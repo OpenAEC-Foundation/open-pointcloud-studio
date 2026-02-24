@@ -1,0 +1,1195 @@
+/* Ribbon Container - Theme-aware */
+.ribbon-container {
+  background: var(--theme-ribbon-bg);
+  border-bottom: 1px solid var(--theme-border-light);
+  flex-shrink: 0;
+  user-select: none;
+  cursor: default;
+}
+
+/* Ribbon Tabs */
+.ribbon-tabs {
+  background: var(--theme-ribbon-tab-bg);
+  border-bottom: 1px solid var(--theme-border-light);
+  display: flex;
+  padding: 0 8px;
+  gap: 2px;
+  height: 28px;
+  align-items: flex-end;
+}
+
+.ribbon-tab {
+  padding: 6px 16px;
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  color: var(--theme-text-dim);
+  font-weight: 500;
+  border-radius: 4px 4px 0 0;
+  transition: all 0.15s ease;
+  position: relative;
+  border: 1px solid transparent;
+  border-bottom: none;
+  cursor: default;
+}
+
+.ribbon-tab.file {
+  background: var(--theme-file-tab-bg);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.ribbon-tab.file:hover {
+  background: var(--theme-file-tab-hover);
+  color: #ffffff;
+}
+
+.ribbon-tab:focus {
+  outline: none;
+}
+
+.ribbon-tab:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+.ribbon-tab.active {
+  background: var(--theme-ribbon-content-bg);
+  color: var(--theme-text);
+  border-color: var(--theme-border-light);
+  border-bottom: 1px solid var(--theme-ribbon-content-bg);
+  margin-bottom: -1px;
+}
+
+/* Ribbon Content Container */
+.ribbon-content-container {
+  position: relative;
+  height: 94px;
+}
+
+/* Ribbon Content */
+.ribbon-content {
+  background: var(--theme-ribbon-content-bg);
+  padding: 4px 8px 0 8px;
+  display: none;
+  height: 94px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.ribbon-content.active {
+  display: flex;
+  align-items: stretch;
+}
+
+.ribbon-groups {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  height: 100%;
+}
+
+.ribbon-group {
+  display: flex;
+  flex-direction: column;
+  padding: 0 4px;
+  border-right: 1px solid var(--theme-border-light);
+  min-width: 50px;
+  height: 100%;
+  margin-right: 4px;
+}
+
+.ribbon-group:last-child {
+  border-right: none;
+  margin-right: 0;
+}
+
+.ribbon-group-label {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  text-align: center;
+  font-weight: 500;
+  padding: 2px 0;
+  margin-top: auto;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.ribbon-group-content {
+  display: flex;
+  gap: 2px;
+  align-items: flex-start;
+  flex: 1;
+  padding: 2px 0;
+}
+
+/* Small buttons container - stacks 3 buttons vertically */
+.ribbon-btn-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  height: 100%;
+  justify-content: flex-start;
+}
+
+/* Ribbon Buttons - Default (Large) */
+.ribbon-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 4px 6px 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: default;
+  transition: all 0.15s ease;
+  min-width: 54px;
+  gap: 4px;
+  height: 66px;
+}
+
+.ribbon-btn:focus {
+  outline: none;
+}
+
+.ribbon-btn:hover {
+  background: var(--theme-hover);
+  border-color: var(--theme-border-light);
+}
+
+.ribbon-btn.active {
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
+}
+
+.ribbon-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ribbon-btn.disabled:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.ribbon-btn-icon {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  color: var(--theme-text-dim);
+}
+
+.ribbon-btn:hover .ribbon-btn-icon {
+  color: var(--theme-text);
+}
+
+.ribbon-btn.active .ribbon-btn-icon {
+  color: #ffffff;
+}
+
+.ribbon-btn-label {
+  font-size: 10px;
+  color: var(--theme-text-dim);
+  text-align: center;
+  line-height: 1.1;
+  max-width: 58px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+  flex-shrink: 1;
+}
+
+.ribbon-btn:hover .ribbon-btn-label {
+  color: var(--theme-text);
+}
+
+.ribbon-btn.active .ribbon-btn-label {
+  color: #ffffff;
+}
+
+/* Small ribbon buttons - horizontal layout, 3 fit vertically */
+.ribbon-btn.small {
+  flex-direction: row;
+  min-width: 70px;
+  height: 22px;
+  padding: 2px 8px 2px 4px;
+  gap: 6px;
+  justify-content: flex-start;
+  border-radius: 3px;
+}
+
+.ribbon-btn.small .ribbon-btn-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.ribbon-btn.small .ribbon-btn-label {
+  font-size: 11px;
+  text-align: left;
+  max-width: none;
+  white-space: nowrap;
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+/* Medium ribbon buttons - horizontal layout, 2 fit vertically */
+.ribbon-btn-medium-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  height: 100%;
+  justify-content: flex-start;
+}
+
+.ribbon-btn.medium {
+  flex-direction: row;
+  min-width: 74px;
+  height: 32px;
+  padding: 2px 10px 2px 6px;
+  gap: 8px;
+  justify-content: flex-start;
+  border-radius: 3px;
+}
+
+.ribbon-btn.medium .ribbon-btn-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.ribbon-btn.medium .ribbon-btn-label {
+  font-size: 11px;
+  text-align: left;
+  max-width: none;
+  white-space: nowrap;
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+/* No-labels group - icon-only buttons */
+.ribbon-group.no-labels .ribbon-btn-label {
+  display: none;
+}
+
+.ribbon-group.no-labels .ribbon-btn {
+  min-width: 40px;
+  padding: 4px 6px;
+}
+
+.ribbon-group.no-labels .ribbon-btn.small {
+  min-width: 28px;
+  padding: 2px 6px;
+}
+
+.ribbon-group.no-labels .ribbon-btn.medium {
+  min-width: 34px;
+  padding: 2px 6px;
+}
+
+.ribbon-group.no-labels .ribbon-btn.has-dropdown {
+  min-width: 40px;
+}
+
+/* Ribbon dropdown button container */
+.ribbon-dropdown-container {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  position: relative;
+}
+
+.ribbon-btn.has-dropdown {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  height: 54px;
+}
+
+.ribbon-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  cursor: default;
+  transition: all 0.15s ease;
+  color: var(--theme-text-dim);
+}
+
+.ribbon-dropdown-trigger:focus {
+  outline: none;
+}
+
+.ribbon-dropdown-trigger:hover {
+  background: var(--theme-hover);
+  border-color: var(--theme-border-light);
+  color: var(--theme-text);
+}
+
+.ribbon-dropdown-trigger.active {
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
+  color: #ffffff;
+}
+
+.ribbon-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 140px;
+  background: var(--theme-dropdown-bg);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  padding: 4px 0;
+  margin-top: 2px;
+}
+
+.ribbon-dropdown-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  color: var(--theme-text-dim);
+  font-size: 11px;
+  text-align: left;
+  cursor: default;
+  transition: all 0.15s ease;
+  gap: 8px;
+}
+
+.ribbon-dropdown-item:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+.ribbon-dropdown-item.selected {
+  color: var(--theme-accent);
+}
+
+.ribbon-dropdown-item .checkmark {
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.ribbon-dropdown-item .no-check {
+  margin-left: 20px;
+}
+
+/* Legacy dropdown arrow (not used currently) */
+.ribbon-dropdown {
+  position: relative;
+}
+
+.ribbon-dropdown-arrow {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 4px solid #888888;
+}
+
+.ribbon-btn:hover .ribbon-dropdown-arrow {
+  border-top-color: #ffffff;
+}
+
+/* Input controls - Dark theme */
+.ribbon-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px;
+}
+
+.ribbon-input-label {
+  font-size: 9px;
+  color: #888888;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.ribbon-input {
+  width: 50px;
+  padding: 3px 6px;
+  font-size: 11px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  color: #e2e8f0;
+  outline: none;
+}
+
+.ribbon-input:focus {
+  border-color: #3b82f6;
+}
+
+.ribbon-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+}
+
+.ribbon-input-row label {
+  font-size: 10px;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+/* Color input */
+.ribbon-color-input {
+  width: 32px;
+  height: 24px;
+  padding: 2px;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  background: transparent;
+  cursor: default;
+}
+
+.ribbon-color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.ribbon-color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+/* Custom Tooltip */
+.ribbon-tooltip {
+  background: var(--theme-dropdown-bg);
+  border: 1px solid var(--theme-border-light);
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.ribbon-tooltip-label {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  color: var(--theme-text);
+  font-weight: 400;
+}
+
+.ribbon-tooltip-shortcut {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  color: var(--theme-text-dim);
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-border-light);
+  padding: 1px 5px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+/* ============================================================================
+   Contextual Ribbon (Filled Region Mode)
+   ============================================================================ */
+
+.ribbon-tab.contextual {
+  background: #1e3a5f;
+  color: #60a5fa;
+  font-weight: 600;
+  border-top: 2px solid #3b82f6;
+}
+
+.ribbon-tab.contextual:hover {
+  background: #1e4976;
+  color: #93c5fd;
+}
+
+.ribbon-tab.contextual.active {
+  background: #172033;
+  color: #60a5fa;
+  border-color: #334155;
+  border-top: 2px solid #3b82f6;
+  border-bottom: 1px solid #172033;
+}
+
+/* Mode buttons (Cancel/Finish) - compact vertical stack */
+.ribbon-mode-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 4px;
+}
+
+.ribbon-mode-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  background: transparent;
+}
+
+.ribbon-mode-btn.cancel {
+  color: #ef4444;
+}
+
+.ribbon-mode-btn.cancel:hover {
+  background: #451a1a;
+  border-color: #ef4444;
+}
+
+.ribbon-mode-btn.finish {
+  color: #22c55e;
+}
+
+.ribbon-mode-btn.finish:hover {
+  background: #14532d;
+  border-color: #22c55e;
+}
+
+/* Draw tools grid */
+.ribbon-draw-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px;
+}
+
+.ribbon-draw-row {
+  display: flex;
+  gap: 1px;
+}
+
+.ribbon-draw-btn {
+  width: 24px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.ribbon-draw-btn:hover {
+  background: #334155;
+  border-color: #475569;
+  color: #ffffff;
+}
+
+.ribbon-draw-btn.active {
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
+  color: #ffffff;
+}
+
+/* ============================================================================
+   Theme Selector (DevExpress-style dropdown)
+   ============================================================================ */
+
+.ribbon-theme-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+}
+
+.ribbon-theme-label {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.ribbon-theme-dropdown {
+  position: relative;
+  min-width: 100px;
+}
+
+.ribbon-theme-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 8px;
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  color: var(--theme-text);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  gap: 8px;
+}
+
+.ribbon-theme-button:hover {
+  border-color: var(--theme-accent);
+}
+
+.ribbon-theme-button:focus {
+  outline: none;
+  border-color: var(--theme-accent);
+}
+
+.ribbon-theme-button-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ribbon-theme-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  border: 1px solid var(--theme-border-light);
+}
+
+.ribbon-theme-swatch.dark {
+  background: linear-gradient(135deg, #1a1a2e 50%, #16213e 50%);
+}
+
+.ribbon-theme-swatch.light {
+  background: linear-gradient(135deg, #f5f5f5 50%, #ffffff 50%);
+}
+
+.ribbon-theme-swatch.blue {
+  background: linear-gradient(135deg, #0d1b2a 50%, #1b263b 50%);
+}
+
+.ribbon-theme-swatch.highContrast {
+  background: linear-gradient(135deg, #000000 50%, #ffff00 50%);
+}
+
+.ribbon-theme-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
+  background: var(--theme-dropdown-bg);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  padding: 4px 0;
+}
+
+.ribbon-theme-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--theme-text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  gap: 8px;
+}
+
+.ribbon-theme-option:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+.ribbon-theme-option.selected {
+  color: var(--theme-accent);
+}
+
+.ribbon-theme-option .checkmark {
+  width: 14px;
+  color: var(--theme-accent);
+}
+
+.ribbon-theme-option .no-check {
+  width: 14px;
+}
+
+/* ============================================================================
+   Quick Access Bar
+   ============================================================================ */
+
+.quick-access-bar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+  background: var(--theme-ribbon-bg);
+  border-top: 1px solid var(--theme-border-light);
+  flex-shrink: 0;
+  height: 18px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.quick-access-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.quick-access-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--theme-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  cursor: default;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+  line-height: 1.2;
+  height: 16px;
+}
+
+.quick-access-btn:hover:not(.disabled) {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+  border-color: var(--theme-border-light);
+}
+
+.quick-access-btn:active:not(.disabled) {
+  background: var(--theme-active);
+  color: #ffffff;
+  border-color: var(--theme-active-border);
+}
+
+.quick-access-btn:focus {
+  outline: none;
+}
+
+.quick-access-btn.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.quick-access-separator {
+  width: 1px;
+  height: 12px;
+  background: var(--theme-border-light);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+.quick-access-tool-label {
+  font-size: 10px;
+  color: var(--theme-text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  margin-right: 1px;
+  flex-shrink: 0;
+}
+
+.quick-access-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--theme-text-dim);
+  cursor: default;
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.quick-access-checkbox input[type="checkbox"] {
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  accent-color: var(--theme-accent, #3b82f6);
+  cursor: default;
+}
+
+.quick-access-checkbox:hover {
+  color: var(--theme-text);
+}
+
+/* ============================================================================
+   Selection Filter Bar
+   ============================================================================ */
+
+.selection-filter-label {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  margin-right: 1px;
+  flex-shrink: 0;
+}
+
+.selection-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--theme-text-dim);
+  background: transparent;
+  border: 1px solid var(--theme-border-light);
+  border-radius: 8px;
+  cursor: default;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+  line-height: 1.2;
+  height: 15px;
+}
+
+.selection-filter-chip:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+  border-color: var(--theme-text-dim);
+}
+
+.selection-filter-chip:focus {
+  outline: none;
+}
+
+.selection-filter-chip.active {
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
+  color: #ffffff;
+  font-weight: 500;
+}
+
+/* ============================================================================
+   IFC Spatial Tree (Ribbon Tab)
+   ============================================================================ */
+
+.ifc-tree-ribbon-wrapper {
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: 76px;
+  min-width: 260px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--theme-border-light) transparent;
+}
+
+.ifc-tree-ribbon-wrapper::-webkit-scrollbar {
+  width: 4px;
+}
+
+.ifc-tree-ribbon-wrapper::-webkit-scrollbar-thumb {
+  background: var(--theme-border-light);
+  border-radius: 2px;
+}
+
+.ifc-tree-container {
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--theme-text-dim);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  padding: 1px 0;
+}
+
+.ifc-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 2px;
+  border-radius: 2px;
+  transition: background 0.1s ease;
+  white-space: nowrap;
+}
+
+.ifc-tree-node:hover {
+  background: var(--theme-hover);
+}
+
+.ifc-tree-chevron {
+  flex-shrink: 0;
+  color: var(--theme-text-muted);
+}
+
+.ifc-tree-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.ifc-tree-dot::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--theme-text-muted);
+}
+
+.ifc-tree-label {
+  color: var(--theme-text-dim);
+  font-weight: 400;
+}
+
+.ifc-tree-badge {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-border-light);
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ifc-tree-children {
+  /* children indented via paddingLeft on the child IfcTreeNode wrapper */
+}
+
+.ifc-tree-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 4px;
+  margin-top: 2px;
+  border-top: 1px solid var(--theme-border-light);
+}
+
+.ifc-tree-summary-item {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  padding: 0 4px;
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  background: var(--theme-input-bg);
+  white-space: nowrap;
+}
+
+/* IFC Stats group */
+.ifc-stats-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+  min-width: 90px;
+}
+
+.ifc-stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.ifc-stat-label {
+  font-size: 10px;
+  color: var(--theme-text-muted);
+  white-space: nowrap;
+}
+
+.ifc-stat-value {
+  font-size: 10px;
+  color: var(--theme-text-dim);
+  font-weight: 500;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  white-space: nowrap;
+}
+
+/* ============================================================================
+   Bonsai Sync Status (Ribbon IFC Tab)
+   ============================================================================ */
+
+.bonsai-sync-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 6px;
+  min-width: 100px;
+  max-width: 160px;
+}
+
+.bonsai-sync-indicator-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.bonsai-sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.bonsai-sync-dot.active {
+  background: #4ade80;
+  box-shadow: 0 0 4px rgba(74, 222, 128, 0.5);
+}
+
+.bonsai-sync-dot.syncing {
+  background: #facc15;
+  box-shadow: 0 0 4px rgba(250, 204, 21, 0.5);
+  animation: bonsai-pulse 1s ease-in-out infinite;
+}
+
+.bonsai-sync-dot.error {
+  background: #f87171;
+  box-shadow: 0 0 4px rgba(248, 113, 113, 0.5);
+}
+
+.bonsai-sync-dot.inactive {
+  background: var(--theme-text-muted);
+  opacity: 0.4;
+}
+
+@keyframes bonsai-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.bonsai-sync-status-text {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--theme-text-dim);
+}
+
+.bonsai-sync-info-row {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+  overflow: hidden;
+}
+
+.bonsai-sync-info-label {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bonsai-sync-info-value {
+  font-size: 9px;
+  color: var(--theme-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bonsai-sync-error-row {
+  margin-top: 1px;
+}
+
+.bonsai-sync-error-text {
+  color: #f87171;
+  font-size: 9px;
+}
+
+/* ============================================================================
+   Bonsai Sync — Info toggle & popover
+   ============================================================================ */
+
+.bonsai-sync-info-toggle {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+}
+
+.bonsai-sync-info-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--theme-border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--theme-text-muted);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.bonsai-sync-info-btn:hover {
+  color: var(--theme-text);
+  border-color: var(--theme-text-dim);
+  background: var(--theme-hover);
+}
+
+.bonsai-sync-info-popover {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  z-index: 9999;
+  width: 320px;
+  padding: 12px 14px;
+  background: var(--theme-bg-panel);
+  border: 1px solid var(--theme-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.bonsai-sync-info-popover-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--theme-text);
+  margin-bottom: 8px;
+}
+
+.bonsai-sync-info-steps {
+  margin: 0;
+  padding: 0 0 0 18px;
+  list-style: decimal;
+}
+
+.bonsai-sync-info-steps li {
+  font-size: 10px;
+  color: var(--theme-text-dim);
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+
+.bonsai-sync-info-steps li strong {
+  color: var(--theme-text);
+  font-weight: 600;
+}
+
+.bonsai-sync-info-note {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--theme-border);
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  line-height: 1.5;
+}
+
+.bonsai-sync-info-note code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 9px;
+  background: var(--theme-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--theme-text-dim);
+}

@@ -1,0 +1,561 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   Theme CSS Variables
+   ============================================================================ */
+
+:root,
+[data-theme="dark"] {
+  /* Dark theme (default) */
+  --theme-bg: #1a1a2e;
+  --theme-surface: #16213e;
+  --theme-surface-elevated: #1e293b;
+  --theme-border: #0f3460;
+  --theme-border-light: #334155;
+  --theme-accent: #e94560;
+  --theme-accent-hover: #d63d56;
+  --theme-text: #eaeaea;
+  --theme-text-dim: #8b8b8b;
+  --theme-text-muted: #64748b;
+  --theme-grid: #2a2a4a;
+  --theme-grid-major: #3a3a5a;
+  --theme-input-bg: #0f172a;
+  --theme-hover: #334155;
+  --theme-active: #3b82f6;
+  --theme-active-border: #60a5fa;
+  --theme-dropdown-bg: #1e293b;
+  --theme-scrollbar-track: #16213e;
+  --theme-scrollbar-thumb: #0f3460;
+  --theme-ribbon-bg: linear-gradient(to bottom, #1e293b 0%, #172033 100%);
+  --theme-ribbon-tab-bg: linear-gradient(to bottom, #1e293b 0%, #1a2436 100%);
+  --theme-ribbon-content-bg: #172033;
+  --theme-file-tab-bg: #a82d6e;
+  --theme-file-tab-hover: #922560;
+
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: dark;
+  color: var(--theme-text);
+  background-color: var(--theme-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+[data-theme="light"] {
+  /* Light theme */
+  --theme-bg: #f5f5f5;
+  --theme-surface: #ffffff;
+  --theme-surface-elevated: #fafafa;
+  --theme-border: #d1d5db;
+  --theme-border-light: #e5e7eb;
+  --theme-accent: #e94560;
+  --theme-accent-hover: #d63d56;
+  --theme-text: #1f2937;
+  --theme-text-dim: #6b7280;
+  --theme-text-muted: #9ca3af;
+  --theme-grid: #e0e0e0;
+  --theme-grid-major: #c0c0c0;
+  --theme-input-bg: #ffffff;
+  --theme-hover: #e5e7eb;
+  --theme-active: #3b82f6;
+  --theme-active-border: #2563eb;
+  --theme-dropdown-bg: #ffffff;
+  --theme-scrollbar-track: #f3f4f6;
+  --theme-scrollbar-thumb: #9ca3af;
+  --theme-ribbon-bg: linear-gradient(to bottom, #ffffff 0%, #f5f5f5 100%);
+  --theme-ribbon-tab-bg: linear-gradient(to bottom, #f5f5f5 0%, #eeeeee 100%);
+  --theme-ribbon-content-bg: #ffffff;
+  --theme-file-tab-bg: #a82d6e;
+  --theme-file-tab-hover: #922560;
+
+  color-scheme: light;
+  color: var(--theme-text);
+  background-color: var(--theme-bg);
+}
+
+[data-theme="blue"] {
+  /* Blue theme (DevExpress-like) */
+  --theme-bg: #0d1b2a;
+  --theme-surface: #1b263b;
+  --theme-surface-elevated: #253a52;
+  --theme-border: #2c4a6b;
+  --theme-border-light: #3d5a80;
+  --theme-accent: #00b4d8;
+  --theme-accent-hover: #0096c7;
+  --theme-text: #e0e1dd;
+  --theme-text-dim: #98c1d9;
+  --theme-text-muted: #778da9;
+  --theme-grid: #1b3a4a;
+  --theme-grid-major: #2b4a5a;
+  --theme-input-bg: #0d1b2a;
+  --theme-hover: #3d5a80;
+  --theme-active: #0077b6;
+  --theme-active-border: #00b4d8;
+  --theme-dropdown-bg: #1b263b;
+  --theme-scrollbar-track: #1b263b;
+  --theme-scrollbar-thumb: #3d5a80;
+  --theme-ribbon-bg: linear-gradient(to bottom, #253a52 0%, #1b263b 100%);
+  --theme-ribbon-tab-bg: linear-gradient(to bottom, #253a52 0%, #1f3044 100%);
+  --theme-ribbon-content-bg: #1b263b;
+  --theme-file-tab-bg: #0077b6;
+  --theme-file-tab-hover: #005f8a;
+
+  color-scheme: dark;
+  color: var(--theme-text);
+  background-color: var(--theme-bg);
+}
+
+[data-theme="highContrast"] {
+  /* High Contrast theme */
+  --theme-bg: #000000;
+  --theme-surface: #0a0a0a;
+  --theme-surface-elevated: #141414;
+  --theme-border: #ffffff;
+  --theme-border-light: #cccccc;
+  --theme-accent: #ffff00;
+  --theme-accent-hover: #ffcc00;
+  --theme-text: #ffffff;
+  --theme-text-dim: #cccccc;
+  --theme-text-muted: #999999;
+  --theme-grid: #333333;
+  --theme-grid-major: #555555;
+  --theme-input-bg: #000000;
+  --theme-hover: #333333;
+  --theme-active: #ffff00;
+  --theme-active-border: #ffff00;
+  --theme-dropdown-bg: #0a0a0a;
+  --theme-scrollbar-track: #0a0a0a;
+  --theme-scrollbar-thumb: #ffffff;
+  --theme-ribbon-bg: linear-gradient(to bottom, #141414 0%, #0a0a0a 100%);
+  --theme-ribbon-tab-bg: linear-gradient(to bottom, #141414 0%, #0d0d0d 100%);
+  --theme-ribbon-content-bg: #0a0a0a;
+  --theme-file-tab-bg: #ffff00;
+  --theme-file-tab-hover: #ffcc00;
+
+  color-scheme: dark;
+  color: var(--theme-text);
+  background-color: var(--theme-bg);
+}
+
+/* High Contrast special styles */
+[data-theme="highContrast"] .ribbon-tab.file {
+  color: #000000;
+}
+
+[data-theme="highContrast"] .ribbon-btn.active {
+  color: #000000;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Disable text selection on UI elements */
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Custom scrollbar - theme-aware */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--theme-scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--theme-scrollbar-thumb);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--theme-accent);
+}
+
+/* Canvas cursor styles */
+.cursor-crosshair {
+  cursor: crosshair;
+}
+
+.cursor-move {
+  cursor: move;
+}
+
+.cursor-grab {
+  cursor: grab;
+}
+
+.cursor-grabbing {
+  cursor: grabbing;
+}
+
+/* ============================================================================
+   IFC Dashboard Overlay
+   ============================================================================ */
+
+.ifc-dashboard-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--theme-bg);
+  color: var(--theme-text);
+  overflow: hidden;
+}
+
+/* Header */
+.ifc-dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--theme-surface);
+  border-bottom: 1px solid var(--theme-border);
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.ifc-dashboard-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ifc-dashboard-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ifc-dashboard-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--theme-text);
+}
+
+.ifc-dashboard-subtitle {
+  font-size: 10px;
+  color: var(--theme-text-dim);
+}
+
+.ifc-dashboard-stat {
+  font-size: 10px;
+  color: var(--theme-text-muted);
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  background: var(--theme-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--theme-border);
+}
+
+.ifc-dashboard-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--theme-text);
+  background: var(--theme-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ifc-dashboard-btn:hover {
+  background: var(--theme-hover);
+  border-color: var(--theme-accent);
+}
+
+.ifc-dashboard-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--theme-text-dim);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ifc-dashboard-close-btn:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+/* Body split */
+.ifc-dashboard-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.ifc-dashboard-left {
+  display: flex;
+  flex-direction: column;
+  width: 40%;
+  min-width: 280px;
+  max-width: 500px;
+  border-right: 1px solid var(--theme-border);
+}
+
+.ifc-dashboard-right {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.ifc-dashboard-divider {
+  width: 1px;
+  background: var(--theme-border);
+  flex-shrink: 0;
+}
+
+.ifc-dashboard-pane-header {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--theme-text-dim);
+  background: var(--theme-surface);
+  border-bottom: 1px solid var(--theme-border);
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ifc-dashboard-pane-content {
+  flex: 1;
+  overflow: auto;
+}
+
+/* Graph / Tree */
+.ifc-dashboard-graph {
+  padding: 12px;
+}
+
+.ifc-dashboard-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  transition: background 0.1s;
+  white-space: nowrap;
+}
+
+.ifc-dashboard-tree-node:hover {
+  background: var(--theme-hover);
+}
+
+.ifc-dashboard-tree-node.selected {
+  background: var(--theme-active);
+  color: #ffffff;
+}
+
+.ifc-dashboard-tree-node.selected .ifc-dashboard-tree-label,
+.ifc-dashboard-tree-node.selected .ifc-dashboard-tree-type,
+.ifc-dashboard-tree-node.selected .ifc-dashboard-tree-badge {
+  color: #ffffff;
+}
+
+.ifc-dashboard-tree-type {
+  font-weight: 600;
+  font-size: 11px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.ifc-dashboard-tree-label {
+  font-size: 11px;
+  color: var(--theme-text-dim);
+}
+
+.ifc-dashboard-tree-badge {
+  font-size: 9px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  color: var(--theme-text-muted);
+  background: var(--theme-bg);
+  padding: 1px 5px;
+  border-radius: 8px;
+  border: 1px solid var(--theme-border);
+  margin-left: auto;
+}
+
+.ifc-dashboard-tree-children {
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--theme-border);
+}
+
+.ifc-dashboard-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 6px 4px;
+  margin-top: 8px;
+  border-top: 1px solid var(--theme-border);
+}
+
+.ifc-dashboard-summary-chip {
+  font-size: 10px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  padding: 2px 8px;
+  border: 1px solid;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* STEP Viewer */
+.ifc-dashboard-step-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.ifc-dashboard-step-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: var(--theme-surface);
+  border-bottom: 1px solid var(--theme-border);
+  flex-shrink: 0;
+}
+
+.ifc-dashboard-step-stats {
+  font-size: 10px;
+  color: var(--theme-text-muted);
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.ifc-dashboard-step-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.ifc-dashboard-step-code {
+  flex: 1;
+  overflow: auto;
+  background: var(--theme-bg);
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ifc-dashboard-step-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.ifc-dashboard-step-linenum {
+  text-align: right;
+  padding: 0 12px 0 8px;
+  color: var(--theme-text-muted);
+  user-select: none;
+  -webkit-user-select: none;
+  white-space: nowrap;
+  width: 1px;
+  vertical-align: top;
+  border-right: 1px solid var(--theme-border);
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.ifc-dashboard-step-text {
+  padding: 0 8px;
+  white-space: pre;
+}
+
+/* STEP syntax highlighting */
+.step-keyword {
+  color: #c084fc;
+  font-weight: 600;
+}
+
+.step-entity-ref {
+  color: #60a5fa;
+}
+
+.step-entity-type {
+  color: #34d399;
+  font-weight: 600;
+}
+
+.step-string {
+  color: #fbbf24;
+}
+
+.step-enum {
+  color: #fb923c;
+}
+
+.step-comment {
+  color: var(--theme-text-muted);
+  font-style: italic;
+}
+
+/* Light theme overrides for STEP highlighting */
+[data-theme="light"] .step-keyword {
+  color: #7c3aed;
+}
+
+[data-theme="light"] .step-entity-ref {
+  color: #2563eb;
+}
+
+[data-theme="light"] .step-entity-type {
+  color: #059669;
+}
+
+[data-theme="light"] .step-string {
+  color: #b45309;
+}
+
+[data-theme="light"] .step-enum {
+  color: #c2410c;
+}
+
+[data-theme="light"] .step-comment {
+  color: var(--theme-text-muted);
+}
+
+.ifc-dashboard-step-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  color: var(--theme-text-dim);
+  font-size: 13px;
+}
+
+.ifc-dashboard-step-empty-hint {
+  font-size: 11px;
+  color: var(--theme-text-muted);
+}
