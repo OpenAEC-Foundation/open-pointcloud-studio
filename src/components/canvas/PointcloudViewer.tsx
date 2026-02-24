@@ -4,9 +4,11 @@
  * Follows BimViewer.tsx pattern: renders an independent Three.js scene
  * as an overlay on the main canvas. Uses LODController for octree-based
  * level-of-detail rendering.
+ *
+ * Supports edit mode with box selection and point deletion.
  */
 
-import { useRef, useEffect, memo } from 'react';
+import { useRef, useEffect, useState, useCallback, memo } from 'react';
 import * as THREE from 'three';
 import { useAppStore } from '../../state/appStore';
 import { LODController } from '../../engine/pointcloud/LODController';
@@ -18,6 +20,14 @@ let OrbitControls: any = null;
 
 const isTauri = !!(window as any).__TAURI_INTERNALS__;
 
+interface BoxSelectState {
+  active: boolean;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+}
+
 const PointcloudViewerInner = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -26,14 +36,241 @@ const PointcloudViewerInner = () => {
   const controlsRef = useRef<any>(null);
   const lodControllersRef = useRef<Map<string, LODController>>(new Map());
   const browserPointsRef = useRef<Map<string, THREE.Points>>(new Map());
+  const browserMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const browserMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
+  const browserMeshMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
   const animFrameRef = useRef<number>(0);
 
   const pointclouds = useAppStore((s) => s.pointclouds);
   const colorMode = useAppStore((s) => s.pointcloudColorMode);
   const pointSize = useAppStore((s) => s.pointcloudPointSize);
   const pointBudget = useAppStore((s) => s.pointBudget);
+  const editMode = useAppStore((s) => s.editMode);
+  const selectedPointIndices = useAppStore((s) => s.selectedPointIndices);
 
+  const [boxSelect, setBoxSelect] = useState<BoxSelectState>({
+    active: false, startX: 0, startY: 0, currentX: 0, currentY: 0,
+  });
+
+  // Enable/disable OrbitControls based on editMode
+  useEffect(() => {
+    if (controlsRef.current) {
+      controlsRef.current.enabled = !editMode;
+    }
+  }, [editMode]);
+
+  // Update aSelected attribute when selection changes
+  useEffect(() => {
+    for (const [pcId, pts] of browserPointsRef.current.entries()) {
+      const geo = pts.geometry;
+      const posAttr = geo.getAttribute('position');
+      if (!posAttr) continue;
+      const numPoints = posAttr.count;
+
+      let selAttr = geo.getAttribute('aSelected') as THREE.BufferAttribute | null;
+      if (!selAttr) {
+        selAttr = new THREE.BufferAttribute(new Float32Array(numPoints), 1);
+        geo.setAttribute('aSelected', selAttr);
+      }
+
+      const selected = selectedPointIndices[pcId];
+      const arr = selAttr.array as Float32Array;
+      arr.fill(0);
+      if (selected) {
+        for (const idx of selected) {
+          if (idx < numPoints) arr[idx] = 1.0;
+        }
+      }
+      selAttr.needsUpdate = true;
+    }
+  }, [selectedPointIndices]);
+
+  // Box selection handlers
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    if (!editMode) return;
+    if (e.button !== 0) return; // left click only
+    const rect = containerRef.current!.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setBoxSelect({ active: true, startX: x, startY: y, currentX: x, currentY: y });
+  }, [editMode]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!boxSelect.active) return;
+    const rect = containerRef.current!.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setBoxSelect((prev) => ({ ...prev, currentX: x, currentY: y }));
+  }, [boxSelect.active]);
+
+  const handlePointerUp = useCallback(() => {
+    if (!boxSelect.active) return;
+    const camera = cameraRef.current;
+    const container = containerRef.current;
+    if (!camera || !container) {
+      setBoxSelect((prev) => ({ ...prev, active: false }));
+      return;
+    }
+
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+
+    // Compute NDC box from pixel coordinates
+    const x1 = Math.min(boxSelect.startX, boxSelect.currentX);
+    const x2 = Math.max(boxSelect.startX, boxSelect.currentX);
+    const y1 = Math.min(boxSelect.startY, boxSelect.currentY);
+    const y2 = Math.max(boxSelect.startY, boxSelect.currentY);
+
+    // Ignore tiny drags (< 4px)
+    if (x2 - x1 < 4 && y2 - y1 < 4) {
+      setBoxSelect((prev) => ({ ...prev, active: false }));
+      return;
+    }
+
+    // Convert to NDC (-1 to 1)
+    const ndcLeft = (x1 / w) * 2 - 1;
+    const ndcRight = (x2 / w) * 2 - 1;
+    const ndcTop = -(y1 / h) * 2 + 1;
+    const ndcBottom = -(y2 / h) * 2 + 1;
+
+    // Build view-projection matrix
+    const vpMatrix = new THREE.Matrix4();
+    vpMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+
+    const projected = new THREE.Vector4();
+
+    // Select points for each pointcloud
+    for (const [pcId, pts] of browserPointsRef.current.entries()) {
+      const posAttr = pts.geometry.getAttribute('position');
+      if (!posAttr) continue;
+      const positions = posAttr.array as Float32Array;
+      const numPoints = posAttr.count;
+      const selected: number[] = [];
+
+      // Combine model matrix with VP
+      const mvpMatrix = new THREE.Matrix4();
+      mvpMatrix.multiplyMatrices(vpMatrix, pts.matrixWorld);
+
+      for (let i = 0; i < numPoints; i++) {
+        const px = positions[i * 3];
+        const py = positions[i * 3 + 1];
+        const pz = positions[i * 3 + 2];
+
+        projected.set(px, py, pz, 1.0);
+        projected.applyMatrix4(mvpMatrix);
+
+        // Perspective divide
+        if (projected.w <= 0) continue;
+        const ndcX = projected.x / projected.w;
+        const ndcY = projected.y / projected.w;
+
+        if (ndcX >= ndcLeft && ndcX <= ndcRight && ndcY >= ndcBottom && ndcY <= ndcTop) {
+          selected.push(i);
+        }
+      }
+
+      if (selected.length > 0) {
+        useAppStore.getState().setSelectedPoints(pcId, selected);
+      }
+    }
+
+    setBoxSelect((prev) => ({ ...prev, active: false }));
+  }, [boxSelect]);
+
+  // Delete selected points
+  const deleteSelectedPoints = useCallback(() => {
+    const indices = useAppStore.getState().selectedPointIndices;
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    for (const [pcId, selectedIdx] of Object.entries(indices)) {
+      if (!selectedIdx || selectedIdx.length === 0) continue;
+      const pts = browserPointsRef.current.get(pcId);
+      if (!pts) continue;
+
+      const geo = pts.geometry;
+      const posAttr = geo.getAttribute('position');
+      if (!posAttr) continue;
+
+      const oldPositions = posAttr.array as Float32Array;
+      const numPoints = posAttr.count;
+
+      // Build a set of indices to remove
+      const removeSet = new Set(selectedIdx);
+      const keepCount = numPoints - removeSet.size;
+      if (keepCount <= 0) {
+        // Remove entire pointcloud
+        scene.remove(pts);
+        geo.dispose();
+        browserPointsRef.current.delete(pcId);
+        removeBrowserPointcloud(pcId);
+        useAppStore.getState().removePointcloud(pcId);
+        continue;
+      }
+
+      // Build new arrays
+      const newPositions = new Float32Array(keepCount * 3);
+      const oldColors = (geo.getAttribute('aColor')?.array as Float32Array) || null;
+      const newColors = oldColors ? new Float32Array(keepCount * 3) : null;
+      const oldIntensities = (geo.getAttribute('aIntensity')?.array as Float32Array) || null;
+      const newIntensities = oldIntensities ? new Float32Array(keepCount) : null;
+      const oldClassifications = (geo.getAttribute('aClassification')?.array as Float32Array) || null;
+      const newClassifications = oldClassifications ? new Float32Array(keepCount) : null;
+
+      let writeIdx = 0;
+      for (let i = 0; i < numPoints; i++) {
+        if (removeSet.has(i)) continue;
+        newPositions[writeIdx * 3] = oldPositions[i * 3];
+        newPositions[writeIdx * 3 + 1] = oldPositions[i * 3 + 1];
+        newPositions[writeIdx * 3 + 2] = oldPositions[i * 3 + 2];
+        if (newColors && oldColors) {
+          newColors[writeIdx * 3] = oldColors[i * 3];
+          newColors[writeIdx * 3 + 1] = oldColors[i * 3 + 1];
+          newColors[writeIdx * 3 + 2] = oldColors[i * 3 + 2];
+        }
+        if (newIntensities && oldIntensities) {
+          newIntensities[writeIdx] = oldIntensities[i];
+        }
+        if (newClassifications && oldClassifications) {
+          newClassifications[writeIdx] = oldClassifications[i];
+        }
+        writeIdx++;
+      }
+
+      // Replace geometry attributes
+      geo.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
+      if (newColors) geo.setAttribute('aColor', new THREE.BufferAttribute(newColors, 3));
+      if (newIntensities) geo.setAttribute('aIntensity', new THREE.BufferAttribute(newIntensities, 1));
+      if (newClassifications) geo.setAttribute('aClassification', new THREE.BufferAttribute(newClassifications, 1));
+
+      // Reset aSelected
+      geo.setAttribute('aSelected', new THREE.BufferAttribute(new Float32Array(keepCount), 1));
+
+      geo.computeBoundingSphere();
+
+      // Update point count in store
+      useAppStore.setState((s) => {
+        const pc = s.pointclouds.find((p) => p.id === pcId);
+        if (pc) pc.totalPoints = keepCount;
+      });
+    }
+
+    useAppStore.getState().clearSelection();
+  }, []);
+
+  // Keyboard handlers
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && editMode) {
+        useAppStore.getState().setEditMode(false);
+      }
+      if (e.key === 'Delete' && editMode) {
+        deleteSelectedPoints();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [editMode, deleteSelectedPoints]);
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -71,10 +308,19 @@ const PointcloudViewerInner = () => {
       controls.maxDistance = 50000;
       controls.minDistance = 0.1;
       controlsRef.current = controls;
+
+      // Apply current editMode state
+      controls.enabled = !useAppStore.getState().editMode;
     });
 
-    // Ambient light for visual reference
-    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+    // Lighting for mesh rendering and visual reference
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(1, 2, 1).normalize();
+    scene.add(dirLight);
+    const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.3);
+    dirLight2.position.set(-1, -0.5, -1).normalize();
+    scene.add(dirLight2);
 
     // Grid helper
     const grid = new THREE.GridHelper(100, 100, 0x444466, 0x222244);
@@ -119,9 +365,19 @@ const PointcloudViewerInner = () => {
         pts.geometry.dispose();
       }
       browserPointsRef.current.clear();
+      // Dispose browser meshes
+      for (const mesh of browserMeshesRef.current.values()) {
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+      }
+      browserMeshesRef.current.clear();
       if (browserMaterialRef.current) {
         browserMaterialRef.current.dispose();
         browserMaterialRef.current = null;
+      }
+      if (browserMeshMaterialRef.current) {
+        browserMeshMaterialRef.current.dispose();
+        browserMeshMaterialRef.current = null;
       }
 
       // Dispose Three.js resources
@@ -173,55 +429,97 @@ const PointcloudViewerInner = () => {
       }
     } else {
       // Browser mode: create Three.js geometry directly from parsed data
-      const existingIds = new Set(browserPointsRef.current.keys());
+      const existingPointIds = new Set(browserPointsRef.current.keys());
+      const existingMeshIds = new Set(browserMeshesRef.current.keys());
 
-      // Remove pointclouds that were deleted
-      for (const id of existingIds) {
+      // Remove pointclouds/meshes that were deleted
+      for (const id of existingPointIds) {
         if (!currentIds.has(id)) {
           const pts = browserPointsRef.current.get(id);
           if (pts) {
             scene.remove(pts);
             pts.geometry.dispose();
             browserPointsRef.current.delete(id);
-            removeBrowserPointcloud(id);
           }
+          removeBrowserPointcloud(id);
+        }
+      }
+      for (const id of existingMeshIds) {
+        if (!currentIds.has(id)) {
+          const mesh = browserMeshesRef.current.get(id);
+          if (mesh) {
+            scene.remove(mesh);
+            mesh.geometry.dispose();
+            browserMeshesRef.current.delete(id);
+          }
+          removeBrowserPointcloud(id);
         }
       }
 
-      // Add new pointclouds
+      // Add new pointclouds / meshes
       for (const pc of pointclouds) {
-        if (!existingIds.has(pc.id) && pc.indexingProgress >= 1.0) {
+        const alreadyExists = existingPointIds.has(pc.id) || existingMeshIds.has(pc.id);
+        if (!alreadyExists && pc.indexingProgress >= 1.0) {
           const parsed = getBrowserPointcloud(pc.id);
           if (!parsed) continue;
 
-          // Create shared material if not yet created
-          if (!browserMaterialRef.current) {
-            browserMaterialRef.current = createPointcloudMaterial({
-              pointSize,
-              colorMode,
-              screenHeight: containerRef.current?.clientHeight ?? 800,
-              elevationMin: pc.bounds.minZ,
-              elevationMax: pc.bounds.maxZ,
-            });
+          const hasMesh = parsed.indices && parsed.indices.length > 0;
+          let fitGeometry: THREE.BufferGeometry | null = null;
+
+          if (hasMesh) {
+            // Render as mesh with vertex colors
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(parsed.positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(parsed.colors, 3));
+            geometry.setIndex(new THREE.BufferAttribute(parsed.indices!, 1));
+            geometry.computeVertexNormals();
+
+            if (!browserMeshMaterialRef.current) {
+              browserMeshMaterialRef.current = new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                side: THREE.DoubleSide,
+                metalness: 0.1,
+                roughness: 0.8,
+              });
+            }
+
+            const mesh = new THREE.Mesh(geometry, browserMeshMaterialRef.current);
+            scene.add(mesh);
+            browserMeshesRef.current.set(pc.id, mesh);
+            fitGeometry = geometry;
+          } else {
+            // Render as point cloud
+            if (!browserMaterialRef.current) {
+              browserMaterialRef.current = createPointcloudMaterial({
+                pointSize,
+                colorMode,
+                screenHeight: containerRef.current?.clientHeight ?? 800,
+                elevationMin: pc.bounds.minZ,
+                elevationMax: pc.bounds.maxZ,
+              });
+            }
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(parsed.positions, 3));
+            geometry.setAttribute('aColor', new THREE.BufferAttribute(parsed.colors, 3));
+            geometry.setAttribute('aIntensity', new THREE.BufferAttribute(parsed.intensities, 1));
+            geometry.setAttribute('aClassification', new THREE.BufferAttribute(parsed.classifications, 1));
+
+            const numPoints = parsed.positions.length / 3;
+            geometry.setAttribute('aSelected', new THREE.BufferAttribute(new Float32Array(numPoints), 1));
+
+            const points = new THREE.Points(geometry, browserMaterialRef.current);
+            scene.add(points);
+            browserPointsRef.current.set(pc.id, points);
+            fitGeometry = geometry;
           }
 
-          const geometry = new THREE.BufferGeometry();
-          geometry.setAttribute('position', new THREE.BufferAttribute(parsed.positions, 3));
-          geometry.setAttribute('aColor', new THREE.BufferAttribute(parsed.colors, 3));
-          geometry.setAttribute('aIntensity', new THREE.BufferAttribute(parsed.intensities, 1));
-          geometry.setAttribute('aClassification', new THREE.BufferAttribute(parsed.classifications, 1));
-
-          const points = new THREE.Points(geometry, browserMaterialRef.current);
-          scene.add(points);
-          browserPointsRef.current.set(pc.id, points);
-
-          // Auto-fit camera to the pointcloud
-          if (camera && controlsRef.current) {
-            geometry.computeBoundingSphere();
-            const sphere = geometry.boundingSphere;
+          // Auto-fit camera
+          if (camera && controlsRef.current && fitGeometry) {
+            fitGeometry.computeBoundingSphere();
+            const sphere = fitGeometry.boundingSphere;
             if (sphere) {
               const dist = sphere.radius * 2.5;
-              // Update far plane based on pointcloud size
               camera.far = Math.max(camera.far, dist * 20);
               camera.updateProjectionMatrix();
               controlsRef.current.maxDistance = dist * 10;
@@ -245,6 +543,8 @@ const PointcloudViewerInner = () => {
     for (const pc of pointclouds) {
       const pts = browserPointsRef.current.get(pc.id);
       if (pts) pts.visible = pc.visible;
+      const mesh = browserMeshesRef.current.get(pc.id);
+      if (mesh) mesh.visible = pc.visible;
     }
   }, [pointclouds]);
 
@@ -287,12 +587,43 @@ const PointcloudViewerInner = () => {
     return () => { running = false; };
   }, [pointBudget]);
 
+  // Compute box overlay rect
+  const boxRect = boxSelect.active ? {
+    left: Math.min(boxSelect.startX, boxSelect.currentX),
+    top: Math.min(boxSelect.startY, boxSelect.currentY),
+    width: Math.abs(boxSelect.currentX - boxSelect.startX),
+    height: Math.abs(boxSelect.currentY - boxSelect.startY),
+  } : null;
+
   return (
     <div
       ref={containerRef}
       className="absolute inset-0 z-10"
-      style={{ background: '#1a1a2e' }}
-    />
+      style={{
+        background: '#1a1a2e',
+        cursor: editMode ? 'crosshair' : 'default',
+      }}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+    >
+      {/* Box selection overlay */}
+      {boxRect && boxRect.width > 2 && boxRect.height > 2 && (
+        <div
+          style={{
+            position: 'absolute',
+            left: boxRect.left,
+            top: boxRect.top,
+            width: boxRect.width,
+            height: boxRect.height,
+            border: '2px dashed rgba(255, 180, 0, 0.8)',
+            backgroundColor: 'rgba(255, 180, 0, 0.1)',
+            pointerEvents: 'none',
+            zIndex: 20,
+          }}
+        />
+      )}
+    </div>
   );
 };
 

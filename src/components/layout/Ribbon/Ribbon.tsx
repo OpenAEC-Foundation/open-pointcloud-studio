@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, memo, useCallback } from 'react';
-import { Upload, Check, ChevronDown, Sun, Eye } from 'lucide-react';
+import { Upload, Check, ChevronDown, Sun, Eye, BoxSelect, Trash2, XCircle } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { type UITheme, UI_THEMES } from '../../../state/appStore';
 import { parsePointcloudFile, FILE_INPUT_ACCEPT, SUPPORTED_EXTENSIONS } from '../../../engine/pointcloud/PointcloudParser';
@@ -291,7 +291,10 @@ function IntensityIcon() {
 // Main Ribbon Component
 // ============================================================================
 
+type RibbonTab = 'home' | 'edit';
+
 export const Ribbon = memo(function Ribbon() {
+  const [activeTab, setActiveTab] = useState<RibbonTab>('home');
   const colorMode = useAppStore((s) => s.pointcloudColorMode);
   const setColorMode = useAppStore((s) => s.setPointcloudColorMode);
   const pointSize = useAppStore((s) => s.pointcloudPointSize);
@@ -302,7 +305,13 @@ export const Ribbon = memo(function Ribbon() {
   const setEdlEnabled = useAppStore((s) => s.setEdlEnabled);
   const uiTheme = useAppStore((s) => s.uiTheme);
   const setUITheme = useAppStore((s) => s.setUITheme);
+  const editMode = useAppStore((s) => s.editMode);
+  const setEditMode = useAppStore((s) => s.setEditMode);
+  const clearSelection = useAppStore((s) => s.clearSelection);
+  const selectedPointIndices = useAppStore((s) => s.selectedPointIndices);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const totalSelected = Object.values(selectedPointIndices).reduce((sum, arr) => sum + arr.length, 0);
 
   const isTauri = !!(window as any).__TAURI_INTERNALS__;
 
@@ -446,12 +455,24 @@ export const Ribbon = memo(function Ribbon() {
     <div className="ribbon-container">
       {/* Tab bar */}
       <div className="ribbon-tabs">
-        <button className="ribbon-tab active">Home</button>
+        <button
+          className={`ribbon-tab ${activeTab === 'home' ? 'active' : ''}`}
+          onClick={() => setActiveTab('home')}
+        >
+          Home
+        </button>
+        <button
+          className={`ribbon-tab ${activeTab === 'edit' ? 'active' : ''}`}
+          onClick={() => setActiveTab('edit')}
+        >
+          Edit
+        </button>
       </div>
 
       {/* Content area */}
       <div className="ribbon-content-container">
-        <div className="ribbon-content active">
+        {/* Home tab */}
+        <div className={`ribbon-content ${activeTab === 'home' ? 'active' : ''}`}>
           <div className="ribbon-groups">
             {/* File Group */}
             <RibbonGroup label="File">
@@ -548,6 +569,55 @@ export const Ribbon = memo(function Ribbon() {
               </RibbonButtonStack>
               <ThemeSelector currentTheme={uiTheme} onThemeChange={setUITheme} />
             </RibbonGroup>
+          </div>
+        </div>
+
+        {/* Edit tab */}
+        <div className={`ribbon-content ${activeTab === 'edit' ? 'active' : ''}`}>
+          <div className="ribbon-groups">
+            {/* Select Group */}
+            <RibbonGroup label="Select">
+              <RibbonButton
+                icon={<BoxSelect size={20} />}
+                label="Box Select"
+                onClick={() => setEditMode(!editMode)}
+                active={editMode}
+                tooltip="Toggle box selection mode (Esc to exit)"
+                shortcut="Esc"
+              />
+            </RibbonGroup>
+
+            {/* Modify Group */}
+            <RibbonGroup label="Modify">
+              <RibbonButtonStack>
+                <RibbonSmallButton
+                  icon={<Trash2 size={14} />}
+                  label="Delete"
+                  onClick={() => {
+                    // Dispatch delete via keyboard event simulation
+                    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }));
+                  }}
+                  disabled={totalSelected === 0}
+                  shortcut="Del"
+                />
+                <RibbonSmallButton
+                  icon={<XCircle size={14} />}
+                  label="Deselect"
+                  onClick={() => clearSelection()}
+                  disabled={totalSelected === 0}
+                />
+              </RibbonButtonStack>
+            </RibbonGroup>
+
+            {/* Selection info */}
+            {editMode && totalSelected > 0 && (
+              <RibbonGroup label="Info">
+                <div className="flex items-center px-3 py-1 text-xs text-cad-text">
+                  <span className="font-mono text-amber-400">{totalSelected.toLocaleString()}</span>
+                  <span className="ml-1 text-cad-text-dim">points selected</span>
+                </div>
+              </RibbonGroup>
+            )}
           </div>
         </div>
       </div>

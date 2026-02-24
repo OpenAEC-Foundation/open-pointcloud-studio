@@ -45,6 +45,8 @@ export interface ParsedPointcloud {
   hasColor: boolean;
   hasIntensity: boolean;
   hasClassification: boolean;
+  /** Optional triangle face indices (for mesh formats like OBJ) */
+  indices?: Uint32Array;
 }
 
 /** Point formats that include RGB color data */

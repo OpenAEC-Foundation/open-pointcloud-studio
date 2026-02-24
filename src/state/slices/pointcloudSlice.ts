@@ -52,6 +52,10 @@ export interface PointcloudState {
   edlStrength: number;
   /** Visible ASPRS classification codes */
   visibleClassifications: number[];
+  /** Whether edit/selection mode is active */
+  editMode: boolean;
+  /** Selected point indices per pointcloud ID */
+  selectedPointIndices: Record<string, number[]>;
 }
 
 // ============================================================================
@@ -71,6 +75,9 @@ export interface PointcloudActions {
   setEdlEnabled: (enabled: boolean) => void;
   setEdlStrength: (strength: number) => void;
   setVisibleClassifications: (codes: number[]) => void;
+  setEditMode: (enabled: boolean) => void;
+  setSelectedPoints: (pcId: string, indices: number[]) => void;
+  clearSelection: () => void;
 }
 
 export type PointcloudSlice = PointcloudState & PointcloudActions;
@@ -92,6 +99,8 @@ export const initialPointcloudState: PointcloudState = {
   edlEnabled: true,
   edlStrength: 1.0,
   visibleClassifications: ALL_CLASSIFICATIONS,
+  editMode: false,
+  selectedPointIndices: {},
 };
 
 // ============================================================================
@@ -169,5 +178,22 @@ export const createPointcloudSlice = (
 
   setVisibleClassifications: (codes: number[]) => {
     set((s) => { s.visibleClassifications = codes; });
+  },
+
+  setEditMode: (enabled: boolean) => {
+    set((s) => {
+      s.editMode = enabled;
+      if (!enabled) {
+        s.selectedPointIndices = {};
+      }
+    });
+  },
+
+  setSelectedPoints: (pcId: string, indices: number[]) => {
+    set((s) => { s.selectedPointIndices[pcId] = indices; });
+  },
+
+  clearSelection: () => {
+    set((s) => { s.selectedPointIndices = {}; });
   },
 });
