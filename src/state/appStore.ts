@@ -30,16 +30,19 @@ export const UI_THEMES: { id: UITheme; label: string }[] = [
 export interface UIState {
   uiTheme: UITheme;
   rightPanelOpen: boolean;
+  showBAG3DPanel: boolean;
 }
 
 export interface UIActions {
   setUITheme: (theme: UITheme) => void;
   toggleRightPanel: () => void;
+  setShowBAG3DPanel: (show: boolean) => void;
 }
 
 const initialUIState: UIState = {
   uiTheme: 'dark',
   rightPanelOpen: true,
+  showBAG3DPanel: false,
 };
 
 // ============================================================================
@@ -59,6 +62,9 @@ export const useAppStore = create<AppState>()(
     },
     toggleRightPanel: () => {
       set((s) => { s.rightPanelOpen = !s.rightPanelOpen; });
+    },
+    setShowBAG3DPanel: (show: boolean) => {
+      set((s) => { s.showBAG3DPanel = show; });
     },
 
     // Pointcloud actions

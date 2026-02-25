@@ -20,6 +20,13 @@ export default defineConfig({
       // Tell vite to ignore watching `src-tauri`
       ignored: ['**/src-tauri/**'],
     },
+    proxy: {
+      '/api/3dbag': {
+        target: 'https://api.3dbag.nl',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/3dbag/, ''),
+      },
+    },
   },
   // To make use of `TAURI_DEBUG` and other env variables
   envPrefix: ['VITE_', 'TAURI_'],

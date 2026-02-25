@@ -1,9 +1,14 @@
 import { useState, useRef, useEffect, memo, useCallback } from 'react';
-import { Upload, Check, ChevronDown, Sun, Eye, BoxSelect, Trash2, XCircle } from 'lucide-react';
+import { Upload, Check, ChevronDown, Sun, Eye, BoxSelect, Trash2, XCircle, Move, Maximize, Filter, Building2, Shapes, Download } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { type UITheme, UI_THEMES } from '../../../state/appStore';
 import { parsePointcloudFile, FILE_INPUT_ACCEPT, SUPPORTED_EXTENSIONS } from '../../../engine/pointcloud/PointcloudParser';
-import { setBrowserPointcloud } from '../../../engine/pointcloud/BrowserPointcloudStore';
+import { setBrowserPointcloud, getBrowserPointcloud } from '../../../engine/pointcloud/BrowserPointcloudStore';
+import { reconstructSurface, type ReconstructionProgress } from '../../../engine/pointcloud/SurfaceReconstruction';
+import { ReconstructionProgressDialog } from '../../panels/ReconstructionProgressDialog';
+import { exportToOBJ, downloadOBJ } from '../../../engine/pointcloud/MeshExporter';
+import { exportToPLY, exportToXYZ, exportToPTS, exportToCSV, downloadFile } from '../../../engine/pointcloud/PointcloudExporter';
+import { translatePointcloud, scalePointcloud, thinPointcloud } from '../../../engine/pointcloud/PointcloudTransforms';
 import './Ribbon.css';
 
 // ============================================================================
@@ -174,6 +179,76 @@ function RibbonButtonStack({ children }: { children: React.ReactNode }) {
   return <div className="ribbon-btn-stack">{children}</div>;
 }
 
+interface RibbonDropdownButtonProps {
+  icon: React.ReactNode;
+  label: string;
+  disabled?: boolean;
+  tooltip?: string;
+  items: { label: string; onClick: () => void }[];
+}
+
+function RibbonDropdownButton({ icon, label, disabled, tooltip, items }: RibbonDropdownButtonProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const tt = useTooltip();
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  return (
+    <div className="ribbon-dropdown-wrapper" ref={dropdownRef} style={{ position: 'relative' }}>
+      <button
+        ref={tt.ref}
+        className={`ribbon-btn ${disabled ? 'disabled' : ''}`}
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+        disabled={disabled}
+        onMouseEnter={tt.onEnter}
+        onMouseLeave={tt.onLeave}
+      >
+        <span className="ribbon-btn-icon">{icon}</span>
+        <span className="ribbon-btn-label" style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+          {label} <ChevronDown size={10} />
+        </span>
+      </button>
+      {tt.show && !isOpen && <RibbonTooltip label={tooltip || label} parentRef={tt.ref as React.RefObject<HTMLElement>} />}
+      {isOpen && (
+        <div
+          className="ribbon-theme-menu"
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            zIndex: 9999,
+            minWidth: '120px',
+          }}
+        >
+          {items.map((item) => (
+            <button
+              key={item.label}
+              className="ribbon-theme-option"
+              onClick={() => {
+                item.onClick();
+                setIsOpen(false);
+              }}
+            >
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============================================================================
 // Theme Selector
 // ============================================================================
@@ -291,7 +366,7 @@ function IntensityIcon() {
 // Main Ribbon Component
 // ============================================================================
 
-type RibbonTab = 'home' | 'edit';
+type RibbonTab = 'home' | 'edit' | 'tools';
 
 export const Ribbon = memo(function Ribbon() {
   const [activeTab, setActiveTab] = useState<RibbonTab>('home');
@@ -309,9 +384,174 @@ export const Ribbon = memo(function Ribbon() {
   const setEditMode = useAppStore((s) => s.setEditMode);
   const clearSelection = useAppStore((s) => s.clearSelection);
   const selectedPointIndices = useAppStore((s) => s.selectedPointIndices);
+  const activePointcloudId = useAppStore((s) => s.activePointcloudId);
+  const incrementTransformVersion = useAppStore((s) => s.incrementTransformVersion);
+  const showBAG3DPanel = useAppStore((s) => s.showBAG3DPanel);
+  const setShowBAG3DPanel = useAppStore((s) => s.setShowBAG3DPanel);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Transform inputs
+  const [translateX, setTranslateX] = useState(0);
+  const [translateY, setTranslateY] = useState(0);
+  const [translateZ, setTranslateZ] = useState(0);
+  const [scaleX, setScaleX] = useState(1);
+  const [scaleY, setScaleY] = useState(1);
+  const [scaleZ, setScaleZ] = useState(1);
+  const [thinPercent, setThinPercent] = useState(50);
+
   const totalSelected = Object.values(selectedPointIndices).reduce((sum, arr) => sum + arr.length, 0);
+
+  const hasActivePointcloud = !!activePointcloudId;
+
+  const handleTranslate = () => {
+    if (!activePointcloudId) return;
+    translatePointcloud(activePointcloudId, translateX, translateY, translateZ);
+    incrementTransformVersion(activePointcloudId);
+  };
+
+  const handleScale = () => {
+    if (!activePointcloudId) return;
+    scalePointcloud(activePointcloudId, scaleX, scaleY, scaleZ);
+    incrementTransformVersion(activePointcloudId);
+  };
+
+  const handleThin = () => {
+    if (!activePointcloudId) return;
+    const result = thinPointcloud(activePointcloudId, thinPercent);
+    if (result) {
+      const newCount = result.positions.length / 3;
+      useAppStore.setState((s) => {
+        const pc = s.pointclouds.find((p) => p.id === activePointcloudId);
+        if (pc) pc.totalPoints = newCount;
+      });
+      incrementTransformVersion(activePointcloudId);
+    }
+  };
+
+  const [reconstructing, setReconstructing] = useState(false);
+  const [reconOpen, setReconOpen] = useState(false);
+  const [reconPhase, setReconPhase] = useState('');
+  const [reconPercent, setReconPercent] = useState(0);
+  const reconCancelledRef = useRef({ value: false });
+
+  const handleReconstruct = async () => {
+    if (!activePointcloudId || reconstructing) return;
+    const parsed = getBrowserPointcloud(activePointcloudId);
+    if (!parsed) {
+      alert('No pointcloud data found. Load a pointcloud first.');
+      return;
+    }
+
+    reconCancelledRef.current = { value: false };
+    setReconstructing(true);
+    setReconOpen(true);
+    setReconPhase('Initializing');
+    setReconPercent(0);
+
+    try {
+      const result = await reconstructSurface(parsed.positions, {
+        kNeighbors: 15,
+        onProgress: (progress: ReconstructionProgress) => {
+          setReconPhase(progress.phase);
+          setReconPercent(progress.percent);
+        },
+        cancelled: reconCancelledRef.current,
+      });
+
+      // Update parsed data with mesh indices
+      parsed.indices = result.indices;
+
+      // Re-store and trigger viewer rebuild
+      setBrowserPointcloud(activePointcloudId, parsed);
+      incrementTransformVersion(activePointcloudId);
+
+      // Brief "complete" state before closing
+      setReconPhase(`Complete — ${result.indices.length / 3} triangles`);
+      setReconPercent(100);
+      await new Promise((r) => setTimeout(r, 1200));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg !== 'Reconstruction cancelled') {
+        alert(`Reconstruction failed:\n${msg}`);
+      }
+    } finally {
+      setReconstructing(false);
+      setReconOpen(false);
+    }
+  };
+
+  const handleReconCancel = () => {
+    reconCancelledRef.current.value = true;
+    setReconPhase('Cancelling...');
+  };
+
+  const handleExportOBJ = () => {
+    if (!activePointcloudId) return;
+    const parsed = getBrowserPointcloud(activePointcloudId);
+    if (!parsed) {
+      alert('No pointcloud data found.');
+      return;
+    }
+    if (!parsed.indices || parsed.indices.length === 0) {
+      alert('No mesh data. Run "Reconstruct" first to generate a mesh.');
+      return;
+    }
+
+    const pc = useAppStore.getState().pointclouds.find((p) => p.id === activePointcloudId);
+    const baseName = pc?.fileName?.replace(/\.[^.]+$/, '') ?? 'mesh';
+
+    const obj = exportToOBJ(parsed.positions, parsed.indices, undefined, parsed.colors);
+    downloadOBJ(obj, `${baseName}.obj`);
+  };
+
+  const handleExport = (format: 'ply-binary' | 'ply-ascii' | 'obj' | 'xyz' | 'pts' | 'csv') => {
+    if (!activePointcloudId) return;
+    const parsed = getBrowserPointcloud(activePointcloudId);
+    if (!parsed) {
+      alert('No pointcloud data found. Load a pointcloud first.');
+      return;
+    }
+
+    const pc = useAppStore.getState().pointclouds.find((p) => p.id === activePointcloudId);
+    const baseName = pc?.fileName?.replace(/\.[^.]+$/, '') ?? 'pointcloud';
+
+    switch (format) {
+      case 'ply-binary': {
+        const blob = exportToPLY(parsed, true);
+        downloadFile(blob, `${baseName}.ply`);
+        break;
+      }
+      case 'ply-ascii': {
+        const blob = exportToPLY(parsed, false);
+        downloadFile(blob, `${baseName}.ply`);
+        break;
+      }
+      case 'obj': {
+        if (!parsed.indices || parsed.indices.length === 0) {
+          alert('No mesh data. Run "Reconstruct" first to export OBJ.');
+          return;
+        }
+        const obj = exportToOBJ(parsed.positions, parsed.indices, undefined, parsed.colors);
+        downloadOBJ(obj, `${baseName}.obj`);
+        break;
+      }
+      case 'xyz': {
+        const content = exportToXYZ(parsed);
+        downloadFile(content, `${baseName}.xyz`);
+        break;
+      }
+      case 'pts': {
+        const content = exportToPTS(parsed);
+        downloadFile(content, `${baseName}.pts`);
+        break;
+      }
+      case 'csv': {
+        const content = exportToCSV(parsed);
+        downloadFile(content, `${baseName}.csv`);
+        break;
+      }
+    }
+  };
 
   const isTauri = !!(window as any).__TAURI_INTERNALS__;
 
@@ -346,6 +586,7 @@ export const Ribbon = memo(function Ribbon() {
             visible: true,
             indexingProgress: 0,
             indexingPhase: 'Opening...',
+            transformVersion: 0,
           });
 
           invoke('pointcloud_open', { id, path: filePath }).then((meta: any) => {
@@ -397,6 +638,7 @@ export const Ribbon = memo(function Ribbon() {
         visible: true,
         indexingProgress: 0,
         indexingPhase: 'Reading file...',
+        transformVersion: 0,
       });
 
       try {
@@ -467,6 +709,12 @@ export const Ribbon = memo(function Ribbon() {
         >
           Edit
         </button>
+        <button
+          className={`ribbon-tab ${activeTab === 'tools' ? 'active' : ''}`}
+          onClick={() => setActiveTab('tools')}
+        >
+          Tools
+        </button>
       </div>
 
       {/* Content area */}
@@ -481,6 +729,20 @@ export const Ribbon = memo(function Ribbon() {
                 label="Import"
                 onClick={handleImport}
                 tooltip="Import pointcloud (.las/.laz)"
+              />
+              <RibbonDropdownButton
+                icon={<Download size={20} />}
+                label="Export"
+                disabled={!hasActivePointcloud}
+                tooltip="Export pointcloud to file"
+                items={[
+                  { label: 'PLY (Binary)', onClick: () => handleExport('ply-binary') },
+                  { label: 'PLY (ASCII)', onClick: () => handleExport('ply-ascii') },
+                  { label: 'OBJ (Mesh)', onClick: () => handleExport('obj') },
+                  { label: 'XYZ', onClick: () => handleExport('xyz') },
+                  { label: 'PTS', onClick: () => handleExport('pts') },
+                  { label: 'CSV', onClick: () => handleExport('csv') },
+                ]}
               />
             </RibbonGroup>
 
@@ -620,8 +882,123 @@ export const Ribbon = memo(function Ribbon() {
             )}
           </div>
         </div>
+
+        {/* Tools tab */}
+        <div className={`ribbon-content ${activeTab === 'tools' ? 'active' : ''}`}>
+          <div className="ribbon-groups">
+            {/* Translate Group */}
+            <RibbonGroup label="Translate">
+              <div className="ribbon-transform-inputs">
+                <div className="ribbon-input-row">
+                  <label>X</label>
+                  <input type="number" className="ribbon-input" value={translateX} onChange={(e) => setTranslateX(Number(e.target.value))} step="1" />
+                </div>
+                <div className="ribbon-input-row">
+                  <label>Y</label>
+                  <input type="number" className="ribbon-input" value={translateY} onChange={(e) => setTranslateY(Number(e.target.value))} step="1" />
+                </div>
+                <div className="ribbon-input-row">
+                  <label>Z</label>
+                  <input type="number" className="ribbon-input" value={translateZ} onChange={(e) => setTranslateZ(Number(e.target.value))} step="1" />
+                </div>
+              </div>
+              <RibbonButton
+                icon={<Move size={20} />}
+                label="Apply"
+                onClick={handleTranslate}
+                disabled={!hasActivePointcloud}
+                tooltip="Translate pointcloud"
+              />
+            </RibbonGroup>
+
+            {/* Scale Group */}
+            <RibbonGroup label="Scale">
+              <div className="ribbon-transform-inputs">
+                <div className="ribbon-input-row">
+                  <label>X</label>
+                  <input type="number" className="ribbon-input" value={scaleX} onChange={(e) => setScaleX(Number(e.target.value))} step="0.1" />
+                </div>
+                <div className="ribbon-input-row">
+                  <label>Y</label>
+                  <input type="number" className="ribbon-input" value={scaleY} onChange={(e) => setScaleY(Number(e.target.value))} step="0.1" />
+                </div>
+                <div className="ribbon-input-row">
+                  <label>Z</label>
+                  <input type="number" className="ribbon-input" value={scaleZ} onChange={(e) => setScaleZ(Number(e.target.value))} step="0.1" />
+                </div>
+              </div>
+              <RibbonButton
+                icon={<Maximize size={20} />}
+                label="Apply"
+                onClick={handleScale}
+                disabled={!hasActivePointcloud}
+                tooltip="Scale pointcloud around centroid"
+              />
+            </RibbonGroup>
+
+            {/* Thin Group */}
+            <RibbonGroup label="Thin">
+              <div className="ribbon-transform-inputs">
+                <div className="ribbon-input-row">
+                  <label>%</label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="100"
+                    value={thinPercent}
+                    onChange={(e) => setThinPercent(Number(e.target.value))}
+                    className="w-16"
+                  />
+                  <span className="ribbon-input-value">{thinPercent}%</span>
+                </div>
+              </div>
+              <RibbonButton
+                icon={<Filter size={20} />}
+                label="Apply"
+                onClick={handleThin}
+                disabled={!hasActivePointcloud}
+                tooltip={`Keep ${thinPercent}% of points`}
+              />
+            </RibbonGroup>
+
+            {/* Surface Reconstruction Group */}
+            <RibbonGroup label="Surface">
+              <RibbonButton
+                icon={<Shapes size={20} />}
+                label={reconstructing ? 'Working...' : 'Reconstruct'}
+                onClick={handleReconstruct}
+                disabled={!hasActivePointcloud || reconstructing}
+                tooltip="Reconstruct triangle mesh from pointcloud"
+              />
+              <RibbonButton
+                icon={<Download size={20} />}
+                label="Export OBJ"
+                onClick={handleExportOBJ}
+                disabled={!hasActivePointcloud}
+                tooltip="Export mesh as Wavefront OBJ file"
+              />
+            </RibbonGroup>
+
+            {/* 3D BAG Group */}
+            <RibbonGroup label="Extensions">
+              <RibbonButton
+                icon={<Building2 size={20} />}
+                label="3D BAG"
+                onClick={() => setShowBAG3DPanel(!showBAG3DPanel)}
+                active={showBAG3DPanel}
+                tooltip="Download 3D buildings from 3dbag.nl"
+              />
+            </RibbonGroup>
+          </div>
+        </div>
       </div>
     </div>
+    <ReconstructionProgressDialog
+      open={reconOpen}
+      phase={reconPhase}
+      percent={reconPercent}
+      onCancel={handleReconCancel}
+    />
     </>
   );
 });

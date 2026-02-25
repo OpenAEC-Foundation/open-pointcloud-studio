@@ -18,6 +18,47 @@ import { createPointcloudMaterial, updatePointcloudMaterial } from '../../engine
 // Dynamically import OrbitControls
 let OrbitControls: any = null;
 
+// Global scene reference for BAG3D mesh injection
+let _viewerScene: THREE.Scene | null = null;
+let _viewerCamera: THREE.PerspectiveCamera | null = null;
+let _viewerControls: any = null;
+let _meshMaterialRef: { current: THREE.MeshStandardMaterial | null } = { current: null };
+let _bag3dMeshes: THREE.Mesh[] = [];
+
+export function addBAG3DMeshToScene(geometry: THREE.BufferGeometry): void {
+  if (!_viewerScene) return;
+
+  if (!_meshMaterialRef.current) {
+    _meshMaterialRef.current = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      metalness: 0.1,
+      roughness: 0.8,
+    });
+  }
+
+  const mesh = new THREE.Mesh(geometry, _meshMaterialRef.current);
+  _viewerScene.add(mesh);
+  _bag3dMeshes.push(mesh);
+
+  // Auto-fit camera to the new mesh
+  geometry.computeBoundingSphere();
+  const sphere = geometry.boundingSphere;
+  if (sphere && _viewerCamera && _viewerControls) {
+    const dist = sphere.radius * 2.5;
+    _viewerCamera.far = Math.max(_viewerCamera.far, dist * 20);
+    _viewerCamera.updateProjectionMatrix();
+    _viewerControls.maxDistance = Math.max(_viewerControls.maxDistance, dist * 10);
+    _viewerCamera.position.set(
+      sphere.center.x + dist * 0.5,
+      sphere.center.y + dist * 0.7,
+      sphere.center.z + dist * 0.5,
+    );
+    _viewerControls.target.copy(sphere.center);
+    _viewerControls.update();
+  }
+}
+
 const isTauri = !!(window as any).__TAURI_INTERNALS__;
 
 interface BoxSelectState {
@@ -39,6 +80,7 @@ const PointcloudViewerInner = () => {
   const browserMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const browserMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
   const browserMeshMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
+  const transformVersionsRef = useRef<Map<string, number>>(new Map());
   const animFrameRef = useRef<number>(0);
 
   const pointclouds = useAppStore((s) => s.pointclouds);
@@ -281,6 +323,7 @@ const PointcloudViewerInner = () => {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1a1a2e);
     sceneRef.current = scene;
+    _viewerScene = scene;
 
     // Camera
     const width = container.clientWidth;
@@ -289,6 +332,7 @@ const PointcloudViewerInner = () => {
     camera.position.set(0, 50, 100);
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
+    _viewerCamera = camera;
 
     // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -308,6 +352,7 @@ const PointcloudViewerInner = () => {
       controls.maxDistance = 50000;
       controls.minDistance = 0.1;
       controlsRef.current = controls;
+      _viewerControls = controls;
 
       // Apply current editMode state
       controls.enabled = !useAppStore.getState().editMode;
@@ -379,6 +424,15 @@ const PointcloudViewerInner = () => {
         browserMeshMaterialRef.current.dispose();
         browserMeshMaterialRef.current = null;
       }
+      // Dispose BAG3D meshes
+      for (const mesh of _bag3dMeshes) {
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+      }
+      _bag3dMeshes = [];
+      _viewerScene = null;
+      _viewerCamera = null;
+      _viewerControls = null;
 
       // Dispose Three.js resources
       if (controlsRef.current) controlsRef.current.dispose();
@@ -534,6 +588,84 @@ const PointcloudViewerInner = () => {
             }
           }
         }
+      }
+    }
+  }, [pointclouds]);
+
+  // Rebuild geometry when transformVersion changes (translate/scale/thin/reconstruct)
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    for (const pc of pointclouds) {
+      const prevVersion = transformVersionsRef.current.get(pc.id) || 0;
+      const currentVersion = pc.transformVersion || 0;
+
+      if (currentVersion <= prevVersion) continue;
+      transformVersionsRef.current.set(pc.id, currentVersion);
+
+      const parsed = getBrowserPointcloud(pc.id);
+      if (!parsed) continue;
+
+      const hasMesh = parsed.indices && parsed.indices.length > 0;
+
+      // Remove old point cloud or mesh for this ID
+      const oldPts = browserPointsRef.current.get(pc.id);
+      if (oldPts) {
+        scene.remove(oldPts);
+        oldPts.geometry.dispose();
+        browserPointsRef.current.delete(pc.id);
+      }
+      const oldMesh = browserMeshesRef.current.get(pc.id);
+      if (oldMesh) {
+        scene.remove(oldMesh);
+        oldMesh.geometry.dispose();
+        browserMeshesRef.current.delete(pc.id);
+      }
+
+      if (hasMesh) {
+        // Rebuild as mesh
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(parsed.positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(parsed.colors, 3));
+        geometry.setIndex(new THREE.BufferAttribute(parsed.indices!, 1));
+        geometry.computeVertexNormals();
+
+        if (!browserMeshMaterialRef.current) {
+          browserMeshMaterialRef.current = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            side: THREE.DoubleSide,
+            metalness: 0.1,
+            roughness: 0.8,
+          });
+        }
+
+        const mesh = new THREE.Mesh(geometry, browserMeshMaterialRef.current);
+        scene.add(mesh);
+        browserMeshesRef.current.set(pc.id, mesh);
+      } else {
+        // Rebuild as point cloud
+        if (!browserMaterialRef.current) {
+          browserMaterialRef.current = createPointcloudMaterial({
+            pointSize,
+            colorMode,
+            screenHeight: containerRef.current?.clientHeight ?? 800,
+            elevationMin: pc.bounds.minZ,
+            elevationMax: pc.bounds.maxZ,
+          });
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(parsed.positions, 3));
+        geometry.setAttribute('aColor', new THREE.BufferAttribute(parsed.colors, 3));
+        geometry.setAttribute('aIntensity', new THREE.BufferAttribute(parsed.intensities, 1));
+        geometry.setAttribute('aClassification', new THREE.BufferAttribute(parsed.classifications, 1));
+        const numPoints = parsed.positions.length / 3;
+        geometry.setAttribute('aSelected', new THREE.BufferAttribute(new Float32Array(numPoints), 1));
+
+        const points = new THREE.Points(geometry, browserMaterialRef.current);
+        scene.add(points);
+        browserPointsRef.current.set(pc.id, points);
       }
     }
   }, [pointclouds]);

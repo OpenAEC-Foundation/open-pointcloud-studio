@@ -474,6 +474,54 @@
   border-radius: 2px;
 }
 
+/* Transform tool inputs */
+.ribbon-transform-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 4px;
+  justify-content: center;
+}
+
+.ribbon-transform-inputs .ribbon-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+}
+
+.ribbon-transform-inputs .ribbon-input-row label {
+  font-size: 10px;
+  color: var(--theme-text-muted);
+  width: 12px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.ribbon-transform-inputs .ribbon-input {
+  width: 54px;
+  padding: 2px 4px;
+  font-size: 11px;
+  background: var(--theme-input-bg, #0f172a);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  color: var(--theme-text);
+  outline: none;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+
+.ribbon-transform-inputs .ribbon-input:focus {
+  border-color: var(--theme-accent, #3b82f6);
+}
+
+.ribbon-input-value {
+  font-size: 10px;
+  color: var(--theme-text);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  min-width: 28px;
+  text-align: right;
+}
+
 /* Custom Tooltip */
 .ribbon-tooltip {
   background: var(--theme-dropdown-bg);

@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { PanelRightOpen, PanelRightClose } from 'lucide-react';
 import { MenuBar } from './components/layout/MenuBar/MenuBar';
 import { Ribbon } from './components/layout/Ribbon/Ribbon';
 import { StatusBar } from './components/layout/StatusBar/StatusBar';
-import { PointcloudViewer } from './components/canvas/PointcloudViewer';
+import { PointcloudViewer, addBAG3DMeshToScene } from './components/canvas/PointcloudViewer';
 import { PointcloudPanel } from './components/panels/PointcloudPanel';
+import { BAG3DPanel } from './components/panels/BAG3DPanel';
 import { useAppStore } from './state/appStore';
 
 function App() {
@@ -16,6 +17,13 @@ function App() {
 
   const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
   const toggleRightPanel = useAppStore((s) => s.toggleRightPanel);
+  const showBAG3DPanel = useAppStore((s) => s.showBAG3DPanel);
+  const setShowBAG3DPanel = useAppStore((s) => s.setShowBAG3DPanel);
+
+  const handleBuildingsLoaded = useCallback((geometry: any, buildingCount: number) => {
+    addBAG3DMeshToScene(geometry);
+    console.log(`Added ${buildingCount} buildings to the scene`);
+  }, []);
 
   // Right panel resizing
   const [rightPanelWidth, setRightPanelWidth] = useState(256);
@@ -128,6 +136,14 @@ function App() {
 
       {/* Bottom Status Bar */}
       <StatusBar />
+
+      {/* BAG3D Panel (modal overlay) */}
+      {showBAG3DPanel && (
+        <BAG3DPanel
+          onClose={() => setShowBAG3DPanel(false)}
+          onBuildingsLoaded={handleBuildingsLoaded}
+        />
+      )}
     </div>
   );
 }

@@ -25,6 +25,7 @@ export interface PointcloudEntry {
   visible: boolean;
   indexingProgress: number;
   indexingPhase: string;
+  transformVersion: number;
 }
 
 export type PointcloudColorMode = 'rgb' | 'intensity' | 'elevation' | 'classification';
@@ -78,6 +79,7 @@ export interface PointcloudActions {
   setEditMode: (enabled: boolean) => void;
   setSelectedPoints: (pcId: string, indices: number[]) => void;
   clearSelection: () => void;
+  incrementTransformVersion: (id: string) => void;
 }
 
 export type PointcloudSlice = PointcloudState & PointcloudActions;
@@ -195,5 +197,12 @@ export const createPointcloudSlice = (
 
   clearSelection: () => {
     set((s) => { s.selectedPointIndices = {}; });
+  },
+
+  incrementTransformVersion: (id: string) => {
+    set((s) => {
+      const pc = s.pointclouds.find((p) => p.id === id);
+      if (pc) pc.transformVersion = (pc.transformVersion || 0) + 1;
+    });
   },
 });

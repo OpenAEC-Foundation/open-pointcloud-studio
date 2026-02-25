@@ -559,3 +559,281 @@ body,
   font-size: 11px;
   color: var(--theme-text-muted);
 }
+
+/* ============================================================================
+   BAG3D Panel (Map + Download)
+   ============================================================================ */
+
+.bag3d-panel-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bag3d-panel {
+  width: 700px;
+  max-width: 90vw;
+  height: 550px;
+  max-height: 85vh;
+  background: var(--theme-bg-panel, #1e293b);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.bag3d-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--theme-border-light);
+  flex-shrink: 0;
+}
+
+.bag3d-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--theme-text);
+}
+
+.bag3d-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--theme-text-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.bag3d-close-btn:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+.bag3d-map-container {
+  flex: 1;
+  min-height: 300px;
+}
+
+.bag3d-map-container .leaflet-container {
+  height: 100%;
+  width: 100%;
+  background: #1a1a2e;
+}
+
+.bag3d-controls {
+  padding: 10px 14px;
+  border-top: 1px solid var(--theme-border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.bag3d-control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bag3d-draw-btn,
+.bag3d-download-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  border: 1px solid var(--theme-border-light);
+  border-radius: 4px;
+  background: var(--theme-input-bg, #0f172a);
+  color: var(--theme-text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s;
+}
+
+.bag3d-draw-btn:hover,
+.bag3d-download-btn:hover {
+  background: var(--theme-hover);
+  border-color: var(--theme-accent, #3b82f6);
+}
+
+.bag3d-draw-btn.active {
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
+  color: #fff;
+}
+
+.bag3d-draw-btn:disabled,
+.bag3d-download-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.bag3d-download-btn {
+  background: #1d4ed8;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.bag3d-download-btn:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.bag3d-lod-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--theme-text-dim);
+}
+
+.bag3d-lod-select select {
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--theme-input-bg, #0f172a);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 4px;
+  color: var(--theme-text);
+  outline: none;
+}
+
+.bag3d-bbox-info {
+  font-size: 11px;
+  color: var(--theme-text-dim);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+
+.bag3d-progress {
+  font-size: 11px;
+  color: var(--theme-accent, #3b82f6);
+}
+
+.bag3d-error {
+  font-size: 11px;
+  color: #ef4444;
+}
+
+/* ============================================================================
+   Reconstruction Progress Dialog
+   ============================================================================ */
+
+.recon-progress-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.recon-progress-panel {
+  width: 400px;
+  max-width: 90vw;
+  background: var(--theme-bg-panel, #1e293b);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.recon-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--theme-border-light);
+}
+
+.recon-progress-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--theme-text);
+}
+
+.recon-progress-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--theme-text-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.recon-progress-close-btn:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+.recon-progress-body {
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.recon-progress-phase {
+  font-size: 12px;
+  color: var(--theme-text-dim);
+}
+
+.recon-progress-bar-track {
+  width: 100%;
+  height: 8px;
+  background: var(--theme-bg-deep, #0f172a);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.recon-progress-bar-fill {
+  height: 100%;
+  background: var(--theme-accent, #3b82f6);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.recon-progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--theme-text-muted);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+
+.recon-progress-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  border-top: 1px solid var(--theme-border-light);
+}
+
+.recon-progress-cancel-btn {
+  background: transparent;
+  border: 1px solid var(--theme-border-light);
+  color: var(--theme-text-dim);
+  padding: 5px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.recon-progress-cancel-btn:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
