@@ -1,5 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
 
+  <!-- Dark background -->
+  <rect width="100" height="100" rx="12" ry="12" fill="#0f172a"/>
+
   <!-- Steel structure concept — I-beam / truss frame made of point cloud dots -->
 
   <!-- Left column (vertical I-beam) -->
