@@ -14,7 +14,7 @@ export default defineConfig({
   clearScreen: false,
   // Tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 3000,
+    port: 3013,
     strictPort: false,
     watch: {
       // Tell vite to ignore watching `src-tauri`
@@ -28,18 +28,21 @@ export default defineConfig({
       },
     },
   },
-  // To make use of `TAURI_DEBUG` and other env variables
+  // To make use of `TAURI_ENV_DEBUG` and other env variables
   envPrefix: ['VITE_', 'TAURI_'],
   optimizeDeps: {
     exclude: ['laz-perf'],
   },
+  worker: {
+    format: 'es',
+  },
   build: {
     // Tauri uses Chromium on Windows and WebKit on macOS and Linux
-    target: process.env.TAURI_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+    target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
     // Don't minify for debug builds
-    minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
+    minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
     // Produce sourcemaps for debug builds
-    sourcemap: !!process.env.TAURI_DEBUG,
+    sourcemap: !!process.env.TAURI_ENV_DEBUG,
     chunkSizeWarningLimit: 2048,
   },
 });

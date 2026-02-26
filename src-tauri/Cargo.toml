@@ -1,6 +1,6 @@
 [package]
 name = "open-pointcloud-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "A cross-platform pointcloud viewer and editor"
 authors = ["Open Pointcloud Studio Contributors"]
 license = "LGPL-3.0-or-later"
@@ -22,10 +22,11 @@ serde_json = "1"
 tiny_http = "0.12"
 clap = { version = "4", features = ["derive"] }
 tauri-plugin-http = "2"
-tauri-plugin-updater = "2"
+
 tauri-plugin-process = "2"
 memmap2 = "0.9"
 rayon = "1.10"
+laz = "0.9"
 
 [features]
 default = ["custom-protocol"]

@@ -6,6 +6,7 @@ import { StatusBar } from './components/layout/StatusBar/StatusBar';
 import { PointcloudViewer, addBAG3DMeshToScene } from './components/canvas/PointcloudViewer';
 import { PointcloudPanel } from './components/panels/PointcloudPanel';
 import { BAG3DPanel } from './components/panels/BAG3DPanel';
+import { SettingsDialog } from './components/SettingsDialog/SettingsDialog';
 import { useAppStore } from './state/appStore';
 
 function App() {
@@ -19,6 +20,7 @@ function App() {
   const toggleRightPanel = useAppStore((s) => s.toggleRightPanel);
   const showBAG3DPanel = useAppStore((s) => s.showBAG3DPanel);
   const setShowBAG3DPanel = useAppStore((s) => s.setShowBAG3DPanel);
+  const [showSettings, setShowSettings] = useState(false);
 
   const handleBuildingsLoaded = useCallback((geometry: any, buildingCount: number) => {
     addBAG3DMeshToScene(geometry);
@@ -74,7 +76,7 @@ function App() {
   return (
     <div className="flex flex-col h-full w-full bg-cad-bg text-cad-text no-select">
       {/* Menu Bar */}
-      <MenuBar />
+      <MenuBar onSettingsClick={() => setShowSettings(true)} />
 
       {/* Ribbon */}
       <Ribbon />
@@ -136,6 +138,11 @@ function App() {
 
       {/* Bottom Status Bar */}
       <StatusBar />
+
+      {/* Settings Dialog */}
+      {showSettings && (
+        <SettingsDialog onClose={() => setShowSettings(false)} />
+      )}
 
       {/* BAG3D Panel (modal overlay) */}
       {showBAG3DPanel && (

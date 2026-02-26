@@ -5,25 +5,7 @@
  */
 
 import type { ParsedPointcloud, LASHeader } from './LASParser';
-
-/** Point formats that include RGB color data */
-const FORMATS_WITH_RGB = new Set([2, 3, 5, 7, 8, 10]);
-
-function getRGBOffset(format: number): number {
-  switch (format) {
-    case 2: return 20;
-    case 3: return 28;
-    case 5: return 28;
-    case 7: return 30;
-    case 8: return 30;
-    case 10: return 30;
-    default: return -1;
-  }
-}
-
-function getClassificationOffset(format: number): number {
-  return format >= 6 ? 16 : 15;
-}
+import { FORMATS_WITH_RGB, getRGBOffset, getClassificationOffset } from './LASParser';
 
 export async function parseLAZ(buffer: ArrayBuffer): Promise<ParsedPointcloud> {
   // Dynamically import laz-perf

@@ -58,14 +58,14 @@ pub struct ShellResult {
 /// Execute a shell command (git, claude, or other allowed commands)
 #[tauri::command]
 pub async fn execute_shell(program: String, args: Vec<String>) -> ShellResult {
-    let allowed_programs = ["git", "claude", "cmd"];
+    let allowed_programs = ["git", "claude"];
     let program_name = program.to_lowercase();
 
     if !allowed_programs.iter().any(|&p| program_name == p || program_name.ends_with(&format!("\\{}", p)) || program_name.ends_with(&format!("/{}", p))) {
         return ShellResult {
             success: false,
             stdout: String::new(),
-            stderr: format!("Program '{}' is not allowed. Allowed: git, claude, cmd", program),
+            stderr: format!("Program '{}' is not allowed. Allowed: git, claude", program),
             code: -1,
         };
     }

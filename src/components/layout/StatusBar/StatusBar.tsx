@@ -1,11 +1,6 @@
 import { memo } from 'react';
 import { useAppStore } from '../../../state/appStore';
-
-function formatPoints(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
-  return n.toString();
-}
+import { formatPoints } from '../../../utils/format';
 
 export const StatusBar = memo(function StatusBar() {
   const pointclouds = useAppStore((s) => s.pointclouds);

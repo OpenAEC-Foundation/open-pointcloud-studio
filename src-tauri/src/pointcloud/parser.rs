@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 use memmap2::Mmap;
 
@@ -160,13 +161,8 @@ impl PointcloudParser {
         }
     }
 
-    /// Read a range of points. Returns a Vec of PointRecords.
-    /// For LAZ files, this currently reads uncompressed LAS only.
+    /// Read a range of points from an uncompressed LAS file.
     pub fn read_points(&self, start_index: u64, count: u64) -> Result<Vec<PointRecord>, String> {
-        if self.is_laz {
-            return self.read_laz_points(start_index, count);
-        }
-
         let record_len = self.header.point_data_record_length as u64;
         let data_start = self.header.offset_to_points as u64;
         let total = self.header.number_of_points;
@@ -246,11 +242,111 @@ impl PointcloudParser {
         }
     }
 
-    /// LAZ decompression stub - reads via las crate for LAZ support
-    fn read_laz_points(&self, _start_index: u64, _count: u64) -> Result<Vec<PointRecord>, String> {
-        // For LAZ files we need the laz crate for decompression.
-        // This is a streaming reader that decompresses on the fly.
-        Err("LAZ decompression requires streaming reader - use read_all_points_streaming for LAZ files".into())
+    /// Find the LASzip VLR in the file header and return its data
+    fn find_laszip_vlr(&self) -> Result<Vec<u8>, String> {
+        let data = &self.mmap[..];
+        let header_size = self.header.offset_to_points as usize;
+
+        // VLRs start after the fixed header (94 bytes for LAS 1.2, varies by version)
+        let vlr_start = if self.header.version_minor >= 3 { 235usize } else { 227usize };
+        let num_vlrs = u32::from_le_bytes([data[100], data[101], data[102], data[103]]) as usize;
+
+        let mut offset = vlr_start;
+        for _ in 0..num_vlrs {
+            if offset + 54 > header_size { break; }
+
+            // VLR header: reserved(2) + user_id(16) + record_id(2) + record_length(2) + description(32)
+            let user_id = &data[offset + 2..offset + 18];
+            let record_id = u16::from_le_bytes([data[offset + 18], data[offset + 19]]);
+            let record_length = u16::from_le_bytes([data[offset + 20], data[offset + 21]]) as usize;
+
+            let vlr_data_start = offset + 54;
+            let vlr_data_end = vlr_data_start + record_length;
+
+            // LASzip VLR: user_id starts with "laszip encoded", record_id = 22204
+            if record_id == 22204 && user_id.starts_with(b"laszip encoded") {
+                if vlr_data_end <= data.len() {
+                    return Ok(data[vlr_data_start..vlr_data_end].to_vec());
+                }
+            }
+
+            offset = vlr_data_end;
+        }
+
+        Err("LASzip VLR not found in LAZ file".into())
+    }
+
+    /// Decompress and read all points from a LAZ file using the laz crate.
+    fn read_laz_all_points(&self) -> Result<Vec<PointRecord>, String> {
+        let vlr_data = self.find_laszip_vlr()?;
+        let vlr = laz::LazVlr::from_buffer(&vlr_data)
+            .map_err(|e| format!("Failed to parse LASzip VLR: {}", e))?;
+
+        let compressed_data = &self.mmap[..];
+        let mut cursor = Cursor::new(compressed_data);
+        cursor.seek(SeekFrom::Start(self.header.offset_to_points as u64))
+            .map_err(|e| format!("Failed to seek to point data: {}", e))?;
+
+        let mut decompressor = laz::LasZipDecompressor::new(cursor, vlr)
+            .map_err(|e| format!("Failed to create LAZ decompressor: {}", e))?;
+
+        self.decompress_laz_points(&mut decompressor)
+    }
+
+    /// Decompress LAZ points using the laz crate decompressor
+    fn decompress_laz_points<R: Read + Seek + Send>(
+        &self,
+        decompressor: &mut laz::LasZipDecompressor<'_, R>,
+    ) -> Result<Vec<PointRecord>, String> {
+        let total = self.header.number_of_points as usize;
+        let record_len = self.header.point_data_record_length as usize;
+        let scale = &self.header.scale;
+        let offset = &self.header.offset;
+        let format = self.header.point_data_format;
+        let has_color = self.header.has_color;
+        let color_offset = Self::color_byte_offset(format);
+
+        let mut points = Vec::with_capacity(total);
+        let mut record_buf = vec![0u8; record_len];
+
+        for _ in 0..total {
+            decompressor.decompress_one(&mut record_buf)
+                .map_err(|e| format!("LAZ decompression error: {}", e))?;
+
+            let rec = &record_buf;
+
+            let xi = i32::from_le_bytes([rec[0], rec[1], rec[2], rec[3]]);
+            let yi = i32::from_le_bytes([rec[4], rec[5], rec[6], rec[7]]);
+            let zi = i32::from_le_bytes([rec[8], rec[9], rec[10], rec[11]]);
+
+            let x = xi as f64 * scale[0] + offset[0];
+            let y = yi as f64 * scale[1] + offset[1];
+            let z = zi as f64 * scale[2] + offset[2];
+
+            let intensity = u16::from_le_bytes([rec[12], rec[13]]);
+
+            let classification = if format >= 6 {
+                rec[16]
+            } else {
+                rec[15]
+            };
+
+            let (r, g, b) = if has_color && color_offset > 0 && color_offset + 5 < rec.len() {
+                let co = color_offset;
+                let r16 = u16::from_le_bytes([rec[co], rec[co + 1]]);
+                let g16 = u16::from_le_bytes([rec[co + 2], rec[co + 3]]);
+                let b16 = u16::from_le_bytes([rec[co + 4], rec[co + 5]]);
+                ((r16 >> 8) as u8, (g16 >> 8) as u8, (b16 >> 8) as u8)
+            } else {
+                (128, 128, 128)
+            };
+
+            points.push(PointRecord {
+                x, y, z, r, g, b, intensity, classification,
+            });
+        }
+
+        Ok(points)
     }
 
     /// Streaming iterator over all points - works for both LAS and LAZ.
@@ -259,6 +355,25 @@ impl PointcloudParser {
     where
         F: FnMut(&[PointRecord], u64) -> bool, // return false to stop
     {
+        if self.is_laz {
+            // For LAZ: decompress all points, then deliver in batches
+            let all_points = self.read_laz_all_points()?;
+            let total = all_points.len() as u64;
+            let mut offset = 0u64;
+
+            while offset < total {
+                let end = (offset + batch_size).min(total) as usize;
+                let batch = &all_points[offset as usize..end];
+                if !callback(batch, offset) {
+                    break;
+                }
+                offset = end as u64;
+            }
+
+            return Ok(());
+        }
+
+        // For uncompressed LAS: read in batches from memory-mapped file
         let total = self.header.number_of_points;
         let mut offset = 0u64;
 

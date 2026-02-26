@@ -342,6 +342,7 @@ const PointcloudViewerInner = () => {
     rendererRef.current = renderer;
 
     // OrbitControls (from three/examples)
+    // CloudCompare convention: Left=Rotate, Right=Pan, Scroll=Zoom
     import('three/examples/jsm/controls/OrbitControls.js').then((module) => {
       OrbitControls = module.OrbitControls;
       const controls = new OrbitControls(camera, renderer.domElement);
@@ -351,11 +352,34 @@ const PointcloudViewerInner = () => {
       controls.maxPolarAngle = Math.PI;
       controls.maxDistance = 50000;
       controls.minDistance = 0.1;
+      controls.mouseButtons = {
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN,
+      };
       controlsRef.current = controls;
       _viewerControls = controls;
 
       // Apply current editMode state
       controls.enabled = !useAppStore.getState().editMode;
+
+      // Double-click to set rotation center (like CloudCompare/Potree)
+      renderer.domElement.addEventListener('dblclick', (event: MouseEvent) => {
+        const rect = renderer.domElement.getBoundingClientRect();
+        const mouse = new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        );
+        const raycaster = new THREE.Raycaster();
+        raycaster.params.Points = { threshold: 1 };
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(scene.children, true);
+        if (intersects.length > 0) {
+          const point = intersects[0].point;
+          controls.target.copy(point);
+          controls.update();
+        }
+      });
     });
 
     // Lighting for mesh rendering and visual reference
@@ -367,13 +391,18 @@ const PointcloudViewerInner = () => {
     dirLight2.position.set(-1, -0.5, -1).normalize();
     scene.add(dirLight2);
 
-    // Grid helper
-    const grid = new THREE.GridHelper(100, 100, 0x444466, 0x222244);
-    scene.add(grid);
 
-    // Axes helper
-    const axes = new THREE.AxesHelper(10);
-    scene.add(axes);
+    // Ctrl + scroll wheel to adjust point size (capture phase to intercept before OrbitControls)
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const store = useAppStore.getState();
+        const delta = event.deltaY > 0 ? -0.2 : 0.2;
+        store.setPointcloudPointSize(Math.round((store.pointcloudPointSize + delta) * 10) / 10);
+      }
+    };
+    renderer.domElement.addEventListener('wheel', onWheel, { passive: false, capture: true });
 
     // Render loop
     const animate = () => {
@@ -397,6 +426,7 @@ const PointcloudViewerInner = () => {
     return () => {
       cancelAnimationFrame(animFrameRef.current);
       observer.disconnect();
+      renderer.domElement.removeEventListener('wheel', onWheel, { capture: true } as EventListenerOptions);
 
       // Dispose LOD controllers
       for (const ctrl of lodControllersRef.current.values()) {
@@ -449,11 +479,10 @@ const PointcloudViewerInner = () => {
 
     const currentIds = new Set(pointclouds.map((pc) => pc.id));
 
-    if (isTauri) {
-      // Tauri mode: use LODController
-      const existingIds = new Set(lodControllersRef.current.keys());
-
-      for (const id of existingIds) {
+    {
+      // LODController cleanup — remove deleted pointclouds
+      const existingLodIds = new Set(lodControllersRef.current.keys());
+      for (const id of existingLodIds) {
         if (!currentIds.has(id)) {
           const ctrl = lodControllersRef.current.get(id);
           if (ctrl) {
@@ -463,25 +492,41 @@ const PointcloudViewerInner = () => {
         }
       }
 
-      for (const pc of pointclouds) {
-        if (!existingIds.has(pc.id) && pc.indexingProgress >= 1.0) {
-          const ctrl = new LODController(scene, pc.id, {
-            pointSize,
-            colorMode,
-            screenHeight: containerRef.current?.clientHeight ?? 800,
-            elevationMin: pc.bounds.minZ,
-            elevationMax: pc.bounds.maxZ,
-          });
+      // For Tauri LAS/LAZ pointclouds that have no browser data, use LODController
+      if (isTauri) {
+        for (const pc of pointclouds) {
+          const hasBrowserData = !!getBrowserPointcloud(pc.id);
+          if (!hasBrowserData && !existingLodIds.has(pc.id) && pc.indexingProgress >= 1.0) {
+            console.log(`[viewer] creating LODController for ${pc.fileName} (${pc.id}), ${pc.totalPoints} points`);
+            console.time(`[viewer] LODController init ${pc.fileName}`);
+            // Compute base spacing: avg distance between points on the surface
+            const sizeX = pc.bounds.maxX - pc.bounds.minX;
+            const sizeY = pc.bounds.maxY - pc.bounds.minY;
+            const footprintArea = sizeX * sizeY;
+            const baseSpacing = Math.sqrt(footprintArea / Math.max(pc.totalPoints, 1));
 
-          const cx = (pc.bounds.minX + pc.bounds.maxX) / 2;
-          const cy = (pc.bounds.minY + pc.bounds.maxY) / 2;
-          const cz = (pc.bounds.minZ + pc.bounds.maxZ) / 2;
-          ctrl.setWorldOffset([cx, cy, cz]);
+            const ctrl = new LODController(scene, pc.id, {
+              pointSize,
+              colorMode,
+              screenHeight: containerRef.current?.clientHeight ?? 800,
+              elevationMin: pc.bounds.minZ,
+              elevationMax: pc.bounds.maxZ,
+              baseSpacing,
+            });
 
-          lodControllersRef.current.set(pc.id, ctrl);
+            const cx = (pc.bounds.minX + pc.bounds.maxX) / 2;
+            const cy = (pc.bounds.minY + pc.bounds.maxY) / 2;
+            const cz = (pc.bounds.minZ + pc.bounds.maxZ) / 2;
+            ctrl.setWorldOffset([cx, cy, cz]);
+
+            lodControllersRef.current.set(pc.id, ctrl);
+            console.timeEnd(`[viewer] LODController init ${pc.fileName}`);
+          }
         }
       }
-    } else {
+    }
+
+    {
       // Browser mode: create Three.js geometry directly from parsed data
       const existingPointIds = new Set(browserPointsRef.current.keys());
       const existingMeshIds = new Set(browserMeshesRef.current.keys());
@@ -514,9 +559,11 @@ const PointcloudViewerInner = () => {
       for (const pc of pointclouds) {
         const alreadyExists = existingPointIds.has(pc.id) || existingMeshIds.has(pc.id);
         if (!alreadyExists && pc.indexingProgress >= 1.0) {
+          console.time(`[viewer] build geometry ${pc.fileName}`);
           const parsed = getBrowserPointcloud(pc.id);
-          if (!parsed) continue;
+          if (!parsed) { console.log(`[viewer] no browser data for ${pc.id}`); continue; }
 
+          console.log(`[viewer] building Three.js geometry for ${pc.fileName}: ${parsed.positions.length / 3} points`);
           const hasMesh = parsed.indices && parsed.indices.length > 0;
           let fitGeometry: THREE.BufferGeometry | null = null;
 
@@ -568,6 +615,8 @@ const PointcloudViewerInner = () => {
             fitGeometry = geometry;
           }
 
+          console.timeEnd(`[viewer] build geometry ${pc.fileName}`);
+
           // Auto-fit camera
           if (camera && controlsRef.current && fitGeometry) {
             fitGeometry.computeBoundingSphere();
@@ -585,6 +634,7 @@ const PointcloudViewerInner = () => {
               );
               controlsRef.current.target.copy(sphere.center);
               controlsRef.current.update();
+              console.log(`[viewer] camera fitted, radius=${sphere.radius.toFixed(1)}`);
             }
           }
         }

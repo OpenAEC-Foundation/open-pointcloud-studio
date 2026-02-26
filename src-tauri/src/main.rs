@@ -9,7 +9,8 @@ use commands::{save_file, load_file, execute_shell};
 use api_server::{ApiServerState, find_free_port, write_discovery_file, remove_discovery_file, start_server};
 use pointcloud::commands::{
     pointcloud_open, pointcloud_get_progress, pointcloud_get_nodes,
-    pointcloud_get_visible_nodes, pointcloud_close, pointcloud_list,
+    pointcloud_get_nodes_binary, pointcloud_get_visible_nodes,
+    pointcloud_close, pointcloud_list,
 };
 use pointcloud::manager::PointcloudManager;
 use std::sync::Arc;
@@ -50,7 +51,7 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             save_file,
@@ -60,6 +61,7 @@ fn main() {
             pointcloud_open,
             pointcloud_get_progress,
             pointcloud_get_nodes,
+            pointcloud_get_nodes_binary,
             pointcloud_get_visible_nodes,
             pointcloud_close,
             pointcloud_list

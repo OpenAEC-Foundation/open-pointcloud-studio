@@ -36,4 +36,8 @@ src-tauri/target/
 .cache/
 nul
 CLAUDE.md
+.claude/
 ROADMAP.md
+
+# Sample data
+samples/

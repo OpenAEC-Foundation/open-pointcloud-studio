@@ -3,6 +3,7 @@
  *
  * Calls Tauri commands to determine which nodes are visible based on camera,
  * loads/unloads geometry on-demand, and throttles updates to max 10Hz.
+ * Uses binary IPC for fast point data transfer from the Rust backend.
  */
 
 import * as THREE from 'three';
@@ -19,14 +20,16 @@ interface OctreeNodeInfo {
   has_children: boolean;
 }
 
-interface PointChunk {
+interface DecodedChunk {
   node_id: string;
   center: [number, number, number];
-  positions: number[];
-  colors: number[];
-  intensities: number[];
-  classifications: number[];
+  level: number;
+  spacing: number;
   point_count: number;
+  positions: Float32Array;
+  colors: Uint8Array;
+  intensities: Uint16Array;
+  classifications: Uint8Array;
 }
 
 interface LoadedNode {
@@ -34,6 +37,8 @@ interface LoadedNode {
   points: THREE.Points;
   lastUsed: number;
 }
+
+const BATCH_SIZE = 15;
 
 export class LODController {
   private scene: THREE.Scene;
@@ -47,6 +52,12 @@ export class LODController {
 
   // Offset applied to all pointcloud positions to avoid floating point issues
   private worldOffset: [number, number, number] = [0, 0, 0];
+
+  // Camera change detection
+  private lastCameraPosition = new THREE.Vector3();
+  private lastCameraRotation = new THREE.Euler();
+  private lastPointBudget = 0;
+  private cameraInitialized = false;
 
   constructor(scene: THREE.Scene, pointcloudId: string, options?: PointcloudMaterialOptions) {
     this.scene = scene;
@@ -64,6 +75,32 @@ export class LODController {
     updatePointcloudMaterial(this.material, options);
   }
 
+  /** Check if camera has moved since last update */
+  private hasCameraMoved(camera: THREE.PerspectiveCamera, pointBudget: number): boolean {
+    if (!this.cameraInitialized) {
+      this.lastCameraPosition.copy(camera.position);
+      this.lastCameraRotation.copy(camera.rotation);
+      this.lastPointBudget = pointBudget;
+      this.cameraInitialized = true;
+      return true;
+    }
+
+    const posDelta = camera.position.distanceTo(this.lastCameraPosition);
+    const rotDelta = Math.abs(camera.rotation.x - this.lastCameraRotation.x)
+                   + Math.abs(camera.rotation.y - this.lastCameraRotation.y)
+                   + Math.abs(camera.rotation.z - this.lastCameraRotation.z);
+    const budgetChanged = pointBudget !== this.lastPointBudget;
+
+    if (posDelta > 0.001 || rotDelta > 0.001 || budgetChanged) {
+      this.lastCameraPosition.copy(camera.position);
+      this.lastCameraRotation.copy(camera.rotation);
+      this.lastPointBudget = pointBudget;
+      return true;
+    }
+
+    return false;
+  }
+
   /** Update visible nodes based on current camera. Throttled to max 10Hz. */
   async update(camera: THREE.PerspectiveCamera, pointBudget: number): Promise<void> {
     if (this.disposed || this.isUpdating) return;
@@ -71,27 +108,33 @@ export class LODController {
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateInterval) return;
     this.lastUpdateTime = now;
+
+    if (!this.hasCameraMoved(camera, pointBudget)) return;
+
     this.isUpdating = true;
 
     try {
       const cameraState = {
         position: [
           camera.position.x + this.worldOffset[0],
-          camera.position.y + this.worldOffset[1],
-          camera.position.z + this.worldOffset[2],
+          camera.position.z + this.worldOffset[1],
+          camera.position.y + this.worldOffset[2],
         ],
-        target: [0, 0, 0], // orbit target not easily available, use approximate
+        target: [0, 0, 0],
         fov: camera.fov,
         aspect: camera.aspect,
-        screen_height: camera.getFilmHeight() > 0 ? window.innerHeight : 800,
+        screen_height: window.innerHeight || 800,
       };
 
       // Get visible node list from Rust backend
+      console.time(`[LOD] get_visible_nodes ${this.pointcloudId}`);
       const visibleNodes: OctreeNodeInfo[] = await invoke('pointcloud_get_visible_nodes', {
         id: this.pointcloudId,
         camera: cameraState,
         budget: pointBudget,
       });
+      console.timeEnd(`[LOD] get_visible_nodes ${this.pointcloudId}`);
+      console.log(`[LOD] ${visibleNodes.length} visible nodes, ${this.loadedNodes.size} already loaded`);
 
       const visibleIds = new Set(visibleNodes.map((n) => n.node_id));
 
@@ -110,7 +153,14 @@ export class LODController {
         .map((n) => n.node_id);
 
       if (toLoad.length > 0) {
-        await this.loadNodes(toLoad);
+        console.time(`[LOD] loadNodes ${toLoad.length} chunks`);
+        // Batch loading: load BATCH_SIZE nodes at a time so first points appear fast
+        for (let i = 0; i < toLoad.length; i += BATCH_SIZE) {
+          if (this.disposed) return;
+          const batch = toLoad.slice(i, i + BATCH_SIZE);
+          await this.loadNodes(batch);
+        }
+        console.timeEnd(`[LOD] loadNodes ${toLoad.length} chunks`);
       }
 
       // Update last-used timestamp for visible nodes
@@ -126,13 +176,18 @@ export class LODController {
     }
   }
 
-  /** Load point chunks from the Rust backend and create Three.js geometry */
+  /** Load point chunks from the Rust backend via binary IPC */
   private async loadNodes(nodeIds: string[]): Promise<void> {
     try {
-      const chunks: PointChunk[] = await invoke('pointcloud_get_nodes', {
+      console.time(`[LOD] invoke get_nodes_binary`);
+      const buffer: ArrayBuffer = await invoke('pointcloud_get_nodes_binary', {
         id: this.pointcloudId,
         nodeIds,
       });
+      console.timeEnd(`[LOD] invoke get_nodes_binary`);
+
+      const chunks = decodeBinaryChunks(buffer);
+      console.log(`[LOD] decoded ${chunks.length} binary chunks, total points: ${chunks.reduce((s, c) => s + c.point_count, 0)}`);
 
       for (const chunk of chunks) {
         if (this.disposed) return;
@@ -143,31 +198,37 @@ export class LODController {
     }
   }
 
-  /** Create a THREE.Points object from a PointChunk */
-  private createPointsObject(chunk: PointChunk): void {
+  /** Create a THREE.Points object from a decoded binary chunk */
+  private createPointsObject(chunk: DecodedChunk): void {
     const geometry = new THREE.BufferGeometry();
 
-    // Positions (already relative to chunk center)
-    const positions = new Float32Array(chunk.positions);
+    // Positions — swap Y/Z to convert from Z-up (LAS) to Y-up (Three.js)
+    const positions = chunk.positions;
+    for (let i = 0; i < chunk.point_count; i++) {
+      const base = i * 3;
+      const tmp = positions[base + 1];
+      positions[base + 1] = positions[base + 2];
+      positions[base + 2] = tmp;
+    }
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
     // Colors (0-255 → 0-1)
-    const colors = new Float32Array(chunk.colors.length);
-    for (let i = 0; i < chunk.colors.length; i++) {
+    const colors = new Float32Array(chunk.point_count * 3);
+    for (let i = 0; i < chunk.point_count * 3; i++) {
       colors[i] = chunk.colors[i] / 255;
     }
     geometry.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
 
     // Intensities (0-65535 → 0-1)
-    const intensities = new Float32Array(chunk.intensities.length);
-    for (let i = 0; i < chunk.intensities.length; i++) {
+    const intensities = new Float32Array(chunk.point_count);
+    for (let i = 0; i < chunk.point_count; i++) {
       intensities[i] = chunk.intensities[i] / 65535;
     }
     geometry.setAttribute('aIntensity', new THREE.BufferAttribute(intensities, 1));
 
     // Classifications
-    const classifications = new Float32Array(chunk.classifications.length);
-    for (let i = 0; i < chunk.classifications.length; i++) {
+    const classifications = new Float32Array(chunk.point_count);
+    for (let i = 0; i < chunk.point_count; i++) {
       classifications[i] = chunk.classifications[i];
     }
     geometry.setAttribute('aClassification', new THREE.BufferAttribute(classifications, 1));
@@ -175,10 +236,11 @@ export class LODController {
     const points = new THREE.Points(geometry, this.material);
 
     // Position the chunk at its world center, offset by worldOffset for precision
+    // Swap Y/Z to convert from Z-up (LAS) to Y-up (Three.js)
     points.position.set(
       chunk.center[0] - this.worldOffset[0],
-      chunk.center[1] - this.worldOffset[1],
       chunk.center[2] - this.worldOffset[2],
+      chunk.center[1] - this.worldOffset[1],
     );
 
     this.scene.add(points);
@@ -214,4 +276,104 @@ export class LODController {
     this.loadedNodes.clear();
     this.material.dispose();
   }
+}
+
+/**
+ * Decode the binary buffer returned by pointcloud_get_nodes_binary.
+ *
+ * Wire format:
+ *   [4 bytes] chunk_count (u32 LE)
+ *   Per chunk:
+ *     [4 bytes]                node_id_len (u32 LE)
+ *     [N bytes]                node_id (UTF-8)
+ *     [0-3 bytes]              padding to 4-byte alignment
+ *     [24 bytes]               center: 3x f64 LE
+ *     [4 bytes]                level (u32 LE)
+ *     [4 bytes]                spacing (f32 LE)
+ *     [4 bytes]                point_count (u32 LE)
+ *     [point_count * 12 bytes] positions: f32 LE (x,y,z)
+ *     [point_count * 3 bytes]  colors: u8 (r,g,b)
+ *     [point_count * 2 bytes]  intensities: u16 LE
+ *     [point_count * 1 byte]   classifications: u8
+ *     [0-3 bytes]              padding to 4-byte alignment
+ */
+function decodeBinaryChunks(buffer: ArrayBuffer): DecodedChunk[] {
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  let offset = 0;
+
+  const chunkCount = view.getUint32(offset, true);
+  offset += 4;
+
+  const chunks: DecodedChunk[] = new Array(chunkCount);
+  const textDecoder = new TextDecoder();
+
+  for (let i = 0; i < chunkCount; i++) {
+    // Node ID
+    const idLen = view.getUint32(offset, true);
+    offset += 4;
+    const nodeId = textDecoder.decode(bytes.subarray(offset, offset + idLen));
+    offset += idLen;
+    // Pad to 4-byte alignment
+    offset = (offset + 3) & ~3;
+
+    // Center: 3x f64
+    const cx = view.getFloat64(offset, true); offset += 8;
+    const cy = view.getFloat64(offset, true); offset += 8;
+    const cz = view.getFloat64(offset, true); offset += 8;
+
+    // Level
+    const level = view.getUint32(offset, true);
+    offset += 4;
+
+    // Spacing
+    const spacing = view.getFloat32(offset, true);
+    offset += 4;
+
+    // Point count
+    const pointCount = view.getUint32(offset, true);
+    offset += 4;
+
+    // Positions: f32 LE — create a copy since the offset may not be aligned for Float32Array view
+    const posBytes = pointCount * 12;
+    const positions = new Float32Array(pointCount * 3);
+    for (let j = 0; j < pointCount * 3; j++) {
+      positions[j] = view.getFloat32(offset + j * 4, true);
+    }
+    offset += posBytes;
+
+    // Colors: u8 — direct slice copy
+    const colorBytes = pointCount * 3;
+    const colors = new Uint8Array(buffer.slice(offset, offset + colorBytes));
+    offset += colorBytes;
+
+    // Intensities: u16 LE
+    const intBytes = pointCount * 2;
+    const intensities = new Uint16Array(pointCount);
+    for (let j = 0; j < pointCount; j++) {
+      intensities[j] = view.getUint16(offset + j * 2, true);
+    }
+    offset += intBytes;
+
+    // Classifications: u8
+    const classifications = new Uint8Array(buffer.slice(offset, offset + pointCount));
+    offset += pointCount;
+
+    // Pad to 4-byte alignment
+    offset = (offset + 3) & ~3;
+
+    chunks[i] = {
+      node_id: nodeId,
+      center: [cx, cy, cz],
+      level,
+      spacing,
+      point_count: pointCount,
+      positions,
+      colors,
+      intensities,
+      classifications,
+    };
+  }
+
+  return chunks;
 }

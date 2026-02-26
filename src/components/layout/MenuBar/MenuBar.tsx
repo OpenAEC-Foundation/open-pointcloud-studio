@@ -1,4 +1,5 @@
 import { useState, useEffect, memo } from 'react';
+import { Settings } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 // Detect platform
@@ -157,12 +158,34 @@ function WindowControls() {
   return <WindowsControls {...controlProps} />;
 }
 
-export const MenuBar = memo(function MenuBar() {
+export const MenuBar = memo(function MenuBar({ onSettingsClick }: { onSettingsClick: () => void }) {
   return (
     <div className="h-8 bg-cad-surface border-b border-cad-border flex items-center select-none">
-      {/* Logo */}
-      <div className="flex items-center gap-2 px-3">
-        <img src="/logo.svg" alt="Open Pointcloud Studio" className="w-5 h-5" draggable={false} />
+      {/* Logo + Quick Access */}
+      <div className="flex items-center gap-2 pr-3">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" className="w-5 h-5 ml-3">
+          <circle cx="24" cy="20" r="2.2" fill="#00b4d8"/><circle cx="24" cy="26" r="2.3" fill="#00b4d8"/><circle cx="24" cy="32" r="2.4" fill="#00b4d8"/><circle cx="24" cy="38" r="2.5" fill="#00b4d8"/><circle cx="24" cy="44" r="2.5" fill="#00b4d8"/><circle cx="24" cy="50" r="2.6" fill="#00b4d8"/><circle cx="24" cy="56" r="2.6" fill="#00b4d8"/><circle cx="24" cy="62" r="2.7" fill="#00b4d8"/><circle cx="24" cy="68" r="2.7" fill="#00b4d8"/><circle cx="24" cy="74" r="2.8" fill="#00b4d8"/><circle cx="24" cy="80" r="2.8" fill="#00b4d8"/>
+          <circle cx="19" cy="20" r="1.5" fill="#0ea5e9" opacity="0.7"/><circle cx="29" cy="20" r="1.5" fill="#0ea5e9" opacity="0.7"/><circle cx="19" cy="80" r="1.8" fill="#0ea5e9" opacity="0.8"/><circle cx="29" cy="80" r="1.8" fill="#0ea5e9" opacity="0.8"/>
+          <circle cx="76" cy="20" r="2.2" fill="#00b4d8"/><circle cx="76" cy="26" r="2.3" fill="#00b4d8"/><circle cx="76" cy="32" r="2.4" fill="#00b4d8"/><circle cx="76" cy="38" r="2.5" fill="#00b4d8"/><circle cx="76" cy="44" r="2.5" fill="#00b4d8"/><circle cx="76" cy="50" r="2.6" fill="#00b4d8"/><circle cx="76" cy="56" r="2.6" fill="#00b4d8"/><circle cx="76" cy="62" r="2.7" fill="#00b4d8"/><circle cx="76" cy="68" r="2.7" fill="#00b4d8"/><circle cx="76" cy="74" r="2.8" fill="#00b4d8"/><circle cx="76" cy="80" r="2.8" fill="#00b4d8"/>
+          <circle cx="71" cy="20" r="1.5" fill="#0ea5e9" opacity="0.7"/><circle cx="81" cy="20" r="1.5" fill="#0ea5e9" opacity="0.7"/><circle cx="71" cy="80" r="1.8" fill="#0ea5e9" opacity="0.8"/><circle cx="81" cy="80" r="1.8" fill="#0ea5e9" opacity="0.8"/>
+          <circle cx="30" cy="20" r="2" fill="#e94560"/><circle cx="36" cy="20" r="2.1" fill="#e94560"/><circle cx="42" cy="20" r="2.1" fill="#e94560"/><circle cx="50" cy="20" r="2.2" fill="#e94560"/><circle cx="58" cy="20" r="2.1" fill="#e94560"/><circle cx="64" cy="20" r="2.1" fill="#e94560"/><circle cx="70" cy="20" r="2" fill="#e94560"/>
+          <circle cx="36" cy="17" r="1.2" fill="#fb7185" opacity="0.6"/><circle cx="50" cy="17" r="1.3" fill="#fb7185" opacity="0.65"/><circle cx="64" cy="17" r="1.2" fill="#fb7185" opacity="0.6"/><circle cx="36" cy="23" r="1.2" fill="#fb7185" opacity="0.6"/><circle cx="50" cy="23" r="1.3" fill="#fb7185" opacity="0.65"/><circle cx="64" cy="23" r="1.2" fill="#fb7185" opacity="0.6"/>
+          <circle cx="28" cy="24" r="1.4" fill="#94a3b8" opacity="0.5"/><circle cx="33" cy="30" r="1.5" fill="#94a3b8" opacity="0.55"/><circle cx="38" cy="36" r="1.6" fill="#94a3b8" opacity="0.6"/><circle cx="43" cy="42" r="1.7" fill="#94a3b8" opacity="0.65"/><circle cx="48" cy="48" r="1.7" fill="#94a3b8" opacity="0.65"/>
+          <circle cx="72" cy="24" r="1.4" fill="#94a3b8" opacity="0.5"/><circle cx="67" cy="30" r="1.5" fill="#94a3b8" opacity="0.55"/><circle cx="62" cy="36" r="1.6" fill="#94a3b8" opacity="0.6"/><circle cx="57" cy="42" r="1.7" fill="#94a3b8" opacity="0.65"/><circle cx="52" cy="48" r="1.7" fill="#94a3b8" opacity="0.65"/>
+          <circle cx="30" cy="52" r="1.3" fill="#64748b" opacity="0.45"/><circle cx="38" cy="58" r="1.4" fill="#64748b" opacity="0.5"/><circle cx="46" cy="64" r="1.5" fill="#64748b" opacity="0.55"/><circle cx="54" cy="70" r="1.6" fill="#64748b" opacity="0.55"/><circle cx="62" cy="76" r="1.5" fill="#64748b" opacity="0.5"/>
+          <circle cx="70" cy="52" r="1.3" fill="#64748b" opacity="0.45"/><circle cx="62" cy="58" r="1.4" fill="#64748b" opacity="0.5"/><circle cx="54" cy="64" r="1.5" fill="#64748b" opacity="0.55"/><circle cx="46" cy="70" r="1.6" fill="#64748b" opacity="0.55"/><circle cx="38" cy="76" r="1.5" fill="#64748b" opacity="0.5"/>
+          <circle cx="30" cy="50" r="1.6" fill="#e94560" opacity="0.7"/><circle cx="37" cy="50" r="1.7" fill="#e94560" opacity="0.75"/><circle cx="44" cy="50" r="1.8" fill="#e94560" opacity="0.8"/><circle cx="50" cy="50" r="1.8" fill="#e94560" opacity="0.8"/><circle cx="56" cy="50" r="1.8" fill="#e94560" opacity="0.8"/><circle cx="63" cy="50" r="1.7" fill="#e94560" opacity="0.75"/><circle cx="70" cy="50" r="1.6" fill="#e94560" opacity="0.7"/>
+          <circle cx="16" cy="83" r="1.8" fill="#475569" opacity="0.6"/><circle cx="24" cy="84" r="2" fill="#475569" opacity="0.65"/><circle cx="32" cy="83" r="1.6" fill="#475569" opacity="0.55"/><circle cx="68" cy="83" r="1.6" fill="#475569" opacity="0.55"/><circle cx="76" cy="84" r="2" fill="#475569" opacity="0.65"/><circle cx="84" cy="83" r="1.8" fill="#475569" opacity="0.6"/>
+          <circle cx="40" cy="28" r="0.8" fill="#e94560" opacity="0.3"/><circle cx="60" cy="32" r="0.7" fill="#e94560" opacity="0.25"/><circle cx="50" cy="38" r="0.9" fill="#e94560" opacity="0.3"/><circle cx="34" cy="46" r="0.8" fill="#00b4d8" opacity="0.2"/><circle cx="66" cy="46" r="0.8" fill="#00b4d8" opacity="0.2"/><circle cx="50" cy="60" r="0.7" fill="#94a3b8" opacity="0.25"/>
+        </svg>
+        <div className="w-px h-4 bg-cad-border" />
+        <button
+          className="flex items-center justify-center w-6 h-6 hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors cursor-default"
+          title="Settings"
+          onClick={onSettingsClick}
+        >
+          <Settings size={14} />
+        </button>
       </div>
 
       {/* Draggable area with app title */}
@@ -176,6 +199,9 @@ export const MenuBar = memo(function MenuBar() {
       >
         <span className="text-cad-text-dim text-sm font-medium pointer-events-none">
           Open Pointcloud Studio
+        </span>
+        <span className="text-cad-text-muted text-[10px] ml-1.5 pointer-events-none">
+          v0.2.0
         </span>
       </div>
 

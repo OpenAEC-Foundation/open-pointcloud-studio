@@ -11,6 +11,7 @@ import type { PointcloudColorMode } from '../../state/slices/pointcloudSlice';
 const vertexShader = /* glsl */ `
   uniform float uPointSize;
   uniform float uScreenHeight;
+  uniform float uBaseSpacing;   // global avg point spacing: sqrt(footprintArea / totalPoints)
   uniform int uColorMode; // 0=rgb, 1=intensity, 2=elevation, 3=classification
   uniform float uElevationMin;
   uniform float uElevationMax;
@@ -53,9 +54,13 @@ const vertexShader = /* glsl */ `
   void main() {
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-    // Distance-based point size attenuation
-    gl_PointSize = uPointSize * (uScreenHeight / -mvPosition.z);
-    gl_PointSize = clamp(gl_PointSize, 1.0, 64.0);
+    // World-space point size from global dataset spacing
+    // uBaseSpacing = sqrt(footprintArea / totalPoints), the avg distance between points
+    float worldSize = uBaseSpacing * uPointSize;
+
+    // Project to screen pixels: projectionMatrix[1][1] = 1/tan(fov/2)
+    gl_PointSize = worldSize * (uScreenHeight / 2.0) * projectionMatrix[1][1] / (-mvPosition.z);
+    gl_PointSize = clamp(gl_PointSize, 1.0, 32.0);
 
     gl_Position = projectionMatrix * mvPosition;
 
@@ -103,6 +108,7 @@ export interface PointcloudMaterialOptions {
   elevationMin?: number;
   elevationMax?: number;
   screenHeight?: number;
+  baseSpacing?: number;
 }
 
 const COLOR_MODE_MAP: Record<PointcloudColorMode, number> = {
@@ -117,8 +123,9 @@ export function createPointcloudMaterial(options: PointcloudMaterialOptions = {}
     vertexShader,
     fragmentShader,
     uniforms: {
-      uPointSize: { value: options.pointSize ?? 2.0 },
+      uPointSize: { value: options.pointSize ?? 1.0 },
       uScreenHeight: { value: options.screenHeight ?? 800 },
+      uBaseSpacing: { value: options.baseSpacing ?? 0.1 },
       uColorMode: { value: COLOR_MODE_MAP[options.colorMode ?? 'rgb'] },
       uElevationMin: { value: options.elevationMin ?? 0 },
       uElevationMax: { value: options.elevationMax ?? 100 },
@@ -135,6 +142,7 @@ export function updatePointcloudMaterial(
 ): void {
   if (options.pointSize !== undefined) material.uniforms.uPointSize.value = options.pointSize;
   if (options.screenHeight !== undefined) material.uniforms.uScreenHeight.value = options.screenHeight;
+  if (options.baseSpacing !== undefined) material.uniforms.uBaseSpacing.value = options.baseSpacing;
   if (options.colorMode !== undefined) material.uniforms.uColorMode.value = COLOR_MODE_MAP[options.colorMode];
   if (options.elevationMin !== undefined) material.uniforms.uElevationMin.value = options.elevationMin;
   if (options.elevationMax !== undefined) material.uniforms.uElevationMax.value = options.elevationMax;

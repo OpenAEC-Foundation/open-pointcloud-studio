@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
-use std::path::Path;
 
 use super::parser::PointcloudParser;
 use super::octree::Octree;
@@ -29,8 +28,9 @@ impl PointcloudManager {
         }
     }
 
-    /// Open a pointcloud file, parse header, and start octree construction
-    pub fn open(&self, file_path: &str) -> Result<PointcloudMetadata, String> {
+    /// Open a pointcloud file, parse header, and start async octree construction.
+    /// Returns metadata immediately; octree builds in the background.
+    pub fn open(self: &Arc<Self>, file_path: &str) -> Result<PointcloudMetadata, String> {
         let id = {
             let mut counter = self.next_id.lock().unwrap();
             let id = format!("pc_{}", *counter);
@@ -41,7 +41,6 @@ impl PointcloudManager {
         let parser = PointcloudParser::open(file_path)?;
         let metadata = parser.metadata(&id, file_path);
         let total_points = parser.total_points();
-        let bounds = parser.bounds();
 
         let progress = IndexProgress {
             progress: 0.0,
@@ -58,14 +57,24 @@ impl PointcloudManager {
 
         self.entries.write().unwrap().insert(id.clone(), entry);
 
-        // Build octree in a blocking manner for now
-        // (For large files, this should be done on a background thread with progress events)
-        self.build_octree(&id, parser)?;
+        // Build octree in a background thread so UI doesn't block
+        let manager = Arc::clone(self);
+        let id_clone = id.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = manager.build_octree(&id_clone, parser) {
+                eprintln!("Octree build failed for {}: {}", id_clone, e);
+                if let Ok(mut entries) = manager.entries.write() {
+                    if let Some(entry) = entries.get_mut(&id_clone) {
+                        entry.progress.phase = format!("Error: {}", e);
+                    }
+                }
+            }
+        });
 
         Ok(metadata)
     }
 
-    /// Build octree from parser
+    /// Build octree from parser (runs on background thread)
     fn build_octree(&self, id: &str, parser: PointcloudParser) -> Result<(), String> {
         let bounds = parser.bounds();
         let total = parser.total_points();

@@ -1,5 +1,6 @@
 /**
- * Unified pointcloud file parser — dispatches to format-specific parsers.
+ * Unified pointcloud file parser — dispatches to format-specific parsers
+ * via a Web Worker (main thread stays responsive).
  *
  * Supported formats:
  *   .las  — ASPRS LAS (uncompressed)
@@ -9,18 +10,14 @@
  *   .xyz  — XYZ text
  *   .txt  — Generic text (same as XYZ)
  *   .csv  — Comma-separated (same as XYZ)
- *   .e57  — ASTM E57 (uncompressed)
+ *   .e57  — ASTM E57 (uncompressed, main-thread only)
  *
  * Not supported (proprietary):
  *   .rcp/.rcs — Autodesk ReCap (convert to LAS/LAZ first)
  */
 
 import type { ParsedPointcloud } from './LASParser';
-import { parseLAS } from './LASParser';
-import { parsePTS } from './PTSParser';
-import { parsePLY } from './PLYParser';
-import { parseXYZ } from './XYZParser';
-import { parseOBJ } from './OBJParser';
+import { parsePointcloud, type ProgressCallback } from './parsePointcloudWorker';
 
 /** File extensions accepted by the import dialog */
 export const SUPPORTED_EXTENSIONS = ['.las', '.laz', '.pts', '.ply', '.xyz', '.txt', '.csv', '.obj', '.e57'];
@@ -40,50 +37,23 @@ const UNSUPPORTED_PROPRIETARY: Record<string, string> = {
 
 /**
  * Parse a pointcloud file from a browser File object.
- * Returns parsed geometry data ready for Three.js rendering.
+ * Parsing runs in a Web Worker so the UI stays responsive.
  */
-export async function parsePointcloudFile(file: File): Promise<ParsedPointcloud> {
+export async function parsePointcloudFile(
+  file: File,
+  onProgress?: ProgressCallback,
+): Promise<ParsedPointcloud> {
   const ext = getExtension(file.name);
 
-  // Check for unsupported proprietary formats
   const unsupported = UNSUPPORTED_PROPRIETARY[ext];
   if (unsupported) {
     throw new Error(`${ext.toUpperCase()} is a proprietary format.\n${unsupported}.`);
   }
 
+  onProgress?.('Reading file...', 0);
   const buffer = await file.arrayBuffer();
 
-  switch (ext) {
-    case '.las':
-      return parseLAS(buffer);
-
-    case '.laz': {
-      const { parseLAZ } = await import('./LAZParser');
-      return parseLAZ(buffer);
-    }
-
-    case '.pts':
-      return parsePTS(buffer);
-
-    case '.ply':
-      return parsePLY(buffer);
-
-    case '.xyz':
-    case '.txt':
-    case '.csv':
-      return parseXYZ(buffer);
-
-    case '.obj':
-      return parseOBJ(buffer);
-
-    case '.e57': {
-      const { parseE57 } = await import('./E57Parser');
-      return parseE57(buffer);
-    }
-
-    default:
-      throw new Error(`Unsupported file format: ${ext}`);
-  }
+  return parsePointcloud(ext, buffer, onProgress);
 }
 
 function getExtension(filename: string): string {

@@ -116,6 +116,8 @@ pub struct OctreeNodeInfo {
 pub struct PointChunk {
     pub node_id: String,
     pub center: [f64; 3],
+    pub level: u8,
+    pub spacing: f32,
     pub positions: Vec<f32>,
     pub colors: Vec<u8>,
     pub intensities: Vec<u16>,

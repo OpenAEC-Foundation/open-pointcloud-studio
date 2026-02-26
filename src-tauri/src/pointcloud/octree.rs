@@ -202,9 +202,20 @@ impl Octree {
             classifications.push(p.classification);
         }
 
+        // Compute per-node spacing from the 2D surface footprint.
+        // LiDAR points lie on surfaces, so use the two largest bbox dimensions
+        // to estimate the area, then derive spacing as sqrt(area / pointCount).
+        let s = node.bounds.size();
+        let mut dims = [s[0], s[1], s[2]];
+        dims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        let surface_area = dims[0] * dims[1]; // two largest dimensions
+        let spacing = (surface_area / count as f64).sqrt() as f32;
+
         Some(PointChunk {
             node_id: node_id.to_string(),
             center,
+            level: node.level,
+            spacing,
             positions,
             colors,
             intensities,

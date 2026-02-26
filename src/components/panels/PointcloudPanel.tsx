@@ -10,6 +10,7 @@ import { memo } from 'react';
 import { Eye, EyeOff, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../state/appStore';
 import type { PointcloudColorMode } from '../../state/slices/pointcloudSlice';
+import { formatPoints } from '../../utils/format';
 
 const ASPRS_CLASSIFICATIONS: { code: number; label: string }[] = [
   { code: 0, label: 'Never Classified' },
@@ -72,38 +73,54 @@ function PointcloudPanelInner() {
       {pointclouds.length === 0 && (
         <div className="text-cad-text-muted italic">No pointclouds loaded</div>
       )}
-      {pointclouds.map((pc) => (
-        <div
-          key={pc.id}
-          className={`flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer ${
-            pc.id === activePointcloudId ? 'bg-cad-accent/20' : 'hover:bg-cad-hover'
-          }`}
-          onClick={() => setActivePointcloudId(pc.id)}
-        >
-          <button
-            className="p-0.5 hover:bg-cad-hover rounded"
-            onClick={(e) => {
-              e.stopPropagation();
-              setPointcloudVisible(pc.id, !pc.visible);
-            }}
-            title={pc.visible ? 'Hide' : 'Show'}
-          >
-            {pc.visible ? <Eye size={12} /> : <EyeOff size={12} />}
-          </button>
-          <span className="flex-1 truncate">{pc.fileName}</span>
-          <span className="text-cad-text-muted">{formatPoints(pc.totalPoints)}</span>
-          <button
-            className="p-0.5 hover:bg-cad-hover rounded text-cad-text-muted hover:text-red-400"
-            onClick={(e) => {
-              e.stopPropagation();
-              removePointcloud(pc.id);
-            }}
-            title="Remove"
-          >
-            <Trash2 size={12} />
-          </button>
-        </div>
-      ))}
+      {pointclouds.map((pc) => {
+        const isLoading = pc.indexingProgress < 1.0;
+        return (
+          <div key={pc.id}>
+            <div
+              className={`flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer ${
+                pc.id === activePointcloudId ? 'bg-cad-accent/20' : 'hover:bg-cad-hover'
+              }`}
+              onClick={() => setActivePointcloudId(pc.id)}
+            >
+              <button
+                className="p-0.5 hover:bg-cad-hover rounded"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPointcloudVisible(pc.id, !pc.visible);
+                }}
+                title={pc.visible ? 'Hide' : 'Show'}
+              >
+                {pc.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+              </button>
+              <span className="flex-1 truncate">{pc.fileName}</span>
+              {isLoading ? (
+                <span className="text-yellow-400 text-[10px]">{pc.indexingPhase}</span>
+              ) : (
+                <span className="text-cad-text-muted">{formatPoints(pc.totalPoints)}</span>
+              )}
+              <button
+                className="p-0.5 hover:bg-cad-hover rounded text-cad-text-muted hover:text-red-400"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removePointcloud(pc.id);
+                }}
+                title="Remove"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+            {isLoading && (
+              <div className="mx-1 mt-0.5 h-[2px] bg-cad-border rounded overflow-hidden">
+                <div
+                  className="h-full bg-yellow-400 transition-all duration-300"
+                  style={{ width: `${Math.max(pc.indexingProgress * 100, 5)}%` }}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* Display Settings */}
       <div className="border-t border-cad-border mt-2 pt-2">
@@ -112,10 +129,10 @@ function PointcloudPanelInner() {
         </div>
 
         {/* Color Mode */}
-        <label className="flex items-center gap-2 mb-1">
-          <span className="w-16">Color:</span>
+        <label className="panel-prop-row">
+          <span className="panel-prop-label">Color</span>
           <select
-            className="flex-1 bg-cad-input text-cad-text rounded px-1 py-0.5 text-xs border border-cad-border"
+            className="panel-select"
             value={colorMode}
             onChange={(e) => setColorMode(e.target.value as PointcloudColorMode)}
           >
@@ -126,23 +143,23 @@ function PointcloudPanelInner() {
         </label>
 
         {/* Point Size */}
-        <label className="flex items-center gap-2 mb-1">
-          <span className="w-16">Size:</span>
+        <label className="panel-prop-row">
+          <span className="panel-prop-label">Size</span>
           <input
             type="range"
-            min="1"
+            min="0.1"
             max="20"
-            step="1"
+            step="0.1"
             value={pointSize}
             onChange={(e) => setPointSize(Number(e.target.value))}
-            className="flex-1"
+            className="panel-slider"
           />
-          <span className="w-6 text-right">{pointSize}</span>
+          <span className="panel-prop-value">{pointSize.toFixed(1)}</span>
         </label>
 
         {/* Point Budget */}
-        <label className="flex items-center gap-2 mb-1">
-          <span className="w-16">Budget:</span>
+        <label className="panel-prop-row">
+          <span className="panel-prop-label">Budget</span>
           <input
             type="range"
             min="100000"
@@ -150,18 +167,19 @@ function PointcloudPanelInner() {
             step="100000"
             value={pointBudget}
             onChange={(e) => setPointBudget(Number(e.target.value))}
-            className="flex-1"
+            className="panel-slider"
           />
-          <span className="w-10 text-right">{formatPoints(pointBudget)}</span>
+          <span className="panel-prop-value">{formatPoints(pointBudget)}</span>
         </label>
 
         {/* EDL */}
-        <label className="flex items-center gap-2 mb-1">
-          <span className="w-16">EDL:</span>
+        <label className="panel-prop-row">
+          <span className="panel-prop-label">EDL</span>
           <input
             type="checkbox"
             checked={edlEnabled}
             onChange={(e) => setEdlEnabled(e.target.checked)}
+            className="panel-checkbox"
           />
           {edlEnabled && (
             <input
@@ -171,7 +189,7 @@ function PointcloudPanelInner() {
               step="0.1"
               value={edlStrength}
               onChange={(e) => setEdlStrength(Number(e.target.value))}
-              className="flex-1"
+              className="panel-slider"
             />
           )}
         </label>
@@ -185,12 +203,12 @@ function PointcloudPanelInner() {
           </div>
           <div className="flex flex-col gap-0.5 max-h-48 overflow-y-auto">
             {ASPRS_CLASSIFICATIONS.map((cls) => (
-              <label key={cls.code} className="flex items-center gap-1 cursor-pointer hover:bg-cad-hover px-1 rounded">
+              <label key={cls.code} className="panel-classification-row">
                 <input
                   type="checkbox"
                   checked={visibleClassifications.includes(cls.code)}
                   onChange={() => toggleClassification(cls.code)}
-                  className="w-3 h-3"
+                  className="panel-checkbox"
                 />
                 <span className="text-cad-text-muted w-4 text-right">{cls.code}</span>
                 <span>{cls.label}</span>
@@ -201,12 +219,6 @@ function PointcloudPanelInner() {
       )}
     </div>
   );
-}
-
-function formatPoints(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
-  return n.toString();
 }
 
 export const PointcloudPanel = memo(PointcloudPanelInner);

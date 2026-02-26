@@ -50,10 +50,10 @@ export interface ParsedPointcloud {
 }
 
 /** Point formats that include RGB color data */
-const FORMATS_WITH_RGB = new Set([2, 3, 5, 7, 8, 10]);
+export const FORMATS_WITH_RGB = new Set([2, 3, 5, 7, 8, 10]);
 
 /** RGB offset within point record for each format */
-function getRGBOffset(format: number): number {
+export function getRGBOffset(format: number): number {
   switch (format) {
     case 2: return 20;   // Format 0 (20 bytes) + RGB
     case 3: return 28;   // Format 1 (28 bytes) + RGB
@@ -66,7 +66,7 @@ function getRGBOffset(format: number): number {
 }
 
 /** Classification byte offset within point record */
-function getClassificationOffset(format: number): number {
+export function getClassificationOffset(format: number): number {
   // Formats 0–5: classification at byte 15
   // Formats 6–10: classification at byte 16
   return format >= 6 ? 16 : 15;
