@@ -497,8 +497,6 @@ const PointcloudViewerInner = () => {
         for (const pc of pointclouds) {
           const hasBrowserData = !!getBrowserPointcloud(pc.id);
           if (!hasBrowserData && !existingLodIds.has(pc.id) && pc.indexingProgress >= 1.0) {
-            console.log(`[viewer] creating LODController for ${pc.fileName} (${pc.id}), ${pc.totalPoints} points`);
-            console.time(`[viewer] LODController init ${pc.fileName}`);
             // Compute base spacing: avg distance between points on the surface
             const sizeX = pc.bounds.maxX - pc.bounds.minX;
             const sizeY = pc.bounds.maxY - pc.bounds.minY;
@@ -520,7 +518,6 @@ const PointcloudViewerInner = () => {
             ctrl.setWorldOffset([cx, cy, cz]);
 
             lodControllersRef.current.set(pc.id, ctrl);
-            console.timeEnd(`[viewer] LODController init ${pc.fileName}`);
           }
         }
       }
@@ -559,11 +556,9 @@ const PointcloudViewerInner = () => {
       for (const pc of pointclouds) {
         const alreadyExists = existingPointIds.has(pc.id) || existingMeshIds.has(pc.id);
         if (!alreadyExists && pc.indexingProgress >= 1.0) {
-          console.time(`[viewer] build geometry ${pc.fileName}`);
           const parsed = getBrowserPointcloud(pc.id);
-          if (!parsed) { console.log(`[viewer] no browser data for ${pc.id}`); continue; }
+          if (!parsed) continue;
 
-          console.log(`[viewer] building Three.js geometry for ${pc.fileName}: ${parsed.positions.length / 3} points`);
           const hasMesh = parsed.indices && parsed.indices.length > 0;
           let fitGeometry: THREE.BufferGeometry | null = null;
 
@@ -615,8 +610,6 @@ const PointcloudViewerInner = () => {
             fitGeometry = geometry;
           }
 
-          console.timeEnd(`[viewer] build geometry ${pc.fileName}`);
-
           // Auto-fit camera
           if (camera && controlsRef.current && fitGeometry) {
             fitGeometry.computeBoundingSphere();
@@ -634,7 +627,6 @@ const PointcloudViewerInner = () => {
               );
               controlsRef.current.target.copy(sphere.center);
               controlsRef.current.update();
-              console.log(`[viewer] camera fitted, radius=${sphere.radius.toFixed(1)}`);
             }
           }
         }

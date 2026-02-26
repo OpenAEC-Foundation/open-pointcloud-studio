@@ -127,14 +127,11 @@ export class LODController {
       };
 
       // Get visible node list from Rust backend
-      console.time(`[LOD] get_visible_nodes ${this.pointcloudId}`);
       const visibleNodes: OctreeNodeInfo[] = await invoke('pointcloud_get_visible_nodes', {
         id: this.pointcloudId,
         camera: cameraState,
         budget: pointBudget,
       });
-      console.timeEnd(`[LOD] get_visible_nodes ${this.pointcloudId}`);
-      console.log(`[LOD] ${visibleNodes.length} visible nodes, ${this.loadedNodes.size} already loaded`);
 
       const visibleIds = new Set(visibleNodes.map((n) => n.node_id));
 
@@ -153,14 +150,11 @@ export class LODController {
         .map((n) => n.node_id);
 
       if (toLoad.length > 0) {
-        console.time(`[LOD] loadNodes ${toLoad.length} chunks`);
-        // Batch loading: load BATCH_SIZE nodes at a time so first points appear fast
         for (let i = 0; i < toLoad.length; i += BATCH_SIZE) {
           if (this.disposed) return;
           const batch = toLoad.slice(i, i + BATCH_SIZE);
           await this.loadNodes(batch);
         }
-        console.timeEnd(`[LOD] loadNodes ${toLoad.length} chunks`);
       }
 
       // Update last-used timestamp for visible nodes
@@ -179,15 +173,12 @@ export class LODController {
   /** Load point chunks from the Rust backend via binary IPC */
   private async loadNodes(nodeIds: string[]): Promise<void> {
     try {
-      console.time(`[LOD] invoke get_nodes_binary`);
       const buffer: ArrayBuffer = await invoke('pointcloud_get_nodes_binary', {
         id: this.pointcloudId,
         nodeIds,
       });
-      console.timeEnd(`[LOD] invoke get_nodes_binary`);
 
       const chunks = decodeBinaryChunks(buffer);
-      console.log(`[LOD] decoded ${chunks.length} binary chunks, total points: ${chunks.reduce((s, c) => s + c.point_count, 0)}`);
 
       for (const chunk of chunks) {
         if (this.disposed) return;
