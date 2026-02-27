@@ -3,7 +3,7 @@ import type { WorkerRequest, WorkerResponse } from './workerProtocol';
 
 export type ProgressCallback = (phase: string, percent: number) => void;
 
-const WORKER_EXTENSIONS = new Set(['.las', '.laz', '.pts', '.ply', '.xyz', '.txt', '.csv', '.obj']);
+const WORKER_EXTENSIONS = new Set(['.las', '.laz', '.pts', '.ply', '.xyz', '.asc', '.txt', '.csv', '.obj', '.pcd', '.ptx', '.off', '.stl', '.dxf']);
 
 let worker: Worker | null = null;
 

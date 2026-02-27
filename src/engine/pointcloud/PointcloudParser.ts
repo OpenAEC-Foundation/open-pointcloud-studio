@@ -8,8 +8,15 @@
  *   .pts  — Leica PTS (text)
  *   .ply  — Stanford PLY (ASCII + binary LE)
  *   .xyz  — XYZ text
+ *   .asc  — ASCII point cloud (same as XYZ)
  *   .txt  — Generic text (same as XYZ)
  *   .csv  — Comma-separated (same as XYZ)
+ *   .obj  — Wavefront OBJ mesh/points
+ *   .pcd  — Point Cloud Data (PCL/ROS)
+ *   .ptx  — Leica PTX structured scan
+ *   .off  — Object File Format
+ *   .stl  — Stereolithography (ASCII + binary)
+ *   .dxf  — AutoCAD Drawing Exchange Format
  *   .e57  — ASTM E57 (uncompressed, main-thread only)
  *
  * Not supported (proprietary):
@@ -20,7 +27,7 @@ import type { ParsedPointcloud } from './LASParser';
 import { parsePointcloud, type ProgressCallback } from './parsePointcloudWorker';
 
 /** File extensions accepted by the import dialog */
-export const SUPPORTED_EXTENSIONS = ['.las', '.laz', '.pts', '.ply', '.xyz', '.txt', '.csv', '.obj', '.e57'];
+export const SUPPORTED_EXTENSIONS = ['.las', '.laz', '.pts', '.ply', '.xyz', '.asc', '.txt', '.csv', '.obj', '.pcd', '.ptx', '.off', '.stl', '.dxf', '.e57'];
 
 /** Human-readable format description for the file dialog */
 export const FORMAT_DESCRIPTION = 'Point Clouds';

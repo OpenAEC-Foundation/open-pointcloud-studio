@@ -4,6 +4,11 @@ import { parsePTS } from './PTSParser';
 import { parsePLY } from './PLYParser';
 import { parseXYZ } from './XYZParser';
 import { parseOBJ } from './OBJParser';
+import { parsePCD } from './PCDParser';
+import { parsePTX } from './PTXParser';
+import { parseOFF } from './OFFParser';
+import { parseSTL } from './STLParser';
+import { parseDXF } from './DXFParser';
 
 declare function postMessage(message: unknown, options?: StructuredSerializeOptions): void;
 
@@ -43,12 +48,28 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
         parsed = parsePLY(buffer);
         break;
       case '.xyz':
+      case '.asc':
       case '.txt':
       case '.csv':
         parsed = parseXYZ(buffer);
         break;
       case '.obj':
         parsed = parseOBJ(buffer);
+        break;
+      case '.pcd':
+        parsed = parsePCD(buffer);
+        break;
+      case '.ptx':
+        parsed = parsePTX(buffer);
+        break;
+      case '.off':
+        parsed = parseOFF(buffer);
+        break;
+      case '.stl':
+        parsed = parseSTL(buffer);
+        break;
+      case '.dxf':
+        parsed = parseDXF(buffer);
         break;
       default:
         post({ type: 'error', id, message: `Unsupported format in worker: ${extension}` });
