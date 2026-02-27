@@ -1,10 +1,11 @@
 import { useState, memo } from 'react';
-import { Upload, Sun, Eye, BoxSelect, Trash2, XCircle, Move, Maximize, Filter, Building2, Shapes, Download } from 'lucide-react';
+import { Upload, Sun, Eye, BoxSelect, Trash2, XCircle, Move, Maximize, Filter, Building2, Shapes, Download, Focus } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { type UITheme } from '../../../state/appStore';
 import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, RibbonDropdownButton, ThemeSelector } from './RibbonComponents';
 import { RGBIcon, ElevationIcon, ClassificationIcon, IntensityIcon } from './RibbonIcons';
 import { useRibbonActions } from './useRibbonActions';
+import { zoomToFit } from '../../canvas/PointcloudViewer';
 import { ReconstructionProgressDialog } from '../../panels/ReconstructionProgressDialog';
 import './Ribbon.css';
 
@@ -121,6 +122,15 @@ export const Ribbon = memo(function Ribbon() {
                   <span className="ribbon-slider-value">{actions.formatBudget(pointBudget)}</span>
                 </label>
               </div>
+            </RibbonGroup>
+
+            <RibbonGroup label="View">
+              <RibbonButton
+                icon={<Focus size={20} />}
+                label="Zoom All"
+                onClick={zoomToFit}
+                tooltip="Zoom to fit all geometry (F)"
+              />
             </RibbonGroup>
 
             <RibbonGroup label="Settings">

@@ -59,6 +59,52 @@ export function addBAG3DMeshToScene(geometry: THREE.BufferGeometry): void {
   }
 }
 
+/**
+ * Zoom camera to fit all visible geometry in the scene.
+ * Works with pointclouds, meshes, and BAG3D objects.
+ */
+export function zoomToFit(): void {
+  const scene = _viewerScene;
+  const camera = _viewerCamera;
+  const controls = _viewerControls;
+  if (!scene || !camera || !controls) return;
+
+  // Compute combined bounding box of all visible objects
+  const box = new THREE.Box3();
+  scene.traverse((obj) => {
+    if (!obj.visible) return;
+    if (obj instanceof THREE.Points || obj instanceof THREE.Mesh) {
+      const geo = (obj as THREE.Points | THREE.Mesh).geometry;
+      if (geo && geo.attributes.position && geo.attributes.position.count > 0) {
+        geo.computeBoundingBox();
+        if (geo.boundingBox) {
+          box.expandByObject(obj);
+        }
+      }
+    }
+  });
+
+  if (box.isEmpty()) return;
+
+  const sphere = new THREE.Sphere();
+  box.getBoundingSphere(sphere);
+
+  const dist = sphere.radius * 2.5;
+  camera.near = Math.max(0.01, dist * 0.001);
+  camera.far = Math.max(1000, dist * 20);
+  camera.updateProjectionMatrix();
+  controls.maxDistance = dist * 10;
+  controls.minDistance = dist * 0.01;
+
+  camera.position.set(
+    sphere.center.x + dist * 0.5,
+    sphere.center.y + dist * 0.7,
+    sphere.center.z + dist * 0.5,
+  );
+  controls.target.copy(sphere.center);
+  controls.update();
+}
+
 const isTauri = !!(window as any).__TAURI_INTERNALS__;
 
 interface BoxSelectState {
@@ -309,6 +355,11 @@ const PointcloudViewerInner = () => {
       if (e.key === 'Delete' && editMode) {
         deleteSelectedPoints();
       }
+      if (e.key === 'f' || e.key === 'F') {
+        // Don't trigger if user is typing in an input
+        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+        zoomToFit();
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -474,7 +525,6 @@ const PointcloudViewerInner = () => {
   // Manage pointcloud rendering when pointclouds change
   useEffect(() => {
     const scene = sceneRef.current;
-    const camera = cameraRef.current;
     if (!scene) return;
 
     const currentIds = new Set(pointclouds.map((pc) => pc.id));
@@ -610,24 +660,9 @@ const PointcloudViewerInner = () => {
             fitGeometry = geometry;
           }
 
-          // Auto-fit camera
-          if (camera && controlsRef.current && fitGeometry) {
-            fitGeometry.computeBoundingSphere();
-            const sphere = fitGeometry.boundingSphere;
-            if (sphere) {
-              const dist = sphere.radius * 2.5;
-              camera.far = Math.max(camera.far, dist * 20);
-              camera.updateProjectionMatrix();
-              controlsRef.current.maxDistance = dist * 10;
-
-              camera.position.set(
-                sphere.center.x + dist * 0.5,
-                sphere.center.y + dist * 0.7,
-                sphere.center.z + dist * 0.5,
-              );
-              controlsRef.current.target.copy(sphere.center);
-              controlsRef.current.update();
-            }
+          // Auto-fit camera to loaded geometry
+          if (fitGeometry) {
+            zoomToFit();
           }
         }
       }
