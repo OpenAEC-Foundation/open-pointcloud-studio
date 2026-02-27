@@ -94,6 +94,9 @@ function readE57Header(view: DataView): E57FileHeader {
  * Read logical data from E57's page-based layout.
  * Each page is `pageSize` bytes: (pageSize - 4) data bytes + 4 byte CRC.
  * CRC is not validated for performance.
+ *
+ * Handles non-page-aligned physical offsets: the first read starts
+ * mid-page and reads only the remaining data bytes before the CRC.
  */
 function readPagedData(
   buffer: ArrayBuffer,
@@ -102,19 +105,39 @@ function readPagedData(
   pageSize: number,
 ): Uint8Array {
   const dataPerPage = pageSize - 4;
-  const result = new Uint8Array(logLength);
+  // Clamp logLength so we never read past the buffer
+  const safeLogLength = Math.min(logLength, buffer.byteLength);
+  const result = new Uint8Array(safeLogLength);
   let written = 0;
-  let currentPhys = physOffset;
 
-  while (written < logLength) {
-    const chunkSize = Math.min(dataPerPage, logLength - written);
-    const src = new Uint8Array(buffer, currentPhys, chunkSize);
-    result.set(src, written);
+  // Determine position within the first page
+  const offsetInPage = physOffset % pageSize;
+  const firstPageStart = physOffset - offsetInPage;
+
+  // First page: read from physOffset to end of data portion (before CRC)
+  const firstChunkAvail = dataPerPage - offsetInPage;
+  const firstChunkSize = Math.min(firstChunkAvail, safeLogLength);
+  if (physOffset + firstChunkSize > buffer.byteLength) {
+    // Not enough data — return what we have
+    const avail = Math.max(0, buffer.byteLength - physOffset);
+    result.set(new Uint8Array(buffer, physOffset, avail), 0);
+    return result.slice(0, avail);
+  }
+  result.set(new Uint8Array(buffer, physOffset, firstChunkSize), 0);
+  written += firstChunkSize;
+
+  // Subsequent pages: read full data portions
+  let currentPageStart = firstPageStart + pageSize;
+  while (written < safeLogLength && currentPageStart < buffer.byteLength) {
+    const avail = Math.min(dataPerPage, buffer.byteLength - currentPageStart);
+    const chunkSize = Math.min(avail, safeLogLength - written);
+    if (chunkSize <= 0) break;
+    result.set(new Uint8Array(buffer, currentPageStart, chunkSize), written);
     written += chunkSize;
-    currentPhys += pageSize; // skip to next page (past CRC)
+    currentPageStart += pageSize;
   }
 
-  return result;
+  return written < safeLogLength ? result.slice(0, written) : result;
 }
 
 // ── XML parsing ────────────────────────────────────────────────────────
@@ -238,7 +261,8 @@ class BitReader {
       }
     }
 
-    return result;
+    // JS bitwise ops produce signed int32; convert to unsigned for 32-bit reads
+    return result >>> 0;
   }
 
   readFloat32(): number {
@@ -280,6 +304,21 @@ function bitsForRange(min: number, max: number): number {
 /**
  * Decode a binary section for a scan descriptor.
  * Returns arrays of decoded field values indexed by field name.
+ *
+ * The binary layout is:
+ *   1. CompressedVectorSectionHeader (32 bytes at binaryPhysicalOffset):
+ *        uint8  sectionId (= 1)
+ *        7 bytes reserved
+ *        uint64 sectionLogicalLength
+ *        uint64 dataPhysicalOffset   ← actual data packets start here
+ *        uint64 indexPhysicalOffset
+ *   2. Data packets (at dataPhysicalOffset):
+ *        uint8  packetType (1 = data)
+ *        uint8  reserved
+ *        uint16 packetLengthMinus1
+ *        uint16 bytestreamCount
+ *        uint16 bytestreamLength[bytestreamCount]
+ *        <bytestream data>
  */
 function decodeBinarySection(
   buffer: ArrayBuffer,
@@ -293,18 +332,21 @@ function decodeBinarySection(
     result.set(field.name, new Float64Array(scan.pointCount));
   }
 
-  // Read paged data for this binary section
-  // First 4 bytes of the section tell us the data packet header
-  // E57 binary sections have data packets; for uncompressed, there's a simple structure
-  const dataPerPage = pageSize - 4;
+  // Read the CompressedVector section header (32 bytes)
+  const sectionHeader = readPagedData(buffer, scan.binaryPhysicalOffset, 32, pageSize);
+  const shView = new DataView(sectionHeader.buffer, sectionHeader.byteOffset, sectionHeader.byteLength);
 
-  // We need to read through the binary section page by page
-  // Each data packet: 1 byte type, then bytestream data interleaved per field
-  let physPos = scan.binaryPhysicalOffset;
+  // Validate section ID
+  if (sectionHeader[0] !== 1) {
+    throw new Error(`Invalid CompressedVector section ID: ${sectionHeader[0]}`);
+  }
 
-  // Collect all binary data from pages
-  // We don't know the exact logical length, so read enough pages for all points
-  // Estimate: calculate bits per point across all fields
+  // Data packets start at dataPhysicalOffset (uint64 at byte 16)
+  const dataPhysLo = shView.getUint32(16, true);
+  const dataPhysHi = shView.getUint32(20, true);
+  const dataPhysicalOffset = dataPhysLo + dataPhysHi * 0x100000000;
+
+  // Estimate logical data size for all points
   let bitsPerPoint = 0;
   for (const field of scan.prototype) {
     if (field.type === 'float') {
@@ -314,78 +356,64 @@ function decodeBinarySection(
     }
   }
 
-  // Generous estimate for data size (plus packet headers)
-  const estimatedBytes = Math.ceil((bitsPerPoint * scan.pointCount) / 8) + fieldCount * 64 + 1024;
-  const pagesToRead = Math.ceil(estimatedBytes / dataPerPage) + 2;
-  const maxPhysRead = Math.min(pagesToRead * pageSize, buffer.byteLength - physPos);
+  // Generous estimate (plus packet headers overhead)
+  const packetOverhead = Math.ceil(scan.pointCount / 1000) * (6 + fieldCount * 2) + 4096;
+  const estimatedLogicalBytes = Math.ceil((bitsPerPoint * scan.pointCount) / 8) + packetOverhead;
 
-  // Read raw pages, stripping CRC
-  const rawData = new Uint8Array(Math.ceil(maxPhysRead / pageSize) * dataPerPage);
-  let rawWritten = 0;
-  let currentPhys = physPos;
+  // Read paged data starting from the actual data packet offset
+  const rawData = readPagedData(buffer, dataPhysicalOffset, estimatedLogicalBytes, pageSize);
+  const rawWritten = rawData.length;
 
-  while (rawWritten < rawData.length && currentPhys < buffer.byteLength) {
-    const remaining = buffer.byteLength - currentPhys;
-    const chunkSize = Math.min(dataPerPage, remaining, rawData.length - rawWritten);
-    const src = new Uint8Array(buffer, currentPhys, chunkSize);
-    rawData.set(src, rawWritten);
-    rawWritten += chunkSize;
-    currentPhys += pageSize;
-  }
-
-  // Now parse data packets from rawData
+  // Parse data packets
   let offset = 0;
   let pointsDecoded = 0;
 
   while (pointsDecoded < scan.pointCount && offset < rawWritten) {
     // Packet header: 1 byte type
     const packetType = rawData[offset];
-    offset++;
 
     if (packetType === 0) {
-      // Index packet — skip (8 bytes of index data per entry)
-      // Not common in point data, skip 15 bytes
-      offset += 15;
+      // Index packet (16 bytes total)
+      offset += 16;
       continue;
     }
 
     if (packetType !== 1) {
-      // Unknown packet type, try to skip
+      // Unknown packet type — stop
       break;
     }
 
     // Data packet (type 1):
-    // 2 bytes: packet length (LE, in bytes including header)
-    // For each bytestream: data follows
-    if (offset + 1 >= rawWritten) break;
-    const packetLength = rawData[offset] | (rawData[offset + 1] << 8);
-    offset += 2;
+    //   byte 0: packetType = 1
+    //   byte 1: reserved
+    //   bytes 2-3: packetLengthMinus1 (uint16 LE)
+    //   bytes 4-5: bytestreamCount (uint16 LE)
+    //   then 2 bytes per bytestream: buffer length
+    if (offset + 5 >= rawWritten) break;
 
-    // 2 bytes: bytestream count
-    if (offset + 1 >= rawWritten) break;
-    const bytestreamCount = rawData[offset] | (rawData[offset + 1] << 8);
-    offset += 2;
+    const packetLengthMinus1 = rawData[offset + 2] | (rawData[offset + 3] << 8);
+    const packetLength = packetLengthMinus1 + 1;
+    const bytestreamCount = rawData[offset + 4] | (rawData[offset + 5] << 8);
 
-    if (bytestreamCount !== fieldCount) {
-      // Mismatch — skip this packet
-      offset += packetLength - 6; // already read 1+2+2 = 5 bytes, packet includes header
-      continue;
-    }
+    // Packet header size: 6 + 2 * bytestreamCount
+    const headerSize = 6 + bytestreamCount * 2;
+    if (offset + headerSize > rawWritten) break;
 
-    // Per bytestream: 2 bytes length
+    // Read per-bytestream lengths
     const streamLengths: number[] = [];
     for (let s = 0; s < bytestreamCount; s++) {
-      if (offset + 1 >= rawWritten) break;
-      const len = rawData[offset] | (rawData[offset + 1] << 8);
-      streamLengths.push(len);
-      offset += 2;
+      const lenOff = offset + 6 + s * 2;
+      streamLengths.push(rawData[lenOff] | (rawData[lenOff + 1] << 8));
     }
 
-    // Now decode each bytestream
-    for (let s = 0; s < fieldCount; s++) {
+    // Decode each bytestream (only process fields we know about)
+    let dataOffset = offset + headerSize;
+    const fieldsToProcess = Math.min(fieldCount, bytestreamCount);
+
+    for (let s = 0; s < fieldsToProcess; s++) {
       const field = scan.prototype[s];
       const streamLen = streamLengths[s] || 0;
-      const streamStart = offset;
+      const streamStart = dataOffset;
       const arr = result.get(field.name)!;
 
       if (field.type === 'float') {
@@ -393,7 +421,7 @@ function decodeBinarySection(
         const bytesPerVal = field.precision === 32 ? 4 : 8;
         const valsInStream = Math.min(
           Math.floor(streamLen / bytesPerVal),
-          scan.pointCount - pointsDecoded
+          scan.pointCount - pointsDecoded,
         );
 
         for (let p = 0; p < valsInStream; p++) {
@@ -407,10 +435,9 @@ function decodeBinarySection(
         const reader = new BitReader(rawData, streamStart);
 
         if (bits === 0) {
-          // Constant value
           const valsInStream = Math.min(
             streamLen > 0 ? scan.pointCount - pointsDecoded : 0,
-            scan.pointCount - pointsDecoded
+            scan.pointCount - pointsDecoded,
           );
           const constVal = field.type === 'scaledInteger'
             ? field.minimum * field.scale + field.offset
@@ -421,7 +448,7 @@ function decodeBinarySection(
         } else {
           const valsInStream = Math.min(
             Math.floor((streamLen * 8) / bits),
-            scan.pointCount - pointsDecoded
+            scan.pointCount - pointsDecoded,
           );
           for (let p = 0; p < valsInStream; p++) {
             const raw = reader.readBits(bits) + field.minimum;
@@ -432,10 +459,15 @@ function decodeBinarySection(
         }
       }
 
-      offset += streamLen;
+      dataOffset += streamLen;
     }
 
-    // Count points decoded in this packet — use first field's stream to determine
+    // Skip remaining bytestreams we didn't process
+    for (let s = fieldsToProcess; s < bytestreamCount; s++) {
+      dataOffset += streamLengths[s] || 0;
+    }
+
+    // Count points decoded — use first field's stream
     const firstField = scan.prototype[0];
     const firstStreamLen = streamLengths[0] || 0;
     let pointsInPacket: number;
@@ -450,6 +482,9 @@ function decodeBinarySection(
     }
     pointsInPacket = Math.min(pointsInPacket, scan.pointCount - pointsDecoded);
     pointsDecoded += pointsInPacket;
+
+    // Advance to next packet
+    offset += packetLength;
   }
 
   return result;
