@@ -82,7 +82,7 @@ export async function parseLAZ(buffer: ArrayBuffer): Promise<ParsedPointcloud> {
   const totalPoints = lazPointCount > 0 ? lazPointCount : numberOfPoints;
 
   // Limit points for browser performance
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const stride = totalPoints > maxPoints ? Math.ceil(totalPoints / maxPoints) : 1;
   const actualCount = Math.ceil(totalPoints / stride);
 

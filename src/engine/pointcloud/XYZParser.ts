@@ -40,7 +40,7 @@ export function parseXYZ(buffer: ArrayBuffer): ParsedPointcloud {
   const hasIntensity = numCols === 4 || numCols >= 7;
   const hasColor = numCols === 6 || numCols >= 7;
 
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const totalLines = lines.length - startLine;
   const stride = totalLines > maxPoints ? Math.ceil(totalLines / maxPoints) : 1;
   const estimatedCount = Math.ceil(totalLines / stride);

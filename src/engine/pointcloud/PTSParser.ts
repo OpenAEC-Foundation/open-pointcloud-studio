@@ -36,7 +36,7 @@ export function parsePTS(buffer: ArrayBuffer): ParsedPointcloud {
   const hasColor = numCols >= 6;
 
   // Limit for browser performance
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const totalLines = lines.length - startLine;
   const stride = totalLines > maxPoints ? Math.ceil(totalLines / maxPoints) : 1;
   const estimatedCount = Math.ceil(totalLines / stride);

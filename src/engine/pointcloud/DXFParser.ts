@@ -155,7 +155,7 @@ export function parseDXF(buffer: ArrayBuffer): ParsedPointcloud {
 
   // Downsampling
   const hasFaces = faceIndices.length > 0;
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const stride = (!hasFaces && points.length > maxPoints) ? Math.ceil(points.length / maxPoints) : 1;
   const actualCount = hasFaces ? points.length : Math.ceil(points.length / stride);
 

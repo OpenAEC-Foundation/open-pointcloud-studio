@@ -29,7 +29,7 @@ export function parseOBJ(buffer: ArrayBuffer): ParsedPointcloud {
 
   // For mesh OBJs, keep all vertices (no downsampling) to preserve face topology.
   // For point-only OBJs, downsample if too many.
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const stride = (!hasFaces && vertexCount > maxPoints) ? Math.ceil(vertexCount / maxPoints) : 1;
   const actualVertexCount = Math.ceil(vertexCount / stride);
 

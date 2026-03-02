@@ -53,7 +53,7 @@ export function parseOFF(buffer: ArrayBuffer): ParsedPointcloud {
   while (lineIdx < lines.length && (lines[lineIdx].trim() === '' || lines[lineIdx].trim().startsWith('#'))) lineIdx++;
 
   const hasFaces = faceCount > 0;
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const stride = (!hasFaces && vertexCount > maxPoints) ? Math.ceil(vertexCount / maxPoints) : 1;
   const actualVertexCount = Math.ceil(vertexCount / stride);
 

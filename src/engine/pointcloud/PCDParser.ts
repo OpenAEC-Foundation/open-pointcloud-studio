@@ -226,7 +226,7 @@ export function parsePCD(buffer: ArrayBuffer): ParsedPointcloud {
   for (const f of fields) recordSize += f.size * f.count;
 
   // Downsampling
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const stride = points > maxPoints ? Math.ceil(points / maxPoints) : 1;
   const estimatedCount = Math.ceil(points / stride);
 

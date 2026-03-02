@@ -126,7 +126,7 @@ export function parsePTX(buffer: ArrayBuffer): ParsedPointcloud {
   }
 
   // Apply downsampling if needed
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const stride = totalPoints > maxPoints ? Math.ceil(totalPoints / maxPoints) : 1;
   const estimatedCount = Math.ceil(totalPoints / stride);
 

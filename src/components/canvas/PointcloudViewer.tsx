@@ -84,10 +84,14 @@ export function zoomToFit(): void {
     }
   });
 
-  if (box.isEmpty()) return;
+  if (box.isEmpty()) {
+    console.warn('[zoomToFit] Bounding box is empty — no visible geometry found');
+    return;
+  }
 
   const sphere = new THREE.Sphere();
   box.getBoundingSphere(sphere);
+  console.log(`[zoomToFit] center=(${sphere.center.x.toFixed(2)}, ${sphere.center.y.toFixed(2)}, ${sphere.center.z.toFixed(2)}), radius=${sphere.radius.toFixed(2)}`);
 
   const dist = sphere.radius * 2.5;
   camera.near = Math.max(0.01, dist * 0.001);
@@ -103,6 +107,7 @@ export function zoomToFit(): void {
   );
   controls.target.copy(sphere.center);
   controls.update();
+  console.log(`[zoomToFit] Camera at (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}), near=${camera.near.toFixed(4)}, far=${camera.far.toFixed(0)}`);
 }
 
 const isTauri = !!(window as any).__TAURI_INTERNALS__;
@@ -607,7 +612,11 @@ const PointcloudViewerInner = () => {
         const alreadyExists = existingPointIds.has(pc.id) || existingMeshIds.has(pc.id);
         if (!alreadyExists && pc.indexingProgress >= 1.0) {
           const parsed = getBrowserPointcloud(pc.id);
-          if (!parsed) continue;
+          if (!parsed) {
+            console.warn(`[viewer] No browser data for pointcloud "${pc.fileName}" (id=${pc.id}) — re-import the file`);
+            continue;
+          }
+          console.log(`[viewer] Adding pointcloud "${pc.fileName}": ${parsed.positions.length / 3} points, hasColor=${parsed.hasColor}`);
 
           const hasMesh = parsed.indices && parsed.indices.length > 0;
           let fitGeometry: THREE.BufferGeometry | null = null;
@@ -635,6 +644,15 @@ const PointcloudViewerInner = () => {
             fitGeometry = geometry;
           } else {
             // Render as point cloud
+            const numPoints = parsed.positions.length / 3;
+
+            // Compute baseSpacing from footprint area and point count
+            const sizeX = pc.bounds.maxX - pc.bounds.minX;
+            const sizeY = pc.bounds.maxY - pc.bounds.minY;
+            const footprintArea = Math.max(sizeX * sizeY, 1);
+            const baseSpacing = Math.sqrt(footprintArea / Math.max(numPoints, 1));
+            console.log(`[viewer] baseSpacing=${baseSpacing.toFixed(4)}, footprint=${sizeX.toFixed(1)}x${sizeY.toFixed(1)}, points=${numPoints}`);
+
             if (!browserMaterialRef.current) {
               browserMaterialRef.current = createPointcloudMaterial({
                 pointSize,
@@ -642,7 +660,10 @@ const PointcloudViewerInner = () => {
                 screenHeight: containerRef.current?.clientHeight ?? 800,
                 elevationMin: pc.bounds.minZ,
                 elevationMax: pc.bounds.maxZ,
+                baseSpacing,
               });
+            } else {
+              updatePointcloudMaterial(browserMaterialRef.current, { baseSpacing });
             }
 
             const geometry = new THREE.BufferGeometry();
@@ -651,7 +672,6 @@ const PointcloudViewerInner = () => {
             geometry.setAttribute('aIntensity', new THREE.BufferAttribute(parsed.intensities, 1));
             geometry.setAttribute('aClassification', new THREE.BufferAttribute(parsed.classifications, 1));
 
-            const numPoints = parsed.positions.length / 3;
             geometry.setAttribute('aSelected', new THREE.BufferAttribute(new Float32Array(numPoints), 1));
 
             const points = new THREE.Points(geometry, browserMaterialRef.current);

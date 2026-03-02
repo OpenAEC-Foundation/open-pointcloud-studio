@@ -529,7 +529,7 @@ export function parseE57(buffer: ArrayBuffer): ParsedPointcloud {
 
   // Count total points and determine stride for sampling
   const totalPoints = scans.reduce((sum, s) => sum + s.pointCount, 0);
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const stride = totalPoints > maxPoints ? Math.ceil(totalPoints / maxPoints) : 1;
   const estimatedCount = Math.ceil(totalPoints / stride);
 

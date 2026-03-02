@@ -132,7 +132,7 @@ export function parseLAS(buffer: ArrayBuffer): ParsedPointcloud {
   const cz = (minZ + maxZ) / 2;
 
   // Limit points for browser performance
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const stride = numberOfPoints > maxPoints ? Math.ceil(numberOfPoints / maxPoints) : 1;
   const actualCount = Math.ceil(numberOfPoints / stride);
 

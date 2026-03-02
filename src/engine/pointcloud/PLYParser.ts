@@ -100,7 +100,7 @@ export function parsePLY(buffer: ArrayBuffer): ParsedPointcloud {
   const hasColor = rIdx >= 0 && gIdx >= 0 && bIdx >= 0;
   const hasIntensity = iIdx >= 0;
 
-  const maxPoints = 5_000_000;
+  const maxPoints = 1_000_000;
   const stride = vertexCount > maxPoints ? Math.ceil(vertexCount / maxPoints) : 1;
   const actualCount = Math.ceil(vertexCount / stride);
 
