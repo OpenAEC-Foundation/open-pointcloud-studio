@@ -1,6 +1,6 @@
 [package]
 name = "open-pointcloud-studio"
-version = "0.2.0"
+version = "0.3.0"
 description = "A cross-platform pointcloud viewer and editor"
 authors = ["Open Pointcloud Studio Contributors"]
 license = "LGPL-3.0-or-later"

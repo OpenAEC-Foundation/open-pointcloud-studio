@@ -201,7 +201,7 @@ export const MenuBar = memo(function MenuBar({ onSettingsClick }: { onSettingsCl
           Open Pointcloud Studio
         </span>
         <span className="text-cad-text-muted text-[10px] ml-1.5 pointer-events-none">
-          v0.2.0
+          v0.3.0
         </span>
       </div>
 
