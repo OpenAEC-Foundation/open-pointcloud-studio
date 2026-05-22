@@ -1,16 +1,32 @@
 /*
  * App-specifieke tokens bovenop @openaec/ui.
- * Definieert composietsvariabelen die alleen open-pointcloud-studio gebruikt
- * (ribbon-gradient, canvas-grid). Geen kleur-hex hier; alles via oaec tokens.
+ *
+ * Twee blokken:
+ * 1. Style-book canonical overrides — corrigeert tokens in @openaec/ui v0.1.0
+ *    die afwijken van OpenAEC-Foundation/OpenAEC-style-book/packages/tokens.
+ *    Verwijderen zodra @openaec/ui upstream is gesynct.
+ * 2. App-specifieke composietsvariabelen (ribbon-gradient, canvas-grid) die niet
+ *    in @openaec/ui zitten.
  */
 
 :root,
 [data-theme="light"] {
-  /* Canvas-grid (gebruikt door PointcloudViewer) */
+  /* ── 1. Style-book canonical overrides ───────────────────────── */
+  /* Panels go DARKER than the base shell (night-build), not lighter */
+  --oaec-bg-lighter: #2A2A32;
+  /* Borders are neutral grey, not orange-tinted */
+  --oaec-border: #27272A;
+  --oaec-border-subtle: #3F3F46;
+  /* Secondary/muted text are warm neutrals, not low-alpha white */
+  --oaec-text-secondary: #D6D3D1;
+  --oaec-text-muted: #A1A1AA;
+
+  /* ── 2. App-specific composite tokens ────────────────────────── */
+  /* Canvas-grid (used by PointcloudViewer) */
   --oaec-grid: var(--oaec-bg-lighter);
   --oaec-grid-major: var(--oaec-border);
 
-  /* Ribbon gradient (gebruikt door Ribbon.css) */
+  /* Ribbon gradient (used by Ribbon.css) */
   --oaec-ribbon-bg: linear-gradient(
     to bottom,
     var(--oaec-bg-lighter) 0%,

@@ -47,6 +47,14 @@ export const Ribbon = memo(function Ribbon() {
     <div className="ribbon-container">
       {/* Tab bar */}
       <div className="ribbon-tabs">
+        {/* TODO(plan2+): expand File-tab to a full app-menu (Open, Recent, Export, About). v1 just triggers Import. */}
+        <button
+          className="ribbon-tab file"
+          onClick={actions.handleImport}
+          title="Open / Import a pointcloud file"
+        >
+          File
+        </button>
         <button
           className={`ribbon-tab ${activeTab === 'home' ? 'active' : ''}`}
           onClick={() => setActiveTab('home')}
