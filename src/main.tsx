@@ -1,6 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import '@openaec/ui/css/tokens.css';
+import '@openaec/ui/css/components.css';
 import './styles/globals.css';
 
 class ErrorBoundary extends React.Component<
