@@ -10,7 +10,7 @@ A cross-platform pointcloud viewer built with Tauri, React, and Three.js.
 - Eye-Dome Lighting (EDL)
 - Classification filtering (ASPRS)
 - Octree-based LOD rendering
-- Dark, Light, Blue, and High Contrast themes
+- OpenAEC Foundation design system (one cohesive theme)
 
 ## Getting Started
 
