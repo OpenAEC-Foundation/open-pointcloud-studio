@@ -381,69 +381,6 @@
 }
 
 
-/* Input controls - Dark theme */
-.ribbon-input-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px;
-}
-
-.ribbon-input-label {
-  font-size: 9px;
-  color: #888888;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.ribbon-input {
-  width: 50px;
-  padding: 3px 6px;
-  font-size: 11px;
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 3px;
-  color: #e2e8f0;
-  outline: none;
-}
-
-.ribbon-input:focus {
-  border-color: #3b82f6;
-}
-
-.ribbon-input-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-}
-
-.ribbon-input-row label {
-  font-size: 10px;
-  color: #94a3b8;
-  white-space: nowrap;
-}
-
-/* Color input */
-.ribbon-color-input {
-  width: 32px;
-  height: 24px;
-  padding: 2px;
-  border: 1px solid #334155;
-  border-radius: 3px;
-  background: transparent;
-  cursor: default;
-}
-
-.ribbon-color-input::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-
-.ribbon-color-input::-webkit-color-swatch {
-  border: none;
-  border-radius: 2px;
-}
 
 /* Transform tool inputs */
 .ribbon-transform-inputs {
@@ -473,7 +410,7 @@
   width: 54px;
   padding: 2px 4px;
   font-size: 11px;
-  background: var(--oaec-bg-input, #0f172a);
+  background: var(--oaec-bg-input);
   border: 1px solid var(--oaec-border-subtle);
   border-radius: 3px;
   color: var(--oaec-text);
@@ -482,7 +419,7 @@
 }
 
 .ribbon-transform-inputs .ribbon-input:focus {
-  border-color: var(--oaec-accent, #3b82f6);
+  border-color: var(--oaec-accent);
 }
 
 .ribbon-input-value {
