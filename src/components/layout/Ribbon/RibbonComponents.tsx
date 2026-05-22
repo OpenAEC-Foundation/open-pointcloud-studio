@@ -231,7 +231,7 @@ export function RibbonDropdownButton({ icon, label, disabled, tooltip, items }: 
       {tt.show && !isOpen && <RibbonTooltip label={tooltip || label} parentRef={tt.ref as React.RefObject<HTMLElement>} />}
       {isOpen && (
         <div
-          className="ribbon-theme-menu"
+          className="ribbon-dropdown-menu"
           style={{
             position: 'absolute',
             top: '100%',
@@ -243,7 +243,7 @@ export function RibbonDropdownButton({ icon, label, disabled, tooltip, items }: 
           {items.map((item) => (
             <button
               key={item.label}
-              className="ribbon-theme-option"
+              className="ribbon-dropdown-option"
               onClick={() => {
                 item.onClick();
                 setIsOpen(false);
