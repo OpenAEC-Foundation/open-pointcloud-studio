@@ -1,0 +1,24 @@
+/*
+ * App-specifieke tokens bovenop @openaec/ui.
+ * Definieert composietsvariabelen die alleen open-pointcloud-studio gebruikt
+ * (ribbon-gradient, canvas-grid). Geen kleur-hex hier; alles via oaec tokens.
+ */
+
+:root,
+[data-theme="light"] {
+  /* Canvas-grid (gebruikt door PointcloudViewer) */
+  --oaec-grid: var(--oaec-bg-lighter);
+  --oaec-grid-major: var(--oaec-border);
+
+  /* Ribbon gradient (gebruikt door Ribbon.css) */
+  --oaec-ribbon-bg: linear-gradient(
+    to bottom,
+    var(--oaec-bg-lighter) 0%,
+    var(--oaec-bg) 100%
+  );
+  --oaec-ribbon-tab-bg: linear-gradient(
+    to bottom,
+    var(--oaec-bg-lighter) 0%,
+    var(--oaec-bg) 100%
+  );
+}

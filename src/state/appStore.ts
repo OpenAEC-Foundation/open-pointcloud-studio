@@ -1,7 +1,7 @@
 /**
  * App Store — Minimal Zustand store for Open Pointcloud Studio
  *
- * Contains only UI theme state + pointcloud state.
+ * Contains only UI state + pointcloud state.
  */
 
 import { create } from 'zustand';
@@ -15,32 +15,20 @@ import {
 } from './slices';
 
 // ============================================================================
-// UI Theme
+// UI State
 // ============================================================================
 
-export type UITheme = 'dark' | 'light' | 'blue' | 'highContrast';
-
-export const UI_THEMES: { id: UITheme; label: string }[] = [
-  { id: 'dark', label: 'Dark' },
-  { id: 'light', label: 'Light' },
-  { id: 'blue', label: 'Blue' },
-  { id: 'highContrast', label: 'High Contrast' },
-];
-
 export interface UIState {
-  uiTheme: UITheme;
   rightPanelOpen: boolean;
   showBAG3DPanel: boolean;
 }
 
 export interface UIActions {
-  setUITheme: (theme: UITheme) => void;
   toggleRightPanel: () => void;
   setShowBAG3DPanel: (show: boolean) => void;
 }
 
 const initialUIState: UIState = {
-  uiTheme: 'dark',
   rightPanelOpen: true,
   showBAG3DPanel: false,
 };
@@ -57,9 +45,6 @@ export const useAppStore = create<AppState>()(
     ...initialPointcloudState,
 
     // UI actions
-    setUITheme: (theme: UITheme) => {
-      set((s) => { s.uiTheme = theme; });
-    },
     toggleRightPanel: () => {
       set((s) => { s.rightPanelOpen = !s.rightPanelOpen; });
     },
