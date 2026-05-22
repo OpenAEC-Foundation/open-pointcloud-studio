@@ -10,12 +10,6 @@ import { SettingsDialog } from './components/SettingsDialog/SettingsDialog';
 import { useAppStore } from './state/appStore';
 
 function App() {
-  // Apply theme on mount
-  const uiTheme = useAppStore((s) => s.uiTheme);
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', uiTheme);
-  }, [uiTheme]);
-
   const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
   const toggleRightPanel = useAppStore((s) => s.toggleRightPanel);
   const showBAG3DPanel = useAppStore((s) => s.showBAG3DPanel);

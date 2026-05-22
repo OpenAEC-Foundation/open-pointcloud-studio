@@ -150,62 +150,6 @@
   border-bottom: 1px solid var(--oaec-border-subtle);
 }
 
-/* ── Theme table ── */
-.settings-theme-table {
-  border: 1px solid var(--oaec-border-subtle);
-  border-radius: 0;
-  overflow: hidden;
-}
-
-.settings-theme-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border: none;
-  border-bottom: 1px solid var(--oaec-border-subtle);
-  background: transparent;
-  color: var(--oaec-text);
-  font-size: 11px;
-  cursor: default;
-  width: 100%;
-  text-align: start;
-  transition: background 0.1s;
-}
-
-.settings-theme-row:last-child {
-  border-bottom: none;
-}
-
-.settings-theme-row:hover {
-  background: var(--oaec-accent-soft);
-}
-
-.settings-theme-row.active {
-  background: color-mix(in srgb, var(--oaec-accent) 8%, transparent);
-}
-
-.settings-theme-row-swatches {
-  display: flex;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
-.settings-theme-row-swatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 2px;
-  border: 1px solid rgba(128, 128, 128, 0.3);
-}
-
-.settings-theme-row-name {
-  font-weight: 500;
-}
-
-.settings-theme-row.active .settings-theme-row-name {
-  color: var(--oaec-accent);
-}
-
 /* ── Footer ── */
 .settings-footer {
   display: flex;

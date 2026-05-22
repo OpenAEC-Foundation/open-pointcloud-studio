@@ -1,8 +1,7 @@
 import { useState, memo } from 'react';
-import { Upload, Sun, Eye, BoxSelect, Trash2, XCircle, Move, Maximize, Filter, Building2, Shapes, Download, Focus } from 'lucide-react';
+import { Upload, Eye, BoxSelect, Trash2, XCircle, Move, Maximize, Filter, Building2, Shapes, Download, Focus } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
-import { type UITheme } from '../../../state/appStore';
-import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, RibbonDropdownButton, ThemeSelector } from './RibbonComponents';
+import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, RibbonDropdownButton } from './RibbonComponents';
 import { RGBIcon, ElevationIcon, ClassificationIcon, IntensityIcon } from './RibbonIcons';
 import { useRibbonActions } from './useRibbonActions';
 import { zoomToFit } from '../../canvas/PointcloudViewer';
@@ -21,8 +20,6 @@ export const Ribbon = memo(function Ribbon() {
   const setPointBudget = useAppStore((s) => s.setPointBudget);
   const edlEnabled = useAppStore((s) => s.edlEnabled);
   const setEdlEnabled = useAppStore((s) => s.setEdlEnabled);
-  const uiTheme = useAppStore((s) => s.uiTheme);
-  const setUITheme = useAppStore((s) => s.setUITheme);
   const editMode = useAppStore((s) => s.editMode);
   const setEditMode = useAppStore((s) => s.setEditMode);
   const clearSelection = useAppStore((s) => s.clearSelection);
@@ -136,17 +133,7 @@ export const Ribbon = memo(function Ribbon() {
             <RibbonGroup label="Settings">
               <RibbonButtonStack>
                 <RibbonSmallButton icon={<Eye size={14} />} label="EDL" onClick={() => setEdlEnabled(!edlEnabled)} active={edlEnabled} />
-                <RibbonSmallButton
-                  icon={<Sun size={14} />}
-                  label="Theme"
-                  onClick={() => {
-                    const themes: UITheme[] = ['dark', 'light', 'blue', 'highContrast'];
-                    const idx = themes.indexOf(uiTheme);
-                    setUITheme(themes[(idx + 1) % themes.length]);
-                  }}
-                />
               </RibbonButtonStack>
-              <ThemeSelector currentTheme={uiTheme} onThemeChange={setUITheme} />
             </RibbonGroup>
           </div>
         </div>

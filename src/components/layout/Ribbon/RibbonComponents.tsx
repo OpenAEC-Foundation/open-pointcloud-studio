@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
-import { type UITheme, UI_THEMES } from '../../../state/appStore';
-
+import { ChevronDown } from 'lucide-react';
 // ============================================================================
 // Tooltip
 // ============================================================================
@@ -260,71 +258,3 @@ export function RibbonDropdownButton({ icon, label, disabled, tooltip, items }: 
   );
 }
 
-// ============================================================================
-// ThemeSelector
-// ============================================================================
-
-interface ThemeSelectorProps {
-  currentTheme: UITheme;
-  onThemeChange: (theme: UITheme) => void;
-}
-
-export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen]);
-
-  const currentThemeLabel = UI_THEMES.find(t => t.id === currentTheme)?.label || 'Dark';
-
-  return (
-    <div className="ribbon-theme-selector" ref={dropdownRef}>
-      <span className="ribbon-theme-label">Theme</span>
-      <div className="ribbon-theme-dropdown">
-        <button
-          className="ribbon-theme-button"
-          onClick={() => setIsOpen(!isOpen)}
-        >
-          <span className="ribbon-theme-button-content">
-            <span className={`ribbon-theme-swatch ${currentTheme}`} />
-            <span>{currentThemeLabel}</span>
-          </span>
-          <ChevronDown size={12} />
-        </button>
-        {isOpen && (
-          <div className="ribbon-theme-menu">
-            {UI_THEMES.map((theme) => (
-              <button
-                key={theme.id}
-                className={`ribbon-theme-option ${currentTheme === theme.id ? 'selected' : ''}`}
-                onClick={() => {
-                  onThemeChange(theme.id);
-                  setIsOpen(false);
-                }}
-              >
-                {currentTheme === theme.id ? (
-                  <Check size={12} className="checkmark" />
-                ) : (
-                  <span className="no-check" />
-                )}
-                <span className={`ribbon-theme-swatch ${theme.id}`} />
-                <span>{theme.label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
