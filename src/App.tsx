@@ -7,6 +7,7 @@ import { PointcloudViewer, addBAG3DMeshToScene } from './components/canvas/Point
 import { PointcloudPanel } from './components/panels/PointcloudPanel';
 import { BAG3DPanel } from './components/panels/BAG3DPanel';
 import { SettingsDialog } from './components/SettingsDialog/SettingsDialog';
+import { AppMenu } from './components/dialogs/AppMenu/AppMenu';
 import { useAppStore } from './state/appStore';
 
 function App() {
@@ -14,6 +15,8 @@ function App() {
   const toggleRightPanel = useAppStore((s) => s.toggleRightPanel);
   const showBAG3DPanel = useAppStore((s) => s.showBAG3DPanel);
   const setShowBAG3DPanel = useAppStore((s) => s.setShowBAG3DPanel);
+  const appMenuOpen = useAppStore((s) => s.appMenuOpen);
+  const setAppMenuOpen = useAppStore((s) => s.setAppMenuOpen);
   const [showSettings, setShowSettings] = useState(false);
 
   const handleBuildingsLoaded = useCallback((geometry: any, buildingCount: number) => {
@@ -45,6 +48,18 @@ function App() {
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, []);
+
+  // Ctrl+O opens the AppMenu / file open
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        setAppMenuOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [setAppMenuOpen]);
 
   // Block browser shortcuts in production
   useEffect(() => {
@@ -132,6 +147,9 @@ function App() {
 
       {/* Bottom Status Bar */}
       <StatusBar />
+
+      {/* App Menu (File backstage overlay) */}
+      <AppMenu isOpen={appMenuOpen} onClose={() => setAppMenuOpen(false)} />
 
       {/* Settings Dialog */}
       {showSettings && (

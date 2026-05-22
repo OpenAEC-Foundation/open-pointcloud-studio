@@ -27,6 +27,7 @@ export const Ribbon = memo(function Ribbon() {
   const activePointcloudId = useAppStore((s) => s.activePointcloudId);
   const showBAG3DPanel = useAppStore((s) => s.showBAG3DPanel);
   const setShowBAG3DPanel = useAppStore((s) => s.setShowBAG3DPanel);
+  const setAppMenuOpen = useAppStore((s) => s.setAppMenuOpen);
 
   const totalSelected = Object.values(selectedPointIndices).reduce((sum, arr) => sum + arr.length, 0);
   const hasActivePointcloud = !!activePointcloudId;
@@ -47,11 +48,10 @@ export const Ribbon = memo(function Ribbon() {
     <div className="ribbon-container">
       {/* Tab bar */}
       <div className="ribbon-tabs">
-        {/* TODO(plan2+): expand File-tab to a full app-menu (Open, Recent, Export, About). v1 just triggers Import. */}
         <button
           className="ribbon-tab file"
-          onClick={actions.handleImport}
-          title="Open / Import a pointcloud file"
+          onClick={() => setAppMenuOpen(true)}
+          title="Open the file menu"
         >
           File
         </button>

@@ -21,16 +21,19 @@ import {
 export interface UIState {
   rightPanelOpen: boolean;
   showBAG3DPanel: boolean;
+  appMenuOpen: boolean;
 }
 
 export interface UIActions {
   toggleRightPanel: () => void;
   setShowBAG3DPanel: (show: boolean) => void;
+  setAppMenuOpen: (open: boolean) => void;
 }
 
 const initialUIState: UIState = {
   rightPanelOpen: true,
   showBAG3DPanel: false,
+  appMenuOpen: false,
 };
 
 // ============================================================================
@@ -50,6 +53,9 @@ export const useAppStore = create<AppState>()(
     },
     setShowBAG3DPanel: (show: boolean) => {
       set((s) => { s.showBAG3DPanel = show; });
+    },
+    setAppMenuOpen: (open: boolean) => {
+      set((s) => { s.appMenuOpen = open; });
     },
 
     // Pointcloud actions
