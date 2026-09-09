@@ -3,6 +3,7 @@ node_modules/
 
 # Build outputs
 dist/
+dist-debug/
 target/
 
 # IDE
@@ -28,6 +29,7 @@ npm-debug.log*
 
 # Tauri
 src-tauri/target/
+crates/*/target/
 
 # TypeScript
 *.tsbuildinfo
@@ -41,3 +43,6 @@ ROADMAP.md
 
 # Sample data
 samples/
+
+# Local dev fixtures (generated), never part of the repo or a build
+dev-fixtures/

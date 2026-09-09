@@ -2362,6 +2362,7 @@ dependencies = [
  "clap",
  "laz",
  "memmap2",
+ "pointcloud-core",
  "rayon",
  "serde",
  "serde_json",
@@ -2628,6 +2629,13 @@ dependencies = [
  "fdeflate",
  "flate2",
  "miniz_oxide",
+]
+
+[[package]]
+name = "pointcloud-core"
+version = "0.1.0"
+dependencies = [
+ "rayon",
 ]
 
 [[package]]

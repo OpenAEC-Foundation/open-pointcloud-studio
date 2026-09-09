@@ -21,17 +21,35 @@ function typeSize(t: string): number {
   }
 }
 
-function readTyped(view: DataView, offset: number, type: string): number {
+function readTyped(view: DataView, offset: number, type: string, le: boolean): number {
   switch (type) {
     case 'char': case 'int8': return view.getInt8(offset);
     case 'uchar': case 'uint8': return view.getUint8(offset);
-    case 'short': case 'int16': return view.getInt16(offset, true);
-    case 'ushort': case 'uint16': return view.getUint16(offset, true);
-    case 'int': case 'int32': return view.getInt32(offset, true);
-    case 'uint': case 'uint32': return view.getUint32(offset, true);
-    case 'float': case 'float32': return view.getFloat32(offset, true);
-    case 'double': case 'float64': return view.getFloat64(offset, true);
-    default: return view.getFloat32(offset, true);
+    case 'short': case 'int16': return view.getInt16(offset, le);
+    case 'ushort': case 'uint16': return view.getUint16(offset, le);
+    case 'int': case 'int32': return view.getInt32(offset, le);
+    case 'uint': case 'uint32': return view.getUint32(offset, le);
+    case 'float': case 'float32': return view.getFloat32(offset, le);
+    case 'double': case 'float64': return view.getFloat64(offset, le);
+    default: return view.getFloat32(offset, le);
+  }
+}
+
+/**
+ * Scale a colour channel to 0–1 based on its declared type.
+ *
+ * Deciding this from the value instead (`v > 1 ? v / 255 : v`) misreads a
+ * uchar channel that happens to hold 0 or 1 as already-normalised, turning
+ * near-black into full brightness.
+ */
+function normalizeChannel(value: number, type: string): number {
+  switch (type) {
+    case 'float': case 'float32': case 'double': case 'float64':
+      return value;
+    case 'ushort': case 'uint16': case 'short': case 'int16':
+      return value / 65535;
+    default:
+      return value / 255;
   }
 }
 
@@ -150,12 +168,9 @@ export function parsePLY(buffer: ArrayBuffer): ParsedPointcloud {
       positions[outIdx * 3 + 2] = -(y - cy);
 
       if (hasColor) {
-        const r = parseFloat(vals[rIdx]);
-        const g = parseFloat(vals[gIdx]);
-        const b = parseFloat(vals[bIdx]);
-        colors[outIdx * 3] = r > 1 ? r / 255 : r;
-        colors[outIdx * 3 + 1] = g > 1 ? g / 255 : g;
-        colors[outIdx * 3 + 2] = b > 1 ? b / 255 : b;
+        colors[outIdx * 3] = normalizeChannel(parseFloat(vals[rIdx]), properties[rIdx].type);
+        colors[outIdx * 3 + 1] = normalizeChannel(parseFloat(vals[gIdx]), properties[gIdx].type);
+        colors[outIdx * 3 + 2] = normalizeChannel(parseFloat(vals[bIdx]), properties[bIdx].type);
       } else {
         colors[outIdx * 3] = 0.8;
         colors[outIdx * 3 + 1] = 0.8;
@@ -172,10 +187,12 @@ export function parsePLY(buffer: ArrayBuffer): ParsedPointcloud {
     return buildResult(outIdx, positions, colors, intensities, classifications, minX, minY, minZ, maxX, maxY, maxZ, hasColor, hasIntensity);
   }
 
-  // Binary format
-  if (format !== 'binary_little_endian') {
-    throw new Error(`Unsupported PLY format: ${format}. Only ascii and binary_little_endian are supported.`);
+  // Binary format — both byte orders are legal PLY and both occur in the wild
+  // (big-endian typically from older SGI/IRIX-lineage scanner software).
+  if (format !== 'binary_little_endian' && format !== 'binary_big_endian') {
+    throw new Error(`Unsupported PLY format: ${format}. Expected ascii, binary_little_endian or binary_big_endian.`);
   }
+  const le = format === 'binary_little_endian';
 
   const recordSize = properties.reduce((sum, p) => sum + typeSize(p.type), 0);
   const propOffsets: number[] = [];
@@ -192,9 +209,9 @@ export function parsePLY(buffer: ArrayBuffer): ParsedPointcloud {
   for (let i = 0; i < vertexCount; i += sampleStep) {
     const base = i * recordSize;
     if (base + recordSize > dataView.byteLength) break;
-    const x = readTyped(dataView, base + propOffsets[xIdx], properties[xIdx].type);
-    const y = readTyped(dataView, base + propOffsets[yIdx], properties[yIdx].type);
-    const z = readTyped(dataView, base + propOffsets[zIdx], properties[zIdx].type);
+    const x = readTyped(dataView, base + propOffsets[xIdx], properties[xIdx].type, le);
+    const y = readTyped(dataView, base + propOffsets[yIdx], properties[yIdx].type, le);
+    const z = readTyped(dataView, base + propOffsets[zIdx], properties[zIdx].type, le);
     minX = Math.min(minX, x); maxX = Math.max(maxX, x);
     minY = Math.min(minY, y); maxY = Math.max(maxY, y);
     minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
@@ -208,21 +225,21 @@ export function parsePLY(buffer: ArrayBuffer): ParsedPointcloud {
     const base = i * recordSize;
     if (base + recordSize > dataView.byteLength) break;
 
-    const x = readTyped(dataView, base + propOffsets[xIdx], properties[xIdx].type);
-    const y = readTyped(dataView, base + propOffsets[yIdx], properties[yIdx].type);
-    const z = readTyped(dataView, base + propOffsets[zIdx], properties[zIdx].type);
+    const x = readTyped(dataView, base + propOffsets[xIdx], properties[xIdx].type, le);
+    const y = readTyped(dataView, base + propOffsets[yIdx], properties[yIdx].type, le);
+    const z = readTyped(dataView, base + propOffsets[zIdx], properties[zIdx].type, le);
 
     positions[outIdx * 3] = x - cx;
     positions[outIdx * 3 + 1] = z - cz;
     positions[outIdx * 3 + 2] = -(y - cy);
 
     if (hasColor) {
-      const r = readTyped(dataView, base + propOffsets[rIdx], properties[rIdx].type);
-      const g = readTyped(dataView, base + propOffsets[gIdx], properties[gIdx].type);
-      const b = readTyped(dataView, base + propOffsets[bIdx], properties[bIdx].type);
-      colors[outIdx * 3] = r > 1 ? r / 255 : r;
-      colors[outIdx * 3 + 1] = g > 1 ? g / 255 : g;
-      colors[outIdx * 3 + 2] = b > 1 ? b / 255 : b;
+      const r = readTyped(dataView, base + propOffsets[rIdx], properties[rIdx].type, le);
+      const g = readTyped(dataView, base + propOffsets[gIdx], properties[gIdx].type, le);
+      const b = readTyped(dataView, base + propOffsets[bIdx], properties[bIdx].type, le);
+      colors[outIdx * 3] = normalizeChannel(r, properties[rIdx].type);
+      colors[outIdx * 3 + 1] = normalizeChannel(g, properties[gIdx].type);
+      colors[outIdx * 3 + 2] = normalizeChannel(b, properties[bIdx].type);
     } else {
       colors[outIdx * 3] = 0.8;
       colors[outIdx * 3 + 1] = 0.8;
@@ -230,7 +247,7 @@ export function parsePLY(buffer: ArrayBuffer): ParsedPointcloud {
     }
 
     if (hasIntensity) {
-      intensities[outIdx] = readTyped(dataView, base + propOffsets[iIdx], properties[iIdx].type);
+      intensities[outIdx] = readTyped(dataView, base + propOffsets[iIdx], properties[iIdx].type, le);
     }
 
     outIdx++;

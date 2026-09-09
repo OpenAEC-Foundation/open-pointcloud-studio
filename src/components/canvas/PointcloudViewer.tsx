@@ -13,7 +13,10 @@ import * as THREE from 'three';
 import { useAppStore } from '../../state/appStore';
 import { LODController } from '../../engine/pointcloud/LODController';
 import { getBrowserPointcloud, removeBrowserPointcloud } from '../../engine/pointcloud/BrowserPointcloudStore';
+import type { ParsedPointcloud } from '../../engine/pointcloud/LASParser';
 import { createPointcloudMaterial, updatePointcloudMaterial } from '../../engine/pointcloud/PointcloudMaterial';
+import { EDLPass } from '../../engine/pointcloud/EDLPass';
+import { requestRender, setRenderRequester } from '../../engine/render/RenderScheduler';
 
 // Dynamically import OrbitControls
 let OrbitControls: any = null;
@@ -24,6 +27,158 @@ let _viewerCamera: THREE.PerspectiveCamera | null = null;
 let _viewerControls: any = null;
 let _meshMaterialRef: { current: THREE.MeshStandardMaterial | null } = { current: null };
 let _bag3dMeshes: THREE.Mesh[] = [];
+
+/** Read a themed colour from CSS custom properties, with a fallback. */
+function themeColor(varName: string, fallback: number): THREE.Color {
+  if (typeof document === 'undefined') return new THREE.Color(fallback);
+  const value = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  if (!value) return new THREE.Color(fallback);
+  try {
+    return new THREE.Color(value);
+  } catch {
+    return new THREE.Color(fallback);
+  }
+}
+
+/**
+ * World (Z-up, as parsed) → viewer frame (Y-up, centred). Must match the
+ * transform every parser applies to positions, or markers drift off the cloud.
+ */
+function toViewerFrame(p: [number, number, number], center: [number, number, number]): THREE.Vector3 {
+  return new THREE.Vector3(p[0] - center[0], p[2] - center[2], -(p[1] - center[1]));
+}
+
+/** Rotate a vector by a unit quaternion given as [w, x, y, z]. */
+function rotateVec(v: [number, number, number], q: [number, number, number, number]): [number, number, number] {
+  const [w, x, y, z] = q;
+  const [vx, vy, vz] = v;
+  const tx = 2 * (y * vz - z * vy);
+  const ty = 2 * (z * vx - x * vz);
+  const tz = 2 * (x * vy - y * vx);
+  return [
+    vx + w * tx + (y * tz - z * ty),
+    vy + w * ty + (z * tx - x * tz),
+    vz + w * tz + (x * ty - y * tx),
+  ];
+}
+
+/** A text label that always faces the camera and draws on top of points. */
+function makeLabelSprite(text: string, color: string): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 96;
+  const ctx = canvas.getContext('2d')!;
+  ctx.font = '600 44px system-ui, sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  const w = Math.min(500, ctx.measureText(text).width + 40);
+  ctx.beginPath();
+  ctx.roundRect((512 - w) / 2, 12, w, 72, 12);
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.fillText(text, 256, 48, 480);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(2.4, 0.45, 1);
+  sprite.renderOrder = 1000;
+  return sprite;
+}
+
+/**
+ * Build markers for scanner stations: a sphere at each setup position plus a
+ * name label. Returned group is in the viewer frame.
+ */
+function buildStationMarkers(
+  stations: NonNullable<ParsedPointcloud['stations']>,
+  center: [number, number, number],
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'stations';
+  const accent = themeColor('--theme-accent', 0xd97706);
+  const material = new THREE.MeshBasicMaterial({ color: accent, depthTest: false, transparent: true, opacity: 0.9 });
+  const geometry = new THREE.SphereGeometry(0.18, 20, 14);
+  const label = `#${accent.getHexString()}`;
+
+  stations.forEach((st, i) => {
+    const pos = toViewerFrame(st.position, center);
+    const sphere = new THREE.Mesh(geometry, material);
+    sphere.position.copy(pos);
+    sphere.renderOrder = 999;
+    sphere.userData.stationIndex = i;
+    group.add(sphere);
+
+    const sprite = makeLabelSprite(st.name, label);
+    sprite.position.copy(pos).add(new THREE.Vector3(0, 0.55, 0));
+    sprite.userData.stationIndex = i;
+    group.add(sprite);
+  });
+  return group;
+}
+
+function disposeGroup(group: THREE.Group): void {
+  group.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) {
+      obj.geometry.dispose();
+    } else if (obj instanceof THREE.Sprite) {
+      obj.material.map?.dispose();
+      obj.material.dispose();
+    }
+  });
+  // The sphere material is shared by every marker in the group.
+  const first = group.children.find((c) => c instanceof THREE.Mesh) as THREE.Mesh | undefined;
+  (first?.material as THREE.Material | undefined)?.dispose();
+}
+
+let _stationGroups: Map<string, THREE.Group> = new Map();
+
+/**
+ * Put the camera at a scanner station, looking the way the scanner faced.
+ * Gives the same view the surveyor had — the natural way to inspect a scan.
+ */
+export function flyToStation(pointcloudId: string, stationIndex: number): void {
+  const camera = _viewerCamera;
+  const controls = _viewerControls;
+  const parsed = getBrowserPointcloud(pointcloudId);
+  const station = parsed?.stations?.[stationIndex];
+  if (!camera || !controls || !parsed || !station) return;
+
+  const eye = toViewerFrame(station.position, parsed.center);
+  // Scanner-local +Y is "ahead" for the common terrestrial scanners; the
+  // pose rotation carries it into world space.
+  const ahead = station.rotation ? rotateVec([0, 1, 0], station.rotation) : [0, 1, 0];
+  const dir = new THREE.Vector3(ahead[0], ahead[2], -ahead[1]).normalize();
+
+  // The marker for the station you are standing on would fill the bottom of
+  // the view; hide it here, zoomToFit shows every marker again.
+  for (const group of _stationGroups.values()) group.traverse((o) => { o.visible = true; });
+  const group = _stationGroups.get(pointcloudId);
+  group?.children.forEach((o) => {
+    if (o.userData.stationIndex === stationIndex) o.visible = false;
+  });
+
+  // Stand slightly above the scanner origin, the way an operator looks around.
+  eye.y += 0.2;
+  camera.near = 0.05;
+  camera.far = Math.max(camera.far, 2000);
+  camera.updateProjectionMatrix();
+  controls.minDistance = 0.05;
+  camera.position.copy(eye);
+  controls.target.copy(eye.clone().add(dir.multiplyScalar(6)));
+  controls.update();
+  requestRender();
+}
+
+/** Read-only snapshot of the camera, for status displays and tests. */
+export function getCameraState(): { position: [number, number, number]; target: [number, number, number] } | null {
+  if (!_viewerCamera || !_viewerControls) return null;
+  const p = _viewerCamera.position;
+  const t = _viewerControls.target as THREE.Vector3;
+  return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z] };
+}
 
 export function addBAG3DMeshToScene(geometry: THREE.BufferGeometry): void {
   if (!_viewerScene) return;
@@ -57,6 +212,8 @@ export function addBAG3DMeshToScene(geometry: THREE.BufferGeometry): void {
     _viewerControls.target.copy(sphere.center);
     _viewerControls.update();
   }
+
+  requestRender();
 }
 
 /**
@@ -68,6 +225,9 @@ export function zoomToFit(): void {
   const camera = _viewerCamera;
   const controls = _viewerControls;
   if (!scene || !camera || !controls) return;
+
+  // Back in overview: every station marker is useful again.
+  for (const group of _stationGroups.values()) group.traverse((o) => { o.visible = true; });
 
   // Compute combined bounding box of all visible objects
   const box = new THREE.Box3();
@@ -107,6 +267,7 @@ export function zoomToFit(): void {
   );
   controls.target.copy(sphere.center);
   controls.update();
+  requestRender();
   console.log(`[zoomToFit] Camera at (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}), near=${camera.near.toFixed(4)}, far=${camera.far.toFixed(0)}`);
 }
 
@@ -133,17 +294,32 @@ const PointcloudViewerInner = () => {
   const browserMeshMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
   const transformVersionsRef = useRef<Map<string, number>>(new Map());
   const animFrameRef = useRef<number>(0);
+  const edlPassRef = useRef<EDLPass | null>(null);
 
   const pointclouds = useAppStore((s) => s.pointclouds);
   const colorMode = useAppStore((s) => s.pointcloudColorMode);
   const pointSize = useAppStore((s) => s.pointcloudPointSize);
   const pointBudget = useAppStore((s) => s.pointBudget);
   const editMode = useAppStore((s) => s.editMode);
+  const uiTheme = useAppStore((s) => s.uiTheme);
   const selectedPointIndices = useAppStore((s) => s.selectedPointIndices);
 
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({
     active: false, startX: 0, startY: 0, currentX: 0, currentY: 0,
   });
+
+  // With an on-demand render loop, any store change that could alter the
+  // image — material uniforms, visibility, selection, EDL — has to ask for a
+  // frame. A redundant frame is cheap; a missed one is a visible bug, so this
+  // subscribes broadly rather than trying to enumerate the relevant keys.
+  useEffect(() => useAppStore.subscribe(() => requestRender()), []);
+
+  // Follow the active theme's canvas colour.
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    sceneRef.current.background = themeColor('--theme-canvas', 0x0f0f1a);
+    requestRender();
+  }, [uiTheme]);
 
   // Enable/disable OrbitControls based on editMode
   useEffect(() => {
@@ -377,7 +553,7 @@ const PointcloudViewerInner = () => {
 
     // Scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a2e);
+    scene.background = themeColor('--theme-canvas', 0x0f0f1a);
     sceneRef.current = scene;
     _viewerScene = scene;
 
@@ -418,6 +594,9 @@ const PointcloudViewerInner = () => {
 
       // Apply current editMode state
       controls.enabled = !useAppStore.getState().editMode;
+
+      // Controls arrive asynchronously; draw once they exist.
+      requestRender();
 
       // Double-click to set rotation center (like CloudCompare/Potree)
       renderer.domElement.addEventListener('dblclick', (event: MouseEvent) => {
@@ -460,11 +639,33 @@ const PointcloudViewerInner = () => {
     };
     renderer.domElement.addEventListener('wheel', onWheel, { passive: false, capture: true });
 
-    // Render loop
+    // Eye-Dome Lighting compositing pass
+    const edlPass = new EDLPass(renderer);
+    edlPassRef.current = edlPass;
+
+    // On-demand render loop.
+    //
+    // The previous loop drew every frame whether or not anything had changed,
+    // which burned GPU continuously on a static scene. Now a frame is drawn
+    // only when OrbitControls reports actual camera movement (its update()
+    // returns true while damping settles) or when something calls
+    // requestRender().
+    let needsRender = true;
+    setRenderRequester(() => { needsRender = true; });
+
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
-      if (controlsRef.current) controlsRef.current.update();
-      renderer.render(scene, camera);
+
+      const cameraMoved = controlsRef.current ? controlsRef.current.update() : false;
+      if (!cameraMoved && !needsRender) return;
+      needsRender = false;
+
+      const { edlEnabled, edlStrength } = useAppStore.getState();
+      if (edlEnabled) {
+        edlPass.render(scene, camera, { strength: edlStrength });
+      } else {
+        renderer.render(scene, camera);
+      }
     };
     animate();
 
@@ -475,6 +676,8 @@ const PointcloudViewerInner = () => {
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
+      edlPass.setSize(w * renderer.getPixelRatio(), h * renderer.getPixelRatio());
+      needsRender = true;
     };
     const observer = new ResizeObserver(onResize);
     observer.observe(container);
@@ -496,6 +699,12 @@ const PointcloudViewerInner = () => {
         pts.geometry.dispose();
       }
       browserPointsRef.current.clear();
+      // Dispose station markers
+      for (const group of _stationGroups.values()) {
+        scene.remove(group);
+        disposeGroup(group);
+      }
+      _stationGroups = new Map();
       // Dispose browser meshes
       for (const mesh of browserMeshesRef.current.values()) {
         scene.remove(mesh);
@@ -519,6 +728,10 @@ const PointcloudViewerInner = () => {
       _viewerScene = null;
       _viewerCamera = null;
       _viewerControls = null;
+      setRenderRequester(null);
+
+      edlPassRef.current?.dispose();
+      edlPassRef.current = null;
 
       // Dispose Three.js resources
       if (controlsRef.current) controlsRef.current.dispose();
@@ -591,6 +804,12 @@ const PointcloudViewerInner = () => {
             scene.remove(pts);
             pts.geometry.dispose();
             browserPointsRef.current.delete(id);
+          }
+          const stations = _stationGroups.get(id);
+          if (stations) {
+            scene.remove(stations);
+            disposeGroup(stations);
+            _stationGroups.delete(id);
           }
           removeBrowserPointcloud(id);
         }
@@ -678,6 +897,13 @@ const PointcloudViewerInner = () => {
             scene.add(points);
             browserPointsRef.current.set(pc.id, points);
             fitGeometry = geometry;
+
+            // Scanner stations (E57): a marker per setup, in the same frame as the points.
+            if (parsed.stations && parsed.stations.length > 0) {
+              const group = buildStationMarkers(parsed.stations, parsed.center);
+              scene.add(group);
+              _stationGroups.set(pc.id, group);
+            }
           }
 
           // Auto-fit camera to loaded geometry

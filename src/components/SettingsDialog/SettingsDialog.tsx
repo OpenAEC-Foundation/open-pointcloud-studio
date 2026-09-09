@@ -1,13 +1,31 @@
-import { useState, useRef, useEffect } from 'react';
-import { useAppStore, type UITheme } from '../../state/appStore';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { useAppStore, UI_THEMES, type UITheme } from '../../state/appStore';
 import './SettingsDialog.css';
 
-const THEMES: { value: UITheme; label: string; swatches: string[] }[] = [
-  { value: 'dark', label: 'Dark', swatches: ['#1a1a2e', '#16213e', '#e94560', '#eaeaea'] },
-  { value: 'light', label: 'Light', swatches: ['#f5f5f5', '#ffffff', '#e94560', '#1f2937'] },
-  { value: 'blue', label: 'Blue', swatches: ['#0d1b2a', '#1b263b', '#00b4d8', '#e0e1dd'] },
-  { value: 'highContrast', label: 'High Contrast', swatches: ['#000000', '#0a0a0a', '#ffff00', '#ffffff'] },
-];
+/**
+ * Swatches are read from the OpenAEC tokens at render time rather than
+ * duplicated as hex, so re-vendoring the design system updates them too.
+ */
+const SWATCH_TOKENS = ['--oaec-bg', '--oaec-bg-lighter', '--oaec-accent', '--oaec-text'];
+
+function readSwatches(theme: UITheme): string[] {
+  if (typeof document === 'undefined') return [];
+  const probe = document.createElement('div');
+  probe.setAttribute('data-theme', theme);
+  probe.style.display = 'none';
+  document.body.appendChild(probe);
+  const style = getComputedStyle(probe);
+  const swatches = SWATCH_TOKENS.map((t) => style.getPropertyValue(t).trim());
+  probe.remove();
+  return swatches;
+}
+
+function useThemeOptions() {
+  return useMemo(
+    () => UI_THEMES.map((t) => ({ value: t.id, label: t.label, swatches: readSwatches(t.id) })),
+    [],
+  );
+}
 
 interface SettingsDialogProps {
   onClose: () => void;
@@ -16,6 +34,7 @@ interface SettingsDialogProps {
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const uiTheme = useAppStore((s) => s.uiTheme);
   const setUITheme = useAppStore((s) => s.setUITheme);
+  const themes = useThemeOptions();
 
   // Dragging state
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -85,7 +104,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
             <div className="settings-section">
               <h3 className="settings-section-title">Theme</h3>
               <div className="settings-theme-table">
-                {THEMES.map(theme => (
+                {themes.map(theme => (
                   <button
                     key={theme.value}
                     className={`settings-theme-row${uiTheme === theme.value ? ' active' : ''}`}

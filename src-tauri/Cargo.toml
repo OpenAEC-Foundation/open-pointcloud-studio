@@ -27,6 +27,7 @@ tauri-plugin-process = "2"
 memmap2 = "0.9"
 rayon = "1.10"
 laz = "0.9"
+pointcloud-core = { path = "../crates/pointcloud-core" }
 
 [features]
 default = ["custom-protocol"]

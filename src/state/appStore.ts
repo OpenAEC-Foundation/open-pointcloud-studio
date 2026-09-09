@@ -18,13 +18,16 @@ import {
 // UI Theme
 // ============================================================================
 
-export type UITheme = 'dark' | 'light' | 'blue' | 'highContrast';
+/**
+ * Theme ids match the `data-theme` values defined by the OpenAEC design
+ * tokens (see styles/openaec-tokens.css). Both are dark; "light" is the
+ * lighter slate surface, "openaec" the darker one.
+ */
+export type UITheme = 'openaec' | 'light';
 
 export const UI_THEMES: { id: UITheme; label: string }[] = [
-  { id: 'dark', label: 'Dark' },
-  { id: 'light', label: 'Light' },
-  { id: 'blue', label: 'Blue' },
-  { id: 'highContrast', label: 'High Contrast' },
+  { id: 'openaec', label: 'OpenAEC Dark' },
+  { id: 'light', label: 'OpenAEC Slate' },
 ];
 
 export interface UIState {
@@ -40,7 +43,7 @@ export interface UIActions {
 }
 
 const initialUIState: UIState = {
-  uiTheme: 'dark',
+  uiTheme: 'openaec',
   rightPanelOpen: true,
   showBAG3DPanel: false,
 };

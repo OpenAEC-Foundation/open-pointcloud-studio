@@ -1,0 +1,143 @@
+/*
+ * Vendored from OpenAEC-Foundation/openaec-ui @ css/tokens.css
+ * https://github.com/OpenAEC-Foundation/openaec-ui
+ *
+ * Do not edit by hand — re-vendor from upstream to update.
+ * Themes: data-theme="light" (slate) and data-theme="openaec" (dark).
+ */
+
+
+/* ── Base (shared across themes) ──────────────────────────────── */
+:root {
+  /* Typography */
+  --oaec-font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --oaec-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+
+  --oaec-font-xs: 0.75rem;
+  --oaec-font-sm: 0.875rem;
+  --oaec-font-base: 1rem;
+  --oaec-font-lg: 1.125rem;
+  --oaec-font-xl: 1.25rem;
+  --oaec-font-2xl: 1.5rem;
+  --oaec-font-3xl: 2rem;
+
+  --oaec-weight-normal: 400;
+  --oaec-weight-medium: 500;
+  --oaec-weight-semibold: 600;
+  --oaec-weight-bold: 700;
+
+  /* Spacing */
+  --oaec-space-xxs: 0.125rem;
+  --oaec-space-xs: 0.25rem;
+  --oaec-space-sm: 0.5rem;
+  --oaec-space-md: 1rem;
+  --oaec-space-lg: 1.5rem;
+  --oaec-space-xl: 2rem;
+  --oaec-space-2xl: 3rem;
+
+  /* Border radius */
+  --oaec-radius-sm: 4px;
+  --oaec-radius-md: 8px;
+  --oaec-radius-lg: 12px;
+  --oaec-radius-full: 9999px;
+
+  /* Transitions */
+  --oaec-transition-fast: 150ms ease;
+  --oaec-transition-normal: 250ms ease;
+  --oaec-transition-slow: 350ms ease;
+
+  /* Layout */
+  --oaec-container-max: 1200px;
+  --oaec-touch-target: 44px;
+  --oaec-sidebar-width: 280px;
+  --oaec-topbar-height: 48px;
+}
+
+/* ── Light theme ──────────────────────────────────────────────── */
+[data-theme="light"],
+:root {
+  --oaec-bg: #36363E;
+  --oaec-bg-lighter: #44444C;
+  --oaec-bg-surface: #36363E;
+  --oaec-bg-input: #2E2E36;
+  --oaec-bg-canvas: #1a1a2e;
+
+  --oaec-accent: #D97706;
+  --oaec-accent-hover: #EA580C;
+  --oaec-accent-soft: rgba(217, 119, 6, 0.08);
+  --oaec-accent-tint: rgba(217, 119, 6, 0.8);
+  --oaec-accent-text: #36363E;
+
+  --oaec-text: #FAFAF9;
+  --oaec-text-secondary: rgba(250, 250, 249, 0.6);
+  --oaec-text-muted: rgba(250, 250, 249, 0.5);
+  --oaec-text-faint: rgba(250, 250, 249, 0.4);
+
+  --oaec-border: rgba(217, 119, 6, 0.25);
+  --oaec-border-subtle: rgba(217, 119, 6, 0.15);
+
+  --oaec-hover: rgba(217, 119, 6, 0.1);
+  --oaec-hover-strong: rgba(217, 119, 6, 0.18);
+
+  --oaec-success: #16A34A;
+  --oaec-success-soft: rgba(22, 163, 74, 0.15);
+  --oaec-danger: #f87171;
+  --oaec-danger-hover: #ef4444;
+  --oaec-danger-soft: rgba(248, 113, 113, 0.15);
+  --oaec-warning: #F59E0B;
+  --oaec-warning-soft: rgba(245, 158, 11, 0.15);
+  --oaec-info: #60A5FA;
+  --oaec-info-soft: rgba(96, 165, 250, 0.15);
+
+  --oaec-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+  --oaec-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --oaec-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+
+  --oaec-scrollbar-track: transparent;
+  --oaec-scrollbar-thumb: rgba(217, 119, 6, 0.25);
+  --oaec-scrollbar-thumb-hover: rgba(217, 119, 6, 0.4);
+}
+
+/* ── Dark theme (OpenAEC) ─────────────────────────────────────── */
+[data-theme="openaec"] {
+  --oaec-bg: #27272A;
+  --oaec-bg-lighter: #36363E;
+  --oaec-bg-surface: #27272A;
+  --oaec-bg-input: #1C1917;
+  --oaec-bg-canvas: #0f0f1a;
+
+  --oaec-accent: #D97706;
+  --oaec-accent-hover: #EA580C;
+  --oaec-accent-soft: rgba(217, 119, 6, 0.06);
+  --oaec-accent-tint: rgba(217, 119, 6, 0.8);
+  --oaec-accent-text: #27272A;
+
+  --oaec-text: #FAFAF9;
+  --oaec-text-secondary: rgba(250, 250, 249, 0.6);
+  --oaec-text-muted: rgba(250, 250, 249, 0.5);
+  --oaec-text-faint: rgba(250, 250, 249, 0.4);
+
+  --oaec-border: rgba(217, 119, 6, 0.2);
+  --oaec-border-subtle: rgba(217, 119, 6, 0.15);
+
+  --oaec-hover: rgba(217, 119, 6, 0.08);
+  --oaec-hover-strong: rgba(217, 119, 6, 0.15);
+
+  --oaec-success: #22c55e;
+  --oaec-success-soft: rgba(34, 197, 94, 0.15);
+  --oaec-danger: #f87171;
+  --oaec-danger-hover: #ef4444;
+  --oaec-danger-soft: rgba(248, 113, 113, 0.15);
+  --oaec-warning: #fbbf24;
+  --oaec-warning-soft: rgba(251, 191, 36, 0.15);
+  --oaec-info: #60A5FA;
+  --oaec-info-soft: rgba(96, 165, 250, 0.15);
+
+  --oaec-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --oaec-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --oaec-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  --oaec-scrollbar-track: transparent;
+  --oaec-scrollbar-thumb: rgba(217, 119, 6, 0.2);
+  --oaec-scrollbar-thumb-hover: rgba(217, 119, 6, 0.35);
+}

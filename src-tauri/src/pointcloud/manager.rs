@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::parser::PointcloudParser;
-use super::octree::Octree;
+// The Morton/rayon core replaces the original per-point-insert tree; the old
+// module stays for now so the two can be compared on the same data.
+use super::octree_core::Octree;
 use super::types::{
     CameraState, IndexProgress, OctreeNodeInfo, PointChunk, PointcloudMetadata,
 };

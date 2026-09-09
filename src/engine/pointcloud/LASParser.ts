@@ -30,8 +30,44 @@ export interface LASHeader {
   maxZ: number;
 }
 
+/** A scanner setup position (E57 data3D pose). World coordinates, Z-up. */
+export interface ScanStation {
+  name: string;
+  guid?: string;
+  /** Scanner origin in world coordinates (after the scan's pose transform). */
+  position: [number, number, number];
+  /** Orientation quaternion [w, x, y, z], if the file carries one. */
+  rotation?: [number, number, number, number];
+  /** Records in the file for this scan, before invalid-point filtering. */
+  recordCount: number;
+  /** Points kept for this scan after filtering and subsampling. */
+  keptCount: number;
+}
+
+/** A photo embedded in the file (E57 images2D). */
+export interface ScanImage {
+  name: string;
+  guid?: string;
+  /** GUID of the scan this photo belongs to, when the file says so. */
+  scanGuid?: string;
+  mime: 'image/jpeg' | 'image/png';
+  representation: 'pinhole' | 'spherical' | 'cylindrical' | 'visual' | 'unknown';
+  width?: number;
+  height?: number;
+  /** Camera position in world coordinates, if the image has a pose. */
+  position?: [number, number, number];
+  rotation?: [number, number, number, number];
+  /** Encoded image bytes, ready for a Blob / object URL. Backed by a plain
+   *  ArrayBuffer (not shared) so it is a valid BlobPart. */
+  data: Uint8Array<ArrayBuffer>;
+}
+
 export interface ParsedPointcloud {
   header: LASHeader;
+  /** Scanner stations, for formats that record them (E57). */
+  stations?: ScanStation[];
+  /** Embedded photos, for formats that carry them (E57). */
+  images?: ScanImage[];
   /** Float32 XYZ positions relative to bounds center */
   positions: Float32Array;
   /** Float32 RGB colors normalized 0–1 (or white if no color) */

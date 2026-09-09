@@ -1,0 +1,30 @@
+[package]
+name = "pointcloud-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+license = "LGPL-3.0-or-later"
+description = "Octree indexing and LOD selection for Open Pointcloud Studio, shared by the Tauri backend and the browser via WebAssembly"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Native builds get rayon. wasm32 needs SharedArrayBuffer plus COOP/COEP
+# headers for threads, so the WASM build stays single-threaded for now and
+# the same code paths are used either way.
+default = ["parallel"]
+parallel = ["dep:rayon"]
+wasm = ["dep:wasm-bindgen", "dep:js-sys"]
+
+[dependencies]
+rayon = { version = "1.10", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+
+[dev-dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

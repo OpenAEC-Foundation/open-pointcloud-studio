@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { createPointcloudMaterial, updatePointcloudMaterial, type PointcloudMaterialOptions } from './PointcloudMaterial';
+import { requestRender } from '../render/RenderScheduler';
 interface OctreeNodeInfo {
   node_id: string;
   bounds: {
@@ -136,13 +137,16 @@ export class LODController {
       const visibleIds = new Set(visibleNodes.map((n) => n.node_id));
 
       // Unload nodes that are no longer visible
+      let changed = false;
       for (const [nodeId, loaded] of this.loadedNodes) {
         if (!visibleIds.has(nodeId)) {
           this.scene.remove(loaded.points);
           loaded.points.geometry.dispose();
           this.loadedNodes.delete(nodeId);
+          changed = true;
         }
       }
+      if (changed) requestRender();
 
       // Find nodes that need loading
       const toLoad = visibleNodes
@@ -240,6 +244,9 @@ export class LODController {
       points,
       lastUsed: Date.now(),
     });
+
+    // Nodes stream in asynchronously, long after the camera stopped moving.
+    requestRender();
   }
 
   /** Get the total number of loaded points */

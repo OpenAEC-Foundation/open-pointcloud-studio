@@ -6,11 +6,124 @@
  * classification filter, and EDL toggle.
  */
 
-import { memo } from 'react';
-import { Eye, EyeOff, Trash2 } from 'lucide-react';
+import { memo, useEffect, useState } from 'react';
+import { Eye, EyeOff, Trash2, Crosshair, X } from 'lucide-react';
 import { useAppStore } from '../../state/appStore';
 import type { PointcloudColorMode } from '../../state/slices/pointcloudSlice';
 import { formatPoints } from '../../utils/format';
+import { getBrowserPointcloud, getBrowserImageUrls } from '../../engine/pointcloud/BrowserPointcloudStore';
+import type { ScanImage, ScanStation } from '../../engine/pointcloud/LASParser';
+import { flyToStation } from '../canvas/PointcloudViewer';
+
+/**
+ * Scanner stations and embedded photos for the active pointcloud (E57).
+ *
+ * Photo bytes live in the parsed data, not the store; object URLs are made
+ * here and revoked when the pointcloud changes so memory is not leaked.
+ */
+function ScansSection({ pointcloudId }: { pointcloudId: string }) {
+  const parsed = getBrowserPointcloud(pointcloudId);
+  const stations: ScanStation[] = parsed?.stations ?? [];
+  const images: ScanImage[] = parsed?.images ?? [];
+
+  // URLs live with the parsed data (see BrowserPointcloudStore), not with this
+  // component, so mounting and unmounting the panel never invalidates them.
+  const urls = getBrowserImageUrls(pointcloudId);
+
+  const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => {
+    if (open === null) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  if (stations.length === 0 && images.length === 0) return null;
+
+  // Photos belong to a station by GUID; a file with one station and no GUIDs
+  // still shows its photos under that station.
+  const photosFor = (st: ScanStation): number[] =>
+    images
+      .map((img, i) => (img.scanGuid && st.guid ? (img.scanGuid === st.guid ? i : -1)
+        : stations.length === 1 ? i : -1))
+      .filter((i) => i >= 0);
+
+  return (
+    <div className="border-t border-cad-border mt-2 pt-2">
+      <div className="font-semibold text-cad-text-dim uppercase tracking-wide mb-1">
+        Scans
+      </div>
+      <div className="flex flex-col gap-1">
+        {stations.map((st, i) => {
+          const photos = photosFor(st);
+          return (
+            <div key={st.guid ?? i} className="rounded px-1 py-1 hover:bg-cad-hover">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className="p-0.5 rounded text-cad-accent hover:bg-cad-accent/20"
+                  title="Fly to this station"
+                  onClick={() => flyToStation(pointcloudId, i)}
+                >
+                  <Crosshair size={13} />
+                </button>
+                <span className="flex-1 truncate" title={st.name}>{st.name}</span>
+                <span className="text-cad-text-muted tabular-nums" title="Points kept / in file">
+                  {formatPoints(st.keptCount)}
+                </span>
+              </div>
+              <div className="pl-5 text-[10px] text-cad-text-muted tabular-nums">
+                {st.position.map((v) => v.toFixed(2)).join(', ')}
+                {photos.length > 0 && ` · ${photos.length} photo${photos.length === 1 ? '' : 's'}`}
+              </div>
+              {photos.length > 0 && (
+                <div className="grid grid-cols-3 gap-1 pl-5 pt-1">
+                  {photos.map((idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      className="aspect-square overflow-hidden rounded border border-cad-border hover:border-cad-accent"
+                      title={`${images[idx].name} (${images[idx].width ?? '?'}×${images[idx].height ?? '?'})`}
+                      onClick={() => setOpen(idx)}
+                    >
+                      <img src={urls[idx]} alt={images[idx].name} className="h-full w-full object-cover" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {open !== null && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
+          onClick={() => setOpen(null)}
+        >
+          <button
+            type="button"
+            className="absolute right-4 top-4 rounded p-1 text-white/80 hover:bg-white/10 hover:text-white"
+            title="Close (Esc)"
+            onClick={() => setOpen(null)}
+          >
+            <X size={20} />
+          </button>
+          <img
+            src={urls[open]}
+            alt={images[open].name}
+            className="max-h-full max-w-full rounded shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <div className="absolute bottom-4 left-0 right-0 text-center text-[11px] text-white/70">
+            {images[open].name} · {images[open].representation}
+            {images[open].width && ` · ${images[open].width}×${images[open].height}`}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const ASPRS_CLASSIFICATIONS: { code: number; label: string }[] = [
   { code: 0, label: 'Never Classified' },
@@ -121,6 +234,12 @@ function PointcloudPanelInner() {
           </div>
         );
       })}
+
+      {/* Scanner stations + photos (E57) for the active pointcloud */}
+      {activePointcloudId &&
+        pointclouds.find((p) => p.id === activePointcloudId)?.indexingProgress === 1 && (
+          <ScansSection key={activePointcloudId} pointcloudId={activePointcloudId} />
+        )}
 
       {/* Display Settings */}
       <div className="border-t border-cad-border mt-2 pt-2">

@@ -7,10 +7,16 @@
 import type { ParsedPointcloud, LASHeader } from './LASParser';
 import { FORMATS_WITH_RGB, getRGBOffset, getClassificationOffset } from './LASParser';
 
+// Emscripten resolves "laz-perf.wasm" relative to the loading script, which is
+// wrong once the module is bundled or served from a worker — the fetch lands on
+// the SPA fallback and instantiate() chokes on "<!DOCTYPE". Let Vite resolve and
+// fingerprint the asset, then point Emscripten straight at it.
+import lazPerfWasmUrl from 'laz-perf/lib/web/laz-perf.wasm?url';
+
 export async function parseLAZ(buffer: ArrayBuffer): Promise<ParsedPointcloud> {
   // Dynamically import laz-perf
   const { create } = await import('laz-perf');
-  const lp = await create();
+  const lp = await create({ locateFile: () => lazPerfWasmUrl });
 
   const view = new DataView(buffer);
 

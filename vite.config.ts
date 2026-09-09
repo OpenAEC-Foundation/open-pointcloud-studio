@@ -17,8 +17,15 @@ export default defineConfig({
     port: 3013,
     strictPort: false,
     watch: {
-      // Tell vite to ignore watching `src-tauri`
-      ignored: ['**/src-tauri/**'],
+      // Nothing generated should be watched: writing a large file into a
+      // watched directory kills the dev server with EBUSY on Windows, and a
+      // build or a fixture download does exactly that.
+      ignored: [
+        '**/src-tauri/**',
+        '**/dist/**',
+        '**/dist-debug/**',
+        '**/dev-fixtures/**',
+      ],
     },
     proxy: {
       '/api/3dbag': {
@@ -31,7 +38,10 @@ export default defineConfig({
   // To make use of `TAURI_ENV_DEBUG` and other env variables
   envPrefix: ['VITE_', 'TAURI_'],
   optimizeDeps: {
-    exclude: ['laz-perf'],
+    // laz-perf ships CommonJS. Excluding it from pre-bundling hands the raw
+    // CJS to the browser, where it dies on "exports is not defined" and takes
+    // all LAZ support with it. Let esbuild convert it to ESM.
+    include: ['laz-perf'],
   },
   worker: {
     format: 'es',

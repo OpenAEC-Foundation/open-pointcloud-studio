@@ -1,7 +1,7 @@
 import { useState, memo } from 'react';
 import { Upload, Sun, Eye, BoxSelect, Trash2, XCircle, Move, Maximize, Filter, Building2, Shapes, Download, Focus } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
-import { type UITheme } from '../../../state/appStore';
+import { UI_THEMES } from '../../../state/appStore';
 import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, RibbonDropdownButton, ThemeSelector } from './RibbonComponents';
 import { RGBIcon, ElevationIcon, ClassificationIcon, IntensityIcon } from './RibbonIcons';
 import { useRibbonActions } from './useRibbonActions';
@@ -140,9 +140,8 @@ export const Ribbon = memo(function Ribbon() {
                   icon={<Sun size={14} />}
                   label="Theme"
                   onClick={() => {
-                    const themes: UITheme[] = ['dark', 'light', 'blue', 'highContrast'];
-                    const idx = themes.indexOf(uiTheme);
-                    setUITheme(themes[(idx + 1) % themes.length]);
+                    const idx = UI_THEMES.findIndex((t) => t.id === uiTheme);
+                    setUITheme(UI_THEMES[(idx + 1) % UI_THEMES.length].id);
                   }}
                 />
               </RibbonButtonStack>

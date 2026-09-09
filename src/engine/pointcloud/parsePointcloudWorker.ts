@@ -69,9 +69,9 @@ export async function parsePointcloud(
 
   // E57 uses DOMParser (unavailable in workers) — parse on main thread
   if (extension === '.e57') {
-    onProgress?.('Parsing E57...', 10);
+    onProgress?.('Parsing E57...', 2);
     const { parseE57 } = await import('./E57Parser');
-    const result = parseE57(buffer);
+    const result = parseE57(buffer, onProgress);
     onProgress?.('Complete', 100);
     return result;
   }
