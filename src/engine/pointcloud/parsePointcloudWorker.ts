@@ -67,6 +67,15 @@ export async function parsePointcloud(
     return parseInWorker(extension, buffer, onProgress);
   }
 
+  // ReCap project: ZIP + XML, main thread (DOMParser). Stations only, no points.
+  if (extension === '.rcp') {
+    onProgress?.('Reading ReCap project...', 10);
+    const { parseRCP } = await import('./RCPParser');
+    const result = await parseRCP(buffer);
+    onProgress?.('Complete', 100);
+    return result;
+  }
+
   // E57 uses DOMParser (unavailable in workers) — parse on main thread
   if (extension === '.e57') {
     onProgress?.('Parsing E57...', 2);

@@ -27,7 +27,7 @@ import type { ParsedPointcloud } from './LASParser';
 import { parsePointcloud, type ProgressCallback } from './parsePointcloudWorker';
 
 /** File extensions accepted by the import dialog */
-export const SUPPORTED_EXTENSIONS = ['.las', '.laz', '.pts', '.ply', '.xyz', '.asc', '.txt', '.csv', '.obj', '.pcd', '.ptx', '.off', '.stl', '.dxf', '.e57'];
+export const SUPPORTED_EXTENSIONS = ['.las', '.laz', '.pts', '.ply', '.xyz', '.asc', '.txt', '.csv', '.obj', '.pcd', '.ptx', '.off', '.stl', '.dxf', '.e57', '.rcp'];
 
 /** Human-readable format description for the file dialog */
 export const FORMAT_DESCRIPTION = 'Point Clouds';
@@ -35,11 +35,14 @@ export const FORMAT_DESCRIPTION = 'Point Clouds';
 /** Accept string for HTML file input */
 export const FILE_INPUT_ACCEPT = SUPPORTED_EXTENSIONS.join(',');
 
-/** Unsupported formats that we should warn about */
+/**
+ * Formats we cannot read. `.rcp` projects open (scan list + registration as
+ * stations), but the `.rcs` files holding their points do not — see
+ * docs/formats/recap-rcs.md for how far the decoding got.
+ */
 const UNSUPPORTED_PROPRIETARY: Record<string, string> = {
-  '.rcp': 'Autodesk ReCap Project — convert to LAS/LAZ using ReCap or CloudCompare',
-  '.rcs': 'Autodesk ReCap Scan — convert to LAS/LAZ using ReCap or CloudCompare',
-  '.fls': 'FARO Scene — convert to LAS/LAZ using FARO Scene or CloudCompare',
+  '.rcs': 'Autodesk ReCap Scan — point encoding not decoded. Export the scan to E57 from ReCap and open that; the .rcp project can be opened for its stations',
+  '.fls': 'FARO Scene — convert to E57 or LAS using FARO Scene or CloudCompare',
 };
 
 /**

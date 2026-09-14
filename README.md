@@ -6,6 +6,7 @@ A cross-platform pointcloud viewer built with Tauri, React, and Three.js, styled
 
 - **Formats**: LAS 1.2–1.4 (point formats 0–10), LAZ (via laz-perf), E57, PLY (ASCII, binary little- and big-endian), PCD (ASCII, binary), PTS, PTX, XYZ/ASC/TXT/CSV, OBJ, OFF, STL, DXF
 - **E57**: multi-scan files with pose registration, colour and intensity, invalid-point filtering, **scanner stations** (fly to any station for the surveyor's view) and **embedded photos** (thumbnails and full-size viewer)
+- **ReCap `.rcp` projects**: the scan list with its registration opens as stations (no points — load the scans' E57 exports alongside)
 - Color modes: RGB, Elevation, Classification, Intensity
 - **Eye-Dome Lighting** — a real screen-space pass (depth-based, Potree-style response), not a toggle that does nothing
 - Adjustable point size and point budget
@@ -16,7 +17,7 @@ A cross-platform pointcloud viewer built with Tauri, React, and Three.js, styled
 
 ### Not supported
 
-- Autodesk ReCap `.rcp` / `.rcs` and FARO `.fls` — proprietary. `.rcp` is a ZIP containing project XML (scan list, registration matrices); `.rcs` is an `ADOCT` octree container whose point encoding is not yet decoded. Convert to E57 or LAS first.
+- Autodesk ReCap `.rcs` scans and FARO `.fls` — proprietary. `.rcs` is an `ADOCT` container whose header, section directory and node table are decoded but whose point encoding is not; see [docs/formats/recap-rcs.md](docs/formats/recap-rcs.md). Export the scans to E57 from ReCap and open those.
 - Files over 2 GB in the browser build (ArrayBuffer limit). The desktop app streams LAS/LAZ from disk.
 
 ## Architecture
