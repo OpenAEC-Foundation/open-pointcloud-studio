@@ -108,19 +108,46 @@ first value increases and resets (runs of 7–243); this is probably an index or
 LOD layer, not points. The second `.rcs` (6.5 bytes/point) is more compact
 still and was not analysed.
 
-What was tried and failed: matching records to E57 cells by (range, colour,
-intensity) — the key is not a range, so matches are coincidental; matching
-packed fields to `(row − r0, col − c0)` of the containing node — no relation;
-fitting fields linearly to row/col/x/y/z on false matches — noise.
+What was tried and failed (each against the E57 of the same scan):
+
+- **u32 as range in 0.1 mm** — keys `(range, r, g, b)` unique on both sides
+  give 564 correspondences where thousands are expected, with intensity
+  agreeing at chance level (12.8 %). Not a range.
+- **u32 as a cell/voxel key** — over the whole section the value changes on
+  almost every record (6.7 M records, 6.2 M runs); it was only constant on
+  one flat ceiling patch. Not a contiguous cell key.
+- **u32 as linear z** — an affine map fitted to the ceiling and floor peaks
+  predicts none of the smaller planes (errors 350–1350 units). The low 16
+  bits peak at `0x0801` on 11 % of records: bit flags, not a coordinate.
+- **packed fields as window offsets** `(c0 + fa, r0 + fb)` — values reach
+  ~560 while most windows are < 240 wide; no node matches.
+- **fixed-size block structures** in sections 1 and 7 — every "exact"
+  landing is an artefact of zero-count blocks.
+
+What was established on the way: the ReCap grid is the E57 grid with the
+column axis **mirrored**, `col_e57 ≈ (K − col_rcs) mod 5084` with
+K ≈ 4200–4220, and rows offset by about +17. Measured by finding, for each
+node's stored xyz box, the E57 cells inside it and comparing their row/column
+extents with the node window (spans match; node 1: window 178 wide, E57 185).
 
 ### How to finish it
 
-1. Establish per-record node membership. Section 7 is the candidate: decode it
-   as a bit stream with a per-node header (its first u32 is the node count).
-2. With membership, test `xyz = node.min + field / 2^k × (node.max − node.min)`
-   for k ∈ {9, 10, 18} against the node's E57 cells (`rowIndex`/`columnIndex`
-   inside its window).
-3. Determine the cell grid behind `key` from consecutive keys within one node.
+Black-box statistics against a 10-million-point scan have been exhausted;
+every plausible reading of the 16-byte record has been falsified. The
+efficient route is a **controlled specimen**:
+
+1. In ReCap, import a tiny synthetic point cloud with known coordinates
+   (an E57 or PTS of 8 points at round numbers, e.g. the corners of a 1 m
+   cube, then 64 points on a grid, then one with distinct colours) and keep
+   the resulting `.rcs`. With a handful of records, the packed fields can be
+   read off directly against the known xyz, and the u32 and section 7
+   explained by elimination.
+2. Repeat with the same cloud translated and scaled, to separate quantisation
+   from offset.
+3. Only then return to real scans to confirm the node → record grouping.
+
+Section 7 remains unexplained (0.6–1.4 bytes per point, small values,
+begins with the node count, no fixed-stride table).
 
 Specimens: `Z:\02_automatisering\60 3D scans\2004 Renovatie Boskoop\Warmoeskade 2- 047.rcs`
 with `4vis\Warmoeskade2\Warmoeskade 2- 047.e57`, and
