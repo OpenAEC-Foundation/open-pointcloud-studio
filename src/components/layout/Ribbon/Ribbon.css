@@ -1,7 +1,7 @@
 /* Ribbon Container - Theme-aware */
 .ribbon-container {
-  background: var(--theme-ribbon-bg);
-  border-bottom: 1px solid var(--theme-border-light);
+  background: var(--oaec-ribbon-bg);
+  border-bottom: 1px solid var(--oaec-border-subtle);
   flex-shrink: 0;
   user-select: none;
   cursor: default;
@@ -9,8 +9,8 @@
 
 /* Ribbon Tabs */
 .ribbon-tabs {
-  background: var(--theme-ribbon-tab-bg);
-  border-bottom: 1px solid var(--theme-border-light);
+  background: var(--oaec-ribbon-tab-bg);
+  border-bottom: 1px solid var(--oaec-border-subtle);
   display: flex;
   padding: 0 8px;
   gap: 2px;
@@ -23,7 +23,7 @@
   font-size: 12px;
   background: transparent;
   border: none;
-  color: var(--theme-text-dim);
+  color: var(--oaec-text-secondary);
   font-weight: 500;
   border-radius: 4px 4px 0 0;
   transition: all 0.15s ease;
@@ -34,13 +34,13 @@
 }
 
 .ribbon-tab.file {
-  background: var(--theme-file-tab-bg);
+  background: var(--oaec-accent);
   color: #ffffff;
   font-weight: 600;
 }
 
 .ribbon-tab.file:hover {
-  background: var(--theme-file-tab-hover);
+  background: var(--oaec-accent-hover);
   color: #ffffff;
 }
 
@@ -49,15 +49,15 @@
 }
 
 .ribbon-tab:hover {
-  background: var(--theme-hover);
-  color: var(--theme-text);
+  background: var(--oaec-accent-soft);
+  color: var(--oaec-text);
 }
 
 .ribbon-tab.active {
-  background: var(--theme-ribbon-content-bg);
-  color: var(--theme-text);
-  border-color: var(--theme-border-light);
-  border-bottom: 1px solid var(--theme-ribbon-content-bg);
+  background: var(--oaec-bg);
+  color: var(--oaec-text);
+  border-color: var(--oaec-border-subtle);
+  border-bottom: 1px solid var(--oaec-bg);
   margin-bottom: -1px;
 }
 
@@ -69,7 +69,7 @@
 
 /* Ribbon Content */
 .ribbon-content {
-  background: var(--theme-ribbon-content-bg);
+  background: var(--oaec-bg);
   padding: 4px 8px 0 8px;
   display: none;
   height: 94px;
@@ -95,7 +95,7 @@
   display: flex;
   flex-direction: column;
   padding: 0 4px;
-  border-right: 1px solid var(--theme-border-light);
+  border-right: 1px solid var(--oaec-border-subtle);
   min-width: 50px;
   height: 100%;
   margin-right: 4px;
@@ -108,7 +108,7 @@
 
 .ribbon-group-label {
   font-size: 9px;
-  color: var(--theme-text-muted);
+  color: var(--oaec-text-muted);
   text-align: center;
   font-weight: 500;
   padding: 2px 0;
@@ -145,7 +145,7 @@
 
 .ribbon-slider-label {
   font-size: 10px;
-  color: var(--theme-text-muted);
+  color: var(--oaec-text-muted);
   width: 38px;
   text-align: right;
   flex-shrink: 0;
@@ -154,7 +154,7 @@
 
 .ribbon-slider-value {
   font-size: 10px;
-  color: var(--theme-text);
+  color: var(--oaec-text);
   min-width: 28px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -167,7 +167,7 @@
   appearance: none;
   width: 80px;
   height: 4px;
-  background: var(--theme-border);
+  background: var(--oaec-border);
   border-radius: 0;
   outline: none;
   cursor: default;
@@ -178,32 +178,32 @@
   appearance: none;
   width: 10px;
   height: 16px;
-  background: var(--theme-text-muted);
-  border: 1px solid var(--theme-border-light);
+  background: var(--oaec-text-muted);
+  border: 1px solid var(--oaec-border-subtle);
   border-radius: 1px;
   cursor: default;
 }
 
 .ribbon-slider::-webkit-slider-thumb:hover {
-  background: var(--theme-text);
+  background: var(--oaec-text);
 }
 
 .ribbon-slider::-moz-range-thumb {
   width: 10px;
   height: 16px;
-  background: var(--theme-text-muted);
-  border: 1px solid var(--theme-border-light);
+  background: var(--oaec-text-muted);
+  border: 1px solid var(--oaec-border-subtle);
   border-radius: 1px;
   cursor: default;
 }
 
 .ribbon-slider::-moz-range-thumb:hover {
-  background: var(--theme-text);
+  background: var(--oaec-text);
 }
 
 .ribbon-slider::-moz-range-track {
   height: 4px;
-  background: var(--theme-border);
+  background: var(--oaec-border);
   border-radius: 0;
 }
 
@@ -238,13 +238,13 @@
 }
 
 .ribbon-btn:hover {
-  background: var(--theme-hover);
-  border-color: var(--theme-border-light);
+  background: var(--oaec-accent-soft);
+  border-color: var(--oaec-border-subtle);
 }
 
 .ribbon-btn.active {
-  background: var(--theme-active);
-  border-color: var(--theme-active-border);
+  background: var(--oaec-accent);
+  border-color: var(--oaec-accent);
 }
 
 .ribbon-btn.disabled {
@@ -265,11 +265,11 @@
   justify-content: center;
   flex-shrink: 0;
   overflow: hidden;
-  color: var(--theme-text-dim);
+  color: var(--oaec-text-secondary);
 }
 
 .ribbon-btn:hover .ribbon-btn-icon {
-  color: var(--theme-text);
+  color: var(--oaec-text);
 }
 
 .ribbon-btn.active .ribbon-btn-icon {
@@ -278,7 +278,7 @@
 
 .ribbon-btn-label {
   font-size: 10px;
-  color: var(--theme-text-dim);
+  color: var(--oaec-text-secondary);
   text-align: center;
   line-height: 1.1;
   max-width: 58px;
@@ -291,7 +291,7 @@
 }
 
 .ribbon-btn:hover .ribbon-btn-label {
-  color: var(--theme-text);
+  color: var(--oaec-text);
 }
 
 .ribbon-btn.active .ribbon-btn-label {
@@ -380,180 +380,7 @@
   min-width: 40px;
 }
 
-/* Ribbon dropdown button container */
-.ribbon-dropdown-container {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  position: relative;
-}
 
-.ribbon-btn.has-dropdown {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-  height: 54px;
-}
-
-.ribbon-dropdown-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 12px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-top: none;
-  border-radius: 0 0 4px 4px;
-  cursor: default;
-  transition: all 0.15s ease;
-  color: var(--theme-text-dim);
-}
-
-.ribbon-dropdown-trigger:focus {
-  outline: none;
-}
-
-.ribbon-dropdown-trigger:hover {
-  background: var(--theme-hover);
-  border-color: var(--theme-border-light);
-  color: var(--theme-text);
-}
-
-.ribbon-dropdown-trigger.active {
-  background: var(--theme-active);
-  border-color: var(--theme-active-border);
-  color: #ffffff;
-}
-
-.ribbon-dropdown-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  min-width: 140px;
-  background: var(--theme-dropdown-bg);
-  border: 1px solid var(--theme-border-light);
-  border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  z-index: 1000;
-  padding: 4px 0;
-  margin-top: 2px;
-}
-
-.ribbon-dropdown-item {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  padding: 6px 12px;
-  background: transparent;
-  border: none;
-  color: var(--theme-text-dim);
-  font-size: 11px;
-  text-align: left;
-  cursor: default;
-  transition: all 0.15s ease;
-  gap: 8px;
-}
-
-.ribbon-dropdown-item:hover {
-  background: var(--theme-hover);
-  color: var(--theme-text);
-}
-
-.ribbon-dropdown-item.selected {
-  color: var(--theme-accent);
-}
-
-.ribbon-dropdown-item .checkmark {
-  width: 12px;
-  flex-shrink: 0;
-}
-
-.ribbon-dropdown-item .no-check {
-  margin-left: 20px;
-}
-
-/* Legacy dropdown arrow (not used currently) */
-.ribbon-dropdown {
-  position: relative;
-}
-
-.ribbon-dropdown-arrow {
-  position: absolute;
-  right: 2px;
-  bottom: 2px;
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 4px solid #888888;
-}
-
-.ribbon-btn:hover .ribbon-dropdown-arrow {
-  border-top-color: #ffffff;
-}
-
-/* Input controls - Dark theme */
-.ribbon-input-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px;
-}
-
-.ribbon-input-label {
-  font-size: 9px;
-  color: #888888;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.ribbon-input {
-  width: 50px;
-  padding: 3px 6px;
-  font-size: 11px;
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 3px;
-  color: #e2e8f0;
-  outline: none;
-}
-
-.ribbon-input:focus {
-  border-color: #3b82f6;
-}
-
-.ribbon-input-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-}
-
-.ribbon-input-row label {
-  font-size: 10px;
-  color: #94a3b8;
-  white-space: nowrap;
-}
-
-/* Color input */
-.ribbon-color-input {
-  width: 32px;
-  height: 24px;
-  padding: 2px;
-  border: 1px solid #334155;
-  border-radius: 3px;
-  background: transparent;
-  cursor: default;
-}
-
-.ribbon-color-input::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-
-.ribbon-color-input::-webkit-color-swatch {
-  border: none;
-  border-radius: 2px;
-}
 
 /* Transform tool inputs */
 .ribbon-transform-inputs {
@@ -573,7 +400,7 @@
 
 .ribbon-transform-inputs .ribbon-input-row label {
   font-size: 10px;
-  color: var(--theme-text-muted);
+  color: var(--oaec-text-muted);
   width: 12px;
   text-align: right;
   flex-shrink: 0;
@@ -583,21 +410,21 @@
   width: 54px;
   padding: 2px 4px;
   font-size: 11px;
-  background: var(--theme-input-bg, #0f172a);
-  border: 1px solid var(--theme-border-light);
+  background: var(--oaec-bg-input);
+  border: 1px solid var(--oaec-border-subtle);
   border-radius: 3px;
-  color: var(--theme-text);
+  color: var(--oaec-text);
   outline: none;
   font-family: 'Cascadia Code', 'Consolas', monospace;
 }
 
 .ribbon-transform-inputs .ribbon-input:focus {
-  border-color: var(--theme-accent, #3b82f6);
+  border-color: var(--oaec-accent);
 }
 
 .ribbon-input-value {
   font-size: 10px;
-  color: var(--theme-text);
+  color: var(--oaec-text);
   font-family: 'Cascadia Code', 'Consolas', monospace;
   min-width: 28px;
   text-align: right;
@@ -605,8 +432,8 @@
 
 /* Custom Tooltip */
 .ribbon-tooltip {
-  background: var(--theme-dropdown-bg);
-  border: 1px solid var(--theme-border-light);
+  background: var(--oaec-bg-lighter);
+  border: 1px solid var(--oaec-border-subtle);
   padding: 6px 10px;
   display: flex;
   align-items: center;
@@ -618,141 +445,68 @@
 .ribbon-tooltip-label {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   font-size: 12px;
-  color: var(--theme-text);
+  color: var(--oaec-text);
   font-weight: 400;
 }
 
 .ribbon-tooltip-shortcut {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   font-size: 11px;
-  color: var(--theme-text-dim);
-  background: var(--theme-input-bg);
-  border: 1px solid var(--theme-border-light);
+  color: var(--oaec-text-secondary);
+  background: var(--oaec-bg-input);
+  border: 1px solid var(--oaec-border-subtle);
   padding: 1px 5px;
   font-weight: 600;
   letter-spacing: 1px;
 }
 
 /* ============================================================================
-   Theme Selector (DevExpress-style dropdown)
+   Generic Dropdown Menu (RibbonDropdownButton)
    ============================================================================ */
 
-.ribbon-theme-selector {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px 8px;
-}
-
-.ribbon-theme-label {
-  font-size: 9px;
-  color: var(--theme-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.ribbon-theme-dropdown {
-  position: relative;
-  min-width: 100px;
-}
-
-.ribbon-theme-button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 4px 8px;
-  background: var(--theme-input-bg);
-  border: 1px solid var(--theme-border-light);
-  border-radius: 3px;
-  color: var(--theme-text);
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  gap: 8px;
-}
-
-.ribbon-theme-button:hover {
-  border-color: var(--theme-accent);
-}
-
-.ribbon-theme-button:focus {
-  outline: none;
-  border-color: var(--theme-accent);
-}
-
-.ribbon-theme-button-content {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.ribbon-theme-swatch {
-  width: 14px;
-  height: 14px;
-  border-radius: 2px;
-  border: 1px solid var(--theme-border-light);
-}
-
-.ribbon-theme-swatch.dark {
-  background: linear-gradient(135deg, #1a1a2e 50%, #16213e 50%);
-}
-
-.ribbon-theme-swatch.light {
-  background: linear-gradient(135deg, #f5f5f5 50%, #ffffff 50%);
-}
-
-.ribbon-theme-swatch.blue {
-  background: linear-gradient(135deg, #0d1b2a 50%, #1b263b 50%);
-}
-
-.ribbon-theme-swatch.highContrast {
-  background: linear-gradient(135deg, #000000 50%, #ffff00 50%);
-}
-
-.ribbon-theme-menu {
+.ribbon-dropdown-menu {
   position: absolute;
   top: 100%;
   left: 0;
   right: 0;
   margin-top: 2px;
-  background: var(--theme-dropdown-bg);
-  border: 1px solid var(--theme-border-light);
+  background: var(--oaec-bg-lighter);
+  border: 1px solid var(--oaec-border-subtle);
   border-radius: 3px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   z-index: 1000;
   padding: 4px 0;
 }
 
-.ribbon-theme-option {
+.ribbon-dropdown-option {
   display: flex;
   align-items: center;
   width: 100%;
   padding: 6px 10px;
   background: transparent;
   border: none;
-  color: var(--theme-text-dim);
+  color: var(--oaec-text-secondary);
   font-size: 11px;
   cursor: pointer;
   transition: all 0.15s ease;
   gap: 8px;
 }
 
-.ribbon-theme-option:hover {
-  background: var(--theme-hover);
-  color: var(--theme-text);
+.ribbon-dropdown-option:hover {
+  background: var(--oaec-accent-soft);
+  color: var(--oaec-text);
 }
 
-.ribbon-theme-option.selected {
-  color: var(--theme-accent);
+.ribbon-dropdown-option.selected {
+  color: var(--oaec-accent);
 }
 
-.ribbon-theme-option .checkmark {
+.ribbon-dropdown-option .checkmark {
   width: 14px;
-  color: var(--theme-accent);
+  color: var(--oaec-accent);
 }
 
-.ribbon-theme-option .no-check {
+.ribbon-dropdown-option .no-check {
   width: 14px;
 }
 

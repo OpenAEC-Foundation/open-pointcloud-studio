@@ -1,22 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
-import { useAppStore, type UITheme } from '../../state/appStore';
 import './SettingsDialog.css';
-
-const THEMES: { value: UITheme; label: string; swatches: string[] }[] = [
-  { value: 'dark', label: 'Dark', swatches: ['#1a1a2e', '#16213e', '#e94560', '#eaeaea'] },
-  { value: 'light', label: 'Light', swatches: ['#f5f5f5', '#ffffff', '#e94560', '#1f2937'] },
-  { value: 'blue', label: 'Blue', swatches: ['#0d1b2a', '#1b263b', '#00b4d8', '#e0e1dd'] },
-  { value: 'highContrast', label: 'High Contrast', swatches: ['#000000', '#0a0a0a', '#ffff00', '#ffffff'] },
-];
 
 interface SettingsDialogProps {
   onClose: () => void;
 }
 
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
-  const uiTheme = useAppStore((s) => s.uiTheme);
-  const setUITheme = useAppStore((s) => s.setUITheme);
-
   // Dragging state
   const dialogRef = useRef<HTMLDivElement>(null);
   const [offset, setOffset] = useState<{ x: number; y: number } | null>(null);
@@ -51,11 +40,6 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
     };
   };
 
-  const handleThemeChange = (theme: UITheme) => {
-    setUITheme(theme);
-    document.documentElement.setAttribute('data-theme', theme);
-  };
-
   return (
     <div className="settings-dialog-overlay">
       <div
@@ -82,25 +66,6 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
           </div>
 
           <div className="settings-content">
-            <div className="settings-section">
-              <h3 className="settings-section-title">Theme</h3>
-              <div className="settings-theme-table">
-                {THEMES.map(theme => (
-                  <button
-                    key={theme.value}
-                    className={`settings-theme-row${uiTheme === theme.value ? ' active' : ''}`}
-                    onClick={() => handleThemeChange(theme.value)}
-                  >
-                    <span className="settings-theme-row-swatches">
-                      {theme.swatches.map((color, i) => (
-                        <span key={i} className="settings-theme-row-swatch" style={{ background: color }} />
-                      ))}
-                    </span>
-                    <span className="settings-theme-row-name">{theme.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
 
