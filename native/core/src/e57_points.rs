@@ -4,14 +4,32 @@ use std::path::Path;
 
 use e57::{CartesianCoordinate, E57Reader};
 
-use super::{LoadError, Point};
+use super::{LoadError, Point, ScanPose};
 
 pub fn read(
     path: &Path,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    pose_push: &mut impl FnMut(ScanPose),
 ) -> Result<(), LoadError> {
     let mut file = E57Reader::from_file(path)?;
-    for scan in file.pointclouds() {
+    for (index, scan) in file.pointclouds().into_iter().enumerate() {
+        if let Some(transform) = &scan.transform {
+            let position = [
+                transform.translation.x,
+                transform.translation.y,
+                transform.translation.z,
+            ];
+            if position.iter().all(|value| value.is_finite()) {
+                pose_push(ScanPose {
+                    label: scan
+                        .name
+                        .clone()
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| format!("Scan {}", index + 1)),
+                    position,
+                });
+            }
+        }
         let mut points = file.pointcloud_simple(&scan)?;
         points.spherical_to_cartesian(true);
         points.apply_pose(true);

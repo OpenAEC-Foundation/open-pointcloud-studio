@@ -43,6 +43,12 @@ pub struct Point {
     pub classification: Option<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScanPose {
+    pub label: String,
+    pub position: [f64; 3],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
     pub min: [f64; 3],
@@ -81,6 +87,7 @@ pub struct PointCloud {
     pub has_rgb: bool,
     pub has_intensity: bool,
     pub has_classification: bool,
+    pub scan_poses: Vec<ScanPose>,
     source_stamp: Option<SourceStamp>,
 }
 
@@ -172,7 +179,10 @@ pub fn open(path: impl AsRef<Path>, sample_limit: usize) -> Result<PointCloud, L
     let path = path.as_ref();
     let before = SourceStamp::read(path)?;
     let mut collector = Collector::new(sample_limit);
-    visit_points(path, &mut |point| collector.push(point))?;
+    let mut scan_poses = Vec::new();
+    visit_points_with_poses(path, &mut |point| collector.push(point), &mut |pose| {
+        scan_poses.push(pose)
+    })?;
     let after = SourceStamp::read(path)?;
     if before != after {
         return Err(LoadError::InvalidData(
@@ -180,6 +190,7 @@ pub fn open(path: impl AsRef<Path>, sample_limit: usize) -> Result<PointCloud, L
         ));
     }
     let mut cloud = collector.finish(path.to_path_buf())?;
+    cloud.scan_poses = scan_poses;
     cloud.source_stamp = Some(after);
     Ok(cloud)
 }
@@ -223,6 +234,7 @@ pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         has_rgb: header.point_format().has_color,
         has_intensity: true,
         has_classification: true,
+        scan_poses: Vec::new(),
         source_stamp: Some(stamp),
     })
 }
@@ -285,6 +297,14 @@ pub fn visit_points(
     path: impl AsRef<Path>,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
+    visit_points_with_poses(path, push, &mut |_| {})
+}
+
+fn visit_points_with_poses(
+    path: impl AsRef<Path>,
+    push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    pose_push: &mut impl FnMut(ScanPose),
+) -> Result<(), LoadError> {
     let path = path.as_ref();
     let extension = path
         .extension()
@@ -297,10 +317,10 @@ pub fn visit_points(
         "obj" => mesh_points::read_obj(path, push),
         "off" => mesh_points::read_off(path, push),
         "stl" => mesh_points::read_stl(path, push),
-        "ptx" => ptx::read(path, push),
-        "pcd" => pcd::read(path, push),
+        "ptx" => ptx::read(path, push, pose_push),
+        "pcd" => pcd::read(path, push, pose_push),
         "dxf" => dxf::read(path, push),
-        "e57" => e57_points::read(path, push),
+        "e57" => e57_points::read(path, push, pose_push),
         "xyz" | "asc" | "txt" | "csv" | "pts" => read_text(path, push, extension == "pts"),
         _ => Err(LoadError::UnsupportedFormat(extension)),
     }
@@ -382,6 +402,7 @@ impl Collector {
             has_rgb: self.has_rgb,
             has_intensity: self.has_intensity,
             has_classification: self.has_classification,
+            scan_poses: Vec::new(),
             source_stamp: None,
         })
     }

@@ -6,7 +6,7 @@ use std::path::Path;
 
 use memmap2::MmapOptions;
 
-use super::{LoadError, Point};
+use super::{LoadError, Point, ScanPose};
 
 struct Field {
     name: String,
@@ -76,11 +76,13 @@ impl Viewpoint {
 pub fn read(
     path: &Path,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    pose_push: &mut impl FnMut(ScanPose),
 ) -> Result<(), LoadError> {
     let mut reader = BufReader::new(File::open(path)?);
     let (mut names, mut sizes, mut kinds, mut counts) = (vec![], vec![], vec![], vec![]);
     let (mut width, mut height, mut points) = (0u64, 1u64, 0u64);
     let mut viewpoint = Viewpoint::default();
+    let mut has_viewpoint = false;
     let mode = loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 {
@@ -100,7 +102,10 @@ pub fn read(
             "WIDTH" => width = parse_u64(words.next())?,
             "HEIGHT" => height = parse_u64(words.next())?,
             "POINTS" => points = parse_u64(words.next())?,
-            "VIEWPOINT" => viewpoint = Viewpoint::parse(words)?,
+            "VIEWPOINT" => {
+                viewpoint = Viewpoint::parse(words)?;
+                has_viewpoint = true;
+            }
             "DATA" => break words.next().unwrap_or("").to_ascii_lowercase(),
             _ => {}
         }
@@ -112,6 +117,12 @@ pub fn read(
     }
     if names.is_empty() || points == 0 {
         return Err(invalid("PCD file has no points or fields"));
+    }
+    if has_viewpoint {
+        pose_push(ScanPose {
+            label: "VIEWPOINT".into(),
+            position: viewpoint.translation,
+        });
     }
     let (mut record_size, mut column) = (0usize, 0usize);
     let mut fields = Vec::with_capacity(names.len());
@@ -459,6 +470,8 @@ mod tests {
             }
             std::fs::write(&path, bytes).unwrap();
             let cloud = super::super::open(&path, 1).unwrap();
+            assert_eq!(cloud.scan_poses.len(), 1);
+            assert_eq!(cloud.scan_poses[0].position, [10.0, 20.0, 30.0]);
             let xyz = cloud.points[0].xyz;
             for (actual, expected) in xyz.into_iter().zip([10.0, 21.0, 30.0]) {
                 assert!((actual - expected).abs() < 1e-8, "{mode}: {xyz:?}");
@@ -481,6 +494,7 @@ mod tests {
         std::fs::write(&ascii, "FIELDS x y z r g b\nSIZE 4 4 4 1 1 1\nTYPE F F F U U U\nWIDTH 1\nHEIGHT 1\nPOINTS 1\nDATA ascii\n1 2 3 10 20 30\n").unwrap();
         let cloud = super::super::open(&ascii, 10).unwrap();
         assert_eq!(cloud.points[0].rgb, Some([10, 20, 30]));
+        assert!(cloud.scan_poses.is_empty());
         let binary = dir.path().join("binary.pcd");
         let mut bytes = b"FIELDS x y z rgb\nSIZE 4 4 4 4\nTYPE F F F F\nWIDTH 1\nHEIGHT 1\nPOINTS 1\nDATA binary\n".to_vec();
         for value in [1.0f32, 2.0, 3.0] {

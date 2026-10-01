@@ -154,6 +154,28 @@ fn main() -> iced::Result {
             }
         }
     }
+    if first.as_deref() == Some(OsStr::new("--scans")) {
+        let (Some(source), None) = (args.next(), args.next()) else {
+            eprintln!("Usage: open-pointcloud-studio-native --scans INPUT");
+            std::process::exit(2);
+        };
+        match open_for_export(&PathBuf::from(source)) {
+            Ok(cloud) => {
+                println!("{} scan position(s)", cloud.scan_poses.len());
+                for pose in cloud.scan_poses {
+                    println!(
+                        "{}: {:.6}, {:.6}, {:.6}",
+                        pose.label, pose.position[0], pose.position[1], pose.position[2]
+                    );
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Scan positions failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if first.as_deref() == Some(OsStr::new("--export")) {
         let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
         else {
@@ -555,6 +577,8 @@ enum Message {
     ColorMode(ColorMode),
     PointSize(f32),
     SetEyeDome(bool),
+    ShowScanPoses(bool),
+    ExpandScanPoses(bool),
     Budget(u32),
     FilterGround(bool),
     FilterVegetation(bool),
@@ -630,6 +654,8 @@ struct Studio {
     color_mode: ColorMode,
     point_size: f32,
     eye_dome: bool,
+    show_scan_poses: bool,
+    expand_scan_poses: bool,
     budget: u32,
     filter_ground: bool,
     filter_vegetation: bool,
@@ -757,6 +783,8 @@ impl Default for Studio {
             color_mode: ColorMode::Rgb,
             point_size: 2.0,
             eye_dome: true,
+            show_scan_poses: true,
+            expand_scan_poses: false,
             budget: 80_000,
             filter_ground: true,
             filter_vegetation: true,
@@ -2025,6 +2053,8 @@ impl Studio {
             Message::ColorMode(mode) => self.color_mode = mode,
             Message::PointSize(size) => self.point_size = size,
             Message::SetEyeDome(enabled) => self.eye_dome = enabled,
+            Message::ShowScanPoses(enabled) => self.show_scan_poses = enabled,
+            Message::ExpandScanPoses(expanded) => self.expand_scan_poses = expanded,
             Message::Budget(budget) => {
                 self.budget = budget;
                 self.revision += 1;
@@ -3040,6 +3070,14 @@ impl Studio {
                     .into()
                 ),
                 ribbon_group(
+                    "SCANNERS",
+                    tool_button(
+                        "Scan positions",
+                        Message::ShowScanPoses(!self.show_scan_poses),
+                        self.show_scan_poses,
+                    )
+                ),
+                ribbon_group(
                     "POINT DISPLAY",
                     column![
                         text(format!("Point size  {:.1}", self.point_size)).size(12),
@@ -3613,6 +3651,7 @@ impl Studio {
             color_mode: self.color_mode,
             point_size: self.point_size,
             eye_dome: self.eye_dome,
+            show_scan_poses: self.show_scan_poses,
             budget: self.budget as usize,
             filter_ground: self.filter_ground,
             filter_vegetation: self.filter_vegetation,
@@ -3707,6 +3746,51 @@ impl Studio {
                         entry.cloud.bounds.min[axis], entry.cloud.bounds.max[axis]
                     ),
                 ));
+            }
+            if !entry.cloud.scan_poses.is_empty() {
+                properties = properties
+                    .push(opencad_properties::section_header("Scan positions"))
+                    .push(opencad_properties::property_row(
+                        "Stations",
+                        entry.cloud.scan_poses.len().to_string(),
+                    ))
+                    .push(
+                        container(
+                            row![
+                                checkbox("Markers", self.show_scan_poses)
+                                    .on_toggle(Message::ShowScanPoses)
+                                    .style(muted_checkbox_style),
+                                button(if self.expand_scan_poses {
+                                    "Hide list"
+                                } else {
+                                    "Show list"
+                                })
+                                .on_press(Message::ExpandScanPoses(!self.expand_scan_poses))
+                                .style(flat_tool_style),
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center),
+                        )
+                        .padding([4, 8]),
+                    );
+                if self.expand_scan_poses {
+                    for pose in &entry.cloud.scan_poses {
+                        properties = properties.push(
+                            container(
+                                column![
+                                    text(pose.label.as_str()).size(11),
+                                    text(format!(
+                                        "{:.3}, {:.3}, {:.3}",
+                                        pose.position[0], pose.position[1], pose.position[2]
+                                    ))
+                                    .size(10),
+                                ]
+                                .spacing(2),
+                            )
+                            .padding([4, 8]),
+                        );
+                    }
+                }
             }
         }
         properties = properties
@@ -4099,6 +4183,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::TogglePickSelect => ToolIcon::Pick,
         Message::ClearSelection => ToolIcon::Clear,
         Message::SetEyeDome(_) => ToolIcon::Shading,
+        Message::ShowScanPoses(_) => ToolIcon::Pick,
         Message::SetSectionEnabled(_)
         | Message::ResetSectionBox
         | Message::FitSectionToSelection => ToolIcon::Select,
@@ -4438,6 +4523,7 @@ struct PointViewport<'a> {
     color_mode: ColorMode,
     point_size: f32,
     eye_dome: bool,
+    show_scan_poses: bool,
     budget: usize,
     filter_ground: bool,
     filter_vegetation: bool,
@@ -4952,6 +5038,50 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         frame.fill_text(canvas::Text {
                             content: format!("{name}{}", if is_min { "-" } else { "+" }),
                             position: UiPoint::new(x + 8.0, y + 3.0),
+                            size: iced::Pixels(10.0),
+                            color: Color::from_rgb8(245, 188, 100),
+                            ..canvas::Text::default()
+                        });
+                    }
+                }
+            }
+        }
+        if self.show_scan_poses {
+            let pose_count: usize = self
+                .clouds
+                .iter()
+                .filter(|entry| entry.visible)
+                .map(|entry| entry.cloud.scan_poses.len())
+                .sum();
+            for entry in self.clouds.iter().filter(|entry| entry.visible) {
+                for pose in &entry.cloud.scan_poses {
+                    let Some((x, y, _)) = projection.project(pose.position) else {
+                        continue;
+                    };
+                    let center = UiPoint::new(x, y);
+                    let ring = canvas::Path::circle(center, 6.0);
+                    frame.fill(&ring, Color::from_rgb8(42, 42, 50));
+                    frame.stroke(
+                        &ring,
+                        canvas::Stroke::default()
+                            .with_color(Color::from_rgb8(245, 158, 11))
+                            .with_width(2.0),
+                    );
+                    for (start, end) in [
+                        (UiPoint::new(x - 10.0, y), UiPoint::new(x + 10.0, y)),
+                        (UiPoint::new(x, y - 10.0), UiPoint::new(x, y + 10.0)),
+                    ] {
+                        frame.stroke(
+                            &canvas::Path::line(start, end),
+                            canvas::Stroke::default()
+                                .with_color(Color::from_rgb8(245, 158, 11))
+                                .with_width(1.0),
+                        );
+                    }
+                    if pose_count <= 24 {
+                        frame.fill_text(canvas::Text {
+                            content: pose.label.clone(),
+                            position: UiPoint::new(x + 12.0, y + 4.0),
                             size: iced::Pixels(10.0),
                             color: Color::from_rgb8(245, 188, 100),
                             ..canvas::Text::default()
