@@ -10,6 +10,12 @@ source. Reopening the same file then showed `reading_source`, `building_tree`
 and `ready` through the native API; the final disk index had 64 leaves and the
 layer became indexed. The live Properties progress bar and Cancel control are
 shown in [`native-index-progress.png`](../screenshots/native-index-progress.png).
+The same LAS source exercised native `select_world`, `export_selection` and
+`export_minus_selection`: the exact world box selected 150,258 points, and the
+two XYZ exports contained 150,258 and 1,049,742 lines respectively. All
+1,200,000 output points were on the expected side of the selection boundary;
+their counts sum to the complete source. An export request without an active
+selection was rejected before creating an output file.
 
 On 1 October 2026, the bounded multithreaded text writer exported a
 1,200,000-point LAS fixture to CSV in 2.54 s with 27,556 KiB peak RSS. The

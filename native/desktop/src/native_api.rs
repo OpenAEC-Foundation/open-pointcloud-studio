@@ -49,6 +49,8 @@ pub enum ApiCommand {
     CancelMesh,
     Export { path: PathBuf },
     ExportSection { path: PathBuf },
+    ExportSelection { path: PathBuf },
+    ExportMinusSelection { path: PathBuf },
 }
 
 #[derive(Clone, Debug)]

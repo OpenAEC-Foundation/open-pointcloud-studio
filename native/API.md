@@ -80,6 +80,8 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 | `cancel_mesh` | — | Requests cancellation of the running mesh task |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
+| `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |
+| `export_minus_selection` | `path` | Exports the active source without selected or deleted points |
 
 The destination extension selects PLY, XYZ, PTS, CSV, LAS, LAZ or E57. Export
 is atomic and scans the complete source rather than the viewport sample.

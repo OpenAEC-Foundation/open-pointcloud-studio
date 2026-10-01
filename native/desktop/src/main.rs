@@ -773,6 +773,14 @@ enum ContextAction {
     ClearSelection,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ApiExportMode {
+    Full,
+    Section,
+    Selected,
+    WithoutSelection,
+}
+
 impl CameraPreset {
     fn orientation(self) -> (f32, f32, &'static str) {
         match self {
@@ -1751,8 +1759,12 @@ impl Studio {
                     (json!({"ok": true, "cancel_requested": true}), task)
                 }
             }
-            ApiCommand::Export { path } => self.api_export(path, false),
-            ApiCommand::ExportSection { path } => self.api_export(path, true),
+            ApiCommand::Export { path } => self.api_export(path, ApiExportMode::Full),
+            ApiCommand::ExportSection { path } => self.api_export(path, ApiExportMode::Section),
+            ApiCommand::ExportSelection { path } => self.api_export(path, ApiExportMode::Selected),
+            ApiCommand::ExportMinusSelection { path } => {
+                self.api_export(path, ApiExportMode::WithoutSelection)
+            }
         };
         let _ = request.reply.send(response);
         task
@@ -1770,7 +1782,7 @@ impl Studio {
         id
     }
 
-    fn api_export(&mut self, path: PathBuf, section_only: bool) -> (Value, Task<Message>) {
+    fn api_export(&mut self, path: PathBuf, mode: ApiExportMode) -> (Value, Task<Message>) {
         if !path.is_absolute() {
             return (
                 json!({"ok": false, "error": "export requires an absolute destination path"}),
@@ -1792,7 +1804,7 @@ impl Studio {
         let cloud = Arc::clone(&entry.cloud);
         let deleted = entry.deleted.as_ref().map(Arc::clone);
         let transform = entry.transform;
-        let section = if section_only {
+        let section = if mode == ApiExportMode::Section {
             let Some(section) = self.section_bounds() else {
                 return (
                     json!({"ok": false, "error": "section box is not enabled"}),
@@ -1800,6 +1812,20 @@ impl Studio {
                 );
             };
             Some(section)
+        } else {
+            None
+        };
+        let selection = if matches!(
+            mode,
+            ApiExportMode::Selected | ApiExportMode::WithoutSelection
+        ) {
+            let Some(mask) = entry.selection.as_ref().filter(|mask| mask.count > 0) else {
+                return (
+                    json!({"ok": false, "error": "select points in the active cloud first"}),
+                    Task::none(),
+                );
+            };
+            Some((Arc::clone(mask), entry.remaining_count()))
         } else {
             None
         };
@@ -1828,6 +1854,50 @@ impl Studio {
                     .and_then(|result| result)
                 },
                 move |result| Message::ApiExported(completion_id.clone(), true, result),
+            );
+            (response, task)
+        } else if let Some((mask, remaining)) = selection {
+            let selected = mode == ApiExportMode::Selected;
+            let expected_count = if selected {
+                mask.count
+            } else {
+                remaining.saturating_sub(mask.count)
+            };
+            self.status = if selected {
+                "Exporting selected points through native API…"
+            } else {
+                "Exporting points outside selection through native API…"
+            }
+            .into();
+            let completion_id = job_id;
+            let task = Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        export_edited_where(
+                            &cloud,
+                            &path,
+                            format,
+                            transform,
+                            expected_count,
+                            |ordinal, _| {
+                                if selected {
+                                    mask.contains(ordinal)
+                                } else {
+                                    !mask.contains(ordinal)
+                                        && deleted
+                                            .as_ref()
+                                            .is_none_or(|bits| !bits.contains(ordinal))
+                                }
+                            },
+                        )
+                        .map(|()| (path, expected_count))
+                        .map_err(|error| error.to_string())
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result)
+                },
+                move |result| Message::ApiExported(completion_id.clone(), false, result),
             );
             (response, task)
         } else {
