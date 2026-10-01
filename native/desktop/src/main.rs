@@ -579,6 +579,7 @@ enum Message {
     SetEyeDome(bool),
     ShowScanPoses(bool),
     ExpandScanPoses(bool),
+    FitScanPoses,
     Budget(u32),
     FilterGround(bool),
     FilterVegetation(bool),
@@ -2055,6 +2056,28 @@ impl Studio {
             Message::SetEyeDome(enabled) => self.eye_dome = enabled,
             Message::ShowScanPoses(enabled) => self.show_scan_poses = enabled,
             Message::ExpandScanPoses(expanded) => self.expand_scan_poses = expanded,
+            Message::FitScanPoses => {
+                let (Some(scene), Some(focus)) = (
+                    combined_bounds(&self.clouds),
+                    bounds_with_scan_poses(&self.clouds),
+                ) else {
+                    self.status = "No scanner positions to frame".into();
+                    return Task::none();
+                };
+                let Some((zoom, pan)) =
+                    camera_to_frame_bounds(scene, focus, self.yaw, self.pitch, self.viewport_size)
+                else {
+                    self.status = "Scanner positions cannot be framed in this view".into();
+                    return Task::none();
+                };
+                self.zoom = zoom;
+                self.pan = pan;
+                self.show_scan_poses = true;
+                self.revision += 1;
+                self.clear_detail();
+                self.status = "Point cloud and scanner positions framed".into();
+                return self.schedule_detail();
+            }
             Message::Budget(budget) => {
                 self.budget = budget;
                 self.revision += 1;
@@ -3071,11 +3094,23 @@ impl Studio {
                 ),
                 ribbon_group(
                     "SCANNERS",
-                    tool_button(
-                        "Scan positions",
-                        Message::ShowScanPoses(!self.show_scan_poses),
-                        self.show_scan_poses,
-                    )
+                    row![
+                        tool_button(
+                            "Stations",
+                            Message::ShowScanPoses(!self.show_scan_poses),
+                            self.show_scan_poses,
+                        ),
+                        tool_button_when(
+                            "Fit stations",
+                            Message::FitScanPoses,
+                            false,
+                            self.clouds.iter().any(|entry| {
+                                entry.visible && !entry.cloud.scan_poses.is_empty()
+                            }),
+                        ),
+                    ]
+                    .spacing(2)
+                    .into()
                 ),
                 ribbon_group(
                     "POINT DISPLAY",
@@ -4184,6 +4219,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::ClearSelection => ToolIcon::Clear,
         Message::SetEyeDome(_) => ToolIcon::Shading,
         Message::ShowScanPoses(_) => ToolIcon::Pick,
+        Message::FitScanPoses => ToolIcon::Fit,
         Message::SetSectionEnabled(_)
         | Message::ResetSectionBox
         | Message::FitSectionToSelection => ToolIcon::Select,
@@ -4412,6 +4448,20 @@ fn loaded_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
         include_bounds(&mut overall, entry.cloud.bounds.max);
     }
     overall
+}
+
+fn bounds_with_scan_poses(clouds: &[CloudEntry]) -> Option<Bounds> {
+    let mut bounds = combined_bounds(clouds);
+    let mut has_scan_poses = false;
+    for pose in clouds
+        .iter()
+        .filter(|entry| entry.visible)
+        .flat_map(|entry| &entry.cloud.scan_poses)
+    {
+        include_bounds(&mut bounds, pose.position);
+        has_scan_poses = true;
+    }
+    has_scan_poses.then_some(bounds).flatten()
 }
 
 fn camera_to_frame_bounds(
