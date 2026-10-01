@@ -155,4 +155,4 @@ Mesh export writes all vertices and faces from the mesh currently held by the vi
 3. Improve the bounded 3D surface mesher toward watertight output and richer source attributes. Broaden the native settings UI as remaining workflows migrate.
 4. Expand the documented native command API to remaining editing and selection actions, then retire the old frontend and Tauri packaging after feature parity checks.
 
-No existing application files are removed by this first slice.
+The earlier application source remains available under `classic/` while the native workflow reaches parity.
