@@ -289,31 +289,47 @@ fn read_compressed(
     }
     // The temporary file remains open and immutable for the lifetime of the mapping.
     let data = unsafe { MmapOptions::new().map(&output)? };
+    let field_index = |name: &str| fields.iter().position(|field| field.name == name);
+    let xyz = [field_index("x"), field_index("y"), field_index("z")];
+    let intensity = field_index("intensity");
+    let label = field_index("label");
+    let classification = field_index("classification");
+    let channels = [field_index("r"), field_index("g"), field_index("b")];
+    let packed_color = fields
+        .iter()
+        .position(|field| field.name == "rgb" || field.name == "rgba");
     for point_index in 0..points {
-        let bytes_for = |field: &Field| -> Result<&[u8], LoadError> {
-            let field_index = fields
-                .iter()
-                .position(|candidate| std::ptr::eq(candidate, field))
-                .ok_or_else(|| invalid("PCD field lookup failed"))?;
-            let plane =
-                planes[field_index].ok_or_else(|| invalid("PCD padding field has no payload"))?;
+        let bytes_for = |index: usize| -> Result<&[u8], LoadError> {
+            let field = &fields[index];
+            let plane = planes[index].ok_or_else(|| invalid("PCD padding field has no payload"))?;
             let start = plane + point_index * field.span;
             Ok(&data[start..start + field.size])
         };
         let get = |name: &str| -> Result<Option<f64>, LoadError> {
-            fields
-                .iter()
-                .find(|field| field.name == name)
-                .map(|field| number(bytes_for(field)?, field))
+            let index = match name {
+                "x" => xyz[0],
+                "y" => xyz[1],
+                "z" => xyz[2],
+                "intensity" => intensity,
+                "label" => label,
+                "classification" => classification,
+                "r" => channels[0],
+                "g" => channels[1],
+                "b" => channels[2],
+                _ => field_index(name),
+            };
+            index
+                .map(|index| number(bytes_for(index)?, &fields[index]))
                 .transpose()
         };
-        let rgb = packed_field(fields)
-            .map(|field| -> Result<[u8; 3], LoadError> {
+        let rgb = packed_color
+            .map(|index| -> Result<[u8; 3], LoadError> {
+                let field = &fields[index];
                 if field.size != 4 {
                     return Err(invalid("unsupported PCD RGB size"));
                 }
                 Ok(unpack_rgb(u32::from_le_bytes(
-                    bytes_for(field)?.try_into().unwrap(),
+                    bytes_for(index)?.try_into().unwrap(),
                 )))
             })
             .transpose()?
@@ -564,5 +580,45 @@ mod tests {
             .unwrap();
         assert_eq!(expanded, b"ABCABCABC");
         assert!(super::decompress_lzf(&mut &[128, 2][..], 2, 4, &mut Vec::new()).is_err());
+    }
+
+    #[test]
+    fn compressed_fields_keep_separate_color_intensity_and_classification() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("producer-fields.pcd");
+        let mut payload = Vec::new();
+        for values in [[1.0f32, 4.0], [2.0, 5.0], [3.0, 6.0]] {
+            for value in values {
+                payload.extend(value.to_le_bytes());
+            }
+        }
+        for value in [1200u16, 3200] {
+            payload.extend(value.to_le_bytes());
+        }
+        payload.extend([2, 6]); // classification
+        payload.extend([10, 40]); // r
+        payload.extend([20, 50]); // g
+        payload.extend([30, 60]); // b
+        for value in [0.5f32, 0.75] {
+            payload.extend(value.to_le_bytes()); // producer-specific field
+        }
+        let mut compressed = Vec::new();
+        for chunk in payload.chunks(32) {
+            compressed.push((chunk.len() - 1) as u8);
+            compressed.extend(chunk);
+        }
+        let mut bytes = b"FIELDS x y z intensity classification r g b normal_x\nSIZE 4 4 4 2 1 1 1 1 4\nTYPE F F F U U U U U F\nWIDTH 2\nHEIGHT 1\nPOINTS 2\nDATA binary_compressed\n".to_vec();
+        bytes.extend((compressed.len() as u32).to_le_bytes());
+        bytes.extend((payload.len() as u32).to_le_bytes());
+        bytes.extend(compressed);
+        std::fs::write(&path, bytes).unwrap();
+        let cloud = super::super::open(&path, 2).unwrap();
+        assert_eq!(cloud.total_points, 2);
+        assert_eq!(cloud.points[0].rgb, Some([10, 20, 30]));
+        assert_eq!(cloud.points[1].rgb, Some([40, 50, 60]));
+        assert_eq!(cloud.points[0].intensity, Some(1200));
+        assert_eq!(cloud.points[1].intensity, Some(3200));
+        assert_eq!(cloud.points[0].classification, Some(2));
+        assert_eq!(cloud.points[1].classification, Some(6));
     }
 }

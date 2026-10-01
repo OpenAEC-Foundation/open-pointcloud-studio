@@ -221,6 +221,13 @@ the native WGPU view with its color and valid sensor axes, shown from above in
 [`native-pcl-rgb-lzf-top.png`](../screenshots/native-pcl-rgb-lzf-top.png).
 The local files can be downloaded from the linked PCL data repository and
 checked with `cargo run -p pointcloud-core --example visit_bench -- FILE.pcd 2000000`.
+The LZF reader now resolves field names and byte-plane offsets once per file,
+instead of searching the header fields again for every point. On this host,
+the rebuilt development reader visited the public couch's 968,520 points in
+0.172 s, the room scan's 112,586 points in 0.014 s, and the RGB sample's
+259,847 finite points in 0.057 s. A compressed multi-field regression fixture
+checks separate RGB, 16-bit intensity and classification alongside an extra
+producer field.
 
 The [AHN dataroom](https://www.ahn.nl/dataroom) describes the point-cloud
 products and their download map. The three adjacent AHN6 tiles total
@@ -896,3 +903,6 @@ opened in the native dev GUI. Switching to Intensity displayed every point in
 neutral gray instead of black; the [screenshot](../screenshots/native-missing-intensity-visible.png)
 shows the complete surface and the active Intensity ribbon control. RGB mode
 also uses a light neutral color when the source has no RGB field.
+The rebuilt dev GUI also reopened the public 160,838-point
+[pye57 test scan](../screenshots/native-current-e57-neutral-rgb.png) in RGB mode
+with its four scanner positions visible.
