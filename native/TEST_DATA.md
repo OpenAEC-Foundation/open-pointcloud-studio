@@ -380,6 +380,13 @@ Screenshots show [Deep Forge](../screenshots/native-theme-forge-45m.png),
 [High Contrast](../screenshots/native-theme-contrast-45m.png). The point cloud
 and view cube remained visible in each theme. The High Contrast choice survived
 a process restart from the XDG config file; Deep Forge was restored afterward.
+A fresh XDG configuration now opens in the OpenAEC style book's default
+Blueprint Light palette. The native ribbon uses the reference's per-theme
+active-text, group-label, separator, hover and File-tab tokens rather than
+the former shared bright gold values. Visual checks on the public four-station
+E57 are saved as [Blueprint Light](../screenshots/native-openaec-ribbon-tokens-light.png)
+and the previously saved [Deep Forge](../screenshots/native-openaec-ribbon-tokens-forge.png);
+the existing user theme preference stayed unchanged during the fresh-profile test.
 The Classic Tools screenshot also exposed independent X/Y/Z scale inputs that
 were missing in the native ribbon. They now appear beside XYZ translation in
 [`native-scale-xyz-tools-45m.png`](../screenshots/native-scale-xyz-tools-45m.png).

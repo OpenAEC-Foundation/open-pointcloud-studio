@@ -65,26 +65,14 @@ pub fn tool_btn_style(theme: &Theme, is_active: bool, status: button::Status) ->
     let (background, text_color, border) = match (is_active, status) {
         (_, button::Status::Disabled) => (None, colors.muted, Color::TRANSPARENT),
         (true, _) => (
-            Some(Color {
-                a: 0.20,
-                ..colors.accent
-            }),
-            colors.ribbon_label,
-            Color {
-                a: 0.40,
-                ..colors.accent
-            },
+            Some(colors.ribbon_active_bg),
+            colors.ribbon_active_text,
+            colors.ribbon_active_border,
         ),
         (_, button::Status::Hovered | button::Status::Pressed) => (
-            Some(Color {
-                a: 0.15,
-                ..colors.accent
-            }),
+            Some(colors.ribbon_hover),
             colors.text,
-            Color {
-                a: 0.30,
-                ..colors.accent
-            },
+            colors.ribbon_hover_border,
         ),
         _ => (None, colors.text, Color::TRANSPARENT),
     };
@@ -135,15 +123,12 @@ pub fn render_group_items<'a>(
             .align_y(iced::Alignment::Start),
         container(
             column![
-                container(text(""))
-                    .width(Fill)
-                    .height(1)
-                    .style(|theme| container::Style::default().background(Color {
-                        a: 0.55,
-                        ..ui_theme::colors(theme).border
-                    })),
+                container(text("")).width(Fill).height(1).style(|theme| {
+                    container::Style::default()
+                        .background(ui_theme::colors(theme).ribbon_group_separator)
+                }),
                 text(title).size(9).style(|theme| text::Style {
-                    color: Some(ui_theme::colors(theme).ribbon_label),
+                    color: Some(ui_theme::colors(theme).ribbon_group_label),
                 }),
             ]
             .align_x(iced::Alignment::Center)
@@ -163,10 +148,10 @@ pub fn render_group_items<'a>(
         container(text(""))
             .width(1)
             .height(TOOL_BAR_H - 10.0)
-            .style(|theme| container::Style::default().background(Color {
-                a: 0.15,
-                ..ui_theme::colors(theme).text
-            })),
+            .style(|theme| {
+                container::Style::default()
+                    .background(ui_theme::colors(theme).ribbon_group_separator)
+            }),
     ]
     .spacing(5)
     .width(Length::Shrink)
@@ -180,12 +165,14 @@ pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button:
         background: Some(Background::Color(if active {
             colors.shell
         } else if matches!(status, button::Status::Hovered) {
-            colors.hover
+            colors.ribbon_hover
         } else {
             colors.tabs
         })),
         text_color: if active {
-            colors.ribbon_label
+            colors.ribbon_active_text
+        } else if matches!(status, button::Status::Hovered) {
+            colors.accent
         } else {
             colors.text
         },
@@ -204,11 +191,17 @@ pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button:
 
 /// OpenAEC's File entry stays at the start of the native ribbon and opens the
 /// backstage workspace. Its solid accent is the style book's File-tab exception.
-pub fn file_tab_style(theme: &Theme, _open: bool, _status: button::Status) -> button::Style {
+pub fn file_tab_style(theme: &Theme, _open: bool, status: button::Status) -> button::Style {
     let colors = ui_theme::colors(theme);
     button::Style {
-        background: Some(Background::Color(colors.accent)),
-        text_color: Color::BLACK,
+        background: Some(Background::Color(
+            if matches!(status, button::Status::Hovered) {
+                colors.file_tab_hover
+            } else {
+                colors.accent
+            },
+        )),
+        text_color: colors.file_tab_text,
         border: Border {
             radius: iced::border::Radius::default().top(4),
             ..Border::default()

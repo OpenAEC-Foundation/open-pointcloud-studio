@@ -50,7 +50,15 @@ impl UiTheme {
                 text: Color::from_rgb8(250, 250, 249),
                 muted: Color::from_rgb8(161, 161, 170),
                 accent: Color::from_rgb8(217, 119, 6),
-                ribbon_label: Color::from_rgb8(245, 158, 11),
+                ribbon_active_text: Color::from_rgb8(217, 119, 6),
+                ribbon_group_label: Color::from_rgba8(217, 119, 6, 0.8),
+                ribbon_group_separator: Color::from_rgba8(250, 250, 249, 0.15),
+                ribbon_hover: Color::from_rgba8(217, 119, 6, 0.15),
+                ribbon_hover_border: Color::from_rgba8(217, 119, 6, 0.30),
+                ribbon_active_bg: Color::from_rgba8(217, 119, 6, 0.20),
+                ribbon_active_border: Color::from_rgba8(217, 119, 6, 0.40),
+                file_tab_text: Color::from_rgb8(54, 54, 62),
+                file_tab_hover: Color::from_rgb8(234, 88, 12),
                 hover: Color::from_rgba8(161, 161, 170, 0.12),
             },
             Self::Light => UiColors {
@@ -63,7 +71,15 @@ impl UiTheme {
                 text: Color::from_rgb8(54, 54, 62),
                 muted: Color::from_rgb8(87, 83, 78),
                 accent: Color::from_rgb8(217, 119, 6),
-                ribbon_label: Color::from_rgb8(54, 54, 62),
+                ribbon_active_text: Color::from_rgb8(217, 119, 6),
+                ribbon_group_label: Color::from_rgba8(217, 119, 6, 0.8),
+                ribbon_group_separator: Color::from_rgba8(54, 54, 62, 0.12),
+                ribbon_hover: Color::from_rgba8(217, 119, 6, 0.10),
+                ribbon_hover_border: Color::from_rgba8(217, 119, 6, 0.25),
+                ribbon_active_bg: Color::from_rgba8(217, 119, 6, 0.15),
+                ribbon_active_border: Color::from_rgba8(217, 119, 6, 0.35),
+                file_tab_text: Color::WHITE,
+                file_tab_hover: Color::from_rgb8(234, 88, 12),
                 hover: Color::from_rgba8(54, 54, 62, 0.06),
             },
             Self::Night => UiColors {
@@ -76,7 +92,15 @@ impl UiTheme {
                 text: Color::from_rgb8(250, 250, 249),
                 muted: Color::from_rgb8(161, 161, 170),
                 accent: Color::from_rgb8(217, 119, 6),
-                ribbon_label: Color::from_rgb8(245, 158, 11),
+                ribbon_active_text: Color::from_rgb8(217, 119, 6),
+                ribbon_group_label: Color::from_rgba8(217, 119, 6, 0.8),
+                ribbon_group_separator: Color::from_rgba8(217, 119, 6, 0.25),
+                ribbon_hover: Color::from_rgba8(217, 119, 6, 0.15),
+                ribbon_hover_border: Color::from_rgba8(217, 119, 6, 0.30),
+                ribbon_active_bg: Color::from_rgba8(217, 119, 6, 0.20),
+                ribbon_active_border: Color::from_rgba8(217, 119, 6, 0.40),
+                file_tab_text: Color::from_rgb8(39, 39, 42),
+                file_tab_hover: Color::from_rgb8(234, 88, 12),
                 hover: Color::from_rgba8(161, 161, 170, 0.12),
             },
             Self::Blueprint => UiColors {
@@ -89,7 +113,15 @@ impl UiTheme {
                 text: Color::from_rgb8(224, 231, 255),
                 muted: Color::from_rgb8(152, 193, 217),
                 accent: Color::from_rgb8(96, 165, 250),
-                ribbon_label: Color::from_rgb8(147, 197, 253),
+                ribbon_active_text: Color::from_rgb8(147, 197, 253),
+                ribbon_group_label: Color::from_rgba8(96, 165, 250, 0.85),
+                ribbon_group_separator: Color::from_rgba8(96, 165, 250, 0.18),
+                ribbon_hover: Color::from_rgba8(96, 165, 250, 0.12),
+                ribbon_hover_border: Color::from_rgba8(96, 165, 250, 0.30),
+                ribbon_active_bg: Color::from_rgba8(96, 165, 250, 0.18),
+                ribbon_active_border: Color::from_rgba8(96, 165, 250, 0.40),
+                file_tab_text: Color::from_rgb8(15, 27, 45),
+                file_tab_hover: Color::from_rgb8(147, 197, 253),
                 hover: Color::from_rgba8(152, 193, 217, 0.12),
             },
             Self::Contrast => UiColors {
@@ -102,7 +134,15 @@ impl UiTheme {
                 text: Color::WHITE,
                 muted: Color::from_rgb8(229, 229, 229),
                 accent: Color::from_rgb8(255, 215, 0),
-                ribbon_label: Color::from_rgb8(255, 215, 0),
+                ribbon_active_text: Color::from_rgb8(255, 215, 0),
+                ribbon_group_label: Color::from_rgb8(255, 215, 0),
+                ribbon_group_separator: Color::WHITE,
+                ribbon_hover: Color::from_rgba8(255, 215, 0, 0.25),
+                ribbon_hover_border: Color::from_rgb8(255, 215, 0),
+                ribbon_active_bg: Color::from_rgba8(255, 215, 0, 0.40),
+                ribbon_active_border: Color::from_rgb8(255, 215, 0),
+                file_tab_text: Color::BLACK,
+                file_tab_hover: Color::from_rgb8(255, 255, 0),
                 hover: Color::from_rgba8(255, 215, 0, 0.25),
             },
         }
@@ -129,7 +169,7 @@ impl UiTheme {
         theme_path()
             .and_then(|path| std::fs::read_to_string(path).ok())
             .and_then(|value| Self::from_key(value.trim()))
-            .unwrap_or(Self::Forge)
+            .unwrap_or(Self::Light)
     }
 
     pub fn save(self) {
@@ -167,7 +207,15 @@ pub struct UiColors {
     pub text: Color,
     pub muted: Color,
     pub accent: Color,
-    pub ribbon_label: Color,
+    pub ribbon_active_text: Color,
+    pub ribbon_group_label: Color,
+    pub ribbon_group_separator: Color,
+    pub ribbon_hover: Color,
+    pub ribbon_hover_border: Color,
+    pub ribbon_active_bg: Color,
+    pub ribbon_active_border: Color,
+    pub file_tab_text: Color,
+    pub file_tab_hover: Color,
     pub hover: Color,
 }
 
