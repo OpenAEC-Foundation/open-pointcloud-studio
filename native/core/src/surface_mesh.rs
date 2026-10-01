@@ -1,6 +1,7 @@
 //! Bounded 3D surface reconstruction from a complete point stream.
-//! A reservoir covers the full source; a k-d tree supports local tangent-plane
-//! triangulation without assuming that the surface is a height field.
+//! A reservoir covers the full source, then spatial thinning spreads its points
+//! across the scan; a k-d tree supports local tangent-plane triangulation
+//! without assuming that the surface is a height field.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -243,6 +244,107 @@ fn surface_normal(neighbors: &[Near], vertices: &[[f64; 3]]) -> [f64; 3] {
     normal
 }
 
+fn voxel_key(point: [f64; 3], origin: [f64; 3], width: f64) -> [i64; 3] {
+    std::array::from_fn(|axis| ((point[axis] - origin[axis]) / width).floor() as i64)
+}
+
+/// Keep one point near each occupied voxel's center. A larger reservoir is
+/// needed here: thinning only the final vertex budget cannot repair regions
+/// that a density-weighted sample already missed.
+fn spatially_thin(candidates: Vec<[f64; 3]>, budget: usize) -> Vec<[f64; 3]> {
+    if candidates.len() <= budget {
+        return candidates;
+    }
+    let mut minimum = [f64::INFINITY; 3];
+    let mut maximum = [f64::NEG_INFINITY; 3];
+    for point in &candidates {
+        for axis in 0..3 {
+            minimum[axis] = minimum[axis].min(point[axis]);
+            maximum[axis] = maximum[axis].max(point[axis]);
+        }
+    }
+    let extent = (0..3)
+        .map(|axis| maximum[axis] - minimum[axis])
+        .fold(0.0, f64::max);
+    if extent <= f64::EPSILON {
+        return candidates.into_iter().take(budget).collect();
+    }
+    let mut low = extent / (candidates.len() as f64 * 2.0);
+    let mut high = extent * 2.0;
+    for _ in 0..24 {
+        let width = (low * high).sqrt();
+        let mut occupied = HashSet::with_capacity(budget + 1);
+        for point in &candidates {
+            occupied.insert(voxel_key(*point, minimum, width));
+            if occupied.len() > budget {
+                break;
+            }
+        }
+        if occupied.len() > budget {
+            low = width;
+        } else {
+            high = width;
+        }
+    }
+    let mut representatives = HashMap::<[i64; 3], (usize, f64)>::with_capacity(budget);
+    for (index, point) in candidates.iter().enumerate() {
+        let key = voxel_key(*point, minimum, high);
+        let distance_sq = (0..3)
+            .map(|axis| {
+                let center = minimum[axis] + (key[axis] as f64 + 0.5) * high;
+                (point[axis] - center).powi(2)
+            })
+            .sum();
+        match representatives.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if distance_sq < entry.get().1 {
+                    *entry.get_mut() = (index, distance_sq);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert((index, distance_sq));
+            }
+        }
+    }
+    let mut indices: Vec<_> = representatives.values().map(|(index, _)| *index).collect();
+    indices.sort_unstable();
+    if indices.len() < budget {
+        // Coarse voxel sizes can jump over the exact target count. Spend the
+        // remaining budget on points farthest from their voxel representative.
+        let mut selected = vec![false; candidates.len()];
+        for &index in &indices {
+            selected[index] = true;
+        }
+        let mut extras = Vec::new();
+        for (index, point) in candidates.iter().enumerate() {
+            if selected[index] {
+                continue;
+            }
+            let representative = representatives[&voxel_key(*point, minimum, high)].0;
+            let distance_sq = dot(
+                difference(*point, candidates[representative]),
+                difference(*point, candidates[representative]),
+            );
+            if distance_sq > 1e-20 {
+                extras.push((index, distance_sq));
+            }
+        }
+        extras.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        indices.extend(
+            extras
+                .into_iter()
+                .take(budget - indices.len())
+                .map(|(index, _)| index),
+        );
+        indices.sort_unstable();
+    }
+    indices
+        .into_iter()
+        .take(budget)
+        .map(|index| candidates[index])
+        .collect()
+}
+
 /// Reconstruct a general 3D surface and atomically write an OBJ. The point
 /// reservoir is sampled across the complete source, not from the GUI preview.
 pub fn mesh_surface_obj(
@@ -276,7 +378,13 @@ pub fn mesh_surface_obj_where(
         return Err(LoadError::InvalidData("invalid 3D mesh settings".into()));
     }
     cloud.validate_source()?;
-    let mut vertices = Vec::<[f64; 3]>::with_capacity(config.max_vertices);
+    // Keep a bounded surplus so occupied regions have candidates even when
+    // source density varies by orders of magnitude across a scan.
+    let candidate_limit = config
+        .max_vertices
+        .saturating_mul(4)
+        .min(config.max_vertices.saturating_add(150_000));
+    let mut candidates = Vec::<[f64; 3]>::with_capacity(candidate_limit);
     let mut visited = 0u64;
     let mut source_points = 0u64;
     let mut random = 0x7a81_09e6_63d1_c207u64;
@@ -290,15 +398,15 @@ pub fn mesh_surface_obj_where(
             return Err(LoadError::InvalidData("non-finite mesh vertex".into()));
         }
         source_points += 1;
-        if vertices.len() < config.max_vertices {
-            vertices.push(point.xyz);
+        if candidates.len() < candidate_limit {
+            candidates.push(point.xyz);
         } else {
             random ^= random << 13;
             random ^= random >> 7;
             random ^= random << 17;
             let slot = random % source_points;
-            if slot < config.max_vertices as u64 {
-                vertices[slot as usize] = point.xyz;
+            if slot < candidate_limit as u64 {
+                candidates[slot as usize] = point.xyz;
             }
         }
         Ok(())
@@ -310,11 +418,12 @@ pub fn mesh_surface_obj_where(
         )));
     }
     cloud.validate_source()?;
-    if vertices.len() < 3 {
+    if candidates.len() < 3 {
         return Err(LoadError::InvalidData(
             "too few points for a 3D surface".into(),
         ));
     }
+    let vertices = spatially_thin(candidates, config.max_vertices);
     let mut indices: Vec<usize> = (0..vertices.len()).collect();
     let mut nodes = Vec::with_capacity(vertices.len());
     let root = build_tree(&mut indices, 0, &vertices, &mut nodes);
@@ -457,6 +566,22 @@ fn edge_key(a: u32, b: u32) -> (u32, u32) {
 mod tests {
     use super::*;
     use crate::{open, read_obj_mesh};
+
+    #[test]
+    fn spatial_thinning_preserves_sparsely_sampled_regions() {
+        let mut candidates = Vec::new();
+        for index in 0..120 {
+            candidates.push([index as f64 / 120.0, 0.0, 0.0]);
+        }
+        for x in 0..8 {
+            for y in 0..5 {
+                candidates.push([10.0 + x as f64, y as f64, 0.0]);
+            }
+        }
+        let selected = spatially_thin(candidates, 40);
+        assert_eq!(selected.len(), 40);
+        assert!(selected.iter().filter(|point| point[0] >= 10.0).count() >= 30);
+    }
 
     #[test]
     fn reconstructs_vertical_wall_and_keeps_distant_patches_separate() {

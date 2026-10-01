@@ -212,6 +212,19 @@ native GPU surface; see
 [`native-ahn6-3d-surface-faces.png`](../screenshots/native-ahn6-3d-surface-faces.png).
 This sampled mesh has gaps, so the terrain TIN remains the preferred mode for
 AHN ground coverage.
+On 1 October, the 3D mesher used a bounded 200,000-point candidate reservoir
+and spatial thinning to choose its final 50,000 vertices. Reprocessing the
+same 45,839,678-point AHN6 tile produced 153,658 triangles in 417.36 seconds
+with 67,964 KiB peak RSS. The old mesh used 126,716 triangles in 389.94
+seconds with 50,248 KiB peak RSS. With both vertex sets projected onto the
+same 100-by-100 XY grid, occupied cells rose from 9,360 to 9,568; on a
+200-by-200 grid they rose from 26,222 to 30,237. The GPU-rendered result with
+the point layer hidden is in
+[`native-ahn6-surface-spatial-faces.png`](../screenshots/native-ahn6-surface-spatial-faces.png).
+The E57 test scan yielded 50,000 vertices and 172,820 triangles in 5.90
+seconds with 60,968 KiB peak RSS. These coverage counts measure selected
+vertices, not a watertight surface guarantee; terrain TIN remains preferable
+for continuous ground coverage.
 The AHN6 OBJ was reopened in the native GUI and its 191,104 triangles were
 rendered with the source point layer hidden. The visual result is saved as
 [`native-terrain-mesh-faces.png`](../screenshots/native-terrain-mesh-faces.png).
