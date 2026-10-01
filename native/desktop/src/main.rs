@@ -4,12 +4,13 @@ use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod bag_map;
 mod camera_views;
+mod cloud_centroid;
 mod cloud_transform;
 mod gpu_viewport;
 mod native_api;
@@ -890,6 +891,9 @@ enum Message {
     ScaleAxis(usize, String),
     ApplyTranslation,
     ApplyScale,
+    ScaleReady(u64, Result<[f64; 3], String>),
+    ScalePoll(u64),
+    CancelScale,
     ResetTransform,
     BuildIndex,
     IndexReady(Arc<PointCloud>, Result<Arc<OctreeIndex>, String>),
@@ -982,6 +986,8 @@ struct Studio {
     translate_y: String,
     translate_z: String,
     scale_inputs: [String; 3],
+    scale_job: Option<ScaleJob>,
+    next_scale_job_id: u64,
     bag_panel: bool,
     bag_fields: [String; 4],
     bag_lod: BagLod,
@@ -1042,6 +1048,7 @@ struct Studio {
 struct CloudEntry {
     cloud: Arc<PointCloud>,
     transform: CloudTransform,
+    centroid_cache: Option<CentroidCache>,
     mesh: Option<Arc<MeshGeometry>>,
     mesh_visible: bool,
     bag_source: bool,
@@ -1052,6 +1059,30 @@ struct CloudEntry {
     auto_index_queued: bool,
     index_building: bool,
     detail_points: Option<Arc<[IndexedPoint]>>,
+}
+
+struct CentroidCache {
+    source_xyz: [f64; 3],
+    deleted: Option<Arc<DeletionMask>>,
+}
+
+struct ScaleJob {
+    id: u64,
+    cloud_index: usize,
+    source: Arc<PointCloud>,
+    deleted: Option<Arc<DeletionMask>>,
+    transform: CloudTransform,
+    factors: [f64; 3],
+    progress: Arc<AtomicU64>,
+    cancel: Arc<AtomicBool>,
+}
+
+fn same_deletion_mask(a: Option<&Arc<DeletionMask>>, b: Option<&Arc<DeletionMask>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        _ => false,
+    }
 }
 
 struct EditBatch {
@@ -1125,6 +1156,8 @@ impl Default for Studio {
             translate_y: "0".into(),
             translate_z: "0".into(),
             scale_inputs: std::array::from_fn(|_| "1".into()),
+            scale_job: None,
+            next_scale_job_id: 0,
             bag_panel: false,
             bag_fields: std::array::from_fn(|_| String::new()),
             bag_lod: BagLod::Lod22,
@@ -1215,6 +1248,8 @@ impl Studio {
                             "visible": entry.visible,
                             "indexed": entry.index.is_some(),
                             "view_sample": entry.view_len(),
+                            "bounds": {"min": entry.bounds().min, "max": entry.bounds().max},
+                            "transform": {"scale": entry.transform.scale, "offset": entry.transform.offset},
                         })
                     })
                     .collect();
@@ -1239,6 +1274,11 @@ impl Studio {
                         "point_size": self.point_size,
                         "budget": self.budget,
                         "mesh": self.mesh_job.as_ref().map(MeshJob::progress_value),
+                        "scale": self.scale_job.as_ref().map(|job| json!({
+                            "source_index": job.cloud_index,
+                            "completed": job.progress.load(Ordering::Relaxed),
+                            "total": job.source.total_points,
+                        })),
                         "api_port": self.api_handle.as_ref().map(|handle| handle.port),
                     }}),
                     Task::none(),
@@ -1533,6 +1573,63 @@ impl Studio {
                     (json!({"ok": true, "status": self.status}), task)
                 }
             }
+            ApiCommand::Translate { offset } => {
+                if self.active.is_none() || !offset.iter().all(|value| value.is_finite()) {
+                    (
+                        json!({"ok": false, "error": "translate needs an active cloud and finite XYZ offsets"}),
+                        Task::none(),
+                    )
+                } else {
+                    [self.translate_x, self.translate_y, self.translate_z] =
+                        offset.map(|value| value.to_string());
+                    let task = self.update(Message::ApplyTranslation);
+                    (
+                        json!({"ok": self.status.starts_with("Moved "), "status": self.status}),
+                        task,
+                    )
+                }
+            }
+            ApiCommand::Scale { factors } => {
+                if self.active.is_none()
+                    || self.scale_job.is_some()
+                    || !factors.iter().all(|value| value.is_finite())
+                {
+                    (
+                        json!({"ok": false, "error": "scale needs an active cloud, finite XYZ factors and no running scale"}),
+                        Task::none(),
+                    )
+                } else {
+                    self.scale_inputs = factors.map(|value| value.to_string());
+                    let task = self.update(Message::ApplyScale);
+                    let accepted = self.scale_job.is_some() || self.status.starts_with("Scaled ");
+                    (
+                        json!({"ok": accepted, "accepted": accepted, "running": self.scale_job.is_some(), "status": self.status}),
+                        task,
+                    )
+                }
+            }
+            ApiCommand::CancelScale => {
+                if self.scale_job.is_none() {
+                    (
+                        json!({"ok": false, "error": "no scale task is running"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::CancelScale);
+                    (json!({"ok": true, "status": self.status}), task)
+                }
+            }
+            ApiCommand::ResetTransform => {
+                if self.active.is_none() {
+                    (
+                        json!({"ok": false, "error": "no active cloud"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::ResetTransform);
+                    (json!({"ok": true, "status": self.status}), task)
+                }
+            }
             ApiCommand::Mesh { mode, path } => {
                 let mode = match mode.to_ascii_lowercase().as_str() {
                     "terrain" => Some(MeshMode::Terrain),
@@ -1719,6 +1816,50 @@ impl Studio {
         )
     }
 
+    fn scale_poll_task(id: u64) -> Task<Message> {
+        Task::perform(
+            async move {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                id
+            },
+            Message::ScalePoll,
+        )
+    }
+
+    fn apply_scale_from_source_centroid(
+        &mut self,
+        cloud_index: usize,
+        factors: [f64; 3],
+        source_centroid: [f64; 3],
+    ) -> Task<Message> {
+        let old_scene = combined_bounds(&self.clouds);
+        let Some(entry) = self.clouds.get_mut(cloud_index) else {
+            self.status = "Scale cancelled: cloud is no longer open".into();
+            return Task::none();
+        };
+        let pivot = entry.transform.xyz(source_centroid);
+        let Some(next) = entry
+            .transform
+            .scaled_about(factors, pivot, entry.cloud.bounds)
+        else {
+            self.status = "Scale would produce non-finite coordinates".into();
+            return Task::none();
+        };
+        entry.transform = next;
+        entry.selection = None;
+        if !self.section_enabled {
+            self.section_reference_bounds = combined_bounds(&self.clouds);
+            self.sync_section_coordinate_inputs();
+        }
+        self.preserve_camera_for_scene_change(old_scene);
+        self.revision += 1;
+        self.status = format!(
+            "Scaled the open cloud around the exact point centroid by X {}, Y {}, Z {}; export to save",
+            factors[0], factors[1], factors[2]
+        );
+        self.schedule_detail()
+    }
+
     fn start_mesh_job(
         &mut self,
         mode: MeshMode,
@@ -1809,6 +1950,7 @@ impl Studio {
                     self.clouds.push(CloudEntry {
                         cloud: Arc::clone(&header_cloud),
                         transform: CloudTransform::default(),
+                        centroid_cache: None,
                         mesh: None,
                         mesh_visible: true,
                         bag_source: false,
@@ -1978,6 +2120,7 @@ impl Studio {
                         bag_source: is_bag3d_obj(&cloud.path),
                         cloud,
                         transform: CloudTransform::default(),
+                        centroid_cache: None,
                         mesh: None,
                         mesh_visible: true,
                         visible: true,
@@ -3033,36 +3176,152 @@ impl Studio {
             }
             Message::ApplyScale => {
                 let parsed = std::array::from_fn(|axis| self.scale_inputs[axis].parse::<f64>());
-                if let [Ok(x), Ok(y), Ok(z)] = parsed {
-                    let scale = [x, y, z];
-                    if scale.iter().all(|value| value.is_finite()) {
-                        let old_scene = combined_bounds(&self.clouds);
-                        if let Some(entry) =
-                            self.active.and_then(|index| self.clouds.get_mut(index))
-                        {
-                            let pivot = entry.bounds().center();
-                            if let Some(next) =
-                                entry
-                                    .transform
-                                    .scaled_about(scale, pivot, entry.cloud.bounds)
-                            {
-                                entry.transform = next;
-                                entry.selection = None;
-                                if !self.section_enabled {
-                                    self.section_reference_bounds = combined_bounds(&self.clouds);
-                                    self.sync_section_coordinate_inputs();
-                                }
-                                self.preserve_camera_for_scene_change(old_scene);
-                                self.revision += 1;
-                                self.status = format!("Scaled the open cloud around its bounds centre by X {x}, Y {y}, Z {z}; export to save");
-                                return self.schedule_detail();
-                            }
-                            self.status = "Scale would produce non-finite coordinates".into();
+                let [Ok(x), Ok(y), Ok(z)] = parsed else {
+                    self.status = "Enter finite X, Y and Z scale factors".into();
+                    return Task::none();
+                };
+                let factors = [x, y, z];
+                if !factors.iter().all(|value| value.is_finite()) {
+                    self.status = "Enter finite X, Y and Z scale factors".into();
+                    return Task::none();
+                }
+                if self.scale_job.is_some() {
+                    self.status = "A point-centroid calculation is already running".into();
+                    return Task::none();
+                }
+                let Some(cloud_index) = self.active else {
+                    self.status = "Open a point cloud first".into();
+                    return Task::none();
+                };
+                let entry = &self.clouds[cloud_index];
+                if entry.remaining_count() == 0 {
+                    self.status = "Scale needs at least one visible point".into();
+                    return Task::none();
+                }
+                if let Err(error) = entry.cloud.validate_source() {
+                    self.status = format!("Scale failed: {error}");
+                    return Task::none();
+                }
+                let cached = entry.centroid_cache.as_ref().and_then(|cache| {
+                    same_deletion_mask(cache.deleted.as_ref(), entry.deleted.as_ref())
+                        .then_some(cache.source_xyz)
+                });
+                let resident = cached
+                    .map(Ok)
+                    .or_else(|| cloud_centroid::resident(&entry.cloud, entry.deleted.as_deref()));
+                if let Some(result) = resident {
+                    let source_centroid = match result {
+                        Ok(value) => value,
+                        Err(error) => {
+                            self.status = format!("Scale failed: {error}");
                             return Task::none();
                         }
-                    }
+                    };
+                    self.clouds[cloud_index].centroid_cache = Some(CentroidCache {
+                        source_xyz: source_centroid,
+                        deleted: self.clouds[cloud_index].deleted.clone(),
+                    });
+                    return self.apply_scale_from_source_centroid(
+                        cloud_index,
+                        factors,
+                        source_centroid,
+                    );
                 }
-                self.status = "Enter finite X, Y and Z scale factors".into();
+
+                let source = Arc::clone(&entry.cloud);
+                let index = entry.index.clone();
+                let deleted = entry.deleted.clone();
+                let transform = entry.transform;
+                let progress = Arc::new(AtomicU64::new(0));
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.next_scale_job_id = self.next_scale_job_id.wrapping_add(1);
+                let id = self.next_scale_job_id;
+                self.scale_job = Some(ScaleJob {
+                    id,
+                    cloud_index,
+                    source: Arc::clone(&source),
+                    deleted: deleted.clone(),
+                    transform,
+                    factors,
+                    progress: Arc::clone(&progress),
+                    cancel: Arc::clone(&cancel),
+                });
+                self.status = format!(
+                    "Calculating exact centroid of {} points; progress and Cancel are available below",
+                    entry.remaining_count()
+                );
+                let worker = Task::perform(
+                    async move {
+                        let result = tokio::task::spawn_blocking(move || {
+                            cloud_centroid::streamed(
+                                &source,
+                                index.as_deref(),
+                                deleted.as_deref(),
+                                &cancel,
+                                &progress,
+                            )
+                        })
+                        .await
+                        .map_err(|error| error.to_string())
+                        .and_then(|result| result);
+                        (id, result)
+                    },
+                    |(id, result)| Message::ScaleReady(id, result),
+                );
+                return Task::batch([worker, Self::scale_poll_task(id)]);
+            }
+            Message::ScalePoll(id) => {
+                if let Some(job) = self.scale_job.as_ref().filter(|job| job.id == id) {
+                    let done = job.progress.load(Ordering::Relaxed);
+                    self.status = format!(
+                        "Calculating exact point centroid: {done} / {} source points",
+                        job.source.total_points
+                    );
+                    return Self::scale_poll_task(id);
+                }
+            }
+            Message::CancelScale => {
+                if let Some(job) = self.scale_job.take() {
+                    job.cancel.store(true, Ordering::Relaxed);
+                    self.status = "Scale cancelled; the original coordinates remain".into();
+                }
+            }
+            Message::ScaleReady(id, result) => {
+                let Some(job) = self.scale_job.take() else {
+                    return Task::none();
+                };
+                if job.id != id {
+                    self.scale_job = Some(job);
+                    return Task::none();
+                }
+                let Some(entry) = self.clouds.get(job.cloud_index) else {
+                    self.status = "Scale cancelled: cloud is no longer open".into();
+                    return Task::none();
+                };
+                if !entry.cloud.same_source_revision(&job.source)
+                    || entry.transform != job.transform
+                    || !same_deletion_mask(entry.deleted.as_ref(), job.deleted.as_ref())
+                {
+                    self.status =
+                        "Scale cancelled: the point cloud changed during processing".into();
+                    return Task::none();
+                }
+                let source_centroid = match result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.status = format!("Scale failed: {error}");
+                        return Task::none();
+                    }
+                };
+                self.clouds[job.cloud_index].centroid_cache = Some(CentroidCache {
+                    source_xyz: source_centroid,
+                    deleted: job.deleted,
+                });
+                return self.apply_scale_from_source_centroid(
+                    job.cloud_index,
+                    job.factors,
+                    source_centroid,
+                );
             }
             Message::ResetTransform => {
                 let old_scene = combined_bounds(&self.clouds);
@@ -4788,7 +5047,20 @@ impl Studio {
                             .align_y(iced::Alignment::Center),
                         ]
                         .spacing(1),
-                        ribbon_button_when("Apply", Message::ApplyScale, self.active.is_some()),
+                        ribbon_button_when(
+                            if self.scale_job.is_some() {
+                                "Working…"
+                            } else {
+                                "Apply"
+                            },
+                            Message::ApplyScale,
+                            self.active.is_some() && self.scale_job.is_none()
+                        ),
+                        ribbon_button_when(
+                            "Cancel",
+                            Message::CancelScale,
+                            self.scale_job.is_some()
+                        ),
                     ]
                     .spacing(6)
                     .align_y(iced::Alignment::Center)
@@ -5242,6 +5514,43 @@ impl Studio {
                 )
                 .push(
                     container(button("Cancel mesh").on_press(Message::CancelMesh)).padding([5, 8]),
+                );
+        }
+        if let Some(job) = &self.scale_job {
+            let completed = job.progress.load(Ordering::Relaxed);
+            let total = job.source.total_points;
+            properties = properties
+                .push(opencad_properties::section_header("Scale centroid"))
+                .push(
+                    container(text(format!("{completed} / {total} source points")).size(11))
+                        .padding([6, 8]),
+                )
+                .push(
+                    container(
+                        iced::widget::progress_bar(
+                            0.0..=1.0,
+                            if total == 0 {
+                                0.0
+                            } else {
+                                completed as f32 / total as f32
+                            },
+                        )
+                        .height(8)
+                        .style(|theme| {
+                            let colors = ui_theme::colors(theme);
+                            iced::widget::progress_bar::Style {
+                                background: colors.panel_alt.into(),
+                                bar: colors.accent.into(),
+                                border: iced::Border::default(),
+                            }
+                        }),
+                    )
+                    .padding([2, 8])
+                    .width(Fill),
+                )
+                .push(
+                    container(button("Cancel scale").on_press(Message::CancelScale))
+                        .padding([5, 8]),
                 );
         }
         if let Some(entry) = active_cloud {
@@ -7305,15 +7614,17 @@ mod editing_tests {
         );
 
         let entry = &studio.clouds[0];
-        assert_eq!(entry.bounds().min, [95.0, 200.0, 0.0]);
-        assert_eq!(entry.bounds().max, [115.0, 210.0, 10.0]);
-        assert_eq!(
-            entry.view_records().next().unwrap().point.xyz,
-            [95.0, 200.0, 0.0]
-        );
+        let expected_x_min = 100.0 - 20.0 / 3.0;
+        let expected_x_max = 120.0 - 20.0 / 3.0;
+        assert!((entry.bounds().min[0] - expected_x_min).abs() < 1e-10);
+        assert!((entry.bounds().max[0] - expected_x_max).abs() < 1e-10);
+        assert_eq!(entry.bounds().min[1..], [200.0, 0.0]);
+        assert_eq!(entry.bounds().max[1..], [210.0, 10.0]);
+        assert!((entry.view_records().next().unwrap().point.xyz[0] - expected_x_min).abs() < 1e-10);
+        assert!((entry.centroid_cache.as_ref().unwrap().source_xyz[0] - 20.0 / 3.0).abs() < 1e-10);
         let select_bounds = Bounds {
-            min: [114.0, 199.0, -1.0],
-            max: [116.0, 211.0, 11.0],
+            min: [112.0, 199.0, -1.0],
+            max: [114.0, 211.0, 11.0],
         };
         let filter = ClassFilter {
             ground: true,
@@ -7351,8 +7662,10 @@ mod editing_tests {
             transform: entry.transform,
         }])
         .unwrap();
-        assert_eq!(selected_bounds.0.min, [115.0, 200.0, 0.0]);
-        assert_eq!(selected_bounds.0.max, [115.0, 210.0, 10.0]);
+        assert!((selected_bounds.0.min[0] - expected_x_max).abs() < 1e-10);
+        assert!((selected_bounds.0.max[0] - expected_x_max).abs() < 1e-10);
+        assert_eq!(selected_bounds.0.min[1..], [200.0, 0.0]);
+        assert_eq!(selected_bounds.0.max[1..], [210.0, 10.0]);
 
         let full = directory.path().join("moved.ply");
         export_edited_where(

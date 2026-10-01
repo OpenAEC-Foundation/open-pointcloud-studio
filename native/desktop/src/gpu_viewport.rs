@@ -796,6 +796,7 @@ mod tests {
         studio.clouds.push(CloudEntry {
             cloud,
             transform: CloudTransform::default(),
+            centroid_cache: None,
             mesh: None,
             mesh_visible: false,
             bag_source: false,
