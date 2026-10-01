@@ -108,7 +108,7 @@ impl UiTheme {
         }
     }
 
-    fn key(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Forge => "forge",
             Self::Light => "light",
@@ -118,7 +118,10 @@ impl UiTheme {
         }
     }
 
-    fn from_key(value: &str) -> Option<Self> {
+    pub fn from_key(value: &str) -> Option<Self> {
+        if value == "night" {
+            return Some(Self::Night);
+        }
         Self::ALL.into_iter().find(|theme| theme.key() == value)
     }
 

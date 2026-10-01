@@ -1659,6 +1659,7 @@ impl Studio {
                         "selection_pending": self.selection_pending,
                         "thin_pending": self.thin_pending,
                         "color_mode": self.color_mode.to_string(),
+                        "theme": self.ui_theme.key(),
                         "hidden_classes": (0..=u8::MAX)
                             .filter(|code| !self.class_visibility.allows(Some(*code)))
                             .collect::<Vec<_>>(),
@@ -1781,6 +1782,14 @@ impl Studio {
                         json!({"ok": false, "error": "unknown camera preset"}),
                         Task::none(),
                     )
+                }
+            }
+            ApiCommand::SetTheme { theme } => {
+                if let Some(theme) = UiTheme::from_key(&theme.to_ascii_lowercase()) {
+                    let task = self.update(Message::Theme(theme));
+                    (json!({"ok": true, "theme": theme.key()}), task)
+                } else {
+                    (json!({"ok": false, "error": "unknown theme"}), Task::none())
                 }
             }
             ApiCommand::SetColor { mode } => {

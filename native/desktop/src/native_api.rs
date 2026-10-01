@@ -38,6 +38,9 @@ pub enum ApiCommand {
     Camera {
         preset: String,
     },
+    SetTheme {
+        theme: String,
+    },
     SetColor {
         mode: String,
     },

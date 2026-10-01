@@ -6,6 +6,15 @@ The design follows [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio
 
 The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-book) was cloned beside this repository (commit `dfdcd41`). The native ribbon uses the old application's compact button grouping, OpenCADStudio's Rust three-row ribbon primitives and quick-access pattern, and OpenAEC's Deep Forge, Night Build, Scaffold Gray, Construction Amber and Warm Gold tokens. Its top strip now keeps Import, Export, Undo and Redo before the tabs, with muted disabled actions and tooltips. Its tab strip, group captions and active/hover states follow the style-book ribbon tokens; wide tool groups scroll horizontally with visible left/right controls instead of being clipped. Unavailable Cancel mesh and Export mesh actions do not consume ribbon space; they appear when a mesh job or surface makes them relevant. The Home ribbon has native Deep Forge, Blueprint Light, Night Build, Blueprint Blue and High Contrast choices. The selection persists in `open-pointcloud-studio-native/theme` under the XDG configuration directory (or `~/.config`); the CAD viewport stays dark across themes. The old web ribbon's CSS and TypeScript components are not used in the native build. Inter and Space Grotesk are bundled as OFL-licensed native font assets. Visual checks are saved in [`../screenshots/`](../screenshots/).
 
+On X11, the Rust desktop sets the system title bar's light/dark theme hint to
+match the chosen native palette while retaining normal window-manager drag,
+resize and controls. The local command API's `set_theme` command changes the
+same palette and persists it, making both theme and window chrome testable in
+the running development build.
+The verified [light theme](../screenshots/native-blueprint-light-native-titlebar-114m.png)
+and [dark theme with exact selection](../screenshots/native-theme-api-forge-114m-exact-selection.png)
+screenshots show the 114,174,907-point merged AHN6 cloud in that build.
+
 At the default 1440-pixel window width, the View tab packs all six axial
 camera directions, isometric view, scanner and
 section actions into OpenCADStudio's three-row small-tool columns and puts the
