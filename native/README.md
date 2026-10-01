@@ -10,6 +10,13 @@ OpenCADStudio's SVG icons under `assets/icons/` were copied into [`assets/openca
 
 The [opencadcodec](https://github.com/HakanSeven12/opencadcodec) repository was inspected at commit `5ef9376` (MPL-2.0). Its `PointCloudData`, `PointCloudExData`, definitions, clips and color maps model *DWG/DXF point-cloud references* and scan placement. Its `source_filename`/`source_files` fields link to scan data; this is not a LAS/LAZ/E57 point decoder or point-processing kernel. OpenCADStudio itself still reports `POINTCLOUDATTACH` as unimplemented and renders existing point-cloud CAD entities as frames/wires. Its `opencadkernel` dependency handles CAD curves and B-rep geometry, not the point stream. Our existing streaming decoders and disk octree therefore remain the scan engine. A future CAD-reference workflow should use `opencadcodec` to resolve and display attached scans and apply its transforms/crops, while keeping scan points on disk.
 
+LAZ writing uses the `las` crate's parallel compressor with bounded 400,000-point
+batches (eight default compression chunks). LAS/LAZ conversion also reads
+source records in batches, preserving their original attributes and
+coordinate transforms. Exact same-format LAS/LAZ export copies the source
+bytes without recompression. Filtered or transformed exports keep the
+original LAS coordinate grid when the source is LAS/LAZ.
+
 ## Build
 
 ```bash

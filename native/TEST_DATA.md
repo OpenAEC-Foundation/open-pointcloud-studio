@@ -243,3 +243,11 @@ time, return numbers, 16-bit RGB and projection metadata. An out-of-range
 coordinate failed without publishing a partial LAS file. Filtered or
 transformed output uses the common point model, which does not yet retain
 LAS-only GPS times, return metadata or full 16-bit RGB values.
+
+Parallel LAZ compression was exercised with 1,200,000 deterministic XYZ points:
+the generated LAZ header reported exactly 1,200,000 points and the native
+octree index reopened all of them. On this host an eight-worker run took
+13.83 seconds (115% total CPU, 102 MiB peak RSS), versus 15.04 seconds
+(99% CPU, 87 MiB RSS) with `RAYON_NUM_THREADS=1`. Input text parsing dominates
+this small benchmark, so these figures do not predict throughput for larger
+LAS/LAZ conversions. The batch size remains bounded at 400,000 points.

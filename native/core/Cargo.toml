@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-las = { version = "0.9.11", features = ["laz"] }
+las = { version = "0.9.11", features = ["laz-parallel"] }
 e57 = "0.11.13"
 tempfile = "3"
 memmap2 = "0.9"

@@ -5,6 +5,11 @@ use std::path::Path;
 
 use super::{visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
 
+// The LAZ compressor parallelizes only when a write contains multiple chunks.
+// Eight default 50,000-point chunks keep memory bounded and can use eight cores.
+const PARALLEL_LAZ_BATCH_POINTS: usize = 400_000;
+const LAS_BATCH_POINTS: usize = 16_384;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
     Xyz,
@@ -147,12 +152,25 @@ fn reencode_las_full(
     builder.vlrs.retain(|vlr| {
         !(vlr.record_id == 22204 && vlr.user_id.eq_ignore_ascii_case("laszip encoded"))
     });
-    let mut writer = las::Writer::new(temporary.reopen()?, builder.into_header()?)?;
+    let options = las::WriterOptions::default().with_laz_parallelism(las::LazParallelism::Yes);
+    let mut writer =
+        las::Writer::with_options(temporary.reopen()?, builder.into_header()?, options)?;
     let read_result = (|| {
         let mut count = 0u64;
-        for point in reader.points() {
-            writer.write_point(point?)?;
-            count += 1;
+        let batch_limit = if format == ExportFormat::Laz {
+            PARALLEL_LAZ_BATCH_POINTS
+        } else {
+            LAS_BATCH_POINTS
+        };
+        let mut batch = Vec::with_capacity(batch_limit);
+        loop {
+            batch.clear();
+            let read = reader.read_points_into(batch_limit as u64, &mut batch)?;
+            if read == 0 {
+                break;
+            }
+            writer.write_points(&batch)?;
+            count += read;
         }
         Ok::<u64, LoadError>(count)
     })();
@@ -465,22 +483,32 @@ fn export_las_map_count(
             .cloned()
             .collect();
     }
-    let transforms: [Transform; 3] = std::array::from_fn(|axis| {
-        let center = cloud.bounds.center()[axis];
-        let half_extent = (cloud.bounds.max[axis] - center)
-            .abs()
-            .max((cloud.bounds.min[axis] - center).abs());
-        Transform {
-            scale: 0.001_f64.max(half_extent / (f64::from(i32::MAX) * 0.9)),
-            offset: center,
-        }
-    });
+    let transforms: [Transform; 3] = if let Some(header) = &source_header {
+        let source = header.transforms();
+        [source.x, source.y, source.z]
+    } else {
+        std::array::from_fn(|axis| {
+            let min = cloud.bounds.min[axis];
+            let extent = cloud.bounds.max[axis] - min;
+            Transform {
+                scale: 0.001_f64.max(extent / (f64::from(i32::MAX) * 0.9)),
+                offset: min,
+            }
+        })
+    };
     builder.transforms = Vector {
         x: transforms[0],
         y: transforms[1],
         z: transforms[2],
     };
-    let mut writer = Writer::new(temporary.reopen()?, builder.into_header()?)?;
+    let options = las::WriterOptions::default().with_laz_parallelism(las::LazParallelism::Yes);
+    let mut writer = Writer::with_options(temporary.reopen()?, builder.into_header()?, options)?;
+    let batch_limit = if format == ExportFormat::Laz {
+        PARALLEL_LAZ_BATCH_POINTS
+    } else {
+        LAS_BATCH_POINTS
+    };
+    let mut batch = Vec::with_capacity(batch_limit);
     let mut source_count = 0u64;
     let mut written_count = 0u64;
     let stream_result = visit_points(&cloud.path, &mut |point| {
@@ -507,7 +535,7 @@ fn export_las_map_count(
                 u16::from(rgb[2]) * 257,
             )
         });
-        writer.write_point(LasPoint {
+        batch.push(LasPoint {
             x: point.xyz[0],
             y: point.xyz[1],
             z: point.xyz[2],
@@ -523,8 +551,18 @@ fn export_las_map_count(
                 None
             },
             ..LasPoint::default()
-        })?;
+        });
+        if batch.len() == batch_limit {
+            writer.write_points(&batch)?;
+            batch.clear();
+        }
         written_count += 1;
+        Ok(())
+    });
+    let stream_result = stream_result.and_then(|()| {
+        if !batch.is_empty() {
+            writer.write_points(&batch)?;
+        }
         Ok(())
     });
     let close_result = writer.close();
@@ -830,7 +868,7 @@ mod tests {
                 ([207002.005, 474002.006, 3.456], [70, 80, 90], 9012, 5),
             ]) {
                 for axis in 0..3 {
-                    assert!((actual.xyz[axis] - expected.0[axis]).abs() < 0.000_51);
+                    assert!((actual.xyz[axis] - expected.0[axis]).abs() < 0.000_01);
                 }
                 assert_eq!(actual.rgb, Some(expected.1));
                 assert_eq!(actual.intensity, Some(expected.2));

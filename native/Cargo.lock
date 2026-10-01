@@ -2237,6 +2237,7 @@ checksum = "d4913af39d4e471d749fbcec0d726c5d4fc6f97cac851a62ff7a84300a7a7579"
 dependencies = [
  "byteorder",
  "num-traits",
+ "rayon",
 ]
 
 [[package]]
