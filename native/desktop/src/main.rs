@@ -1119,6 +1119,7 @@ enum Message {
     PersistSettings(u64),
     Open,
     FilesChosen(Option<Vec<PathBuf>>),
+    OpenProgress(String, u64, Arc<AtomicBool>),
     Loaded(Result<Arc<PointCloud>, String>),
     MeshLoaded(Arc<PointCloud>, Result<Option<Arc<MeshGeometry>>, String>),
     Refined(Arc<PointCloud>, Result<Arc<PointCloud>, String>),
@@ -3115,16 +3116,46 @@ impl Studio {
             }
         }
         self.status = format!("Loading {}…", path.display());
-        Task::perform(
+        let label = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("point cloud")
+            .to_owned();
+        let count = Arc::new(AtomicU64::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+        let worker_count = Arc::clone(&count);
+        let worker_done = Arc::clone(&done);
+        let worker = Task::perform(
             async move {
-                tokio::task::spawn_blocking(move || pointcloud_core::open(path, LOAD_SAMPLE_LIMIT))
-                    .await
-                    .map_err(|error| error.to_string())?
-                    .map(Arc::new)
-                    .map_err(|error| error.to_string())
+                let result = tokio::task::spawn_blocking(move || {
+                    pointcloud_core::open_with_progress(path, LOAD_SAMPLE_LIMIT, |processed| {
+                        worker_count.store(processed, Ordering::Relaxed);
+                        Ok(())
+                    })
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result.map(Arc::new).map_err(|error| error.to_string()));
+                worker_done.store(true, Ordering::Relaxed);
+                result
             },
             Message::Loaded,
-        )
+        );
+        let progress =
+            iced::futures::stream::unfold(Some((label, count, done)), |state| async move {
+                let (label, count, done) = state?;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if done.load(Ordering::Relaxed) {
+                    return None;
+                }
+                let message = Message::OpenProgress(
+                    label.clone(),
+                    count.load(Ordering::Relaxed),
+                    Arc::clone(&done),
+                );
+                Some((message, Some((label, count, done))))
+            });
+        Task::batch([worker, Task::run(progress, |message| message)])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -3362,6 +3393,12 @@ impl Studio {
                 return Task::batch(paths.into_iter().map(|path| self.load(path)));
             }
             Message::FilesChosen(None) => {}
+            Message::OpenProgress(label, count, done) => {
+                if !done.load(Ordering::Relaxed) && count > 0 {
+                    self.status =
+                        format!("Loading {label}: {} points decoded…", format_count(count));
+                }
+            }
             Message::Loaded(result) => match result {
                 Ok(cloud) => {
                     self.cancel_selection_for_scene_change();
@@ -7023,6 +7060,10 @@ impl Studio {
     fn point_viewport(&self) -> PointViewport<'_> {
         PointViewport {
             clouds: &self.clouds,
+            loading_status: self
+                .status
+                .starts_with("Loading ")
+                .then_some(self.status.as_str()),
             color_mode: self.color_mode,
             point_size: self.point_size,
             eye_dome: self.eye_dome,
@@ -8610,6 +8651,7 @@ fn selected_source_bounds(sources: &[SelectedSource]) -> Result<(Bounds, u64), S
 #[derive(Clone, Copy)]
 struct PointViewport<'a> {
     clouds: &'a [CloudEntry],
+    loading_status: Option<&'a str>,
     color_mode: ColorMode,
     point_size: f32,
     eye_dome: bool,
@@ -9144,11 +9186,30 @@ impl canvas::Program<Message> for PointViewport<'_> {
         let mut frame = Frame::new(renderer, bounds.size());
         let Some(overall_bounds) = combined_bounds(self.clouds) else {
             frame.fill_text(canvas::Text {
-                content: "Open a point cloud to begin".into(),
-                position: UiPoint::new(bounds.width * 0.5 - 120.0, bounds.height * 0.5),
+                content: if self.loading_status.is_some() {
+                    "Importing point cloud…"
+                } else {
+                    "Open a point cloud to begin"
+                }
+                .into(),
+                position: UiPoint::new(bounds.width * 0.5, bounds.height * 0.5 - 14.0),
+                horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment: iced::alignment::Vertical::Center,
+                size: iced::Pixels(16.0),
                 color: Color::WHITE,
                 ..canvas::Text::default()
             });
+            if let Some(status) = self.loading_status {
+                frame.fill_text(canvas::Text {
+                    content: status.into(),
+                    position: UiPoint::new(bounds.width * 0.5, bounds.height * 0.5 + 18.0),
+                    horizontal_alignment: iced::alignment::Horizontal::Center,
+                    vertical_alignment: iced::alignment::Vertical::Center,
+                    size: iced::Pixels(12.0),
+                    color: Color::from_rgb8(180, 183, 191),
+                    ..canvas::Text::default()
+                });
+            }
             view_cube::draw(
                 &mut frame,
                 bounds,

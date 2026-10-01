@@ -206,11 +206,26 @@ for two distant scan patches still confirms that their gap is not bridged.
 | [Stanford 3D Scanning Repository](https://graphics.stanford.edu/data/3Dscanrep/) | Dragon scans: 2,748,318 points; Lucy raw scans: 58,241,932 points | PLY range data for Dragon; Lucy raw scans use SD | Object scan and mesh fidelity; check the repository's non-commercial terms |
 | [OpenTopography Mariposa Grove mobile lidar](https://portal.opentopography.org/dataspace/dataset?opentopoID=OTDS.112025.32611.1) | One listed LAZ scan: 786.31 MB and 153,181,399 points | LAZ | Follow-up stress test at higher density |
 | [pye57 test scans](https://github.com/davidcaron/pye57/tree/master/tests/test_data) | `test.e57`: 160,838 valid points; `testSpherical.e57`: 155,201 valid points | E57 | Cartesian and spherical scan decoding, pose handling |
+| Public 46.6-million-point E57 sample with nine scan stations | 1,146,370,048 bytes; 46,589,344 valid points | E57 | Nine posed scans; gigabyte-scale import, automatic indexing and native viewport test |
 | [PCL couch](https://github.com/PointCloudLibrary/data/blob/master/tutorials/kinfu_large_scale/Tutorial_Cloud_Couch_bin_compressed.pcd) | 7,529,032 bytes; 968,520 points | LZF-compressed PCD | Official producer sample with an all-zero `VIEWPOINT` quaternion |
 | [PCL region-growing RGB](https://github.com/PointCloudLibrary/data/blob/master/tutorials/region_growing_rgb_tutorial.pcd) | 2,286,562 bytes; 307,200 records, 259,847 finite XYZ points | LZF-compressed PCD | Organized RGB sample with a valid rotated `VIEWPOINT` |
 | [PCL room scan](https://github.com/PointCloudLibrary/data/blob/master/tutorials/room_scan1.pcd) | 603,904 bytes; 112,586 points | LZF-compressed PCD | Ordinary producer scan with identity `VIEWPOINT` |
 | [3DBAG API](https://docs.3dbag.nl/nl/delivery/webservices/) | 1 km RD bounding box: 81 buildings, 3,414 vertices, 3,800 triangles across four pages | CityJSONFeatures | Native building import, page transforms, LoD 2.2, license credit |
 | [PDOK BRT-A WMTS](https://www.pdok.nl/ogc-webservices/-/article/basisregistratie-topografie-achtergrondkaarten-brt-a-) | 256×256 raster tiles in EPSG:28992 | PNG | Native RD area map, rectangle drawing, pan and zoom |
+
+On 2 October 2026, the public nine-station E57 sample download was 1,146,370,048 bytes
+(SHA-256 `bb777dfa7d52df6116d18296e85151c12bf09ee4225bff926bb89e4e28c55dd2`).
+The native reader decoded 46,589,344 finite points from nine posed scans while
+retaining a 100,000-point resident preview. Automatic disk indexing completed;
+the 5× native view
+shows a one-million-point LOD and scanner positions. Native Pick point selected
+exact source point 27,654,512 at X 0.755, Y -32.516, Z -0.044; the
+selection view
+shows its attributes and Escape leaving the selection in place. A full E57
+export reported 46,589,344 points and its 1,146,370,048-byte output compared
+byte-for-byte identical to the source with `cmp`. During a fresh import the
+progress view
+displayed the decoded-point count in both the viewport and status bar.
 
 On 1 October 2026, the Rust reader visited all 968,520 finite points in the
 PCL couch file, all 112,586 in the room scan, and 259,847 finite points in the

@@ -137,6 +137,11 @@ The Tools ribbon includes two meshers. Terrain mesh streams every source point t
 The Tools ribbon also opens a native 3D BAG panel. Enter a bounding box in RD New coordinates or copy it from the active scan/section box, choose LoD 1.2, 1.3 or 2.2, and save a georeferenced OBJ. The Rust client follows API pagination, applies each page's CityJSON transform, triangulates polygon holes, and loads the result as a separate surface layer. The panel now includes a fully native RD New map using [Kadaster BRT-A raster tiles via PDOK](https://www.pdok.nl/ogc-webservices/-/article/basisregistratie-topografie-achtergrondkaarten-brt-a-): draw a rectangle, pan, zoom or fit typed RD bounds, then download that exact area. The map displays [Kadaster/PDOK CC BY 4.0 attribution](https://www.pdok.nl/copyright/). Exported OBJ files preserve the [3DBAG CC BY 4.0 attribution](https://docs.3dbag.nl/nl/copyright/), and the viewer displays the required credit and license link while the buildings are visible.
 
 File open and save dialogs use `rfd::AsyncFileDialog`, so the native UI stays responsive while the operating-system dialog is open. The running development build now displays one 1.208 GB merged AHN6 LAZ containing 114,174,907 points, with its full disk index attached and an exact 373,382-point selection highlighted. Three separate AHN6 tiles totaling 1.28 GiB and 129,398,587 points were also checked earlier.
+Full-stream imports such as E57 report their decoded-point count during loading,
+and the empty viewport shows import progress instead of an open-file prompt. A
+public 1.15 GB E57 with 46,589,344 points and nine scanner positions was
+opened, indexed, navigated and point-picked in the native dev build; see the
+[test record](TEST_DATA.md).
 The [Select ribbon screenshot](../screenshots/native-select-ribbon-zoom-selection-114m.png)
 shows the selected area framed at 19.4× after the new Zoom selection action.
 

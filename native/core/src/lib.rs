@@ -235,6 +235,17 @@ impl From<e57::Error> for LoadError {
 /// Open a point cloud while keeping at most `sample_limit` points in memory.
 /// Bounds and point counts are computed from the full input stream.
 pub fn open(path: impl AsRef<Path>, sample_limit: usize) -> Result<PointCloud, LoadError> {
+    open_with_progress(path, sample_limit, |_| Ok(()))
+}
+
+/// Open a point cloud while reporting the count of decoded, finite points.
+/// The callback runs on the reader's thread after each 65,536-point batch and
+/// once more at completion. Returning an error cancels the load.
+pub fn open_with_progress(
+    path: impl AsRef<Path>,
+    sample_limit: usize,
+    mut progress: impl FnMut(u64) -> Result<(), LoadError>,
+) -> Result<PointCloud, LoadError> {
     if sample_limit == 0 {
         return Err(LoadError::InvalidData(
             "sample limit must be greater than zero".into(),
@@ -249,15 +260,25 @@ pub fn open(path: impl AsRef<Path>, sample_limit: usize) -> Result<PointCloud, L
         if let Ok(Some(cached)) =
             octree::open_cached_ply_preview(path, sample_limit, octree::IndexConfig::default())
         {
+            progress(cached.total_points)?;
             return Ok(cached);
         }
     }
     let before = SourceStamp::read(path)?;
     let mut collector = Collector::new(sample_limit);
     let mut scan_poses = Vec::new();
-    visit_points_with_poses(path, &mut |point| collector.push(point), &mut |pose| {
-        scan_poses.push(pose)
-    })?;
+    visit_points_with_poses(
+        path,
+        &mut |point| {
+            collector.push(point)?;
+            if collector.total.is_multiple_of(65_536) {
+                progress(collector.total)?;
+            }
+            Ok(())
+        },
+        &mut |pose| scan_poses.push(pose),
+    )?;
+    progress(collector.total)?;
     let after = SourceStamp::read(path)?;
     if before != after {
         return Err(LoadError::InvalidData(
@@ -639,6 +660,26 @@ mod tests {
         assert_eq!(cloud.points.len(), 3);
         assert_eq!(cloud.bounds.min, [0.0, 0.0, 0.0]);
         assert_eq!(cloud.bounds.max, [9_999.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn open_reports_bounded_progress_and_allows_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("progress.xyz");
+        std::fs::write(&path, "1 2 3\n".repeat(65_537)).unwrap();
+        let mut updates = Vec::new();
+        let cloud = open_with_progress(&path, 10, |count| {
+            updates.push(count);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(updates, [65_536, 65_537]);
+        assert_eq!(cloud.total_points, 65_537);
+        assert_eq!(cloud.points.len(), 10);
+        assert!(matches!(
+            open_with_progress(&path, 10, |_| Err(LoadError::Cancelled)),
+            Err(LoadError::Cancelled)
+        ));
     }
 
     #[test]
