@@ -5828,13 +5828,11 @@ impl Studio {
         if self.mesh_job.is_some() {
             surface_tools = surface_tools.push(ribbon_button("Cancel mesh", Message::CancelMesh));
         }
-        if mesh_available {
-            surface_tools = surface_tools.push(ribbon_button_when(
-                "Export mesh",
-                Message::ExportMesh,
-                !self.mesh_export_pending,
-            ));
-        }
+        surface_tools = surface_tools.push(ribbon_button_when(
+            "Export mesh",
+            Message::ExportMesh,
+            mesh_available && !self.mesh_export_pending,
+        ));
         let mut scale_tools = row![
             column![
                 row![
@@ -6285,20 +6283,6 @@ impl Studio {
             .spacing(6)
             .into(),
             RibbonTab::Tools => row![
-                ribbon_group("DETAIL LOD", detail_tools.into()),
-                ribbon_group(
-                    "AUTO INDEX",
-                    container(
-                        checkbox("Auto-index large scans", self.auto_index)
-                            .on_toggle(Message::SetAutoIndex)
-                            .style(muted_checkbox_style)
-                            .text_size(11)
-                            .size(12),
-                    )
-                    .height(64)
-                    .align_y(iced::Alignment::Center)
-                    .into()
-                ),
                 ribbon_group(
                     "TRANSLATE",
                     row![
@@ -6368,6 +6352,25 @@ impl Studio {
                     .align_y(iced::Alignment::Center)
                     .into()
                 ),
+                ribbon_group("SURFACE", surface_tools.into(),),
+                ribbon_group(
+                    "CITY DATA",
+                    tool_button("3D BAG", Message::ToggleBagPanel, self.bag_panel),
+                ),
+                ribbon_group("DETAIL LOD", detail_tools.into()),
+                ribbon_group(
+                    "AUTO INDEX",
+                    container(
+                        checkbox("Auto-index large scans", self.auto_index)
+                            .on_toggle(Message::SetAutoIndex)
+                            .style(muted_checkbox_style)
+                            .text_size(11)
+                            .size(12),
+                    )
+                    .height(64)
+                    .align_y(iced::Alignment::Center)
+                    .into()
+                ),
                 ribbon_group(
                     "DECIMATE",
                     row![
@@ -6382,11 +6385,6 @@ impl Studio {
                     .spacing(8)
                     .align_y(iced::Alignment::Center)
                     .into()
-                ),
-                ribbon_group("SURFACE", surface_tools.into(),),
-                ribbon_group(
-                    "CITY DATA",
-                    tool_button("3D BAG", Message::ToggleBagPanel, self.bag_panel),
                 ),
             ]
             .spacing(6)

@@ -65,17 +65,27 @@ pub fn tool_btn_style(theme: &Theme, is_active: bool, status: button::Status) ->
     let (background, text_color, border) = match (is_active, status) {
         (_, button::Status::Disabled) => (None, colors.muted, Color::TRANSPARENT),
         (true, _) => (
-            Some(colors.active),
-            if colors.shell == Color::BLACK {
-                Color::BLACK
-            } else {
-                colors.accent
+            Some(Color {
+                a: 0.20,
+                ..colors.accent
+            }),
+            colors.ribbon_label,
+            Color {
+                a: 0.40,
+                ..colors.accent
             },
-            colors.accent,
         ),
-        (_, button::Status::Hovered | button::Status::Pressed) => {
-            (Some(colors.hover), colors.text, colors.border)
-        }
+        (_, button::Status::Hovered | button::Status::Pressed) => (
+            Some(Color {
+                a: 0.15,
+                ..colors.accent
+            }),
+            colors.text,
+            Color {
+                a: 0.30,
+                ..colors.accent
+            },
+        ),
         _ => (None, colors.text, Color::TRANSPARENT),
     };
     button::Style {
@@ -133,7 +143,7 @@ pub fn render_group_items<'a>(
                         ..ui_theme::colors(theme).border
                     })),
                 text(title).size(9).style(|theme| text::Style {
-                    color: Some(ui_theme::colors(theme).muted),
+                    color: Some(ui_theme::colors(theme).ribbon_label),
                 }),
             ]
             .align_x(iced::Alignment::Center)
@@ -174,7 +184,11 @@ pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button:
         } else {
             colors.tabs
         })),
-        text_color: if active { colors.accent } else { colors.text },
+        text_color: if active {
+            colors.ribbon_label
+        } else {
+            colors.text
+        },
         border: Border {
             color: if active {
                 colors.accent

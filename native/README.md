@@ -4,7 +4,7 @@ This workspace is the active all-Rust replacement for the Tauri, React and Three
 
 The design follows [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio): a Rust document and I/O core, a native `iced` user interface, and a viewport. The reference was cloned beside this repository and inspected at commit `1fec34d`. The native desktop ribbon now contains adapted source from `src/ui/ribbon/mod.rs`, `widgets.rs` and `draw_panel.rs`: its three-row panel packing, large/small tool columns, active-tab treatment, and tool button styling. The properties panel adopts the two-column rows from `src/ui/properties.rs`. See [`desktop/src/opencad_ribbon.rs`](desktop/src/opencad_ribbon.rs) and [`desktop/src/opencad_properties.rs`](desktop/src/opencad_properties.rs) for source attribution and adaptation notes. OpenCADStudio is GPL-3.0, so the native desktop crate is GPL-3.0-only; its license text is at [`desktop/LICENSE-GPL-3.0`](desktop/LICENSE-GPL-3.0). The separate pointcloud core remains LGPL-3.0-or-later.
 
-The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-book) was cloned beside this repository (commit `dfdcd41`). The native ribbon uses the old application's compact button grouping, OpenCADStudio's Rust three-row ribbon primitives and quick-access pattern, and OpenAEC's Deep Forge, Night Build, Scaffold Gray, Construction Amber and Warm Gold tokens. Its top strip now keeps Import, Export, Undo and Redo before the tabs, with muted disabled actions and tooltips. Its tab strip, group captions and active/hover states follow the style-book ribbon tokens; wide tool groups scroll horizontally with visible left/right controls instead of being clipped. Unavailable Cancel mesh and Export mesh actions do not consume ribbon space; they appear when a mesh job or surface makes them relevant. The Home ribbon has native Deep Forge, Blueprint Light, Night Build, Blueprint Blue and High Contrast choices. The selection persists in `open-pointcloud-studio-native/theme` under the XDG configuration directory (or `~/.config`); the CAD viewport stays dark across themes. The old web ribbon's CSS and TypeScript components are not used in the native build. Inter and Space Grotesk are bundled as OFL-licensed native font assets. Visual checks are saved in [`../screenshots/`](../screenshots/).
+The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-book) was cloned beside this repository (commit `dfdcd41`). The native ribbon uses the old application's compact button grouping, OpenCADStudio's Rust three-row ribbon primitives and quick-access pattern, and OpenAEC's Deep Forge, Night Build, Scaffold Gray, Construction Amber and Warm Gold tokens. Its top strip keeps Import, Export, Undo and Redo before the tabs, with muted disabled actions and tooltips. Its tab strip, group captions and active/hover states follow the style-book ribbon tokens; wide tool groups scroll horizontally with visible left/right controls instead of being clipped. The Tools tab follows Classic's Translate, Scale, Thin, Surface and 3D BAG order before advanced LOD and decimation controls. Export mesh stays visible but disabled until a mesh is available; Cancel mesh appears only during a running job. The Home ribbon has native Deep Forge, Blueprint Light, Night Build, Blueprint Blue and High Contrast choices. The selection persists in `open-pointcloud-studio-native/theme` under the XDG configuration directory (or `~/.config`); the CAD viewport stays dark across themes. The old web ribbon's CSS and TypeScript components are not used in the native build. Inter and Space Grotesk are bundled as OFL-licensed native font assets. Visual checks are saved in [`../screenshots/`](../screenshots/).
 
 On X11, the Rust desktop sets the system title bar's light/dark theme hint to
 match the chosen native palette while retaining normal window-manager drag,
@@ -16,12 +16,13 @@ and [dark theme with exact selection](../screenshots/native-theme-api-forge-114m
 screenshots show the 114,174,907-point merged AHN6 cloud in that build.
 
 At the default 1440-pixel window width, the View tab packs all six axial
-camera directions, isometric view, scanner and
-section actions into OpenCADStudio's three-row small-tool columns and puts the
-four class switches in a two-by-two block. The Tools tab keeps editing,
-meshing and 3D BAG in view; the duplicate general export controls remain in
-File, Home and Properties. Both tabs show their regular controls without
-horizontal scrolling at this width.
+camera directions, isometric view, scanner and section actions into
+OpenCADStudio's three-row small-tool columns and puts the four class switches
+in a two-by-two block. The Tools tab keeps Classic's editing, meshing and
+3D BAG controls in view, followed by advanced controls that can be reached
+with the horizontal scrollbar or arrow buttons. Compare the
+[Classic tool order](../screenshots/classic-v0.3-tools.jpg) with the
+[native Tools ribbon](../screenshots/native-tools-ribbon-classic-order-114m.png).
 
 The amber File tab opens a native backstage view with the currently open scans, direct scan activation, import, full/selected/section/mesh export, format choice and appearance choice. The File view covers the tool ribbon and model space, while keeping quick access and the status bar visible; Escape or Return to model closes it. Unavailable exports appear muted. This uses the existing Rust import/export commands and no web components.
 
