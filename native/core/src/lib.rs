@@ -240,6 +240,17 @@ pub fn open(path: impl AsRef<Path>, sample_limit: usize) -> Result<PointCloud, L
         ));
     }
     let path = path.as_ref();
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ply"))
+    {
+        if let Ok(Some(cached)) =
+            octree::open_cached_ply_preview(path, sample_limit, octree::IndexConfig::default())
+        {
+            return Ok(cached);
+        }
+    }
     let before = SourceStamp::read(path)?;
     let mut collector = Collector::new(sample_limit);
     let mut scan_poses = Vec::new();

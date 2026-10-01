@@ -52,6 +52,10 @@ selection predicate.
 The disk octree's fixed 40-byte records now use one write per point and
 bounded 8,192-record reads while preserving exact source ordinals and
 cancellation between records.
+Completed PLY indexes also keep exact source bounds, count and attribute
+flags in an atomic cache manifest. Reopening an unchanged indexed PLY reads
+that manifest and a small octree preview instead of scanning the source file
+again; a missing, stale or damaged manifest falls back to the full reader.
 Both meshers keep their full-source loops inside the optimized Rust core in
 development builds; the native desktop supplies edit and progress callbacks
 without recompiling those loops at the desktop's lower optimization level.
@@ -70,6 +74,10 @@ Before the binary PLY reader was batched, reopening and scanning the full
 bounded parallel reader reduced that full scan to 18.13 seconds with
 32,836 KiB peak memory on the same machine. A separate full-source visit
 counted all 114,174,907 records in order.
+With the completed index present, the same `--index` command reopened that
+3.2 GiB PLY in 0.15 seconds with 18,712 KiB peak process memory, including
+index validation; the first run after adding its cache manifest took 18.50
+seconds to read the source and backfill metadata.
 
 ## Build
 

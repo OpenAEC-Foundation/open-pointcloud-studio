@@ -7,11 +7,24 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use serde::{Deserialize, Serialize};
+
 use super::{visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
 
 const RECORD_BYTES: usize = 40;
 const RECORD_BATCH_POINTS: usize = 8_192;
 const LEAF_LOD_POINTS: usize = 2_048;
+
+#[derive(Serialize, Deserialize)]
+struct CachedCloudHeader {
+    version: u8,
+    total_points: u64,
+    min: [f64; 3],
+    max: [f64; 3],
+    has_rgb: bool,
+    has_intensity: bool,
+    has_classification: bool,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct IndexedPoint {
@@ -243,6 +256,7 @@ impl OctreeIndex {
         let cache_path = cache_directory(&cache_root, &fingerprint);
         if cache_path.exists() {
             if let Ok(index) = Self::open_cached(cloud, &cache_path, &fingerprint) {
+                let _ = write_cached_cloud_header(&cache_path, cloud);
                 progress(IndexProgress::ready(
                     cloud.total_points,
                     count_leaves(&index.root),
@@ -258,6 +272,7 @@ impl OctreeIndex {
             unreachable!("fresh octree build uses temporary storage")
         };
         fs::write(storage.path().join("source.meta"), &fingerprint)?;
+        write_cached_cloud_header(storage.path(), cloud)?;
         let temporary_path = storage.keep();
         if let Err(error) = fs::rename(&temporary_path, &cache_path) {
             let _ = fs::remove_dir_all(&temporary_path);
@@ -291,7 +306,9 @@ impl OctreeIndex {
         if !directory.exists() {
             return Ok(None);
         }
-        Self::open_cached(cloud, &directory, &fingerprint).map(Some)
+        let index = Self::open_cached(cloud, &directory, &fingerprint)?;
+        let _ = write_cached_cloud_header(&directory, cloud);
+        Ok(Some(index))
     }
 
     fn open_cached(
@@ -666,6 +683,94 @@ fn collect_visible_leaves<'a>(
         .any(|child| collect_visible_leaves(child, visible, leaves, candidates, max_scan_points))
 }
 
+/// Recover exact PLY metadata and a small preview from an already validated
+/// disk index, without reading the multi-gigabyte source again.
+pub(crate) fn open_cached_ply_preview(
+    path: &Path,
+    sample_limit: usize,
+    config: IndexConfig,
+) -> Result<Option<PointCloud>, LoadError> {
+    let stamp = SourceStamp::read(path)?;
+    let fingerprint = cache_fingerprint_for(path, stamp, &config)?;
+    let root = config.scratch_dir.unwrap_or_else(cache_root);
+    let directory = cache_directory(&root, &fingerprint);
+    if !directory.exists() || !directory.join("cloud.json").exists() {
+        return Ok(None);
+    }
+    if fs::read(directory.join("source.meta"))? != fingerprint {
+        return Err(LoadError::InvalidData(
+            "octree cache source mismatch".into(),
+        ));
+    }
+    let metadata_path = directory.join("cloud.json");
+    if fs::metadata(&metadata_path)?.len() > 4_096 {
+        return Err(LoadError::InvalidData(
+            "oversized octree cloud metadata".into(),
+        ));
+    }
+    let header: CachedCloudHeader =
+        serde_json::from_slice(&fs::read(metadata_path)?).map_err(|error| {
+            LoadError::InvalidData(format!("invalid octree cloud metadata: {error}"))
+        })?;
+    if header.version != 1
+        || header.total_points == 0
+        || (0..3).any(|axis| {
+            !header.min[axis].is_finite()
+                || !header.max[axis].is_finite()
+                || header.min[axis] > header.max[axis]
+        })
+    {
+        return Err(LoadError::InvalidData("invalid octree cloud bounds".into()));
+    }
+    let mut cloud = PointCloud {
+        path: path.to_path_buf(),
+        total_points: header.total_points,
+        bounds: Bounds {
+            min: header.min,
+            max: header.max,
+        },
+        points: Vec::new(),
+        point_ordinals: Vec::new(),
+        has_rgb: header.has_rgb,
+        has_intensity: header.has_intensity,
+        has_classification: header.has_classification,
+        scan_poses: Vec::new(),
+        source_stamp: Some(stamp),
+    };
+    let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint)?;
+    for record in index.read_node_indexed("r", sample_limit)? {
+        cloud.points.push(record.point);
+        cloud.point_ordinals.push(record.ordinal);
+    }
+    if SourceStamp::read(path)? != stamp {
+        return Err(LoadError::InvalidData(
+            "source changed while loading cached preview".into(),
+        ));
+    }
+    Ok(Some(cloud))
+}
+
+fn write_cached_cloud_header(directory: &Path, cloud: &PointCloud) -> Result<(), LoadError> {
+    let header = CachedCloudHeader {
+        version: 1,
+        total_points: cloud.total_points,
+        min: cloud.bounds.min,
+        max: cloud.bounds.max,
+        has_rgb: cloud.has_rgb,
+        has_intensity: cloud.has_intensity,
+        has_classification: cloud.has_classification,
+    };
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    serde_json::to_writer(temporary.as_file_mut(), &header).map_err(|error| {
+        LoadError::InvalidData(format!("cannot write octree metadata: {error}"))
+    })?;
+    temporary.as_file_mut().sync_all()?;
+    temporary
+        .persist(directory.join("cloud.json"))
+        .map_err(|error| error.error)?;
+    Ok(())
+}
+
 fn cache_root() -> PathBuf {
     if let Some(root) = std::env::var_os("XDG_CACHE_HOME") {
         return PathBuf::from(root).join("open-pointcloud-studio/indexes");
@@ -688,7 +793,15 @@ fn cache_fingerprint(cloud: &PointCloud, config: &IndexConfig) -> Result<Vec<u8>
     let stamp = cloud
         .source_stamp
         .ok_or_else(|| LoadError::InvalidData("source identity is unavailable".into()))?;
-    let path = fs::canonicalize(&cloud.path)?;
+    cache_fingerprint_for(&cloud.path, stamp, config)
+}
+
+fn cache_fingerprint_for(
+    source: &Path,
+    stamp: SourceStamp,
+    config: &IndexConfig,
+) -> Result<Vec<u8>, LoadError> {
+    let path = fs::canonicalize(source)?;
     let modified = stamp
         .modified
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
@@ -1412,5 +1525,48 @@ mod tests {
                 .path(),
             cache_path
         );
+    }
+
+    #[test]
+    fn cached_ply_preview_uses_exact_index_metadata_and_rejects_stale_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("scan.ply");
+        fs::write(
+            &source,
+            "ply\nformat ascii 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n1 2 3\n2 4 6\n3 6 9\n",
+        )
+        .unwrap();
+        let cloud = super::super::open(&source, 2).unwrap();
+        let config = IndexConfig {
+            leaf_points: 2,
+            preview_points: 2,
+            max_depth: 4,
+            scratch_dir: Some(directory.path().join("cache")),
+        };
+        let index = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
+        let cache_path = index.storage.path().to_path_buf();
+        assert!(cache_path.join("cloud.json").exists());
+
+        let reopened = open_cached_ply_preview(&source, 2, config.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(reopened.total_points, 4);
+        assert_eq!(reopened.bounds, cloud.bounds);
+        assert_eq!(reopened.points.len(), 2);
+        assert_eq!(reopened.point_ordinals.len(), 2);
+
+        fs::remove_file(cache_path.join("cloud.json")).unwrap();
+        assert!(open_cached_ply_preview(&source, 2, config.clone())
+            .unwrap()
+            .is_none());
+        OctreeIndex::open_cached_if_present(&cloud, config.clone())
+            .unwrap()
+            .unwrap();
+        assert!(cache_path.join("cloud.json").exists());
+
+        fs::write(&source, "changed source").unwrap();
+        assert!(open_cached_ply_preview(&source, 2, config)
+            .unwrap()
+            .is_none());
     }
 }

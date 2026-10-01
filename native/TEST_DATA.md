@@ -37,6 +37,13 @@ The native command API then set an exact camera pose on the indexed PLY
 isometric 1.0× view and zero pan. Another indexed world-box selection found
 the same 432,975 points, and `zoom_selection` framed them at 19.4× in the
 [latest native dev build](../screenshots/native-114m-ply-camera-selection.png).
+The indexed PLY cache now includes exact cloud metadata. A first `--index`
+run with the new build took 18.50 s to read the source and backfill that
+metadata; the next run reopened and validated the same 7,852-node index in
+0.15 s, using 18,712 KiB peak RSS. A fresh native GUI instance reached its
+250,000-point octree LOD without scanning the 3.2 GiB source, then selected
+the same 432,975 exact points and framed them at 19.4×. See the
+[cached reopen screenshot](../screenshots/native-cached-3p2gib-ply-114m.png).
 
 On 1 October 2026, the native GUI opened a separate 1,200,000-point LAS test
 source and reported octree source-reading progress. `cancel_index` stopped its
