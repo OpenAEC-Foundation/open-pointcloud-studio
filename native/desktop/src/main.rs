@@ -1018,6 +1018,8 @@ enum Message {
     ),
     Orbit(f32, f32),
     Pan(f32, f32),
+    FinishPan(f32, f32),
+    FinishOrbit(f32, f32),
     NavigationFinished,
     Zoom(f32, [f32; 2], Size),
     ViewportSize(Size),
@@ -4590,6 +4592,22 @@ impl Studio {
                 self.revision += 1;
                 return self.schedule_detail();
             }
+            Message::FinishPan(dx, dy) => {
+                let move_task = if dx != 0.0 || dy != 0.0 {
+                    self.update(Message::Pan(dx, dy))
+                } else {
+                    Task::none()
+                };
+                return Task::batch([move_task, self.update(Message::NavigationFinished)]);
+            }
+            Message::FinishOrbit(dx, dy) => {
+                let move_task = if dx != 0.0 || dy != 0.0 {
+                    self.update(Message::Orbit(dx, dy))
+                } else {
+                    Task::none()
+                };
+                return Task::batch([move_task, self.update(Message::NavigationFinished)]);
+            }
             Message::NavigationFinished => {
                 if self.detail_loaded_revision == Some(self.revision)
                     || !self
@@ -7640,6 +7658,36 @@ struct DragState {
     mode: DragMode,
 }
 
+fn finish_viewport_drag(
+    button: mouse::Button,
+    drag: DragState,
+    position: UiPoint,
+    size: Size,
+) -> Option<Message> {
+    let total = (position.x - drag.start.x).hypot(position.y - drag.start.y);
+    let dx = position.x - drag.position.x;
+    let dy = position.y - drag.position.y;
+    match (button, drag.mode) {
+        (mouse::Button::Right, DragMode::RightPending) if total >= 5.0 => Some(Message::FinishPan(
+            position.x - drag.start.x,
+            position.y - drag.start.y,
+        )),
+        (mouse::Button::Right, DragMode::RightPending) => {
+            Some(Message::ShowContextMenu([position.x, position.y]))
+        }
+        (mouse::Button::Middle | mouse::Button::Right, DragMode::Pan) if total > 0.5 => {
+            Some(Message::FinishPan(dx, dy))
+        }
+        (mouse::Button::Left, DragMode::Orbit) if total > 0.5 => Some(Message::FinishOrbit(dx, dy)),
+        (mouse::Button::Left, DragMode::Select) => Some(Message::BoxSelect {
+            start: [drag.start.x, drag.start.y],
+            end: [position.x, position.y],
+            size,
+        }),
+        _ => None,
+    }
+}
+
 const CONTEXT_ACTIONS: [(ContextAction, &str); 6] = [
     (ContextAction::Orbit, "Orbit"),
     (ContextAction::BoxSelect, "Box select"),
@@ -7919,27 +7967,10 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 ) =>
             {
                 let message = state.take().and_then(|drag| {
-                    if matches!(
-                        (button, drag.mode),
-                        (mouse::Button::Right, DragMode::RightPending)
-                    ) {
-                        return Some(Message::ShowContextMenu([drag.position.x, drag.position.y]));
-                    }
-                    if matches!(
-                        (button, drag.mode),
-                        (mouse::Button::Left, DragMode::Orbit)
-                            | (mouse::Button::Middle | mouse::Button::Right, DragMode::Pan)
-                    ) && (drag.position.x - drag.start.x).hypot(drag.position.y - drag.start.y)
-                        > 0.5
-                    {
-                        return Some(Message::NavigationFinished);
-                    }
-                    matches!((button, drag.mode), (mouse::Button::Left, DragMode::Select))
-                        .then_some(Message::BoxSelect {
-                            start: [drag.start.x, drag.start.y],
-                            end: [drag.position.x, drag.position.y],
-                            size: bounds.size(),
-                        })
+                    let position = cursor
+                        .position_from(bounds.position())
+                        .unwrap_or(drag.position);
+                    finish_viewport_drag(button, drag, position, bounds.size())
                 });
                 (event::Status::Captured, message)
             }
@@ -9043,5 +9074,97 @@ mod lod_transition_tests {
         ));
         assert_eq!(studio.clouds[0].view_len(), 1);
         assert_eq!(studio.clouds[0].view_records().next().unwrap().ordinal, 3);
+    }
+}
+
+#[cfg(test)]
+mod viewport_drag_tests {
+    use super::*;
+
+    #[test]
+    fn right_release_uses_final_pointer_even_without_move_events() {
+        let start = UiPoint::new(10.0, 20.0);
+        let drag = DragState {
+            start,
+            position: start,
+            mode: DragMode::RightPending,
+        };
+        let message = finish_viewport_drag(
+            mouse::Button::Right,
+            drag,
+            UiPoint::new(110.0, 60.0),
+            Size::new(800.0, 600.0),
+        );
+        assert!(matches!(message, Some(Message::FinishPan(100.0, 40.0))));
+
+        let message = finish_viewport_drag(
+            mouse::Button::Right,
+            drag,
+            UiPoint::new(12.0, 23.0),
+            Size::new(800.0, 600.0),
+        );
+        assert!(matches!(
+            message,
+            Some(Message::ShowContextMenu([12.0, 23.0]))
+        ));
+    }
+
+    #[test]
+    fn release_applies_unreported_motion_to_camera_and_selection() {
+        let start = UiPoint::new(10.0, 20.0);
+        let mut studio = Studio::default();
+        let drag = DragState {
+            start,
+            position: UiPoint::new(50.0, 40.0),
+            mode: DragMode::Pan,
+        };
+        let message = finish_viewport_drag(
+            mouse::Button::Middle,
+            drag,
+            UiPoint::new(60.0, 50.0),
+            Size::new(800.0, 600.0),
+        )
+        .unwrap();
+        assert!(matches!(message, Message::FinishPan(10.0, 10.0)));
+        let _ = studio.update(message);
+        assert_eq!(studio.pan, [10.0, 10.0]);
+
+        let orbit = DragState {
+            start,
+            position: UiPoint::new(25.0, 25.0),
+            mode: DragMode::Orbit,
+        };
+        let message = finish_viewport_drag(
+            mouse::Button::Left,
+            orbit,
+            UiPoint::new(35.0, 30.0),
+            Size::new(800.0, 600.0),
+        )
+        .unwrap();
+        assert!(matches!(message, Message::FinishOrbit(10.0, 5.0)));
+        let yaw = studio.yaw;
+        let pitch = studio.pitch;
+        let _ = studio.update(message);
+        assert!((studio.yaw - yaw - 0.1).abs() < 0.0001);
+        assert!((studio.pitch - pitch - 0.05).abs() < 0.0001);
+
+        let selection = DragState {
+            start,
+            position: start,
+            mode: DragMode::Select,
+        };
+        let message = finish_viewport_drag(
+            mouse::Button::Left,
+            selection,
+            UiPoint::new(80.0, 90.0),
+            Size::new(800.0, 600.0),
+        );
+        assert!(matches!(
+            message,
+            Some(Message::BoxSelect {
+                end: [80.0, 90.0],
+                ..
+            })
+        ));
     }
 }

@@ -603,3 +603,11 @@ duplicate read. The panned native view is in
 A left-button orbit changed yaw by 0.40 radians and pitch by 0.16 radians;
 its new detail request appeared at 0.012 seconds after release and was ready
 by the 0.253-second status check.
+
+The native viewport also uses the pointer position at mouse release to finish
+right/middle-button pan, left-button orbit and box selection. This preserves
+the final movement when the release arrives before a separate move event is
+processed. A controlled 100 × 40 pixel right-button drag in the three-tile
+AHN6 scene changed camera pan by exactly that amount, left no context menu
+open, and returned to an 80,000-point LOD. See
+[`native-right-pan-release-ahn6.png`](../screenshots/native-right-pan-release-ahn6.png).
