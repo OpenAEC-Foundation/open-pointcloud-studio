@@ -27,6 +27,11 @@ the GUI starts loading; poll `status` for the new layer. Exports return
 `accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
 for a durable `running`, `complete` (with point count), or `failed` result.
 The newest 32 jobs remain queryable even if the GUI status line changes.
+Non-LAS/LAZ imports return an `import_id`; `status.result.imports` lists active
+imports with decoded finite-point counts and cancellation state. Use
+`cancel_import` with that ID to stop a long import. A cancelled import never
+adds a partial layer. LAS/LAZ header previews open immediately and have a null
+`import_id`.
 Mesh jobs report `reading`, `reconstructing`, or `writing` with completed and
 total units. `cancel_mesh` requests cancellation; a cancelled mesh leaves an
 existing destination untouched. Only one mesh job runs at a time.
@@ -75,9 +80,10 @@ pick is discarded when cancelled.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera and saved views for that layer, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
+| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera and saved views for that layer, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
 | `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
-| `open` | `path` | Opens a point cloud or mesh in the running GUI |
+| `open` | `path` | Opens a point cloud or mesh in the running GUI; full-stream readers return an `import_id` |
+| `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |
 | `set_active` | `index` | Chooses the active layer |
 | `set_visible` | `index`, `visible` | Shows or hides a point layer |

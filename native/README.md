@@ -138,7 +138,9 @@ The Tools ribbon also opens a native 3D BAG panel. Enter a bounding box in RD Ne
 
 File open and save dialogs use `rfd::AsyncFileDialog`, so the native UI stays responsive while the operating-system dialog is open. The running development build now displays one 1.208 GB merged AHN6 LAZ containing 114,174,907 points, with its full disk index attached and an exact 373,382-point selection highlighted. Three separate AHN6 tiles totaling 1.28 GiB and 129,398,587 points were also checked earlier.
 Full-stream imports such as E57 report their decoded-point count during loading,
-and the empty viewport shows import progress instead of an open-file prompt. A
+and the empty viewport shows import progress instead of an open-file prompt.
+The status bar and local API can cancel an individual full-stream import without
+adding a partial layer. A
 public 1.15 GB E57 with 46,589,344 points and nine scanner positions was
 opened, indexed, navigated and point-picked in the native dev build; see the
 [test record](TEST_DATA.md).

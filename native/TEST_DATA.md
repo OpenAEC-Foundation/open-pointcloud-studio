@@ -226,6 +226,13 @@ export reported 46,589,344 points and its 1,146,370,048-byte output compared
 byte-for-byte identical to the source with `cmp`. During a fresh import the
 progress view
 displayed the decoded-point count in both the viewport and status bar.
+In a separate native dev run, `cancel_import` stopped this E57 after more than
+five million decoded points; `status` then showed no active imports and zero
+clouds. A second import returned its own ID and showed the
+native Cancel import control
+alongside the decoded count. It then completed with all 46,589,344 points and
+reattached the disk octree, confirming that cancellation did not poison the
+next import.
 
 On 1 October 2026, the Rust reader visited all 968,520 finite points in the
 PCL couch file, all 112,586 in the room scan, and 259,847 finite points in the

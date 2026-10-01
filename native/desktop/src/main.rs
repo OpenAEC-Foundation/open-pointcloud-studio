@@ -1119,7 +1119,9 @@ enum Message {
     PersistSettings(u64),
     Open,
     FilesChosen(Option<Vec<PathBuf>>),
-    OpenProgress(String, u64, Arc<AtomicBool>),
+    OpenProgress(u64),
+    ImportLoaded(u64, Result<Arc<PointCloud>, String>),
+    CancelImport(u64),
     Loaded(Result<Arc<PointCloud>, String>),
     MeshLoaded(Arc<PointCloud>, Result<Option<Arc<MeshGeometry>>, String>),
     Refined(Arc<PointCloud>, Result<Arc<PointCloud>, String>),
@@ -1295,6 +1297,8 @@ struct Studio {
     api_handle: Option<native_api::ApiHandle>,
     api_jobs: HashMap<String, Value>,
     api_job_order: VecDeque<String>,
+    imports: HashMap<u64, ImportJob>,
+    next_import_id: u64,
     clouds: Vec<CloudEntry>,
     undo_deletions: Vec<EditBatch>,
     redo_deletions: Vec<EditBatch>,
@@ -1376,6 +1380,12 @@ struct Studio {
     detail_urgent_revision: Option<u64>,
     auto_index: bool,
     revision: u64,
+}
+
+struct ImportJob {
+    path: PathBuf,
+    decoded: Arc<AtomicU64>,
+    cancel: Arc<AtomicBool>,
 }
 
 struct CloudEntry {
@@ -1585,6 +1595,8 @@ impl Default for Studio {
             api_handle: None,
             api_jobs: HashMap::new(),
             api_job_order: VecDeque::new(),
+            imports: HashMap::new(),
+            next_import_id: 0,
             clouds: Vec::new(),
             undo_deletions: Vec::new(),
             redo_deletions: Vec::new(),
@@ -1797,6 +1809,12 @@ impl Studio {
                 (
                     json!({"ok": true, "result": {
                         "clouds": clouds,
+                        "imports": self.imports.iter().map(|(id, job)| json!({
+                            "id": id,
+                            "path": job.path,
+                            "decoded": job.decoded.load(Ordering::Relaxed),
+                            "cancelling": job.cancel.load(Ordering::Relaxed),
+                        })).collect::<Vec<_>>(),
                         "active": self.active,
                         "status": self.status,
                         "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label},
@@ -1871,8 +1889,24 @@ impl Studio {
                         Task::none(),
                     )
                 } else {
+                    let before = self.next_import_id;
                     let task = self.load(path.clone());
-                    (json!({"ok": true, "accepted": true, "path": path}), task)
+                    let import_id = (self.next_import_id != before).then_some(self.next_import_id);
+                    (
+                        json!({"ok": true, "accepted": true, "path": path, "import_id": import_id}),
+                        task,
+                    )
+                }
+            }
+            ApiCommand::CancelImport { id } => {
+                if !self.imports.contains_key(&id) {
+                    (
+                        json!({"ok": false, "error": "unknown active import ID"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::CancelImport(id));
+                    (json!({"ok": true, "cancelling": true, "id": id}), task)
                 }
             }
             ApiCommand::Remove { index } => {
@@ -3116,20 +3150,28 @@ impl Studio {
             }
         }
         self.status = format!("Loading {}…", path.display());
-        let label = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("point cloud")
-            .to_owned();
-        let count = Arc::new(AtomicU64::new(0));
+        self.next_import_id += 1;
+        let id = self.next_import_id;
+        let decoded = Arc::new(AtomicU64::new(0));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.imports.insert(
+            id,
+            ImportJob {
+                path: path.clone(),
+                decoded: Arc::clone(&decoded),
+                cancel: Arc::clone(&cancel),
+            },
+        );
         let done = Arc::new(AtomicBool::new(false));
-        let worker_count = Arc::clone(&count);
         let worker_done = Arc::clone(&done);
         let worker = Task::perform(
             async move {
                 let result = tokio::task::spawn_blocking(move || {
                     pointcloud_core::open_with_progress(path, LOAD_SAMPLE_LIMIT, |processed| {
-                        worker_count.store(processed, Ordering::Relaxed);
+                        if cancel.load(Ordering::Relaxed) {
+                            return Err(pointcloud_core::LoadError::Cancelled);
+                        }
+                        decoded.store(processed, Ordering::Relaxed);
                         Ok(())
                     })
                 })
@@ -3139,22 +3181,16 @@ impl Studio {
                 worker_done.store(true, Ordering::Relaxed);
                 result
             },
-            Message::Loaded,
+            move |result| Message::ImportLoaded(id, result),
         );
-        let progress =
-            iced::futures::stream::unfold(Some((label, count, done)), |state| async move {
-                let (label, count, done) = state?;
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                if done.load(Ordering::Relaxed) {
-                    return None;
-                }
-                let message = Message::OpenProgress(
-                    label.clone(),
-                    count.load(Ordering::Relaxed),
-                    Arc::clone(&done),
-                );
-                Some((message, Some((label, count, done))))
-            });
+        let progress = iced::futures::stream::unfold(Some(done), move |state| async move {
+            let done = state?;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if done.load(Ordering::Relaxed) {
+                return None;
+            }
+            Some((Message::OpenProgress(id), Some(done)))
+        });
         Task::batch([worker, Task::run(progress, |message| message)])
     }
 
@@ -3393,10 +3429,33 @@ impl Studio {
                 return Task::batch(paths.into_iter().map(|path| self.load(path)));
             }
             Message::FilesChosen(None) => {}
-            Message::OpenProgress(label, count, done) => {
-                if !done.load(Ordering::Relaxed) && count > 0 {
-                    self.status =
-                        format!("Loading {label}: {} points decoded…", format_count(count));
+            Message::OpenProgress(id) => {
+                if let Some(job) = self.imports.get(&id) {
+                    let label = display_name(&job.path);
+                    self.status = if job.cancel.load(Ordering::Relaxed) {
+                        format!("Cancelling import of {label}…")
+                    } else {
+                        format!(
+                            "Loading {label}: {} points decoded…",
+                            format_count(job.decoded.load(Ordering::Relaxed))
+                        )
+                    };
+                }
+            }
+            Message::CancelImport(id) => {
+                if let Some(job) = self.imports.get(&id) {
+                    job.cancel.store(true, Ordering::Relaxed);
+                    self.status = format!("Cancelling import of {}…", display_name(&job.path));
+                }
+            }
+            Message::ImportLoaded(id, result) => {
+                let Some(job) = self.imports.remove(&id) else {
+                    return Task::none();
+                };
+                if job.cancel.load(Ordering::Relaxed) {
+                    self.status = format!("Import cancelled: {}", display_name(&job.path));
+                } else {
+                    return self.update(Message::Loaded(result));
                 }
             }
             Message::Loaded(result) => match result {
@@ -7060,10 +7119,7 @@ impl Studio {
     fn point_viewport(&self) -> PointViewport<'_> {
         PointViewport {
             clouds: &self.clouds,
-            loading_status: self
-                .status
-                .starts_with("Loading ")
-                .then_some(self.status.as_str()),
+            loading_status: (!self.imports.is_empty()).then_some(self.status.as_str()),
             color_mode: self.color_mode,
             point_size: self.point_size,
             eye_dome: self.eye_dome,
@@ -7297,7 +7353,7 @@ impl Studio {
     fn view(&self) -> Element<'_, Message> {
         if self.file_open {
             let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
-            let status_bar = row![
+            let mut status_bar = row![
                 text(&self.status).size(11),
                 text(format!(
                     "{} files  ·  {} points  ·  {} selected",
@@ -7309,6 +7365,16 @@ impl Studio {
             ]
             .spacing(24)
             .padding([7, 12]);
+            if let Some((&id, job)) = self.imports.iter().max_by_key(|(id, _)| *id) {
+                status_bar = status_bar.push(
+                    button("Cancel import")
+                        .on_press_maybe(
+                            (!job.cancel.load(Ordering::Relaxed))
+                                .then_some(Message::CancelImport(id)),
+                        )
+                        .style(flat_tool_style),
+                );
+            }
             return column![
                 self.ribbon(),
                 self.file_view(),
@@ -8001,7 +8067,7 @@ impl Studio {
         .height(Fill);
         let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
         let mesh_status = self.mesh_job.as_ref().map(MeshJob::progress_text);
-        let status_bar = row![
+        let mut status_bar = row![
             text(mesh_status.unwrap_or_else(|| self.status.clone())).size(11),
             text(format!(
                 "{} files  ·  {} points  ·  {} selected",
@@ -8013,6 +8079,15 @@ impl Studio {
         ]
         .spacing(24)
         .padding([7, 12]);
+        if let Some((&id, job)) = self.imports.iter().max_by_key(|(id, _)| *id) {
+            status_bar = status_bar.push(
+                button("Cancel import")
+                    .on_press_maybe(
+                        (!job.cancel.load(Ordering::Relaxed)).then_some(Message::CancelImport(id)),
+                    )
+                    .style(flat_tool_style),
+            );
+        }
         column![
             self.ribbon(),
             content,
@@ -10534,6 +10609,45 @@ mod viewport_drag_tests {
                 ..
             })
         ));
+    }
+}
+
+#[cfg(test)]
+mod import_api_tests {
+    use super::*;
+
+    fn send(studio: &mut Studio, command: native_api::ApiCommand) -> Value {
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.handle_api(native_api::ApiRequest { command, reply });
+        receive.recv().unwrap()
+    }
+
+    #[test]
+    fn cancelling_import_discards_a_late_successful_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scan.xyz");
+        std::fs::write(&path, "1 2 3\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+        let mut studio = Studio::default();
+        let cancel = Arc::new(AtomicBool::new(false));
+        studio.imports.insert(
+            7,
+            ImportJob {
+                path,
+                decoded: Arc::new(AtomicU64::new(1)),
+                cancel: Arc::clone(&cancel),
+            },
+        );
+
+        let status = send(&mut studio, native_api::ApiCommand::Status);
+        assert_eq!(status["result"]["imports"][0]["decoded"], 1);
+        let response = send(&mut studio, native_api::ApiCommand::CancelImport { id: 7 });
+        assert_eq!(response["cancelling"], true);
+        assert!(cancel.load(Ordering::Relaxed));
+        let _ = studio.update(Message::ImportLoaded(7, Ok(cloud)));
+        assert!(studio.clouds.is_empty());
+        assert!(studio.imports.is_empty());
+        assert!(studio.status.starts_with("Import cancelled:"));
     }
 }
 

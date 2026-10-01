@@ -25,6 +25,9 @@ pub enum ApiCommand {
     Open {
         path: PathBuf,
     },
+    CancelImport {
+        id: u64,
+    },
     Remove {
         index: usize,
     },
