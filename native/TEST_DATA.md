@@ -447,6 +447,11 @@ of the source XYZ stream found zero world-coordinate deviation and identical
 point attributes for every exported point. The reopened E57 also rendered in
 the native dev build with four stations listed in Properties; see
 [`native-e57-filtered-scans.png`](../screenshots/native-e57-filtered-scans.png).
+The public spherical `testSpherical.e57` was also filtered through the same
+writer with section `-1,-5,-2,1,-1,2`: 102,616 of 155,201 valid points were
+retained. Reopening and exporting them to XYZ gave the same 102,616 points,
+with zero coordinate deviation and identical attributes compared point by
+point to the matching source stream.
 The 1,200,000-point LAS fixture exported to E57 in 5.13 seconds with 22,288
 KiB peak RSS, and the E57 reopened and exported to a 1,200,000-point PLY in
 5.00 seconds with 21,736 KiB peak RSS. Comparing that PLY with a direct LAS
