@@ -75,7 +75,7 @@ pick is discarded when cancelled.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
+| `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera and saved views for that layer, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
 | `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
 | `open` | `path` | Opens a point cloud or mesh in the running GUI |
 | `remove` | `index` | Removes a layer from the project |
@@ -84,6 +84,10 @@ pick is discarded when cancelled.
 | `camera` | `preset` | Chooses `top`, `bottom`, `front`, `back`, `left`, `right` or `isometric` |
 | `set_camera` | `yaw`, `pitch`, `zoom`, `pan` | Sets an exact camera view; angles are radians, zoom is 0.000001–10000, and pan is a two-number screen-pixel array. Rejects non-finite or out-of-range values without changing the view |
 | `zoom_all` | — | Fits the complete model at the default isometric orientation, matching the ribbon button and `F` shortcut |
+| `list_camera_views` | — | Lists saved views for the active scan, including each view's yaw, pitch, zoom and pan |
+| `save_camera_view` | `name` | Saves the current camera for the active scan; the name must be unique within that scan and 1–64 characters long (maximum 32 views per scan) |
+| `restore_camera_view` | `name` | Restores a named view for the active scan, ignoring name case |
+| `delete_camera_view` | `name` | Deletes a named view for the active scan, ignoring name case |
 | `set_theme` | `theme` | Chooses and persists `forge`, `light`, `night`, `blueprint` or `contrast`; `openaec` remains an alias for Night Build |
 | `set_color` | `mode` | Chooses `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code`, `visible` | Shows or hides one classification code in the viewport and exact selection |

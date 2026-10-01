@@ -45,6 +45,16 @@ pub enum ApiCommand {
         pan: [f32; 2],
     },
     ZoomAll,
+    ListCameraViews,
+    SaveCameraView {
+        name: String,
+    },
+    RestoreCameraView {
+        name: String,
+    },
+    DeleteCameraView {
+        name: String,
+    },
     SetTheme {
         theme: String,
     },

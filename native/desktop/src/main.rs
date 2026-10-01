@@ -1639,6 +1639,12 @@ impl Studio {
         }
     }
 
+    fn active_camera_source(&self) -> Option<PathBuf> {
+        self.active
+            .and_then(|index| self.clouds.get(index))
+            .map(|entry| camera_views::source_key(&entry.cloud.path))
+    }
+
     fn queue_preferences_save(&mut self) -> Task<Message> {
         self.settings_revision = self.settings_revision.wrapping_add(1);
         let revision = self.settings_revision;
@@ -1709,12 +1715,19 @@ impl Studio {
                 let section = self
                     .section_bounds()
                     .map(|bounds| json!({"min": bounds.min, "max": bounds.max}));
+                let active_source = self.active_camera_source();
+                let camera_views: Vec<_> = self
+                    .saved_views
+                    .iter()
+                    .filter(|view| active_source.as_ref() == Some(&view.source))
+                    .collect();
                 (
                     json!({"ok": true, "result": {
                         "clouds": clouds,
                         "active": self.active,
                         "status": self.status,
                         "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label},
+                        "camera_views": camera_views,
                         "section": section,
                         "selected_points": self.selected_total(),
                         "selection_pending": self.selection_pending,
@@ -1881,6 +1894,110 @@ impl Studio {
                     json!({"ok": true, "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label}}),
                     task,
                 )
+            }
+            ApiCommand::ListCameraViews => {
+                let source = self.active_camera_source();
+                let views: Vec<_> = self
+                    .saved_views
+                    .iter()
+                    .filter(|view| source.as_ref() == Some(&view.source))
+                    .collect();
+                (
+                    json!({"ok": true, "source": source, "views": views}),
+                    Task::none(),
+                )
+            }
+            ApiCommand::SaveCameraView { name } => {
+                let name = name.trim().to_owned();
+                if let Some(source) = self.active_camera_source() {
+                    let matching: Vec<_> = self
+                        .saved_views
+                        .iter()
+                        .filter(|view| view.source == source)
+                        .collect();
+                    if name.is_empty()
+                        || name.chars().count() > 64
+                        || matching.len() >= 32
+                        || matching
+                            .iter()
+                            .any(|view| view.name.eq_ignore_ascii_case(&name))
+                    {
+                        (
+                            json!({"ok": false, "error": "choose a unique camera view name of 1 to 64 characters; each scan allows at most 32 views"}),
+                            Task::none(),
+                        )
+                    } else {
+                        self.saved_views.push(SavedView {
+                            source,
+                            name: name.clone(),
+                            yaw: self.yaw,
+                            pitch: self.pitch,
+                            zoom: self.zoom,
+                            pan: self.pan,
+                        });
+                        match camera_views::save(&self.saved_views) {
+                            Ok(()) => {
+                                self.status = format!("Saved camera view {name}");
+                                (json!({"ok": true, "name": name}), Task::none())
+                            }
+                            Err(error) => {
+                                self.saved_views.pop();
+                                (
+                                    json!({"ok": false, "error": error.to_string()}),
+                                    Task::none(),
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    (
+                        json!({"ok": false, "error": "open a scan before saving a camera view"}),
+                        Task::none(),
+                    )
+                }
+            }
+            ApiCommand::RestoreCameraView { name } => {
+                let source = self.active_camera_source();
+                if let Some(index) = self.saved_views.iter().position(|view| {
+                    source.as_ref() == Some(&view.source)
+                        && view.name.eq_ignore_ascii_case(name.trim())
+                }) {
+                    let view = self.saved_views[index].clone();
+                    let task = self.update(Message::RestoreView(index));
+                    (json!({"ok": true, "view": view}), task)
+                } else {
+                    (
+                        json!({"ok": false, "error": "camera view not found for the active scan"}),
+                        Task::none(),
+                    )
+                }
+            }
+            ApiCommand::DeleteCameraView { name } => {
+                let source = self.active_camera_source();
+                if let Some(index) = self.saved_views.iter().position(|view| {
+                    source.as_ref() == Some(&view.source)
+                        && view.name.eq_ignore_ascii_case(name.trim())
+                }) {
+                    let view = self.saved_views.remove(index);
+                    match camera_views::save(&self.saved_views) {
+                        Ok(()) => {
+                            self.status = format!("Deleted camera view {}", view.name);
+                            (json!({"ok": true, "name": view.name}), Task::none())
+                        }
+                        Err(error) => {
+                            self.saved_views.insert(index, view);
+                            (
+                                json!({"ok": false, "error": error.to_string()}),
+                                Task::none(),
+                            )
+                        }
+                    }
+                } else {
+                    (
+                        json!({"ok": false, "error": "camera view not found for the active scan"}),
+                        Task::none(),
+                    )
+                }
             }
             ApiCommand::SetTheme { theme } => {
                 if let Some(theme) = UiTheme::from_key(&theme.to_ascii_lowercase()) {
@@ -10241,6 +10358,60 @@ mod camera_api_tests {
         assert_eq!(studio.zoom, 1.0);
         assert_eq!(studio.pan, [0.0, 0.0]);
         assert_eq!(studio.view_label, "ISOMETRIC");
+    }
+
+    #[test]
+    fn camera_api_lists_and_restores_only_the_active_scan_views() {
+        let directory = tempfile::tempdir().unwrap();
+        let first_path = directory.path().join("first.xyz");
+        let second_path = directory.path().join("second.xyz");
+        std::fs::write(&first_path, "0 0 0\n1 0 0\n").unwrap();
+        std::fs::write(&second_path, "0 1 0\n1 1 0\n").unwrap();
+        let first = Arc::new(pointcloud_core::open(&first_path, 10).unwrap());
+        let second = Arc::new(pointcloud_core::open(&second_path, 10).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(first)));
+        let _ = studio.update(Message::Loaded(Ok(second)));
+        studio.saved_views.push(SavedView {
+            source: camera_views::source_key(&first_path),
+            name: "First entrance".into(),
+            yaw: 0.5,
+            pitch: 0.25,
+            zoom: 2.0,
+            pan: [12.0, -8.0],
+        });
+        studio.saved_views.push(SavedView {
+            source: camera_views::source_key(&second_path),
+            name: "Second entrance".into(),
+            yaw: -0.5,
+            pitch: 0.1,
+            zoom: 3.0,
+            pan: [4.0, 5.0],
+        });
+
+        let _ = studio.update(Message::Select(0));
+        let listed = send(&mut studio, native_api::ApiCommand::ListCameraViews);
+        assert_eq!(listed["views"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["views"][0]["name"], "First entrance");
+        let restored = send(
+            &mut studio,
+            native_api::ApiCommand::RestoreCameraView {
+                name: "first ENTRANCE".into(),
+            },
+        );
+        assert_eq!(restored["ok"], true);
+        assert_eq!(studio.yaw, 0.5);
+        assert_eq!(studio.pan, [12.0, -8.0]);
+        assert_eq!(studio.view_label, "SAVED VIEW");
+        assert_eq!(
+            send(
+                &mut studio,
+                native_api::ApiCommand::RestoreCameraView {
+                    name: "Second entrance".into(),
+                },
+            )["ok"],
+            false
+        );
     }
 }
 
