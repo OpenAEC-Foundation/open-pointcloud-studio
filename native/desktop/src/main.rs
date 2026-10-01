@@ -4749,23 +4749,31 @@ impl Studio {
         .spacing(2)
         .align_y(iced::Alignment::Center)
         .padding([1, 8]);
-        let history = row![
-            button(icon_svg(ToolIcon::Undo, 16.0))
-                .on_press_maybe((!self.undo_deletions.is_empty()).then_some(Message::UndoDelete))
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
-                .width(27)
-                .height(24)
-                .padding(4),
-            button(icon_svg(ToolIcon::Redo, 16.0))
-                .on_press_maybe((!self.redo_deletions.is_empty()).then_some(Message::RedoDelete))
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
-                .width(27)
-                .height(24)
-                .padding(4),
+        let quick_access = row![
+            opencad_ribbon::quick_access_btn(
+                icon_svg(ToolIcon::Open, 20.0),
+                "Import point cloud",
+                Some(Message::Open),
+            ),
+            opencad_ribbon::quick_access_btn(
+                icon_svg(ToolIcon::Export, 20.0),
+                "Export active point cloud",
+                self.active.map(|_| Message::Export),
+            ),
+            opencad_ribbon::quick_access_btn(
+                icon_svg(ToolIcon::Undo, 20.0),
+                "Undo delete",
+                (!self.undo_deletions.is_empty()).then_some(Message::UndoDelete),
+            ),
+            opencad_ribbon::quick_access_btn(
+                icon_svg(ToolIcon::Redo, 20.0),
+                "Redo delete",
+                (!self.redo_deletions.is_empty()).then_some(Message::RedoDelete),
+            ),
         ]
-        .spacing(2);
+        .spacing(4);
         let tab_bar = container(
-            row![tabs, iced::widget::horizontal_space(), history]
+            row![quick_access, tabs, iced::widget::horizontal_space()]
                 .width(Fill)
                 .align_y(iced::Alignment::Center)
                 .padding([0, 8]),

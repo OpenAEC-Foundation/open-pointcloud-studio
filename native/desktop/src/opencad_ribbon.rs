@@ -3,7 +3,7 @@
 // Copyright OpenCADStudio contributors. Licensed under GPL-3.0.
 // Changes: adapted the ribbon primitives to iced 0.13 and point-cloud commands.
 
-use iced::widget::{button, column, container, row, text};
+use iced::widget::{button, column, container, row, text, tooltip};
 use iced::{Background, Border, Color, Element, Fill, Length, Theme};
 
 use crate::ui_theme;
@@ -11,6 +11,36 @@ use crate::Message;
 
 pub const ROW_H: f32 = 26.0;
 pub const TOOL_BAR_H: f32 = 3.0 * ROW_H + 18.0;
+pub const QUICK_ACCESS_W: f32 = 30.0;
+
+/// OpenCADStudio's compact top-strip action, adapted to native point-cloud
+/// commands and OpenAEC colors. Unavailable actions remain visible and muted.
+pub fn quick_access_btn<'a>(
+    icon: Element<'a, Message>,
+    label: &'static str,
+    message: Option<Message>,
+) -> Element<'a, Message> {
+    let control = button(container(icon).width(Fill).height(Fill).center(Fill))
+        .on_press_maybe(message)
+        .style(|theme, status| tool_btn_style(theme, false, status))
+        .width(Length::Fixed(QUICK_ACCESS_W))
+        .height(26)
+        .padding([2, 0]);
+    tooltip(
+        control,
+        container(text(label).size(11))
+            .padding([4, 7])
+            .style(|theme| {
+                let colors = ui_theme::colors(theme);
+                container::Style::default()
+                    .background(colors.panel_alt)
+                    .color(colors.text)
+            }),
+        tooltip::Position::Bottom,
+    )
+    .gap(6)
+    .into()
+}
 
 pub enum RibbonItem<'a> {
     Large(Element<'a, Message>),

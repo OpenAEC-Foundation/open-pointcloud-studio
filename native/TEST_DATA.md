@@ -46,6 +46,17 @@ editing groups and the final 3D BAG and Export groups; an 1100 px resize kept
 the same controls usable. See [`start`](../screenshots/native-ribbon-scroll-tools-start.png),
 [`end`](../screenshots/native-ribbon-scroll-tools-end.png), and
 [`1100 px`](../screenshots/native-ribbon-scroll-tools-narrow.png).
+The latest native ribbon was also checked against OpenCADStudio's Rust
+quick-access row. Its Import, Export, Undo and Redo actions now precede the
+tabs in the same compact pattern; disabled actions remain visible. The
+45.8-million-point AHN6 viewer with this top strip is shown in
+[`native-ribbon-quick-access-opencad.png`](../screenshots/native-ribbon-quick-access-opencad.png).
+The same development build opened three adjacent public AHN6 LAZ tiles
+(1,374,660,640 source bytes and 129,398,587 points), attached all three disk
+indexes and rendered a combined 79,998-point LOD; see
+[`native-ribbon-quick-access-three-ahn.png`](../screenshots/native-ribbon-quick-access-three-ahn.png).
+An exact world box across the first two tile boundaries selected 5,365 and
+6,416 points respectively (11,781 total), with zero from the third tile.
 
 On 1 October 2026, the native GUI mesher reported reading progress on the
 45,839,678-point AHN6 tile while the viewport remained responsive. Cancelling
