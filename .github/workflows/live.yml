@@ -1,4 +1,4 @@
-name: Deploy site
+name: Deploy Classic web demo
 
 on:
   push:
@@ -22,8 +22,8 @@ jobs:
       deploy_user: ${{ vars.DEPLOY_USER }}
       deploy_path: /var/www/open-pointcloud-studio.open-aec.com
       node_version: "22"
-      install_command: npm ci
-      build_command: npm run build
-      deploy_source: dist
+      install_command: cd classic && npm ci
+      build_command: cd classic && npm run build
+      deploy_source: classic/dist
     secrets:
       deploy_ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}

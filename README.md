@@ -14,36 +14,14 @@ The native application currently opens LAS/LAZ/E57 and other point formats, hand
 
 Run the separate old desktop app locally with `./scripts/classic.sh run`. See [classic/README.md](classic/README.md) for its local release and source-build instructions.
 
-## Earlier application
-
-- Import LAS/LAZ pointcloud files
-- Color modes: RGB, Elevation, Classification, Intensity
-- Adjustable point size and point budget
-- Eye-Dome Lighting (EDL)
-- Classification filtering (ASPRS)
-- Octree-based LOD rendering
-- Dark, Light, Blue, and High Contrast themes
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
-- Rust 1.70+
-
-### Development
+## Build the native application
 
 ```bash
-npm install
-npm run dev          # Frontend only
-npm run tauri dev    # Full Tauri app
+cd native
+cargo build --release -p open-pointcloud-studio-native
 ```
 
-### Build
-
-```bash
-npm run tauri build
-```
+The native executable is `native/target/release/open-pointcloud-studio-native` on Linux and macOS, or `native/target/release/open-pointcloud-studio-native.exe` on Windows. Its source, dependencies, tests and renderer are Rust and WGSL; it does not use the Classic Tauri frontend. The earlier web/Tauri source now lives entirely under [`classic/`](classic/README.md) for comparison and separate use.
 
 ## License
 

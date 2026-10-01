@@ -23,14 +23,17 @@ case "${1:-run}" in
     ;;
   dev)
     command -v pnpm >/dev/null 2>&1 || { echo "pnpm is required for a source build" >&2; exit 1; }
+    cd "$project_dir/classic"
     pnpm exec tauri dev --config src-tauri/tauri.classic.conf.json
     ;;
   build)
     command -v pnpm >/dev/null 2>&1 || { echo "pnpm is required for a source build" >&2; exit 1; }
+    cd "$project_dir/classic"
     pnpm exec tauri build --config src-tauri/tauri.classic.conf.json
     ;;
   frontend)
     command -v pnpm >/dev/null 2>&1 || { echo "pnpm is required for a source build" >&2; exit 1; }
+    cd "$project_dir/classic"
     pnpm build
     ;;
   *)
