@@ -3,6 +3,17 @@
 The files themselves are deliberately kept outside the repository. Check the
 source terms before redistributing a dataset or screenshots from it.
 
+On 2 October 2026, the native OBJ loader opened TinyObjLoader's public
+[multi-material Cornell box](https://github.com/tinyobjloader/tinyobjloader/blob/release/models/cornell_box_multimaterial.obj)
+with its adjacent [MTL file](https://github.com/tinyobjloader/tinyobjloader/blob/release/models/cornell_box.mtl).
+Its 76 vertices and 36 triangles displayed the MTL diffuse red, green and
+white surfaces in the Rust GUI; see the
+[material screenshot](../screenshots/native-cornell-obj-mtl-colors.png).
+The native `--mesh-export` command wrote the resolved colors into an OBJ with
+60 white, 12 green and four red vertex-color records. The source OBJ and MTL
+remain under `/tmp` and are not part of this repository. This verifies solid
+`Kd` colors; OBJ texture maps are not yet displayed.
+
 On 1 October 2026, the merged 114,174,907-point AHN6 LAZ was exported to a
 3,425,247,452-byte binary PLY. The previous native reader scanned this file
 in 56.61 s on one core; after bounded, parallel binary decoding it took

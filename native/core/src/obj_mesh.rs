@@ -1,13 +1,15 @@
 //! Bounded native OBJ face loader for showing reconstructed meshes.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{LoadError, SourceStamp};
 
 pub(crate) const MAX_VERTICES: usize = 1_000_000;
 pub(crate) const MAX_TRIANGLES: usize = 2_000_000;
+const MAX_MTL_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Default)]
 pub struct MeshGeometry {
@@ -106,20 +108,156 @@ pub fn write_obj_mesh(
     Ok(())
 }
 
+fn read_material_library(
+    path: &Path,
+    materials: &mut HashMap<String, [u8; 3]>,
+) -> Result<(), LoadError> {
+    if std::fs::metadata(path)?.len() > MAX_MTL_BYTES {
+        return Err(LoadError::InvalidData(
+            "OBJ material library is too large".into(),
+        ));
+    }
+    let before = SourceStamp::read(path)?;
+    let source = BufReader::new(File::open(path)?);
+    let mut name = None;
+    let mut loaded = HashMap::new();
+    for line in source.lines() {
+        let line = line?;
+        let mut fields = line.split_whitespace();
+        match fields.next() {
+            Some("newmtl") => {
+                let value = fields.collect::<Vec<_>>().join(" ");
+                name = (!value.is_empty()).then_some(value);
+            }
+            Some("Kd") => {
+                let Some(name) = &name else { continue };
+                let values = fields
+                    .take(3)
+                    .map(str::parse::<f64>)
+                    .collect::<Result<Vec<_>, _>>();
+                let Ok(values) = values else { continue };
+                if values.len() != 3
+                    || values
+                        .iter()
+                        .any(|value| !value.is_finite() || !(0.0..=255.0).contains(value))
+                {
+                    continue;
+                }
+                let scale = if values.iter().all(|value| *value <= 1.0) {
+                    255.0
+                } else {
+                    1.0
+                };
+                loaded.insert(
+                    name.clone(),
+                    std::array::from_fn(|axis| (values[axis] * scale).round() as u8),
+                );
+            }
+            _ => {}
+        }
+    }
+    if SourceStamp::read(path)? != before {
+        return Err(LoadError::InvalidData(
+            "OBJ material library changed while loading".into(),
+        ));
+    }
+    materials.extend(loaded);
+    Ok(())
+}
+
+fn material_library_paths(parent: &Path, names: Vec<&str>) -> Vec<PathBuf> {
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let joined_name = names.join(" ");
+    let joined = parent.join(&joined_name);
+    if !Path::new(&joined_name).is_absolute() && joined.is_file() {
+        return vec![joined];
+    }
+    names
+        .into_iter()
+        .map(Path::new)
+        .filter(|path| !path.is_absolute())
+        .map(|path| parent.join(path))
+        .collect()
+}
+
+fn apply_material_colors(
+    mesh: &mut MeshGeometry,
+    mut colors: Vec<[u8; 3]>,
+    explicit_colors: &[bool],
+    face_colors: &[Option<[u8; 3]>],
+) -> Result<(), LoadError> {
+    let mut assigned = vec![None; mesh.vertices.len()];
+    let mut duplicates = HashMap::<(u32, [u8; 3]), u32>::new();
+    for (face, material) in mesh.triangles.iter_mut().zip(face_colors) {
+        for index in face {
+            let original = *index as usize;
+            if explicit_colors[original] {
+                continue;
+            }
+            let desired = material.unwrap_or([255; 3]);
+            if assigned[original].is_none() {
+                assigned[original] = Some(desired);
+                colors[original] = desired;
+                continue;
+            }
+            if assigned[original] == Some(desired) {
+                continue;
+            }
+            let key = (*index, desired);
+            if let Some(&duplicate) = duplicates.get(&key) {
+                *index = duplicate;
+                continue;
+            }
+            if mesh.vertices.len() >= MAX_VERTICES {
+                return Err(LoadError::InvalidData(
+                    "OBJ material vertex limit exceeded".into(),
+                ));
+            }
+            let duplicate = mesh.vertices.len() as u32;
+            mesh.vertices.push(mesh.vertices[original]);
+            colors.push(desired);
+            if let Some(normals) = &mut mesh.normals {
+                normals.push(normals[original]);
+            }
+            duplicates.insert(key, duplicate);
+            *index = duplicate;
+        }
+    }
+    mesh.colors = Some(colors);
+    Ok(())
+}
+
 /// Read OBJ vertex positions and triangulate polygon faces for GPU display.
 pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> {
     let path = path.as_ref();
     let before = SourceStamp::read(path)?;
     let source = BufReader::new(File::open(path)?);
+    let parent = path.parent().unwrap_or(Path::new("."));
     let mut mesh = MeshGeometry::default();
     let mut colors = Vec::<[u8; 3]>::new();
+    let mut explicit_colors = Vec::<bool>::new();
     let mut has_color = false;
     let mut normals = Vec::<[f32; 3]>::new();
     let mut normals_aligned = true;
+    let mut materials = HashMap::<String, [u8; 3]>::new();
+    let mut active_material = None;
+    let mut face_colors = Vec::<Option<[u8; 3]>>::new();
     for line in source.lines() {
         let line = line?;
         let mut fields = line.split_whitespace();
         match fields.next() {
+            Some("mtllib") => {
+                for library in material_library_paths(parent, fields.collect()) {
+                    let _ = read_material_library(&library, &mut materials);
+                }
+            }
+            Some("usemtl") => {
+                active_material = materials
+                    .get(&fields.collect::<Vec<_>>().join(" "))
+                    .copied();
+            }
             Some("v") => {
                 let mut xyz = [0.0_f64; 3];
                 for value in &mut xyz {
@@ -136,7 +274,8 @@ pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> 
                     return Err(LoadError::InvalidData("OBJ vertex limit exceeded".into()));
                 }
                 let extras: Vec<_> = fields.collect();
-                let rgb = if matches!(extras.len(), 3 | 4) {
+                let explicit_color = matches!(extras.len(), 3 | 4);
+                let rgb = if explicit_color {
                     let values = extras[extras.len() - 3..]
                         .iter()
                         .map(|field| field.parse::<f64>())
@@ -160,6 +299,7 @@ pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> 
                     [255; 3]
                 };
                 colors.push(rgb);
+                explicit_colors.push(explicit_color);
                 mesh.vertices.push(xyz);
             }
             Some("vn") => {
@@ -212,6 +352,7 @@ pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> 
                     }
                     mesh.triangles
                         .push([indices[0], indices[next], indices[next + 1]]);
+                    face_colors.push(active_material);
                 }
             }
             _ => {}
@@ -222,11 +363,13 @@ pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> 
             "OBJ has no faces or changed while loading".into(),
         ));
     }
-    if has_color {
-        mesh.colors = Some(colors);
-    }
     if normals_aligned && normals.len() == mesh.vertices.len() {
         mesh.normals = Some(normals);
+    }
+    if face_colors.iter().any(Option::is_some) {
+        apply_material_colors(&mut mesh, colors, &explicit_colors, &face_colors)?;
+    } else if has_color {
+        mesh.colors = Some(colors);
     }
     Ok(mesh)
 }
@@ -306,5 +449,33 @@ mod tests {
         };
         assert!(write_obj_mesh(&invalid, &destination, &[]).is_err());
         assert_eq!(std::fs::read_to_string(destination).unwrap(), saved);
+    }
+
+    #[test]
+    fn material_diffuse_colors_split_shared_vertices_and_survive_export() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("materials.obj");
+        let library = directory.path().join("materials.mtl");
+        let exported = directory.path().join("exported.obj");
+        std::fs::write(&library, "newmtl red\nKd 1 0 0\nnewmtl blue\nKd 0 0 1\n").unwrap();
+        std::fs::write(
+            &source,
+            "mtllib materials.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nusemtl red\nf 1 2 3\nusemtl blue\nf 1 3 4\n",
+        )
+        .unwrap();
+        let mesh = read_obj_mesh(&source).unwrap();
+        assert_eq!(mesh.triangles.len(), 2);
+        assert_eq!(mesh.vertices.len(), 6);
+        let colors = mesh.colors.as_ref().unwrap();
+        for index in mesh.triangles[0] {
+            assert_eq!(colors[index as usize], [255, 0, 0]);
+        }
+        for index in mesh.triangles[1] {
+            assert_eq!(colors[index as usize], [0, 0, 255]);
+        }
+        write_obj_mesh(&mesh, &exported, &[]).unwrap();
+        let reopened = read_obj_mesh(exported).unwrap();
+        assert_eq!(reopened.colors, mesh.colors);
+        assert_eq!(reopened.triangles, mesh.triangles);
     }
 }
