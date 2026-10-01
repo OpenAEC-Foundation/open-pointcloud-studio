@@ -559,6 +559,17 @@ enum RibbonTab {
     Tools,
 }
 
+impl RibbonTab {
+    fn scroll_id(self) -> scrollable::Id {
+        scrollable::Id::new(match self {
+            Self::Home => "ops-ribbon-home",
+            Self::View => "ops-ribbon-view",
+            Self::Select => "ops-ribbon-select",
+            Self::Tools => "ops-ribbon-tools",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum MeshMode {
     Terrain,
@@ -719,6 +730,7 @@ enum Message {
         Result<Vec<(usize, Arc<SelectionMask>)>, String>,
     ),
     Tab(RibbonTab),
+    RibbonScroll(f32),
     Theme(UiTheme),
     Open,
     FilesChosen(Option<Vec<PathBuf>>),
@@ -1794,6 +1806,15 @@ impl Studio {
                 }
             }
             Message::Tab(tab) => self.ribbon_tab = tab,
+            Message::RibbonScroll(direction) => {
+                return scrollable::scroll_by(
+                    self.ribbon_tab.scroll_id(),
+                    scrollable::AbsoluteOffset {
+                        x: direction * 320.0,
+                        y: 0.0,
+                    },
+                );
+            }
             Message::Theme(theme) => {
                 self.ui_theme = theme;
                 theme.save();
@@ -3976,6 +3997,33 @@ impl Studio {
         .height(29)
         .style(|theme| container::Style::default().background(ui_theme::colors(theme).tabs));
 
+        let mesh_available = self
+            .active
+            .and_then(|index| self.clouds.get(index))
+            .is_some_and(|entry| entry.mesh.is_some());
+        let mut surface_tools = row![
+            ribbon_button_when(
+                "Terrain mesh",
+                Message::MeshRequest(MeshMode::Terrain),
+                self.active.is_some() && self.mesh_job.is_none() && !self.mesh_dialog_pending
+            ),
+            ribbon_button_when(
+                "3D surface",
+                Message::MeshRequest(MeshMode::Surface),
+                self.active.is_some() && self.mesh_job.is_none() && !self.mesh_dialog_pending
+            ),
+        ]
+        .spacing(2);
+        if self.mesh_job.is_some() {
+            surface_tools = surface_tools.push(ribbon_button("Cancel mesh", Message::CancelMesh));
+        }
+        if mesh_available {
+            surface_tools = surface_tools.push(ribbon_button_when(
+                "Export mesh",
+                Message::ExportMesh,
+                !self.mesh_export_pending,
+            ));
+        }
         let groups: Element<'_, Message> = match self.ribbon_tab {
             RibbonTab::Home => row![
                 opencad_ribbon::render_group_items(
@@ -4462,40 +4510,7 @@ impl Studio {
                     .align_y(iced::Alignment::Center)
                     .into()
                 ),
-                ribbon_group(
-                    "SURFACE",
-                    row![
-                        ribbon_button_when(
-                            "Terrain mesh",
-                            Message::MeshRequest(MeshMode::Terrain),
-                            self.active.is_some()
-                                && self.mesh_job.is_none()
-                                && !self.mesh_dialog_pending
-                        ),
-                        ribbon_button_when(
-                            "3D surface",
-                            Message::MeshRequest(MeshMode::Surface),
-                            self.active.is_some()
-                                && self.mesh_job.is_none()
-                                && !self.mesh_dialog_pending
-                        ),
-                        ribbon_button_when(
-                            "Cancel mesh",
-                            Message::CancelMesh,
-                            self.mesh_job.is_some()
-                        ),
-                        ribbon_button_when(
-                            "Export mesh",
-                            Message::ExportMesh,
-                            self.active
-                                .and_then(|index| self.clouds.get(index))
-                                .is_some_and(|entry| entry.mesh.is_some())
-                                && !self.mesh_export_pending,
-                        ),
-                    ]
-                    .spacing(2)
-                    .into(),
-                ),
+                ribbon_group("SURFACE", surface_tools.into(),),
                 ribbon_group(
                     "CITY DATA",
                     tool_button("3D BAG", Message::ToggleBagPanel, self.bag_panel),
@@ -4525,11 +4540,33 @@ impl Studio {
                 .width(iced::Length::Shrink)
                 .height(opencad_ribbon::TOOL_BAR_H),
         )
+        .id(self.ribbon_tab.scroll_id())
         .direction(scrollable::Direction::Horizontal(
-            scrollable::Scrollbar::new().width(3).scroller_width(3),
+            scrollable::Scrollbar::new().width(5).scroller_width(5),
         ))
         .width(Fill)
         .height(opencad_ribbon::TOOL_BAR_H);
+        let scroll_button = |label, direction| {
+            container(
+                button(text(label).size(26))
+                    .on_press(Message::RibbonScroll(direction))
+                    .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                    .width(26)
+                    .height(38)
+                    .padding(0),
+            )
+            .width(30)
+            .height(opencad_ribbon::TOOL_BAR_H)
+            .align_y(iced::Alignment::Center)
+            .align_x(iced::Alignment::Center)
+        };
+        let tool_strip = row![
+            scroll_button("‹", -1.0),
+            group_strip,
+            scroll_button("›", 1.0),
+        ]
+        .height(opencad_ribbon::TOOL_BAR_H)
+        .align_y(iced::Alignment::Center);
         container(
             column![
                 tab_bar,
@@ -4538,7 +4575,7 @@ impl Studio {
                     .height(1)
                     .style(|theme| container::Style::default()
                         .background(ui_theme::colors(theme).accent)),
-                group_strip,
+                tool_strip,
             ]
             .spacing(0),
         )

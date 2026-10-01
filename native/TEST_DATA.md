@@ -25,6 +25,13 @@ the camera pan to `[45, 124]` and returned a fresh 2,000,000-point LOD.
 shows the final dense view. The core test also cancels a leaf-preview build
 after it has begun reading, verifies that no partial preview is published,
 and successfully rebuilds it on the next request.
+The Tools ribbon was checked visually against the separately running Classic
+v0.3 build for button coverage and against the OpenAEC-styled native ribbon for
+appearance. At 1440 px, the left and right controls expose both the first
+editing groups and the final 3D BAG and Export groups; an 1100 px resize kept
+the same controls usable. See [`start`](../screenshots/native-ribbon-scroll-tools-start.png),
+[`end`](../screenshots/native-ribbon-scroll-tools-end.png), and
+[`1100 px`](../screenshots/native-ribbon-scroll-tools-narrow.png).
 
 On 1 October 2026, the native GUI mesher reported reading progress on the
 45,839,678-point AHN6 tile while the viewport remained responsive. Cancelling
