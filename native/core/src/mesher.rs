@@ -199,7 +199,13 @@ pub fn mesh_terrain_obj_where_progress(
                 let dy = planar[left].y - planar[right].y;
                 dx * dx + dy * dy <= edge_limit_squared
             });
-            short.then_some([a + 1, b + 1, c + 1])
+            let winding = (planar[b].x - planar[a].x) * (planar[c].y - planar[a].y)
+                - (planar[b].y - planar[a].y) * (planar[c].x - planar[a].x);
+            short.then_some(if winding >= 0.0 {
+                [a + 1, b + 1, c + 1]
+            } else {
+                [a + 1, c + 1, b + 1]
+            })
         })
         .collect();
     if faces.is_empty() {
@@ -207,24 +213,69 @@ pub fn mesh_terrain_obj_where_progress(
             "no terrain faces within the allowed edge length".into(),
         ));
     }
+    let mut normals = vec![[0.0_f64; 3]; vertices.len()];
+    for [a, b, c] in &faces {
+        let [pa, pb, pc] = [
+            vertices[a - 1].xyz,
+            vertices[b - 1].xyz,
+            vertices[c - 1].xyz,
+        ];
+        let ab = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+        let ac = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+        let normal = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        for index in [*a, *b, *c] {
+            for axis in 0..3 {
+                normals[index - 1][axis] += normal[axis];
+            }
+        }
+    }
+    for normal in &mut normals {
+        let length = normal.iter().map(|value| value * value).sum::<f64>().sqrt();
+        if length > f64::EPSILON {
+            for value in normal {
+                *value /= length;
+            }
+        } else {
+            *normal = [0.0, 0.0, 1.0];
+        }
+    }
     progress(MeshProgress::new(MeshStage::Reconstructing, 1, 1))?;
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    let write_total = (vertices.len() + faces.len()) as u64;
+    let write_total = (vertices.len() * 2 + faces.len()) as u64;
     progress(MeshProgress::new(MeshStage::Writing, 0, write_total))?;
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
         writeln!(writer, "# Open Pointcloud Studio terrain mesh")?;
         writeln!(writer, "o Terrain")?;
+        let has_color = vertices.iter().any(|point| point.rgb.is_some());
         for (index, point) in vertices.iter().enumerate() {
-            writeln!(
-                writer,
-                "v {:.9} {:.9} {:.9}",
-                point.xyz[0], point.xyz[1], point.xyz[2]
-            )?;
+            if has_color {
+                let rgb = point.rgb.unwrap_or([255; 3]);
+                writeln!(
+                    writer,
+                    "v {:.9} {:.9} {:.9} {:.6} {:.6} {:.6}",
+                    point.xyz[0],
+                    point.xyz[1],
+                    point.xyz[2],
+                    f64::from(rgb[0]) / 255.0,
+                    f64::from(rgb[1]) / 255.0,
+                    f64::from(rgb[2]) / 255.0,
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    "v {:.9} {:.9} {:.9}",
+                    point.xyz[0], point.xyz[1], point.xyz[2]
+                )?;
+            }
             if (index + 1).is_multiple_of(4_096) {
                 progress(MeshProgress::new(
                     MeshStage::Writing,
@@ -233,12 +284,26 @@ pub fn mesh_terrain_obj_where_progress(
                 ))?;
             }
         }
-        for (index, [a, b, c]) in faces.iter().enumerate() {
-            writeln!(writer, "f {a} {b} {c}")?;
+        for (index, normal) in normals.iter().enumerate() {
+            writeln!(
+                writer,
+                "vn {:.8} {:.8} {:.8}",
+                normal[0], normal[1], normal[2]
+            )?;
             if (index + 1).is_multiple_of(4_096) {
                 progress(MeshProgress::new(
                     MeshStage::Writing,
                     (vertices.len() + index + 1) as u64,
+                    write_total,
+                ))?;
+            }
+        }
+        for (index, [a, b, c]) in faces.iter().enumerate() {
+            writeln!(writer, "f {a}//{a} {b}//{b} {c}//{c}")?;
+            if (index + 1).is_multiple_of(4_096) {
+                progress(MeshProgress::new(
+                    MeshStage::Writing,
+                    (vertices.len() * 2 + index + 1) as u64,
                     write_total,
                 ))?;
             }
@@ -264,6 +329,28 @@ pub fn mesh_terrain_obj_where_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::read_obj_mesh;
+
+    #[test]
+    fn terrain_mesh_preserves_rgb_and_writes_normals() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("colored-terrain.xyz");
+        let destination = directory.path().join("colored-terrain.obj");
+        let mut data = String::new();
+        for y in 0..5 {
+            for x in 0..5 {
+                data.push_str(&format!("{x} {y} 0 {} {} 128\n", x * 40, y * 40));
+            }
+        }
+        fs::write(&source, data).unwrap();
+        let cloud = super::super::open(&source, 1).unwrap();
+        mesh_terrain_obj(&cloud, &destination, MeshConfig::default()).unwrap();
+        let mesh = read_obj_mesh(destination).unwrap();
+        assert!(!mesh.triangles.is_empty());
+        assert_eq!(mesh.colors.as_ref().unwrap().len(), mesh.vertices.len());
+        assert_eq!(mesh.normals.as_ref().unwrap().len(), mesh.vertices.len());
+        assert!(mesh.normals.unwrap().iter().all(|normal| normal[2] > 0.99));
+    }
 
     #[test]
     fn meshes_complete_stream_and_keeps_lowest_point_per_cell() {

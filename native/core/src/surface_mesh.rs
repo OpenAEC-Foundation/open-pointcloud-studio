@@ -251,13 +251,13 @@ fn voxel_key(point: [f64; 3], origin: [f64; 3], width: f64) -> [i64; 3] {
 /// Keep one point near each occupied voxel's center. A larger reservoir is
 /// needed here: thinning only the final vertex budget cannot repair regions
 /// that a density-weighted sample already missed.
-fn spatially_thin(candidates: Vec<[f64; 3]>, budget: usize) -> Vec<[f64; 3]> {
+fn spatially_thin_indices(candidates: &[[f64; 3]], budget: usize) -> Vec<usize> {
     if candidates.len() <= budget {
-        return candidates;
+        return (0..candidates.len()).collect();
     }
     let mut minimum = [f64::INFINITY; 3];
     let mut maximum = [f64::NEG_INFINITY; 3];
-    for point in &candidates {
+    for point in candidates {
         for axis in 0..3 {
             minimum[axis] = minimum[axis].min(point[axis]);
             maximum[axis] = maximum[axis].max(point[axis]);
@@ -267,14 +267,14 @@ fn spatially_thin(candidates: Vec<[f64; 3]>, budget: usize) -> Vec<[f64; 3]> {
         .map(|axis| maximum[axis] - minimum[axis])
         .fold(0.0, f64::max);
     if extent <= f64::EPSILON {
-        return candidates.into_iter().take(budget).collect();
+        return (0..budget).collect();
     }
     let mut low = extent / (candidates.len() as f64 * 2.0);
     let mut high = extent * 2.0;
     for _ in 0..24 {
         let width = (low * high).sqrt();
         let mut occupied = HashSet::with_capacity(budget + 1);
-        for point in &candidates {
+        for point in candidates {
             occupied.insert(voxel_key(*point, minimum, width));
             if occupied.len() > budget {
                 break;
@@ -338,11 +338,7 @@ fn spatially_thin(candidates: Vec<[f64; 3]>, budget: usize) -> Vec<[f64; 3]> {
         );
         indices.sort_unstable();
     }
-    indices
-        .into_iter()
-        .take(budget)
-        .map(|index| candidates[index])
-        .collect()
+    indices.into_iter().take(budget).collect()
 }
 
 /// Reconstruct a general 3D surface and atomically write an OBJ. The point
@@ -395,7 +391,7 @@ pub fn mesh_surface_obj_where_progress(
         .max_vertices
         .saturating_mul(4)
         .min(config.max_vertices.saturating_add(150_000));
-    let mut candidates = Vec::<[f64; 3]>::with_capacity(candidate_limit);
+    let mut candidates = Vec::<Point>::with_capacity(candidate_limit);
     let mut visited = 0u64;
     let mut source_points = 0u64;
     let mut random = 0x7a81_09e6_63d1_c207u64;
@@ -418,14 +414,14 @@ pub fn mesh_surface_obj_where_progress(
         }
         source_points += 1;
         if candidates.len() < candidate_limit {
-            candidates.push(point.xyz);
+            candidates.push(point);
         } else {
             random ^= random << 13;
             random ^= random >> 7;
             random ^= random << 17;
             let slot = random % source_points;
             if slot < candidate_limit as u64 {
-                candidates[slot as usize] = point.xyz;
+                candidates[slot as usize] = point;
             }
         }
         Ok(())
@@ -448,7 +444,12 @@ pub fn mesh_surface_obj_where_progress(
         ));
     }
     progress(MeshProgress::new(MeshStage::Reconstructing, 0, 0))?;
-    let vertices = spatially_thin(candidates, config.max_vertices);
+    let candidate_xyz: Vec<_> = candidates.iter().map(|point| point.xyz).collect();
+    let vertex_points: Vec<_> = spatially_thin_indices(&candidate_xyz, config.max_vertices)
+        .into_iter()
+        .map(|index| candidates[index])
+        .collect();
+    let vertices: Vec<_> = vertex_points.iter().map(|point| point.xyz).collect();
     let reconstruct_total = vertices.len() as u64 * 3;
     let mut indices: Vec<usize> = (0..vertices.len()).collect();
     let mut nodes = Vec::with_capacity(vertices.len());
@@ -583,18 +584,33 @@ pub fn mesh_surface_obj_where_progress(
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    let write_total = (vertices.len() + faces.len()) as u64;
+    let write_total = (vertices.len() * 2 + faces.len()) as u64;
     progress(MeshProgress::new(MeshStage::Writing, 0, write_total))?;
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
         writeln!(writer, "# Open Pointcloud Studio 3D surface mesh")?;
         writeln!(writer, "o Surface")?;
+        let has_color = vertex_points.iter().any(|point| point.rgb.is_some());
         for (index, vertex) in vertices.iter().enumerate() {
-            writeln!(
-                writer,
-                "v {:.9} {:.9} {:.9}",
-                vertex[0], vertex[1], vertex[2]
-            )?;
+            if has_color {
+                let rgb = vertex_points[index].rgb.unwrap_or([255; 3]);
+                writeln!(
+                    writer,
+                    "v {:.9} {:.9} {:.9} {:.6} {:.6} {:.6}",
+                    vertex[0],
+                    vertex[1],
+                    vertex[2],
+                    f64::from(rgb[0]) / 255.0,
+                    f64::from(rgb[1]) / 255.0,
+                    f64::from(rgb[2]) / 255.0,
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    "v {:.9} {:.9} {:.9}",
+                    vertex[0], vertex[1], vertex[2]
+                )?;
+            }
             if (index + 1).is_multiple_of(4_096) {
                 progress(MeshProgress::new(
                     MeshStage::Writing,
@@ -603,12 +619,35 @@ pub fn mesh_surface_obj_where_progress(
                 ))?;
             }
         }
-        for (index, [a, b, c]) in faces.iter().enumerate() {
-            writeln!(writer, "f {} {} {}", a + 1, b + 1, c + 1)?;
+        for (index, normal) in normals.iter().enumerate() {
+            writeln!(
+                writer,
+                "vn {:.8} {:.8} {:.8}",
+                normal[0], normal[1], normal[2]
+            )?;
             if (index + 1).is_multiple_of(4_096) {
                 progress(MeshProgress::new(
                     MeshStage::Writing,
                     (vertices.len() + index + 1) as u64,
+                    write_total,
+                ))?;
+            }
+        }
+        for (index, [a, b, c]) in faces.iter().enumerate() {
+            writeln!(
+                writer,
+                "f {}//{} {}//{} {}//{}",
+                a + 1,
+                a + 1,
+                b + 1,
+                b + 1,
+                c + 1,
+                c + 1
+            )?;
+            if (index + 1).is_multiple_of(4_096) {
+                progress(MeshProgress::new(
+                    MeshStage::Writing,
+                    (vertices.len() * 2 + index + 1) as u64,
                     write_total,
                 ))?;
             }
@@ -639,6 +678,31 @@ fn edge_key(a: u32, b: u32) -> (u32, u32) {
 mod tests {
     use super::*;
     use crate::{open, read_obj_mesh};
+
+    #[test]
+    fn surface_mesh_preserves_rgb_and_estimated_normals() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("colored-wall.xyz");
+        let destination = directory.path().join("colored-wall.obj");
+        let mut data = String::new();
+        for y in 0..6 {
+            for z in 0..6 {
+                data.push_str(&format!("0 {y} {z} {} {} 128\n", y * 40, z * 40));
+            }
+        }
+        fs::write(&source, data).unwrap();
+        let cloud = open(&source, 1).unwrap();
+        mesh_surface_obj(&cloud, &destination, SurfaceMeshConfig::default()).unwrap();
+        let mesh = read_obj_mesh(destination).unwrap();
+        assert!(!mesh.triangles.is_empty());
+        assert_eq!(mesh.colors.as_ref().unwrap().len(), mesh.vertices.len());
+        assert_eq!(mesh.normals.as_ref().unwrap().len(), mesh.vertices.len());
+        assert!(mesh
+            .normals
+            .unwrap()
+            .iter()
+            .all(|normal| normal[0].abs() > 0.99));
+    }
 
     #[test]
     fn cancellation_during_surface_write_preserves_existing_mesh() {
@@ -682,7 +746,10 @@ mod tests {
                 candidates.push([10.0 + x as f64, y as f64, 0.0]);
             }
         }
-        let selected = spatially_thin(candidates, 40);
+        let selected: Vec<_> = spatially_thin_indices(&candidates, 40)
+            .into_iter()
+            .map(|index| candidates[index])
+            .collect();
         assert_eq!(selected.len(), 40);
         assert!(selected.iter().filter(|point| point[0] >= 10.0).count() >= 30);
     }

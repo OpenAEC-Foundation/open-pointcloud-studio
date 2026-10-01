@@ -183,8 +183,20 @@ impl<'a> GpuViewport<'a> {
                     break;
                 }
                 mesh_vertices.reserve(mesh.vertices.len());
-                for xyz in &mesh.vertices {
+                for (index, xyz) in mesh.vertices.iter().enumerate() {
                     let xyz = entry.transform.xyz(*xyz);
+                    let color = mesh
+                        .colors
+                        .as_ref()
+                        .and_then(|colors| colors.get(index))
+                        .map_or([0.56, 0.55, 0.51, 0.82], |rgb| {
+                            [
+                                f32::from(rgb[0]) / 255.0,
+                                f32::from(rgb[1]) / 255.0,
+                                f32::from(rgb[2]) / 255.0,
+                                0.82,
+                            ]
+                        });
                     mesh_vertices.push(GpuPoint {
                         relative: [
                             (xyz[0] - center[0]) as f32,
@@ -192,7 +204,7 @@ impl<'a> GpuViewport<'a> {
                             (xyz[2] - center[2]) as f32,
                             0.0,
                         ],
-                        color: [0.56, 0.55, 0.51, 0.82],
+                        color,
                     });
                 }
                 mesh_indices.reserve(mesh.triangles.len() * 3);
@@ -871,5 +883,23 @@ mod tests {
         let detailed = draw(&studio);
         assert!(!Arc::ptr_eq(&clipped.geometry, &detailed.geometry));
         assert_eq!(detailed.geometry.points.len(), 1);
+
+        studio.clouds[0].mesh = Some(Arc::new(MeshGeometry {
+            vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            triangles: vec![[0, 1, 2]],
+            colors: Some(vec![[255, 0, 0], [0, 128, 0], [0, 0, 255]]),
+            normals: None,
+        }));
+        studio.clouds[0].mesh_visible = true;
+        let colored_mesh = draw(&studio);
+        assert_eq!(colored_mesh.geometry.mesh_vertices.len(), 3);
+        assert_eq!(
+            colored_mesh.geometry.mesh_vertices[0].color,
+            [1.0, 0.0, 0.0, 0.82]
+        );
+        assert_eq!(
+            colored_mesh.geometry.mesh_vertices[1].color[1],
+            128.0 / 255.0
+        );
     }
 }

@@ -35,6 +35,7 @@ pub fn read_mesh(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, LoadErr
     let mut mesh = MeshGeometry {
         vertices: Vec::new(),
         triangles: Vec::new(),
+        ..MeshGeometry::default()
     };
     let mut indices = HashMap::<[u64; 3], u32>::new();
     scan(path, &mut |entity| {

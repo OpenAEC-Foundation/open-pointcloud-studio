@@ -114,6 +114,36 @@ pub fn read_ply_mesh(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, Loa
                 .ok_or_else(|| LoadError::InvalidData(format!("PLY vertex has no {axis} property")))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let color_names = [
+        ["red", "diffuse_red"],
+        ["green", "diffuse_green"],
+        ["blue", "diffuse_blue"],
+    ];
+    let color_indices: Option<Vec<_>> = color_names
+        .iter()
+        .map(|names| {
+            header
+                .vertex_properties
+                .iter()
+                .enumerate()
+                .find_map(|(index, property)| match property {
+                    Property::Scalar(name, scalar)
+                        if names.iter().any(|expected| name == expected) =>
+                    {
+                        Some((index, *scalar))
+                    }
+                    _ => None,
+                })
+        })
+        .collect();
+    let normal_indices: Option<Vec<_>> = ["nx", "ny", "nz"]
+        .iter()
+        .map(|name| {
+            header.vertex_properties.iter().position(
+                |property| matches!(property, Property::Scalar(found, _) if found == name),
+            )
+        })
+        .collect();
     if !header
         .face_properties
         .iter()
@@ -126,6 +156,12 @@ pub fn read_ply_mesh(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, Loa
     let mut mesh = MeshGeometry {
         vertices: Vec::with_capacity(vertex_count),
         triangles: Vec::with_capacity(face_count.min(MAX_TRIANGLES)),
+        colors: color_indices
+            .as_ref()
+            .map(|_| Vec::with_capacity(vertex_count)),
+        normals: normal_indices
+            .as_ref()
+            .map(|_| Vec::with_capacity(vertex_count)),
     };
     match encoding {
         Encoding::Ascii => {
@@ -136,13 +172,19 @@ pub fn read_ply_mesh(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, Loa
                 if fields.len() != header.vertex_properties.len() {
                     return Err(LoadError::InvalidData("invalid PLY mesh vertex".into()));
                 }
-                let mut xyz = [0.0; 3];
-                for (axis, property) in axes.iter().copied().enumerate() {
-                    xyz[axis] = fields[property]
-                        .parse::<f64>()
-                        .map_err(|_| LoadError::InvalidData("invalid PLY coordinate".into()))?;
-                }
+                let values = fields
+                    .iter()
+                    .map(|field| field.parse::<f64>())
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| LoadError::InvalidData("invalid PLY vertex attribute".into()))?;
+                let xyz = [values[axes[0]], values[axes[1]], values[axes[2]]];
                 add_vertex(&mut mesh, xyz)?;
+                add_attributes(
+                    &mut mesh,
+                    &values,
+                    color_indices.as_deref(),
+                    normal_indices.as_deref(),
+                )?;
             }
             for _ in 0..face_count {
                 read_data_line(&mut reader, &mut line)?;
@@ -188,19 +230,23 @@ pub fn read_ply_mesh(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, Loa
         }
         Encoding::BinaryLittleEndian => {
             for _ in 0..vertex_count {
-                let mut xyz = [0.0; 3];
-                for (property_index, property) in header.vertex_properties.iter().enumerate() {
+                let mut values = Vec::with_capacity(header.vertex_properties.len());
+                for property in &header.vertex_properties {
                     let Property::Scalar(_, scalar) = property else {
                         return Err(LoadError::InvalidData(
                             "list properties in PLY vertices are unsupported".into(),
                         ));
                     };
-                    let value = read_scalar(&mut reader, *scalar)?;
-                    if let Some(axis) = axes.iter().position(|index| *index == property_index) {
-                        xyz[axis] = value;
-                    }
+                    values.push(read_scalar(&mut reader, *scalar)?);
                 }
+                let xyz = [values[axes[0]], values[axes[1]], values[axes[2]]];
                 add_vertex(&mut mesh, xyz)?;
+                add_attributes(
+                    &mut mesh,
+                    &values,
+                    color_indices.as_deref(),
+                    normal_indices.as_deref(),
+                )?;
             }
             for _ in 0..face_count {
                 let mut indices = None;
@@ -356,6 +402,41 @@ fn add_vertex(mesh: &mut MeshGeometry, xyz: [f64; 3]) -> Result<(), LoadError> {
     Ok(())
 }
 
+fn add_attributes(
+    mesh: &mut MeshGeometry,
+    values: &[f64],
+    color_indices: Option<&[(usize, Scalar)]>,
+    normal_indices: Option<&[usize]>,
+) -> Result<(), LoadError> {
+    if let (Some(colors), Some(indices)) = (&mut mesh.colors, color_indices) {
+        let mut rgb = [0; 3];
+        for (axis, (index, scalar)) in indices.iter().copied().enumerate() {
+            let value = values[index];
+            let value = match scalar {
+                Scalar::U16 | Scalar::I16 => value / 257.0,
+                Scalar::F32 | Scalar::F64 if value <= 1.0 => value * 255.0,
+                _ => value,
+            };
+            if !value.is_finite() || !(0.0..=255.0).contains(&value) {
+                return Err(LoadError::InvalidData("invalid PLY vertex color".into()));
+            }
+            rgb[axis] = value.round() as u8;
+        }
+        colors.push(rgb);
+    }
+    if let (Some(normals), Some(indices)) = (&mut mesh.normals, normal_indices) {
+        let normal = [values[indices[0]], values[indices[1]], values[indices[2]]];
+        if normal
+            .iter()
+            .any(|value| !value.is_finite() || value.abs() > f32::MAX as f64)
+        {
+            return Err(LoadError::InvalidData("invalid PLY vertex normal".into()));
+        }
+        normals.push(normal.map(|value| value as f32));
+    }
+    Ok(())
+}
+
 fn add_face(mesh: &mut MeshGeometry, indices: Vec<u32>) -> Result<(), LoadError> {
     if indices.len() < 3
         || indices
@@ -432,5 +513,48 @@ mod tests {
         )
         .unwrap();
         assert!(read_ply_mesh(file.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn reads_ascii_mesh_colors_and_normals() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nproperty float nx\nproperty float ny\nproperty float nz\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0 0 0 1\n1 0 0 0 128 0 0 0 1\n0 1 0 0 0 255 0 0 1\n3 0 1 2\n").unwrap();
+        let mesh = read_ply_mesh(file.path()).unwrap().unwrap();
+        assert_eq!(
+            mesh.colors.unwrap(),
+            vec![[255, 0, 0], [0, 128, 0], [0, 0, 255]]
+        );
+        assert_eq!(mesh.normals.unwrap(), vec![[0.0, 0.0, 1.0]; 3]);
+    }
+
+    #[test]
+    fn reads_binary_mesh_colors_and_normals() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let header = "ply\nformat binary_little_endian 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nproperty float nx\nproperty float ny\nproperty float nz\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n";
+        let mut bytes = header.as_bytes().to_vec();
+        for (xyz, rgb) in [
+            ([0.0_f32, 0.0, 0.0], [255, 0, 0]),
+            ([1.0, 0.0, 0.0], [0, 128, 0]),
+            ([0.0, 1.0, 0.0], [0, 0, 255]),
+        ] {
+            for value in xyz {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            bytes.extend_from_slice(&rgb);
+            for value in [0.0_f32, 0.0, 1.0] {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        bytes.push(3);
+        for index in [0_i32, 1, 2] {
+            bytes.extend_from_slice(&index.to_le_bytes());
+        }
+        std::fs::write(file.path(), bytes).unwrap();
+        let mesh = read_ply_mesh(file.path()).unwrap().unwrap();
+        assert_eq!(
+            mesh.colors.unwrap(),
+            vec![[255, 0, 0], [0, 128, 0], [0, 0, 255]]
+        );
+        assert_eq!(mesh.normals.unwrap(), vec![[0.0, 0.0, 1.0]; 3]);
     }
 }

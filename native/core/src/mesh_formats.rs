@@ -46,6 +46,7 @@ pub fn read_off_mesh(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, Loa
     let mut mesh = MeshGeometry {
         vertices: Vec::with_capacity(vertex_count),
         triangles: Vec::with_capacity(face_count),
+        ..MeshGeometry::default()
     };
     for _ in 0..vertex_count {
         let line = next_off_line(&mut lines)?
@@ -121,6 +122,7 @@ pub fn read_stl_mesh(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, Loa
     let mut mesh = MeshGeometry {
         vertices: Vec::new(),
         triangles: Vec::new(),
+        ..MeshGeometry::default()
     };
     let mut indices = HashMap::new();
     if let Some(count) = binary_count {

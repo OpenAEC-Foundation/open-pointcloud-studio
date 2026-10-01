@@ -120,6 +120,36 @@ fn export_edited_where(
     }
 }
 
+fn transformed_mesh_normals(normals: &[[f32; 3]], scale: [f64; 3]) -> Option<Vec<[f32; 3]>> {
+    if scale
+        .iter()
+        .any(|value| !value.is_finite() || value.abs() <= f64::EPSILON)
+    {
+        return None;
+    }
+    let orientation = if scale
+        .iter()
+        .filter(|value| **value < 0.0)
+        .count()
+        .is_multiple_of(2)
+    {
+        1.0
+    } else {
+        -1.0
+    };
+    normals
+        .iter()
+        .map(|normal| {
+            let mapped = std::array::from_fn::<_, 3, _>(|axis| {
+                f64::from(normal[axis]) / scale[axis] * orientation
+            });
+            let length = mapped.iter().map(|value| value * value).sum::<f64>().sqrt();
+            (length.is_finite() && length > f64::EPSILON)
+                .then(|| mapped.map(|value| (value / length) as f32))
+        })
+        .collect()
+}
+
 fn export_edited_section(
     cloud: &PointCloud,
     destination: &Path,
@@ -2119,6 +2149,10 @@ impl Studio {
                                         .map(|xyz| transform.xyz(*xyz))
                                         .collect(),
                                     triangles: mesh.triangles.clone(),
+                                    colors: mesh.colors.clone(),
+                                    normals: mesh.normals.as_deref().and_then(|normals| {
+                                        transformed_mesh_normals(normals, transform.scale)
+                                    }),
                                 };
                                 pointcloud_core::write_obj_mesh(&edited, &path, &[])?;
                             }
@@ -2737,6 +2771,10 @@ impl Studio {
                                     .map(|xyz| transform.xyz(*xyz))
                                     .collect(),
                                 triangles: mesh.triangles.clone(),
+                                colors: mesh.colors.clone(),
+                                normals: mesh.normals.as_deref().and_then(|normals| {
+                                    transformed_mesh_normals(normals, transform.scale)
+                                }),
                             };
                             pointcloud_core::write_obj_mesh(&edited, &path, comments)
                                 .map(|()| (path, mesh.vertices.len(), mesh.triangles.len()))
@@ -7841,6 +7879,20 @@ mod scan_marker_tests {
 #[cfg(test)]
 mod editing_tests {
     use super::*;
+
+    #[test]
+    fn mesh_normals_follow_nonuniform_and_reflected_scale() {
+        let normal = [std::f32::consts::FRAC_1_SQRT_2; 2];
+        let transformed =
+            transformed_mesh_normals(&[[normal[0], normal[1], 0.0]], [2.0, 1.0, 1.0]).unwrap();
+        assert!((transformed[0][0] - 0.447_213_6).abs() < 1e-5);
+        assert!((transformed[0][1] - 0.894_427_2).abs() < 1e-5);
+        assert_eq!(
+            transformed_mesh_normals(&[[0.0, 0.0, 1.0]], [-1.0, 1.0, 1.0]).unwrap(),
+            vec![[0.0, 0.0, -1.0]]
+        );
+        assert!(transformed_mesh_normals(&[[0.0, 0.0, 1.0]], [0.0, 1.0, 1.0]).is_none());
+    }
 
     #[test]
     fn live_transform_is_shared_by_view_selection_and_export() {
