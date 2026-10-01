@@ -21,7 +21,7 @@ cd native
 cargo build --release -p open-pointcloud-studio-native
 ```
 
-The native executable is `native/target/release/open-pointcloud-studio-native` on Linux and macOS, or `native/target/release/open-pointcloud-studio-native.exe` on Windows. Its source, dependencies, tests and renderer are Rust and WGSL; it does not use the Classic Tauri frontend. The earlier web/Tauri source now lives entirely under [`classic/`](classic/README.md) for comparison and separate use.
+The native executable is `native/target/release/open-pointcloud-studio` on Linux and macOS, or `native/target/release/open-pointcloud-studio.exe` on Windows. Its source, dependencies, tests and renderer are Rust and WGSL; it does not use the Classic Tauri frontend. The earlier web/Tauri source now lives entirely under [`classic/`](classic/README.md) for comparison and separate use.
 
 ## License
 

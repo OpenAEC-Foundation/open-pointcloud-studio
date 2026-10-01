@@ -51,13 +51,13 @@ jobs:
         include:
           - platform: ubuntu-22.04
             artifact: linux
-            binary: open-pointcloud-studio-native
+            binary: open-pointcloud-studio
           - platform: windows-latest
             artifact: windows
-            binary: open-pointcloud-studio-native.exe
+            binary: open-pointcloud-studio.exe
           - platform: macos-latest
             artifact: macos
-            binary: open-pointcloud-studio-native
+            binary: open-pointcloud-studio
     runs-on: ${{ matrix.platform }}
     defaults:
       run:
@@ -80,7 +80,7 @@ jobs:
           PLATFORM: ${{ matrix.artifact }}
           BINARY: ${{ matrix.binary }}
         run: |
-          archive="open-pointcloud-studio-native-${VERSION}-${PLATFORM}.tar.gz"
+          archive="open-pointcloud-studio-${VERSION}-${PLATFORM}.tar.gz"
           tar -czf "$archive" -C target/release "$BINARY"
           gh release upload "$VERSION" "$archive" --clobber --repo "$GITHUB_REPOSITORY"
 

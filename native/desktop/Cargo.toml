@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license = "GPL-3.0-only"
 
+[[bin]]
+name = "open-pointcloud-studio"
+path = "src/main.rs"
+
 [dependencies]
 pointcloud-core = { path = "../core" }
 iced = { version = "0.13.1", features = ["canvas", "image", "svg", "tokio"] }

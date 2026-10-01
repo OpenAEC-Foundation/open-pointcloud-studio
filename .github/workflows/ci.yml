@@ -16,13 +16,13 @@ jobs:
         include:
           - platform: ubuntu-22.04
             artifact: linux
-            binary: native/target/release/open-pointcloud-studio-native
+            binary: native/target/release/open-pointcloud-studio
           - platform: windows-latest
             artifact: windows
-            binary: native/target/release/open-pointcloud-studio-native.exe
+            binary: native/target/release/open-pointcloud-studio.exe
           - platform: macos-latest
             artifact: macos
-            binary: native/target/release/open-pointcloud-studio-native
+            binary: native/target/release/open-pointcloud-studio
     runs-on: ${{ matrix.platform }}
     defaults:
       run:
@@ -45,6 +45,6 @@ jobs:
         run: cargo build --release --locked -p open-pointcloud-studio-native
       - uses: actions/upload-artifact@v4
         with:
-          name: open-pointcloud-studio-native-${{ matrix.artifact }}
+          name: open-pointcloud-studio-${{ matrix.artifact }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
