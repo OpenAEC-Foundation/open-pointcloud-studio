@@ -44,6 +44,15 @@ metadata; the next run reopened and validated the same 7,852-node index in
 250,000-point octree LOD without scanning the 3.2 GiB source, then selected
 the same 432,975 exact points and framed them at 19.4×. See the
 [cached reopen screenshot](../screenshots/native-cached-3p2gib-ply-114m.png).
+A full-bounds indexed selection over the same 114,174,907-point PLY was
+started and its layer removed while the job was pending. The job reached
+`cancelled` in 0.196 s from request, with no cloud or selection left in the
+viewer. Repeating the test by hiding the layer cancelled in 0.085 s and left
+zero selected points. Both changes stop the disk scan instead of waiting for
+the full-source result to be discarded.
+The refreshed native dev build remains open on that PLY with a 250,000-point
+LOD and the 432,975-point exact selection; see the
+[current screenshot](../screenshots/native-current-114m-ply-selection.png).
 
 On 1 October 2026, the native GUI opened a separate 1,200,000-point LAS test
 source and reported octree source-reading progress. `cancel_index` stopped its

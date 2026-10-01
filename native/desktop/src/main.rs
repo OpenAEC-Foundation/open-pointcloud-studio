@@ -2865,6 +2865,7 @@ impl Studio {
     }
 
     fn load(&mut self, path: PathBuf) -> Task<Message> {
+        self.cancel_selection_for_scene_change();
         let is_las = path
             .extension()
             .and_then(|extension| extension.to_str())
@@ -3162,6 +3163,7 @@ impl Studio {
             Message::FilesChosen(None) => {}
             Message::Loaded(result) => match result {
                 Ok(cloud) => {
+                    self.cancel_selection_for_scene_change();
                     let cache_source = Arc::clone(&cloud);
                     let mesh_path = cloud.path.clone();
                     let mesh_format = mesh_path
@@ -4794,6 +4796,9 @@ impl Studio {
                 }
             }
             Message::SetVisible(index, visible) => {
+                if index < self.clouds.len() {
+                    self.cancel_selection_for_scene_change();
+                }
                 if let Some(entry) = self.clouds.get_mut(index) {
                     entry.visible = visible;
                     self.revision += 1;
@@ -4807,6 +4812,7 @@ impl Studio {
             }
             Message::Remove(index) => {
                 if index < self.clouds.len() {
+                    self.cancel_selection_for_scene_change();
                     self.clouds.remove(index);
                     self.undo_deletions.clear();
                     self.redo_deletions.clear();
@@ -5654,6 +5660,12 @@ impl Studio {
             self.revision += 1;
         }
         true
+    }
+
+    fn cancel_selection_for_scene_change(&self) {
+        if self.selection_pending {
+            self.selection_cancel.store(true, Ordering::Relaxed);
+        }
     }
 
     fn selection_status(&self) -> String {
@@ -10262,5 +10274,46 @@ mod duplicate_layer_tests {
 
         let _ = studio.update(Message::CachedIndexReady(second, Ok(Some(index))));
         assert!(studio.clouds[1].index.is_some());
+    }
+}
+
+#[cfg(test)]
+mod selection_scene_change_tests {
+    use super::*;
+
+    #[test]
+    fn opening_hiding_or_removing_a_layer_stops_stale_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scan.xyz");
+        std::fs::write(&path, "0 0 0\n1 0 0\n").unwrap();
+        let mut studio = Studio::default();
+        let first = Arc::new(pointcloud_core::open(&path, 2).unwrap());
+        let second = Arc::new(pointcloud_core::open(&path, 2).unwrap());
+        let _ = studio.update(Message::Loaded(Ok(first)));
+
+        studio.selection_pending = true;
+        studio.selection_cancel = Arc::new(AtomicBool::new(false));
+        let _ = studio.load(path.clone());
+        assert!(studio.selection_cancel.load(Ordering::Relaxed));
+        studio.selection_pending = false;
+
+        for change in [0, 1, 2] {
+            studio.selection_pending = true;
+            studio.selection_cancel = Arc::new(AtomicBool::new(false));
+            let cancel = Arc::clone(&studio.selection_cancel);
+            let revision = studio.revision;
+            let _ = studio.update(match change {
+                0 => Message::Loaded(Ok(Arc::clone(&second))),
+                1 => Message::SetVisible(1, false),
+                _ => Message::Remove(0),
+            });
+            assert!(cancel.load(Ordering::Relaxed));
+            assert!(studio.revision > revision);
+            let _ = studio.update(Message::SelectionReady(revision, Ok(Vec::new())));
+            assert!(!studio.selection_pending);
+            assert_eq!(studio.status, "Selection cancelled");
+        }
+        assert_eq!(studio.clouds.len(), 1);
+        assert!(studio.clouds[0].selection.is_none());
     }
 }
