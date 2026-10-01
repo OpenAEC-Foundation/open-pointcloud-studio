@@ -14,6 +14,7 @@ mod cloud_centroid;
 mod cloud_transform;
 mod gpu_viewport;
 mod native_api;
+mod native_chrome;
 mod opencad_properties;
 mod opencad_ribbon;
 mod preferences;
@@ -29,7 +30,7 @@ use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
 use iced::widget::{
     button, checkbox, column, container, image, pick_list, row, scrollable, slider, stack, svg,
-    text, text_input,
+    text, text_input, tooltip,
 };
 use iced::{Color, Element, Fill, Font, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 use pointcloud_core::{
@@ -194,16 +195,6 @@ fn display_name(path: &std::path::Path) -> &str {
         .and_then(|name| name.to_str())
         .unwrap_or("Point cloud");
     name.strip_prefix("open-pointcloud-").unwrap_or(name)
-}
-
-fn compact_filename(name: &str, max_chars: usize) -> String {
-    let length = name.chars().count();
-    if length <= max_chars {
-        return name.to_owned();
-    }
-    let mut compact = String::from("…");
-    compact.extend(name.chars().skip(length - max_chars.saturating_sub(1)));
-    compact
 }
 
 fn format_count(value: impl ToString) -> String {
@@ -705,7 +696,19 @@ fn main() -> iced::Result {
                 studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
                 studio.api_handle = Some(handle);
             }
-            let task = Task::batch(startup_files.into_iter().map(|path| studio.load(path)));
+            let chrome = Task::perform(
+                async {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    3
+                },
+                Message::SyncWindowChrome,
+            );
+            let task = Task::batch(
+                startup_files
+                    .into_iter()
+                    .map(|path| studio.load(path))
+                    .chain(std::iter::once(chrome)),
+            );
             (studio, task)
         })
 }
@@ -1000,6 +1003,7 @@ impl CameraPreset {
 
 #[derive(Debug, Clone)]
 enum Message {
+    SyncWindowChrome(u8),
     ApiRequest(native_api::ApiRequest),
     ApiExported(String, bool, Result<(PathBuf, u64), String>),
     MergeVisible,
@@ -2815,6 +2819,17 @@ impl Studio {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::SyncWindowChrome(retries) => {
+                if !native_chrome::apply(self.ui_theme != UiTheme::Light) && retries > 0 {
+                    return Task::perform(
+                        async move {
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            retries - 1
+                        },
+                        Message::SyncWindowChrome,
+                    );
+                }
+            }
             Message::ApiRequest(request) => return self.handle_api(request),
             Message::ApiExported(id, section_only, result) => {
                 if section_only {
@@ -2991,6 +3006,7 @@ impl Studio {
             Message::Theme(theme) => {
                 self.ui_theme = theme;
                 theme.save();
+                let _ = native_chrome::apply(theme != UiTheme::Light);
             }
             Message::PersistSettings(revision) => {
                 if revision == self.settings_revision {
@@ -6349,11 +6365,15 @@ impl Studio {
     }
 
     fn project_panel(&self) -> Element<'_, Message> {
+        let cloud_count = match self.clouds.len() {
+            1 => "1 point cloud".to_owned(),
+            count => format!("{count} point clouds"),
+        };
         let mut files = column![
             text("PROJECT")
                 .size(14)
                 .font(Font::with_name("Space Grotesk")),
-            text(format!("{} point cloud(s)", self.clouds.len()))
+            text(cloud_count)
                 .size(11)
                 .color(self.ui_theme.colors().muted),
             button("+  Add point cloud")
@@ -6364,19 +6384,47 @@ impl Studio {
         .spacing(9);
         for (index, entry) in self.clouds.iter().enumerate() {
             let name = display_name(&entry.cloud.path);
-            let short_name = compact_filename(name, 19);
-            let file_button = button(
-                text(short_name)
-                    .size(12)
-                    .wrapping(iced::widget::text::Wrapping::None),
+            let readable_name = name.replace('_', "_\u{200b}");
+            let file_button = tooltip(
+                button(
+                    text(readable_name)
+                        .size(12)
+                        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+                        .width(Fill),
+                )
+                .on_press(Message::Select(index))
+                .style(flat_tool_style)
+                .width(Fill)
+                .padding([4, 2]),
+                container(text(entry.cloud.path.display().to_string()).size(11))
+                    .padding([4, 7])
+                    .style(|theme| {
+                        let colors = ui_theme::colors(theme);
+                        container::Style::default()
+                            .background(colors.panel_alt)
+                            .color(colors.text)
+                    }),
+                tooltip::Position::FollowCursor,
             )
-            .on_press(Message::Select(index))
-            .style(if self.active == Some(index) {
-                active_tool_style
+            .gap(5);
+            let selected = entry.selection.as_ref().map_or(0, |mask| mask.count);
+            let deleted = entry.deleted_count();
+            let mut summary = format!("{} points", format_count(entry.remaining_count()));
+            if selected > 0 {
+                summary.push_str(&format!("  ·  {} selected", format_count(selected)));
+            }
+            if deleted > 0 {
+                summary.push_str(&format!("  ·  {} deleted", format_count(deleted)));
+            }
+            let index_state = if entry.index.is_some() {
+                "LOD ready"
+            } else if entry.index_building {
+                "Indexing"
+            } else if entry.auto_index_queued {
+                "LOD queued"
             } else {
-                flat_tool_style
-            })
-            .width(Fill);
+                "Not indexed"
+            };
             let mut item = column![
                 row![
                     checkbox("", entry.visible)
@@ -6389,28 +6437,10 @@ impl Studio {
                 ]
                 .spacing(4)
                 .align_y(iced::Alignment::Center),
-                text(format!(
-                    "{} points  ·  {} selected  ·  {} deleted{}",
-                    format_count(entry.remaining_count()),
-                    format_count(
-                        entry
-                            .selection
-                            .as_ref()
-                            .map_or(0, |selection| selection.count)
-                    ),
-                    format_count(entry.deleted_count()),
-                    if entry.index.is_some() {
-                        "  ·  LOD ready"
-                    } else if entry.index_building {
-                        "  ·  Indexing"
-                    } else if entry.auto_index_queued {
-                        "  ·  LOD queued"
-                    } else {
-                        ""
-                    }
-                ))
-                .size(10)
-                .color(self.ui_theme.colors().muted),
+                text(summary).size(10).color(self.ui_theme.colors().muted),
+                text(index_state)
+                    .size(10)
+                    .color(self.ui_theme.colors().muted),
             ]
             .spacing(3);
             if entry.mesh.is_some() {
@@ -6422,7 +6452,26 @@ impl Studio {
                         .size(12),
                 );
             }
-            files = files.push(item);
+            let active = self.active == Some(index);
+            files = files.push(
+                container(item)
+                    .padding([6, 5])
+                    .width(Fill)
+                    .style(move |theme| {
+                        let colors = ui_theme::colors(theme);
+                        container::Style::default()
+                            .background(if active {
+                                colors.panel_alt
+                            } else {
+                                colors.panel
+                            })
+                            .border(iced::Border {
+                                color: if active { colors.accent } else { colors.border },
+                                width: 1.0,
+                                radius: 2.0.into(),
+                            })
+                    }),
+            );
         }
         container(scrollable(files.padding(14)).height(Fill))
             .width(255)
@@ -7045,13 +7094,10 @@ impl Studio {
         }
         if let Some(entry) = active_cloud {
             for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
-                properties = properties.push(opencad_properties::property_row(
+                properties = properties.push(opencad_properties::bounds_row(
                     label,
-                    format!(
-                        "{:.2} … {:.2}",
-                        entry.bounds().min[axis],
-                        entry.bounds().max[axis]
-                    ),
+                    entry.bounds().min[axis],
+                    entry.bounds().max[axis],
                 ));
             }
             if !entry.transform.is_identity() {
@@ -7766,24 +7812,6 @@ fn muted_checkbox_style(theme: &Theme, status: checkbox::Status) -> checkbox::St
             radius: 2.0.into(),
         },
         text_color: Some(colors.text),
-    }
-}
-
-fn active_tool_style(theme: &Theme, _: button::Status) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    button::Style {
-        background: Some(iced::Background::Color(colors.active)),
-        text_color: if colors.shell == Color::BLACK {
-            Color::BLACK
-        } else {
-            colors.accent
-        },
-        border: iced::Border {
-            color: colors.accent,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        ..button::Style::default()
     }
 }
 

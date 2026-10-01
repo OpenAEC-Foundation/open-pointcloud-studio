@@ -41,6 +41,52 @@ pub fn property_row(label: &'static str, value: String) -> Element<'static, Mess
         .into()
 }
 
+/// Keep survey bounds readable within OpenCADStudio's narrow properties dock.
+pub fn bounds_row(axis: &'static str, min: f64, max: f64) -> Element<'static, Message> {
+    let axis = container(text(axis).size(FONT_SZ).style(|theme| text::Style {
+        color: Some(ui_theme::colors(theme).muted),
+    }))
+    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel_alt))
+    .width(Length::Fixed(30.0))
+    .height(ROW_H)
+    .align_y(iced::Alignment::Center)
+    .padding([0, 8]);
+    let values = container(
+        row![
+            text(format!("{min:.3}"))
+                .size(FONT_SZ)
+                .width(Length::FillPortion(1)),
+            text("→")
+                .size(FONT_SZ)
+                .style(|theme| text::Style {
+                    color: Some(ui_theme::colors(theme).muted),
+                })
+                .width(Length::Fixed(22.0)),
+            text(format!("{max:.3}"))
+                .size(FONT_SZ)
+                .width(Length::FillPortion(1)),
+        ]
+        .align_y(iced::Alignment::Center),
+    )
+    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel))
+    .width(Fill)
+    .height(ROW_H)
+    .align_y(iced::Alignment::Center)
+    .padding([0, 6]);
+    container(row![axis, values])
+        .height(ROW_H)
+        .width(Fill)
+        .style(|theme: &Theme| container::Style {
+            border: Border {
+                color: ui_theme::colors(theme).border,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
 /// Editable variant of OpenCADStudio's two-column property row.
 pub fn property_input<'a>(
     label: &'static str,
