@@ -66,6 +66,8 @@ those bounds to frame the points quickly even after a live transform; the
 selection highlight follows the current transform. The command leaves the
 section box unchanged and `status.result.selection_bounds_pending` reports
 whether a bounds calculation is still running.
+If an earlier Delete hid other source points, the cached bounds still apply
+when its deletion mask has no ordinal in common with the current selection.
 `cancel_selection` stops a running world-box or viewport-box scan; the job
 becomes `cancelled` and no partial selection replaces the previous one. Escape
 or Clear in the native UI also stops an in-progress scan. An in-progress point

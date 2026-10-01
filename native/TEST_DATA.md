@@ -704,3 +704,12 @@ An exact world box crossing the source-tile boundary (X 207950–208050,
 Y 474950–475050, Z -100–1000) selected 373,382 points in the merged file.
 The viewer retained the exact selection and displayed 8,000 representative
 highlights; see [the selection screenshot](../screenshots/native-merged-114m-selection-373k.png).
+
+For an edited-cloud selection check, the native viewer deleted 303,276 source
+points in X 208200–208300, Y 475200–475300. It then selected the disjoint
+373,382 points in X 207950–208050, Y 474950–475050 and framed them at 18.6×.
+The `zoom_selection` API call and completion poll took 135 ms on this host.
+The exact cached source bounds were reused after comparing selection and
+deletion bitmasks, without decoding the 1.208 GB LAZ again. The
+[screenshot](../screenshots/native-selected-after-disjoint-delete-114m.png)
+shows both counts; Undo restored all 303,276 deleted points afterward.

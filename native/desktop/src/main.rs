@@ -8230,7 +8230,10 @@ fn selected_source_bounds(sources: &[SelectedSource]) -> Result<(Bounds, u64), S
         let selection = &source.selection;
         let deleted = &source.deleted;
         cloud.validate_source().map_err(|error| error.to_string())?;
-        if deleted.is_none() {
+        if deleted
+            .as_ref()
+            .is_none_or(|mask| !mask.overlaps_selection(selection))
+        {
             if let Some(source_bounds) = selection.source_bounds {
                 let world_bounds = source.transform.bounds(source_bounds);
                 include_bounds(&mut bounds, world_bounds.min);
@@ -9189,6 +9192,70 @@ mod surface_settings_tests {
 #[cfg(test)]
 mod section_box_tests {
     use super::*;
+
+    #[test]
+    fn selected_bounds_reuse_cache_only_when_deletions_do_not_overlap() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.xyz");
+        std::fs::write(&path, "0 0 0\n10 0 0\n20 0 0\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 3).unwrap());
+        let selected = Arc::new(SelectionMask {
+            bits: vec![0b110],
+            count: 2,
+            highlights: Vec::new(),
+            highlights_source: true,
+            source_bounds: Some(Bounds {
+                min: [10.0, 0.0, 0.0],
+                max: [20.0, 0.0, 0.0],
+            }),
+        });
+        let first = SelectionMask::single(
+            cloud.total_points,
+            IndexedPoint {
+                point: cloud.points[0],
+                ordinal: 0,
+            },
+        )
+        .unwrap();
+        let mut deleted = DeletionMask::new(cloud.total_points).unwrap();
+        deleted.apply(&first).unwrap();
+        let source = |deleted: DeletionMask| SelectedSource {
+            index: 0,
+            cloud: Arc::clone(&cloud),
+            selection: Arc::clone(&selected),
+            deleted: Some(Arc::new(deleted)),
+            transform: CloudTransform::default(),
+        };
+        let cached = selected_source_bounds(&[source(deleted.clone())]).unwrap();
+        assert_eq!(
+            (cached.0.min[0], cached.0.max[0], cached.1),
+            (10.0, 20.0, 2)
+        );
+        let middle = SelectionMask::single(
+            cloud.total_points,
+            IndexedPoint {
+                point: cloud.points[1],
+                ordinal: 1,
+            },
+        )
+        .unwrap();
+        deleted.apply(&middle).unwrap();
+        let remaining = selected_source_bounds(&[source(deleted.clone())]).unwrap();
+        assert_eq!(
+            (remaining.0.min[0], remaining.0.max[0], remaining.1),
+            (20.0, 20.0, 1)
+        );
+        let last = SelectionMask::single(
+            cloud.total_points,
+            IndexedPoint {
+                point: cloud.points[2],
+                ordinal: 2,
+            },
+        )
+        .unwrap();
+        deleted.apply(&last).unwrap();
+        assert!(selected_source_bounds(&[source(deleted)]).is_err());
+    }
 
     #[test]
     fn selected_point_frames_camera_without_enabling_section() {

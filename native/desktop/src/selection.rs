@@ -161,6 +161,17 @@ impl DeletionMask {
             .is_some_and(|bits| bits & (1u64 << (ordinal % 64)) != 0)
     }
 
+    /// A selection can reuse its exact cached bounds when no selected source
+    /// ordinal has since been hidden. Compare masks without rereading points.
+    pub fn overlaps_selection(&self, selection: &SelectionMask) -> bool {
+        self.bits.len() != selection.bits.len()
+            || self
+                .bits
+                .iter()
+                .zip(&selection.bits)
+                .any(|(deleted, selected)| deleted & selected != 0)
+    }
+
     pub fn apply(&mut self, selection: &SelectionMask) -> Result<u64, String> {
         if self.bits.len() != selection.bits.len() {
             return Err("selection belongs to a different source size".into());
@@ -838,6 +849,32 @@ fn select_one(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn deleted_and_selected_masks_detect_only_shared_source_ordinals() {
+        let point = Point {
+            xyz: [1.0, 2.0, 3.0],
+            rgb: None,
+            intensity: None,
+            classification: None,
+        };
+        let first = SelectionMask::single(130, IndexedPoint { point, ordinal: 5 }).unwrap();
+        let second = SelectionMask::single(
+            130,
+            IndexedPoint {
+                point,
+                ordinal: 129,
+            },
+        )
+        .unwrap();
+        let mut deleted = DeletionMask::new(130).unwrap();
+        assert!(!deleted.overlaps_selection(&first));
+        deleted.apply(&first).unwrap();
+        assert!(deleted.overlaps_selection(&first));
+        assert!(!deleted.overlaps_selection(&second));
+        deleted.apply(&second).unwrap();
+        assert!(deleted.overlaps_selection(&second));
+    }
 
     #[test]
     fn thinning_is_exact_and_undo_preserves_earlier_deletions() {
