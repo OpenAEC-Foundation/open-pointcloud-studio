@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 mod bag_map;
 mod camera_views;
+mod cloud_transform;
 mod gpu_viewport;
 mod native_api;
 mod opencad_properties;
@@ -20,6 +21,7 @@ mod view_cube;
 
 use bag_map::{BagMap, MapView, TileKey};
 use camera_views::SavedView;
+use cloud_transform::CloudTransform;
 use iced::futures::SinkExt;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
@@ -33,8 +35,8 @@ use pointcloud_core::{
     Point, PointCloud,
 };
 use selection::{
-    pick_full, pick_indexed, select_full, select_world, ClassFilter, ClassVisibility, DeletionMask,
-    Projection, ScreenRect, SelectionMask, SelectionSource,
+    pick_full_transformed, pick_indexed_transformed, select_full, select_world, ClassFilter,
+    ClassVisibility, DeletionMask, Projection, ScreenRect, SelectionMask, SelectionSource,
 };
 use serde_json::{json, Value};
 use ui_theme::UiTheme;
@@ -94,6 +96,78 @@ fn open_for_export(source: &Path) -> Result<PointCloud, pointcloud_core::LoadErr
     } else {
         pointcloud_core::open(source, 1)
     }
+}
+
+fn export_edited_where(
+    cloud: &PointCloud,
+    destination: &Path,
+    format: ExportFormat,
+    transform: CloudTransform,
+    expected_count: u64,
+    mut include: impl FnMut(u64, &Point) -> bool,
+) -> Result<(), pointcloud_core::LoadError> {
+    if transform.is_identity() {
+        pointcloud_core::export_where(cloud, destination, format, expected_count, include)
+    } else {
+        pointcloud_core::export_map(
+            cloud,
+            destination,
+            format,
+            expected_count,
+            |ordinal, point| include(ordinal, &point).then(|| transform.point(point)),
+        )
+    }
+}
+
+fn export_edited_section(
+    cloud: &PointCloud,
+    destination: &Path,
+    format: ExportFormat,
+    transform: CloudTransform,
+    section: Bounds,
+    deleted: Option<&DeletionMask>,
+) -> Result<u64, pointcloud_core::LoadError> {
+    if transform.is_identity() {
+        pointcloud_core::export_section_where(cloud, destination, format, section, |ordinal, _| {
+            deleted.is_none_or(|mask| !mask.contains(ordinal))
+        })
+    } else {
+        pointcloud_core::export_map_auto_count(cloud, destination, format, |ordinal, point| {
+            if deleted.is_some_and(|mask| mask.contains(ordinal)) {
+                return None;
+            }
+            let point = transform.point(point);
+            (0..3)
+                .all(|axis| {
+                    point.xyz[axis] >= section.min[axis] && point.xyz[axis] <= section.max[axis]
+                })
+                .then_some(point)
+        })
+    }
+}
+
+fn section_within_model(requested: Bounds, model: Bounds) -> Option<Bounds> {
+    let mut section = requested;
+    for axis in 0..3 {
+        let span = model.max[axis] - model.min[axis];
+        let tolerance = (span * 0.01).clamp(0.000_001, 0.01);
+        if !requested.min[axis].is_finite()
+            || !requested.max[axis].is_finite()
+            || requested.min[axis] > requested.max[axis]
+            || requested.min[axis] < model.min[axis] - tolerance
+            || requested.max[axis] > model.max[axis] + tolerance
+        {
+            return None;
+        }
+        section.min[axis] = requested.min[axis].max(model.min[axis]);
+        section.max[axis] = requested.max[axis].min(model.max[axis]);
+        if (span > 0.0 && section.min[axis] >= section.max[axis])
+            || (span == 0.0 && section.min[axis] != section.max[axis])
+        {
+            return None;
+        }
+    }
+    Some(section)
 }
 
 fn display_name(path: &std::path::Path) -> &str {
@@ -743,6 +817,7 @@ enum Message {
         Arc<PointCloud>,
         Bounds,
         ExportFormat,
+        CloudTransform,
         Option<Arc<DeletionMask>>,
         Option<PathBuf>,
     ),
@@ -784,7 +859,13 @@ enum Message {
     MeshPoll,
     CancelMesh,
     ExportMesh,
-    MeshExportPathChosen(Arc<MeshGeometry>, PathBuf, bool, Option<PathBuf>),
+    MeshExportPathChosen(
+        Arc<MeshGeometry>,
+        PathBuf,
+        bool,
+        CloudTransform,
+        Option<PathBuf>,
+    ),
     MeshExported(Result<(PathBuf, usize, usize), String>),
     ToggleBagPanel,
     BagField(usize, String),
@@ -809,6 +890,7 @@ enum Message {
     ScaleAxis(usize, String),
     ApplyTranslation,
     ApplyScale,
+    ResetTransform,
     BuildIndex,
     IndexReady(Arc<PointCloud>, Result<Arc<OctreeIndex>, String>),
     AutoIndexReady(Arc<PointCloud>, Result<Arc<OctreeIndex>, String>),
@@ -959,6 +1041,7 @@ struct Studio {
 
 struct CloudEntry {
     cloud: Arc<PointCloud>,
+    transform: CloudTransform,
     mesh: Option<Arc<MeshGeometry>>,
     mesh_visible: bool,
     bag_source: bool,
@@ -983,8 +1066,14 @@ impl CloudEntry {
     }
 
     fn view_records(&self) -> Box<dyn Iterator<Item = IndexedPoint> + '_> {
+        let transform = self.transform;
         if let Some(detail) = &self.detail_points {
-            Box::new(detail.iter().copied())
+            Box::new(
+                detail
+                    .iter()
+                    .copied()
+                    .map(move |record| transform.record(record)),
+            )
         } else {
             Box::new(
                 self.cloud
@@ -992,9 +1081,13 @@ impl CloudEntry {
                     .iter()
                     .copied()
                     .zip(self.cloud.point_ordinals.iter().copied())
-                    .map(|(point, ordinal)| IndexedPoint { point, ordinal }),
+                    .map(move |(point, ordinal)| transform.record(IndexedPoint { point, ordinal })),
             )
         }
+    }
+
+    fn bounds(&self) -> Bounds {
+        self.transform.bounds(self.cloud.bounds)
     }
 
     fn deleted_count(&self) -> u64 {
@@ -1290,26 +1383,15 @@ impl Studio {
             }
             ApiCommand::SetSection { min, max } => {
                 if let Some(overall) = combined_bounds(&self.clouds) {
-                    let valid = (0..3).all(|axis| {
-                        min[axis].is_finite()
-                            && max[axis].is_finite()
-                            && min[axis] >= overall.min[axis] - 0.000_001
-                            && max[axis] <= overall.max[axis] + 0.000_001
-                            && if overall.min[axis] < overall.max[axis] {
-                                min[axis] < max[axis]
-                            } else {
-                                min[axis] == max[axis]
-                            }
-                    });
-                    if valid {
+                    if let Some(section) = section_within_model(Bounds { min, max }, overall) {
                         self.section_reference_bounds = Some(overall);
                         for axis in 0..3 {
                             let span = overall.max[axis] - overall.min[axis];
                             if span > 0.0 {
                                 self.section_min_percent[axis] =
-                                    (min[axis] - overall.min[axis]) / span * 100.0;
+                                    (section.min[axis] - overall.min[axis]) / span * 100.0;
                                 self.section_max_percent[axis] =
-                                    (max[axis] - overall.min[axis]) / span * 100.0;
+                                    (section.max[axis] - overall.min[axis]) / span * 100.0;
                             }
                         }
                         self.section_enabled = true;
@@ -1318,7 +1400,7 @@ impl Studio {
                         self.status = "Section box updated through native API".into();
                         let task = self.schedule_detail();
                         (
-                            json!({"ok": true, "section": {"min": min, "max": max}}),
+                            json!({"ok": true, "section": {"min": section.min, "max": section.max}}),
                             task,
                         )
                     } else {
@@ -1362,6 +1444,7 @@ impl Studio {
                             cloud: Arc::clone(&entry.cloud),
                             tree: entry.index.as_ref().map(Arc::clone),
                             deleted: entry.deleted.as_ref().map(Arc::clone),
+                            transform: entry.transform,
                         })
                         .collect();
                     if sources.is_empty() {
@@ -1474,6 +1557,7 @@ impl Studio {
                     if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
                         let cloud = Arc::clone(&entry.cloud);
                         let deleted = entry.deleted.as_ref().map(Arc::clone);
+                        let transform = entry.transform;
                         let id = self.record_api_job(json!({
                             "state": "running", "operation": "mesh", "mode": mode.label(), "path": path
                         }));
@@ -1481,6 +1565,7 @@ impl Studio {
                             mode,
                             cloud,
                             deleted,
+                            transform,
                             path.clone(),
                             Some(id.clone()),
                         );
@@ -1552,6 +1637,7 @@ impl Studio {
         };
         let cloud = Arc::clone(&entry.cloud);
         let deleted = entry.deleted.as_ref().map(Arc::clone);
+        let transform = entry.transform;
         let section = if section_only {
             let Some(section) = self.section_bounds() else {
                 return (
@@ -1572,14 +1658,13 @@ impl Studio {
             let task = Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
-                        pointcloud_core::export_section_where(
+                        export_edited_section(
                             &cloud,
                             &path,
                             format,
+                            transform,
                             section,
-                            |ordinal, _| {
-                                deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
-                            },
+                            deleted.as_deref(),
                         )
                         .map(|count| (path, count))
                         .map_err(|error| error.to_string())
@@ -1599,16 +1684,19 @@ impl Studio {
                     tokio::task::spawn_blocking(move || {
                         let expected_count =
                             cloud.total_points - deleted.as_ref().map_or(0, |mask| mask.count);
-                        let result = if let Some(mask) = deleted {
-                            pointcloud_core::export_where(
+                        let result = if deleted.is_none() && transform.is_identity() {
+                            pointcloud_core::export_full(&cloud, &path, format)
+                        } else {
+                            export_edited_where(
                                 &cloud,
                                 &path,
                                 format,
+                                transform,
                                 expected_count,
-                                |ordinal, _| !mask.contains(ordinal),
+                                |ordinal, _| {
+                                    deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
+                                },
                             )
-                        } else {
-                            pointcloud_core::export_full(&cloud, &path, format)
                         };
                         result
                             .map(|()| (path, expected_count))
@@ -1636,6 +1724,7 @@ impl Studio {
         mode: MeshMode,
         cloud: Arc<PointCloud>,
         deleted: Option<Arc<DeletionMask>>,
+        transform: CloudTransform,
         path: PathBuf,
         api_job_id: Option<String>,
     ) -> Task<Message> {
@@ -1677,8 +1766,19 @@ impl Studio {
                     };
                     result
                         .and_then(|stats| {
-                            pointcloud_core::read_obj_mesh(&path)
-                                .map(|mesh| (source, path, stats, Arc::new(mesh)))
+                            let mesh = pointcloud_core::read_obj_mesh(&path)?;
+                            if !transform.is_identity() {
+                                let edited = MeshGeometry {
+                                    vertices: mesh
+                                        .vertices
+                                        .iter()
+                                        .map(|xyz| transform.xyz(*xyz))
+                                        .collect(),
+                                    triangles: mesh.triangles.clone(),
+                                };
+                                pointcloud_core::write_obj_mesh(&edited, &path, &[])?;
+                            }
+                            Ok((source, path, stats, Arc::new(mesh)))
                         })
                         .map_err(|error| error.to_string())
                 })
@@ -1708,6 +1808,7 @@ impl Studio {
                     let header_cloud = Arc::new(header_cloud);
                     self.clouds.push(CloudEntry {
                         cloud: Arc::clone(&header_cloud),
+                        transform: CloudTransform::default(),
                         mesh: None,
                         mesh_visible: true,
                         bag_source: false,
@@ -1876,6 +1977,7 @@ impl Studio {
                     self.clouds.push(CloudEntry {
                         bag_source: is_bag3d_obj(&cloud.path),
                         cloud,
+                        transform: CloudTransform::default(),
                         mesh: None,
                         mesh_visible: true,
                         visible: true,
@@ -1978,17 +2080,21 @@ impl Studio {
                     self.status = "Choose where to export the full cloud…".into();
                     let cloud = Arc::clone(&entry.cloud);
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
+                    let transform = entry.transform;
                     return save_task(suggested, format, move |path| {
-                        let result = if let Some(mask) = deleted {
-                            pointcloud_core::export_where(
+                        let result = if deleted.is_none() && transform.is_identity() {
+                            pointcloud_core::export_full(&cloud, &path, format)
+                        } else {
+                            export_edited_where(
                                 &cloud,
                                 &path,
                                 format,
-                                cloud.total_points - mask.count,
-                                |ordinal, _| !mask.contains(ordinal),
+                                transform,
+                                cloud.total_points - deleted.as_ref().map_or(0, |mask| mask.count),
+                                |ordinal, _| {
+                                    deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
+                                },
                             )
-                        } else {
-                            pointcloud_core::export_full(&cloud, &path, format)
                         };
                         result.map(|()| path).map_err(|error| error.to_string())
                     });
@@ -2009,6 +2115,7 @@ impl Studio {
                     let suggested = format!("{stem}-section.{}", format.extension());
                     let cloud = Arc::clone(&entry.cloud);
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
+                    let transform = entry.transform;
                     self.status = "Choose where to export the full-resolution section…".into();
                     return Task::perform(
                         async move {
@@ -2024,6 +2131,7 @@ impl Studio {
                                 Arc::clone(&cloud),
                                 section,
                                 format,
+                                transform,
                                 deleted.as_ref().map(Arc::clone),
                                 path,
                             )
@@ -2031,7 +2139,14 @@ impl Studio {
                     );
                 }
             }
-            Message::SectionExportPathChosen(cloud, section, format, deleted, Some(path)) => {
+            Message::SectionExportPathChosen(
+                cloud,
+                section,
+                format,
+                transform,
+                deleted,
+                Some(path),
+            ) => {
                 self.section_export_pending = true;
                 self.status = format!(
                     "Exporting section from {} source points…",
@@ -2040,14 +2155,13 @@ impl Studio {
                 return Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            pointcloud_core::export_section_where(
+                            export_edited_section(
                                 &cloud,
                                 &path,
                                 format,
+                                transform,
                                 section,
-                                |ordinal, _| {
-                                    deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
-                                },
+                                deleted.as_deref(),
                             )
                             .map(|count| (path, count))
                             .map_err(|error| error.to_string())
@@ -2058,7 +2172,7 @@ impl Studio {
                     Message::SectionExported,
                 );
             }
-            Message::SectionExportPathChosen(_, _, _, _, None) => {
+            Message::SectionExportPathChosen(_, _, _, _, _, None) => {
                 self.status = "Section export cancelled".into();
             }
             Message::SectionExported(result) => {
@@ -2124,7 +2238,16 @@ impl Studio {
                     self.status = "A mesh task is already running".into();
                     return Task::none();
                 }
-                return self.start_mesh_job(mode, cloud, deleted, path, None);
+                let Some(transform) = self
+                    .clouds
+                    .iter()
+                    .find(|entry| Arc::ptr_eq(&entry.cloud, &cloud))
+                    .map(|entry| entry.transform)
+                else {
+                    self.status = "Mesh source is no longer open".into();
+                    return Task::none();
+                };
+                return self.start_mesh_job(mode, cloud, deleted, transform, path, None);
             }
             Message::MeshPathChosen(_, _, _, None) => {
                 self.mesh_dialog_pending = false;
@@ -2208,6 +2331,7 @@ impl Studio {
                 let mesh = Arc::clone(entry.mesh.as_ref().unwrap());
                 let source = entry.cloud.path.clone();
                 let bag_source = entry.bag_source;
+                let transform = entry.transform;
                 let stem = source
                     .file_stem()
                     .and_then(|stem| stem.to_str())
@@ -2229,12 +2353,13 @@ impl Studio {
                             Arc::clone(&mesh),
                             source.clone(),
                             bag_source,
+                            transform,
                             path,
                         )
                     },
                 );
             }
-            Message::MeshExportPathChosen(mesh, source, bag_source, Some(path)) => {
+            Message::MeshExportPathChosen(mesh, source, bag_source, transform, Some(path)) => {
                 if !path
                     .extension()
                     .and_then(|extension| extension.to_str())
@@ -2259,7 +2384,15 @@ impl Studio {
                         tokio::task::spawn_blocking(move || {
                             let comments: &[&str] =
                                 if bag_source { BAG3D_MESH_COMMENTS } else { &[] };
-                            pointcloud_core::write_obj_mesh(&mesh, &path, comments)
+                            let edited = MeshGeometry {
+                                vertices: mesh
+                                    .vertices
+                                    .iter()
+                                    .map(|xyz| transform.xyz(*xyz))
+                                    .collect(),
+                                triangles: mesh.triangles.clone(),
+                            };
+                            pointcloud_core::write_obj_mesh(&edited, &path, comments)
                                 .map(|()| (path, mesh.vertices.len(), mesh.triangles.len()))
                                 .map_err(|error| error.to_string())
                         })
@@ -2269,7 +2402,7 @@ impl Studio {
                     Message::MeshExported,
                 );
             }
-            Message::MeshExportPathChosen(_, _, _, None) => {
+            Message::MeshExportPathChosen(_, _, _, _, None) => {
                 self.mesh_export_pending = false;
                 self.status = "Mesh export cancelled".into();
             }
@@ -2304,7 +2437,7 @@ impl Studio {
                 let bounds = self.section_bounds().or_else(|| {
                     self.active
                         .and_then(|index| self.clouds.get(index))
-                        .map(|entry| entry.cloud.bounds)
+                        .map(CloudEntry::bounds)
                 });
                 if let Some(bounds) = bounds {
                     self.bag_fields = [
@@ -2531,13 +2664,15 @@ impl Studio {
                         let suggestion = format!("{stem}-selection.{}", format.extension());
                         let cloud = Arc::clone(&entry.cloud);
                         let mask = Arc::clone(mask);
+                        let transform = entry.transform;
                         self.status =
                             format!("Choose where to export {} selected points…", mask.count);
                         return save_task(suggestion, format, move |path| {
-                            pointcloud_core::export_where(
+                            export_edited_where(
                                 &cloud,
                                 &path,
                                 format,
+                                transform,
                                 mask.count,
                                 |ordinal, _| mask.contains(ordinal),
                             )
@@ -2561,14 +2696,16 @@ impl Studio {
                         let cloud = Arc::clone(&entry.cloud);
                         let mask = Arc::clone(mask);
                         let deleted = entry.deleted.as_ref().map(Arc::clone);
+                        let transform = entry.transform;
                         let expected = entry.remaining_count().saturating_sub(mask.count);
                         self.status =
                             format!("Choose output file without {} selected points…", mask.count);
                         return save_task(suggestion, format, move |path| {
-                            pointcloud_core::export_where(
+                            export_edited_where(
                                 &cloud,
                                 &path,
                                 format,
+                                transform,
                                 expected,
                                 |ordinal, _| {
                                     !mask.contains(ordinal)
@@ -2830,14 +2967,16 @@ impl Studio {
                     let suggestion = format!("{stem}-1-in-{stride}.{}", format.extension());
                     let cloud = Arc::clone(&entry.cloud);
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
+                    let transform = entry.transform;
                     let expected = entry.remaining_count().div_ceil(stride);
                     self.status = format!("Choose output for one point in every {stride}…");
                     return save_task(suggestion, format, move |path| {
                         let mut kept_ordinal = 0u64;
-                        pointcloud_core::export_where(
+                        export_edited_where(
                             &cloud,
                             &path,
                             format,
+                            transform,
                             expected,
                             |ordinal, _| {
                                 if deleted.as_ref().is_some_and(|mask| mask.contains(ordinal)) {
@@ -2868,7 +3007,27 @@ impl Studio {
                     self.translate_z.parse::<f64>(),
                 ];
                 if let [Ok(x), Ok(y), Ok(z)] = parsed {
-                    return self.save_transform([x, y, z], [1.0; 3], "translated");
+                    let old_scene = combined_bounds(&self.clouds);
+                    if let Some(entry) = self.active.and_then(|index| self.clouds.get_mut(index)) {
+                        if let Some(next) =
+                            entry.transform.translated([x, y, z], entry.cloud.bounds)
+                        {
+                            entry.transform = next;
+                            entry.selection = None;
+                            if !self.section_enabled {
+                                self.section_reference_bounds = combined_bounds(&self.clouds);
+                                self.sync_section_coordinate_inputs();
+                            }
+                            self.preserve_camera_for_scene_change(old_scene);
+                            self.revision += 1;
+                            self.status = format!(
+                                "Moved the open cloud by X {x}, Y {y}, Z {z}; export to save"
+                            );
+                            return self.schedule_detail();
+                        }
+                        self.status = "Translation would produce non-finite coordinates".into();
+                        return Task::none();
+                    }
                 }
                 self.status = "Enter valid X, Y and Z offsets".into();
             }
@@ -2877,10 +3036,67 @@ impl Studio {
                 if let [Ok(x), Ok(y), Ok(z)] = parsed {
                     let scale = [x, y, z];
                     if scale.iter().all(|value| value.is_finite()) {
-                        return self.save_transform([0.0; 3], scale, "scaled");
+                        let old_scene = combined_bounds(&self.clouds);
+                        if let Some(entry) =
+                            self.active.and_then(|index| self.clouds.get_mut(index))
+                        {
+                            let pivot = entry.bounds().center();
+                            if let Some(next) =
+                                entry
+                                    .transform
+                                    .scaled_about(scale, pivot, entry.cloud.bounds)
+                            {
+                                entry.transform = next;
+                                entry.selection = None;
+                                if !self.section_enabled {
+                                    self.section_reference_bounds = combined_bounds(&self.clouds);
+                                    self.sync_section_coordinate_inputs();
+                                }
+                                self.preserve_camera_for_scene_change(old_scene);
+                                self.revision += 1;
+                                self.status = format!("Scaled the open cloud around its bounds centre by X {x}, Y {y}, Z {z}; export to save");
+                                return self.schedule_detail();
+                            }
+                            self.status = "Scale would produce non-finite coordinates".into();
+                            return Task::none();
+                        }
                     }
                 }
                 self.status = "Enter finite X, Y and Z scale factors".into();
+            }
+            Message::ResetTransform => {
+                let old_scene = combined_bounds(&self.clouds);
+                let reset_section = self.section_bounds().is_some_and(|section| {
+                    self.active
+                        .and_then(|index| self.clouds.get(index))
+                        .is_some_and(|entry| {
+                            (0..3).any(|axis| {
+                                section.max[axis] < entry.cloud.bounds.min[axis]
+                                    || section.min[axis] > entry.cloud.bounds.max[axis]
+                            })
+                        })
+                });
+                if let Some(entry) = self.active.and_then(|index| self.clouds.get_mut(index)) {
+                    entry.transform = CloudTransform::default();
+                    entry.selection = None;
+                    if reset_section || !self.section_enabled {
+                        self.section_reference_bounds = combined_bounds(&self.clouds);
+                        if reset_section {
+                            self.section_min_percent = [0.0; 3];
+                            self.section_max_percent = [100.0; 3];
+                        }
+                        self.sync_section_coordinate_inputs();
+                    }
+                    self.preserve_camera_for_scene_change(old_scene);
+                    self.revision += 1;
+                    self.status = if reset_section {
+                        "Source coordinates restored; section box reset to show the cloud"
+                    } else {
+                        "Restored the source coordinates in the open view"
+                    }
+                    .into();
+                    return self.schedule_detail();
+                }
             }
             Message::BuildIndex => {
                 if self.index_pending {
@@ -3016,7 +3232,12 @@ impl Studio {
                     .enumerate()
                     .filter_map(|(index, entry)| {
                         (entry.visible)
-                            .then(|| entry.index.as_ref().map(|tree| (index, Arc::clone(tree))))
+                            .then(|| {
+                                entry
+                                    .index
+                                    .as_ref()
+                                    .map(|tree| (index, Arc::clone(tree), entry.transform))
+                            })
                             .flatten()
                     })
                     .collect();
@@ -3049,12 +3270,13 @@ impl Studio {
                         tokio::task::spawn_blocking(move || {
                             let workers: Vec<_> = sources
                                 .into_iter()
-                                .map(|(index, tree)| {
+                                .map(|(index, tree, transform)| {
                                     let cancel = Arc::clone(&cancel);
                                     std::thread::spawn(move || {
                                         tree.sample_lod_indexed_cancellable(
                                             limit,
                                             |node_bounds| {
+                                                let node_bounds = transform.bounds(node_bounds);
                                                 if section.is_some_and(|clip| {
                                                     (0..3).any(|axis| {
                                                         node_bounds.max[axis] < clip.min[axis]
@@ -3188,18 +3410,24 @@ impl Studio {
                 return self.schedule_detail();
             }
             Message::CenterScanPose(cloud_index, pose_index) => {
-                let (Some(scene), Some(pose)) = (
+                let (Some(scene), Some((pose, transform))) = (
                     combined_bounds(&self.clouds),
                     self.clouds
                         .get(cloud_index)
                         .filter(|entry| entry.visible)
-                        .and_then(|entry| entry.cloud.scan_poses.get(pose_index)),
+                        .and_then(|entry| {
+                            entry
+                                .cloud
+                                .scan_poses
+                                .get(pose_index)
+                                .map(|pose| (pose, entry.transform))
+                        }),
                 ) else {
                     return Task::none();
                 };
                 let Some(pan) = pan_to_world(
                     scene,
-                    pose.position,
+                    transform.xyz(pose.position),
                     self.yaw,
                     self.pitch,
                     self.zoom,
@@ -3317,27 +3545,24 @@ impl Studio {
                         limits[axis][side] = value;
                     }
                 }
-                for (axis, pair) in limits.iter().enumerate() {
-                    let span = overall.max[axis] - overall.min[axis];
-                    if (span > 0.0 && pair[0] >= pair[1])
-                        || (span == 0.0 && pair[0] != pair[1])
-                        || pair[0] < overall.min[axis] - 0.000_001
-                        || pair[1] > overall.max[axis] + 0.000_001
-                    {
-                        self.status = format!(
-                            "{} section limits must be ordered and inside the model bounds",
-                            ["X", "Y", "Z"][axis]
-                        );
-                        return Task::none();
-                    }
-                }
-                for (axis, pair) in limits.iter().enumerate() {
+                let requested = Bounds {
+                    min: limits.map(|pair| pair[0]),
+                    max: limits.map(|pair| pair[1]),
+                };
+                let Some(section) = section_within_model(requested, overall) else {
+                    self.status =
+                        "Section limits must be ordered and inside the model bounds".into();
+                    return Task::none();
+                };
+                for axis in 0..3 {
                     let span = overall.max[axis] - overall.min[axis];
                     if span > 0.0 {
                         self.section_min_percent[axis] =
-                            ((pair[0] - overall.min[axis]) / span * 100.0).clamp(0.0, 100.0);
+                            ((section.min[axis] - overall.min[axis]) / span * 100.0)
+                                .clamp(0.0, 100.0);
                         self.section_max_percent[axis] =
-                            ((pair[1] - overall.min[axis]) / span * 100.0).clamp(0.0, 100.0);
+                            ((section.max[axis] - overall.min[axis]) / span * 100.0)
+                                .clamp(0.0, 100.0);
                     }
                 }
                 self.section_reference_bounds = Some(overall);
@@ -3396,6 +3621,7 @@ impl Studio {
                                 cloud: Arc::clone(&entry.cloud),
                                 selection: Arc::clone(mask),
                                 deleted: entry.deleted.as_ref().map(Arc::clone),
+                                transform: entry.transform,
                             })
                     })
                     .collect();
@@ -3699,6 +3925,7 @@ impl Studio {
                         cloud: Arc::clone(&entry.cloud),
                         tree: entry.index.as_ref().map(Arc::clone),
                         deleted: entry.deleted.as_ref().map(Arc::clone),
+                        transform: entry.transform,
                     })
                     .collect();
                 let projection = Projection::new(
@@ -3731,6 +3958,7 @@ impl Studio {
                     let tree = entry.index.as_ref().map(Arc::clone);
                     let cloud = Arc::clone(&entry.cloud);
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
+                    let transform = entry.transform;
                     self.selection_pending = true;
                     self.status = if tree.is_some() {
                         "Finding nearest point through the octree…".into()
@@ -3742,22 +3970,24 @@ impl Studio {
                             tokio::task::spawn_blocking(move || {
                                 cloud.validate_source().map_err(|error| error.to_string())?;
                                 let result = if let Some(tree) = tree {
-                                    pick_indexed(
+                                    pick_indexed_transformed(
                                         &tree,
                                         projection,
                                         end,
                                         8.0,
                                         filter,
                                         deleted.as_deref(),
+                                        transform,
                                     )?
                                 } else {
-                                    pick_full(
+                                    pick_full_transformed(
                                         &cloud,
                                         projection,
                                         end,
                                         8.0,
                                         filter,
                                         deleted.as_deref(),
+                                        transform,
                                     )?
                                 };
                                 cloud.validate_source().map_err(|error| error.to_string())?;
@@ -3995,47 +4225,46 @@ impl Studio {
         )
     }
 
-    fn save_transform(
-        &mut self,
-        translation: [f64; 3],
-        scale: [f64; 3],
-        suffix: &str,
-    ) -> Task<Message> {
-        let Some((cloud, deleted, remaining)) = self
-            .active
-            .and_then(|index| self.clouds.get(index))
-            .map(|entry| {
-                (
-                    Arc::clone(&entry.cloud),
-                    entry.deleted.as_ref().map(Arc::clone),
-                    entry.remaining_count(),
-                )
-            })
-        else {
-            self.status = "Open a point cloud first".into();
-            return Task::none();
+    fn preserve_camera_for_scene_change(&mut self, old_scene: Option<Bounds>) {
+        let (Some(old_scene), Some(new_scene)) = (old_scene, combined_bounds(&self.clouds)) else {
+            return;
         };
-        let format = self.export_format;
-        let stem = cloud
-            .path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("pointcloud");
-        let suggestion = format!("{stem}-{suffix}.{}", format.extension());
-        self.status = format!("Choose output for transforming {} points…", remaining);
-        save_task(suggestion, format, move |path| {
-            pointcloud_core::export_affine_axes_where(
-                &cloud,
-                &path,
-                format,
-                translation,
-                scale,
-                remaining,
-                |ordinal, _| deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal)),
-            )
-            .map(|()| path)
-            .map_err(|error| error.to_string())
-        })
+        let size = self.viewport_size;
+        if size.width <= 0.0 || size.height <= 0.0 {
+            return;
+        }
+        let anchor = old_scene.center();
+        let old_projection = Projection::new(
+            old_scene,
+            self.yaw,
+            self.pitch,
+            self.zoom,
+            self.pan,
+            size.width,
+            size.height,
+        );
+        let next_zoom = (f64::from(self.zoom) * old_scene.extent().max(0.001)
+            / new_scene.extent().max(0.001))
+        .clamp(0.000_001, 10_000.0) as f32;
+        let new_projection = Projection::new(
+            new_scene,
+            self.yaw,
+            self.pitch,
+            next_zoom,
+            [0.0; 2],
+            size.width,
+            size.height,
+        );
+        if let (Some(old), Some(new)) = (
+            old_projection.project_unclipped(anchor),
+            new_projection.project_unclipped(anchor),
+        ) {
+            let pan = [old.0 - new.0, old.1 - new.1];
+            if pan.iter().all(|value| value.is_finite()) {
+                self.zoom = next_zoom;
+                self.pan = pan;
+            }
+        }
     }
 
     fn ribbon(&self) -> Element<'_, Message> {
@@ -5021,9 +5250,42 @@ impl Studio {
                     label,
                     format!(
                         "{:.2} … {:.2}",
-                        entry.cloud.bounds.min[axis], entry.cloud.bounds.max[axis]
+                        entry.bounds().min[axis],
+                        entry.bounds().max[axis]
                     ),
                 ));
+            }
+            if !entry.transform.is_identity() {
+                let source_center = entry.cloud.bounds.center();
+                let edited_center = entry.bounds().center();
+                properties = properties
+                    .push(opencad_properties::section_header("Live transform"))
+                    .push(opencad_properties::property_row(
+                        "Scale XYZ",
+                        format!(
+                            "{:.3}, {:.3}, {:.3}",
+                            entry.transform.scale[0],
+                            entry.transform.scale[1],
+                            entry.transform.scale[2]
+                        ),
+                    ))
+                    .push(opencad_properties::property_row(
+                        "Centre shift",
+                        format!(
+                            "{:.3}, {:.3}, {:.3}",
+                            edited_center[0] - source_center[0],
+                            edited_center[1] - source_center[1],
+                            edited_center[2] - source_center[2]
+                        ),
+                    ))
+                    .push(
+                        container(
+                            button("Reset transform")
+                                .on_press(Message::ResetTransform)
+                                .style(flat_tool_style),
+                        )
+                        .padding([3, 8]),
+                    );
             }
             if let Some(point) = entry
                 .selection
@@ -5099,10 +5361,12 @@ impl Studio {
                                     .align_y(iced::Alignment::Center),
                                     text(format!(
                                         "{:.3}, {:.3}, {:.3}",
-                                        pose.position[0], pose.position[1], pose.position[2]
+                                        entry.transform.xyz(pose.position)[0],
+                                        entry.transform.xyz(pose.position)[1],
+                                        entry.transform.xyz(pose.position)[2]
                                     ))
                                     .size(10),
-                                    text(match pose.axes {
+                                    text(match entry.transform.axes(pose.axes) {
                                         Some(axes) => format!(
                                             "X {:+.2} {:+.2} {:+.2}\nY {:+.2} {:+.2} {:+.2}\nZ {:+.2} {:+.2} {:+.2}",
                                             axes[0][0], axes[0][1], axes[0][2],
@@ -5795,11 +6059,11 @@ fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
         match &mut overall {
             Some(bounds) => {
                 for axis in 0..3 {
-                    bounds.min[axis] = bounds.min[axis].min(entry.cloud.bounds.min[axis]);
-                    bounds.max[axis] = bounds.max[axis].max(entry.cloud.bounds.max[axis]);
+                    bounds.min[axis] = bounds.min[axis].min(entry.bounds().min[axis]);
+                    bounds.max[axis] = bounds.max[axis].max(entry.bounds().max[axis]);
                 }
             }
-            None => overall = Some(entry.cloud.bounds),
+            None => overall = Some(entry.bounds()),
         }
     }
     overall
@@ -5808,8 +6072,8 @@ fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
 fn loaded_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
     let mut overall: Option<Bounds> = None;
     for entry in clouds {
-        include_bounds(&mut overall, entry.cloud.bounds.min);
-        include_bounds(&mut overall, entry.cloud.bounds.max);
+        include_bounds(&mut overall, entry.bounds().min);
+        include_bounds(&mut overall, entry.bounds().max);
     }
     overall
 }
@@ -5817,13 +6081,11 @@ fn loaded_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
 fn bounds_with_scan_poses(clouds: &[CloudEntry]) -> Option<Bounds> {
     let mut bounds = combined_bounds(clouds);
     let mut has_scan_poses = false;
-    for pose in clouds
-        .iter()
-        .filter(|entry| entry.visible)
-        .flat_map(|entry| &entry.cloud.scan_poses)
-    {
-        include_bounds(&mut bounds, pose.position);
-        has_scan_poses = true;
+    for entry in clouds.iter().filter(|entry| entry.visible) {
+        for pose in &entry.cloud.scan_poses {
+            include_bounds(&mut bounds, entry.transform.xyz(pose.position));
+            has_scan_poses = true;
+        }
     }
     has_scan_poses.then_some(bounds).flatten()
 }
@@ -5905,6 +6167,7 @@ struct SelectedSource {
     cloud: Arc<PointCloud>,
     selection: Arc<SelectionMask>,
     deleted: Option<Arc<DeletionMask>>,
+    transform: CloudTransform,
 }
 
 fn selected_source_bounds(sources: &[SelectedSource]) -> Result<(Bounds, u64), String> {
@@ -5927,7 +6190,7 @@ fn selected_source_bounds(sources: &[SelectedSource]) -> Result<(Bounds, u64), S
             if selection.contains(ordinal)
                 && deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
             {
-                include_bounds(&mut bounds, point.xyz);
+                include_bounds(&mut bounds, source.transform.xyz(point.xyz));
                 count += 1;
             }
             ordinal += 1;
@@ -6169,7 +6432,7 @@ fn scan_pose_at(
     let mut nearest: Option<(usize, usize, f32)> = None;
     for (cloud_index, entry) in clouds.iter().enumerate().filter(|(_, entry)| entry.visible) {
         for (pose_index, pose) in entry.cloud.scan_poses.iter().enumerate() {
-            let Some((x, y, _)) = projection.project(pose.position) else {
+            let Some((x, y, _)) = projection.project(entry.transform.xyz(pose.position)) else {
                 continue;
             };
             let distance = (pointer.x - x).hypot(pointer.y - y);
@@ -6576,10 +6839,18 @@ impl canvas::Program<Message> for PointViewport<'_> {
             let mut markers = Vec::with_capacity(pose_count);
             for entry in self.clouds.iter().filter(|entry| entry.visible) {
                 for pose in &entry.cloud.scan_poses {
-                    let Some((x, y, _)) = projection.project(pose.position) else {
+                    let Some((x, y, _)) = projection.project(entry.transform.xyz(pose.position))
+                    else {
                         continue;
                     };
-                    push_scan_marker(&mut markers, x, y, &pose.label, pose.axes, show_labels);
+                    push_scan_marker(
+                        &mut markers,
+                        x,
+                        y,
+                        &pose.label,
+                        entry.transform.axes(pose.axes),
+                        show_labels,
+                    );
                 }
             }
             for marker in markers {
@@ -6811,6 +7082,32 @@ mod section_box_tests {
     use super::*;
 
     #[test]
+    fn displayed_rounded_limits_clamp_to_precise_survey_bounds() {
+        let model = Bounds {
+            min: [206600.0, 474000.0, 0.803],
+            max: [208600.0, 474999.999, 79.363],
+        };
+        let section = section_within_model(
+            Bounds {
+                min: [206600.0, 474000.0, 0.8],
+                max: [206700.0, 475000.0, 79.36],
+            },
+            model,
+        )
+        .unwrap();
+        assert_eq!(section.min[2], 0.803);
+        assert_eq!(section.max[1], 474999.999);
+        assert!(section_within_model(
+            Bounds {
+                min: [206600.0, 474000.0, 0.5],
+                max: [206700.0, 475000.0, 79.36],
+            },
+            model,
+        )
+        .is_none());
+    }
+
+    #[test]
     fn zoom_box_frames_a_small_survey_section_on_all_axes() {
         let scene = Bounds {
             min: [207_000.0, 474_000.0, 0.0],
@@ -6862,6 +7159,7 @@ mod section_box_tests {
             cloud: Arc::clone(&cloud),
             selection: Arc::clone(&selection),
             deleted: None,
+            transform: CloudTransform::default(),
         }])
         .unwrap();
         assert_eq!(selected.0.min, [2.0, 4.0, 6.0]);
@@ -6975,6 +7273,121 @@ mod scan_marker_tests {
 #[cfg(test)]
 mod editing_tests {
     use super::*;
+
+    #[test]
+    fn live_transform_is_shared_by_view_selection_and_export() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.xyz");
+        std::fs::write(&path, "0 0 0\n10 0 0\n10 10 10\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+        let tree = Arc::new(
+            OctreeIndex::build(
+                &cloud,
+                IndexConfig {
+                    leaf_points: 1,
+                    preview_points: 2,
+                    max_depth: 4,
+                    scratch_dir: Some(directory.path().to_path_buf()),
+                },
+            )
+            .unwrap(),
+        );
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&cloud))));
+        studio.translate_x = "100".into();
+        studio.translate_y = "200".into();
+        let _ = studio.update(Message::ApplyTranslation);
+        studio.scale_inputs[0] = "2".into();
+        let _ = studio.update(Message::ApplyScale);
+        assert!(
+            studio.zoom < 1.0,
+            "camera should retain its world scale after scaling"
+        );
+
+        let entry = &studio.clouds[0];
+        assert_eq!(entry.bounds().min, [95.0, 200.0, 0.0]);
+        assert_eq!(entry.bounds().max, [115.0, 210.0, 10.0]);
+        assert_eq!(
+            entry.view_records().next().unwrap().point.xyz,
+            [95.0, 200.0, 0.0]
+        );
+        let select_bounds = Bounds {
+            min: [114.0, 199.0, -1.0],
+            max: [116.0, 211.0, 11.0],
+        };
+        let filter = ClassFilter {
+            ground: true,
+            vegetation: true,
+            buildings: true,
+            other: true,
+            classes: ClassVisibility::default(),
+            section: None,
+        };
+        for index in [None, Some(Arc::clone(&tree))] {
+            let selected = select_world(
+                vec![SelectionSource {
+                    index: 0,
+                    cloud: Arc::clone(&cloud),
+                    tree: index,
+                    deleted: None,
+                    transform: entry.transform,
+                }],
+                select_bounds,
+                filter,
+            )
+            .unwrap();
+            assert_eq!(selected[0].1.count, 2);
+            assert!(!selected[0].1.contains(0));
+        }
+        let selected_bounds = selected_source_bounds(&[SelectedSource {
+            index: 0,
+            cloud: Arc::clone(&cloud),
+            selection: Arc::new(SelectionMask {
+                bits: vec![0b110],
+                count: 2,
+                highlights: Vec::new(),
+            }),
+            deleted: None,
+            transform: entry.transform,
+        }])
+        .unwrap();
+        assert_eq!(selected_bounds.0.min, [115.0, 200.0, 0.0]);
+        assert_eq!(selected_bounds.0.max, [115.0, 210.0, 10.0]);
+
+        let full = directory.path().join("moved.ply");
+        export_edited_where(
+            &cloud,
+            &full,
+            ExportFormat::PlyBinary,
+            entry.transform,
+            3,
+            |_, _| true,
+        )
+        .unwrap();
+        let reopened = pointcloud_core::open(&full, 10).unwrap();
+        assert_eq!(reopened.bounds, entry.bounds());
+        let section = directory.path().join("section.ply");
+        assert_eq!(
+            export_edited_section(
+                &cloud,
+                &section,
+                ExportFormat::PlyBinary,
+                entry.transform,
+                select_bounds,
+                None,
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(pointcloud_core::open(section, 10).unwrap().total_points, 2);
+        studio.section_reference_bounds = Some(studio.clouds[0].bounds());
+        studio.section_min_percent = [90.0, 0.0, 0.0];
+        studio.section_max_percent = [100.0; 3];
+        studio.section_enabled = true;
+        let _ = studio.update(Message::ResetTransform);
+        assert_eq!(studio.clouds[0].bounds(), cloud.bounds);
+        assert_eq!(studio.section_bounds(), Some(cloud.bounds));
+    }
 
     #[test]
     fn delete_undo_redo_keep_source_ordinals_across_two_clouds() {

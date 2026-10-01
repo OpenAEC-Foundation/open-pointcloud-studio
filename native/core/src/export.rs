@@ -306,6 +306,17 @@ pub fn export_map(
     export_map_count(cloud, destination, format, Some(expected_count), map).map(|_| ())
 }
 
+/// Stream a mapped subset when its exact output count is only known after
+/// evaluating the world-space filter. The writer backfills count headers.
+pub fn export_map_auto_count(
+    cloud: &PointCloud,
+    destination: impl AsRef<Path>,
+    format: ExportFormat,
+    map: impl FnMut(u64, Point) -> Option<Point>,
+) -> Result<u64, LoadError> {
+    export_map_count(cloud, destination, format, None, map)
+}
+
 fn export_map_count(
     cloud: &PointCloud,
     destination: impl AsRef<Path>,

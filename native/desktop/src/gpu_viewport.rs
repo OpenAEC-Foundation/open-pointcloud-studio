@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::selection::{ClassVisibility, DeletionMask};
+use crate::CloudTransform;
 use crate::{combined_bounds, CloudEntry, ColorMode, Message, PointViewport, Projection};
 use bytemuck::{Pod, Zeroable};
 use iced::mouse;
@@ -37,6 +38,7 @@ struct SceneKey {
 
 struct CloudKey {
     source: Arc<PointCloud>,
+    transform: CloudTransform,
     detail: Option<Arc<[IndexedPoint]>>,
     deleted: Option<Arc<DeletionMask>>,
     mesh: Option<Arc<MeshGeometry>>,
@@ -60,6 +62,7 @@ impl SceneKey {
                 .iter()
                 .map(|entry| CloudKey {
                     source: Arc::clone(&entry.cloud),
+                    transform: entry.transform,
                     detail: entry.detail_points.clone(),
                     deleted: entry.deleted.clone(),
                     mesh: entry.mesh.clone(),
@@ -106,6 +109,7 @@ impl SceneKey {
 impl CloudKey {
     fn matches(&self, entry: &CloudEntry) -> bool {
         Arc::ptr_eq(&self.source, &entry.cloud)
+            && self.transform == entry.transform
             && same_arc(&self.detail, &entry.detail_points)
             && same_arc(&self.deleted, &entry.deleted)
             && same_arc(&self.mesh, &entry.mesh)
@@ -161,13 +165,15 @@ impl<'a> GpuViewport<'a> {
                     color: [color.r, color.g, color.b, color.a],
                 });
             }
-            for mesh in self
+            for entry in self
                 .overlay
                 .clouds
                 .iter()
                 .filter(|entry| entry.mesh_visible)
-                .filter_map(|entry| entry.mesh.as_deref())
             {
+                let Some(mesh) = entry.mesh.as_deref() else {
+                    continue;
+                };
                 let Ok(base) = u32::try_from(mesh_vertices.len()) else {
                     break;
                 };
@@ -178,6 +184,7 @@ impl<'a> GpuViewport<'a> {
                 }
                 mesh_vertices.reserve(mesh.vertices.len());
                 for xyz in &mesh.vertices {
+                    let xyz = entry.transform.xyz(*xyz);
                     mesh_vertices.push(GpuPoint {
                         relative: [
                             (xyz[0] - center[0]) as f32,
@@ -788,6 +795,7 @@ mod tests {
         let mut studio = Studio::default();
         studio.clouds.push(CloudEntry {
             cloud,
+            transform: CloudTransform::default(),
             mesh: None,
             mesh_visible: false,
             bag_source: false,

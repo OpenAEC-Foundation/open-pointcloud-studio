@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::CloudTransform;
 use pointcloud_core::{visit_points, Bounds, IndexedPoint, OctreeIndex, Point, PointCloud};
 
 const HIGHLIGHT_LIMIT: usize = 8_000;
@@ -332,6 +333,7 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+#[cfg(test)]
 pub fn pick_indexed(
     tree: &OctreeIndex,
     projection: Projection,
@@ -340,13 +342,39 @@ pub fn pick_indexed(
     filter: ClassFilter,
     deleted: Option<&DeletionMask>,
 ) -> Result<Option<IndexedPoint>, String> {
+    pick_indexed_transformed(
+        tree,
+        projection,
+        pointer,
+        radius,
+        filter,
+        deleted,
+        CloudTransform::default(),
+    )
+}
+
+pub fn pick_indexed_transformed(
+    tree: &OctreeIndex,
+    projection: Projection,
+    pointer: [f32; 2],
+    radius: f32,
+    filter: ClassFilter,
+    deleted: Option<&DeletionMask>,
+    transform: CloudTransform,
+) -> Result<Option<IndexedPoint>, String> {
     validate_pick(pointer, radius)?;
     let mut best: Option<(IndexedPoint, f32, f64)> = None;
     tree.visit_intersecting(
-        |bounds| node_overlaps_pointer(bounds, projection, pointer, radius),
+        |bounds| node_overlaps_pointer(transform.bounds(bounds), projection, pointer, radius),
         |record| {
             consider_pick(
-                record, projection, pointer, radius, filter, deleted, &mut best,
+                transform.record(record),
+                projection,
+                pointer,
+                radius,
+                filter,
+                deleted,
+                &mut best,
             );
             Ok(())
         },
@@ -356,6 +384,7 @@ pub fn pick_indexed(
 }
 
 /// Pick directly from the source when no disk octree has been built yet.
+#[cfg(test)]
 pub fn pick_full(
     cloud: &PointCloud,
     projection: Projection,
@@ -364,13 +393,33 @@ pub fn pick_full(
     filter: ClassFilter,
     deleted: Option<&DeletionMask>,
 ) -> Result<Option<IndexedPoint>, String> {
+    pick_full_transformed(
+        cloud,
+        projection,
+        pointer,
+        radius,
+        filter,
+        deleted,
+        CloudTransform::default(),
+    )
+}
+
+pub fn pick_full_transformed(
+    cloud: &PointCloud,
+    projection: Projection,
+    pointer: [f32; 2],
+    radius: f32,
+    filter: ClassFilter,
+    deleted: Option<&DeletionMask>,
+    transform: CloudTransform,
+) -> Result<Option<IndexedPoint>, String> {
     validate_pick(pointer, radius)?;
     cloud.validate_source().map_err(|error| error.to_string())?;
     let mut best = None;
     let mut ordinal = 0u64;
     visit_points(&cloud.path, &mut |point| {
         consider_pick(
-            IndexedPoint { point, ordinal },
+            transform.record(IndexedPoint { point, ordinal }),
             projection,
             pointer,
             radius,
@@ -488,6 +537,7 @@ pub struct SelectionSource {
     pub cloud: Arc<PointCloud>,
     pub tree: Option<Arc<OctreeIndex>>,
     pub deleted: Option<Arc<DeletionMask>>,
+    pub transform: CloudTransform,
 }
 
 pub fn select_full(
@@ -498,19 +548,7 @@ pub fn select_full(
 ) -> Result<Vec<(usize, Arc<SelectionMask>)>, String> {
     let workers: Vec<_> = sources
         .into_iter()
-        .map(|source| {
-            std::thread::spawn(move || {
-                select_one(
-                    source.index,
-                    source.cloud,
-                    source.tree,
-                    source.deleted,
-                    projection,
-                    rectangle,
-                    filter,
-                )
-            })
-        })
+        .map(|source| std::thread::spawn(move || select_one(source, projection, rectangle, filter)))
         .collect();
     let mut result = Vec::with_capacity(workers.len());
     for worker in workers {
@@ -558,11 +596,13 @@ fn select_one_world(
         cloud,
         tree,
         deleted,
+        transform,
     } = source;
     cloud.validate_source().map_err(|error| error.to_string())?;
     let mut mask = SelectionMask::new(cloud.total_points)?;
     let mut random_state = 0xd1b5_4a32_d192_ed03u64;
     let mut consider = |ordinal: u64, point: Point| {
+        let point = transform.point(point);
         if !deleted.as_ref().is_some_and(|mask| mask.contains(ordinal))
             && filter.accepts(&point)
             && (0..3).all(|axis| {
@@ -575,10 +615,10 @@ fn select_one_world(
     if let Some(tree) = tree {
         tree.visit_intersecting(
             |node| {
-                bounds_overlap(node, bounds)
+                bounds_overlap(transform.bounds(node), bounds)
                     && filter
                         .section
-                        .is_none_or(|section| bounds_overlap(node, section))
+                        .is_none_or(|section| bounds_overlap(transform.bounds(node), section))
             },
             |record| {
                 consider(record.ordinal, record.point);
@@ -603,18 +643,23 @@ fn select_one_world(
 }
 
 fn select_one(
-    index: usize,
-    cloud: Arc<PointCloud>,
-    tree: Option<Arc<OctreeIndex>>,
-    deleted: Option<Arc<DeletionMask>>,
+    source: SelectionSource,
     projection: Projection,
     rectangle: ScreenRect,
     filter: ClassFilter,
 ) -> Result<(usize, Arc<SelectionMask>), String> {
+    let SelectionSource {
+        index,
+        cloud,
+        tree,
+        deleted,
+        transform,
+    } = source;
     cloud.validate_source().map_err(|error| error.to_string())?;
     let mut mask = SelectionMask::new(cloud.total_points)?;
     let mut random_state = 0xd1b5_4a32_d192_ed03u64;
     let mut consider = |ordinal: u64, point: Point| {
+        let point = transform.point(point);
         if !deleted.as_ref().is_some_and(|mask| mask.contains(ordinal)) && filter.accepts(&point) {
             if let Some((x, y, _)) = projection.project(point.xyz) {
                 if rectangle.contains(x, y) {
@@ -628,12 +673,13 @@ fn select_one(
             |bounds| {
                 if filter.section.is_some_and(|section| {
                     (0..3).any(|axis| {
-                        bounds.max[axis] < section.min[axis] || bounds.min[axis] > section.max[axis]
+                        transform.bounds(bounds).max[axis] < section.min[axis]
+                            || transform.bounds(bounds).min[axis] > section.max[axis]
                     })
                 }) {
                     return false;
                 }
-                node_overlaps_rectangle(bounds, projection, rectangle)
+                node_overlaps_rectangle(transform.bounds(bounds), projection, rectangle)
             },
             |record| {
                 consider(record.ordinal, record.point);
@@ -705,6 +751,7 @@ mod tests {
             cloud,
             tree,
             deleted,
+            transform: CloudTransform::default(),
         }
     }
 
