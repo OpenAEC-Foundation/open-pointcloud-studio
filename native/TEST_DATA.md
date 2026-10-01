@@ -493,3 +493,33 @@ remained visible in
 [`native-ahn6-45m-lit-terrain-faces.png`](../screenshots/native-ahn6-45m-lit-terrain-faces.png).
 The desktop geometry test also checks derived normals for a mesh without
 normal attributes and their orientation after a reflected scale.
+
+The 3D surface mesher was also run on the complete AHN6 `207000_474000` LAZ
+tile on 1 October 2026. Its first run read all 45,839,678 points and saved
+50,000 colored vertices, 50,000 normals and 153,658 triangles in 323.92
+seconds with 84,972 KiB peak RSS. The native GUI rendered the faces without
+the point layer in
+[`native-ahn6-45m-3d-surface-faces.png`](../screenshots/native-ahn6-45m-3d-surface-faces.png).
+The screenshot shows substantial holes; this sampled local reconstruction is
+not a substitute for the continuous 2.5D terrain TIN on this aerial scan.
+An independent edge audit found no edges used by more than two faces, but
+44,660 shared edges were traversed in the same direction by both faces.
+
+After adding connected-patch winding propagation and recalculating vertex
+normals from the final faces, a second complete LAZ run produced the same
+50,000 vertices and 153,658 triangle sets in 349.12 seconds with 109,104 KiB
+peak RSS. It reoriented 72,528 triangles without removing any; the shared
+edges with matching directions fell to 12,228, while the 89,144 open boundary
+edges remained. The revised result is shown in
+[`native-ahn6-45m-3d-surface-oriented.png`](../screenshots/native-ahn6-45m-3d-surface-oriented.png).
+Contradictory cycles and sampling holes still need a stronger reconstruction
+algorithm.
+
+The 50,000 selected XYZ vertices were replayed as a separate source to tune
+the local triangulation in about 3–8 seconds per setting. Raising the edge
+factor from 4 to 6 or 8 added only 260 or 300 faces and increased open edges.
+Raising neighbor count from 12 to 16, 24 or 32 increased faces to 191,635,
+255,714 or 302,355 but also increased open edges to 117,199, 167,858 or
+205,331. The default remains 12 neighbors and edge factor 4. The headless
+`--surface` command now accepts `--max-vertices`, `--neighbors` and
+`--edge-factor` for further controlled tests.

@@ -450,11 +450,43 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--surface")) {
-        let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
-        else {
-            eprintln!("Usage: open-pointcloud-studio-native --surface INPUT OUTPUT.obj");
+        let usage = "Usage: open-pointcloud-studio-native --surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N]";
+        let (Some(source), Some(destination)) = (args.next(), args.next()) else {
+            eprintln!("{usage}");
             std::process::exit(2);
         };
+        let mut config = pointcloud_core::SurfaceMeshConfig::default();
+        while let Some(option) = args.next() {
+            let Some(value) = args.next() else {
+                eprintln!("{usage}");
+                std::process::exit(2);
+            };
+            let value = value.to_string_lossy();
+            match option.to_str() {
+                Some("--max-vertices") => {
+                    config.max_vertices = value.parse().unwrap_or_else(|_| {
+                        eprintln!("invalid --max-vertices: {value}");
+                        std::process::exit(2)
+                    });
+                }
+                Some("--neighbors") => {
+                    config.neighbors = value.parse().unwrap_or_else(|_| {
+                        eprintln!("invalid --neighbors: {value}");
+                        std::process::exit(2)
+                    });
+                }
+                Some("--edge-factor") => {
+                    config.max_edge_factor = value.parse().unwrap_or_else(|_| {
+                        eprintln!("invalid --edge-factor: {value}");
+                        std::process::exit(2)
+                    });
+                }
+                _ => {
+                    eprintln!("{usage}");
+                    std::process::exit(2);
+                }
+            }
+        }
         let source = PathBuf::from(source);
         let destination = PathBuf::from(destination);
         let is_las = source
@@ -468,13 +500,9 @@ fn main() -> iced::Result {
         } else {
             pointcloud_core::open(&source, 1)
         };
-        match cloud.and_then(|cloud| {
-            pointcloud_core::mesh_surface_obj(
-                &cloud,
-                &destination,
-                pointcloud_core::SurfaceMeshConfig::default(),
-            )
-        }) {
+        match cloud
+            .and_then(|cloud| pointcloud_core::mesh_surface_obj(&cloud, &destination, config))
+        {
             Ok(stats) => {
                 println!(
                     "3D surface ready: {} source points, {} vertices, {} triangles -> {}",

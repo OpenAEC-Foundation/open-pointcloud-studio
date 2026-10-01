@@ -4,7 +4,7 @@
 //! without assuming that the surface is a height field.
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -574,6 +574,7 @@ pub fn mesh_surface_obj_where_progress(
             "3D surface reconstruction produced no triangles".into(),
         ));
     }
+    let normals = orient_surface_faces(&vertices, &normals, &mut faces);
     progress(MeshProgress::new(
         MeshStage::Reconstructing,
         reconstruct_total,
@@ -674,10 +675,109 @@ fn edge_key(a: u32, b: u32) -> (u32, u32) {
     (a.min(b), a.max(b))
 }
 
+/// Propagate edge orientation across each connected patch and then derive
+/// normals from the resulting faces. Contradictory cycles from independently
+/// triangulated neighborhoods remain unresolved rather than removing faces.
+fn orient_surface_faces(
+    vertices: &[[f64; 3]],
+    estimated_normals: &[[f64; 3]],
+    faces: &mut [[u32; 3]],
+) -> Vec<[f64; 3]> {
+    let mut first_edge = HashMap::<(u32, u32), (usize, bool)>::with_capacity(faces.len() * 2);
+    let mut adjacent = vec![Vec::<(usize, bool)>::new(); faces.len()];
+    for (face_index, &[a, b, c]) in faces.iter().enumerate() {
+        for (start, end) in [(a, b), (b, c), (c, a)] {
+            let key = edge_key(start, end);
+            let forward = start == key.0;
+            if let Some(&(other, other_forward)) = first_edge.get(&key) {
+                let opposite_flip = forward == other_forward;
+                adjacent[face_index].push((other, opposite_flip));
+                adjacent[other].push((face_index, opposite_flip));
+            } else {
+                first_edge.insert(key, (face_index, forward));
+            }
+        }
+    }
+    let mut flip = vec![None; faces.len()];
+    let mut queue = VecDeque::new();
+    for seed in 0..faces.len() {
+        if flip[seed].is_some() {
+            continue;
+        }
+        flip[seed] = Some(false);
+        queue.push_back(seed);
+        let mut component = Vec::new();
+        while let Some(face_index) = queue.pop_front() {
+            component.push(face_index);
+            let current = flip[face_index].expect("queued face has an orientation");
+            for &(neighbor, opposite_flip) in &adjacent[face_index] {
+                if flip[neighbor].is_none() {
+                    flip[neighbor] = Some(current ^ opposite_flip);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        let alignment: f64 = component
+            .iter()
+            .map(|&index| {
+                let [a, b, c] = faces[index];
+                let normal = cross(
+                    difference(vertices[b as usize], vertices[a as usize]),
+                    difference(vertices[c as usize], vertices[a as usize]),
+                );
+                let sign = if flip[index] == Some(true) { -1.0 } else { 1.0 };
+                sign * dot(normal, estimated_normals[a as usize])
+            })
+            .sum();
+        if alignment < 0.0 {
+            for &index in &component {
+                flip[index] = Some(!flip[index].expect("component face has an orientation"));
+            }
+        }
+    }
+    for (face, should_flip) in faces.iter_mut().zip(flip) {
+        if should_flip == Some(true) {
+            face.swap(1, 2);
+        }
+    }
+    let mut normals = vec![[0.0_f64; 3]; vertices.len()];
+    for &[a, b, c] in faces.iter() {
+        let normal = cross(
+            difference(vertices[b as usize], vertices[a as usize]),
+            difference(vertices[c as usize], vertices[a as usize]),
+        );
+        for index in [a, b, c] {
+            for axis in 0..3 {
+                normals[index as usize][axis] += normal[axis];
+            }
+        }
+    }
+    normals
+        .into_iter()
+        .enumerate()
+        .map(|(index, normal)| unit(normal).unwrap_or(estimated_normals[index]))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{open, read_obj_mesh};
+
+    #[test]
+    fn orients_adjacent_surface_faces_and_recomputes_normals() {
+        let vertices = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ];
+        let mut faces = vec![[0, 1, 2], [1, 2, 3]];
+        let estimated = vec![[0.0, 0.0, 1.0]; 4];
+        let normals = orient_surface_faces(&vertices, &estimated, &mut faces);
+        assert_eq!(faces, vec![[0, 1, 2], [1, 3, 2]]);
+        assert_eq!(normals, estimated);
+    }
 
     #[test]
     fn surface_mesh_preserves_rgb_and_estimated_normals() {
