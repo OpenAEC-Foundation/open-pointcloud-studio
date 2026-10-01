@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 mod bag_map;
 mod camera_views;
 mod gpu_viewport;
+mod native_api;
 mod opencad_properties;
 mod opencad_ribbon;
 mod selection;
@@ -18,6 +19,7 @@ mod view_cube;
 
 use bag_map::{BagMap, MapView, TileKey};
 use camera_views::SavedView;
+use iced::futures::SinkExt;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
 use iced::widget::{
@@ -33,6 +35,7 @@ use selection::{
     pick_full, pick_indexed, select_full, ClassFilter, DeletionMask, Projection, ScreenRect,
     SelectionMask, SelectionSource,
 };
+use serde_json::{json, Value};
 use ui_theme::UiTheme;
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
@@ -415,10 +418,32 @@ fn main() -> iced::Result {
             }
         }
     }
-    let startup_files: Vec<PathBuf> = first.into_iter().chain(args).map(PathBuf::from).collect();
+    let (requested_port, startup_files): (Option<u16>, Vec<PathBuf>) =
+        if first.as_deref() == Some(OsStr::new("--api-port")) {
+            let Some(value) = args
+                .next()
+                .and_then(|value| value.to_str().and_then(|s| s.parse().ok()))
+            else {
+                eprintln!("Usage: open-pointcloud-studio-native --api-port PORT [INPUT ...]");
+                std::process::exit(2);
+            };
+            (Some(value), args.map(PathBuf::from).collect())
+        } else {
+            (
+                None,
+                first.into_iter().chain(args).map(PathBuf::from).collect(),
+            )
+        };
+    let api = match native_api::start(requested_port) {
+        Ok(api) => Some(api),
+        Err(error) => {
+            eprintln!("Native API unavailable: {error}");
+            None
+        }
+    };
     iced::application("Open Pointcloud Studio", Studio::update, Studio::view)
-        .subscription(|_| {
-            iced::event::listen_with(|event, status, _| match event {
+        .subscription(|studio| {
+            let keyboard = iced::event::listen_with(|event, status, _| match event {
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                     ..
@@ -445,7 +470,23 @@ fn main() -> iced::Result {
                     }
                 }
                 _ => None,
-            })
+            });
+            let api = if let Some(receiver) = &studio.api_receiver {
+                let receiver = Arc::clone(receiver);
+                let stream = iced::stream::channel(32, move |mut output| async move {
+                    loop {
+                        let request = receiver.lock().await.recv().await;
+                        let Some(request) = request else { break };
+                        if output.send(Message::ApiRequest(request)).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                iced::Subscription::run_with_id("native_api", stream)
+            } else {
+                iced::Subscription::none()
+            };
+            iced::Subscription::batch([keyboard, api])
         })
         .font(include_bytes!("../../assets/fonts/Inter.ttf").as_slice())
         .font(include_bytes!("../../assets/fonts/SpaceGrotesk.ttf").as_slice())
@@ -455,6 +496,10 @@ fn main() -> iced::Result {
         .window_size((1440.0, 900.0))
         .run_with(move || {
             let mut studio = Studio::default();
+            if let Some((receiver, handle)) = api {
+                studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
+                studio.api_handle = Some(handle);
+            }
             let task = Task::batch(startup_files.into_iter().map(|path| studio.load(path)));
             (studio, task)
         })
@@ -547,6 +592,8 @@ impl CameraPreset {
 
 #[derive(Debug, Clone)]
 enum Message {
+    ApiRequest(native_api::ApiRequest),
+    ApiExported(String, bool, Result<(PathBuf, u64), String>),
     Tab(RibbonTab),
     Theme(UiTheme),
     Open,
@@ -688,6 +735,12 @@ enum Message {
 }
 
 struct Studio {
+    api_receiver: Option<
+        Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<native_api::ApiRequest>>>,
+    >,
+    api_handle: Option<native_api::ApiHandle>,
+    api_jobs: HashMap<String, Value>,
+    api_job_order: VecDeque<String>,
     clouds: Vec<CloudEntry>,
     undo_deletions: Vec<EditBatch>,
     redo_deletions: Vec<EditBatch>,
@@ -810,6 +863,10 @@ impl CloudEntry {
 impl Default for Studio {
     fn default() -> Self {
         Self {
+            api_receiver: None,
+            api_handle: None,
+            api_jobs: HashMap::new(),
+            api_job_order: VecDeque::new(),
             clouds: Vec::new(),
             undo_deletions: Vec::new(),
             redo_deletions: Vec::new(),
@@ -887,6 +944,323 @@ impl Default for Studio {
 }
 
 impl Studio {
+    fn handle_api(&mut self, request: native_api::ApiRequest) -> Task<Message> {
+        use native_api::ApiCommand;
+
+        let (response, task) = match request.command {
+            ApiCommand::Status => {
+                let clouds: Vec<_> = self
+                    .clouds
+                    .iter()
+                    .enumerate()
+                    .map(|(index, entry)| {
+                        json!({
+                            "index": index,
+                            "path": entry.cloud.path,
+                            "points": entry.cloud.total_points,
+                            "remaining": entry.remaining_count(),
+                            "visible": entry.visible,
+                            "indexed": entry.index.is_some(),
+                            "view_sample": entry.view_len(),
+                        })
+                    })
+                    .collect();
+                let section = self
+                    .section_bounds()
+                    .map(|bounds| json!({"min": bounds.min, "max": bounds.max}));
+                (
+                    json!({"ok": true, "result": {
+                        "clouds": clouds,
+                        "active": self.active,
+                        "status": self.status,
+                        "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label},
+                        "section": section,
+                        "selected_points": self.selected_total(),
+                        "color_mode": self.color_mode.to_string(),
+                        "eye_dome": self.eye_dome,
+                        "point_size": self.point_size,
+                        "budget": self.budget,
+                        "api_port": self.api_handle.as_ref().map(|handle| handle.port),
+                    }}),
+                    Task::none(),
+                )
+            }
+            ApiCommand::Job { id } => {
+                if let Some(job) = self.api_jobs.get(&id) {
+                    (json!({"ok": true, "job": job}), Task::none())
+                } else {
+                    (
+                        json!({"ok": false, "error": "unknown or expired job ID"}),
+                        Task::none(),
+                    )
+                }
+            }
+            ApiCommand::Open { path } => {
+                if !path.is_absolute() || !path.is_file() {
+                    (
+                        json!({"ok": false, "error": "open requires an absolute path to an existing file"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.load(path.clone());
+                    (json!({"ok": true, "accepted": true, "path": path}), task)
+                }
+            }
+            ApiCommand::Remove { index } => {
+                if index >= self.clouds.len() {
+                    (
+                        json!({"ok": false, "error": "cloud index is out of range"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::Remove(index));
+                    (json!({"ok": true, "removed": index}), task)
+                }
+            }
+            ApiCommand::SetActive { index } => {
+                if index >= self.clouds.len() {
+                    (
+                        json!({"ok": false, "error": "cloud index is out of range"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::Select(index));
+                    (json!({"ok": true, "active": index}), task)
+                }
+            }
+            ApiCommand::SetVisible { index, visible } => {
+                if index >= self.clouds.len() {
+                    (
+                        json!({"ok": false, "error": "cloud index is out of range"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::SetVisible(index, visible));
+                    (
+                        json!({"ok": true, "index": index, "visible": visible}),
+                        task,
+                    )
+                }
+            }
+            ApiCommand::Camera { preset } => {
+                let preset = match preset.to_ascii_lowercase().as_str() {
+                    "top" => Some(CameraPreset::Top),
+                    "bottom" => Some(CameraPreset::Bottom),
+                    "front" => Some(CameraPreset::Front),
+                    "back" => Some(CameraPreset::Back),
+                    "right" => Some(CameraPreset::Right),
+                    "left" => Some(CameraPreset::Left),
+                    "isometric" | "iso" => Some(CameraPreset::Isometric),
+                    _ => None,
+                };
+                if let Some(preset) = preset {
+                    let task = self.update(Message::CameraPreset(preset));
+                    (json!({"ok": true, "view": self.view_label}), task)
+                } else {
+                    (
+                        json!({"ok": false, "error": "unknown camera preset"}),
+                        Task::none(),
+                    )
+                }
+            }
+            ApiCommand::SetColor { mode } => {
+                let mode = match mode.to_ascii_lowercase().as_str() {
+                    "rgb" => Some(ColorMode::Rgb),
+                    "elevation" => Some(ColorMode::Elevation),
+                    "intensity" => Some(ColorMode::Intensity),
+                    "classification" => Some(ColorMode::Classification),
+                    _ => None,
+                };
+                if let Some(mode) = mode {
+                    let task = self.update(Message::ColorMode(mode));
+                    (json!({"ok": true}), task)
+                } else {
+                    (
+                        json!({"ok": false, "error": "unknown color mode"}),
+                        Task::none(),
+                    )
+                }
+            }
+            ApiCommand::SetPointSize { size } => {
+                if !size.is_finite() || !(1.0..=8.0).contains(&size) {
+                    (
+                        json!({"ok": false, "error": "point size must be between 1 and 8"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::PointSize(size));
+                    (json!({"ok": true, "point_size": size}), task)
+                }
+            }
+            ApiCommand::SetBudget { points } => {
+                if !(1_000..=2_000_000).contains(&points) {
+                    (
+                        json!({"ok": false, "error": "point budget must be between 1000 and 2000000"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::Budget(points));
+                    (json!({"ok": true, "budget": points}), task)
+                }
+            }
+            ApiCommand::SetSection { min, max } => {
+                if let Some(overall) = combined_bounds(&self.clouds) {
+                    let valid = (0..3).all(|axis| {
+                        min[axis].is_finite()
+                            && max[axis].is_finite()
+                            && min[axis] >= overall.min[axis] - 0.000_001
+                            && max[axis] <= overall.max[axis] + 0.000_001
+                            && if overall.min[axis] < overall.max[axis] {
+                                min[axis] < max[axis]
+                            } else {
+                                min[axis] == max[axis]
+                            }
+                    });
+                    if valid {
+                        self.section_reference_bounds = Some(overall);
+                        for axis in 0..3 {
+                            let span = overall.max[axis] - overall.min[axis];
+                            if span > 0.0 {
+                                self.section_min_percent[axis] =
+                                    (min[axis] - overall.min[axis]) / span * 100.0;
+                                self.section_max_percent[axis] =
+                                    (max[axis] - overall.min[axis]) / span * 100.0;
+                            }
+                        }
+                        self.section_enabled = true;
+                        self.sync_section_coordinate_inputs();
+                        self.revision += 1;
+                        self.status = "Section box updated through native API".into();
+                        let task = self.schedule_detail();
+                        (
+                            json!({"ok": true, "section": {"min": min, "max": max}}),
+                            task,
+                        )
+                    } else {
+                        (
+                            json!({"ok": false, "error": "section bounds must be finite, ordered and inside the model"}),
+                            Task::none(),
+                        )
+                    }
+                } else {
+                    (
+                        json!({"ok": false, "error": "open a cloud before setting a section"}),
+                        Task::none(),
+                    )
+                }
+            }
+            ApiCommand::ClearSection => {
+                let task = self.update(Message::SetSectionEnabled(false));
+                (json!({"ok": true}), task)
+            }
+            ApiCommand::Export { path } => self.api_export(path, false),
+            ApiCommand::ExportSection { path } => self.api_export(path, true),
+        };
+        let _ = request.reply.send(response);
+        task
+    }
+
+    fn api_export(&mut self, path: PathBuf, section_only: bool) -> (Value, Task<Message>) {
+        if !path.is_absolute() {
+            return (
+                json!({"ok": false, "error": "export requires an absolute destination path"}),
+                Task::none(),
+            );
+        }
+        let Some(format) = export_format_for_path(&path) else {
+            return (
+                json!({"ok": false, "error": "unsupported export extension"}),
+                Task::none(),
+            );
+        };
+        let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) else {
+            return (
+                json!({"ok": false, "error": "no active cloud"}),
+                Task::none(),
+            );
+        };
+        let cloud = Arc::clone(&entry.cloud);
+        let deleted = entry.deleted.as_ref().map(Arc::clone);
+        let section = if section_only {
+            let Some(section) = self.section_bounds() else {
+                return (
+                    json!({"ok": false, "error": "section box is not enabled"}),
+                    Task::none(),
+                );
+            };
+            Some(section)
+        } else {
+            None
+        };
+        let job_id = uuid::Uuid::new_v4().to_string();
+        self.api_jobs
+            .insert(job_id.clone(), json!({"state": "running", "path": path}));
+        self.api_job_order.push_back(job_id.clone());
+        if self.api_job_order.len() > 32 {
+            if let Some(oldest) = self.api_job_order.pop_front() {
+                self.api_jobs.remove(&oldest);
+            }
+        }
+        let response = json!({"ok": true, "accepted": true, "path": path, "job_id": job_id});
+        if let Some(section) = section {
+            self.section_export_pending = true;
+            self.status = "Exporting section through native API…".into();
+            let completion_id = job_id;
+            let task = Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        pointcloud_core::export_section_where(
+                            &cloud,
+                            &path,
+                            format,
+                            section,
+                            |ordinal, _| {
+                                deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
+                            },
+                        )
+                        .map(|count| (path, count))
+                        .map_err(|error| error.to_string())
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result)
+                },
+                move |result| Message::ApiExported(completion_id.clone(), true, result),
+            );
+            (response, task)
+        } else {
+            self.status = "Exporting cloud through native API…".into();
+            let completion_id = job_id;
+            let task = Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let expected_count =
+                            cloud.total_points - deleted.as_ref().map_or(0, |mask| mask.count);
+                        let result = if let Some(mask) = deleted {
+                            pointcloud_core::export_where(
+                                &cloud,
+                                &path,
+                                format,
+                                expected_count,
+                                |ordinal, _| !mask.contains(ordinal),
+                            )
+                        } else {
+                            pointcloud_core::export_full(&cloud, &path, format)
+                        };
+                        result
+                            .map(|()| (path, expected_count))
+                            .map_err(|error| error.to_string())
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result)
+                },
+                move |result| Message::ApiExported(completion_id.clone(), false, result),
+            );
+            (response, task)
+        }
+    }
+
     fn load(&mut self, path: PathBuf) -> Task<Message> {
         let is_las = path
             .extension()
@@ -957,6 +1331,25 @@ impl Studio {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::ApiRequest(request) => return self.handle_api(request),
+            Message::ApiExported(id, section_only, result) => {
+                if section_only {
+                    self.section_export_pending = false;
+                }
+                let job = match result {
+                    Ok((path, count)) => {
+                        self.status = format!("Exported {count} points to {}", path.display());
+                        json!({"state": "complete", "path": path, "points": count})
+                    }
+                    Err(error) => {
+                        self.status = format!("API export failed: {error}");
+                        json!({"state": "failed", "error": error})
+                    }
+                };
+                if let Some(entry) = self.api_jobs.get_mut(&id) {
+                    *entry = job;
+                }
+            }
             Message::Tab(tab) => self.ribbon_tab = tab,
             Message::Theme(theme) => {
                 self.ui_theme = theme;

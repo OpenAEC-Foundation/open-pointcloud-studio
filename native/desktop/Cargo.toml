@@ -10,7 +10,9 @@ iced = { version = "0.13.1", features = ["canvas", "image", "svg", "tokio"] }
 iced_wgpu = "0.13.5"
 bytemuck = { version = "1", features = ["derive"] }
 rfd = "0.15"
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "sync"] }
+tiny_http = "0.12"
+uuid = { version = "1", features = ["v4"] }
 open = "5.3"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 image = { version = "0.24", default-features = false, features = ["png"] }
