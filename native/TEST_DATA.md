@@ -86,8 +86,21 @@ for two distant scan patches still confirms that their gap is not bridged.
 | [Stanford 3D Scanning Repository](https://graphics.stanford.edu/data/3Dscanrep/) | Dragon scans: 2,748,318 points; Lucy raw scans: 58,241,932 points | PLY range data for Dragon; Lucy raw scans use SD | Object scan and mesh fidelity; check the repository's non-commercial terms |
 | [OpenTopography Mariposa Grove mobile lidar](https://portal.opentopography.org/dataspace/dataset?opentopoID=OTDS.112025.32611.1) | One listed LAZ scan: 786.31 MB and 153,181,399 points | LAZ | Follow-up stress test at higher density |
 | [pye57 test scans](https://github.com/davidcaron/pye57/tree/master/tests/test_data) | `test.e57`: 160,838 valid points; `testSpherical.e57`: 155,201 valid points | E57 | Cartesian and spherical scan decoding, pose handling |
+| [PCL couch](https://github.com/PointCloudLibrary/data/blob/master/tutorials/kinfu_large_scale/Tutorial_Cloud_Couch_bin_compressed.pcd) | 7,529,032 bytes; 968,520 points | LZF-compressed PCD | Official producer sample with an all-zero `VIEWPOINT` quaternion |
+| [PCL region-growing RGB](https://github.com/PointCloudLibrary/data/blob/master/tutorials/region_growing_rgb_tutorial.pcd) | 2,286,562 bytes; 307,200 records, 259,847 finite XYZ points | LZF-compressed PCD | Organized RGB sample with a valid rotated `VIEWPOINT` |
+| [PCL room scan](https://github.com/PointCloudLibrary/data/blob/master/tutorials/room_scan1.pcd) | 603,904 bytes; 112,586 points | LZF-compressed PCD | Ordinary producer scan with identity `VIEWPOINT` |
 | [3DBAG API](https://docs.3dbag.nl/nl/delivery/webservices/) | 1 km RD bounding box: 81 buildings, 3,414 vertices, 3,800 triangles across four pages | CityJSONFeatures | Native building import, page transforms, LoD 2.2, license credit |
 | [PDOK BRT-A WMTS](https://www.pdok.nl/ogc-webservices/-/article/basisregistratie-topografie-achtergrondkaarten-brt-a-) | 256×256 raster tiles in EPSG:28992 | PNG | Native RD area map, rectangle drawing, pan and zoom |
+
+On 1 October 2026, the Rust reader visited all 968,520 finite points in the
+PCL couch file, all 112,586 in the room scan, and 259,847 finite points in the
+organized RGB file (the remaining records contain non-finite XYZ). The couch
+sample previously failed at its all-zero `VIEWPOINT`; it now opens with a
+neutral orientation and no invented station marker. The RGB file rendered in
+the native WGPU view with its color and valid sensor axes, shown from above in
+[`native-pcl-rgb-lzf-top.png`](../screenshots/native-pcl-rgb-lzf-top.png).
+The local files can be downloaded from the linked PCL data repository and
+checked with `cargo run -p pointcloud-core --example visit_bench -- FILE.pcd 2000000`.
 
 The [AHN dataroom](https://www.ahn.nl/dataroom) describes the point-cloud
 products and their download map. The three adjacent AHN6 tiles total

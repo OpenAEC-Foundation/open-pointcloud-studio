@@ -21,6 +21,7 @@ struct Field {
 struct Viewpoint {
     translation: [f64; 3],
     rotation: [f64; 4], // w, x, y, z
+    orientation_known: bool,
 }
 
 impl Default for Viewpoint {
@@ -28,6 +29,7 @@ impl Default for Viewpoint {
         Self {
             translation: [0.0; 3],
             rotation: [1.0, 0.0, 0.0, 0.0],
+            orientation_known: false,
         }
     }
 }
@@ -49,12 +51,21 @@ impl Viewpoint {
             .map(|value| value * value)
             .sum::<f64>()
             .sqrt();
-        if !norm.is_finite() || norm <= f64::EPSILON {
-            return Err(invalid("PCD VIEWPOINT quaternion is zero"));
+        if !norm.is_finite() {
+            return Err(invalid("invalid PCD VIEWPOINT quaternion"));
         }
+        // Some PCL-produced clouds write a zero quaternion for an unknown
+        // sensor orientation. Keep their points in place instead of rejecting
+        // the entire scan, but do not invent oriented scanner axes.
+        let orientation_known = norm > f64::EPSILON;
         Ok(Self {
             translation: [values[0], values[1], values[2]],
-            rotation: std::array::from_fn(|axis| values[axis + 3] / norm),
+            rotation: if orientation_known {
+                std::array::from_fn(|axis| values[axis + 3] / norm)
+            } else {
+                [1.0, 0.0, 0.0, 0.0]
+            },
+            orientation_known,
         })
     }
 
@@ -118,7 +129,7 @@ pub fn read(
     if names.is_empty() || points == 0 {
         return Err(invalid("PCD file has no points or fields"));
     }
-    if has_viewpoint {
+    if has_viewpoint && viewpoint.orientation_known {
         pose_push(ScanPose {
             label: "VIEWPOINT".into(),
             position: viewpoint.translation,
@@ -483,10 +494,20 @@ mod tests {
             }
         }
 
+        let unknown = dir.path().join("unknown-viewpoint.pcd");
+        std::fs::write(
+            &unknown,
+            "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 1\nVIEWPOINT 10 20 30 0 0 0 0\nDATA ascii\n1 0 0\n",
+        )
+        .unwrap();
+        let cloud = super::super::open(&unknown, 1).unwrap();
+        assert_eq!(cloud.points[0].xyz, [11.0, 20.0, 30.0]);
+        assert!(cloud.scan_poses.is_empty());
+
         let invalid = dir.path().join("invalid-viewpoint.pcd");
         std::fs::write(
             &invalid,
-            "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 1\nVIEWPOINT 0 0 0 0 0 0 0\nDATA ascii\n1 0 0\n",
+            "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 1\nVIEWPOINT 0 0 0 NaN 0 0 0\nDATA ascii\n1 0 0\n",
         )
         .unwrap();
         assert!(super::super::open(&invalid, 1).is_err());
@@ -525,7 +546,7 @@ mod tests {
             payload.extend(rgb.to_le_bytes());
         }
         assert_eq!(payload.len(), 32);
-        let mut bytes = b"FIELDS x y z rgb\nSIZE 4 4 4 4\nTYPE F F F F\nWIDTH 2\nHEIGHT 1\nPOINTS 2\nDATA binary_compressed\n".to_vec();
+        let mut bytes = b"FIELDS x y z rgb\nSIZE 4 4 4 4\nTYPE F F F F\nWIDTH 2\nHEIGHT 1\nPOINTS 2\nVIEWPOINT 0 0 0 0 0 0 0\nDATA binary_compressed\n".to_vec();
         bytes.extend(33u32.to_le_bytes());
         bytes.extend(32u32.to_le_bytes());
         bytes.push(31); // One LZF literal run of 32 bytes.
@@ -533,6 +554,7 @@ mod tests {
         std::fs::write(&compressed, bytes).unwrap();
         let cloud = super::super::open(&compressed, 10).unwrap();
         assert_eq!(cloud.total_points, 2);
+        assert!(cloud.scan_poses.is_empty());
         assert_eq!(cloud.points[0].xyz, [1.0, 2.0, 3.0]);
         assert_eq!(cloud.points[1].xyz, [4.0, 5.0, 6.0]);
         assert_eq!(cloud.points[1].rgb, Some([0x44, 0x55, 0x66]));
