@@ -70,6 +70,14 @@ The renderer test checks that camera, point-size and eye-dome redraws reuse
 the same CPU geometry, while color, classification filters, section clipping
 and replacement LOD points rebuild it. GPU vertex/index uploads follow that
 geometry identity; the camera uniform still updates on every redraw.
+During a continuous middle-button pan on the header-only 45.8-million-point
+AHN6 LAZ, the previous 80,000-point LOD sample remained visible while the
+background request was delayed and refreshed. Properties showed **View sample
+80,000** instead of the source header's zero preview points; see
+[`native-ahn-continuous-pan-lod.png`](../screenshots/native-ahn-continuous-pan-lod.png).
+A native test verifies that orbit, pan, zoom, budget and section changes retain
+an existing sample when the source has no preview, reject a stale LOD result,
+and replace the sample only when a current result arrives.
 
 The native 3DBAG client was checked against the live
 [`pand/items` API](https://api.3dbag.nl/collections/pand/items) on 1 October

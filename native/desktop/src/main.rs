@@ -2170,7 +2170,6 @@ impl Studio {
                 if let Some(entry) = self.clouds.get_mut(index) {
                     entry.visible = visible;
                     self.revision += 1;
-                    self.clear_detail();
                     return self.schedule_detail();
                 }
             }
@@ -2186,7 +2185,6 @@ impl Studio {
                     self.redo_deletions.clear();
                     self.pending_delete = false;
                     self.revision += 1;
-                    self.clear_detail();
                     self.active = if self.clouds.is_empty() {
                         None
                     } else {
@@ -2218,7 +2216,6 @@ impl Studio {
                 self.pan = pan;
                 self.show_scan_poses = true;
                 self.revision += 1;
-                self.clear_detail();
                 self.status = "Point cloud and scanner positions framed".into();
                 return self.schedule_detail();
             }
@@ -2248,13 +2245,11 @@ impl Studio {
                 self.show_scan_poses = true;
                 self.status = format!("Centered on {}", pose.label);
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::Budget(budget) => {
                 self.budget = budget;
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::FilterGround(value) => self.filter_ground = value,
@@ -2270,7 +2265,6 @@ impl Studio {
                     self.sync_section_coordinate_inputs();
                 }
                 self.revision += 1;
-                self.clear_detail();
                 self.status = if enabled {
                     "Section box enabled; adjust X, Y and Z in Properties".into()
                 } else {
@@ -2284,7 +2278,6 @@ impl Studio {
                     self.section_min_percent[axis] = f64::from(value).clamp(0.0, upper);
                     self.sync_section_coordinate_inputs();
                     self.revision += 1;
-                    self.clear_detail();
                     return self.schedule_detail();
                 }
             }
@@ -2294,7 +2287,6 @@ impl Studio {
                     self.section_max_percent[axis] = f64::from(value).clamp(lower, 100.0);
                     self.sync_section_coordinate_inputs();
                     self.revision += 1;
-                    self.clear_detail();
                     return self.schedule_detail();
                 }
             }
@@ -2311,7 +2303,6 @@ impl Studio {
                     }
                     self.sync_section_coordinate_inputs();
                     self.revision += 1;
-                    self.clear_detail();
                     return self.schedule_detail();
                 }
             }
@@ -2369,7 +2360,6 @@ impl Studio {
                 self.section_enabled = true;
                 self.sync_section_coordinate_inputs();
                 self.revision += 1;
-                self.clear_detail();
                 self.status = "Section box updated from XYZ coordinates".into();
                 return self.schedule_detail();
             }
@@ -2379,7 +2369,6 @@ impl Studio {
                 self.section_max_percent = [100.0; 3];
                 self.sync_section_coordinate_inputs();
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::ZoomToSection => {
@@ -2402,7 +2391,6 @@ impl Studio {
                 self.zoom = zoom;
                 self.pan = pan;
                 self.revision += 1;
-                self.clear_detail();
                 self.status = "Section box framed in the viewport".into();
                 return self.schedule_detail();
             }
@@ -2497,7 +2485,6 @@ impl Studio {
                 self.section_enabled = true;
                 self.sync_section_coordinate_inputs();
                 self.revision += 1;
-                self.clear_detail();
                 self.status = format!("Section box fitted to {count} selected points");
                 return self.schedule_detail();
             }
@@ -2508,14 +2495,12 @@ impl Studio {
                 self.pitch = (self.pitch + dy * 0.01).clamp(-1.56, 1.56);
                 self.view_label = "CUSTOM";
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::Pan(dx, dy) => {
                 self.pan[0] += dx;
                 self.pan[1] += dy;
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::Zoom(delta, pointer, size) => {
@@ -2530,14 +2515,12 @@ impl Studio {
                         (value - center) * (1.0 - magnification) + self.pan[axis] * magnification;
                 }
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::ViewportSize(size) => {
                 if size.width > 0.0 && size.height > 0.0 {
                     self.viewport_size = size;
                     self.revision += 1;
-                    self.clear_detail();
                     return self.schedule_detail();
                 }
             }
@@ -2549,7 +2532,6 @@ impl Studio {
                 self.pan = [0.0, 0.0];
                 self.view_label = label;
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::CameraPreset(preset) => {
@@ -2558,7 +2540,6 @@ impl Studio {
                 self.pitch = pitch;
                 self.view_label = label;
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::CubeCorner(corner) => {
@@ -2566,7 +2547,6 @@ impl Studio {
                 self.pitch = f32::from(corner[2]).atan2(std::f32::consts::SQRT_2);
                 self.view_label = "ISO CORNER";
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::ViewName(name) => self.view_name = name,
@@ -2634,7 +2614,6 @@ impl Studio {
                 self.view_label = "SAVED VIEW";
                 self.status = format!("Restored camera view {}", view.name);
                 self.revision += 1;
-                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::DeleteView(index) => {
@@ -2970,14 +2949,6 @@ impl Studio {
 
     fn rebuild_bag_raster(&mut self) {
         self.bag_map_raster = bag_map::compose_raster(self.bag_map_view(), &self.bag_map_tiles);
-    }
-
-    fn clear_detail(&mut self) {
-        for entry in &mut self.clouds {
-            if entry.deleted_count() == 0 {
-                entry.detail_points = None;
-            }
-        }
     }
 
     fn start_next_auto_index(&mut self) -> Task<Message> {
@@ -3927,7 +3898,7 @@ impl Studio {
             )
             .style(flat_tool_style);
         let source_points = active_cloud.map_or(0, |entry| entry.cloud.total_points);
-        let preview_points = active_cloud.map_or(0, |entry| entry.cloud.points.len());
+        let view_points = active_cloud.map_or(0, CloudEntry::view_len);
         let selected_points = active_cloud
             .and_then(|entry| entry.selection.as_ref())
             .map_or(0, |selection| selection.count);
@@ -3961,7 +3932,7 @@ impl Studio {
                     .map_or(0, CloudEntry::deleted_count)
                     .to_string(),
             ),
-            opencad_properties::property_row("Preview points", preview_points.to_string()),
+            opencad_properties::property_row("View sample", view_points.to_string()),
             opencad_properties::property_row("Indexed", if indexed { "Yes" } else { "No" }.into()),
             opencad_properties::property_row("Selected", selected_points.to_string()),
             opencad_properties::section_header("Geometry"),
@@ -5947,5 +5918,66 @@ mod editing_tests {
         .unwrap();
         let reopened = pointcloud_core::open(destination, 10).unwrap();
         assert_eq!(reopened.total_points, 1);
+    }
+}
+
+#[cfg(test)]
+mod lod_transition_tests {
+    use super::*;
+
+    #[test]
+    fn navigation_keeps_old_lod_until_matching_replacement_arrives() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("scan.xyz");
+        std::fs::write(&source, "0 0 0\n1 0 0\n2 0 0\n3 0 0\n").unwrap();
+        let mut cloud = pointcloud_core::open(&source, 4).unwrap();
+        let records = cloud
+            .points
+            .iter()
+            .copied()
+            .zip(cloud.point_ordinals.iter().copied())
+            .take(2)
+            .map(|(point, ordinal)| IndexedPoint { point, ordinal })
+            .collect::<Vec<_>>();
+        let replacement_point = cloud.points[3];
+        // LAS header loading has exact bounds and counts but no preview yet.
+        cloud.points.clear();
+        cloud.point_ordinals.clear();
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::new(cloud))));
+        assert!(studio.clouds[0].cloud.points.is_empty());
+        let old: Arc<[IndexedPoint]> = records.into();
+        studio.clouds[0].detail_points = Some(Arc::clone(&old));
+
+        for message in [
+            Message::Orbit(20.0, 5.0),
+            Message::Pan(50.0, 25.0),
+            Message::Zoom(1.0, [400.0, 300.0], Size::new(800.0, 600.0)),
+            Message::Budget(40_000),
+            Message::SetSectionEnabled(true),
+        ] {
+            let _ = studio.update(message);
+            assert!(Arc::ptr_eq(
+                studio.clouds[0].detail_points.as_ref().unwrap(),
+                &old
+            ));
+        }
+        let stale_revision = studio.revision - 1;
+        let _ = studio.update(Message::DetailReady(stale_revision, Ok(vec![(0, vec![])])));
+        assert!(Arc::ptr_eq(
+            studio.clouds[0].detail_points.as_ref().unwrap(),
+            &old
+        ));
+
+        let replacement = vec![IndexedPoint {
+            point: replacement_point,
+            ordinal: 3,
+        }];
+        let _ = studio.update(Message::DetailReady(
+            studio.revision,
+            Ok(vec![(0, replacement)]),
+        ));
+        assert_eq!(studio.clouds[0].view_len(), 1);
+        assert_eq!(studio.clouds[0].view_records().next().unwrap().ordinal, 3);
     }
 }
