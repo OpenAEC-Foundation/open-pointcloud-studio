@@ -673,6 +673,16 @@ enum RibbonTab {
     Tools,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum FileAction {
+    Import,
+    Activate(usize),
+    ExportFull,
+    ExportSelection,
+    ExportSection,
+    ExportMesh,
+}
+
 impl RibbonTab {
     fn scroll_id(self) -> scrollable::Id {
         scrollable::Id::new(match self {
@@ -862,6 +872,8 @@ enum Message {
         Result<Vec<(usize, Arc<SelectionMask>)>, String>,
     ),
     Tab(RibbonTab),
+    ToggleFile,
+    FileAction(FileAction),
     RibbonScroll(f32),
     Theme(UiTheme),
     Open,
@@ -1094,6 +1106,7 @@ struct Studio {
     view_name: String,
     viewport_size: Size,
     ribbon_tab: RibbonTab,
+    file_open: bool,
     ui_theme: UiTheme,
     box_select: bool,
     pick_mode: bool,
@@ -1284,6 +1297,7 @@ impl Default for Studio {
             view_name: String::new(),
             viewport_size: Size::new(915.0, 743.0),
             ribbon_tab: RibbonTab::Home,
+            file_open: false,
             ui_theme: UiTheme::load(),
             box_select: false,
             pick_mode: false,
@@ -2399,7 +2413,22 @@ impl Studio {
                     *entry = job;
                 }
             }
-            Message::Tab(tab) => self.ribbon_tab = tab,
+            Message::Tab(tab) => {
+                self.ribbon_tab = tab;
+                self.file_open = false;
+            }
+            Message::ToggleFile => self.file_open = !self.file_open,
+            Message::FileAction(action) => {
+                self.file_open = false;
+                return self.update(match action {
+                    FileAction::Import => Message::Open,
+                    FileAction::Activate(index) => Message::Select(index),
+                    FileAction::ExportFull => Message::Export,
+                    FileAction::ExportSelection => Message::ExportSelection,
+                    FileAction::ExportSection => Message::ExportSection,
+                    FileAction::ExportMesh => Message::ExportMesh,
+                });
+            }
             Message::RibbonScroll(direction) => {
                 return scrollable::scroll_by(
                     self.ribbon_tab.scroll_id(),
@@ -4551,6 +4580,10 @@ impl Studio {
                 }
             }
             Message::Escape => {
+                if self.file_open {
+                    self.file_open = false;
+                    return Task::none();
+                }
                 self.context_menu = None;
                 self.box_select = false;
                 self.pick_mode = false;
@@ -4936,11 +4969,21 @@ impl Studio {
             button(text(label).size(12))
                 .on_press(Message::Tab(value))
                 .style(move |theme, status| {
-                    opencad_ribbon::tab_style(theme, self.ribbon_tab == value, status)
+                    opencad_ribbon::tab_style(
+                        theme,
+                        !self.file_open && self.ribbon_tab == value,
+                        status,
+                    )
                 })
                 .padding([5, 13])
         };
         let tabs = row![
+            button(text("File").size(12))
+                .on_press(Message::ToggleFile)
+                .style(|theme, status| {
+                    opencad_ribbon::file_tab_style(theme, self.file_open, status)
+                })
+                .padding([5, 13]),
             tab("Home", RibbonTab::Home),
             tab("View", RibbonTab::View),
             tab("Select", RibbonTab::Select),
@@ -4981,6 +5024,9 @@ impl Studio {
         .width(Fill)
         .height(29)
         .style(|theme| container::Style::default().background(ui_theme::colors(theme).tabs));
+        if self.file_open {
+            return container(tab_bar).width(Fill).style(ribbon_style).into();
+        }
 
         let mesh_available = self
             .active
@@ -5822,7 +5868,201 @@ impl Studio {
         }
     }
 
+    fn file_view(&self) -> Element<'_, Message> {
+        let action = |label: &'static str, action: FileAction, available: bool| {
+            button(text(label).size(14))
+                .on_press_maybe(available.then_some(Message::FileAction(action)))
+                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                .width(Fill)
+                .padding([11, 18])
+        };
+        let active_cloud = self.active.and_then(|index| self.clouds.get(index));
+        let selected = self.selected_total();
+        let active_selected = active_cloud
+            .and_then(|entry| entry.selection.as_ref())
+            .map_or(0, |selection| selection.count);
+        let menu = column![
+            container(text("FILE").size(12).color(self.ui_theme.colors().accent)).padding([20, 18]),
+            action("Import point cloud…", FileAction::Import, true),
+            container(text("EXPORT").size(10).color(self.ui_theme.colors().muted)).padding(
+                iced::Padding {
+                    top: 22.0,
+                    right: 18.0,
+                    bottom: 7.0,
+                    left: 18.0,
+                }
+            ),
+            action(
+                "Full resolution…",
+                FileAction::ExportFull,
+                active_cloud.is_some()
+            ),
+            action(
+                "Selected points…",
+                FileAction::ExportSelection,
+                active_selected > 0
+            ),
+            action(
+                "Section box…",
+                FileAction::ExportSection,
+                active_cloud.is_some() && self.section_enabled && !self.section_export_pending,
+            ),
+            action(
+                "Surface mesh…",
+                FileAction::ExportMesh,
+                active_cloud.is_some_and(|entry| entry.mesh.is_some()) && !self.mesh_export_pending,
+            ),
+            iced::widget::vertical_space(),
+            button(text("←  Return to model").size(13))
+                .on_press(Message::ToggleFile)
+                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                .width(Fill)
+                .padding([13, 18]),
+        ]
+        .width(260)
+        .height(Fill);
+        let menu = container(menu).width(260).height(Fill).style(sidebar_style);
+
+        let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
+        let active_name = active_cloud
+            .map(|entry| display_name(&entry.cloud.path))
+            .unwrap_or("No active scan");
+        let open_scans = self.clouds.iter().enumerate().fold(
+            column![].spacing(3).width(Fill),
+            |rows, (index, entry)| {
+                rows.push(
+                    button(
+                        row![
+                            text(display_name(&entry.cloud.path)).size(13),
+                            iced::widget::horizontal_space(),
+                            text(format!("{} points", entry.remaining_count()))
+                                .size(11)
+                                .color(self.ui_theme.colors().muted),
+                        ]
+                        .spacing(16)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .on_press(Message::FileAction(FileAction::Activate(index)))
+                    .style(move |theme, status| {
+                        opencad_ribbon::tool_btn_style(theme, self.active == Some(index), status)
+                    })
+                    .width(Fill)
+                    .padding([9, 12]),
+                )
+            },
+        );
+        let details = column![
+            text("Point cloud workspace")
+                .size(26)
+                .font(Font::with_name("Space Grotesk")),
+            text(format!(
+                "{} files  ·  {} points  ·  {} selected",
+                self.clouds.len(),
+                total_points,
+                selected,
+            ))
+            .size(13)
+            .color(self.ui_theme.colors().muted),
+            container(
+                text("CURRENT SCAN")
+                    .size(10)
+                    .color(self.ui_theme.colors().muted)
+            )
+            .padding(iced::Padding {
+                top: 28.0,
+                bottom: 4.0,
+                ..iced::Padding::ZERO
+            }),
+            text(active_name).size(16),
+            container(
+                text("OPEN SCANS")
+                    .size(10)
+                    .color(self.ui_theme.colors().muted)
+            )
+            .padding(iced::Padding {
+                top: 28.0,
+                bottom: 4.0,
+                ..iced::Padding::ZERO
+            }),
+            container(open_scans).width(Fill).max_width(560),
+            container(
+                text("EXPORT FORMAT")
+                    .size(10)
+                    .color(self.ui_theme.colors().muted)
+            )
+            .padding(iced::Padding {
+                top: 28.0,
+                bottom: 4.0,
+                ..iced::Padding::ZERO
+            }),
+            pick_list(
+                ExportFormat::ALL,
+                Some(self.export_format),
+                Message::ExportFormat,
+            )
+            .style(themed_pick_list_style)
+            .width(240),
+            container(
+                text("APPEARANCE")
+                    .size(10)
+                    .color(self.ui_theme.colors().muted)
+            )
+            .padding(iced::Padding {
+                top: 28.0,
+                bottom: 4.0,
+                ..iced::Padding::ZERO
+            }),
+            pick_list(UiTheme::ALL, Some(self.ui_theme), Message::Theme)
+                .style(themed_pick_list_style)
+                .width(240),
+            container(
+                text("Choose an export format, then save the active scan or selection.")
+                    .size(12)
+                    .color(self.ui_theme.colors().muted),
+            )
+            .padding(iced::Padding {
+                top: 32.0,
+                ..iced::Padding::ZERO
+            }),
+        ]
+        .spacing(8)
+        .width(Fill);
+        row![
+            menu,
+            container(scrollable(details).height(Fill))
+                .padding([30, 40])
+                .width(Fill)
+                .height(Fill)
+                .style(|theme| container::Style::default()
+                    .background(ui_theme::colors(theme).panel_alt)),
+        ]
+        .height(Fill)
+        .into()
+    }
+
     fn view(&self) -> Element<'_, Message> {
+        if self.file_open {
+            let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
+            let status_bar = row![
+                text(&self.status).size(11),
+                text(format!(
+                    "{} files  ·  {} points  ·  {} selected",
+                    self.clouds.len(),
+                    total_points,
+                    self.selected_total()
+                ))
+                .size(11),
+            ]
+            .spacing(24)
+            .padding([7, 12]);
+            return column![
+                self.ribbon(),
+                self.file_view(),
+                container(status_bar).width(Fill).style(status_style),
+            ]
+            .height(Fill)
+            .into();
+        }
         let point_view = self.point_viewport();
         let canvas = stack![
             gpu_viewport::GpuViewport {

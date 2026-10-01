@@ -187,3 +187,18 @@ pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button:
         ..button::Style::default()
     }
 }
+
+/// OpenAEC's File entry stays at the start of the native ribbon and opens the
+/// backstage workspace. Its solid accent is the style book's File-tab exception.
+pub fn file_tab_style(theme: &Theme, _open: bool, _status: button::Status) -> button::Style {
+    let colors = ui_theme::colors(theme);
+    button::Style {
+        background: Some(Background::Color(colors.accent)),
+        text_color: Color::BLACK,
+        border: Border {
+            radius: iced::border::Radius::default().top(4),
+            ..Border::default()
+        },
+        ..button::Style::default()
+    }
+}
