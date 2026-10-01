@@ -439,6 +439,12 @@ all scan poses and metadata. A separate section export streamed all 160,838
 valid points through the writer into one world-coordinate E57 scan in 3.20
 seconds with 25,304 KiB peak RSS. Exporting the original and this new E57 to
 binary PLY yielded byte-identical 160,838-point files (XYZ and intensity).
+With the scan-preserving filtered writer, the native dev build exported the
+section `301358.2,5042487.0,89.0,301358.7,5042489.0,91.0` from the same
+public file. Reopening the E57 found 85,865 points and all four original scan
+positions and orientations. A sequential comparison against the same section
+of the source XYZ stream found zero world-coordinate deviation and identical
+point attributes for every exported point.
 The 1,200,000-point LAS fixture exported to E57 in 5.13 seconds with 22,288
 KiB peak RSS, and the E57 reopened and exported to a 1,200,000-point PLY in
 5.00 seconds with 21,736 KiB peak RSS. Comparing that PLY with a direct LAS
