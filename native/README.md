@@ -23,6 +23,10 @@ All full-source LAS/LAZ operations now read bounded batches too: LAZ uses
 400,000 points per request so the parallel decompressor can process several
 compression chunks at once, while LAS uses 16,384-point batches. Callbacks
 still receive points in source order and can cancel mid-batch.
+Filtered LAS/LAZ exports use the same bounded input batches while retaining
+the source's native LAS attributes and coordinate grid. The export scan itself
+stays in the optimized Rust core when the desktop supplies a section, edit or
+selection predicate.
 Both meshers keep their full-source loops inside the optimized Rust core in
 development builds; the native desktop supplies edit and progress callbacks
 without recompiling those loops at the desktop's lower optimization level.

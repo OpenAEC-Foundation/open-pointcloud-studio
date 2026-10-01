@@ -570,3 +570,15 @@ the earlier terrain output. With all point layers temporarily hidden, the
 GPU-rendered surface was captured in
 [`native-ahn6-45m-optimized-gui-terrain.png`](../screenshots/native-ahn6-45m-optimized-gui-terrain.png).
 The three point layers were then made visible again.
+
+A filtered LAZ export scanned all 45,839,678 source points but wrote only the
+125,763 points inside X 207950..208000, Y 474000..474050 and the full Z range.
+Before batching the raw LAS/LAZ reader and moving the generic export scan into
+the optimized core, the native `--section` command took 323.06 seconds with
+65,304 KiB peak RSS. The revised command took 17.58 seconds with 148,976 KiB
+peak RSS. Both LAZ files were byte-for-byte identical (SHA-256
+`562a55682dde3d6f8c673e3ec5c1747a792260f4b8ff3944a271f3e8908b694e`).
+The rebuilt GUI then used its native section box and background export job to
+write the same 125,763-point LAZ in 26.666 seconds, also with the identical
+hash. The section box was cleared after the job; all three indexed source
+tiles remain open in the dev build.

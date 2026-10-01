@@ -324,7 +324,24 @@ fn export_map_count(
     expected_count: Option<u64>,
     mut map: impl FnMut(u64, Point) -> Option<Point>,
 ) -> Result<u64, LoadError> {
-    let destination = destination.as_ref();
+    export_map_count_inner(
+        cloud,
+        destination.as_ref(),
+        format,
+        expected_count,
+        &mut map,
+    )
+}
+
+// This scan is intentionally compiled in the optimized core, including when
+// a native desktop callback supplies the edit/selection predicate.
+fn export_map_count_inner(
+    cloud: &PointCloud,
+    destination: &Path,
+    format: ExportFormat,
+    expected_count: Option<u64>,
+    map: &mut dyn FnMut(u64, Point) -> Option<Point>,
+) -> Result<u64, LoadError> {
     if destination == cloud.path
         || fs::canonicalize(destination).ok() == fs::canonicalize(&cloud.path).ok()
     {
@@ -681,51 +698,62 @@ fn export_las_map_count(
     let stream_result = if source_header.is_some() {
         (|| -> Result<(), LoadError> {
             let mut reader = las::Reader::from_path(&cloud.path)?;
-            for raw_point in reader.points() {
-                let mut raw_point = raw_point?;
-                let original = convert_las_point(&raw_point);
-                let ordinal = source_count;
-                source_count += 1;
-                let Some(point) = map(ordinal, original) else {
-                    continue;
-                };
-                if !point.xyz.iter().all(|value| value.is_finite()) {
-                    return Err(LoadError::InvalidData(
-                        "transform produced non-finite coordinates".into(),
-                    ));
+            let read_limit = if reader.header().point_format().is_compressed {
+                PARALLEL_LAZ_BATCH_POINTS
+            } else {
+                LAS_BATCH_POINTS
+            };
+            let mut read_batch = Vec::with_capacity(read_limit);
+            loop {
+                read_batch.clear();
+                if reader.read_points_into(read_limit as u64, &mut read_batch)? == 0 {
+                    break;
                 }
-                for (axis, transform) in transforms.iter().enumerate() {
-                    transform.inverse(point.xyz[axis])?;
+                for mut raw_point in read_batch.drain(..) {
+                    let original = convert_las_point(&raw_point);
+                    let ordinal = source_count;
+                    source_count += 1;
+                    let Some(point) = map(ordinal, original) else {
+                        continue;
+                    };
+                    if !point.xyz.iter().all(|value| value.is_finite()) {
+                        return Err(LoadError::InvalidData(
+                            "transform produced non-finite coordinates".into(),
+                        ));
+                    }
+                    for (axis, transform) in transforms.iter().enumerate() {
+                        transform.inverse(point.xyz[axis])?;
+                    }
+                    [raw_point.x, raw_point.y, raw_point.z] = point.xyz;
+                    if point.rgb != original.rgb {
+                        raw_point.color = point.rgb.map(|rgb| {
+                            Color::new(
+                                u16::from(rgb[0]) * 257,
+                                u16::from(rgb[1]) * 257,
+                                u16::from(rgb[2]) * 257,
+                            )
+                        });
+                    }
+                    if point.intensity != original.intensity {
+                        raw_point.intensity = point.intensity.unwrap_or(0);
+                    }
+                    if point.classification != original.classification {
+                        let class_code = point.classification.unwrap_or(1);
+                        raw_point.is_overlap = class_code == 12;
+                        raw_point.classification =
+                            las::point::Classification::new(if class_code == 12 {
+                                1
+                            } else {
+                                class_code
+                            })?;
+                    }
+                    batch.push(raw_point);
+                    if batch.len() == batch_limit {
+                        writer.write_points(&batch)?;
+                        batch.clear();
+                    }
+                    written_count += 1;
                 }
-                [raw_point.x, raw_point.y, raw_point.z] = point.xyz;
-                if point.rgb != original.rgb {
-                    raw_point.color = point.rgb.map(|rgb| {
-                        Color::new(
-                            u16::from(rgb[0]) * 257,
-                            u16::from(rgb[1]) * 257,
-                            u16::from(rgb[2]) * 257,
-                        )
-                    });
-                }
-                if point.intensity != original.intensity {
-                    raw_point.intensity = point.intensity.unwrap_or(0);
-                }
-                if point.classification != original.classification {
-                    let class_code = point.classification.unwrap_or(1);
-                    raw_point.is_overlap = class_code == 12;
-                    raw_point.classification =
-                        las::point::Classification::new(if class_code == 12 {
-                            1
-                        } else {
-                            class_code
-                        })?;
-                }
-                batch.push(raw_point);
-                if batch.len() == batch_limit {
-                    writer.write_points(&batch)?;
-                    batch.clear();
-                }
-                written_count += 1;
             }
             Ok(())
         })()
