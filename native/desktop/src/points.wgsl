@@ -25,6 +25,7 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) local: vec2<f32>,
     @location(2) relative: vec3<f32>,
+    @location(3) normal: vec3<f32>,
 };
 
 @vertex
@@ -34,6 +35,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.color = input.color;
     output.local = vec2<f32>(0.0, 0.0);
     output.relative = input.relative.xyz;
+    output.normal = vec3<f32>(0.0, 0.0, 0.0);
     if depth <= 0.01 {
         output.position = vec4<f32>(2.0, 2.0, 1.0, 1.0);
         return output;
@@ -69,6 +71,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 struct MeshInput {
     @location(0) relative: vec4<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) normal: vec4<f32>,
 };
 
 @vertex
@@ -78,6 +81,7 @@ fn vs_mesh(input: MeshInput) -> VertexOutput {
     output.color = input.color;
     output.local = vec2<f32>(0.0, 0.0);
     output.relative = input.relative.xyz;
+    output.normal = input.normal.xyz;
     if depth <= 0.01 {
         output.position = vec4<f32>(2.0, 2.0, 1.0, 1.0);
         return output;
@@ -102,7 +106,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
        (any(input.relative < camera.clip_min.xyz) || any(input.relative > camera.clip_max.xyz)) {
         discard;
     }
-    return input.color;
+    if dot(input.normal, input.normal) <= 0.000001 {
+        return input.color;
+    }
+    let light = normalize(vec3<f32>(-0.35, -0.25, 0.90));
+    let shade = 0.76 + 0.24 * max(dot(normalize(input.normal), light), 0.0);
+    return vec4<f32>(input.color.rgb * shade, input.color.a);
 }
 
 @fragment

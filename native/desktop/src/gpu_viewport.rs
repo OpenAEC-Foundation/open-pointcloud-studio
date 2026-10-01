@@ -15,6 +15,42 @@ use iced_wgpu::primitive::{Primitive, Storage};
 use iced_wgpu::wgpu;
 use pointcloud_core::{Bounds, IndexedPoint, MeshGeometry, PointCloud};
 
+fn derived_mesh_normals(mesh: &MeshGeometry) -> Vec<[f32; 3]> {
+    let mut normals = vec![[0.0_f64; 3]; mesh.vertices.len()];
+    for &[a, b, c] in &mesh.triangles {
+        let (Some(&pa), Some(&pb), Some(&pc)) = (
+            mesh.vertices.get(a as usize),
+            mesh.vertices.get(b as usize),
+            mesh.vertices.get(c as usize),
+        ) else {
+            continue;
+        };
+        let ab = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+        let ac = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+        let normal = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        for index in [a, b, c] {
+            for axis in 0..3 {
+                normals[index as usize][axis] += normal[axis];
+            }
+        }
+    }
+    normals
+        .into_iter()
+        .map(|normal| {
+            let length = normal.iter().map(|value| value * value).sum::<f64>().sqrt();
+            if length.is_finite() && length > f64::EPSILON {
+                normal.map(|value| (value / length) as f32)
+            } else {
+                [0.0; 3]
+            }
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy)]
 pub struct GpuViewport<'a> {
     pub overlay: PointViewport<'a>,
@@ -183,6 +219,17 @@ impl<'a> GpuViewport<'a> {
                     break;
                 }
                 mesh_vertices.reserve(mesh.vertices.len());
+                let derived_normals = mesh
+                    .normals
+                    .as_ref()
+                    .is_none_or(|normals| normals.len() != mesh.vertices.len())
+                    .then(|| derived_mesh_normals(mesh));
+                let normals = mesh
+                    .normals
+                    .as_deref()
+                    .filter(|normals| normals.len() == mesh.vertices.len())
+                    .or(derived_normals.as_deref())
+                    .expect("mesh normals available");
                 for (index, xyz) in mesh.vertices.iter().enumerate() {
                     let xyz = entry.transform.xyz(*xyz);
                     let color = mesh
@@ -197,7 +244,8 @@ impl<'a> GpuViewport<'a> {
                                 0.82,
                             ]
                         });
-                    mesh_vertices.push(GpuPoint {
+                    let normal = entry.transform.normal(normals[index]).unwrap_or([0.0; 3]);
+                    mesh_vertices.push(GpuMeshVertex {
                         relative: [
                             (xyz[0] - center[0]) as f32,
                             (xyz[1] - center[1]) as f32,
@@ -205,6 +253,7 @@ impl<'a> GpuViewport<'a> {
                             0.0,
                         ],
                         color,
+                        normal: [normal[0], normal[1], normal[2], 0.0],
                     });
                 }
                 mesh_indices.reserve(mesh.triangles.len() * 3);
@@ -307,6 +356,14 @@ struct GpuPoint {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct GpuMeshVertex {
+    relative: [f32; 4],
+    color: [f32; 4],
+    normal: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct CameraUniform {
     right: [f32; 4],
     up: [f32; 4],
@@ -322,7 +379,7 @@ struct CameraUniform {
 #[derive(Debug)]
 struct RenderGeometry {
     points: Vec<GpuPoint>,
-    mesh_vertices: Vec<GpuPoint>,
+    mesh_vertices: Vec<GpuMeshVertex>,
     mesh_indices: Vec<u32>,
 }
 
@@ -396,6 +453,8 @@ impl GpuState {
             push_constant_ranges: &[],
         });
         let attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+        let mesh_attributes =
+            wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("pointcloud sprite pipeline"),
             layout: Some(&pipeline_layout),
@@ -439,9 +498,9 @@ impl GpuState {
                 module: &shader,
                 entry_point: "vs_mesh",
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<GpuPoint>() as u64,
+                    array_stride: std::mem::size_of::<GpuMeshVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
+                    attributes: &mesh_attributes,
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -527,7 +586,7 @@ impl GpuState {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let mesh_vertex_capacity = std::mem::size_of::<GpuPoint>() as u64;
+        let mesh_vertex_capacity = std::mem::size_of::<GpuMeshVertex>() as u64;
         let mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("terrain mesh vertices"),
             size: mesh_vertex_capacity,
@@ -662,7 +721,7 @@ impl Primitive for CloudPrimitive {
             }
             state.point_count = geometry.points.len() as u32;
             let vertex_bytes =
-                (geometry.mesh_vertices.len() * std::mem::size_of::<GpuPoint>()) as u64;
+                (geometry.mesh_vertices.len() * std::mem::size_of::<GpuMeshVertex>()) as u64;
             if vertex_bytes > state.mesh_vertex_capacity {
                 state.mesh_vertex_capacity = vertex_bytes.next_power_of_two();
                 state.mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -900,6 +959,17 @@ mod tests {
         assert_eq!(
             colored_mesh.geometry.mesh_vertices[1].color[1],
             128.0 / 255.0
+        );
+        assert_eq!(
+            colored_mesh.geometry.mesh_vertices[0].normal,
+            [0.0, 0.0, 1.0, 0.0]
+        );
+
+        studio.clouds[0].transform.scale = [-1.0, 2.0, 1.0];
+        let reflected_mesh = draw(&studio);
+        assert_eq!(
+            reflected_mesh.geometry.mesh_vertices[0].normal,
+            [0.0, 0.0, -1.0, 0.0]
         );
     }
 }

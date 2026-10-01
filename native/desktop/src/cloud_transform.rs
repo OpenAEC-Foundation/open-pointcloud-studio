@@ -26,6 +26,35 @@ impl CloudTransform {
         std::array::from_fn(|axis| source[axis] * self.scale[axis] + self.offset[axis])
     }
 
+    /// Map a surface normal through the inverse-transpose of this scale.
+    /// The determinant sign keeps it aligned with transformed triangle winding.
+    pub fn normal(self, source: [f32; 3]) -> Option<[f32; 3]> {
+        if self
+            .scale
+            .iter()
+            .any(|value| !value.is_finite() || value.abs() <= f64::EPSILON)
+        {
+            return None;
+        }
+        let orientation = if self
+            .scale
+            .iter()
+            .filter(|value| **value < 0.0)
+            .count()
+            .is_multiple_of(2)
+        {
+            1.0
+        } else {
+            -1.0
+        };
+        let mapped = std::array::from_fn::<_, 3, _>(|axis| {
+            f64::from(source[axis]) / self.scale[axis] * orientation
+        });
+        let length = mapped.iter().map(|value| value * value).sum::<f64>().sqrt();
+        (length.is_finite() && length > f64::EPSILON)
+            .then(|| mapped.map(|value| (value / length) as f32))
+    }
+
     pub fn point(self, mut point: Point) -> Point {
         point.xyz = self.xyz(point.xyz);
         point

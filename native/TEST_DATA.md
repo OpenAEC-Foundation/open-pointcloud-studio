@@ -487,3 +487,9 @@ All three source tiles were then made visible again (129,398,587 points).
 28,020 KiB peak RSS. An independent record comparison found identical values
 for all vertex coordinates and RGB channels, identical face indices, and a
 maximum normal-component difference of `5.0e-8` from decimal formatting.
+The next native WGPU build used those normals for interpolated directional
+lighting. With the OBJ's point layer hidden, its 191,104 colored faces
+remained visible in
+[`native-ahn6-45m-lit-terrain-faces.png`](../screenshots/native-ahn6-45m-lit-terrain-faces.png).
+The desktop geometry test also checks derived normals for a mesh without
+normal attributes and their orientation after a reflected scale.
