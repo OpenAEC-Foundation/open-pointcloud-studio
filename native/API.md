@@ -30,6 +30,13 @@ The newest 32 jobs remain queryable even if the GUI status line changes.
 Mesh jobs report `reading`, `reconstructing`, or `writing` with completed and
 total units. `cancel_mesh` requests cancellation; a cancelled mesh leaves an
 existing destination untouched. Only one mesh job runs at a time.
+`merge_visible` joins all visible LAS/LAZ layers into one `.las` or `.laz` file
+in a background task. It preserves original point attributes and applies each
+layer's current deletions and affine transform. Sources must have matching LAS
+version, point layout, coordinate grid and metadata; incompatible CRS metadata
+is rejected instead of silently choosing one. Poll its job or
+`status.result.merge` for processed and written point counts. `cancel_merge`
+stops the task and leaves an existing destination unchanged.
 For large clouds, `scale` returns `running: true`. Poll `status.result.scale`
 for processed and total source points; it becomes `null` when the transform
 finishes or is cancelled. `cancel_scale` stops the scan without applying the
@@ -62,7 +69,7 @@ pick is discarded when cancelled.
 | Command | JSON fields | Effect |
 | --- | --- | --- |
 | `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
-| `job` | `id` | Reads an export, selection or mesh task's state and result |
+| `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
 | `open` | `path` | Opens a point cloud or mesh in the running GUI |
 | `remove` | `index` | Removes a layer from the project |
 | `set_active` | `index` | Chooses the active layer |
@@ -93,6 +100,8 @@ pick is discarded when cancelled.
 | `reset_transform` | — | Restores the active cloud's source coordinates |
 | `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path; surface mode uses the current 3D surface settings and returns a job ID |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task |
+| `merge_visible` | `path` | Merges the visible LAS/LAZ layers to an absolute `.las` or `.laz` path; returns a job ID |
+| `cancel_merge` | — | Requests cancellation of the running merge task |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |

@@ -109,6 +109,10 @@ pub enum ApiCommand {
     ExportMinusSelection {
         path: PathBuf,
     },
+    MergeVisible {
+        path: PathBuf,
+    },
+    CancelMerge,
 }
 
 #[derive(Clone, Debug)]

@@ -137,6 +137,7 @@ for two distant scan patches still confirms that their gap is not bridged.
 | [AHN6 tile `207000_474000`](https://fsn1.your-objectstorage.com/hwh-ahn/AHN6/01_LAZ/AHN6_2025_C_207000_474000.LAZ) | 485,317,717 bytes; 45,839,678 points | LAZ 1.4 | Large classified geographic scan and octree |
 | [AHN6 tile `208000_474000`](https://fsn1.your-objectstorage.com/hwh-ahn/AHN6/01_LAZ/AHN6_2025_C_208000_474000.LAZ) | 300,181,990 bytes; 29,688,001 points | LAZ 1.4 | Adjacent horizontal tile |
 | [AHN6 tile `207000_475000`](https://fsn1.your-objectstorage.com/hwh-ahn/AHN6/01_LAZ/AHN6_2025_C_207000_475000.LAZ) | 589,160,933 bytes; 53,870,908 points | LAZ 1.4 | Adjacent vertical tile |
+| [AHN6 tile `208000_475000`](https://fsn1.your-objectstorage.com/hwh-ahn/AHN6/01_LAZ/AHN6_2025_C_208000_475000.LAZ) | 318,219,261 bytes; 30,615,998 points | LAZ 1.4 | Third tile with matching compound CRS for a >1 GB merged-file test |
 | [Stanford 3D Scanning Repository](https://graphics.stanford.edu/data/3Dscanrep/) | Dragon scans: 2,748,318 points; Lucy raw scans: 58,241,932 points | PLY range data for Dragon; Lucy raw scans use SD | Object scan and mesh fidelity; check the repository's non-commercial terms |
 | [OpenTopography Mariposa Grove mobile lidar](https://portal.opentopography.org/dataspace/dataset?opentopoID=OTDS.112025.32611.1) | One listed LAZ scan: 786.31 MB and 153,181,399 points | LAZ | Follow-up stress test at higher density |
 | [pye57 test scans](https://github.com/davidcaron/pye57/tree/master/tests/test_data) | `test.e57`: 160,838 valid points; `testSpherical.e57`: 155,201 valid points | E57 | Cartesian and spherical scan decoding, pose handling |
@@ -679,3 +680,16 @@ processed. A controlled 100 × 40 pixel right-button drag in the three-tile
 AHN6 scene changed camera pan by exactly that amount, left no context menu
 open, and returned to an 80,000-point LOD. See
 [`native-right-pan-release-ahn6.png`](../screenshots/native-right-pan-release-ahn6.png).
+
+The native multi-scan writer merged the visible-compatible AHN6 tiles
+`207000_475000`, `208000_474000` and `208000_475000` (1,207,562,184 source
+bytes, 114,174,907 points) into one 1,207,954,772-byte LAS 1.4 LAZ at
+`/tmp/open-pointcloud-AHN6-merged-114m.laz`. The final header reports all
+114,174,907 points and preserves the 0.001 m coordinate grid. An attempted
+merge with `207000_474000` was rejected before writing because that tile has
+different CRS records (horizontal-only versus compound RD New + NAP). In the
+native GUI, the [File view](../screenshots/native-merge-file-view-83m.png)
+shows the merge action for two visible scans. An API-triggered merge displayed
+[live progress](../screenshots/native-merge-progress-ahn6.png); cancellation
+after 3,600,000 processed points returned a `cancelled` job and preserved the
+existing destination byte for byte.

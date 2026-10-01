@@ -317,6 +317,59 @@ fn main() -> iced::Result {
             }
         }
     }
+    if first.as_deref() == Some(OsStr::new("--merge")) {
+        let Some(destination) = args.next() else {
+            eprintln!("Usage: open-pointcloud-studio-native --merge OUTPUT.laz INPUT1.las INPUT2.laz [...]");
+            std::process::exit(2);
+        };
+        let destination = PathBuf::from(destination);
+        let sources: Vec<PathBuf> = args.map(PathBuf::from).collect();
+        if sources.len() < 2 {
+            eprintln!("Merge needs at least two LAS/LAZ inputs");
+            std::process::exit(2);
+        }
+        let Some(format @ (ExportFormat::Las | ExportFormat::Laz)) =
+            export_format_for_path(&destination)
+        else {
+            eprintln!("Merge destination must end in .las or .laz");
+            std::process::exit(2);
+        };
+        let result = sources
+            .iter()
+            .map(pointcloud_core::open_las_header)
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|clouds| {
+                let references: Vec<_> = clouds.iter().collect();
+                let mut last_report = 0;
+                pointcloud_core::merge_las_map_count(
+                    &references,
+                    &destination,
+                    format,
+                    None,
+                    &mut |_, _, point| Some(point),
+                    &mut |processed, total, written| {
+                        if processed.saturating_sub(last_report) >= 5_000_000 || processed == total
+                        {
+                            eprintln!(
+                                "Merged {processed} / {total} source points; wrote {written}"
+                            );
+                            last_report = processed;
+                        }
+                        Ok(())
+                    },
+                )
+            });
+        match result {
+            Ok(count) => {
+                println!("Merged {count} points into {}", destination.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Merge failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if first.as_deref() == Some(OsStr::new("--export")) {
         let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
         else {
@@ -702,6 +755,8 @@ enum FileAction {
     ExportSelection,
     ExportSection,
     ExportMesh,
+    MergeVisible,
+    CancelMerge,
 }
 
 impl RibbonTab {
@@ -786,6 +841,66 @@ struct MeshStart {
     transform: CloudTransform,
     path: PathBuf,
     api_job_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct MergeSource {
+    cloud: Arc<PointCloud>,
+    deleted: Option<Arc<DeletionMask>>,
+    transform: CloudTransform,
+}
+
+struct MergeControl {
+    cancelled: AtomicBool,
+    processed: AtomicU64,
+    written: AtomicU64,
+    total: u64,
+}
+
+impl MergeControl {
+    fn report(&self, processed: u64, written: u64) -> Result<(), pointcloud_core::LoadError> {
+        self.processed.store(processed, Ordering::Relaxed);
+        self.written.store(written, Ordering::Relaxed);
+        if self.cancelled.load(Ordering::Relaxed) {
+            Err(pointcloud_core::LoadError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+struct MergeJob {
+    path: PathBuf,
+    control: Arc<MergeControl>,
+    started: Instant,
+    api_job_id: Option<String>,
+}
+
+impl MergeJob {
+    fn progress_value(&self) -> Value {
+        json!({
+            "state": "running",
+            "operation": "merge_visible",
+            "path": self.path,
+            "processed": self.control.processed.load(Ordering::Relaxed),
+            "total": self.control.total,
+            "written": self.control.written.load(Ordering::Relaxed),
+            "cancel_requested": self.control.cancelled.load(Ordering::Relaxed),
+            "elapsed_seconds": self.started.elapsed().as_secs(),
+        })
+    }
+
+    fn progress_text(&self) -> String {
+        if self.control.cancelled.load(Ordering::Relaxed) {
+            return "Cancelling cloud merge…".into();
+        }
+        let processed = self.control.processed.load(Ordering::Relaxed);
+        let percent = processed.saturating_mul(100) / self.control.total.max(1);
+        format!(
+            "Merging scans: {percent}% of {} source points",
+            format_count(self.control.total)
+        )
+    }
 }
 
 impl MeshJob {
@@ -887,6 +1002,11 @@ impl CameraPreset {
 enum Message {
     ApiRequest(native_api::ApiRequest),
     ApiExported(String, bool, Result<(PathBuf, u64), String>),
+    MergeVisible,
+    MergePathChosen(Option<PathBuf>),
+    MergePoll,
+    CancelMerge,
+    MergeReady(Result<(PathBuf, u64), String>),
     ApiWorldSelectionReady(
         String,
         u64,
@@ -1118,6 +1238,8 @@ struct Studio {
     mesh_export_pending: bool,
     mesh_dialog_pending: bool,
     mesh_job: Option<MeshJob>,
+    merge_job: Option<MergeJob>,
+    merge_dialog_pending: bool,
     section_fit_pending: bool,
     section_reference_bounds: Option<Bounds>,
     section_min_percent: [f64; 3],
@@ -1394,6 +1516,8 @@ impl Default for Studio {
             mesh_export_pending: false,
             mesh_dialog_pending: false,
             mesh_job: None,
+            merge_job: None,
+            merge_dialog_pending: false,
             section_fit_pending: false,
             section_reference_bounds: None,
             section_min_percent: [0.0; 3],
@@ -1545,6 +1669,7 @@ impl Studio {
                             "edge_factor": self.surface_settings[2],
                         },
                         "mesh": self.mesh_job.as_ref().map(MeshJob::progress_value),
+                        "merge": self.merge_job.as_ref().map(MergeJob::progress_value),
                         "index_progress": self.index_progress.as_ref().and_then(|value| value.lock().ok().map(|progress| json!({
                             "stage": match progress.stage {
                                 IndexStage::ReadingSource => "reading_source",
@@ -1568,7 +1693,16 @@ impl Studio {
                 )
             }
             ApiCommand::Job { id } => {
-                if let Some(job) = self.api_jobs.get(&id) {
+                if let Some(merge) = self
+                    .merge_job
+                    .as_ref()
+                    .filter(|job| job.api_job_id.as_deref() == Some(id.as_str()))
+                {
+                    (
+                        json!({"ok": true, "job": merge.progress_value()}),
+                        Task::none(),
+                    )
+                } else if let Some(job) = self.api_jobs.get(&id) {
                     (json!({"ok": true, "job": job}), Task::none())
                 } else {
                     (
@@ -2096,6 +2230,48 @@ impl Studio {
             ApiCommand::ExportMinusSelection { path } => {
                 self.api_export(path, ApiExportMode::WithoutSelection)
             }
+            ApiCommand::MergeVisible { path } => {
+                if !path.is_absolute()
+                    || !matches!(
+                        export_format_for_path(&path),
+                        Some(ExportFormat::Las | ExportFormat::Laz)
+                    )
+                {
+                    (
+                        json!({"ok": false, "error": "merge requires an absolute .las or .laz destination"}),
+                        Task::none(),
+                    )
+                } else if self.merge_job.is_some() || self.merge_dialog_pending {
+                    (
+                        json!({"ok": false, "error": "a cloud merge is already running"}),
+                        Task::none(),
+                    )
+                } else {
+                    match self.visible_merge_sources() {
+                        Ok(sources) => {
+                            let id = self.record_api_job(json!({"state": "running", "operation": "merge_visible", "path": path}));
+                            let task =
+                                self.start_merge_job(path.clone(), sources, Some(id.clone()));
+                            (
+                                json!({"ok": true, "accepted": true, "job_id": id, "path": path}),
+                                task,
+                            )
+                        }
+                        Err(error) => (json!({"ok": false, "error": error}), Task::none()),
+                    }
+                }
+            }
+            ApiCommand::CancelMerge => {
+                if self.merge_job.is_none() {
+                    (
+                        json!({"ok": false, "error": "no cloud merge is running"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::CancelMerge);
+                    (json!({"ok": true, "cancel_requested": true}), task)
+                }
+            }
         };
         let _ = request.reply.send(response);
         task
@@ -2272,6 +2448,102 @@ impl Studio {
             async { tokio::time::sleep(Duration::from_millis(250)).await },
             |()| Message::MeshPoll,
         )
+    }
+
+    fn merge_poll_task() -> Task<Message> {
+        Task::perform(
+            async { tokio::time::sleep(Duration::from_millis(300)).await },
+            |()| Message::MergePoll,
+        )
+    }
+
+    fn visible_merge_sources(&self) -> Result<Vec<MergeSource>, String> {
+        let sources: Vec<_> = self
+            .clouds
+            .iter()
+            .filter(|entry| entry.visible)
+            .map(|entry| MergeSource {
+                cloud: Arc::clone(&entry.cloud),
+                deleted: entry.deleted.as_ref().map(Arc::clone),
+                transform: entry.transform,
+            })
+            .collect();
+        if sources.len() < 2 {
+            return Err("show at least two LAS/LAZ scans before merging".into());
+        }
+        if sources.iter().any(|source| {
+            !source
+                .cloud
+                .path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
+                })
+        }) {
+            return Err("all visible layers must be LAS or LAZ scans".into());
+        }
+        Ok(sources)
+    }
+
+    fn start_merge_job(
+        &mut self,
+        path: PathBuf,
+        sources: Vec<MergeSource>,
+        api_job_id: Option<String>,
+    ) -> Task<Message> {
+        let total = sources.iter().map(|source| source.cloud.total_points).sum();
+        let expected = sources
+            .iter()
+            .map(|source| {
+                source.cloud.total_points - source.deleted.as_ref().map_or(0, |mask| mask.count)
+            })
+            .sum();
+        let control = Arc::new(MergeControl {
+            cancelled: AtomicBool::new(false),
+            processed: AtomicU64::new(0),
+            written: AtomicU64::new(0),
+            total,
+        });
+        self.merge_job = Some(MergeJob {
+            path: path.clone(),
+            control: Arc::clone(&control),
+            started: Instant::now(),
+            api_job_id,
+        });
+        self.status = format!("Merging {} visible scans…", sources.len());
+        let worker = Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let clouds: Vec<_> =
+                        sources.iter().map(|source| source.cloud.as_ref()).collect();
+                    let format =
+                        export_format_for_path(&path).expect("validated LAS/LAZ destination");
+                    pointcloud_core::merge_las_map_count(
+                        &clouds,
+                        &path,
+                        format,
+                        Some(expected),
+                        &mut |source_index, ordinal, point| {
+                            let source = &sources[source_index];
+                            source
+                                .deleted
+                                .as_ref()
+                                .is_none_or(|mask| !mask.contains(ordinal))
+                                .then(|| source.transform.point(point))
+                        },
+                        &mut |processed, _, written| control.report(processed, written),
+                    )
+                    .map(|count| (path, count))
+                    .map_err(|error| error.to_string())
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result)
+            },
+            Message::MergeReady,
+        );
+        Task::batch([worker, Self::merge_poll_task()])
     }
 
     fn scale_poll_task(id: u64) -> Task<Message> {
@@ -2566,6 +2838,93 @@ impl Studio {
                     *entry = job;
                 }
             }
+            Message::MergeVisible => {
+                if self.merge_job.is_some() || self.merge_dialog_pending {
+                    return Task::none();
+                }
+                if let Err(error) = self.visible_merge_sources() {
+                    self.status = error;
+                    return Task::none();
+                }
+                self.merge_dialog_pending = true;
+                self.status = "Choose where to save the merged visible scans…".into();
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .add_filter("LAZ point cloud", &["laz"])
+                            .add_filter("LAS point cloud", &["las"])
+                            .set_file_name("merged-scans.laz")
+                            .save_file()
+                            .await
+                            .map(|selection| selection.path().to_path_buf())
+                    },
+                    Message::MergePathChosen,
+                );
+            }
+            Message::MergePathChosen(path) => {
+                self.merge_dialog_pending = false;
+                let Some(path) = path else {
+                    self.status = "Cloud merge cancelled".into();
+                    return Task::none();
+                };
+                if !matches!(
+                    export_format_for_path(&path),
+                    Some(ExportFormat::Las | ExportFormat::Laz)
+                ) {
+                    self.status = "Choose a .las or .laz destination".into();
+                    return Task::none();
+                }
+                match self.visible_merge_sources() {
+                    Ok(sources) => return self.start_merge_job(path, sources, None),
+                    Err(error) => self.status = error,
+                }
+            }
+            Message::MergePoll => {
+                if let Some(job) = &self.merge_job {
+                    self.status = job.progress_text();
+                    if let Some(id) = &job.api_job_id {
+                        if let Some(entry) = self.api_jobs.get_mut(id) {
+                            *entry = job.progress_value();
+                        }
+                    }
+                    return Self::merge_poll_task();
+                }
+            }
+            Message::CancelMerge => {
+                if let Some(job) = &self.merge_job {
+                    job.control.cancelled.store(true, Ordering::Relaxed);
+                    self.status = "Cancelling cloud merge…".into();
+                }
+            }
+            Message::MergeReady(result) => {
+                if let Some(job) = self.merge_job.take() {
+                    if let Some(id) = job.api_job_id {
+                        let state = match &result {
+                            Ok((path, count)) => {
+                                json!({"state": "complete", "path": path, "points": count})
+                            }
+                            Err(error) if error == "Operation cancelled" => {
+                                json!({"state": "cancelled", "path": job.path})
+                            }
+                            Err(error) => json!({"state": "failed", "error": error}),
+                        };
+                        if let Some(entry) = self.api_jobs.get_mut(&id) {
+                            *entry = state;
+                        }
+                    }
+                }
+                self.status = match result {
+                    Ok((path, count)) => format!(
+                        "Merged {} points into {}",
+                        format_count(count),
+                        path.display()
+                    ),
+                    Err(error) if error == "Operation cancelled" => {
+                        "Cloud merge cancelled; output left unchanged".into()
+                    }
+                    Err(error) => format!("Cloud merge failed: {error}"),
+                };
+            }
             Message::ApiWorldSelectionReady(id, revision, result) => {
                 self.selection_pending = false;
                 let job = if self.selection_cancel.load(Ordering::Relaxed) {
@@ -2616,6 +2975,8 @@ impl Studio {
                     FileAction::ExportSelection => Message::ExportSelection,
                     FileAction::ExportSection => Message::ExportSection,
                     FileAction::ExportMesh => Message::ExportMesh,
+                    FileAction::MergeVisible => Message::MergeVisible,
+                    FileAction::CancelMerge => Message::CancelMerge,
                 });
             }
             Message::RibbonScroll(direction) => {
@@ -6266,6 +6627,18 @@ impl Studio {
                 active_cloud.is_some() && self.section_enabled && !self.section_export_pending,
             ),
             action(
+                "Merge visible LAS/LAZ scans…",
+                FileAction::MergeVisible,
+                self.merge_job.is_none()
+                    && !self.merge_dialog_pending
+                    && self.visible_merge_sources().is_ok(),
+            ),
+            action(
+                "Cancel merge",
+                FileAction::CancelMerge,
+                self.merge_job.is_some(),
+            ),
+            action(
                 "Surface mesh…",
                 FileAction::ExportMesh,
                 active_cloud.is_some_and(|entry| entry.mesh.is_some()) && !self.mesh_export_pending,
@@ -6309,7 +6682,7 @@ impl Studio {
                 )
             },
         );
-        let details = column![
+        let mut details = column![
             text("Point cloud workspace")
                 .size(26)
                 .font(Font::with_name("Space Grotesk")),
@@ -6385,6 +6758,27 @@ impl Studio {
         ]
         .spacing(8)
         .width(Fill);
+        if let Some(job) = &self.merge_job {
+            let processed = job.control.processed.load(Ordering::Relaxed);
+            details = details
+                .push(text(job.progress_text()).size(13))
+                .push(
+                    iced::widget::progress_bar(
+                        0.0..=1.0,
+                        processed as f32 / job.control.total.max(1) as f32,
+                    )
+                    .height(8),
+                )
+                .push(
+                    text(format!(
+                        "{} points written to {}",
+                        format_count(job.control.written.load(Ordering::Relaxed)),
+                        job.path.display()
+                    ))
+                    .size(11),
+                )
+                .push(button("Cancel merge").on_press(Message::CancelMerge));
+        }
         row![
             menu,
             container(scrollable(details).height(Fill))
@@ -6589,6 +6983,27 @@ impl Studio {
                 )
                 .push(
                     container(button("Cancel mesh").on_press(Message::CancelMesh)).padding([5, 8]),
+                );
+        }
+        if let Some(job) = &self.merge_job {
+            let processed = job.control.processed.load(Ordering::Relaxed);
+            properties = properties
+                .push(opencad_properties::section_header("Merge progress"))
+                .push(container(text(job.progress_text()).size(11)).padding([6, 8]))
+                .push(
+                    container(
+                        iced::widget::progress_bar(
+                            0.0..=1.0,
+                            processed as f32 / job.control.total.max(1) as f32,
+                        )
+                        .height(8),
+                    )
+                    .padding([2, 8])
+                    .width(Fill),
+                )
+                .push(
+                    container(button("Cancel merge").on_press(Message::CancelMerge))
+                        .padding([5, 8]),
                 );
         }
         if let Some(job) = &self.scale_job {
