@@ -9254,11 +9254,11 @@ impl canvas::Program<Message> for PointViewport<'_> {
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if let Some(previous) = state.as_mut() {
-                    let Some(position) = cursor.position_in(bounds) else {
+                    let Some(position) = cursor.position_from(bounds.position()) else {
                         return (event::Status::Captured, None);
                     };
-                    let dx = position.x - previous.position.x;
-                    let dy = position.y - previous.position.y;
+                    let mut dx = position.x - previous.position.x;
+                    let mut dy = position.y - previous.position.y;
                     previous.position = position;
                     if matches!(previous.mode, DragMode::RightPending) {
                         if (position.x - previous.start.x).hypot(position.y - previous.start.y)
@@ -9267,6 +9267,8 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             return (event::Status::Captured, None);
                         }
                         previous.mode = DragMode::Pan;
+                        dx = position.x - previous.start.x;
+                        dy = position.y - previous.start.y;
                     }
                     (
                         event::Status::Captured,

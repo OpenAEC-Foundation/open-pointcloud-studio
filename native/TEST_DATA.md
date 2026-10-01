@@ -14,6 +14,17 @@ The native `--mesh-export` command wrote the resolved colors into an OBJ with
 remain under `/tmp` and are not part of this repository. This verifies solid
 `Kd` colors; OBJ texture maps are not yet displayed.
 
+In the rebuilt native GUI, a physical right-button drag moved three pixels
+and then four more. The camera reported a seven-pixel pan, including the
+initial motion before the context-menu threshold. A separate middle-button
+drag moved from inside model space into the Properties area and reported a
+50-pixel pan. After resetting the camera, another middle-button drag crossed
+the viewport edge and reported the full 180-pixel pan; compare the
+[centered Cornell view](../screenshots/native-cornell-obj-mtl-colors.png) with
+the [edge-drag view](../screenshots/native-pan-across-viewport-edge.png).
+A stationary right-click still opened the
+[viewport menu](../screenshots/native-right-click-after-pan-fix.png).
+
 On 1 October 2026, the merged 114,174,907-point AHN6 LAZ was exported to a
 3,425,247,452-byte binary PLY. The previous native reader scanned this file
 in 56.61 s on one core; after bounded, parallel binary decoding it took
@@ -255,6 +266,12 @@ exact zero-based source ordinal 27,708,324, world XYZ
 `[-0.762906, -31.155014, -0.045100]` and RGB `[73, 74, 73]`; the
 native view
 shows the same selected point and attributes in Properties.
+The rebuilt debug GUI reopened the same 46,589,344-point file with its cached
+octree and displayed a 758,104-point LOD. A physical right-button drag moved
+from model space into the Properties panel, crossing the click-to-pan threshold
+in two small steps. The camera reported the full 110-pixel pan while the LOD
+remained available before
+and after.
 
 On 2 October 2026, the five additional official PCL producer files above
 completed full source visits in the native Rust reader. The mOSD file also
