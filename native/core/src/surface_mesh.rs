@@ -9,6 +9,8 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use rayon::prelude::*;
+
 use super::{visit_points, LoadError, Point, PointCloud};
 use crate::mesher::{MeshProgress, MeshStage, MeshStats};
 
@@ -489,22 +491,32 @@ fn mesh_surface_obj_inner(
     let root = build_tree(&mut indices, 0, &vertices, &mut nodes);
     let mut neighborhoods = Vec::with_capacity(vertices.len());
     let mut nearest_distances = Vec::with_capacity(vertices.len());
-    for index in 0..vertices.len() {
-        if index.is_multiple_of(1_024) {
-            progress(MeshProgress::new(
-                MeshStage::Reconstructing,
-                index as u64,
-                reconstruct_total,
-            ))?;
+    // Each query reads the same immutable tree. Keep batches bounded so the
+    // UI can report progress and cancel between parallel search waves.
+    for start in (0..vertices.len()).step_by(4_096) {
+        progress(MeshProgress::new(
+            MeshStage::Reconstructing,
+            start as u64,
+            reconstruct_total,
+        ))?;
+        let end = (start + 4_096).min(vertices.len());
+        let batch: Vec<_> = (start..end)
+            .into_par_iter()
+            .map(|index| {
+                let mut heap = BinaryHeap::with_capacity(config.neighbors + 1);
+                nearest(root, index, config.neighbors, &vertices, &nodes, &mut heap);
+                let mut nearby = heap.into_sorted_vec();
+                nearby.retain(|near| near.distance_sq > 1e-20);
+                let first_distance = nearby.first().map(|near| near.distance_sq.sqrt());
+                (nearby, first_distance)
+            })
+            .collect();
+        for (nearby, first_distance) in batch {
+            if let Some(distance) = first_distance {
+                nearest_distances.push(distance);
+            }
+            neighborhoods.push(nearby);
         }
-        let mut heap = BinaryHeap::with_capacity(config.neighbors + 1);
-        nearest(root, index, config.neighbors, &vertices, &nodes, &mut heap);
-        let mut nearby = heap.into_sorted_vec();
-        nearby.retain(|near| near.distance_sq > 1e-20);
-        if let Some(first) = nearby.first() {
-            nearest_distances.push(first.distance_sq.sqrt());
-        }
-        neighborhoods.push(nearby);
     }
     if nearest_distances.is_empty() {
         return Err(LoadError::InvalidData("all 3D points coincide".into()));
@@ -513,15 +525,19 @@ fn mesh_surface_obj_inner(
     nearest_distances.select_nth_unstable_by(middle, f64::total_cmp);
     let max_edge_sq = (nearest_distances[middle] * config.max_edge_factor).powi(2);
     let mut normals = Vec::with_capacity(vertices.len());
-    for (index, neighbors) in neighborhoods.iter().enumerate() {
-        if index.is_multiple_of(1_024) {
-            progress(MeshProgress::new(
-                MeshStage::Reconstructing,
-                vertices.len() as u64 + index as u64,
-                reconstruct_total,
-            ))?;
-        }
-        normals.push(surface_normal(neighbors, &vertices));
+    for start in (0..vertices.len()).step_by(4_096) {
+        progress(MeshProgress::new(
+            MeshStage::Reconstructing,
+            vertices.len() as u64 + start as u64,
+            reconstruct_total,
+        ))?;
+        let end = (start + 4_096).min(vertices.len());
+        normals.extend(
+            neighborhoods[start..end]
+                .par_iter()
+                .map(|neighbors| surface_normal(neighbors, &vertices))
+                .collect::<Vec<_>>(),
+        );
     }
     let mut faces = Vec::<[u32; 3]>::new();
     let mut known = HashSet::<[u32; 3]>::new();
@@ -864,6 +880,43 @@ mod tests {
                 }
             },
         );
+        assert!(matches!(result, Err(LoadError::Cancelled)));
+        assert_eq!(fs::read(&target).unwrap(), b"previous surface");
+    }
+
+    #[test]
+    fn cancellation_between_parallel_neighborhood_batches_preserves_existing_mesh() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("large-grid.xyz");
+        let target = dir.path().join("large-grid.obj");
+        let mut data = String::new();
+        for y in 0..100 {
+            for x in 0..100 {
+                data.push_str(&format!("{x} {y} 0\n"));
+            }
+        }
+        fs::write(&source, data).unwrap();
+        fs::write(&target, "previous surface").unwrap();
+        let cloud = open(&source, 1).unwrap();
+        let mut reached_second_batch = false;
+        let result = mesh_surface_obj_where_progress(
+            &cloud,
+            &target,
+            SurfaceMeshConfig {
+                max_vertices: 8_000,
+                ..SurfaceMeshConfig::default()
+            },
+            |_, _| true,
+            |state| {
+                if state.stage == MeshStage::Reconstructing && state.completed >= 4_096 {
+                    reached_second_batch = true;
+                    Err(LoadError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(reached_second_batch);
         assert!(matches!(result, Err(LoadError::Cancelled)));
         assert_eq!(fs::read(&target).unwrap(), b"previous surface");
     }

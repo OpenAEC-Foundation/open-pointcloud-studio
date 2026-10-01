@@ -65,6 +65,10 @@ again; a missing, stale or damaged manifest falls back to the full reader.
 Both meshers keep their full-source loops inside the optimized Rust core in
 development builds; the native desktop supplies edit and progress callbacks
 without recompiling those loops at the desktop's lower optimization level.
+The 3D surface mesher searches nearest neighbors and estimates local normals
+on multiple Rust threads in bounded batches. Progress and cancellation remain
+available between batches, and the resulting OBJ keeps deterministic vertex
+and face order.
 XYZ, PTS, CSV and both ASCII and binary PLY exports encode bounded
 65,536-point batches on multiple Rust threads and write the finished chunks
 in source order. The

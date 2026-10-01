@@ -828,3 +828,20 @@ the pending flag cleared within the first 0.05-second status poll and the
 zero selected points. A subsequent normal pick still selected the same exact
 source ordinal, confirming that cancellation did not poison the next search.
 A cancelled replacement pick also left the previously selected point intact.
+
+On 1 October, the release 3D surface mesher was checked before and after
+parallelizing its nearest-neighbor and normal calculations. For the public
+160,838-point E57 test scan at 30,000 vertices, both runs produced 100,691
+triangles and byte-identical OBJ files (SHA-256
+`dbd0be442ab33f893ca5ec022549c652418b798fb6d3f0ce9ac2350a00e2dbce`).
+Elapsed times on this host were 0.81 and 0.73 seconds. The public 45,839,678-
+point AHN6 LAZ at 100,000 vertices produced 302,592 triangles and the same
+byte-identical OBJ before and after the change (SHA-256
+`0a24ddc678975c7aff3391f37303a74e4fa1730f60d92a6e0be1ffa7a355266a`);
+elapsed times were 17.56 and 15.71 seconds. This whole-command measure also
+includes reading and sampling every source point, so it is not a standalone
+measure of the parallel reconstruction stage. A core regression test cancels
+between parallel neighborhood batches and verifies the destination OBJ is
+left untouched. The rebuilt native dev GUI reopened the E57 input and its
+30,000-vertex OBJ; the [mesh screenshot](../screenshots/native-dev-e57-parallel-mesher.png)
+shows the source points hidden and the generated 100,691 faces visible.

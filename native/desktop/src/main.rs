@@ -248,7 +248,7 @@ fn main() -> iced::Result {
     let first = args.next();
     if first.as_deref() == Some(OsStr::new("--index")) {
         let (Some(source), None) = (args.next(), args.next()) else {
-            eprintln!("Usage: open-pointcloud-studio-native --index INPUT");
+            eprintln!("Usage: open-pointcloud-studio --index INPUT");
             std::process::exit(2);
         };
         let source = PathBuf::from(source);
@@ -296,7 +296,7 @@ fn main() -> iced::Result {
     }
     if first.as_deref() == Some(OsStr::new("--scans")) {
         let (Some(source), None) = (args.next(), args.next()) else {
-            eprintln!("Usage: open-pointcloud-studio-native --scans INPUT");
+            eprintln!("Usage: open-pointcloud-studio --scans INPUT");
             std::process::exit(2);
         };
         match open_for_export(&PathBuf::from(source)) {
@@ -326,7 +326,9 @@ fn main() -> iced::Result {
     }
     if first.as_deref() == Some(OsStr::new("--merge")) {
         let Some(destination) = args.next() else {
-            eprintln!("Usage: open-pointcloud-studio-native --merge OUTPUT.laz INPUT1.las INPUT2.laz [...]");
+            eprintln!(
+                "Usage: open-pointcloud-studio --merge OUTPUT.laz INPUT1.las INPUT2.laz [...]"
+            );
             std::process::exit(2);
         };
         let destination = PathBuf::from(destination);
@@ -380,7 +382,7 @@ fn main() -> iced::Result {
     if first.as_deref() == Some(OsStr::new("--export")) {
         let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
         else {
-            eprintln!("Usage: open-pointcloud-studio-native --export INPUT OUTPUT");
+            eprintln!("Usage: open-pointcloud-studio --export INPUT OUTPUT");
             std::process::exit(2);
         };
         let source = PathBuf::from(source);
@@ -404,7 +406,7 @@ fn main() -> iced::Result {
             (args.next(), args.next(), args.next(), args.next())
         else {
             eprintln!(
-                "Usage: open-pointcloud-studio-native --section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT"
+                "Usage: open-pointcloud-studio --section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT"
             );
             std::process::exit(2);
         };
@@ -448,7 +450,7 @@ fn main() -> iced::Result {
     if first.as_deref() == Some(OsStr::new("--mesh-export")) {
         let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
         else {
-            eprintln!("Usage: open-pointcloud-studio-native --mesh-export INPUT OUTPUT.obj");
+            eprintln!("Usage: open-pointcloud-studio --mesh-export INPUT OUTPUT.obj");
             std::process::exit(2);
         };
         let source = PathBuf::from(source);
@@ -490,7 +492,7 @@ fn main() -> iced::Result {
     if first.as_deref() == Some(OsStr::new("--mesh")) {
         let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
         else {
-            eprintln!("Usage: open-pointcloud-studio-native --mesh INPUT OUTPUT.obj");
+            eprintln!("Usage: open-pointcloud-studio --mesh INPUT OUTPUT.obj");
             std::process::exit(2);
         };
         let source = PathBuf::from(source);
@@ -530,7 +532,7 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--surface")) {
-        let usage = "Usage: open-pointcloud-studio-native --surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N]";
+        let usage = "Usage: open-pointcloud-studio --surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N]";
         let (Some(source), Some(destination)) = (args.next(), args.next()) else {
             eprintln!("{usage}");
             std::process::exit(2);
@@ -604,7 +606,7 @@ fn main() -> iced::Result {
             (args.next(), args.next(), args.next(), args.next())
         else {
             eprintln!(
-                "Usage: open-pointcloud-studio-native --bag3d XMIN,YMIN,XMAX,YMAX 1.2|1.3|2.2 OUTPUT.obj"
+                "Usage: open-pointcloud-studio --bag3d XMIN,YMIN,XMAX,YMAX 1.2|1.3|2.2 OUTPUT.obj"
             );
             std::process::exit(2);
         };
@@ -636,7 +638,7 @@ fn main() -> iced::Result {
                 .next()
                 .and_then(|value| value.to_str().and_then(|s| s.parse().ok()))
             else {
-                eprintln!("Usage: open-pointcloud-studio-native --api-port PORT [INPUT ...]");
+                eprintln!("Usage: open-pointcloud-studio --api-port PORT [INPUT ...]");
                 std::process::exit(2);
             };
             (Some(value), args.map(PathBuf::from).collect())
