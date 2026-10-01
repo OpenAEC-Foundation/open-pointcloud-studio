@@ -658,6 +658,7 @@ fn main() -> iced::Result {
     iced::application("Open Pointcloud Studio", Studio::update, Studio::view)
         .subscription(|studio| {
             let keyboard = iced::event::listen_with(|event, status, _| match event {
+                iced::Event::Window(iced::window::Event::Resized(_)) => Some(Message::RibbonReset),
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                     ..
@@ -1068,6 +1069,8 @@ enum Message {
     ToggleFile,
     FileAction(FileAction),
     RibbonScroll(f32),
+    RibbonViewport(RibbonTab, f32, f32, f32),
+    RibbonReset,
     Theme(UiTheme),
     PersistSettings(u64),
     Open,
@@ -1308,6 +1311,7 @@ struct Studio {
     view_name: String,
     viewport_size: Size,
     ribbon_tab: RibbonTab,
+    ribbon_viewport: Option<(f32, f32, f32)>,
     file_open: bool,
     ui_theme: UiTheme,
     settings_revision: u64,
@@ -1619,6 +1623,7 @@ impl Default for Studio {
             view_name: String::new(),
             viewport_size: Size::new(915.0, 743.0),
             ribbon_tab: RibbonTab::Home,
+            ribbon_viewport: None,
             file_open: false,
             ui_theme: UiTheme::load(),
             settings_revision: 0,
@@ -3247,9 +3252,13 @@ impl Studio {
             }
             Message::Tab(tab) => {
                 self.ribbon_tab = tab;
+                self.ribbon_viewport = None;
                 self.file_open = false;
             }
-            Message::ToggleFile => self.file_open = !self.file_open,
+            Message::ToggleFile => {
+                self.file_open = !self.file_open;
+                self.ribbon_viewport = None;
+            }
             Message::FileAction(action) => {
                 self.file_open = false;
                 return self.update(match action {
@@ -3272,6 +3281,12 @@ impl Studio {
                     },
                 );
             }
+            Message::RibbonViewport(tab, offset, width, content_width) => {
+                if tab == self.ribbon_tab {
+                    self.ribbon_viewport = Some((offset, width, content_width));
+                }
+            }
+            Message::RibbonReset => self.ribbon_viewport = None,
             Message::Theme(theme) => {
                 self.ui_theme = theme;
                 theme.save();
@@ -5405,6 +5420,7 @@ impl Studio {
             Message::ViewportSize(size) => {
                 if size.width > 0.0 && size.height > 0.0 {
                     self.viewport_size = size;
+                    self.ribbon_viewport = None;
                     self.revision += 1;
                     return self.schedule_detail();
                 }
@@ -6665,15 +6681,23 @@ impl Studio {
                 .height(opencad_ribbon::TOOL_BAR_H),
         )
         .id(self.ribbon_tab.scroll_id())
+        .on_scroll(move |viewport| {
+            Message::RibbonViewport(
+                self.ribbon_tab,
+                viewport.absolute_offset().x,
+                viewport.bounds().width,
+                viewport.content_bounds().width,
+            )
+        })
         .direction(scrollable::Direction::Horizontal(
             scrollable::Scrollbar::new().width(5).scroller_width(5),
         ))
         .width(Fill)
         .height(opencad_ribbon::TOOL_BAR_H);
-        let scroll_button = |label, direction| {
+        let scroll_button = |label: &'static str, direction: f32, enabled: bool| {
             container(
                 button(text(label).size(26))
-                    .on_press(Message::RibbonScroll(direction))
+                    .on_press_maybe(enabled.then_some(Message::RibbonScroll(direction)))
                     .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
                     .width(26)
                     .height(38)
@@ -6684,13 +6708,21 @@ impl Studio {
             .align_y(iced::Alignment::Center)
             .align_x(iced::Alignment::Center)
         };
-        let tool_strip = row![
-            scroll_button("‹", -1.0),
-            group_strip,
-            scroll_button("›", 1.0),
-        ]
-        .height(opencad_ribbon::TOOL_BAR_H)
-        .align_y(iced::Alignment::Center);
+        let tool_strip: Element<'_, Message> = if let Some((offset, width, content_width)) = self
+            .ribbon_viewport
+            .filter(|(_, width, content_width)| *content_width > *width + 1.0)
+        {
+            row![
+                scroll_button("‹", -1.0, offset > 1.0),
+                group_strip,
+                scroll_button("›", 1.0, offset + width < content_width - 1.0),
+            ]
+            .height(opencad_ribbon::TOOL_BAR_H)
+            .align_y(iced::Alignment::Center)
+            .into()
+        } else {
+            group_strip.into()
+        };
         container(
             column![
                 tab_bar,

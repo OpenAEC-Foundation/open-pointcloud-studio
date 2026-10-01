@@ -28,7 +28,13 @@ columns for mesh export, index controls and auto-index, with Decimate's
 number and Apply action stacked. At the default 1440-pixel width all eight
 groups remain visible in [the updated ribbon screenshot](../screenshots/native-tools-ribbon-compact-1440.png);
 at narrower widths the same controls remain available through horizontal
-scrolling.
+scrolling. The native ribbon now measures the actual scrollable content: at
+1440 pixels [Home](../screenshots/native-ribbon-overflow-home-wide.png),
+[View](../screenshots/native-ribbon-overflow-view-wide.png) and
+[Tools](../screenshots/native-ribbon-overflow-tools-wide.png) have no empty
+navigation arrows. At 900 pixels the [Tools arrows](../screenshots/native-ribbon-overflow-tools-narrow.png)
+appear, and the [right arrow disables at the end](../screenshots/native-ribbon-overflow-tools-scrolled.png).
+Resizing back to a wide window removes them again.
 
 The amber File tab opens a native backstage view with the currently open scans, direct scan activation, import, full/selected/section/mesh export, format choice and appearance choice. The File view covers the tool ribbon and model space, while keeping quick access and the status bar visible; Escape or Return to model closes it. Unavailable exports appear muted. This uses the existing Rust import/export commands and no web components.
 
