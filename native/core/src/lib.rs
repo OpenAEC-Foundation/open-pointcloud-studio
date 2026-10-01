@@ -30,10 +30,32 @@ pub use export::{
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
 pub use mesher::{mesh_terrain_obj, mesh_terrain_obj_where, MeshConfig, MeshStats};
-pub use obj_mesh::{read_obj_mesh, MeshGeometry};
+pub use obj_mesh::{read_obj_mesh, write_obj_mesh, MeshGeometry};
 pub use octree::{IndexConfig, IndexedNode, IndexedPoint, OctreeIndex};
 pub use ply_mesh::read_ply_mesh;
 pub use surface_mesh::{mesh_surface_obj, mesh_surface_obj_where, SurfaceMeshConfig};
+
+pub fn read_mesh_geometry(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, LoadError> {
+    let path = path.as_ref();
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("obj") => read_obj_mesh(path).map(Some),
+        Some("ply") => read_ply_mesh(path),
+        Some("off") => read_off_mesh(path),
+        Some("stl") => read_stl_mesh(path),
+        Some("dxf") => read_dxf_mesh(path),
+        _ => Err(LoadError::UnsupportedFormat(
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or_default()
+                .to_owned(),
+        )),
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Point {

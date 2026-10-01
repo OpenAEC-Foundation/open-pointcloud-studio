@@ -293,3 +293,13 @@ source in the background; the Properties panel displayed those coordinates.
 The native test separately verifies a picked ordinal beyond a one-point
 preview, deletion filtering and section-box filtering. See
 [`native-pick-without-index.png`](../screenshots/native-pick-without-index.png).
+
+The native GUI imported the AHN-derived OFF terrain mesh (95,872 vertices,
+191,104 triangles), displayed its faces and exported the resident mesh as
+OBJ through the Tools ribbon. The GUI output matched the independent CLI
+`--mesh-export` output byte for byte; see
+[`native-mesh-export-ahn-off.png`](../screenshots/native-mesh-export-ahn-off.png).
+The final CLI writer converted the 7.3 MB OFF input to a 6.4 MB OBJ in 1.65
+seconds with 24,352 KiB peak RSS. Reimporting and exporting that OBJ again
+gave the same SHA-256 hash (`0edab73e…f6ee42`). A 3DBAG OBJ converted through
+the same path retained its copyright, CC BY 4.0 URL and EPSG:7415 header.

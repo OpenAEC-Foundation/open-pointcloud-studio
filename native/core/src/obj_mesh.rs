@@ -1,7 +1,7 @@
 //! Bounded native OBJ face loader for showing reconstructed meshes.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
 use super::{LoadError, SourceStamp};
@@ -13,6 +13,57 @@ pub(crate) const MAX_TRIANGLES: usize = 2_000_000;
 pub struct MeshGeometry {
     pub vertices: Vec<[f64; 3]>,
     pub triangles: Vec<[u32; 3]>,
+}
+
+/// Atomically write the triangles currently held by the native viewer.
+pub fn write_obj_mesh(
+    mesh: &MeshGeometry,
+    destination: impl AsRef<Path>,
+    comments: &[&str],
+) -> Result<(), LoadError> {
+    if mesh.vertices.is_empty()
+        || mesh.triangles.is_empty()
+        || mesh.vertices.len() > MAX_VERTICES
+        || mesh.triangles.len() > MAX_TRIANGLES
+        || mesh
+            .vertices
+            .iter()
+            .any(|vertex| !vertex.iter().all(|value| value.is_finite()))
+        || mesh.triangles.iter().any(|face| {
+            face.iter()
+                .any(|index| *index as usize >= mesh.vertices.len())
+        })
+        || comments
+            .iter()
+            .any(|comment| comment.contains(['\n', '\r']))
+    {
+        return Err(LoadError::InvalidData("invalid OBJ mesh export".into()));
+    }
+    let destination = destination.as_ref();
+    let parent = destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    {
+        let mut writer = BufWriter::new(temporary.as_file_mut());
+        writeln!(writer, "# Mesh exported by Open Pointcloud Studio")?;
+        for comment in comments {
+            writeln!(writer, "# {comment}")?;
+        }
+        for [x, y, z] in &mesh.vertices {
+            writeln!(writer, "v {x} {y} {z}")?;
+        }
+        for [a, b, c] in &mesh.triangles {
+            writeln!(writer, "f {} {} {}", a + 1, b + 1, c + 1)?;
+        }
+        writer.flush()?;
+    }
+    temporary.as_file_mut().sync_all()?;
+    temporary
+        .persist(destination)
+        .map_err(|error| LoadError::Io(error.error))?;
+    Ok(())
 }
 
 /// Read OBJ vertex positions and triangulate polygon faces for GPU display.
@@ -106,5 +157,32 @@ mod tests {
         let mesh = read_obj_mesh(file.path()).unwrap();
         assert_eq!(mesh.vertices.len(), 4);
         assert_eq!(mesh.triangles, vec![[0, 1, 2], [0, 2, 3]]);
+    }
+
+    #[test]
+    fn writes_resident_mesh_with_precise_coordinates_and_rejects_invalid_faces() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("surface.obj");
+        let mesh = MeshGeometry {
+            vertices: vec![
+                [301_336.231_998_1, 5_042_597.236_764_2, 15.466_498],
+                [301_337.0, 5_042_597.0, 15.0],
+                [301_336.0, 5_042_598.0, 16.0],
+            ],
+            triangles: vec![[0, 1, 2]],
+        };
+        write_obj_mesh(&mesh, &destination, &["Source attribution"]).unwrap();
+        let saved = std::fs::read_to_string(&destination).unwrap();
+        assert!(saved.contains("# Source attribution"));
+        let reopened = read_obj_mesh(&destination).unwrap();
+        assert_eq!(reopened.vertices, mesh.vertices);
+        assert_eq!(reopened.triangles, mesh.triangles);
+
+        let invalid = MeshGeometry {
+            vertices: mesh.vertices,
+            triangles: vec![[0, 1, 3]],
+        };
+        assert!(write_obj_mesh(&invalid, &destination, &[]).is_err());
+        assert_eq!(std::fs::read_to_string(destination).unwrap(), saved);
     }
 }

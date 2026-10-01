@@ -37,6 +37,11 @@ use ui_theme::UiTheme;
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
 const AUTO_INDEX_MIN_POINTS: u64 = 1_000_000;
+const BAG3D_MESH_COMMENTS: &[&str] = &[
+    "© 3DBAG door tudelft3d en 3DGI · CC BY 4.0",
+    "https://docs.3dbag.nl/nl/copyright/",
+    "EPSG:7415 RD New + NAP",
+];
 
 fn export_format_for_path(path: &Path) -> Option<ExportFormat> {
     match path
@@ -240,6 +245,48 @@ fn main() -> iced::Result {
             }
             Err(error) => {
                 eprintln!("Section export failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if first.as_deref() == Some(OsStr::new("--mesh-export")) {
+        let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
+        else {
+            eprintln!("Usage: open-pointcloud-studio-native --mesh-export INPUT OUTPUT.obj");
+            std::process::exit(2);
+        };
+        let source = PathBuf::from(source);
+        let destination = PathBuf::from(destination);
+        if !destination
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("obj"))
+            || camera_views::source_key(&source) == camera_views::source_key(&destination)
+        {
+            eprintln!("Choose a distinct .obj output path");
+            std::process::exit(2);
+        }
+        let comments: &[&str] = if is_bag3d_obj(&source) {
+            BAG3D_MESH_COMMENTS
+        } else {
+            &[]
+        };
+        match pointcloud_core::read_mesh_geometry(&source).and_then(|mesh| {
+            let mesh = mesh.ok_or_else(|| {
+                pointcloud_core::LoadError::InvalidData("source contains no mesh faces".into())
+            })?;
+            pointcloud_core::write_obj_mesh(&mesh, &destination, comments)?;
+            Ok((mesh.vertices.len(), mesh.triangles.len()))
+        }) {
+            Ok((vertices, triangles)) => {
+                println!(
+                    "Mesh exported: {vertices} vertices, {triangles} triangles -> {}",
+                    destination.display()
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Mesh export failed: {error}");
                 std::process::exit(1);
             }
         }
@@ -536,6 +583,9 @@ enum Message {
             String,
         >,
     ),
+    ExportMesh,
+    MeshExportPathChosen(Arc<MeshGeometry>, PathBuf, bool, Option<PathBuf>),
+    MeshExported(Result<(PathBuf, usize, usize), String>),
     ToggleBagPanel,
     BagField(usize, String),
     BagLod(BagLod),
@@ -665,6 +715,7 @@ struct Studio {
     filter_other: bool,
     section_enabled: bool,
     section_export_pending: bool,
+    mesh_export_pending: bool,
     section_fit_pending: bool,
     section_reference_bounds: Option<Bounds>,
     section_min_percent: [f64; 3],
@@ -794,6 +845,7 @@ impl Default for Studio {
             filter_other: true,
             section_enabled: false,
             section_export_pending: false,
+            mesh_export_pending: false,
             section_fit_pending: false,
             section_reference_bounds: None,
             section_min_percent: [0.0; 3],
@@ -980,14 +1032,7 @@ impl Studio {
                         let mesh_task = Task::perform(
                             async move {
                                 tokio::task::spawn_blocking(move || {
-                                    let result = match mesh_format.as_deref() {
-                                        Some("ply") => pointcloud_core::read_ply_mesh(mesh_path),
-                                        Some("off") => pointcloud_core::read_off_mesh(mesh_path),
-                                        Some("stl") => pointcloud_core::read_stl_mesh(mesh_path),
-                                        Some("dxf") => pointcloud_core::read_dxf_mesh(mesh_path),
-                                        _ => pointcloud_core::read_obj_mesh(mesh_path).map(Some),
-                                    };
-                                    result
+                                    pointcloud_core::read_mesh_geometry(mesh_path)
                                         .map(|mesh| mesh.map(Arc::new))
                                         .map_err(|error| error.to_string())
                                 })
@@ -1260,6 +1305,96 @@ impl Studio {
                 }
                 Err(error) => self.status = format!("Meshing failed: {error}"),
             },
+            Message::ExportMesh => {
+                if self.mesh_export_pending {
+                    return Task::none();
+                }
+                let Some(entry) = self
+                    .active
+                    .and_then(|index| self.clouds.get(index))
+                    .filter(|entry| entry.mesh.is_some())
+                else {
+                    self.status = "Select a cloud with a surface mesh first".into();
+                    return Task::none();
+                };
+                let mesh = Arc::clone(entry.mesh.as_ref().unwrap());
+                let source = entry.cloud.path.clone();
+                let bag_source = entry.bag_source;
+                let stem = source
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("surface");
+                let suggestion = format!("{stem}-mesh.obj");
+                self.mesh_export_pending = true;
+                self.status = "Choose where to save the visible surface as OBJ…".into();
+                return Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .add_filter("Wavefront OBJ", &["obj"])
+                            .set_file_name(suggestion)
+                            .save_file()
+                            .await
+                            .map(|selection| selection.path().to_path_buf())
+                    },
+                    move |path| {
+                        Message::MeshExportPathChosen(
+                            Arc::clone(&mesh),
+                            source.clone(),
+                            bag_source,
+                            path,
+                        )
+                    },
+                );
+            }
+            Message::MeshExportPathChosen(mesh, source, bag_source, Some(path)) => {
+                if !path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("obj"))
+                {
+                    self.mesh_export_pending = false;
+                    self.status = "Choose an .obj output file for the surface mesh".into();
+                    return Task::none();
+                }
+                if camera_views::source_key(&source) == camera_views::source_key(&path) {
+                    self.mesh_export_pending = false;
+                    self.status = "Choose an OBJ path different from the source file".into();
+                    return Task::none();
+                }
+                self.status = format!(
+                    "Writing {} vertices and {} triangles…",
+                    mesh.vertices.len(),
+                    mesh.triangles.len()
+                );
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let comments: &[&str] =
+                                if bag_source { BAG3D_MESH_COMMENTS } else { &[] };
+                            pointcloud_core::write_obj_mesh(&mesh, &path, comments)
+                                .map(|()| (path, mesh.vertices.len(), mesh.triangles.len()))
+                                .map_err(|error| error.to_string())
+                        })
+                        .await
+                        .map_err(|error| error.to_string())?
+                    },
+                    Message::MeshExported,
+                );
+            }
+            Message::MeshExportPathChosen(_, _, _, None) => {
+                self.mesh_export_pending = false;
+                self.status = "Mesh export cancelled".into();
+            }
+            Message::MeshExported(result) => {
+                self.mesh_export_pending = false;
+                self.status = match result {
+                    Ok((path, vertices, triangles)) => format!(
+                        "Exported mesh: {vertices} vertices and {triangles} triangles to {}",
+                        path.display()
+                    ),
+                    Err(error) => format!("Mesh export failed: {error}"),
+                };
+            }
             Message::ToggleBagPanel => {
                 self.bag_panel = !self.bag_panel;
                 if self.bag_panel {
@@ -3457,6 +3592,14 @@ impl Studio {
                             Message::MeshRequest(MeshMode::Surface),
                             self.active.is_some()
                         ),
+                        ribbon_button_when(
+                            "Export mesh",
+                            Message::ExportMesh,
+                            self.active
+                                .and_then(|index| self.clouds.get(index))
+                                .is_some_and(|entry| entry.mesh.is_some())
+                                && !self.mesh_export_pending,
+                        ),
                     ]
                     .spacing(2)
                     .into(),
@@ -4069,7 +4212,7 @@ impl Studio {
             )
             .padding([3, 8]),
         );
-        let properties = properties
+        properties = properties
             .push(opencad_properties::section_header("Export"))
             .push(
                 container(
@@ -4083,7 +4226,30 @@ impl Studio {
                 .padding([6, 8]),
             )
             .push(container(export_button).padding([0, 8]))
-            .push(container(section_export_button).padding([4, 8]))
+            .push(container(section_export_button).padding([4, 8]));
+        if let Some(mesh) = active_cloud.and_then(|entry| entry.mesh.as_ref()) {
+            properties = properties
+                .push(opencad_properties::section_header("Surface mesh"))
+                .push(opencad_properties::property_row(
+                    "Vertices",
+                    mesh.vertices.len().to_string(),
+                ))
+                .push(opencad_properties::property_row(
+                    "Triangles",
+                    mesh.triangles.len().to_string(),
+                ))
+                .push(
+                    container(
+                        button("Export mesh as OBJ")
+                            .on_press_maybe(
+                                (!self.mesh_export_pending).then_some(Message::ExportMesh),
+                            )
+                            .style(flat_tool_style),
+                    )
+                    .padding([4, 8]),
+                );
+        }
+        let properties = properties
             .push(opencad_properties::section_header("Display"))
             .push(
                 container(
@@ -4280,7 +4446,10 @@ fn small_tool_button_when(
 fn tool_icon(message: &Message) -> ToolIcon {
     match message {
         Message::Open => ToolIcon::Open,
-        Message::Export | Message::ExportSelection | Message::ExportSection => ToolIcon::Export,
+        Message::Export
+        | Message::ExportSelection
+        | Message::ExportSection
+        | Message::ExportMesh => ToolIcon::Export,
         Message::Decimate | Message::Thin => ToolIcon::Decimate,
         Message::MeshRequest(_) => ToolIcon::Mesh,
         Message::ToggleBagPanel => ToolIcon::Building,
