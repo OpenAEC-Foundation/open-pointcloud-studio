@@ -692,4 +692,15 @@ native GUI, the [File view](../screenshots/native-merge-file-view-83m.png)
 shows the merge action for two visible scans. An API-triggered merge displayed
 [live progress](../screenshots/native-merge-progress-ahn6.png); cancellation
 after 3,600,000 processed points returned a `cancelled` job and preserved the
-existing destination byte for byte.
+existing destination byte for byte. The core regression fixture uses LAS 1.4
+point format 7 with GPS time, 16-bit RGB, return fields, scanner channel and
+four extra bytes. It checks those raw attributes after a filtered and
+transformed LAZ merge.
+The merged file was then fully reread to build its disk octree: 114,174,907
+points, 7,852 nodes, 6,770 leaves and depth 6 in 169.7 seconds. The native
+viewer opened it alone, attached the cached index, and rendered a 250,000-point
+LOD, shown in [the 1.2 GB viewer screenshot](../screenshots/native-merged-114m-1p2gb-view.png).
+An exact world box crossing the source-tile boundary (X 207950–208050,
+Y 474950–475050, Z -100–1000) selected 373,382 points in the merged file.
+The viewer retained the exact selection and displayed 8,000 representative
+highlights; see [the selection screenshot](../screenshots/native-merged-114m-selection-373k.png).

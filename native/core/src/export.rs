@@ -1533,7 +1533,8 @@ mod tests {
         let make_source = |name: &str, points: &[las::Point]| {
             let path = dir.path().join(name);
             let mut builder = las::Builder::from((1, 4));
-            builder.point_format = las::point::Format::new(3).unwrap();
+            builder.point_format = las::point::Format::new(7).unwrap();
+            builder.point_format.extra_bytes = 4;
             builder.transforms = las::Vector {
                 x: las::Transform {
                     scale: 0.001,
@@ -1573,6 +1574,8 @@ mod tests {
             number_of_returns: 3,
             gps_time: Some(time),
             color: Some(las::Color::new(12_345, 23_456, 34_567)),
+            scanner_channel: 2,
+            extra_bytes: vec![1, 2, 3, 4],
             ..las::Point::default()
         };
         let first_points = [make_point(207_000.001, 1.25), make_point(207_000.002, 2.5)];
