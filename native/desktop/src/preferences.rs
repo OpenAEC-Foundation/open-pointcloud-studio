@@ -32,7 +32,7 @@ impl Default for Preferences {
             eye_dome: true,
             eye_dome_strength: 1.0,
             show_scan_poses: true,
-            budget: 80_000,
+            budget: 250_000,
             auto_index: true,
             filter_ground: true,
             filter_vegetation: true,
@@ -129,7 +129,7 @@ mod tests {
         let repaired = load_from(&path);
         assert_eq!(repaired.point_size, 2.0);
         assert_eq!(repaired.eye_dome_strength, 1.0);
-        assert_eq!(repaired.budget, 80_000);
+        assert_eq!(repaired.budget, 250_000);
         assert!(!repaired.auto_index);
     }
 }

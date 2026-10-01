@@ -197,7 +197,21 @@ fn compact_filename(name: &str, max_chars: usize) -> String {
     if length <= max_chars {
         return name.to_owned();
     }
-    name.chars().skip(length - max_chars).collect()
+    let mut compact = String::from("…");
+    compact.extend(name.chars().skip(length - max_chars.saturating_sub(1)));
+    compact
+}
+
+fn format_count(value: impl ToString) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index != 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push('.');
+        }
+        grouped.push(digit);
+    }
+    grouped
 }
 
 fn is_bag3d_obj(path: &std::path::Path) -> bool {
@@ -2614,8 +2628,8 @@ impl Studio {
                     self.status = format!(
                         "{} · {} points · {} sampled",
                         name,
-                        cloud.total_points,
-                        cloud.points.len()
+                        format_count(cloud.total_points),
+                        format_count(cloud.points.len())
                     );
                     self.clouds.push(CloudEntry {
                         bag_source: is_bag3d_obj(&cloud.path),
@@ -2699,8 +2713,11 @@ impl Studio {
                             let count = cloud.total_points;
                             let indexed = entry.index.is_some();
                             entry.cloud = Arc::clone(&cloud);
-                            self.status =
-                                format!("Ready: {} points from {}", count, path.display());
+                            self.status = format!(
+                                "Ready: {} points from {}",
+                                format_count(count),
+                                path.display()
+                            );
                             return if indexed {
                                 self.schedule_detail()
                             } else {
@@ -4161,7 +4178,10 @@ impl Studio {
                         }
                     }
                     if !self.section_export_pending {
-                        self.status = format!("Viewport LOD: {count} points; adding detail…");
+                        self.status = format!(
+                            "Viewport LOD: {} points; adding detail…",
+                            format_count(count)
+                        );
                     }
                 }
             }
@@ -4186,8 +4206,10 @@ impl Studio {
                         }
                         self.detail_loaded_revision = Some(revision);
                         if !self.section_export_pending {
-                            self.status =
-                                format!("Viewport LOD ready: {count} points from disk octree");
+                            self.status = format!(
+                                "Viewport LOD ready: {} points from disk octree",
+                                format_count(count)
+                            );
                         }
                     }
                     Err(error) if error == "Operation cancelled" => {
@@ -5879,12 +5901,14 @@ impl Studio {
                 .align_y(iced::Alignment::Center),
                 text(format!(
                     "{} points  ·  {} selected  ·  {} deleted{}",
-                    entry.remaining_count(),
-                    entry
-                        .selection
-                        .as_ref()
-                        .map_or(0, |selection| selection.count),
-                    entry.deleted_count(),
+                    format_count(entry.remaining_count()),
+                    format_count(
+                        entry
+                            .selection
+                            .as_ref()
+                            .map_or(0, |selection| selection.count)
+                    ),
+                    format_count(entry.deleted_count()),
                     if entry.index.is_some() {
                         "  ·  LOD ready"
                     } else if entry.index_building {
@@ -6140,7 +6164,7 @@ impl Studio {
                         row![
                             text(display_name(&entry.cloud.path)).size(13),
                             iced::widget::horizontal_space(),
-                            text(format!("{} points", entry.remaining_count()))
+                            text(format!("{} points", format_count(entry.remaining_count())))
                                 .size(11)
                                 .color(self.ui_theme.colors().muted),
                         ]
@@ -6163,8 +6187,8 @@ impl Studio {
             text(format!(
                 "{} files  ·  {} points  ·  {} selected",
                 self.clouds.len(),
-                total_points,
-                selected,
+                format_count(total_points),
+                format_count(selected),
             ))
             .size(13)
             .color(self.ui_theme.colors().muted),
@@ -6253,8 +6277,8 @@ impl Studio {
                 text(format!(
                     "{} files  ·  {} points  ·  {} selected",
                     self.clouds.len(),
-                    total_points,
-                    self.selected_total()
+                    format_count(total_points),
+                    format_count(self.selected_total())
                 ))
                 .size(11),
             ]
@@ -6317,22 +6341,18 @@ impl Studio {
                 .style(|theme| container::Style::default()
                     .background(ui_theme::colors(theme).panel_alt)),
             opencad_properties::section_header("General"),
-            opencad_properties::property_row("Source points", source_points.to_string()),
+            opencad_properties::property_row("Source points", format_count(source_points)),
             opencad_properties::property_row(
                 "Remaining",
-                active_cloud
-                    .map_or(0, CloudEntry::remaining_count)
-                    .to_string(),
+                format_count(active_cloud.map_or(0, CloudEntry::remaining_count)),
             ),
             opencad_properties::property_row(
                 "Deleted",
-                active_cloud
-                    .map_or(0, CloudEntry::deleted_count)
-                    .to_string(),
+                format_count(active_cloud.map_or(0, CloudEntry::deleted_count)),
             ),
-            opencad_properties::property_row("View sample", view_points.to_string()),
+            opencad_properties::property_row("View sample", format_count(view_points)),
             opencad_properties::property_row("Indexed", if indexed { "Yes" } else { "No" }.into()),
-            opencad_properties::property_row("Selected", selected_points.to_string()),
+            opencad_properties::property_row("Selected", format_count(selected_points)),
         ]
         .spacing(0)
         .width(270);
@@ -6800,11 +6820,11 @@ impl Studio {
                 .push(opencad_properties::section_header("Surface mesh"))
                 .push(opencad_properties::property_row(
                     "Vertices",
-                    mesh.vertices.len().to_string(),
+                    format_count(mesh.vertices.len()),
                 ))
                 .push(opencad_properties::property_row(
                     "Triangles",
-                    mesh.triangles.len().to_string(),
+                    format_count(mesh.triangles.len()),
                 ))
                 .push(
                     container(
@@ -6934,8 +6954,8 @@ impl Studio {
             text(format!(
                 "{} files  ·  {} points  ·  {} selected",
                 self.clouds.len(),
-                total_points,
-                self.selected_total()
+                format_count(total_points),
+                format_count(self.selected_total())
             ))
             .size(11),
         ]

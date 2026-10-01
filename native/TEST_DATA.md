@@ -68,6 +68,13 @@ about 0.27 seconds and the full 80,000-point refinement after about 0.60 seconds
 this development machine. The final view is in
 [`native-ahn6-progressive-lod-final.png`](../screenshots/native-ahn6-progressive-lod-final.png).
 
+At the same three-tile overview, increasing the viewport budget from 80,000
+to 250,000 points took about 0.43 seconds to reach the full LOD; 500,000 took
+about 0.54 seconds. After a controlled 100 × 40 pixel pan with warm disk
+caches, refinement finished in about 0.21 and 0.32 seconds respectively.
+The 250,000-point view, chosen as the new default for fresh settings, is in
+[`native-ahn6-250k-default.png`](../screenshots/native-ahn6-250k-default.png).
+
 On 1 October 2026, the native GUI mesher reported reading progress on the
 45,839,678-point AHN6 tile while the viewport remained responsive. Cancelling
 after more than two million points stopped the job and preserved an existing
