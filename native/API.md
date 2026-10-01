@@ -49,7 +49,7 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera, section box, index and scale progress, and current status text |
+| `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera, section box, auto-index setting, index and scale progress, and current status text |
 | `job` | `id` | Reads an export, selection or mesh task's state and result |
 | `open` | `path` | Opens a point cloud or mesh in the running GUI |
 | `remove` | `index` | Removes a layer from the project |
@@ -72,7 +72,9 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 | `translate` | `offset` | Applies three finite XYZ offsets to the active cloud view |
 | `scale` | `factors` | Scales the active view around the exact centroid of remaining points; large sources stream from the disk octree in the background |
 | `cancel_scale` | — | Cancels a running centroid calculation without changing the source |
+| `build_index` | — | Starts an octree build for the active unindexed cloud |
 | `cancel_index` | — | Cancels a running octree build without publishing a partial index |
+| `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
 | `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path; returns a job ID |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task |

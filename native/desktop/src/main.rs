@@ -1279,6 +1279,7 @@ impl Studio {
                         "eye_dome_strength": self.eye_dome_strength,
                         "point_size": self.point_size,
                         "budget": self.budget,
+                        "auto_index": self.auto_index,
                         "mesh": self.mesh_job.as_ref().map(MeshJob::progress_value),
                         "index_progress": self.index_progress.as_ref().and_then(|value| value.lock().ok().map(|progress| json!({
                             "stage": match progress.stage {
@@ -1637,6 +1638,29 @@ impl Studio {
                     (json!({"ok": true, "status": self.status}), task)
                 }
             }
+            ApiCommand::BuildIndex => {
+                if self.index_pending {
+                    (
+                        json!({"ok": false, "error": "an octree build is already running"}),
+                        Task::none(),
+                    )
+                } else if !self
+                    .active
+                    .and_then(|index| self.clouds.get(index))
+                    .is_some_and(|entry| entry.index.is_none())
+                {
+                    (
+                        json!({"ok": false, "error": "choose an unindexed active cloud"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::BuildIndex);
+                    (
+                        json!({"ok": self.index_pending, "accepted": self.index_pending, "status": self.status}),
+                        task,
+                    )
+                }
+            }
             ApiCommand::CancelIndex => {
                 if !self.index_pending {
                     (
@@ -1647,6 +1671,10 @@ impl Studio {
                     let task = self.update(Message::CancelIndex);
                     (json!({"ok": true, "status": self.status}), task)
                 }
+            }
+            ApiCommand::SetAutoIndex { enabled } => {
+                let task = self.update(Message::SetAutoIndex(enabled));
+                (json!({"ok": true, "auto_index": self.auto_index}), task)
             }
             ApiCommand::ResetTransform => {
                 if self.active.is_none() {

@@ -3,6 +3,14 @@
 The files themselves are deliberately kept outside the repository. Check the
 source terms before redistributing a dataset or screenshots from it.
 
+On 1 October 2026, the native GUI opened a separate 1,200,000-point LAS test
+source and reported octree source-reading progress. `cancel_index` stopped its
+first cold build, leaving the layer unindexed and no completed cache for that
+source. Reopening the same file then showed `reading_source`, `building_tree`
+and `ready` through the native API; the final disk index had 64 leaves and the
+layer became indexed. The live Properties progress bar and Cancel control are
+shown in [`native-index-progress.png`](../screenshots/native-index-progress.png).
+
 On 1 October 2026, the bounded multithreaded text writer exported a
 1,200,000-point LAS fixture to CSV in 2.54 s with 27,556 KiB peak RSS. The
 previous point-by-point writer took 3.75 s and 20,028 KiB on the same file.
