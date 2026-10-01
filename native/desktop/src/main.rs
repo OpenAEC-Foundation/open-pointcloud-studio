@@ -9481,7 +9481,7 @@ impl PointViewport<'_> {
 
     fn color(&self, point: &Point, bounds: Bounds) -> Color {
         let rgb = match self.color_mode {
-            ColorMode::Rgb => point.rgb.unwrap_or([210, 218, 225]),
+            ColorMode::Rgb => point.rgb.unwrap_or([245, 247, 250]),
             ColorMode::Elevation => {
                 let range = (bounds.max[2] - bounds.min[2]).max(0.001);
                 let t = ((point.xyz[2] - bounds.min[2]) / range).clamp(0.0, 1.0);
@@ -9491,10 +9491,10 @@ impl PointViewport<'_> {
                     (230.0 * (1.0 - t)) as u8,
                 ]
             }
-            ColorMode::Intensity => {
-                let value = (point.intensity.unwrap_or(0) / 257) as u8;
+            ColorMode::Intensity => point.intensity.map_or([210, 218, 225], |intensity| {
+                let value = (intensity / 257) as u8;
                 [value; 3]
-            }
+            }),
             ColorMode::Classification => match point.classification.unwrap_or(0) {
                 2 => [150, 110, 75],
                 3..=5 => [80, 190, 95],

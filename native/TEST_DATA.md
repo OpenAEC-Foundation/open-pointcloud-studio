@@ -890,3 +890,9 @@ between parallel neighborhood batches and verifies the destination OBJ is
 left untouched. The rebuilt native dev GUI reopened the E57 input and its
 30,000-vertex OBJ; the [mesh screenshot](../screenshots/native-dev-e57-parallel-mesher.png)
 shows the source points hidden and the generated 100,691 faces visible.
+
+A local 25,600-point XYZ hill fixture with no RGB or intensity attributes was
+opened in the native dev GUI. Switching to Intensity displayed every point in
+neutral gray instead of black; the [screenshot](../screenshots/native-missing-intensity-visible.png)
+shows the complete surface and the active Intensity ribbon control. RGB mode
+also uses a light neutral color when the source has no RGB field.
