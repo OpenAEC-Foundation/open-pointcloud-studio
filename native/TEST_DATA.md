@@ -444,7 +444,9 @@ section `301358.2,5042487.0,89.0,301358.7,5042489.0,91.0` from the same
 public file. Reopening the E57 found 85,865 points and all four original scan
 positions and orientations. A sequential comparison against the same section
 of the source XYZ stream found zero world-coordinate deviation and identical
-point attributes for every exported point.
+point attributes for every exported point. The reopened E57 also rendered in
+the native dev build with four stations listed in Properties; see
+[`native-e57-filtered-scans.png`](../screenshots/native-e57-filtered-scans.png).
 The 1,200,000-point LAS fixture exported to E57 in 5.13 seconds with 22,288
 KiB peak RSS, and the E57 reopened and exported to a 1,200,000-point PLY in
 5.00 seconds with 21,736 KiB peak RSS. Comparing that PLY with a direct LAS
