@@ -210,6 +210,11 @@ for two distant scan patches still confirms that their gap is not bridged.
 | [PCL couch](https://github.com/PointCloudLibrary/data/blob/master/tutorials/kinfu_large_scale/Tutorial_Cloud_Couch_bin_compressed.pcd) | 7,529,032 bytes; 968,520 points | LZF-compressed PCD | Official producer sample with an all-zero `VIEWPOINT` quaternion |
 | [PCL region-growing RGB](https://github.com/PointCloudLibrary/data/blob/master/tutorials/region_growing_rgb_tutorial.pcd) | 2,286,562 bytes; 307,200 records, 259,847 finite XYZ points | LZF-compressed PCD | Organized RGB sample with a valid rotated `VIEWPOINT` |
 | [PCL room scan](https://github.com/PointCloudLibrary/data/blob/master/tutorials/room_scan1.pcd) | 603,904 bytes; 112,586 points | LZF-compressed PCD | Ordinary producer scan with identity `VIEWPOINT` |
+| [PCL mOSD learning scan](https://github.com/PointCloudLibrary/data/blob/master/segmentation/mOSD/learn/learn0.pcd) | 1,839,104 bytes; 307,200 records, 182,292 finite XYZ points | LZF-compressed PCD | `label` before XYZ, packed `rgba`, organized depth image |
+| [PCL LMS400 table scene](https://github.com/PointCloudLibrary/data/blob/master/tutorials/table_scene_lms400.pcd) | 5,649,007 bytes; 460,400 points | LZF-compressed PCD | Floating intensity plus producer-specific distance and sensor-ID fields |
+| [PCL template alignment object](https://github.com/PointCloudLibrary/data/blob/master/tutorials/template_alignment/object_template_0.pcd) | 52,737 bytes; 1,397 points | ASCII PCD | Four-element `_` padding field after XYZ |
+| [PCL pairwise capture](https://github.com/PointCloudLibrary/data/blob/master/tutorials/pairwise/capture0001.pcd) | 972,688 bytes; 307,200 records, 249,647 finite XYZ points | LZF-compressed PCD | Organized depth image with a 180° `VIEWPOINT` quaternion |
+| [PCL Clorox object](https://github.com/PointCloudLibrary/data/blob/master/tutorials/correspondence_grouping/milk_cartoon_all_small_clorox.pcd) | 2,546,855 bytes; 307,200 records, 241,407 finite XYZ points | LZF-compressed PCD | Packed unsigned `rgba` after XYZ |
 | [3DBAG API](https://docs.3dbag.nl/nl/delivery/webservices/) | 1 km RD bounding box: 81 buildings, 3,414 vertices, 3,800 triangles across four pages | CityJSONFeatures | Native building import, page transforms, LoD 2.2, license credit |
 | [PDOK BRT-A WMTS](https://www.pdok.nl/ogc-webservices/-/article/basisregistratie-topografie-achtergrondkaarten-brt-a-) | 256×256 raster tiles in EPSG:28992 | PNG | Native RD area map, rectangle drawing, pan and zoom |
 
@@ -239,6 +244,17 @@ exact zero-based source ordinal 27,708,324, world XYZ
 `[-0.762906, -31.155014, -0.045100]` and RGB `[73, 74, 73]`; the
 native view
 shows the same selected point and attributes in Properties.
+
+On 2 October 2026, the five additional official PCL producer files above
+completed full source visits in the native Rust reader. The mOSD file also
+opened in the GUI with 182,292 finite points and a 100,000-point bounded
+preview. Native `pick_screen` selected zero-based source ordinal 94,615 at
+`[-0.077891, 0.100836, 0.634000]`, with RGB `[120, 59, 27]` and class 20;
+the [GUI screenshot](../screenshots/native-pcl-mosd-label-rgba-point.png)
+shows the same attributes. After class 20 was hidden, a pick at the same pixel
+returned class 30 instead, confirming that a nonstandard producer label field
+participates in exact selection filtering. The five downloaded PCD files stay
+outside Git under `/tmp/ops-pcl-*.pcd`.
 
 On 1 October 2026, the Rust reader visited all 968,520 finite points in the
 PCL couch file, all 112,586 in the room scan, and 259,847 finite points in the
