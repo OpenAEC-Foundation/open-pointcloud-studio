@@ -233,6 +233,12 @@ native Cancel import control
 alongside the decoded count. It then completed with all 46,589,344 points and
 reattached the disk octree, confirming that cancellation did not poison the
 next import.
+The native `pick_screen` API was then exercised on this indexed scan at
+viewport pixel `[450, 250]` with a 12-pixel radius. Its completed job returned
+exact zero-based source ordinal 27,708,324, world XYZ
+`[-0.762906, -31.155014, -0.045100]` and RGB `[73, 74, 73]`; the
+native view
+shows the same selected point and attributes in Properties.
 
 On 1 October 2026, the Rust reader visited all 968,520 finite points in the
 PCL couch file, all 112,586 in the room scan, and 259,847 finite points in the

@@ -66,6 +66,13 @@ The job and `status.result.selected_points` report exact counts. For very large
 selections the viewport draws a representative highlight sample rather than
 uploading every selected point again; the native status line reports how many
 highlights are shown.
+`pick_screen` uses viewport-local pixel coordinates from the top-left corner;
+`status.result.viewport_size` gives the current width and height. It searches
+the active visible layer's exact source through its octree when available, or
+streams the source otherwise. The optional `radius` defaults to 8 pixels and
+may be 1–64. The returned job contains the zero-based source ordinal, world
+XYZ, RGB, intensity and classification for a hit; a miss completes with zero
+points. It honors the section box, class filters and deleted-point mask.
 Selections retain their exact source-coordinate bounds. `zoom_selection` uses
 those bounds to frame the points quickly even after a live transform; the
 selection highlight follows the current transform. The command leaves the
@@ -80,7 +87,7 @@ pick is discarded when cancelled.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera and saved views for that layer, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
+| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
 | `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
 | `open` | `path` | Opens a point cloud or mesh in the running GUI; full-stream readers return an `import_id` |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -104,6 +111,7 @@ pick is discarded when cancelled.
 | `set_section` | `min`, `max` | Enables an XYZ section box using two three-number arrays inside the visible model bounds |
 | `clear_section` | — | Disables the section box |
 | `select_world` | `min`, `max` | Selects all exact source points in an inclusive XYZ box, returning a job ID |
+| `pick_screen` | `pointer`, optional `radius` | Picks the frontmost exact point near a viewport-local pixel `[x, y]`, returning a job ID |
 | `cancel_selection` | — | Stops a running full-resolution box selection or point-pick source scan |
 | `clear_selection` | — | Clears the current point selection |
 | `zoom_selection` | — | Frames the exact selected source points in the 3D view without changing the section box; poll `selection_bounds_pending` in status until the camera updates |

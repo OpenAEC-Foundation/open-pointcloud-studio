@@ -89,6 +89,10 @@ pub enum ApiCommand {
         min: [f64; 3],
         max: [f64; 3],
     },
+    PickScreen {
+        pointer: [f32; 2],
+        radius: Option<f32>,
+    },
     CancelSelection,
     ClearSelection,
     ZoomSelection,

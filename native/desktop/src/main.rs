@@ -1109,6 +1109,7 @@ enum Message {
         u64,
         Result<Vec<(usize, Arc<SelectionMask>)>, String>,
     ),
+    ApiPickReady(String, u64, usize, Result<Option<IndexedPoint>, String>),
     Tab(RibbonTab),
     ToggleFile,
     FileAction(FileAction),
@@ -1818,6 +1819,7 @@ impl Studio {
                         "active": self.active,
                         "status": self.status,
                         "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label},
+                        "viewport_size": [self.viewport_size.width, self.viewport_size.height],
                         "camera_views": camera_views,
                         "section": section,
                         "selected_points": self.selected_total(),
@@ -2284,6 +2286,38 @@ impl Studio {
                             },
                         );
                         (json!({"ok": true, "accepted": true, "job_id": id}), task)
+                    }
+                }
+            }
+            ApiCommand::PickScreen { pointer, radius } => {
+                let radius = radius.unwrap_or(8.0);
+                if !pointer.into_iter().all(f32::is_finite)
+                    || !radius.is_finite()
+                    || !(1.0..=64.0).contains(&radius)
+                    || pointer[0] < 0.0
+                    || pointer[1] < 0.0
+                    || pointer[0] > self.viewport_size.width
+                    || pointer[1] > self.viewport_size.height
+                {
+                    (
+                        json!({"ok": false, "error": "pointer must lie inside the viewport and radius must be 1–64 pixels"}),
+                        Task::none(),
+                    )
+                } else {
+                    let id = self
+                        .record_api_job(json!({"state": "running", "operation": "pick_screen"}));
+                    match self.start_point_pick(
+                        pointer,
+                        radius,
+                        self.viewport_size,
+                        Some(id.clone()),
+                    ) {
+                        Ok(task) => (json!({"ok": true, "accepted": true, "job_id": id}), task),
+                        Err(error) => {
+                            self.api_jobs.remove(&id);
+                            self.api_job_order.retain(|job_id| job_id != &id);
+                            (json!({"ok": false, "error": error}), Task::none())
+                        }
                     }
                 }
             }
@@ -3194,6 +3228,93 @@ impl Studio {
         Task::batch([worker, Task::run(progress, |message| message)])
     }
 
+    fn start_point_pick(
+        &mut self,
+        pointer: [f32; 2],
+        radius: f32,
+        size: Size,
+        api_job_id: Option<String>,
+    ) -> Result<Task<Message>, String> {
+        if self.selection_pending {
+            return Err("a full-resolution selection is already running".into());
+        }
+        let bounds = combined_bounds(&self.clouds)
+            .ok_or_else(|| "open a point cloud before picking a point".to_string())?;
+        let (index, entry) = self
+            .active
+            .and_then(|index| self.clouds.get(index).map(|entry| (index, entry)))
+            .filter(|(_, entry)| entry.visible)
+            .ok_or_else(|| "choose a visible point cloud to pick from".to_string())?;
+        let tree = entry.index.as_ref().map(Arc::clone);
+        let cloud = Arc::clone(&entry.cloud);
+        let deleted = entry.deleted.as_ref().map(Arc::clone);
+        let transform = entry.transform;
+        let projection = Projection::new(
+            bounds,
+            self.yaw,
+            self.pitch,
+            self.zoom,
+            self.pan,
+            size.width,
+            size.height,
+        );
+        let filter = ClassFilter {
+            ground: self.filter_ground,
+            vegetation: self.filter_vegetation,
+            buildings: self.filter_buildings,
+            other: self.filter_other,
+            classes: self.class_visibility,
+            section: self.section_bounds(),
+        };
+        let revision = self.revision;
+        self.pending_delete = false;
+        self.selection_pending = true;
+        self.selection_cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::clone(&self.selection_cancel);
+        self.status = if tree.is_some() {
+            "Finding nearest point through the octree…".into()
+        } else {
+            "Scanning the full source for the nearest point…".into()
+        };
+        Ok(Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    cloud.validate_source().map_err(|error| error.to_string())?;
+                    let target = PickTarget { pointer, radius };
+                    let result = if let Some(tree) = tree {
+                        pick_indexed_transformed(
+                            &tree,
+                            projection,
+                            target,
+                            filter,
+                            deleted.as_deref(),
+                            transform,
+                            &cancel,
+                        )?
+                    } else {
+                        pick_full_transformed(
+                            &cloud,
+                            projection,
+                            target,
+                            filter,
+                            deleted.as_deref(),
+                            transform,
+                            &cancel,
+                        )?
+                    };
+                    cloud.validate_source().map_err(|error| error.to_string())?;
+                    Ok(result)
+                })
+                .await
+                .map_err(|error| error.to_string())?
+            },
+            move |result| match &api_job_id {
+                Some(id) => Message::ApiPickReady(id.clone(), revision, index, result),
+                None => Message::PickReady(revision, index, result),
+            },
+        ))
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SyncWindowChrome(retries) => {
@@ -3352,6 +3473,34 @@ impl Studio {
                 if let Some(entry) = self.api_jobs.get_mut(&id) {
                     *entry = job;
                 }
+            }
+            Message::ApiPickReady(id, revision, index, result) => {
+                let job = if self.selection_cancel.load(Ordering::Relaxed) {
+                    json!({"state": "cancelled"})
+                } else if revision != self.revision {
+                    json!({"state": "failed", "error": "point pick discarded because the view changed"})
+                } else {
+                    match &result {
+                        Ok(Some(record)) => json!({
+                            "state": "complete",
+                            "points": 1,
+                            "layer": index,
+                            "point": {
+                                "ordinal": record.ordinal,
+                                "xyz": record.point.xyz,
+                                "rgb": record.point.rgb,
+                                "intensity": record.point.intensity,
+                                "classification": record.point.classification,
+                            },
+                        }),
+                        Ok(None) => json!({"state": "complete", "points": 0, "point": null}),
+                        Err(error) => json!({"state": "failed", "error": error}),
+                    }
+                };
+                if let Some(entry) = self.api_jobs.get_mut(&id) {
+                    *entry = job;
+                }
+                return self.update(Message::PickReady(revision, index, result));
             }
             Message::Tab(tab) => {
                 self.ribbon_tab = tab;
@@ -5752,6 +5901,15 @@ impl Studio {
                     self.status = "A full-resolution selection is already running".into();
                     return Task::none();
                 }
+                if self.pick_mode {
+                    return match self.start_point_pick(end, 8.0, size, None) {
+                        Ok(task) => task,
+                        Err(error) => {
+                            self.status = error;
+                            Task::none()
+                        }
+                    };
+                }
                 let Some(bounds) = combined_bounds(&self.clouds) else {
                     return Task::none();
                 };
@@ -5786,67 +5944,6 @@ impl Studio {
                     section: self.section_bounds(),
                 };
                 let revision = self.revision;
-                if self.pick_mode {
-                    let Some((index, entry)) = self
-                        .active
-                        .and_then(|index| self.clouds.get(index).map(|entry| (index, entry)))
-                        .filter(|(_, entry)| entry.visible)
-                    else {
-                        self.status = "Choose a visible point cloud to pick from".into();
-                        return Task::none();
-                    };
-                    let tree = entry.index.as_ref().map(Arc::clone);
-                    let cloud = Arc::clone(&entry.cloud);
-                    let deleted = entry.deleted.as_ref().map(Arc::clone);
-                    let transform = entry.transform;
-                    self.selection_pending = true;
-                    self.selection_cancel = Arc::new(AtomicBool::new(false));
-                    let cancel = Arc::clone(&self.selection_cancel);
-                    self.status = if tree.is_some() {
-                        "Finding nearest point through the octree…".into()
-                    } else {
-                        "Scanning the full source for the nearest point…".into()
-                    };
-                    return Task::perform(
-                        async move {
-                            tokio::task::spawn_blocking(move || {
-                                cloud.validate_source().map_err(|error| error.to_string())?;
-                                let result = if let Some(tree) = tree {
-                                    pick_indexed_transformed(
-                                        &tree,
-                                        projection,
-                                        PickTarget {
-                                            pointer: end,
-                                            radius: 8.0,
-                                        },
-                                        filter,
-                                        deleted.as_deref(),
-                                        transform,
-                                        &cancel,
-                                    )?
-                                } else {
-                                    pick_full_transformed(
-                                        &cloud,
-                                        projection,
-                                        PickTarget {
-                                            pointer: end,
-                                            radius: 8.0,
-                                        },
-                                        filter,
-                                        deleted.as_deref(),
-                                        transform,
-                                        &cancel,
-                                    )?
-                                };
-                                cloud.validate_source().map_err(|error| error.to_string())?;
-                                Ok(result)
-                            })
-                            .await
-                            .map_err(|error| error.to_string())?
-                        },
-                        move |result| Message::PickReady(revision, index, result),
-                    );
-                }
                 let rectangle = ScreenRect::from_corners(start, end);
                 self.selection_pending = true;
                 let cancel = Arc::new(AtomicBool::new(false));
@@ -10659,6 +10756,29 @@ mod camera_api_tests {
         let (reply, receive) = std::sync::mpsc::channel();
         let _ = studio.handle_api(native_api::ApiRequest { command, reply });
         receive.recv().unwrap()
+    }
+
+    #[test]
+    fn screen_pick_rejects_invalid_coordinates_without_starting_a_job() {
+        let mut studio = Studio::default();
+        let invalid = send(
+            &mut studio,
+            native_api::ApiCommand::PickScreen {
+                pointer: [f32::NAN, 10.0],
+                radius: None,
+            },
+        );
+        assert_eq!(invalid["ok"], false);
+        let outside_x = studio.viewport_size.width + 1.0;
+        let outside = send(
+            &mut studio,
+            native_api::ApiCommand::PickScreen {
+                pointer: [outside_x, 10.0],
+                radius: Some(8.0),
+            },
+        );
+        assert_eq!(outside["ok"], false);
+        assert!(studio.api_jobs.is_empty());
     }
 
     #[test]
