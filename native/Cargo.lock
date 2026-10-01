@@ -2937,6 +2937,7 @@ dependencies = [
  "image",
  "open",
  "pointcloud-core",
+ "rayon",
  "reqwest",
  "rfd",
  "serde",

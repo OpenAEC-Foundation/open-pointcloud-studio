@@ -233,6 +233,13 @@ The [AHN dataroom](https://www.ahn.nl/dataroom) describes the point-cloud
 products and their download map. The three adjacent AHN6 tiles total
 1,374,660,640 bytes (1.28 GiB) and 129,398,587 points. Their direct URLs
 were checked on 30 September 2026.
+On 2 October, the rebuilt native dev GUI reopened those same three cached
+LAZ tiles with the bounded Rayon LOD pool. All three indexes attached and a
+one-million-point viewport request completed; the
+[overview](../screenshots/native-ahn6-three-tiles-rayon-lod-1m.png) shows all
+129,398,587 source points across three layers. A camera change to 4×
+magnification refreshed a one-million-point visible sample in the
+[close-up](../screenshots/native-ahn6-three-tiles-rayon-lod-zoom4x.png).
 
 Example local test:
 
