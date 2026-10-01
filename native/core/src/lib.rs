@@ -206,7 +206,7 @@ impl fmt::Display for LoadError {
             Self::E57(error) => write!(f, "E57 error: {error}"),
             Self::UnsupportedFormat(extension) => write!(f, "Unsupported format: {extension}"),
             Self::InvalidData(reason) => write!(f, "Invalid point cloud: {reason}"),
-            Self::Cancelled => f.write_str("Mesh cancelled"),
+            Self::Cancelled => f.write_str("Operation cancelled"),
         }
     }
 }

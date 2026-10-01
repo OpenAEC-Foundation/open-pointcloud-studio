@@ -243,8 +243,20 @@ impl OctreeIndex {
         id: &str,
         limit: usize,
     ) -> Result<Vec<IndexedPoint>, LoadError> {
+        self.read_node_indexed_where(id, limit, &|| false)
+    }
+
+    fn read_node_indexed_where(
+        &self,
+        id: &str,
+        limit: usize,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Vec<IndexedPoint>, LoadError> {
         if limit == 0 {
             return Err(LoadError::InvalidData("read limit must be positive".into()));
+        }
+        if cancelled() {
+            return Err(LoadError::Cancelled);
         }
         let node = self
             .root
@@ -258,7 +270,7 @@ impl OctreeIndex {
             && node.stored_points > (LEAF_LOD_POINTS * 4) as u64
         {
             let preview = leaf_lod_path(self.storage.path(), id);
-            match ensure_leaf_lod(&path, &preview, node.stored_points) {
+            match ensure_leaf_lod_where(&path, &preview, node.stored_points, cancelled) {
                 Ok(()) => (preview, LEAF_LOD_POINTS as u64),
                 // A read-only cache still remains usable through the full leaf.
                 Err(LoadError::Io(_)) => (path, node.stored_points),
@@ -269,6 +281,9 @@ impl OctreeIndex {
         };
         let mut index = 0u64;
         read_records(&path, |point| {
+            if index.is_multiple_of(4_096) && cancelled() {
+                return Err(LoadError::Cancelled);
+            }
             let sample_bin =
                 (u128::from(index) * target as u128) / u128::from(stored_points.max(1));
             if sample_bin >= points.len() as u128 {
@@ -277,6 +292,9 @@ impl OctreeIndex {
             index += 1;
             Ok(())
         })?;
+        if cancelled() {
+            return Err(LoadError::Cancelled);
+        }
         if index != stored_points || points.len() != target {
             return Err(LoadError::InvalidData(format!("damaged octree node: {id}")));
         }
@@ -346,10 +364,23 @@ impl OctreeIndex {
     pub fn sample_lod_indexed(
         &self,
         limit: usize,
+        projected_span: impl FnMut(Bounds) -> Option<f32>,
+    ) -> Result<Vec<IndexedPoint>, LoadError> {
+        self.sample_lod_indexed_cancellable(limit, projected_span, || false)
+    }
+
+    /// Stop a stale viewport request while it scans node or leaf-preview files.
+    pub fn sample_lod_indexed_cancellable(
+        &self,
+        limit: usize,
         mut projected_span: impl FnMut(Bounds) -> Option<f32>,
+        cancelled: impl Fn() -> bool,
     ) -> Result<Vec<IndexedPoint>, LoadError> {
         if limit == 0 {
             return Err(LoadError::InvalidData("read limit must be positive".into()));
+        }
+        if cancelled() {
+            return Err(LoadError::Cancelled);
         }
         let Some(root_span) = projected_span(self.root.bounds) else {
             return Ok(Vec::new());
@@ -357,6 +388,9 @@ impl OctreeIndex {
         let max_nodes = (limit / 128).clamp(8, 1_024).min(limit);
         let mut frontier = vec![(&self.root, root_span)];
         loop {
+            if cancelled() {
+                return Err(LoadError::Cancelled);
+            }
             let next = frontier
                 .iter()
                 .enumerate()
@@ -407,8 +441,11 @@ impl OctreeIndex {
         let mut points = Vec::with_capacity(limit - remaining);
         for ((node, _), allocation) in frontier.into_iter().zip(allocations) {
             if allocation > 0 {
-                points.extend(self.read_node_indexed(&node.id, allocation)?);
+                points.extend(self.read_node_indexed_where(&node.id, allocation, &cancelled)?);
             }
+        }
+        if cancelled() {
+            return Err(LoadError::Cancelled);
         }
         Ok(points)
     }
@@ -720,6 +757,18 @@ fn leaf_lod_path(directory: &Path, id: &str) -> PathBuf {
 }
 
 fn ensure_leaf_lod(source: &Path, preview: &Path, count: u64) -> Result<(), LoadError> {
+    ensure_leaf_lod_where(source, preview, count, &|| false)
+}
+
+fn ensure_leaf_lod_where(
+    source: &Path,
+    preview: &Path,
+    count: u64,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), LoadError> {
+    if cancelled() {
+        return Err(LoadError::Cancelled);
+    }
     let source_bytes = count
         .checked_mul(RECORD_BYTES as u64)
         .ok_or_else(|| LoadError::InvalidData("damaged octree leaf".into()))?;
@@ -739,6 +788,9 @@ fn ensure_leaf_lod(source: &Path, preview: &Path, count: u64) -> Result<(), Load
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
         read_records(source, |point| {
+            if seen.is_multiple_of(4_096) && cancelled() {
+                return Err(LoadError::Cancelled);
+            }
             let bin = (u128::from(seen) * LEAF_LOD_POINTS as u128) / u128::from(count);
             if bin >= written as u128 {
                 write_record(&mut writer, point)?;
@@ -751,6 +803,9 @@ fn ensure_leaf_lod(source: &Path, preview: &Path, count: u64) -> Result<(), Load
     }
     if seen != count || written != LEAF_LOD_POINTS {
         return Err(LoadError::InvalidData("damaged octree leaf".into()));
+    }
+    if cancelled() {
+        return Err(LoadError::Cancelled);
     }
     temporary
         .persist(preview)
@@ -805,6 +860,14 @@ mod tests {
             2048 * RECORD_BYTES as u64
         );
         fs::remove_file(&preview).unwrap();
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        let cancelled = index.sample_lod_indexed_cancellable(
+            61,
+            |_| Some(100.0),
+            || checks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 5,
+        );
+        assert!(matches!(cancelled, Err(LoadError::Cancelled)));
+        assert!(!preview.exists());
         let sample = index.read_node_indexed("r", 61).unwrap();
         assert!(preview.exists());
         assert_eq!(sample.len(), 61);

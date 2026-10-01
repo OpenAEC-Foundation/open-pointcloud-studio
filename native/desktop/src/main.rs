@@ -933,6 +933,7 @@ struct Studio {
     pending_delete: bool,
     index_pending: bool,
     detail_pending: bool,
+    detail_cancel: Arc<AtomicBool>,
     auto_index: bool,
     revision: u64,
 }
@@ -1073,6 +1074,7 @@ impl Default for Studio {
             pending_delete: false,
             index_pending: false,
             detail_pending: false,
+            detail_cancel: Arc::new(AtomicBool::new(false)),
             auto_index: true,
             revision: 0,
         }
@@ -2127,7 +2129,7 @@ impl Studio {
                                 "vertices": stats.vertices,
                                 "triangles": stats.triangles,
                             }),
-                            Err(error) if error == "Mesh cancelled" => {
+                            Err(error) if error == "Operation cancelled" => {
                                 json!({"state": "cancelled", "path": job.path})
                             }
                             Err(error) => json!({"state": "failed", "error": error}),
@@ -2155,7 +2157,7 @@ impl Studio {
                             );
                         }
                     }
-                    Err(error) if error == "Mesh cancelled" => {
+                    Err(error) if error == "Operation cancelled" => {
                         self.status =
                             format!("{} mesh cancelled; output left unchanged", mode.label())
                     }
@@ -2928,6 +2930,8 @@ impl Studio {
                 );
                 let limit = (self.budget as usize / sources.len()).max(1);
                 let revision = self.revision;
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.detail_cancel = Arc::clone(&cancel);
                 self.detail_pending = true;
                 if !self.section_export_pending {
                     self.status = format!(
@@ -2941,18 +2945,24 @@ impl Studio {
                             let workers: Vec<_> = sources
                                 .into_iter()
                                 .map(|(index, tree)| {
+                                    let cancel = Arc::clone(&cancel);
                                     std::thread::spawn(move || {
-                                        tree.sample_lod_indexed(limit, |node_bounds| {
-                                            if section.is_some_and(|clip| {
-                                                (0..3).any(|axis| {
-                                                    node_bounds.max[axis] < clip.min[axis]
-                                                        || node_bounds.min[axis] > clip.max[axis]
-                                                })
-                                            }) {
-                                                return None;
-                                            }
-                                            projection.screen_span(node_bounds)
-                                        })
+                                        tree.sample_lod_indexed_cancellable(
+                                            limit,
+                                            |node_bounds| {
+                                                if section.is_some_and(|clip| {
+                                                    (0..3).any(|axis| {
+                                                        node_bounds.max[axis] < clip.min[axis]
+                                                            || node_bounds.min[axis]
+                                                                > clip.max[axis]
+                                                    })
+                                                }) {
+                                                    return None;
+                                                }
+                                                projection.screen_span(node_bounds)
+                                            },
+                                            || cancel.load(Ordering::Relaxed),
+                                        )
                                         .map(|points| (index, points))
                                         .map_err(|error| error.to_string())
                                     })
@@ -2996,6 +3006,9 @@ impl Studio {
                             self.status =
                                 format!("Viewport LOD ready: {count} points from disk octree");
                         }
+                    }
+                    Err(error) if error == "Operation cancelled" => {
+                        return self.schedule_detail();
                     }
                     Err(error) if !self.section_export_pending => {
                         self.status = format!("Detail failed: {error}")
@@ -3859,6 +3872,7 @@ impl Studio {
     }
 
     fn schedule_detail(&self) -> Task<Message> {
+        self.detail_cancel.store(true, Ordering::Relaxed);
         if !self
             .clouds
             .iter()
@@ -6931,6 +6945,7 @@ mod lod_transition_tests {
         assert!(studio.clouds[0].cloud.points.is_empty());
         let old: Arc<[IndexedPoint]> = records.into();
         studio.clouds[0].detail_points = Some(Arc::clone(&old));
+        let previous_request = Arc::clone(&studio.detail_cancel);
 
         for message in [
             Message::Orbit(20.0, 5.0),
@@ -6945,6 +6960,7 @@ mod lod_transition_tests {
                 &old
             ));
         }
+        assert!(previous_request.load(Ordering::Relaxed));
         let stale_revision = studio.revision - 1;
         let _ = studio.update(Message::DetailReady(stale_revision, Ok(vec![(0, vec![])])));
         assert!(Arc::ptr_eq(

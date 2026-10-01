@@ -15,6 +15,16 @@ The same writer exported the public AHN6 `207000_474000` LAZ tile to XYZ:
 41,268 KiB peak RSS. The final file appeared only after the temporary output
 was complete. Its SHA-256 is
 `142bec5664af80226ca0447fb56e80c8a82a4395c3c15d7da053122f8b12e09f`.
+The native viewer then exercised cancellable octree LOD reads on that same
+45.8-million-point tile. A 2,000,000-point viewport request was interrupted
+by successive Top, Front, Right and Isometric camera commands; the final
+Isometric request reached `Viewport LOD ready: 2000000 points from disk octree`
+3.49 seconds after the last command. Two physical right-drag gestures changed
+the camera pan to `[45, 124]` and returned a fresh 2,000,000-point LOD.
+[`native-stale-lod-cancel-ahn2m.png`](../screenshots/native-stale-lod-cancel-ahn2m.png)
+shows the final dense view. The core test also cancels a leaf-preview build
+after it has begun reading, verifies that no partial preview is published,
+and successfully rebuilds it on the next request.
 
 On 1 October 2026, the native GUI mesher reported reading progress on the
 45,839,678-point AHN6 tile while the viewport remained responsive. Cancelling
