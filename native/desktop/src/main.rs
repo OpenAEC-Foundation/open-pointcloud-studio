@@ -2504,7 +2504,11 @@ impl Studio {
                 }
                 let job = match result {
                     Ok((path, count)) => {
-                        self.status = format!("Exported {count} points to {}", path.display());
+                        self.status = format!(
+                            "Exported {} points to {}",
+                            format_count(count),
+                            path.display()
+                        );
                         json!({"state": "complete", "path": path, "points": count})
                     }
                     Err(error) => {
@@ -2536,7 +2540,7 @@ impl Studio {
                                 }
                             }
                             let count = self.selected_total();
-                            self.status = format!("{count} points selected at full resolution");
+                            self.status = self.selection_status();
                             json!({"state": "complete", "points": count, "layers": layers})
                         }
                         Err(error) => {
@@ -3476,8 +3480,10 @@ impl Studio {
                 }
                 self.redo_deletions.clear();
                 self.revision += 1;
-                self.status =
-                    format!("Deleted {removed} points in the open view; Undo restores them");
+                self.status = format!(
+                    "Deleted {} points in the open view; Undo restores them",
+                    format_count(removed)
+                );
                 return self.schedule_detail();
             }
             Message::UndoDelete => {
@@ -3504,7 +3510,7 @@ impl Studio {
                 }
                 self.redo_deletions.push(batch);
                 self.revision += 1;
-                self.status = format!("Restored {restored} points");
+                self.status = format!("Restored {} points", format_count(restored));
                 return self.schedule_detail();
             }
             Message::RedoDelete => {
@@ -3531,7 +3537,7 @@ impl Studio {
                 }
                 self.undo_deletions.push(batch);
                 self.revision += 1;
-                self.status = format!("Deleted {removed} points again");
+                self.status = format!("Deleted {} points again", format_count(removed));
                 return self.schedule_detail();
             }
             Message::DecimationStride(stride) => self.decimation_stride = stride,
@@ -4973,10 +4979,7 @@ impl Studio {
                                 entry.selection = Some(mask);
                             }
                         }
-                        self.status = format!(
-                            "{} points selected at full resolution",
-                            self.selected_total()
-                        );
+                        self.status = self.selection_status();
                     }
                     Err(error) => self.status = format!("Selection failed: {error}"),
                 }
@@ -5026,6 +5029,22 @@ impl Studio {
             .filter_map(|entry| entry.selection.as_ref())
             .map(|selection| selection.count)
             .sum()
+    }
+
+    fn selection_status(&self) -> String {
+        let count = self.selected_total();
+        let shown: usize = self
+            .clouds
+            .iter()
+            .filter_map(|entry| entry.selection.as_ref())
+            .map(|selection| selection.highlights.len())
+            .sum();
+        let noun = if count == 1 { "point" } else { "points" };
+        let mut status = format!("{} {noun} selected at full resolution", format_count(count));
+        if count > shown as u64 {
+            status.push_str(&format!(" · {} highlighted", format_count(shown)));
+        }
+        status
     }
 
     fn section_bounds(&self) -> Option<Bounds> {
@@ -5671,7 +5690,7 @@ impl Studio {
                     column![
                         text(format!(
                             "{} point{} selected",
-                            self.selected_total(),
+                            format_count(self.selected_total()),
                             if self.selected_total() == 1 { "" } else { "s" }
                         ))
                         .size(15),

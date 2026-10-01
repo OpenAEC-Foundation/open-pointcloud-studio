@@ -46,6 +46,10 @@ are inclusive source XYZ coordinates, independent of the viewport camera and
 point budget. It selects across visible layers while respecting class filters,
 the active section box and previously deleted points. Indexed layers search
 intersecting octree leaves; unindexed layers stream their complete sources.
+The job and `status.result.selected_points` report exact counts. For very large
+selections the viewport draws a representative highlight sample rather than
+uploading every selected point again; the native status line reports how many
+highlights are shown.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |

@@ -58,6 +58,19 @@ indexes and rendered a combined 79,998-point LOD; see
 An exact world box across the first two tile boundaries selected 5,365 and
 6,416 points respectively (11,781 total), with zero from the third tile.
 
+A larger exact world selection used X 207250–207750, Y 474250–474750 and Z
+-100–1000 with the three AHN6 tiles open. It selected 11,019,954 points from
+the first tile in 6.58 seconds; the other two contributed zero. The viewer
+retains the exact ordinal mask and shows a representative 8,000-point
+highlight preview. [The selection screenshot](../screenshots/native-ahn6-11m-exact-selection.png)
+shows the full count in Properties. Native Delete, Undo, Redo and Undo changed
+the first tile's deleted count from 0 to 11,019,954 and back without changing
+its 45,839,678 source points. Export Selection wrote an 118,442,155-byte LAZ
+in 26.72 seconds; a full reread counted the same 11,019,954 points in 4.28
+seconds. The selected LAZ remains locally at
+`/tmp/ops-ahn6-selection-11m.laz` for follow-up tests. The development view
+was returned to zero selected and zero deleted points afterward.
+
 The same three indexed tiles were used to check deep-zoom LOD allocation at
 0.08046× zoom. An equal split of the 80,000-point budget rendered 32,810
 points because two tiles could supply only 2,048 and 4,096 visible points.
