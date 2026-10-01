@@ -8,6 +8,8 @@ The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-boo
 
 OpenCADStudio's SVG icons under `assets/icons/` were copied into [`assets/opencad-icons/`](assets/opencad-icons/) and are embedded by Rust `iced::widget::svg`. No HTML, CSS, JavaScript or webview is used in the native desktop crate.
 
+Camera views can be named and saved from the View ribbon or Properties panel, then restored or deleted from Properties. They persist per source scan in `camera-views.json` under the native XDG configuration directory.
+
 The [opencadcodec](https://github.com/HakanSeven12/opencadcodec) repository was inspected at commit `5ef9376` (MPL-2.0). Its `PointCloudData`, `PointCloudExData`, definitions, clips and color maps model *DWG/DXF point-cloud references* and scan placement. Its `source_filename`/`source_files` fields link to scan data; this is not a LAS/LAZ/E57 point decoder or point-processing kernel. OpenCADStudio itself still reports `POINTCLOUDATTACH` as unimplemented and renders existing point-cloud CAD entities as frames/wires. Its `opencadkernel` dependency handles CAD curves and B-rep geometry, not the point stream. Our existing streaming decoders and disk octree therefore remain the scan engine. A future CAD-reference workflow should use `opencadcodec` to resolve and display attached scans and apply its transforms/crops, while keeping scan points on disk.
 
 LAZ writing uses the `las` crate's parallel compressor with bounded 400,000-point
@@ -45,8 +47,8 @@ File open and save dialogs use `rfd::AsyncFileDialog`, so the native UI stays re
 | Workflow in the existing app | Native status |
 | --- | --- |
 | LAS/LAZ, PLY, XYZ/ASC/TXT/CSV, PTS import | Implemented for point data; bounded ASCII and little-endian binary PLY polygon meshes also render |
-| PCD, PTX, OBJ, OFF, STL, DXF, E57 import | Point vertices implemented, including PCD LZF compression; OBJ, OFF, STL and DXF 3DFACE geometry also renders as triangles |
-| Multiple clouds, visibility, orbit, pan, deep zoom, 3D view cube, right-click menu, rounded points, colors, point size, budget, class groups | Native implementation; advanced navigation polish remains |
+| PCD, PTX, OBJ, OFF, STL, DXF, E57 import | Point vertices implemented, including PCD LZF compression and VIEWPOINT transforms in all three PCD storage modes; OBJ, OFF, STL and DXF 3DFACE geometry also renders as triangles |
+| Multiple clouds, visibility, orbit, pan, deep zoom, 3D view cube, right-click menu, rounded points, colors, point size, budget, class groups | Native implementation; named camera views save and restore yaw, pitch, zoom and pan per source scan. Advanced navigation polish remains |
 | Section box | Three-axis clipping with visible wireframe, six draggable face handles, six limit sliders and precise XYZ fields. Fit box to selection uses exact selected source points, including points outside the preview; Zoom box frames the clipped volume in the viewport. Clipping applies to GPU rendering, full-resolution selection and a separate clipped export |
 | Octree LOD and eye-dome lighting | Existing disk-backed octrees attach when a scan opens. Uncached scans with at least one million points are indexed automatically, one at a time, after their preview loads; the Tools ribbon can disable this or start a manual build. Camera movement selects visible nodes by projected size and refreshes a bounded point sample; the point-budget control reaches 2 million. Native screen-space eye-dome shading is toggleable in Home and View |
 | Full-resolution point selection | Index-guided exact box selection when available, full-source fallback, exact indexed single-point pick and selected export |

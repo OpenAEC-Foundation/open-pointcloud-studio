@@ -2921,6 +2921,8 @@ dependencies = [
  "pointcloud-core",
  "reqwest",
  "rfd",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

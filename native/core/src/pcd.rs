@@ -17,6 +17,62 @@ struct Field {
     span: usize,
 }
 
+#[derive(Clone, Copy)]
+struct Viewpoint {
+    translation: [f64; 3],
+    rotation: [f64; 4], // w, x, y, z
+}
+
+impl Default for Viewpoint {
+    fn default() -> Self {
+        Self {
+            translation: [0.0; 3],
+            rotation: [1.0, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
+impl Viewpoint {
+    fn parse<'a>(words: impl Iterator<Item = &'a str>) -> Result<Self, LoadError> {
+        let values = words
+            .take(7)
+            .map(|word| {
+                word.parse::<f64>()
+                    .map_err(|_| invalid("invalid PCD VIEWPOINT"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if values.len() != 7 || !values.iter().all(|value| value.is_finite()) {
+            return Err(invalid("invalid PCD VIEWPOINT"));
+        }
+        let norm = values[3..]
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            .sqrt();
+        if !norm.is_finite() || norm <= f64::EPSILON {
+            return Err(invalid("PCD VIEWPOINT quaternion is zero"));
+        }
+        Ok(Self {
+            translation: [values[0], values[1], values[2]],
+            rotation: std::array::from_fn(|axis| values[axis + 3] / norm),
+        })
+    }
+
+    fn apply(self, xyz: [f64; 3]) -> [f64; 3] {
+        let [w, qx, qy, qz] = self.rotation;
+        let [x, y, z] = xyz;
+        let ix = w * x + qy * z - qz * y;
+        let iy = w * y + qz * x - qx * z;
+        let iz = w * z + qx * y - qy * x;
+        let iw = -qx * x - qy * y - qz * z;
+        [
+            ix * w - iw * qx - iy * qz + iz * qy + self.translation[0],
+            iy * w - iw * qy - iz * qx + ix * qz + self.translation[1],
+            iz * w - iw * qz - ix * qy + iy * qx + self.translation[2],
+        ]
+    }
+}
+
 pub fn read(
     path: &Path,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
@@ -24,6 +80,7 @@ pub fn read(
     let mut reader = BufReader::new(File::open(path)?);
     let (mut names, mut sizes, mut kinds, mut counts) = (vec![], vec![], vec![], vec![]);
     let (mut width, mut height, mut points) = (0u64, 1u64, 0u64);
+    let mut viewpoint = Viewpoint::default();
     let mode = loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 {
@@ -43,6 +100,7 @@ pub fn read(
             "WIDTH" => width = parse_u64(words.next())?,
             "HEIGHT" => height = parse_u64(words.next())?,
             "POINTS" => points = parse_u64(words.next())?,
+            "VIEWPOINT" => viewpoint = Viewpoint::parse(words)?,
             "DATA" => break words.next().unwrap_or("").to_ascii_lowercase(),
             _ => {}
         }
@@ -130,7 +188,7 @@ pub fn read(
                     })
                     .transpose()?
                     .or(separate_rgb(&get)?);
-                emit(&get, rgb, push)?;
+                emit(&get, rgb, viewpoint, push)?;
             }
         }
         "binary" => {
@@ -157,11 +215,11 @@ pub fn read(
                     })
                     .transpose()?
                     .or(separate_rgb(&get)?);
-                emit(&get, rgb, push)?;
+                emit(&get, rgb, viewpoint, push)?;
             }
         }
         "binary_compressed" => {
-            read_compressed(&mut reader, &fields, points, push)?;
+            read_compressed(&mut reader, &fields, points, viewpoint, push)?;
         }
         _ => return Err(invalid("unsupported PCD DATA mode")),
     }
@@ -172,6 +230,7 @@ fn read_compressed(
     reader: &mut impl Read,
     fields: &[Field],
     points: u64,
+    viewpoint: Viewpoint,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
     let mut header = [0u8; 8];
@@ -236,7 +295,7 @@ fn read_compressed(
             })
             .transpose()?
             .or(separate_rgb(&get)?);
-        emit(&get, rgb, push)?;
+        emit(&get, rgb, viewpoint, push)?;
     }
     Ok(())
 }
@@ -305,9 +364,10 @@ fn decompress_lzf(
 fn emit(
     get: &impl Fn(&str) -> Result<Option<f64>, LoadError>,
     rgb: Option<[u8; 3]>,
+    viewpoint: Viewpoint,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
-    let xyz = [get("x")?.unwrap(), get("y")?.unwrap(), get("z")?.unwrap()];
+    let xyz = viewpoint.apply([get("x")?.unwrap(), get("y")?.unwrap(), get("z")?.unwrap()]);
     if !xyz.iter().all(|value| value.is_finite()) {
         return Ok(());
     }
@@ -375,6 +435,45 @@ fn invalid(reason: &str) -> LoadError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn viewpoint_rotates_and_translates_all_storage_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        let header = "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nWIDTH 1\nHEIGHT 1\nPOINTS 1\nVIEWPOINT 10 20 30 0.7071067811865476 0 0 0.7071067811865476\n";
+        for mode in ["ascii", "binary", "binary_compressed"] {
+            let path = dir.path().join(format!("viewpoint-{mode}.pcd"));
+            let mut bytes = format!("{header}DATA {mode}\n").into_bytes();
+            let mut record = Vec::new();
+            for coordinate in [1.0f32, 0.0, 0.0] {
+                record.extend(coordinate.to_le_bytes());
+            }
+            match mode {
+                "ascii" => bytes.extend(b"1 0 0\n"),
+                "binary" => bytes.extend(record),
+                "binary_compressed" => {
+                    bytes.extend(13u32.to_le_bytes());
+                    bytes.extend(12u32.to_le_bytes());
+                    bytes.push(11); // One LZF literal run of 12 bytes.
+                    bytes.extend(record);
+                }
+                _ => unreachable!(),
+            }
+            std::fs::write(&path, bytes).unwrap();
+            let cloud = super::super::open(&path, 1).unwrap();
+            let xyz = cloud.points[0].xyz;
+            for (actual, expected) in xyz.into_iter().zip([10.0, 21.0, 30.0]) {
+                assert!((actual - expected).abs() < 1e-8, "{mode}: {xyz:?}");
+            }
+        }
+
+        let invalid = dir.path().join("invalid-viewpoint.pcd");
+        std::fs::write(
+            &invalid,
+            "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 1\nVIEWPOINT 0 0 0 0 0 0 0\nDATA ascii\n1 0 0\n",
+        )
+        .unwrap();
+        assert!(super::super::open(&invalid, 1).is_err());
+    }
+
     #[test]
     fn reads_ascii_and_binary() {
         let dir = tempfile::tempdir().unwrap();

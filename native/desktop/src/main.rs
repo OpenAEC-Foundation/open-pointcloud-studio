@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod bag_map;
+mod camera_views;
 mod gpu_viewport;
 mod opencad_properties;
 mod opencad_ribbon;
@@ -16,6 +17,7 @@ mod ui_theme;
 mod view_cube;
 
 use bag_map::{BagMap, MapView, TileKey};
+use camera_views::SavedView;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
 use iced::widget::{
@@ -579,6 +581,10 @@ enum Message {
     ResetCamera,
     CameraPreset(CameraPreset),
     CubeCorner([i8; 3]),
+    ViewName(String),
+    SaveView,
+    RestoreView(usize),
+    DeleteView(usize),
     ShowContextMenu([f32; 2]),
     ContextAction(ContextAction),
     DismissContextMenu,
@@ -641,6 +647,8 @@ struct Studio {
     zoom: f32,
     pan: [f32; 2],
     view_label: &'static str,
+    saved_views: Vec<SavedView>,
+    view_name: String,
     viewport_size: Size,
     ribbon_tab: RibbonTab,
     ui_theme: UiTheme,
@@ -768,6 +776,8 @@ impl Default for Studio {
             zoom: 1.0,
             pan: [0.0, 0.0],
             view_label: "ISOMETRIC",
+            saved_views: camera_views::load(),
+            view_name: String::new(),
             viewport_size: Size::new(915.0, 743.0),
             ribbon_tab: RibbonTab::Home,
             ui_theme: UiTheme::load(),
@@ -2333,6 +2343,91 @@ impl Studio {
                 self.clear_detail();
                 return self.schedule_detail();
             }
+            Message::ViewName(name) => self.view_name = name,
+            Message::SaveView => {
+                let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) else {
+                    self.status = "Open a scan before saving a camera view".into();
+                    return Task::none();
+                };
+                let source = camera_views::source_key(&entry.cloud.path);
+                let existing: Vec<_> = self
+                    .saved_views
+                    .iter()
+                    .filter(|view| view.source == source)
+                    .collect();
+                if existing.len() >= 32 {
+                    self.status = "A scan can have at most 32 saved camera views".into();
+                    return Task::none();
+                }
+                let name = if self.view_name.trim().is_empty() {
+                    (1..=32)
+                        .map(|number| format!("View {number}"))
+                        .find(|name| !existing.iter().any(|view| view.name == *name))
+                        .unwrap()
+                } else {
+                    self.view_name.trim().to_owned()
+                };
+                if name.chars().count() > 64
+                    || existing
+                        .iter()
+                        .any(|view| view.name.eq_ignore_ascii_case(&name))
+                {
+                    self.status =
+                        "Choose a unique camera view name of 64 characters or fewer".into();
+                    return Task::none();
+                }
+                self.saved_views.push(SavedView {
+                    source,
+                    name: name.clone(),
+                    yaw: self.yaw,
+                    pitch: self.pitch,
+                    zoom: self.zoom,
+                    pan: self.pan,
+                });
+                self.view_name.clear();
+                self.status = match camera_views::save(&self.saved_views) {
+                    Ok(()) => format!("Saved camera view {name}"),
+                    Err(error) => format!("Camera view is in memory; saving failed: {error}"),
+                };
+            }
+            Message::RestoreView(index) => {
+                let Some(view) = self.saved_views.get(index).cloned() else {
+                    return Task::none();
+                };
+                let active_source = self
+                    .active
+                    .and_then(|index| self.clouds.get(index))
+                    .map(|entry| camera_views::source_key(&entry.cloud.path));
+                if active_source.as_ref() != Some(&view.source) {
+                    return Task::none();
+                }
+                self.yaw = view.yaw;
+                self.pitch = view.pitch;
+                self.zoom = view.zoom;
+                self.pan = view.pan;
+                self.view_label = "SAVED VIEW";
+                self.status = format!("Restored camera view {}", view.name);
+                self.revision += 1;
+                self.clear_detail();
+                return self.schedule_detail();
+            }
+            Message::DeleteView(index) => {
+                let Some(view) = self.saved_views.get(index) else {
+                    return Task::none();
+                };
+                let active_source = self
+                    .active
+                    .and_then(|index| self.clouds.get(index))
+                    .map(|entry| camera_views::source_key(&entry.cloud.path));
+                if active_source.as_ref() != Some(&view.source) {
+                    return Task::none();
+                }
+                let name = self.saved_views.remove(index).name;
+                self.status = match camera_views::save(&self.saved_views) {
+                    Ok(()) => format!("Deleted camera view {name}"),
+                    Err(error) => format!("Camera view removed in memory; saving failed: {error}"),
+                };
+            }
             Message::ShowContextMenu(point) => self.context_menu = Some(point),
             Message::DismissContextMenu => self.context_menu = None,
             Message::ContextAction(action) => {
@@ -2933,6 +3028,12 @@ impl Studio {
                             "Isometric",
                             Message::CameraPreset(CameraPreset::Isometric),
                             self.view_label == "ISOMETRIC"
+                        ),
+                        tool_button_when(
+                            "Save view",
+                            Message::SaveView,
+                            false,
+                            self.active.is_some(),
                         ),
                     ]
                     .spacing(2)
@@ -3609,6 +3710,58 @@ impl Studio {
             }
         }
         properties = properties
+            .push(opencad_properties::section_header("Camera views"))
+            .push(opencad_properties::property_row(
+                "Yaw / pitch",
+                format!(
+                    "{:.0}° / {:.0}°",
+                    self.yaw.to_degrees(),
+                    self.pitch.to_degrees()
+                ),
+            ))
+            .push(opencad_properties::property_row(
+                "Zoom",
+                format!("{:.3}×", self.zoom),
+            ))
+            .push(
+                container(
+                    row![
+                        text_input("View name", &self.view_name)
+                            .on_input(Message::ViewName)
+                            .size(11)
+                            .padding([3, 5])
+                            .width(Fill),
+                        button("Save")
+                            .on_press_maybe(active_cloud.is_some().then_some(Message::SaveView))
+                            .style(flat_tool_style),
+                    ]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+                )
+                .padding([5, 8]),
+            );
+        let active_source = active_cloud.map(|entry| camera_views::source_key(&entry.cloud.path));
+        for (index, view) in self.saved_views.iter().enumerate() {
+            if active_source.as_ref() != Some(&view.source) {
+                continue;
+            }
+            properties = properties.push(
+                container(
+                    row![
+                        button(text(view.name.as_str()).size(11))
+                            .on_press(Message::RestoreView(index))
+                            .style(flat_tool_style)
+                            .width(Fill),
+                        button("×")
+                            .on_press(Message::DeleteView(index))
+                            .style(flat_tool_style),
+                    ]
+                    .spacing(3),
+                )
+                .padding([2, 8]),
+            );
+        }
+        properties = properties
             .push(opencad_properties::section_header("Section box"))
             .push(
                 container(
@@ -3939,6 +4092,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::ResetCamera => ToolIcon::Fit,
         Message::ZoomToSection => ToolIcon::Fit,
         Message::CameraPreset(preset) => ToolIcon::Camera(*preset),
+        Message::SaveView => ToolIcon::Save,
         Message::ApplyTranslation => ToolIcon::Move,
         Message::ApplyScale => ToolIcon::Scale,
         Message::ToggleBoxSelect => ToolIcon::Select,
@@ -4097,6 +4251,7 @@ enum ToolIcon {
     Undo,
     Redo,
     Camera(CameraPreset),
+    Save,
     Move,
     Scale,
     Decimate,
@@ -4129,6 +4284,7 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Camera(CameraPreset::Isometric) => {
             include_bytes!("../../assets/opencad-icons/view_iso.svg")
         }
+        ToolIcon::Save => include_bytes!("../../assets/opencad-icons/save.svg"),
         ToolIcon::Move => include_bytes!("../../assets/opencad-icons/move.svg"),
         ToolIcon::Scale => include_bytes!("../../assets/opencad-icons/scale.svg"),
         ToolIcon::Decimate => include_bytes!("../../assets/opencad-icons/point.svg"),

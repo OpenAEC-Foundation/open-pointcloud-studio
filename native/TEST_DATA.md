@@ -262,3 +262,13 @@ The native `--section` command was then run on the public 463 MB AHN6 tile with
 output retained the source's compressed point format 7, 42-byte point record,
 0.001 coordinate scales and zero offsets. Its LAS header X range was
 207980.000..207999.999, inside the requested section.
+
+PCD `VIEWPOINT` now rotates and translates every point in ASCII, binary and
+binary-compressed files. A 90° Z-rotation plus translation was checked in all
+three modes; a zero quaternion is rejected. A separate native camera-view
+storage test verifies per-source save/reload and rejects an invalid zoom.
+In the running native GUI, a view of the 45.8-million-point AHN6 scan was
+saved as `View 1`, the camera was switched to Top, then `View 1` restored.
+After restarting the dev build, `View 1` was still listed for that scan.
+Screenshots: [`native-camera-views-saved.png`](../screenshots/native-camera-views-saved.png)
+and [`native-camera-view-restored.png`](../screenshots/native-camera-view-restored.png).
