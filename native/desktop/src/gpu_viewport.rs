@@ -19,6 +19,14 @@ use pointcloud_core::{Bounds, IndexedPoint, MeshGeometry, PointCloud};
 // viewport budget can span multiple draw calls without losing detail.
 const POINTS_PER_BUFFER: usize = 2_000_000;
 
+// At close range the fixed-size sprites become single-pixel specks even when
+// the octree supplies exact points. Grow their screen radius gently so the
+// hemisphere lighting remains legible, without making large user sizes explode.
+fn display_point_radius(point_size: f32, zoom: f32) -> f32 {
+    let close_up = (-zoom.max(0.000_001).log10() * 1.2).clamp(0.0, 4.0);
+    point_size + close_up
+}
+
 fn derived_mesh_normals(mesh: &MeshGeometry) -> Vec<[f32; 3]> {
     let mut normals = vec![[0.0_f64; 3]; mesh.vertices.len()];
     for &[a, b, c] in &mesh.triangles {
@@ -322,7 +330,7 @@ impl shader::Program<Message> for GpuViewport<'_> {
             camera.view = [
                 self.overlay.pan[0],
                 self.overlay.pan[1],
-                self.overlay.point_size,
+                display_point_radius(self.overlay.point_size, self.overlay.zoom),
                 1.0,
             ];
             camera.clip_enabled[1] = if self.overlay.eye_dome { 1.0 } else { 0.0 };
@@ -872,6 +880,15 @@ mod tests {
     use crate::Studio;
 
     #[test]
+    fn close_up_spheres_grow_without_overriding_point_size() {
+        assert_eq!(display_point_radius(2.0, 1.0), 2.0);
+        assert_eq!(display_point_radius(8.0, 2.0), 8.0);
+        assert!(display_point_radius(2.0, 1.0 / 270.0) > 4.0);
+        assert_eq!(display_point_radius(2.0, 0.000_001), 6.0);
+        assert_eq!(display_point_radius(8.0, 0.000_001), 12.0);
+    }
+
+    #[test]
     fn camera_redraw_reuses_geometry_and_data_changes_invalidate_it() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("camera.xyz");
@@ -908,6 +925,11 @@ mod tests {
         let camera_moved = draw(&studio);
         assert!(Arc::ptr_eq(&first.geometry, &camera_moved.geometry));
         assert_ne!(first.camera.right, camera_moved.camera.right);
+
+        studio.zoom = 1.0 / 270.0;
+        let close_up = draw(&studio);
+        assert!(Arc::ptr_eq(&camera_moved.geometry, &close_up.geometry));
+        assert!(close_up.camera.view[2] > camera_moved.camera.view[2]);
 
         studio.point_size = 4.0;
         studio.eye_dome = false;
