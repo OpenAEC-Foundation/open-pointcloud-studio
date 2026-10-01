@@ -38,6 +38,8 @@ pub enum ApiCommand {
     DeleteSelection,
     UndoDelete,
     RedoDelete,
+    Mesh { mode: String, path: PathBuf },
+    CancelMesh,
     Export { path: PathBuf },
     ExportSection { path: PathBuf },
 }

@@ -10,7 +10,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use super::{visit_points, LoadError, Point, PointCloud};
-use crate::mesher::MeshStats;
+use crate::mesher::{MeshProgress, MeshStage, MeshStats};
 
 #[derive(Clone, Copy, Debug)]
 pub struct SurfaceMeshConfig {
@@ -360,7 +360,18 @@ pub fn mesh_surface_obj_where(
     cloud: &PointCloud,
     destination: impl AsRef<Path>,
     config: SurfaceMeshConfig,
+    include: impl FnMut(u64, &Point) -> bool,
+) -> Result<MeshStats, LoadError> {
+    mesh_surface_obj_where_progress(cloud, destination, config, include, |_| Ok(()))
+}
+
+/// Full-stream surface reconstruction with progress and cancellation support.
+pub fn mesh_surface_obj_where_progress(
+    cloud: &PointCloud,
+    destination: impl AsRef<Path>,
+    config: SurfaceMeshConfig,
     mut include: impl FnMut(u64, &Point) -> bool,
+    mut progress: impl FnMut(MeshProgress) -> Result<(), LoadError>,
 ) -> Result<MeshStats, LoadError> {
     let destination = destination.as_ref();
     if destination == cloud.path
@@ -388,9 +399,17 @@ pub fn mesh_surface_obj_where(
     let mut visited = 0u64;
     let mut source_points = 0u64;
     let mut random = 0x7a81_09e6_63d1_c207u64;
+    progress(MeshProgress::new(MeshStage::Reading, 0, cloud.total_points))?;
     visit_points(&cloud.path, &mut |point| {
         let ordinal = visited;
         visited += 1;
+        if visited.is_multiple_of(65_536) {
+            progress(MeshProgress::new(
+                MeshStage::Reading,
+                visited,
+                cloud.total_points,
+            ))?;
+        }
         if !include(ordinal, &point) {
             return Ok(());
         }
@@ -418,18 +437,32 @@ pub fn mesh_surface_obj_where(
         )));
     }
     cloud.validate_source()?;
+    progress(MeshProgress::new(
+        MeshStage::Reading,
+        visited,
+        cloud.total_points,
+    ))?;
     if candidates.len() < 3 {
         return Err(LoadError::InvalidData(
             "too few points for a 3D surface".into(),
         ));
     }
+    progress(MeshProgress::new(MeshStage::Reconstructing, 0, 0))?;
     let vertices = spatially_thin(candidates, config.max_vertices);
+    let reconstruct_total = vertices.len() as u64 * 3;
     let mut indices: Vec<usize> = (0..vertices.len()).collect();
     let mut nodes = Vec::with_capacity(vertices.len());
     let root = build_tree(&mut indices, 0, &vertices, &mut nodes);
     let mut neighborhoods = Vec::with_capacity(vertices.len());
     let mut nearest_distances = Vec::with_capacity(vertices.len());
     for index in 0..vertices.len() {
+        if index.is_multiple_of(1_024) {
+            progress(MeshProgress::new(
+                MeshStage::Reconstructing,
+                index as u64,
+                reconstruct_total,
+            ))?;
+        }
         let mut heap = BinaryHeap::with_capacity(config.neighbors + 1);
         nearest(root, index, config.neighbors, &vertices, &nodes, &mut heap);
         let mut nearby = heap.into_sorted_vec();
@@ -445,14 +478,28 @@ pub fn mesh_surface_obj_where(
     let middle = nearest_distances.len() / 2;
     nearest_distances.select_nth_unstable_by(middle, f64::total_cmp);
     let max_edge_sq = (nearest_distances[middle] * config.max_edge_factor).powi(2);
-    let normals: Vec<_> = neighborhoods
-        .iter()
-        .map(|neighbors| surface_normal(neighbors, &vertices))
-        .collect();
+    let mut normals = Vec::with_capacity(vertices.len());
+    for (index, neighbors) in neighborhoods.iter().enumerate() {
+        if index.is_multiple_of(1_024) {
+            progress(MeshProgress::new(
+                MeshStage::Reconstructing,
+                vertices.len() as u64 + index as u64,
+                reconstruct_total,
+            ))?;
+        }
+        normals.push(surface_normal(neighbors, &vertices));
+    }
     let mut faces = Vec::<[u32; 3]>::new();
     let mut known = HashSet::<[u32; 3]>::new();
     let mut edge_uses = HashMap::<(u32, u32), u8>::new();
     for (center, neighbors) in neighborhoods.iter().enumerate() {
+        if center.is_multiple_of(1_024) {
+            progress(MeshProgress::new(
+                MeshStage::Reconstructing,
+                vertices.len() as u64 * 2 + center as u64,
+                reconstruct_total,
+            ))?;
+        }
         let normal = normals[center];
         let reference = if normal[0].abs() < 0.9 {
             [1.0, 0.0, 0.0]
@@ -526,27 +573,53 @@ pub fn mesh_surface_obj_where(
             "3D surface reconstruction produced no triangles".into(),
         ));
     }
+    progress(MeshProgress::new(
+        MeshStage::Reconstructing,
+        reconstruct_total,
+        reconstruct_total,
+    ))?;
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    let write_total = (vertices.len() + faces.len()) as u64;
+    progress(MeshProgress::new(MeshStage::Writing, 0, write_total))?;
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
         writeln!(writer, "# Open Pointcloud Studio 3D surface mesh")?;
         writeln!(writer, "o Surface")?;
-        for vertex in &vertices {
+        for (index, vertex) in vertices.iter().enumerate() {
             writeln!(
                 writer,
                 "v {:.9} {:.9} {:.9}",
                 vertex[0], vertex[1], vertex[2]
             )?;
+            if (index + 1).is_multiple_of(4_096) {
+                progress(MeshProgress::new(
+                    MeshStage::Writing,
+                    (index + 1) as u64,
+                    write_total,
+                ))?;
+            }
         }
-        for [a, b, c] in &faces {
+        for (index, [a, b, c]) in faces.iter().enumerate() {
             writeln!(writer, "f {} {} {}", a + 1, b + 1, c + 1)?;
+            if (index + 1).is_multiple_of(4_096) {
+                progress(MeshProgress::new(
+                    MeshStage::Writing,
+                    (vertices.len() + index + 1) as u64,
+                    write_total,
+                ))?;
+            }
         }
         writer.flush()?;
     }
+    progress(MeshProgress::new(
+        MeshStage::Writing,
+        write_total,
+        write_total,
+    ))?;
     cloud.validate_source()?;
     temporary
         .persist(destination)
@@ -566,6 +639,37 @@ fn edge_key(a: u32, b: u32) -> (u32, u32) {
 mod tests {
     use super::*;
     use crate::{open, read_obj_mesh};
+
+    #[test]
+    fn cancellation_during_surface_write_preserves_existing_mesh() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("wall.xyz");
+        let target = dir.path().join("wall.obj");
+        let mut data = String::new();
+        for y in 0..8 {
+            for z in 0..8 {
+                data.push_str(&format!("0 {y} {z}\n"));
+            }
+        }
+        fs::write(&source, data).unwrap();
+        fs::write(&target, "previous surface").unwrap();
+        let cloud = open(&source, 1).unwrap();
+        let result = mesh_surface_obj_where_progress(
+            &cloud,
+            &target,
+            SurfaceMeshConfig::default(),
+            |_, _| true,
+            |state| {
+                if state.stage == MeshStage::Writing {
+                    Err(LoadError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(matches!(result, Err(LoadError::Cancelled)));
+        assert_eq!(fs::read(&target).unwrap(), b"previous surface");
+    }
 
     #[test]
     fn spatial_thinning_preserves_sparsely_sampled_regions() {

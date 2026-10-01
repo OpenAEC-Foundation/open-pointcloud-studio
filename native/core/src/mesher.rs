@@ -33,6 +33,30 @@ pub struct MeshStats {
     pub triangles: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeshStage {
+    Reading,
+    Reconstructing,
+    Writing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MeshProgress {
+    pub stage: MeshStage,
+    pub completed: u64,
+    pub total: u64,
+}
+
+impl MeshProgress {
+    pub fn new(stage: MeshStage, completed: u64, total: u64) -> Self {
+        Self {
+            stage,
+            completed,
+            total,
+        }
+    }
+}
+
 /// Stream the complete source, reconstruct a terrain TIN, and atomically save
 /// Wavefront OBJ. Vertical walls and overhangs require a 3D reconstruction mode.
 pub fn mesh_terrain_obj(
@@ -48,7 +72,19 @@ pub fn mesh_terrain_obj_where(
     cloud: &PointCloud,
     destination: impl AsRef<Path>,
     config: MeshConfig,
+    include: impl FnMut(u64, &Point) -> bool,
+) -> Result<MeshStats, LoadError> {
+    mesh_terrain_obj_where_progress(cloud, destination, config, include, |_| Ok(()))
+}
+
+/// Terrain reconstruction with bounded progress callbacks. Returning an error
+/// from the callback stops work before the destination is replaced.
+pub fn mesh_terrain_obj_where_progress(
+    cloud: &PointCloud,
+    destination: impl AsRef<Path>,
+    config: MeshConfig,
     mut include: impl FnMut(u64, &Point) -> bool,
+    mut progress: impl FnMut(MeshProgress) -> Result<(), LoadError>,
 ) -> Result<MeshStats, LoadError> {
     let destination = destination.as_ref();
     if destination == cloud.path
@@ -76,9 +112,17 @@ pub fn mesh_terrain_obj_where(
     let mut cells: BTreeMap<(u32, u32), Point> = BTreeMap::new();
     let mut visited = 0u64;
     let mut source_points = 0u64;
+    progress(MeshProgress::new(MeshStage::Reading, 0, cloud.total_points))?;
     visit_points(&cloud.path, &mut |point| {
         let ordinal = visited;
         visited += 1;
+        if visited.is_multiple_of(65_536) {
+            progress(MeshProgress::new(
+                MeshStage::Reading,
+                visited,
+                cloud.total_points,
+            ))?;
+        }
         if !include(ordinal, &point) {
             return Ok(());
         }
@@ -107,6 +151,12 @@ pub fn mesh_terrain_obj_where(
         )));
     }
     cloud.validate_source()?;
+    progress(MeshProgress::new(
+        MeshStage::Reading,
+        visited,
+        cloud.total_points,
+    ))?;
+    progress(MeshProgress::new(MeshStage::Reconstructing, 0, 1))?;
     let vertices: Vec<Point> = cells.into_values().collect();
     if vertices.len() < 3 {
         return Err(LoadError::InvalidData(
@@ -141,27 +191,49 @@ pub fn mesh_terrain_obj_where(
             "no terrain faces within the allowed edge length".into(),
         ));
     }
+    progress(MeshProgress::new(MeshStage::Reconstructing, 1, 1))?;
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    let write_total = (vertices.len() + faces.len()) as u64;
+    progress(MeshProgress::new(MeshStage::Writing, 0, write_total))?;
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
         writeln!(writer, "# Open Pointcloud Studio terrain mesh")?;
         writeln!(writer, "o Terrain")?;
-        for point in &vertices {
+        for (index, point) in vertices.iter().enumerate() {
             writeln!(
                 writer,
                 "v {:.9} {:.9} {:.9}",
                 point.xyz[0], point.xyz[1], point.xyz[2]
             )?;
+            if (index + 1).is_multiple_of(4_096) {
+                progress(MeshProgress::new(
+                    MeshStage::Writing,
+                    (index + 1) as u64,
+                    write_total,
+                ))?;
+            }
         }
-        for [a, b, c] in &faces {
+        for (index, [a, b, c]) in faces.iter().enumerate() {
             writeln!(writer, "f {a} {b} {c}")?;
+            if (index + 1).is_multiple_of(4_096) {
+                progress(MeshProgress::new(
+                    MeshStage::Writing,
+                    (vertices.len() + index + 1) as u64,
+                    write_total,
+                ))?;
+            }
         }
         writer.flush()?;
     }
+    progress(MeshProgress::new(
+        MeshStage::Writing,
+        write_total,
+        write_total,
+    ))?;
     cloud.validate_source()?;
     temporary
         .persist(destination)
@@ -233,5 +305,37 @@ mod tests {
         .unwrap();
         assert_eq!(stats.vertices, 6);
         assert_eq!(stats.triangles, 2);
+    }
+
+    #[test]
+    fn cancellation_during_write_preserves_existing_mesh() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("terrain.xyz");
+        let destination = directory.path().join("terrain.obj");
+        fs::write(&source, "0 0 0\n1 0 0\n0 1 0\n1 1 0\n").unwrap();
+        fs::write(&destination, "previous mesh").unwrap();
+        let cloud = super::super::open(&source, 1).unwrap();
+        let mut saw_read_complete = false;
+        let result = mesh_terrain_obj_where_progress(
+            &cloud,
+            &destination,
+            MeshConfig {
+                max_vertices: 4,
+                max_edge_cells: 6.0,
+            },
+            |_, _| true,
+            |state| {
+                if state.stage == MeshStage::Reading && state.completed == state.total {
+                    saw_read_complete = true;
+                }
+                if state.stage == MeshStage::Writing {
+                    return Err(LoadError::Cancelled);
+                }
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(LoadError::Cancelled)));
+        assert!(saw_read_complete);
+        assert_eq!(fs::read(&destination).unwrap(), b"previous mesh");
     }
 }

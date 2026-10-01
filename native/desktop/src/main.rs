@@ -4,7 +4,8 @@ use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod bag_map;
@@ -564,6 +565,107 @@ enum MeshMode {
     Surface,
 }
 
+impl MeshMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Terrain => "Terrain",
+            Self::Surface => "3D surface",
+        }
+    }
+}
+
+struct MeshControl {
+    cancelled: AtomicBool,
+    progress: Mutex<pointcloud_core::MeshProgress>,
+}
+
+impl MeshControl {
+    fn new(total: u64) -> Self {
+        Self {
+            cancelled: AtomicBool::new(false),
+            progress: Mutex::new(pointcloud_core::MeshProgress::new(
+                pointcloud_core::MeshStage::Reading,
+                0,
+                total,
+            )),
+        }
+    }
+
+    fn report(
+        &self,
+        progress: pointcloud_core::MeshProgress,
+    ) -> Result<(), pointcloud_core::LoadError> {
+        *self
+            .progress
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = progress;
+        if self.cancelled.load(Ordering::Relaxed) {
+            Err(pointcloud_core::LoadError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn snapshot(&self) -> pointcloud_core::MeshProgress {
+        *self
+            .progress
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+struct MeshJob {
+    mode: MeshMode,
+    path: PathBuf,
+    control: Arc<MeshControl>,
+    started: Instant,
+    api_job_id: Option<String>,
+}
+
+impl MeshJob {
+    fn progress_value(&self) -> Value {
+        let progress = self.control.snapshot();
+        let stage = match progress.stage {
+            pointcloud_core::MeshStage::Reading => "reading",
+            pointcloud_core::MeshStage::Reconstructing => "reconstructing",
+            pointcloud_core::MeshStage::Writing => "writing",
+        };
+        json!({
+            "state": "running",
+            "operation": "mesh",
+            "mode": self.mode.label(),
+            "path": self.path,
+            "stage": stage,
+            "completed": progress.completed,
+            "total": progress.total,
+            "cancel_requested": self.control.cancelled.load(Ordering::Relaxed),
+            "elapsed_seconds": self.started.elapsed().as_secs(),
+        })
+    }
+
+    fn progress_text(&self) -> String {
+        let progress = self.control.snapshot();
+        let stage = match progress.stage {
+            pointcloud_core::MeshStage::Reading => "Reading points",
+            pointcloud_core::MeshStage::Reconstructing => "Reconstructing",
+            pointcloud_core::MeshStage::Writing => "Writing OBJ",
+        };
+        if self.control.cancelled.load(Ordering::Relaxed) {
+            return format!("{}: cancelling…", self.mode.label());
+        }
+        if progress.total == 0 {
+            format!("{}: {stage}…", self.mode.label())
+        } else {
+            let percent = progress
+                .completed
+                .saturating_mul(100)
+                .checked_div(progress.total)
+                .unwrap_or(0);
+            format!("{}: {stage} {percent}%", self.mode.label())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CameraPreset {
     Top,
@@ -661,6 +763,8 @@ enum Message {
             String,
         >,
     ),
+    MeshPoll,
+    CancelMesh,
     ExportMesh,
     MeshExportPathChosen(Arc<MeshGeometry>, PathBuf, bool, Option<PathBuf>),
     MeshExported(Result<(PathBuf, usize, usize), String>),
@@ -804,6 +908,8 @@ struct Studio {
     section_enabled: bool,
     section_export_pending: bool,
     mesh_export_pending: bool,
+    mesh_dialog_pending: bool,
+    mesh_job: Option<MeshJob>,
     section_fit_pending: bool,
     section_reference_bounds: Option<Bounds>,
     section_min_percent: [f64; 3],
@@ -940,6 +1046,8 @@ impl Default for Studio {
             section_enabled: false,
             section_export_pending: false,
             mesh_export_pending: false,
+            mesh_dialog_pending: false,
+            mesh_job: None,
             section_fit_pending: false,
             section_reference_bounds: None,
             section_min_percent: [0.0; 3],
@@ -1015,6 +1123,7 @@ impl Studio {
                         "eye_dome_strength": self.eye_dome_strength,
                         "point_size": self.point_size,
                         "budget": self.budget,
+                        "mesh": self.mesh_job.as_ref().map(MeshJob::progress_value),
                         "api_port": self.api_handle.as_ref().map(|handle| handle.port),
                     }}),
                     Task::none(),
@@ -1319,6 +1428,68 @@ impl Studio {
                     (json!({"ok": true, "status": self.status}), task)
                 }
             }
+            ApiCommand::Mesh { mode, path } => {
+                let mode = match mode.to_ascii_lowercase().as_str() {
+                    "terrain" => Some(MeshMode::Terrain),
+                    "surface" | "3d" => Some(MeshMode::Surface),
+                    _ => None,
+                };
+                if self.mesh_dialog_pending || self.mesh_job.is_some() {
+                    (
+                        json!({"ok": false, "error": "a mesh task is already open or running"}),
+                        Task::none(),
+                    )
+                } else if !path.is_absolute()
+                    || !path
+                        .extension()
+                        .is_some_and(|value| value.eq_ignore_ascii_case("obj"))
+                {
+                    (
+                        json!({"ok": false, "error": "mesh requires an absolute .obj destination"}),
+                        Task::none(),
+                    )
+                } else if let Some(mode) = mode {
+                    if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
+                        let cloud = Arc::clone(&entry.cloud);
+                        let deleted = entry.deleted.as_ref().map(Arc::clone);
+                        let id = self.record_api_job(json!({
+                            "state": "running", "operation": "mesh", "mode": mode.label(), "path": path
+                        }));
+                        let task = self.start_mesh_job(
+                            mode,
+                            cloud,
+                            deleted,
+                            path.clone(),
+                            Some(id.clone()),
+                        );
+                        (
+                            json!({"ok": true, "accepted": true, "job_id": id, "path": path}),
+                            task,
+                        )
+                    } else {
+                        (
+                            json!({"ok": false, "error": "no active cloud"}),
+                            Task::none(),
+                        )
+                    }
+                } else {
+                    (
+                        json!({"ok": false, "error": "mesh mode must be terrain or surface"}),
+                        Task::none(),
+                    )
+                }
+            }
+            ApiCommand::CancelMesh => {
+                if self.mesh_job.is_none() {
+                    (
+                        json!({"ok": false, "error": "no mesh task is running"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::CancelMesh);
+                    (json!({"ok": true, "cancel_requested": true}), task)
+                }
+            }
             ApiCommand::Export { path } => self.api_export(path, false),
             ApiCommand::ExportSection { path } => self.api_export(path, true),
         };
@@ -1429,6 +1600,73 @@ impl Studio {
             );
             (response, task)
         }
+    }
+
+    fn mesh_poll_task() -> Task<Message> {
+        Task::perform(
+            async { tokio::time::sleep(Duration::from_millis(250)).await },
+            |()| Message::MeshPoll,
+        )
+    }
+
+    fn start_mesh_job(
+        &mut self,
+        mode: MeshMode,
+        cloud: Arc<PointCloud>,
+        deleted: Option<Arc<DeletionMask>>,
+        path: PathBuf,
+        api_job_id: Option<String>,
+    ) -> Task<Message> {
+        let remaining = cloud.total_points - deleted.as_ref().map_or(0, |mask| mask.count);
+        let control = Arc::new(MeshControl::new(cloud.total_points));
+        self.mesh_job = Some(MeshJob {
+            mode,
+            path: path.clone(),
+            control: Arc::clone(&control),
+            started: Instant::now(),
+            api_job_id,
+        });
+        self.status = format!(
+            "Meshing {remaining} remaining points; progress and Cancel are available below"
+        );
+        let worker = Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let source = Arc::clone(&cloud);
+                    let result = match mode {
+                        MeshMode::Terrain => pointcloud_core::mesh_terrain_obj_where_progress(
+                            &cloud,
+                            &path,
+                            pointcloud_core::MeshConfig::default(),
+                            |ordinal, _| {
+                                deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
+                            },
+                            |progress| control.report(progress),
+                        ),
+                        MeshMode::Surface => pointcloud_core::mesh_surface_obj_where_progress(
+                            &cloud,
+                            &path,
+                            pointcloud_core::SurfaceMeshConfig::default(),
+                            |ordinal, _| {
+                                deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
+                            },
+                            |progress| control.report(progress),
+                        ),
+                    };
+                    result
+                        .and_then(|stats| {
+                            pointcloud_core::read_obj_mesh(&path)
+                                .map(|mesh| (source, path, stats, Arc::new(mesh)))
+                        })
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result)
+            },
+            move |result| Message::MeshReady(mode, result),
+        );
+        Task::batch([worker, Self::mesh_poll_task()])
     }
 
     fn load(&mut self, path: PathBuf) -> Task<Message> {
@@ -1803,6 +2041,10 @@ impl Studio {
                 }
             }
             Message::MeshRequest(mode) => {
+                if self.mesh_dialog_pending || self.mesh_job.is_some() {
+                    self.status = "A mesh task is already open or running".into();
+                    return Task::none();
+                }
                 if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
                     let stem = entry
                         .cloud
@@ -1819,6 +2061,7 @@ impl Studio {
                     );
                     let cloud = Arc::clone(&entry.cloud);
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
+                    self.mesh_dialog_pending = true;
                     self.status = match mode {
                         MeshMode::Terrain => "Choose where to save the terrain mesh…",
                         MeshMode::Surface => "Choose where to save the 3D surface mesh…",
@@ -1845,71 +2088,80 @@ impl Studio {
                 }
             }
             Message::MeshPathChosen(mode, cloud, deleted, Some(path)) => {
-                let remaining = cloud.total_points - deleted.as_ref().map_or(0, |mask| mask.count);
-                self.status = format!(
-                    "Meshing {remaining} remaining points; the viewport remains responsive…"
-                );
-                return Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            let source = Arc::clone(&cloud);
-                            match mode {
-                                MeshMode::Terrain => pointcloud_core::mesh_terrain_obj_where(
-                                    &cloud,
-                                    &path,
-                                    pointcloud_core::MeshConfig::default(),
-                                    |ordinal, _| {
-                                        deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
-                                    },
-                                ),
-                                MeshMode::Surface => pointcloud_core::mesh_surface_obj_where(
-                                    &cloud,
-                                    &path,
-                                    pointcloud_core::SurfaceMeshConfig::default(),
-                                    |ordinal, _| {
-                                        deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
-                                    },
-                                ),
-                            }
-                            .and_then(|stats| {
-                                pointcloud_core::read_obj_mesh(&path)
-                                    .map(|mesh| (source, path, stats, Arc::new(mesh)))
-                            })
-                            .map_err(|error| error.to_string())
-                        })
-                        .await
-                        .map_err(|error| error.to_string())
-                        .and_then(|result| result)
-                    },
-                    move |result| Message::MeshReady(mode, result),
-                );
+                self.mesh_dialog_pending = false;
+                if self.mesh_job.is_some() {
+                    self.status = "A mesh task is already running".into();
+                    return Task::none();
+                }
+                return self.start_mesh_job(mode, cloud, deleted, path, None);
             }
             Message::MeshPathChosen(_, _, _, None) => {
+                self.mesh_dialog_pending = false;
                 self.status = "Mesh save cancelled".into();
             }
-            Message::MeshReady(mode, result) => match result {
-                Ok((source, path, stats, mesh)) => {
-                    if let Some(entry) = self
-                        .clouds
-                        .iter_mut()
-                        .find(|entry| entry.cloud.same_source_revision(&source))
-                    {
-                        entry.mesh = Some(mesh);
-                        self.status = format!(
-                            "{} mesh displayed: {} vertices, {} triangles from {} points → {}",
-                            match mode {
-                                MeshMode::Terrain => "Terrain",
-                                MeshMode::Surface => "3D surface",
-                            },
-                            stats.vertices,
-                            stats.triangles,
-                            stats.source_points,
-                            path.display()
-                        );
+            Message::MeshPoll => {
+                if let Some(job) = &self.mesh_job {
+                    if let Some(id) = &job.api_job_id {
+                        if let Some(entry) = self.api_jobs.get_mut(id) {
+                            *entry = job.progress_value();
+                        }
+                    }
+                    return Self::mesh_poll_task();
+                }
+            }
+            Message::CancelMesh => {
+                if let Some(job) = &self.mesh_job {
+                    job.control.cancelled.store(true, Ordering::Relaxed);
+                    self.status = format!("Cancelling {} mesh…", job.mode.label());
+                }
+            }
+            Message::MeshReady(mode, result) => {
+                if let Some(job) = self.mesh_job.take() {
+                    if let Some(id) = job.api_job_id {
+                        let state = match &result {
+                            Ok((_, path, stats, _)) => json!({
+                                "state": "complete",
+                                "path": path,
+                                "mode": mode.label(),
+                                "source_points": stats.source_points,
+                                "vertices": stats.vertices,
+                                "triangles": stats.triangles,
+                            }),
+                            Err(error) if error == "Mesh cancelled" => {
+                                json!({"state": "cancelled", "path": job.path})
+                            }
+                            Err(error) => json!({"state": "failed", "error": error}),
+                        };
+                        if let Some(entry) = self.api_jobs.get_mut(&id) {
+                            *entry = state;
+                        }
                     }
                 }
-                Err(error) => self.status = format!("Meshing failed: {error}"),
-            },
+                match result {
+                    Ok((source, path, stats, mesh)) => {
+                        if let Some(entry) = self
+                            .clouds
+                            .iter_mut()
+                            .find(|entry| entry.cloud.same_source_revision(&source))
+                        {
+                            entry.mesh = Some(mesh);
+                            self.status = format!(
+                                "{} mesh displayed: {} vertices, {} triangles from {} points → {}",
+                                mode.label(),
+                                stats.vertices,
+                                stats.triangles,
+                                stats.source_points,
+                                path.display()
+                            );
+                        }
+                    }
+                    Err(error) if error == "Mesh cancelled" => {
+                        self.status =
+                            format!("{} mesh cancelled; output left unchanged", mode.label())
+                    }
+                    Err(error) => self.status = format!("Meshing failed: {error}"),
+                }
+            }
             Message::ExportMesh => {
                 if self.mesh_export_pending {
                     return Task::none();
@@ -4203,11 +4455,20 @@ impl Studio {
                             "Terrain mesh",
                             Message::MeshRequest(MeshMode::Terrain),
                             self.active.is_some()
+                                && self.mesh_job.is_none()
+                                && !self.mesh_dialog_pending
                         ),
                         ribbon_button_when(
                             "3D surface",
                             Message::MeshRequest(MeshMode::Surface),
                             self.active.is_some()
+                                && self.mesh_job.is_none()
+                                && !self.mesh_dialog_pending
+                        ),
+                        ribbon_button_when(
+                            "Cancel mesh",
+                            Message::CancelMesh,
+                            self.mesh_job.is_some()
                         ),
                         ribbon_button_when(
                             "Export mesh",
@@ -4579,6 +4840,27 @@ impl Studio {
         ]
         .spacing(0)
         .width(270);
+        if let Some(job) = &self.mesh_job {
+            let progress = job.control.snapshot();
+            properties = properties
+                .push(opencad_properties::section_header("Mesh progress"))
+                .push(container(text(job.progress_text()).size(11)).padding([6, 8]))
+                .push(
+                    container(iced::widget::progress_bar(
+                        0.0..=1.0,
+                        if progress.total == 0 {
+                            0.0
+                        } else {
+                            progress.completed as f32 / progress.total as f32
+                        },
+                    ))
+                    .padding([2, 8])
+                    .width(Fill),
+                )
+                .push(
+                    container(button("Cancel mesh").on_press(Message::CancelMesh)).padding([5, 8]),
+                );
+        }
         if let Some(entry) = active_cloud {
             for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
                 properties = properties.push(opencad_properties::property_row(
@@ -4993,8 +5275,9 @@ impl Studio {
         ]
         .height(Fill);
         let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
+        let mesh_status = self.mesh_job.as_ref().map(MeshJob::progress_text);
         let status_bar = row![
-            text(&self.status).size(11),
+            text(mesh_status.unwrap_or_else(|| self.status.clone())).size(11),
             text(format!(
                 "{} files  ·  {} points  ·  {} selected",
                 self.clouds.len(),

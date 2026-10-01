@@ -29,11 +29,16 @@ pub use export::{
     ExportFormat,
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
-pub use mesher::{mesh_terrain_obj, mesh_terrain_obj_where, MeshConfig, MeshStats};
+pub use mesher::{
+    mesh_terrain_obj, mesh_terrain_obj_where, mesh_terrain_obj_where_progress, MeshConfig,
+    MeshProgress, MeshStage, MeshStats,
+};
 pub use obj_mesh::{read_obj_mesh, write_obj_mesh, MeshGeometry};
 pub use octree::{IndexConfig, IndexedNode, IndexedPoint, OctreeIndex};
 pub use ply_mesh::read_ply_mesh;
-pub use surface_mesh::{mesh_surface_obj, mesh_surface_obj_where, SurfaceMeshConfig};
+pub use surface_mesh::{
+    mesh_surface_obj, mesh_surface_obj_where, mesh_surface_obj_where_progress, SurfaceMeshConfig,
+};
 
 pub fn read_mesh_geometry(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, LoadError> {
     let path = path.as_ref();
@@ -190,6 +195,7 @@ pub enum LoadError {
     E57(e57::Error),
     UnsupportedFormat(String),
     InvalidData(String),
+    Cancelled,
 }
 
 impl fmt::Display for LoadError {
@@ -200,6 +206,7 @@ impl fmt::Display for LoadError {
             Self::E57(error) => write!(f, "E57 error: {error}"),
             Self::UnsupportedFormat(extension) => write!(f, "Unsupported format: {extension}"),
             Self::InvalidData(reason) => write!(f, "Invalid point cloud: {reason}"),
+            Self::Cancelled => f.write_str("Mesh cancelled"),
         }
     }
 }
