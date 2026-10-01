@@ -281,6 +281,10 @@ ribbon's **Fit stations** action frames their markers together with the
 Two E57 scans share one position; the latest view groups their overlapping
 screen markers as **2 stations** while Properties keeps all four records:
 [`native-e57-scan-positions-grouped.png`](../screenshots/native-e57-scan-positions-grouped.png).
+The expanded Properties list's **Center** action moved Scan 4 to the middle
+of the viewport without changing the -46°/34° orbit angle or 3.510× zoom;
+clicking another station marker then centered that station as well. See
+[`native-e57-center-station.png`](../screenshots/native-e57-center-station.png).
 The same position collection is checked by PTX and PCD parser tests.
 
 The GUI also opened a 22,801-point XYZ grid with **Indexed: No**. Pick point

@@ -580,6 +580,7 @@ enum Message {
     ShowScanPoses(bool),
     ExpandScanPoses(bool),
     FitScanPoses,
+    CenterScanPose(usize, usize),
     Budget(u32),
     FilterGround(bool),
     FilterVegetation(bool),
@@ -2076,6 +2077,35 @@ impl Studio {
                 self.revision += 1;
                 self.clear_detail();
                 self.status = "Point cloud and scanner positions framed".into();
+                return self.schedule_detail();
+            }
+            Message::CenterScanPose(cloud_index, pose_index) => {
+                let (Some(scene), Some(pose)) = (
+                    combined_bounds(&self.clouds),
+                    self.clouds
+                        .get(cloud_index)
+                        .filter(|entry| entry.visible)
+                        .and_then(|entry| entry.cloud.scan_poses.get(pose_index)),
+                ) else {
+                    return Task::none();
+                };
+                let Some(pan) = pan_to_world(
+                    scene,
+                    pose.position,
+                    self.yaw,
+                    self.pitch,
+                    self.zoom,
+                    self.viewport_size,
+                ) else {
+                    self.status =
+                        "Station is behind the current view; rotate the camera first".into();
+                    return Task::none();
+                };
+                self.pan = pan;
+                self.show_scan_poses = true;
+                self.status = format!("Centered on {}", pose.label);
+                self.revision += 1;
+                self.clear_detail();
                 return self.schedule_detail();
             }
             Message::Budget(budget) => {
@@ -3852,11 +3882,19 @@ impl Studio {
                         .padding([4, 8]),
                     );
                 if self.expand_scan_poses {
-                    for pose in &entry.cloud.scan_poses {
+                    for (pose_index, pose) in entry.cloud.scan_poses.iter().enumerate() {
                         properties = properties.push(
                             container(
                                 column![
-                                    text(pose.label.as_str()).size(11),
+                                    row![
+                                        text(pose.label.as_str()).size(11).width(Fill),
+                                        button("Center")
+                                            .on_press_maybe(self.active.map(|cloud_index| {
+                                                Message::CenterScanPose(cloud_index, pose_index)
+                                            }))
+                                            .style(flat_tool_style),
+                                    ]
+                                    .align_y(iced::Alignment::Center),
                                     text(format!(
                                         "{:.3}, {:.3}, {:.3}",
                                         pose.position[0], pose.position[1], pose.position[2]
@@ -4551,6 +4589,23 @@ fn camera_to_frame_bounds(
     Some((zoom, pan))
 }
 
+fn pan_to_world(
+    scene: Bounds,
+    target: [f64; 3],
+    yaw: f32,
+    pitch: f32,
+    zoom: f32,
+    size: Size,
+) -> Option<[f32; 2]> {
+    if size.width <= 0.0 || size.height <= 0.0 {
+        return None;
+    }
+    let projection = Projection::new(scene, yaw, pitch, zoom, [0.0; 2], size.width, size.height);
+    let (x, y, _) = projection.project_unclipped(target)?;
+    let pan = [size.width * 0.5 - x, size.height * 0.5 - y];
+    pan.iter().all(|value| value.is_finite()).then_some(pan)
+}
+
 fn include_bounds(bounds: &mut Option<Bounds>, xyz: [f64; 3]) {
     if let Some(bounds) = bounds {
         for (axis, value) in xyz.into_iter().enumerate() {
@@ -4809,6 +4864,28 @@ fn section_handle_delta(
     })
 }
 
+fn scan_pose_at(
+    clouds: &[CloudEntry],
+    projection: Projection,
+    pointer: UiPoint,
+) -> Option<(usize, usize)> {
+    let mut nearest: Option<(usize, usize, f32)> = None;
+    for (cloud_index, entry) in clouds.iter().enumerate().filter(|(_, entry)| entry.visible) {
+        for (pose_index, pose) in entry.cloud.scan_poses.iter().enumerate() {
+            let Some((x, y, _)) = projection.project(pose.position) else {
+                continue;
+            };
+            let distance = (pointer.x - x).hypot(pointer.y - y);
+            if distance <= 12.0
+                && nearest.is_none_or(|(_, _, previous_distance)| distance < previous_distance)
+            {
+                nearest = Some((cloud_index, pose_index, distance));
+            }
+        }
+    }
+    nearest.map(|(cloud_index, pose_index, _)| (cloud_index, pose_index))
+}
+
 impl canvas::Program<Message> for PointViewport<'_> {
     type State = Option<DragState>;
 
@@ -4866,6 +4943,30 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             mode: DragMode::Section(axis, is_min),
                         });
                         return (event::Status::Captured, None);
+                    }
+                }
+                if self.show_scan_poses && !self.box_select && !self.pick_mode {
+                    if let (Some(overall), Some(position)) =
+                        (combined_bounds(self.clouds), cursor.position_in(bounds))
+                    {
+                        let projection = Projection::new(
+                            overall,
+                            self.yaw,
+                            self.pitch,
+                            self.zoom,
+                            self.pan,
+                            bounds.width,
+                            bounds.height,
+                        );
+                        if let Some((cloud_index, pose_index)) =
+                            scan_pose_at(self.clouds, projection, position)
+                        {
+                            *state = None;
+                            return (
+                                event::Status::Captured,
+                                Some(Message::CenterScanPose(cloud_index, pose_index)),
+                            );
+                        }
                     }
                 }
                 *state = cursor.position_in(bounds).map(|position| DragState {
@@ -5290,6 +5391,25 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         })
                     })
                 })
+                || (self.show_scan_poses && !self.box_select && !self.pick_mode)
+                    && cursor.position_in(bounds).is_some_and(|point| {
+                        combined_bounds(self.clouds).is_some_and(|overall| {
+                            scan_pose_at(
+                                self.clouds,
+                                Projection::new(
+                                    overall,
+                                    self.yaw,
+                                    self.pitch,
+                                    self.zoom,
+                                    self.pan,
+                                    bounds.width,
+                                    bounds.height,
+                                ),
+                                point,
+                            )
+                            .is_some()
+                        })
+                    })
             {
                 mouse::Interaction::Pointer
             } else if self.box_select {
@@ -5480,6 +5600,21 @@ mod section_box_tests {
 #[cfg(test)]
 mod scan_marker_tests {
     use super::*;
+
+    #[test]
+    fn center_station_keeps_camera_orientation_and_zoom() {
+        let scene = Bounds {
+            min: [0.0; 3],
+            max: [100.0; 3],
+        };
+        let target = [70.0, 80.0, 20.0];
+        let size = Size::new(900.0, 700.0);
+        let pan = pan_to_world(scene, target, -0.8, 0.6, 2.0, size).unwrap();
+        let projection = Projection::new(scene, -0.8, 0.6, 2.0, pan, size.width, size.height);
+        let (x, y, _) = projection.project(target).unwrap();
+        assert!((x - size.width * 0.5).abs() < 0.01);
+        assert!((y - size.height * 0.5).abs() < 0.01);
+    }
 
     #[test]
     fn nearby_scan_positions_share_one_marker_and_distant_ones_remain_distinct() {
