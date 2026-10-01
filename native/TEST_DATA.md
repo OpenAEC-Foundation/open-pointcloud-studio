@@ -58,6 +58,16 @@ indexes and rendered a combined 79,998-point LOD; see
 An exact world box across the first two tile boundaries selected 5,365 and
 6,416 points respectively (11,781 total), with zero from the third tile.
 
+The same three indexed tiles were used to check deep-zoom LOD allocation at
+0.08046× zoom. An equal split of the 80,000-point budget rendered 32,810
+points because two tiles could supply only 2,048 and 4,096 visible points.
+Weighting by projected viewport coverage and returning unused capacity to the
+tile under the camera rendered all 80,000 points (73,856 from that tile).
+After a 100 × 40 pixel pan, an initial 41,000–42,000-point sample appeared after
+about 0.27 seconds and the full 80,000-point refinement after about 0.60 seconds on
+this development machine. The final view is in
+[`native-ahn6-progressive-lod-final.png`](../screenshots/native-ahn6-progressive-lod-final.png).
+
 On 1 October 2026, the native GUI mesher reported reading progress on the
 45,839,678-point AHN6 tile while the viewport remained responsive. Cancelling
 after more than two million points stopped the job and preserved an existing

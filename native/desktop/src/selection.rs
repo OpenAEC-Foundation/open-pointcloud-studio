@@ -297,10 +297,9 @@ impl Projection {
         Some((x as f32, y as f32, depth))
     }
 
-    pub fn screen_span(self, bounds: Bounds) -> Option<f32> {
+    fn projected_extents(self, bounds: Bounds) -> Option<[f32; 4]> {
         let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
         let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
-        let mut projected = 0usize;
         for corner in 0..8 {
             let xyz = std::array::from_fn(|axis| {
                 if corner & (1 << axis) == 0 {
@@ -315,17 +314,34 @@ impl Projection {
                     max_x = max_x.max(x);
                     min_y = min_y.min(y);
                     max_y = max_y.max(y);
-                    projected += 1;
                 }
             }
         }
-        if projected == 0 {
+        min_x.is_finite().then_some([min_x, max_x, min_y, max_y])
+    }
+
+    pub fn screen_span(self, bounds: Bounds) -> Option<f32> {
+        let Some([min_x, max_x, min_y, max_y]) = self.projected_extents(bounds) else {
             return Some(f32::MAX);
-        }
+        };
         if max_x < 0.0 || min_x > self.width as f32 || max_y < 0.0 || min_y > self.height as f32 {
             return None;
         }
         Some((max_x - min_x).max(max_y - min_y).max(1.0))
+    }
+
+    /// Pixel area covered by a projected node after clipping to the viewport.
+    /// Used to share a bounded LOD budget between open scans.
+    pub fn screen_coverage(self, bounds: Bounds) -> Option<f32> {
+        let Some([min_x, max_x, min_y, max_y]) = self.projected_extents(bounds) else {
+            return Some((self.width * self.height).max(1.0) as f32);
+        };
+        if max_x < 0.0 || min_x > self.width as f32 || max_y < 0.0 || min_y > self.height as f32 {
+            return None;
+        }
+        let width = (max_x.min(self.width as f32) - min_x.max(0.0)).max(0.0);
+        let height = (max_y.min(self.height as f32) - min_y.max(0.0)).max(0.0);
+        Some((width * height).max(1.0))
     }
 }
 
@@ -1088,7 +1104,9 @@ mod tests {
         let zoomed = Projection::new(bounds, 0.0, 0.0, 0.1, [0.0; 2], 800.0, 600.0);
         let panned = Projection::new(bounds, 0.0, 0.0, 1.0, [2_000.0, 0.0], 800.0, 600.0);
         assert!(zoomed.screen_span(node).unwrap() > overview.screen_span(node).unwrap());
+        assert!(zoomed.screen_coverage(node).unwrap() > overview.screen_coverage(node).unwrap());
         assert!(panned.screen_span(node).is_none());
+        assert!(panned.screen_coverage(node).is_none());
     }
 
     #[test]

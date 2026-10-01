@@ -979,6 +979,7 @@ enum Message {
     CachedIndexReady(Arc<PointCloud>, Result<Option<Arc<OctreeIndex>>, String>),
     LoadDetail,
     RefreshDetail(u64),
+    DetailPreview(u64, Vec<(usize, Vec<IndexedPoint>)>),
     DetailReady(u64, Result<Vec<(usize, Vec<IndexedPoint>)>, String>),
     ExportFormat(ExportFormat),
     Exported(Result<PathBuf, String>),
@@ -1144,6 +1145,90 @@ struct CloudEntry {
     auto_index_queued: bool,
     index_building: bool,
     detail_points: Option<Arc<[IndexedPoint]>>,
+}
+
+struct LodRefinement {
+    sources: Vec<(usize, Arc<OctreeIndex>, CloudTransform, f32)>,
+    source_weights: Vec<(f32, usize)>,
+    requested: Vec<usize>,
+    sampled_limits: Vec<usize>,
+    samples: Vec<Vec<IndexedPoint>>,
+    section: Option<Bounds>,
+    projection: Projection,
+    cancel: Arc<AtomicBool>,
+    budget: usize,
+}
+
+impl LodRefinement {
+    fn sample_pass(&mut self) -> Result<(), String> {
+        let workers: Vec<_> = self
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(slot, _)| self.requested[*slot] > self.sampled_limits[*slot])
+            .map(|(slot, (_, tree, transform, _))| {
+                let tree = Arc::clone(tree);
+                let transform = *transform;
+                let cancel = Arc::clone(&self.cancel);
+                let limit = self.requested[slot];
+                let section = self.section;
+                let projection = self.projection;
+                std::thread::spawn(move || {
+                    tree.sample_lod_indexed_cancellable(
+                        limit,
+                        |node_bounds| {
+                            let node_bounds = transform.bounds(node_bounds);
+                            if section.is_some_and(|clip| {
+                                (0..3).any(|axis| {
+                                    node_bounds.max[axis] < clip.min[axis]
+                                        || node_bounds.min[axis] > clip.max[axis]
+                                })
+                            }) {
+                                return None;
+                            }
+                            projection.screen_span(node_bounds)
+                        },
+                        || cancel.load(Ordering::Relaxed),
+                    )
+                    .map(|points| (slot, points))
+                    .map_err(|error| error.to_string())
+                })
+            })
+            .collect();
+        for worker in workers {
+            let (slot, points) = worker
+                .join()
+                .map_err(|_| "detail worker panicked".to_string())??;
+            self.samples[slot] = points;
+            self.sampled_limits[slot] = self.requested[slot];
+        }
+        Ok(())
+    }
+
+    fn next_limits(&self) -> Option<Vec<usize>> {
+        rebalance_lod_limits(
+            self.budget,
+            &self.source_weights,
+            &self.requested,
+            &self.samples.iter().map(Vec::len).collect::<Vec<_>>(),
+        )
+    }
+
+    fn snapshot(&self) -> Vec<(usize, Vec<IndexedPoint>)> {
+        self.sources
+            .iter()
+            .zip(&self.samples)
+            .map(|((index, _, _, _), points)| (*index, points.clone()))
+            .collect()
+    }
+
+    fn finish(self) -> Vec<(usize, Vec<IndexedPoint>)> {
+        self.sources
+            .into_iter()
+            .zip(self.samples)
+            .map(|((index, _, _, _), points)| (index, points))
+            .collect()
+    }
 }
 
 struct CentroidCache {
@@ -3947,7 +4032,16 @@ impl Studio {
                     return Task::none();
                 };
                 let section = self.section_bounds();
-                let sources: Vec<_> = self
+                let projection = Projection::new(
+                    bounds,
+                    self.yaw,
+                    self.pitch,
+                    self.zoom,
+                    self.pan,
+                    self.viewport_size.width,
+                    self.viewport_size.height,
+                );
+                let indexed_sources: Vec<_> = self
                     .clouds
                     .iter()
                     .enumerate()
@@ -3962,20 +4056,37 @@ impl Studio {
                             .flatten()
                     })
                     .collect();
-                if sources.is_empty() {
+                if indexed_sources.is_empty() {
                     self.status = "Build an octree for a visible cloud first".into();
                     return Task::none();
                 }
-                let projection = Projection::new(
-                    bounds,
-                    self.yaw,
-                    self.pitch,
-                    self.zoom,
-                    self.pan,
-                    self.viewport_size.width,
-                    self.viewport_size.height,
-                );
-                let limit = (self.budget as usize / sources.len()).max(1);
+                let sources: Vec<_> = indexed_sources
+                    .into_iter()
+                    .filter_map(|(index, tree, transform)| {
+                        let coverage = source_lod_coverage(
+                            projection,
+                            transform.bounds(tree.root.bounds),
+                            section,
+                        )?;
+                        Some((index, tree, transform, coverage))
+                    })
+                    .collect();
+                if sources.is_empty() {
+                    self.detail_loaded_revision = Some(self.revision);
+                    self.status = "No indexed cloud intersects the current view".into();
+                    return Task::none();
+                }
+                let budget = self.budget as usize;
+                let source_weights: Vec<_> = sources
+                    .iter()
+                    .map(|(_, tree, _, coverage)| {
+                        (
+                            *coverage,
+                            usize::try_from(tree.root.total_points).unwrap_or(usize::MAX),
+                        )
+                    })
+                    .collect();
+                let limits = distribute_lod_budget(budget, &source_weights);
                 let revision = self.revision;
                 let cancel = Arc::new(AtomicBool::new(false));
                 self.detail_cancel = Arc::clone(&cancel);
@@ -3986,50 +4097,49 @@ impl Studio {
                         sources.len()
                     );
                 }
-                return Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            let workers: Vec<_> = sources
-                                .into_iter()
-                                .map(|(index, tree, transform)| {
-                                    let cancel = Arc::clone(&cancel);
-                                    std::thread::spawn(move || {
-                                        tree.sample_lod_indexed_cancellable(
-                                            limit,
-                                            |node_bounds| {
-                                                let node_bounds = transform.bounds(node_bounds);
-                                                if section.is_some_and(|clip| {
-                                                    (0..3).any(|axis| {
-                                                        node_bounds.max[axis] < clip.min[axis]
-                                                            || node_bounds.min[axis]
-                                                                > clip.max[axis]
-                                                    })
-                                                }) {
-                                                    return None;
-                                                }
-                                                projection.screen_span(node_bounds)
-                                            },
-                                            || cancel.load(Ordering::Relaxed),
-                                        )
-                                        .map(|points| (index, points))
-                                        .map_err(|error| error.to_string())
-                                    })
-                                })
-                                .collect();
-                            workers
-                                .into_iter()
-                                .map(|worker| {
-                                    worker
-                                        .join()
-                                        .map_err(|_| "detail worker panicked".to_string())?
-                                })
-                                .collect::<Result<Vec<_>, String>>()
+                let refinement = LodRefinement {
+                    sampled_limits: vec![0; sources.len()],
+                    samples: vec![Vec::new(); sources.len()],
+                    sources,
+                    source_weights,
+                    requested: limits,
+                    section,
+                    projection,
+                    cancel,
+                    budget,
+                };
+                let stream =
+                    iced::futures::stream::unfold(Some((refinement, 0u8)), |state| async move {
+                        let (refinement, pass) = state?;
+                        let outcome = tokio::task::spawn_blocking(move || {
+                            let mut refinement = refinement;
+                            let result = refinement.sample_pass();
+                            (refinement, result)
                         })
-                        .await
-                        .map_err(|error| error.to_string())?
-                    },
-                    move |result| Message::DetailReady(revision, result),
-                );
+                        .await;
+                        match outcome {
+                            Ok((mut refinement, Ok(()))) => {
+                                if pass < 2 {
+                                    if let Some(next) = refinement.next_limits() {
+                                        let preview = refinement.snapshot();
+                                        refinement.requested = next;
+                                        return Some((
+                                            Ok((false, preview)),
+                                            Some((refinement, pass + 1)),
+                                        ));
+                                    }
+                                }
+                                Some((Ok((true, refinement.finish())), None))
+                            }
+                            Ok((_, Err(error))) => Some((Err(error), None)),
+                            Err(error) => Some((Err(error.to_string()), None)),
+                        }
+                    });
+                return Task::run(stream, move |result| match result {
+                    Ok((false, details)) => Message::DetailPreview(revision, details),
+                    Ok((true, details)) => Message::DetailReady(revision, Ok(details)),
+                    Err(error) => Message::DetailReady(revision, Err(error)),
+                });
             }
             Message::RefreshDetail(revision) => {
                 if revision == self.revision
@@ -4037,6 +4147,20 @@ impl Studio {
                     && self.detail_loaded_revision != Some(revision)
                 {
                     return self.update(Message::LoadDetail);
+                }
+            }
+            Message::DetailPreview(revision, details) => {
+                if revision == self.revision {
+                    let mut count = 0usize;
+                    for (index, points) in details {
+                        count += points.len();
+                        if let Some(entry) = self.clouds.get_mut(index) {
+                            entry.detail_points = Some(points.into());
+                        }
+                    }
+                    if !self.section_export_pending {
+                        self.status = format!("Viewport LOD: {count} points; adding detail…");
+                    }
                 }
             }
             Message::DetailReady(revision, result) => {
@@ -7162,6 +7286,135 @@ fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
     overall
 }
 
+fn source_lod_coverage(
+    projection: Projection,
+    bounds: Bounds,
+    section: Option<Bounds>,
+) -> Option<f32> {
+    let visible_bounds = if let Some(section) = section {
+        let clipped = Bounds {
+            min: std::array::from_fn(|axis| bounds.min[axis].max(section.min[axis])),
+            max: std::array::from_fn(|axis| bounds.max[axis].min(section.max[axis])),
+        };
+        if (0..3).any(|axis| clipped.min[axis] > clipped.max[axis]) {
+            return None;
+        }
+        clipped
+    } else {
+        bounds
+    };
+    projection.screen_coverage(visible_bounds)
+}
+
+/// Reserve a small sample for each visible scan, then share the remaining
+/// viewport budget by on-screen coverage. Reassign quota left by small scans.
+fn distribute_lod_budget(budget: usize, sources: &[(f32, usize)]) -> Vec<usize> {
+    let mut allocated = vec![0usize; sources.len()];
+    if sources.is_empty() || budget == 0 {
+        return allocated;
+    }
+    let available = sources
+        .iter()
+        .fold(0usize, |sum, (_, capacity)| sum.saturating_add(*capacity));
+    let mut remaining = budget.min(available);
+    let reserve = if remaining >= sources.len() {
+        (remaining / sources.len() / 16).clamp(1, 1_024)
+    } else {
+        0
+    };
+    for (allocation, (_, capacity)) in allocated.iter_mut().zip(sources) {
+        let initial = reserve.min(*capacity).min(remaining);
+        *allocation = initial;
+        remaining -= initial;
+    }
+    while remaining > 0 {
+        let active: Vec<_> = sources
+            .iter()
+            .enumerate()
+            .filter(|(index, (_, capacity))| allocated[*index] < *capacity)
+            .map(|(index, (coverage, _))| {
+                (
+                    index,
+                    f64::from(if coverage.is_finite() {
+                        coverage.max(1.0)
+                    } else {
+                        1.0
+                    }),
+                )
+            })
+            .collect();
+        if active.is_empty() {
+            break;
+        }
+        let weight_sum: f64 = active.iter().map(|(_, weight)| weight).sum();
+        let shares: Vec<_> = active
+            .iter()
+            .map(|(index, weight)| (*index, remaining as f64 * weight / weight_sum))
+            .collect();
+        let mut granted = 0usize;
+        for (index, share) in &shares {
+            let add = (*share as usize).min(sources[*index].1 - allocated[*index]);
+            allocated[*index] += add;
+            granted += add;
+        }
+        remaining -= granted;
+        if remaining == 0 {
+            break;
+        }
+        let mut remainders = shares;
+        remainders.sort_by(|a, b| b.1.fract().total_cmp(&a.1.fract()));
+        for (index, _) in remainders {
+            if remaining == 0 {
+                break;
+            }
+            if allocated[index] < sources[index].1 {
+                allocated[index] += 1;
+                remaining -= 1;
+                granted += 1;
+            }
+        }
+        if granted == 0 {
+            break;
+        }
+    }
+    allocated
+}
+
+fn rebalance_lod_limits(
+    budget: usize,
+    sources: &[(f32, usize)],
+    requested: &[usize],
+    returned: &[usize],
+) -> Option<Vec<usize>> {
+    let unused = budget.saturating_sub(returned.iter().sum());
+    if unused == 0 {
+        return None;
+    }
+    let expandable: Vec<_> = sources
+        .iter()
+        .enumerate()
+        .filter(|(index, (_, capacity))| {
+            returned[*index] >= requested[*index] && requested[*index] < *capacity
+        })
+        .map(|(index, (coverage, capacity))| (index, *coverage, capacity - requested[index]))
+        .collect();
+    if expandable.is_empty() {
+        return None;
+    }
+    let extras = distribute_lod_budget(
+        unused,
+        &expandable
+            .iter()
+            .map(|(_, coverage, capacity)| (*coverage, *capacity))
+            .collect::<Vec<_>>(),
+    );
+    let mut next = requested.to_vec();
+    for ((index, _, _), extra) in expandable.into_iter().zip(extras) {
+        next[index] += extra;
+    }
+    (next != requested).then_some(next)
+}
+
 fn loaded_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
     let mut overall: Option<Bounds> = None;
     for entry in clouds {
@@ -8609,8 +8862,89 @@ mod editing_tests {
 }
 
 #[cfg(test)]
+mod lod_budget_tests {
+    use super::*;
+
+    #[test]
+    fn visible_scan_gets_most_of_budget_and_small_scan_returns_unused_quota() {
+        let shares = distribute_lod_budget(
+            80_000,
+            &[(900.0, 100_000), (50.0, 100_000), (50.0, 100_000)],
+        );
+        assert_eq!(shares.iter().sum::<usize>(), 80_000);
+        assert!(shares[0] > 70_000, "{shares:?}");
+        assert!(shares[1] > 0 && shares[2] > 0);
+
+        let capped = distribute_lod_budget(80_000, &[(900.0, 1_000), (100.0, 100_000)]);
+        assert_eq!(capped, vec![1_000, 79_000]);
+
+        let weights = [(45.0, 100_000), (30.0, 100_000), (25.0, 100_000)];
+        let requested = distribute_lod_budget(80_000, &weights);
+        let returned = [requested[0], 2_048, 4_096];
+        let next = rebalance_lod_limits(80_000, &weights, &requested, &returned).unwrap();
+        assert!(next[0] > 70_000, "{next:?}");
+        assert_eq!(next[1], requested[1]);
+        assert_eq!(next[2], requested[2]);
+    }
+
+    #[test]
+    fn section_and_camera_cull_sources_before_budgeting() {
+        let scene = Bounds {
+            min: [0.0; 3],
+            max: [100.0; 3],
+        };
+        let projection = Projection::new(scene, 0.0, 0.0, 1.0, [0.0; 2], 800.0, 600.0);
+        let offscreen = Projection::new(scene, 0.0, 0.0, 1.0, [2_000.0, 0.0], 800.0, 600.0);
+        assert!(source_lod_coverage(projection, scene, None).unwrap() > 0.0);
+        assert!(source_lod_coverage(offscreen, scene, None).is_none());
+        let outside = Bounds {
+            min: [200.0; 3],
+            max: [300.0; 3],
+        };
+        assert!(source_lod_coverage(projection, scene, Some(outside)).is_none());
+    }
+}
+
+#[cfg(test)]
 mod lod_transition_tests {
     use super::*;
+
+    #[test]
+    fn progressive_preview_keeps_request_pending_and_ignores_stale_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("scan.xyz");
+        std::fs::write(&source, "0 0 0\n1 0 0\n2 0 0\n3 0 0\n").unwrap();
+        let cloud = pointcloud_core::open(&source, 4).unwrap();
+        let first = IndexedPoint {
+            point: cloud.points[0],
+            ordinal: 0,
+        };
+        let second = IndexedPoint {
+            point: cloud.points[1],
+            ordinal: 1,
+        };
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::new(cloud))));
+        studio.detail_pending = true;
+        let revision = studio.revision;
+
+        let _ = studio.update(Message::DetailPreview(revision, vec![(0, vec![first])]));
+        assert!(studio.detail_pending);
+        assert_ne!(studio.detail_loaded_revision, Some(revision));
+        assert_eq!(studio.clouds[0].view_records().next().unwrap().ordinal, 0);
+
+        studio.revision += 1;
+        let _ = studio.update(Message::DetailPreview(revision, vec![(0, vec![second])]));
+        assert_eq!(studio.clouds[0].view_records().next().unwrap().ordinal, 0);
+        let current_revision = studio.revision;
+        let _ = studio.update(Message::DetailReady(
+            current_revision,
+            Ok(vec![(0, vec![second])]),
+        ));
+        assert!(!studio.detail_pending);
+        assert_eq!(studio.detail_loaded_revision, Some(current_revision));
+        assert_eq!(studio.clouds[0].view_records().next().unwrap().ordinal, 1);
+    }
 
     #[test]
     fn drag_release_starts_current_lod_without_a_second_debounced_request() {
