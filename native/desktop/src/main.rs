@@ -756,6 +756,12 @@ enum Message {
     Decimate,
     ThinPercent(u8),
     Thin,
+    ThinReady {
+        source: Arc<PointCloud>,
+        baseline: Option<Arc<DeletionMask>>,
+        percent: u8,
+        result: Result<Arc<SelectionMask>, String>,
+    },
     MeshRequest(MeshMode),
     MeshPathChosen(
         MeshMode,
@@ -889,6 +895,7 @@ struct Studio {
     export_format: ExportFormat,
     decimation_stride: u64,
     thin_percent: u8,
+    thin_pending: bool,
     translate_x: String,
     translate_y: String,
     translate_z: String,
@@ -1020,6 +1027,7 @@ impl Default for Studio {
             export_format: ExportFormat::PlyBinary,
             decimation_stride: 10,
             thin_percent: 50,
+            thin_pending: false,
             translate_x: "0".into(),
             translate_y: "0".into(),
             translate_z: "0".into(),
@@ -2702,36 +2710,112 @@ impl Studio {
             Message::DecimationStride(stride) => self.decimation_stride = stride,
             Message::ThinPercent(percent) => self.thin_percent = percent,
             Message::Thin => {
-                if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
-                    let format = self.export_format;
-                    let percent = self.thin_percent;
-                    let remaining = entry.remaining_count();
-                    let stem = entry
-                        .cloud
-                        .path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("pointcloud");
-                    let suggestion = format!("{stem}-thin-{percent}pct.{}", format.extension());
-                    let cloud = Arc::clone(&entry.cloud);
-                    let deleted = entry.deleted.as_ref().map(Arc::clone);
-                    self.status =
-                        format!("Choose output for keeping {percent}% of {remaining} points…");
-                    return save_task(suggestion, format, move |path| {
-                        pointcloud_core::export_thin_percent_where(
-                            &cloud,
-                            &path,
-                            format,
-                            remaining,
-                            percent,
-                            |ordinal, _| {
-                                deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
-                            },
-                        )
-                        .map(|_| path)
-                        .map_err(|error| error.to_string())
-                    });
+                if self.thin_pending {
+                    self.status = "Thinning is already in progress".into();
+                    return Task::none();
                 }
+                if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
+                    let source = Arc::clone(&entry.cloud);
+                    let baseline = entry.deleted.as_ref().map(Arc::clone);
+                    let percent = self.thin_percent;
+                    self.thin_pending = true;
+                    self.status = format!(
+                        "Keeping {percent}% of {} points in the open view…",
+                        entry.remaining_count()
+                    );
+                    return Task::perform(
+                        async move {
+                            let worker_source = Arc::clone(&source);
+                            let worker_baseline = baseline.as_ref().map(Arc::clone);
+                            let result = tokio::task::spawn_blocking(move || {
+                                SelectionMask::thin_removed(
+                                    worker_source.total_points,
+                                    worker_baseline.as_deref(),
+                                    percent,
+                                )
+                                .map(Arc::new)
+                            })
+                            .await
+                            .map_err(|error| error.to_string())
+                            .and_then(|result| result);
+                            (source, baseline, percent, result)
+                        },
+                        |(source, baseline, percent, result)| Message::ThinReady {
+                            source,
+                            baseline,
+                            percent,
+                            result,
+                        },
+                    );
+                }
+            }
+            Message::ThinReady {
+                source,
+                baseline,
+                percent,
+                result,
+            } => {
+                self.thin_pending = false;
+                let Some(entry) = self
+                    .clouds
+                    .iter_mut()
+                    .find(|entry| Arc::ptr_eq(&entry.cloud, &source))
+                else {
+                    self.status = "Thin cancelled: source is no longer open".into();
+                    return Task::none();
+                };
+                let same_baseline = match (&entry.deleted, &baseline) {
+                    (None, None) => true,
+                    (Some(current), Some(original)) => Arc::ptr_eq(current, original),
+                    _ => false,
+                };
+                if !same_baseline {
+                    self.status =
+                        "Thin cancelled: the point cloud changed during processing".into();
+                    return Task::none();
+                }
+                let mask = match result {
+                    Ok(mask) if mask.count > 0 => mask,
+                    Ok(_) => {
+                        self.status = "All visible points are already kept".into();
+                        return Task::none();
+                    }
+                    Err(error) => {
+                        self.status = format!("Thin failed: {error}");
+                        return Task::none();
+                    }
+                };
+                let mut deleted = match entry.deleted.as_deref() {
+                    Some(mask) => mask.clone(),
+                    None => match DeletionMask::new(source.total_points) {
+                        Ok(mask) => mask,
+                        Err(error) => {
+                            self.status = format!("Thin failed: {error}");
+                            return Task::none();
+                        }
+                    },
+                };
+                let removed = match deleted.apply(&mask) {
+                    Ok(count) => count,
+                    Err(error) => {
+                        self.status = format!("Thin failed: {error}");
+                        return Task::none();
+                    }
+                };
+                entry.deleted = Some(Arc::new(deleted));
+                entry.selection = None;
+                self.undo_deletions.push(EditBatch {
+                    members: vec![(source, mask)],
+                });
+                if self.undo_deletions.len() > 8 {
+                    self.undo_deletions.remove(0);
+                }
+                self.redo_deletions.clear();
+                self.revision += 1;
+                self.status = format!(
+                    "Kept {percent}% of the open cloud; hidden {removed} points. Undo restores them"
+                );
+                return self.schedule_detail();
             }
             Message::Decimate => {
                 if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
@@ -4489,7 +4573,15 @@ impl Studio {
                             slider(1..=100, self.thin_percent, Message::ThinPercent).width(110),
                         ]
                         .spacing(7),
-                        ribbon_button_when("Apply", Message::Thin, self.active.is_some()),
+                        ribbon_button_when(
+                            if self.thin_pending {
+                                "Working…"
+                            } else {
+                                "Apply"
+                            },
+                            Message::Thin,
+                            self.active.is_some() && !self.thin_pending,
+                        ),
                     ]
                     .spacing(6)
                     .align_y(iced::Alignment::Center)

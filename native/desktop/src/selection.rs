@@ -52,6 +52,45 @@ impl SelectionMask {
         mask.insert(record.ordinal, record.point, &mut 0);
         Ok(mask)
     }
+
+    /// Mark an exact, evenly distributed fraction of the currently visible
+    /// source ordinals for removal without reading or copying point records.
+    pub fn thin_removed(
+        total_points: u64,
+        deleted: Option<&DeletionMask>,
+        percent: u8,
+    ) -> Result<Self, String> {
+        let expected_words = usize::try_from(total_points.div_ceil(64))
+            .map_err(|_| "point count exceeds address space")?;
+        if !(1..=100).contains(&percent)
+            || deleted.is_some_and(|mask| mask.bits.len() != expected_words)
+        {
+            return Err("invalid thin percentage or deletion mask".into());
+        }
+        let remaining = total_points - deleted.map_or(0, |mask| mask.count);
+        let target = if remaining == 0 {
+            0
+        } else {
+            ((u128::from(remaining) * u128::from(percent) + 50) / 100) as u64
+        }
+        .max(u64::from(remaining > 0))
+        .min(remaining);
+        let mut removed = Self::new(total_points)?;
+        let mut seen = 0u64;
+        for ordinal in 0..total_points {
+            if deleted.is_some_and(|mask| mask.contains(ordinal)) {
+                continue;
+            }
+            let before = u128::from(seen) * u128::from(target) / u128::from(remaining);
+            seen += 1;
+            let after = u128::from(seen) * u128::from(target) / u128::from(remaining);
+            if after == before {
+                removed.bits[(ordinal / 64) as usize] |= 1u64 << (ordinal % 64);
+                removed.count += 1;
+            }
+        }
+        Ok(removed)
+    }
 }
 
 /// Non-destructive edit state keyed by the original file's point ordinals.
@@ -622,6 +661,39 @@ fn select_one(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn thinning_is_exact_and_undo_preserves_earlier_deletions() {
+        let original = SelectionMask::single(
+            101,
+            IndexedPoint {
+                point: Point {
+                    xyz: [0.0; 3],
+                    rgb: None,
+                    intensity: None,
+                    classification: None,
+                },
+                ordinal: 7,
+            },
+        )
+        .unwrap();
+        let mut deleted = DeletionMask::new(101).unwrap();
+        deleted.apply(&original).unwrap();
+        let removed = SelectionMask::thin_removed(101, Some(&deleted), 10).unwrap();
+        assert_eq!(removed.count, 90);
+        assert!(!removed.contains(7));
+        assert_eq!(deleted.apply(&removed).unwrap(), 90);
+        assert_eq!(deleted.count, 91);
+        assert_eq!(deleted.undo(&removed).unwrap(), 90);
+        assert_eq!(deleted.count, 1);
+        assert!(deleted.contains(7));
+        assert_eq!(
+            SelectionMask::thin_removed(101, Some(&deleted), 100)
+                .unwrap()
+                .count,
+            0
+        );
+    }
 
     fn selection_source(
         cloud: Arc<PointCloud>,
