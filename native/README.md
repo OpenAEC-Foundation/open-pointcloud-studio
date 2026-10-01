@@ -88,7 +88,7 @@ Mesh export writes all vertices and faces from the mesh currently held by the vi
 
 ## Migration work remaining
 
-1. Improve viewport LOD with predictive loading and smooth transitions between node levels. The native app already builds and reuses disk-backed indexes automatically for large scans, reads compact leaf previews for repeated camera movements, and cancels stale LOD reads during navigation. The existing Rust octree and binary IPC code in `src-tauri/src/pointcloud/` is a reference, but its all-points-in-memory build is unsuitable for large surveys.
+1. Improve viewport LOD with predictive loading and smooth transitions between node levels. The native app already builds and reuses disk-backed indexes automatically for large scans, reads compact leaf previews for repeated camera movements, and cancels stale LOD reads during navigation. Releasing an orbit or pan drag now starts the latest detail request immediately; an older in-flight request is cancelled and the delayed timer cannot launch a duplicate. The existing Rust octree and binary IPC code in `src-tauri/src/pointcloud/` is a reference, but its all-points-in-memory build is unsuitable for large surveys.
 2. Test PCD LZF import against more representative producer files and broaden mesh validation for real producer variants, materials and large models. Keep each decoder in `core`.
 3. Improve the bounded 3D surface mesher toward watertight output and richer source attributes. Port themes and settings to Rust modules and native UI panels.
 4. Expand the documented native command API to remaining editing and selection actions, then retire the old frontend and Tauri packaging after feature parity checks.

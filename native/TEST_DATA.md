@@ -582,3 +582,14 @@ The rebuilt GUI then used its native section box and background export job to
 write the same 125,763-point LAZ in 26.666 seconds, also with the identical
 hash. The section box was cleared after the job; all three indexed source
 tiles remain open in the dev build.
+
+On the three indexed AHN6 tiles (129,398,587 points), a native right-button
+drag moved the camera pan by 100 × 40 screen pixels. On mouse release the
+viewport began refining its octree sample within 0.077 seconds and reported
+79,998 ready points by 0.131 seconds. Status checks at 0.253 and 0.503 seconds
+remained ready, showing that the older 220 ms debounce timer did not start a
+duplicate read. The panned native view is in
+[`native-ahn6-immediate-pan-lod-three-tiles.png`](../screenshots/native-ahn6-immediate-pan-lod-three-tiles.png).
+A left-button orbit changed yaw by 0.40 radians and pitch by 0.16 radians;
+its new detail request appeared at 0.012 seconds after release and was ready
+by the 0.253-second status check.

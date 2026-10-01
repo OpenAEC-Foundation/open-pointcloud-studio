@@ -1001,6 +1001,7 @@ enum Message {
     ),
     Orbit(f32, f32),
     Pan(f32, f32),
+    NavigationFinished,
     Zoom(f32, [f32; 2], Size),
     ViewportSize(Size),
     ResetCamera,
@@ -1105,6 +1106,8 @@ struct Studio {
     index_cancel: Arc<AtomicBool>,
     detail_pending: bool,
     detail_cancel: Arc<AtomicBool>,
+    detail_loaded_revision: Option<u64>,
+    detail_urgent_revision: Option<u64>,
     auto_index: bool,
     revision: u64,
 }
@@ -1293,6 +1296,8 @@ impl Default for Studio {
             index_cancel: Arc::new(AtomicBool::new(false)),
             detail_pending: false,
             detail_cancel: Arc::new(AtomicBool::new(false)),
+            detail_loaded_revision: None,
+            detail_urgent_revision: None,
             auto_index: true,
             revision: 0,
         }
@@ -3777,6 +3782,7 @@ impl Studio {
                     match result {
                         Ok(index) => {
                             entry.index = Some(index);
+                            self.revision += 1;
                             self.status = format!("Octree ready for {}", source.path.display());
                             ready = true;
                         }
@@ -3811,6 +3817,7 @@ impl Studio {
                     match result {
                         Ok(Some(index)) => {
                             entry.index = Some(index);
+                            self.revision += 1;
                             entry.auto_index_queued = false;
                             self.status =
                                 format!("Cached octree attached: {}", source.path.display());
@@ -3952,14 +3959,22 @@ impl Studio {
                 );
             }
             Message::RefreshDetail(revision) => {
-                if revision == self.revision && !self.detail_pending {
+                if revision == self.revision
+                    && !self.detail_pending
+                    && self.detail_loaded_revision != Some(revision)
+                {
                     return self.update(Message::LoadDetail);
                 }
             }
             Message::DetailReady(revision, result) => {
                 self.detail_pending = false;
+                let urgent = self.detail_urgent_revision.take() == Some(self.revision);
                 if revision != self.revision {
-                    return self.schedule_detail();
+                    return if urgent {
+                        self.update(Message::LoadDetail)
+                    } else {
+                        self.schedule_detail()
+                    };
                 }
                 match result {
                     Ok(details) => {
@@ -3970,13 +3985,18 @@ impl Studio {
                                 entry.detail_points = Some(points.into());
                             }
                         }
+                        self.detail_loaded_revision = Some(revision);
                         if !self.section_export_pending {
                             self.status =
                                 format!("Viewport LOD ready: {count} points from disk octree");
                         }
                     }
                     Err(error) if error == "Operation cancelled" => {
-                        return self.schedule_detail();
+                        return if urgent {
+                            self.update(Message::LoadDetail)
+                        } else {
+                            self.schedule_detail()
+                        };
                     }
                     Err(error) if !self.section_export_pending => {
                         self.status = format!("Detail failed: {error}")
@@ -4353,6 +4373,22 @@ impl Studio {
                 self.pan[1] += dy;
                 self.revision += 1;
                 return self.schedule_detail();
+            }
+            Message::NavigationFinished => {
+                if self.detail_loaded_revision == Some(self.revision)
+                    || !self
+                        .clouds
+                        .iter()
+                        .any(|entry| entry.visible && entry.index.is_some())
+                {
+                    return Task::none();
+                }
+                if self.detail_pending {
+                    self.detail_cancel.store(true, Ordering::Relaxed);
+                    self.detail_urgent_revision = Some(self.revision);
+                    return Task::none();
+                }
+                return self.update(Message::LoadDetail);
             }
             Message::Zoom(delta, pointer, size) => {
                 self.viewport_size = size;
@@ -7333,6 +7369,15 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     ) {
                         return Some(Message::ShowContextMenu([drag.position.x, drag.position.y]));
                     }
+                    if matches!(
+                        (button, drag.mode),
+                        (mouse::Button::Left, DragMode::Orbit)
+                            | (mouse::Button::Middle | mouse::Button::Right, DragMode::Pan)
+                    ) && (drag.position.x - drag.start.x).hypot(drag.position.y - drag.start.y)
+                        > 0.5
+                    {
+                        return Some(Message::NavigationFinished);
+                    }
                     matches!((button, drag.mode), (mouse::Button::Left, DragMode::Select))
                         .then_some(Message::BoxSelect {
                             start: [drag.start.x, drag.start.y],
@@ -8263,6 +8308,47 @@ mod editing_tests {
 #[cfg(test)]
 mod lod_transition_tests {
     use super::*;
+
+    #[test]
+    fn drag_release_starts_current_lod_without_a_second_debounced_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("scan.xyz");
+        std::fs::write(&source, "0 0 0\n1 0 0\n2 0 0\n3 0 0\n").unwrap();
+        let cloud = pointcloud_core::open(&source, 4).unwrap();
+        let index = Arc::new(OctreeIndex::build(&cloud, IndexConfig::default()).unwrap());
+        let point = IndexedPoint {
+            point: cloud.points[0],
+            ordinal: 0,
+        };
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::new(cloud))));
+        studio.clouds[0].index = Some(index);
+        studio.revision += 1;
+
+        let _ = studio.update(Message::Pan(20.0, 0.0));
+        assert!(!studio.detail_pending);
+        let _ = studio.update(Message::NavigationFinished);
+        assert!(studio.detail_pending);
+        let revision = studio.revision;
+        let _ = studio.update(Message::DetailReady(revision, Ok(vec![(0, vec![point])])));
+        assert_eq!(studio.detail_loaded_revision, Some(revision));
+        let _ = studio.update(Message::RefreshDetail(revision));
+        assert!(!studio.detail_pending);
+
+        let _ = studio.update(Message::Pan(20.0, 0.0));
+        let old_revision = studio.revision - 1;
+        studio.detail_pending = true;
+        studio.detail_cancel = Arc::new(AtomicBool::new(false));
+        let _ = studio.update(Message::NavigationFinished);
+        assert!(studio.detail_cancel.load(Ordering::Relaxed));
+        assert_eq!(studio.detail_urgent_revision, Some(studio.revision));
+        let _ = studio.update(Message::DetailReady(
+            old_revision,
+            Err("Operation cancelled".into()),
+        ));
+        assert!(studio.detail_pending);
+        assert_eq!(studio.detail_urgent_revision, None);
+    }
 
     #[test]
     fn navigation_keeps_old_lod_until_matching_replacement_arrives() {
