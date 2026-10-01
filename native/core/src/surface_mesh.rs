@@ -390,7 +390,25 @@ pub fn mesh_surface_obj_where_progress(
     mut include: impl FnMut(u64, &Point) -> bool,
     mut progress: impl FnMut(MeshProgress) -> Result<(), LoadError>,
 ) -> Result<MeshStats, LoadError> {
-    let destination = destination.as_ref();
+    mesh_surface_obj_inner(
+        cloud,
+        destination.as_ref(),
+        config,
+        &mut include,
+        &mut progress,
+    )
+}
+
+// Keep the point-heavy reconstruction in pointcloud-core's optimized dev
+// profile. A generic body is monomorphized in the unoptimized desktop crate
+// when called from its CLI or GUI and makes a large LAZ mesh many times slower.
+fn mesh_surface_obj_inner(
+    cloud: &PointCloud,
+    destination: &Path,
+    config: SurfaceMeshConfig,
+    include: &mut dyn FnMut(u64, &Point) -> bool,
+    progress: &mut dyn FnMut(MeshProgress) -> Result<(), LoadError>,
+) -> Result<MeshStats, LoadError> {
     if destination == cloud.path
         || fs::canonicalize(destination).ok() == fs::canonicalize(&cloud.path).ok()
     {

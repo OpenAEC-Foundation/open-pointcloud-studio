@@ -548,3 +548,25 @@ identical to the earlier oriented mesh (SHA-256
 `089cc49965a17b09de32b51038796847b0db0f2eae952f5556ddc54af14b0742`).
 Repeat the bounded reader timing with
 `cargo run -p pointcloud-core --example visit_bench -- FILE.laz 2000000`.
+
+A phase-timed core run of the same 3D surface job took 20.165 seconds: 18.777
+for reading and sampling, 0.308 for spatial thinning, 0.526 for neighbor
+search, 0.036 for normal estimation, 0.418 for triangulation/orientation and
+0.100 for OBJ writing. The native CLI repeated its slower 145.89-second time
+before the mesh functions were changed to call non-generic internal functions
+compiled in `pointcloud-core`'s optimized development profile. With that
+change, the native `--surface` command took 19.09 seconds and `--mesh` terrain
+took 20.74 seconds on the same 45,839,678-point tile. Both new OBJ files were
+byte-for-byte identical to their respective earlier outputs; the terrain OBJ
+hash is `b5b832ff2750a1ec542895fe8dd01355ac262310ba7f5ccbe8ead99c64305453`.
+Peak RSS was 135,064 KiB for 3D surface and 135,640 KiB for terrain.
+Repeat the phase measurement with
+`cargo run -p pointcloud-core --example surface_bench -- FILE.laz OUTPUT.obj`.
+The rebuilt native GUI reopened all three indexed AHN6 tiles (129,398,587
+source points). Its typed `mesh` command reconstructed terrain from the active
+45,839,678-point tile as a background job in 29.878 seconds, yielding the same
+95,872 vertices and 191,104 triangles. Its OBJ was byte-for-byte identical to
+the earlier terrain output. With all point layers temporarily hidden, the
+GPU-rendered surface was captured in
+[`native-ahn6-45m-optimized-gui-terrain.png`](../screenshots/native-ahn6-45m-optimized-gui-terrain.png).
+The three point layers were then made visible again.

@@ -23,6 +23,9 @@ All full-source LAS/LAZ operations now read bounded batches too: LAZ uses
 400,000 points per request so the parallel decompressor can process several
 compression chunks at once, while LAS uses 16,384-point batches. Callbacks
 still receive points in source order and can cancel mid-batch.
+Both meshers keep their full-source loops inside the optimized Rust core in
+development builds; the native desktop supplies edit and progress callbacks
+without recompiling those loops at the desktop's lower optimization level.
 XYZ, PTS, CSV and ASCII PLY exports format bounded 65,536-point batches on
 multiple Rust threads and write the finished chunks in source order. The
 temporary output is published only after the full source and any selected

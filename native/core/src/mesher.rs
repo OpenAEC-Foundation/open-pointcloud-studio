@@ -86,7 +86,24 @@ pub fn mesh_terrain_obj_where_progress(
     mut include: impl FnMut(u64, &Point) -> bool,
     mut progress: impl FnMut(MeshProgress) -> Result<(), LoadError>,
 ) -> Result<MeshStats, LoadError> {
-    let destination = destination.as_ref();
+    mesh_terrain_obj_inner(
+        cloud,
+        destination.as_ref(),
+        config,
+        &mut include,
+        &mut progress,
+    )
+}
+
+// Run the point-heavy loop in pointcloud-core's optimized dev profile rather
+// than monomorphizing it in the unoptimized native desktop caller.
+fn mesh_terrain_obj_inner(
+    cloud: &PointCloud,
+    destination: &Path,
+    config: MeshConfig,
+    include: &mut dyn FnMut(u64, &Point) -> bool,
+    progress: &mut dyn FnMut(MeshProgress) -> Result<(), LoadError>,
+) -> Result<MeshStats, LoadError> {
     if destination == cloud.path
         || fs::canonicalize(destination).ok() == fs::canonicalize(&cloud.path).ok()
     {
