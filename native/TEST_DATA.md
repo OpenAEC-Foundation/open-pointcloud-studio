@@ -3,6 +3,19 @@
 The files themselves are deliberately kept outside the repository. Check the
 source terms before redistributing a dataset or screenshots from it.
 
+On 1 October 2026, the bounded multithreaded text writer exported a
+1,200,000-point LAS fixture to CSV in 2.54 s with 27,556 KiB peak RSS. The
+previous point-by-point writer took 3.75 s and 20,028 KiB on the same file.
+Both outputs had 1,200,001 lines including the header and were byte-identical
+(SHA-256 `5460d40b74a725a1961e83dea66a19809e4bddec9197e533f83759de7292d8ab`).
+An order/count regression test crosses the 65,536-point batch boundary for
+XYZ, PTS, CSV and ASCII PLY.
+The same writer exported the public AHN6 `207000_474000` LAZ tile to XYZ:
+45,839,678 output lines, 2,582,457,357 bytes, 456.10 s wall time and
+41,268 KiB peak RSS. The final file appeared only after the temporary output
+was complete. Its SHA-256 is
+`142bec5664af80226ca0447fb56e80c8a82a4395c3c15d7da053122f8b12e09f`.
+
 On 1 October 2026, the native GUI mesher reported reading progress on the
 45,839,678-point AHN6 tile while the viewport remained responsive. Cancelling
 after more than two million points stopped the job and preserved an existing

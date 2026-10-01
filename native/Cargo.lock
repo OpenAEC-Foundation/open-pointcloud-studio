@@ -3183,6 +3183,7 @@ dependencies = [
  "earcutr",
  "las",
  "memmap2",
+ "rayon",
  "reqwest",
  "serde_json",
  "tempfile",

@@ -3,12 +3,16 @@ use std::fs;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use rayon::prelude::*;
+
 use super::{convert_las_point, visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
 
 // The LAZ compressor parallelizes only when a write contains multiple chunks.
 // Eight default 50,000-point chunks keep memory bounded and can use eight cores.
 const PARALLEL_LAZ_BATCH_POINTS: usize = 400_000;
 const LAS_BATCH_POINTS: usize = 16_384;
+const PARALLEL_TEXT_BATCH_POINTS: usize = 65_536;
+const TEXT_FORMAT_CHUNK_POINTS: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -369,6 +373,16 @@ fn export_map_count(
     };
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
+        let mut text_batch = Vec::with_capacity(
+            if matches!(
+                format,
+                ExportFormat::Xyz | ExportFormat::Pts | ExportFormat::Csv | ExportFormat::PlyAscii
+            ) {
+                PARALLEL_TEXT_BATCH_POINTS
+            } else {
+                0
+            },
+        );
         match format {
             ExportFormat::Pts => writeln!(writer, "{count_text}")?,
             ExportFormat::Csv => {
@@ -403,15 +417,21 @@ fn export_map_count(
             }
             written_count += 1;
             match format {
-                ExportFormat::Xyz | ExportFormat::Pts | ExportFormat::Csv => {
-                    write_text_point(&mut writer, point, cloud, format)?;
+                ExportFormat::Xyz
+                | ExportFormat::Pts
+                | ExportFormat::Csv
+                | ExportFormat::PlyAscii => {
+                    text_batch.push(point);
+                    if text_batch.len() == PARALLEL_TEXT_BATCH_POINTS {
+                        write_parallel_text_batch(&mut writer, &mut text_batch, cloud, format)?;
+                    }
                 }
-                ExportFormat::PlyAscii => write_ply_ascii(&mut writer, point, cloud)?,
                 ExportFormat::PlyBinary => write_ply_binary(&mut writer, point, cloud)?,
                 ExportFormat::Las | ExportFormat::Laz | ExportFormat::E57 => unreachable!(),
             }
             Ok(())
         })?;
+        write_parallel_text_batch(&mut writer, &mut text_batch, cloud, format)?;
         writer.flush()?;
     }
 
@@ -441,6 +461,38 @@ fn export_map_count(
         .persist(destination)
         .map_err(|error| LoadError::Io(error.error))?;
     Ok(written_count)
+}
+
+fn write_parallel_text_batch(
+    writer: &mut impl Write,
+    points: &mut Vec<Point>,
+    cloud: &PointCloud,
+    format: ExportFormat,
+) -> Result<(), LoadError> {
+    if points.is_empty() {
+        return Ok(());
+    }
+    let chunks: Result<Vec<Vec<u8>>, LoadError> = points
+        .par_chunks(TEXT_FORMAT_CHUNK_POINTS)
+        .map(|chunk| {
+            let mut bytes = Vec::with_capacity(chunk.len() * 48);
+            for point in chunk {
+                match format {
+                    ExportFormat::Xyz | ExportFormat::Pts | ExportFormat::Csv => {
+                        write_text_point(&mut bytes, *point, cloud, format)?;
+                    }
+                    ExportFormat::PlyAscii => write_ply_ascii(&mut bytes, *point, cloud)?,
+                    _ => unreachable!("only text formats use parallel batches"),
+                }
+            }
+            Ok(bytes)
+        })
+        .collect();
+    for bytes in chunks? {
+        writer.write_all(&bytes)?;
+    }
+    points.clear();
+    Ok(())
 }
 
 fn export_e57_map_count(
@@ -971,6 +1023,37 @@ fn write_ply_binary(
 mod tests {
     use super::*;
     use crate::open;
+
+    #[test]
+    fn parallel_text_export_keeps_order_and_exact_count_across_batches() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("ordered.xyz");
+        let mut source_file = BufWriter::new(fs::File::create(&source).unwrap());
+        for ordinal in 0..65_541 {
+            writeln!(source_file, "{ordinal} 1 2").unwrap();
+        }
+        source_file.flush().unwrap();
+        let cloud = open(&source, 1).unwrap();
+        for format in [
+            ExportFormat::Xyz,
+            ExportFormat::Pts,
+            ExportFormat::Csv,
+            ExportFormat::PlyAscii,
+        ] {
+            let destination = directory
+                .path()
+                .join(format!("ordered-{format:?}.{}", format.extension()));
+            export_full(&cloud, &destination, format).unwrap();
+            let mut count = 0u64;
+            visit_points(&destination, &mut |point| {
+                assert_eq!(point.xyz, [count as f64, 1.0, 2.0]);
+                count += 1;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(count, 65_541);
+        }
+    }
 
     #[test]
     fn exports_full_source_not_sample() {

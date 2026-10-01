@@ -19,6 +19,10 @@ source records in batches, preserving their original attributes and
 coordinate transforms. Exact same-format LAS/LAZ export copies the source
 bytes without recompression. Filtered or transformed exports keep the
 original LAS coordinate grid when the source is LAS/LAZ.
+XYZ, PTS, CSV and ASCII PLY exports format bounded 65,536-point batches on
+multiple Rust threads and write the finished chunks in source order. The
+temporary output is published only after the full source and any selected
+point count have been verified.
 
 ## Build
 
