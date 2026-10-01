@@ -651,7 +651,7 @@ fn export_e57_filtered_count(
     expected_count: Option<u64>,
     include: &mut dyn FnMut(u64, &Point) -> bool,
 ) -> Result<u64, LoadError> {
-    use e57::{CartesianCoordinate, E57Reader, E57Writer, Record, RecordDataType, RecordName};
+    use e57::{CartesianCoordinate, E57Reader, E57Writer};
 
     if destination == cloud.path
         || fs::canonicalize(destination).ok() == fs::canonicalize(&cloud.path).ok()
@@ -670,36 +670,19 @@ fn export_e57_filtered_count(
         .unwrap_or(Path::new("."));
     let temporary = tempfile::NamedTempFile::new_in(parent)?;
     let mut reader = E57Reader::from_file(&cloud.path)?;
+    let mut raw_reader = E57Reader::from_file(&cloud.path)?;
     let file_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
     let mut writer = E57Writer::new(temporary.reopen()?, &file_guid)?;
+    writer.set_creation(reader.creation());
+    writer.set_coordinate_metadata(reader.coordinate_metadata().map(str::to_owned));
+    for extension in reader.extensions() {
+        writer.register_extension(extension)?;
+    }
     let mut source_count = 0u64;
     let mut written_count = 0u64;
     for source_scan in reader.pointclouds() {
-        let mut prototype = vec![
-            Record::CARTESIAN_X_F64,
-            Record::CARTESIAN_Y_F64,
-            Record::CARTESIAN_Z_F64,
-        ];
-        if source_scan.has_color() {
-            for name in [
-                RecordName::ColorRed,
-                RecordName::ColorGreen,
-                RecordName::ColorBlue,
-            ] {
-                prototype.push(Record {
-                    name,
-                    data_type: RecordDataType::U8,
-                });
-            }
-        }
-        if source_scan.has_intensity() {
-            prototype.push(Record {
-                name: RecordName::Intensity,
-                data_type: RecordDataType::U16,
-            });
-        }
         let scan_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
-        let mut output_scan = writer.add_pointcloud(&scan_guid, prototype)?;
+        let mut output_scan = writer.add_pointcloud(&scan_guid, source_scan.prototype.clone())?;
         output_scan.set_name(source_scan.name.clone());
         output_scan.set_description(source_scan.description.clone());
         output_scan.set_original_guids(source_scan.guid.clone().map(|guid| vec![guid]));
@@ -715,19 +698,24 @@ fn export_e57_filtered_count(
         output_scan.set_temperature(source_scan.temperature);
         output_scan.set_humidity(source_scan.humidity);
         output_scan.set_atmospheric_pressure(source_scan.atmospheric_pressure);
+        output_scan.set_color_limits(source_scan.color_limits.clone());
+        output_scan.set_intensity_limits(source_scan.intensity_limits.clone());
 
         let mut points = reader.pointcloud_simple(&source_scan)?;
+        let mut raw_points = raw_reader.pointcloud_raw(&source_scan)?;
         points.spherical_to_cartesian(true);
         points.intensity_to_color(false);
-        points.apply_pose(false);
-        for raw in points {
-            let raw = raw?;
-            let CartesianCoordinate::Valid { x, y, z } = &raw.cartesian else {
+        points.apply_pose(true);
+        for simple in points {
+            let simple = simple?;
+            let values = raw_points.next().ok_or_else(|| {
+                LoadError::InvalidData("E57 raw and decoded streams have different lengths".into())
+            })??;
+            let CartesianCoordinate::Valid { x, y, z } = &simple.cartesian else {
                 continue;
             };
-            let local = [*x, *y, *z];
-            let world = e57_points::world_xyz(local, source_scan.transform.as_ref());
-            let point = e57_points::simple_point(raw, world);
+            let xyz = [*x, *y, *z];
+            let point = e57_points::simple_point(simple, xyz);
             let ordinal = source_count;
             source_count += 1;
             if !include(ordinal, &point) {
@@ -736,24 +724,13 @@ fn export_e57_filtered_count(
             if !point.xyz.iter().all(|value| value.is_finite()) {
                 return Err(LoadError::InvalidData("non-finite E57 coordinate".into()));
             }
-            let mut values: Vec<e57::RecordValue> =
-                local.into_iter().map(e57::RecordValue::Double).collect();
-            if source_scan.has_color() {
-                values.extend(
-                    point
-                        .rgb
-                        .unwrap_or([0, 0, 0])
-                        .into_iter()
-                        .map(|value| e57::RecordValue::Integer(i64::from(value))),
-                );
-            }
-            if source_scan.has_intensity() {
-                values.push(e57::RecordValue::Integer(i64::from(
-                    point.intensity.unwrap_or(0),
-                )));
-            }
             output_scan.add_point(values)?;
             written_count += 1;
+        }
+        if raw_points.next().is_some() {
+            return Err(LoadError::InvalidData(
+                "E57 raw and decoded streams have different lengths".into(),
+            ));
         }
         output_scan.finalize()?;
     }
@@ -1489,11 +1466,15 @@ mod tests {
             ] {
                 prototype.push(Record {
                     name,
-                    data_type: RecordDataType::U8,
+                    data_type: RecordDataType::U16,
                 });
             }
             prototype.push(Record {
                 name: RecordName::Intensity,
+                data_type: RecordDataType::U16,
+            });
+            prototype.push(Record {
+                name: RecordName::RowIndex,
                 data_type: RecordDataType::U16,
             });
             let mut scan = writer
@@ -1508,15 +1489,16 @@ mod tests {
                     z: 10.0,
                 },
             }));
-            for x in [1.0, 2.0] {
+            for (row, x) in [1.0, 2.0].into_iter().enumerate() {
                 scan.add_point(vec![
                     RecordValue::Double(x),
                     RecordValue::Double(0.0),
                     RecordValue::Double(0.0),
-                    RecordValue::Integer(10),
-                    RecordValue::Integer(20),
-                    RecordValue::Integer(30),
                     RecordValue::Integer(1_000),
+                    RecordValue::Integer(2_000),
+                    RecordValue::Integer(3_000),
+                    RecordValue::Integer(1_000),
+                    RecordValue::Integer(row as i64),
                 ])
                 .unwrap();
             }
@@ -1573,7 +1555,7 @@ mod tests {
         assert_eq!(reopened.scan_poses[1].label, "North station");
         assert!((reopened.points[0].xyz[0] - 101.0).abs() < 1e-9);
         assert!((reopened.points[1].xyz[1] - 301.0).abs() < 1e-9);
-        assert_eq!(reopened.points[0].rgb, Some([10, 20, 30]));
+        assert_eq!(reopened.points[0].rgb, Some([4, 8, 12]));
         assert_eq!(reopened.points[0].intensity, Some(1_000));
         assert_eq!(reopened.points[1].rgb, None);
         assert_eq!(reopened.points[1].intensity, None);
@@ -1581,6 +1563,34 @@ mod tests {
         assert_eq!(scan_headers.len(), 2);
         assert_eq!(scan_headers[0].records, 1);
         assert_eq!(scan_headers[1].records, 1);
+        let source_headers = E57Reader::from_file(&source).unwrap().pointclouds();
+        assert_eq!(
+            scan_headers[0].prototype.len(),
+            source_headers[0].prototype.len()
+        );
+        assert_eq!(scan_headers[0].prototype[3].name, RecordName::ColorRed);
+        assert!(matches!(
+            scan_headers[0].prototype[3].data_type,
+            RecordDataType::Integer { min: 0, max: 65535 }
+        ));
+        assert_eq!(scan_headers[0].prototype[7].name, RecordName::RowIndex);
+        let mut source_reader = E57Reader::from_file(&source).unwrap();
+        let mut output_reader = E57Reader::from_file(&destination).unwrap();
+        for (source_scan, output_scan) in source_headers.iter().zip(&scan_headers) {
+            let source_point = source_reader
+                .pointcloud_raw(source_scan)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            let output_point = output_reader
+                .pointcloud_raw(output_scan)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(output_point, source_point);
+        }
 
         let section = dir.path().join("section.e57");
         let written = export_section(

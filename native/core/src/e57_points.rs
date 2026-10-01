@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use e57::{CartesianCoordinate, E57Reader, Transform};
+use e57::{CartesianCoordinate, E57Reader};
 
 use super::{quaternion_axes, LoadError, Point, ScanPose};
 
@@ -66,26 +66,4 @@ pub(crate) fn simple_point(point: e57::Point, xyz: [f64; 3]) -> Point {
             .map(|value| (value.clamp(0.0, 1.0) * 65535.0).round() as u16),
         classification: None,
     }
-}
-
-/// Match the E57 reader's local-to-file pose when a filtered export keeps
-/// each scan's original local coordinates and scanner position.
-pub(crate) fn world_xyz(local: [f64; 3], pose: Option<&Transform>) -> [f64; 3] {
-    let Some(pose) = pose else { return local };
-    let q = &pose.rotation;
-    let [x, y, z] = local;
-    [
-        (q.w * q.w + q.x * q.x - q.y * q.y - q.z * q.z) * x
-            + 2.0 * (q.x * q.y - q.w * q.z) * y
-            + 2.0 * (q.x * q.z + q.w * q.y) * z
-            + pose.translation.x,
-        2.0 * (q.x * q.y + q.w * q.z) * x
-            + (q.w * q.w + q.y * q.y - q.x * q.x - q.z * q.z) * y
-            + 2.0 * (q.y * q.z - q.w * q.x) * z
-            + pose.translation.y,
-        2.0 * (q.x * q.z - q.w * q.y) * x
-            + 2.0 * (q.y * q.z + q.w * q.x) * y
-            + (q.w * q.w + q.z * q.z - q.x * q.x - q.y * q.y) * z
-            + pose.translation.z,
-    ]
 }
