@@ -32,8 +32,8 @@ use pointcloud_core::{
     Point, PointCloud,
 };
 use selection::{
-    pick_full, pick_indexed, select_full, ClassFilter, DeletionMask, Projection, ScreenRect,
-    SelectionMask, SelectionSource,
+    pick_full, pick_indexed, select_full, select_world, ClassFilter, DeletionMask, Projection,
+    ScreenRect, SelectionMask, SelectionSource,
 };
 use serde_json::{json, Value};
 use ui_theme::UiTheme;
@@ -594,6 +594,11 @@ impl CameraPreset {
 enum Message {
     ApiRequest(native_api::ApiRequest),
     ApiExported(String, bool, Result<(PathBuf, u64), String>),
+    ApiWorldSelectionReady(
+        String,
+        u64,
+        Result<Vec<(usize, Arc<SelectionMask>)>, String>,
+    ),
     Tab(RibbonTab),
     Theme(UiTheme),
     Open,
@@ -959,6 +964,8 @@ impl Studio {
                             "path": entry.cloud.path,
                             "points": entry.cloud.total_points,
                             "remaining": entry.remaining_count(),
+                            "selected": entry.selection.as_ref().map_or(0, |mask| mask.count),
+                            "deleted": entry.deleted.as_ref().map_or(0, |mask| mask.count),
                             "visible": entry.visible,
                             "indexed": entry.index.is_some(),
                             "view_sample": entry.view_len(),
@@ -976,6 +983,7 @@ impl Studio {
                         "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label},
                         "section": section,
                         "selected_points": self.selected_total(),
+                        "selection_pending": self.selection_pending,
                         "color_mode": self.color_mode.to_string(),
                         "eye_dome": self.eye_dome,
                         "point_size": self.point_size,
@@ -1153,11 +1161,134 @@ impl Studio {
                 let task = self.update(Message::SetSectionEnabled(false));
                 (json!({"ok": true}), task)
             }
+            ApiCommand::SelectWorld { min, max } => {
+                if !(0..3).all(|axis| {
+                    min[axis].is_finite() && max[axis].is_finite() && min[axis] <= max[axis]
+                }) {
+                    (
+                        json!({"ok": false, "error": "selection bounds must be finite and ordered"}),
+                        Task::none(),
+                    )
+                } else if self.selection_pending {
+                    (
+                        json!({"ok": false, "error": "a full-resolution selection is already running"}),
+                        Task::none(),
+                    )
+                } else {
+                    let sources: Vec<_> = self
+                        .clouds
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| entry.visible)
+                        .map(|(index, entry)| SelectionSource {
+                            index,
+                            cloud: Arc::clone(&entry.cloud),
+                            tree: entry.index.as_ref().map(Arc::clone),
+                            deleted: entry.deleted.as_ref().map(Arc::clone),
+                        })
+                        .collect();
+                    if sources.is_empty() {
+                        (
+                            json!({"ok": false, "error": "no visible point cloud to select"}),
+                            Task::none(),
+                        )
+                    } else {
+                        let id = self.record_api_job(
+                            json!({"state": "running", "operation": "select_world"}),
+                        );
+                        let completion_id = id.clone();
+                        let revision = self.revision;
+                        let bounds = Bounds { min, max };
+                        let filter = ClassFilter {
+                            ground: self.filter_ground,
+                            vegetation: self.filter_vegetation,
+                            buildings: self.filter_buildings,
+                            other: self.filter_other,
+                            section: self.section_bounds(),
+                        };
+                        self.selection_pending = true;
+                        self.pending_delete = false;
+                        self.status = format!(
+                            "Selecting exact points in {} visible file(s)…",
+                            sources.len()
+                        );
+                        let task = Task::perform(
+                            async move {
+                                tokio::task::spawn_blocking(move || {
+                                    select_world(sources, bounds, filter)
+                                })
+                                .await
+                                .map_err(|error| error.to_string())?
+                            },
+                            move |result| {
+                                Message::ApiWorldSelectionReady(
+                                    completion_id.clone(),
+                                    revision,
+                                    result,
+                                )
+                            },
+                        );
+                        (json!({"ok": true, "accepted": true, "job_id": id}), task)
+                    }
+                }
+            }
+            ApiCommand::ClearSelection => {
+                let task = self.update(Message::ClearSelection);
+                (json!({"ok": true, "selected_points": 0}), task)
+            }
+            ApiCommand::DeleteSelection => {
+                if self.selection_pending || self.selected_total() == 0 {
+                    (
+                        json!({"ok": false, "error": "wait for selection to finish or select points first"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::DeleteSelection);
+                    (
+                        json!({"ok": true, "accepted": true, "status": self.status}),
+                        task,
+                    )
+                }
+            }
+            ApiCommand::UndoDelete => {
+                if self.undo_deletions.is_empty() {
+                    (
+                        json!({"ok": false, "error": "nothing to undo"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::UndoDelete);
+                    (json!({"ok": true, "status": self.status}), task)
+                }
+            }
+            ApiCommand::RedoDelete => {
+                if self.redo_deletions.is_empty() {
+                    (
+                        json!({"ok": false, "error": "nothing to redo"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::RedoDelete);
+                    (json!({"ok": true, "status": self.status}), task)
+                }
+            }
             ApiCommand::Export { path } => self.api_export(path, false),
             ApiCommand::ExportSection { path } => self.api_export(path, true),
         };
         let _ = request.reply.send(response);
         task
+    }
+
+    fn record_api_job(&mut self, initial: Value) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.api_jobs.insert(id.clone(), initial);
+        self.api_job_order.push_back(id.clone());
+        if self.api_job_order.len() > 32 {
+            if let Some(oldest) = self.api_job_order.pop_front() {
+                self.api_jobs.remove(&oldest);
+            }
+        }
+        id
     }
 
     fn api_export(&mut self, path: PathBuf, section_only: bool) -> (Value, Task<Message>) {
@@ -1192,15 +1323,7 @@ impl Studio {
         } else {
             None
         };
-        let job_id = uuid::Uuid::new_v4().to_string();
-        self.api_jobs
-            .insert(job_id.clone(), json!({"state": "running", "path": path}));
-        self.api_job_order.push_back(job_id.clone());
-        if self.api_job_order.len() > 32 {
-            if let Some(oldest) = self.api_job_order.pop_front() {
-                self.api_jobs.remove(&oldest);
-            }
-        }
+        let job_id = self.record_api_job(json!({"state": "running", "path": path}));
         let response = json!({"ok": true, "accepted": true, "path": path, "job_id": job_id});
         if let Some(section) = section {
             self.section_export_pending = true;
@@ -1344,6 +1467,39 @@ impl Studio {
                     Err(error) => {
                         self.status = format!("API export failed: {error}");
                         json!({"state": "failed", "error": error})
+                    }
+                };
+                if let Some(entry) = self.api_jobs.get_mut(&id) {
+                    *entry = job;
+                }
+            }
+            Message::ApiWorldSelectionReady(id, revision, result) => {
+                self.selection_pending = false;
+                let job = if revision != self.revision {
+                    let error = "selection discarded because files or view filters changed";
+                    self.status = error.into();
+                    json!({"state": "failed", "error": error})
+                } else {
+                    match result {
+                        Ok(masks) => {
+                            for entry in &mut self.clouds {
+                                entry.selection = None;
+                            }
+                            let mut layers = Vec::with_capacity(masks.len());
+                            for (index, mask) in masks {
+                                layers.push(json!({"index": index, "points": mask.count}));
+                                if let Some(entry) = self.clouds.get_mut(index) {
+                                    entry.selection = Some(mask);
+                                }
+                            }
+                            let count = self.selected_total();
+                            self.status = format!("{count} points selected at full resolution");
+                            json!({"state": "complete", "points": count, "layers": layers})
+                        }
+                        Err(error) => {
+                            self.status = format!("Selection failed: {error}");
+                            json!({"state": "failed", "error": error})
+                        }
                     }
                 };
                 if let Some(entry) = self.api_jobs.get_mut(&id) {

@@ -448,6 +448,89 @@ pub fn select_full(
     Ok(result)
 }
 
+/// Select exact source points inside a world-coordinate box. Indexed files
+/// only visit intersecting leaves; unindexed files stream the entire source.
+pub fn select_world(
+    sources: Vec<SelectionSource>,
+    bounds: Bounds,
+    filter: ClassFilter,
+) -> Result<Vec<(usize, Arc<SelectionMask>)>, String> {
+    if !(0..3).all(|axis| {
+        bounds.min[axis].is_finite()
+            && bounds.max[axis].is_finite()
+            && bounds.min[axis] <= bounds.max[axis]
+    }) {
+        return Err("selection bounds must be finite and ordered".into());
+    }
+    let workers: Vec<_> = sources
+        .into_iter()
+        .map(|source| std::thread::spawn(move || select_one_world(source, bounds, filter)))
+        .collect();
+    let mut result = Vec::with_capacity(workers.len());
+    for worker in workers {
+        result.push(worker.join().map_err(|_| "selection worker panicked")??);
+    }
+    Ok(result)
+}
+
+fn bounds_overlap(a: Bounds, b: Bounds) -> bool {
+    (0..3).all(|axis| a.max[axis] >= b.min[axis] && a.min[axis] <= b.max[axis])
+}
+
+fn select_one_world(
+    source: SelectionSource,
+    bounds: Bounds,
+    filter: ClassFilter,
+) -> Result<(usize, Arc<SelectionMask>), String> {
+    let SelectionSource {
+        index,
+        cloud,
+        tree,
+        deleted,
+    } = source;
+    cloud.validate_source().map_err(|error| error.to_string())?;
+    let mut mask = SelectionMask::new(cloud.total_points)?;
+    let mut random_state = 0xd1b5_4a32_d192_ed03u64;
+    let mut consider = |ordinal: u64, point: Point| {
+        if !deleted.as_ref().is_some_and(|mask| mask.contains(ordinal))
+            && filter.accepts(&point)
+            && (0..3).all(|axis| {
+                point.xyz[axis] >= bounds.min[axis] && point.xyz[axis] <= bounds.max[axis]
+            })
+        {
+            mask.insert(ordinal, point, &mut random_state);
+        }
+    };
+    if let Some(tree) = tree {
+        tree.visit_intersecting(
+            |node| {
+                bounds_overlap(node, bounds)
+                    && filter
+                        .section
+                        .is_none_or(|section| bounds_overlap(node, section))
+            },
+            |record| {
+                consider(record.ordinal, record.point);
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    } else {
+        let mut ordinal = 0u64;
+        visit_points(&cloud.path, &mut |point| {
+            consider(ordinal, point);
+            ordinal += 1;
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+        if ordinal != cloud.total_points {
+            return Err(format!("{} changed while selecting", cloud.path.display()));
+        }
+    }
+    cloud.validate_source().map_err(|error| error.to_string())?;
+    Ok((index, Arc::new(mask)))
+}
+
 fn select_one(
     index: usize,
     cloud: Arc<PointCloud>,
@@ -609,6 +692,81 @@ mod tests {
         .unwrap();
         assert!(stream[0].1.count > 0 && stream[0].1.count < 100);
         assert_eq!(indexed[0].1.bits, stream[0].1.bits);
+    }
+
+    #[test]
+    fn world_box_uses_exact_ordinals_with_and_without_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("world.xyz");
+        fs::write(
+            &source,
+            (0..100).map(|x| format!("{x} 0 0\n")).collect::<String>(),
+        )
+        .unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 1).unwrap());
+        assert_eq!(cloud.points.len(), 1);
+        let tree = Arc::new(
+            OctreeIndex::build(
+                &cloud,
+                pointcloud_core::IndexConfig {
+                    leaf_points: 8,
+                    preview_points: 4,
+                    max_depth: 8,
+                    scratch_dir: Some(dir.path().to_path_buf()),
+                },
+            )
+            .unwrap(),
+        );
+        let removed = SelectionMask::single(
+            cloud.total_points,
+            IndexedPoint {
+                point: Point {
+                    xyz: [40.0, 0.0, 0.0],
+                    rgb: None,
+                    intensity: None,
+                    classification: None,
+                },
+                ordinal: 40,
+            },
+        )
+        .unwrap();
+        let mut deleted = DeletionMask::new(cloud.total_points).unwrap();
+        deleted.apply(&removed).unwrap();
+        let query = Bounds {
+            min: [30.0, 0.0, 0.0],
+            max: [49.0, 0.0, 0.0],
+        };
+        let filter = ClassFilter {
+            ground: true,
+            vegetation: true,
+            buildings: true,
+            other: true,
+            section: Some(Bounds {
+                min: [35.0, 0.0, 0.0],
+                max: [45.0, 0.0, 0.0],
+            }),
+        };
+        let stream = select_world(
+            vec![selection_source(
+                Arc::clone(&cloud),
+                None,
+                Some(Arc::new(deleted.clone())),
+            )],
+            query,
+            filter,
+        )
+        .unwrap();
+        let indexed = select_world(
+            vec![selection_source(cloud, Some(tree), Some(Arc::new(deleted)))],
+            query,
+            filter,
+        )
+        .unwrap();
+        assert_eq!(stream[0].1.count, 10);
+        assert!(stream[0].1.contains(35));
+        assert!(stream[0].1.contains(45));
+        assert!(!stream[0].1.contains(40));
+        assert_eq!(stream[0].1.bits, indexed[0].1.bits);
     }
 
     #[test]

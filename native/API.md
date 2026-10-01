@@ -27,11 +27,16 @@ the GUI starts loading; poll `status` for the new layer. Exports return
 `accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
 for a durable `running`, `complete` (with point count), or `failed` result.
 The newest 32 jobs remain queryable even if the GUI status line changes.
+World-box selection also returns a job ID and uses the same query. Its limits
+are inclusive source XYZ coordinates, independent of the viewport camera and
+point budget. It selects across visible layers while respecting class filters,
+the active section box and previously deleted points. Indexed layers search
+intersecting octree leaves; unindexed layers stream their complete sources.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, point counts, visibility, active layer, camera, section box and current status text |
-| `job` | `id` | Reads an export task's state and result |
+| `status` | — | Lists clouds, point counts, selected/deleted counts, visibility, active layer, camera, section box and current status text |
+| `job` | `id` | Reads an export or selection task's state and result |
 | `open` | `path` | Opens a point cloud or mesh in the running GUI |
 | `remove` | `index` | Removes a layer from the project |
 | `set_active` | `index` | Chooses the active layer |
@@ -42,6 +47,11 @@ The newest 32 jobs remain queryable even if the GUI status line changes.
 | `set_budget` | `points` | Sets visible point budget from 1,000 to 2,000,000 |
 | `set_section` | `min`, `max` | Enables an XYZ section box using two three-number arrays inside the visible model bounds |
 | `clear_section` | — | Disables the section box |
+| `select_world` | `min`, `max` | Selects all exact source points in an inclusive XYZ box, returning a job ID |
+| `clear_selection` | — | Clears the current point selection |
+| `delete_selection` | — | Hides selected points in the open view; may first queue an octree build for LAZ |
+| `undo_delete` | — | Restores the latest deletion batch |
+| `redo_delete` | — | Reapplies the latest undone deletion batch |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 

@@ -30,6 +30,11 @@ pub enum ApiCommand {
     SetBudget { points: u32 },
     SetSection { min: [f64; 3], max: [f64; 3] },
     ClearSection,
+    SelectWorld { min: [f64; 3], max: [f64; 3] },
+    ClearSelection,
+    DeleteSelection,
+    UndoDelete,
+    RedoDelete,
     Export { path: PathBuf },
     ExportSection { path: PathBuf },
 }

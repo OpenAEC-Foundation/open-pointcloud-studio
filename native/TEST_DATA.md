@@ -375,3 +375,16 @@ The final CLI writer converted the 7.3 MB OFF input to a 6.4 MB OBJ in 1.65
 seconds with 24,352 KiB peak RSS. Reimporting and exporting that OBJ again
 gave the same SHA-256 hash (`0edab73e…f6ee42`). A 3DBAG OBJ converted through
 the same path retained its copyright, CC BY 4.0 URL and EPSG:7415 header.
+
+The native command API was exercised against a running build with the cached
+45,839,678-point AHN6 octree attached. `select_world` on XYZ bounds
+`[207950, 474000, -100]` to `[208000, 474050, 1000]` selected 125,763
+source ordinals in about 0.52 seconds; the selection job reached `complete`
+and `status.selected_points` agreed. A separate 10-point XYZ layer selected
+ordinals 3 through 6 by world coordinates. API Delete, Undo and Redo changed
+its remaining count from 10 to 6, back to 10, then to 6. The small layer was
+removed and the AHN6 layer restored to visible afterward.
+A second AHN6 API selection covered X 207400..207600 and Y 474400..474600,
+returning 1,569,701 exact source ordinals. The top-view GUI highlighted a
+bounded 8,000-point sample of that selection over a 250,000-point viewport
+LOD; see [`native-api-select-world-ahn45m.png`](../screenshots/native-api-select-world-ahn45m.png).
