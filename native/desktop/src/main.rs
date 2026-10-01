@@ -16,6 +16,7 @@ mod gpu_viewport;
 mod native_api;
 mod opencad_properties;
 mod opencad_ribbon;
+mod preferences;
 mod selection;
 mod ui_theme;
 mod view_cube;
@@ -39,6 +40,7 @@ use selection::{
     pick_full_transformed, pick_indexed_transformed, select_full, select_world, ClassFilter,
     ClassVisibility, DeletionMask, Projection, ScreenRect, SelectionMask, SelectionSource,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use ui_theme::UiTheme;
 
@@ -637,7 +639,8 @@ fn main() -> iced::Result {
         })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum ColorMode {
     Rgb,
     Elevation,
@@ -876,6 +879,7 @@ enum Message {
     FileAction(FileAction),
     RibbonScroll(f32),
     Theme(UiTheme),
+    PersistSettings(u64),
     Open,
     FilesChosen(Option<Vec<PathBuf>>),
     Loaded(Result<Arc<PointCloud>, String>),
@@ -1108,6 +1112,7 @@ struct Studio {
     ribbon_tab: RibbonTab,
     file_open: bool,
     ui_theme: UiTheme,
+    settings_revision: u64,
     box_select: bool,
     pick_mode: bool,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
@@ -1219,6 +1224,7 @@ impl CloudEntry {
 impl Default for Studio {
     fn default() -> Self {
         let surface = SurfaceMeshConfig::default();
+        let settings = preferences::load();
         Self {
             api_receiver: None,
             api_handle: None,
@@ -1264,17 +1270,17 @@ impl Default for Studio {
                 &HashMap::new(),
             ),
             bag_map_loading: HashSet::new(),
-            color_mode: ColorMode::Rgb,
-            point_size: 2.0,
-            eye_dome: true,
-            eye_dome_strength: 1.0,
-            show_scan_poses: true,
+            color_mode: settings.color_mode,
+            point_size: settings.point_size,
+            eye_dome: settings.eye_dome,
+            eye_dome_strength: settings.eye_dome_strength,
+            show_scan_poses: settings.show_scan_poses,
             expand_scan_poses: false,
-            budget: 80_000,
-            filter_ground: true,
-            filter_vegetation: true,
-            filter_buildings: true,
-            filter_other: true,
+            budget: settings.budget,
+            filter_ground: settings.filter_ground,
+            filter_vegetation: settings.filter_vegetation,
+            filter_buildings: settings.filter_buildings,
+            filter_other: settings.filter_other,
             class_visibility: ClassVisibility::default(),
             section_enabled: false,
             section_export_pending: false,
@@ -1299,6 +1305,7 @@ impl Default for Studio {
             ribbon_tab: RibbonTab::Home,
             file_open: false,
             ui_theme: UiTheme::load(),
+            settings_revision: 0,
             box_select: false,
             pick_mode: false,
             drag_rectangle: None,
@@ -1312,13 +1319,41 @@ impl Default for Studio {
             detail_cancel: Arc::new(AtomicBool::new(false)),
             detail_loaded_revision: None,
             detail_urgent_revision: None,
-            auto_index: true,
+            auto_index: settings.auto_index,
             revision: 0,
         }
     }
 }
 
 impl Studio {
+    fn preferences(&self) -> preferences::Preferences {
+        preferences::Preferences {
+            color_mode: self.color_mode,
+            point_size: self.point_size,
+            eye_dome: self.eye_dome,
+            eye_dome_strength: self.eye_dome_strength,
+            show_scan_poses: self.show_scan_poses,
+            budget: self.budget,
+            auto_index: self.auto_index,
+            filter_ground: self.filter_ground,
+            filter_vegetation: self.filter_vegetation,
+            filter_buildings: self.filter_buildings,
+            filter_other: self.filter_other,
+        }
+    }
+
+    fn queue_preferences_save(&mut self) -> Task<Message> {
+        self.settings_revision = self.settings_revision.wrapping_add(1);
+        let revision = self.settings_revision;
+        Task::perform(
+            async move {
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                revision
+            },
+            Message::PersistSettings,
+        )
+    }
+
     fn surface_mesh_config(&self) -> Result<SurfaceMeshConfig, String> {
         let max_vertices = self.surface_settings[0]
             .trim()
@@ -2441,6 +2476,13 @@ impl Studio {
             Message::Theme(theme) => {
                 self.ui_theme = theme;
                 theme.save();
+            }
+            Message::PersistSettings(revision) => {
+                if revision == self.settings_revision {
+                    if let Err(error) = preferences::save(&self.preferences()) {
+                        self.status = format!("Could not save settings: {error}");
+                    }
+                }
             }
             Message::Open => {
                 return Task::perform(
@@ -3877,6 +3919,7 @@ impl Studio {
             }
             Message::SetAutoIndex(enabled) => {
                 self.auto_index = enabled;
+                let save = self.queue_preferences_save();
                 if enabled {
                     let tasks = self
                         .clouds
@@ -3888,11 +3931,12 @@ impl Studio {
                                 && !entry.cloud.points.is_empty()
                         })
                         .map(|entry| cached_index_task(Arc::clone(&entry.cloud)));
-                    return Task::batch(tasks);
+                    return Task::batch([Task::batch(tasks), save]);
                 }
                 for entry in &mut self.clouds {
                     entry.auto_index_queued = false;
                 }
+                return save;
             }
             Message::LoadDetail => {
                 if self.detail_pending {
@@ -4072,11 +4116,26 @@ impl Studio {
                     return self.schedule_detail();
                 }
             }
-            Message::ColorMode(mode) => self.color_mode = mode,
-            Message::PointSize(size) => self.point_size = size,
-            Message::SetEyeDome(enabled) => self.eye_dome = enabled,
-            Message::EyeDomeStrength(strength) => self.eye_dome_strength = strength,
-            Message::ShowScanPoses(enabled) => self.show_scan_poses = enabled,
+            Message::ColorMode(mode) => {
+                self.color_mode = mode;
+                return self.queue_preferences_save();
+            }
+            Message::PointSize(size) => {
+                self.point_size = size;
+                return self.queue_preferences_save();
+            }
+            Message::SetEyeDome(enabled) => {
+                self.eye_dome = enabled;
+                return self.queue_preferences_save();
+            }
+            Message::EyeDomeStrength(strength) => {
+                self.eye_dome_strength = strength;
+                return self.queue_preferences_save();
+            }
+            Message::ShowScanPoses(enabled) => {
+                self.show_scan_poses = enabled;
+                return self.queue_preferences_save();
+            }
             Message::ExpandScanPoses(expanded) => self.expand_scan_poses = expanded,
             Message::FitScanPoses => {
                 let (Some(scene), Some(focus)) = (
@@ -4136,23 +4195,27 @@ impl Studio {
             Message::Budget(budget) => {
                 self.budget = budget;
                 self.revision += 1;
-                return self.schedule_detail();
+                return Task::batch([self.schedule_detail(), self.queue_preferences_save()]);
             }
             Message::FilterGround(value) => {
                 self.filter_ground = value;
                 self.revision += 1;
+                return self.queue_preferences_save();
             }
             Message::FilterVegetation(value) => {
                 self.filter_vegetation = value;
                 self.revision += 1;
+                return self.queue_preferences_save();
             }
             Message::FilterBuildings(value) => {
                 self.filter_buildings = value;
                 self.revision += 1;
+                return self.queue_preferences_save();
             }
             Message::FilterOther(value) => {
                 self.filter_other = value;
                 self.revision += 1;
+                return self.queue_preferences_save();
             }
             Message::FilterClass(code, visible) => {
                 self.class_visibility.set(code, visible);

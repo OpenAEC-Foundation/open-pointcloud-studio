@@ -8,6 +8,8 @@ The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-boo
 
 The amber File tab opens a native backstage view with the currently open scans, direct scan activation, import, full/selected/section/mesh export, format choice and appearance choice. The File view covers the tool ribbon and model space, while keeping quick access and the status bar visible; Escape or Return to model closes it. Unavailable exports appear muted. This uses the existing Rust import/export commands and no web components.
 
+Native display and indexing defaults now persist in `settings.json` under the same configuration directory as the theme: color mode, point size, eye-dome switch and strength, scanner-marker visibility, point budget, auto-index and the four broad classification groups. Changes from the ribbon or local command API are saved after a short debounce; invalid stored numeric values fall back to safe defaults. Source scans and their per-file edits are unaffected.
+
 OpenCADStudio's SVG icons under `assets/icons/` were copied into [`assets/opencad-icons/`](assets/opencad-icons/) and are embedded by Rust `iced::widget::svg`. No HTML, CSS, JavaScript or webview is used in the native desktop crate.
 
 Camera views can be named and saved from the View ribbon or Properties panel, then restored or deleted from Properties. They persist per source scan in `camera-views.json` under the native XDG configuration directory.
@@ -84,7 +86,7 @@ File open and save dialogs use `rfd::AsyncFileDialog`, so the native UI stays re
 | OBJ mesh export | Terrain and 3D surface meshers save RGB and per-vertex normals in OBJ; any resident OBJ, PLY, OFF, STL or DXF triangle mesh can also be exported from the Tools ribbon or Properties. Imported OBJ/PLY colors and aligned normals survive conversion. The writer saves atomically and keeps 3DBAG attribution where applicable |
 | 3DBAG | Native RD map with PDOK raster tiles, rectangle drawing, pan/zoom, typed/scan/section-box bounds, LoD choice, paginated CityJSONFeatures import and GPU mesh display |
 | Themes | Five native OpenAEC palettes, selected from Home and persisted locally; model space remains dark |
-| Settings and automation API | Theme and named camera views persist in native configuration files. A local token-protected Rust command API controls open layers, camera, visibility, section boxes, exact point selection, deletion/undo/redo and exports; more commands and settings remain to port |
+| Settings and automation API | Theme, display/indexing defaults and named camera views persist in native configuration files. A local token-protected Rust command API controls open layers, camera, visibility, section boxes, exact point selection, deletion/undo/redo and exports; more commands and settings remain to port |
 
 Mesh export writes all vertices and faces from the mesh currently held by the viewer, validates indices before touching the destination, and saves atomically. The Tools ribbon and Properties panel expose it for imported OBJ, PLY, OFF, STL and DXF meshes. The `--mesh-export INPUT OUTPUT.obj` command supports batch conversion; 3DBAG output retains the required attribution header.
 
@@ -92,7 +94,7 @@ Mesh export writes all vertices and faces from the mesh currently held by the vi
 
 1. Improve viewport LOD with predictive loading and smooth transitions between node levels. The native app already builds and reuses disk-backed indexes automatically for large scans, reads compact leaf previews for repeated camera movements, and cancels stale LOD reads during navigation. Releasing an orbit or pan drag now starts the latest detail request immediately; an older in-flight request is cancelled and the delayed timer cannot launch a duplicate. The existing Rust octree and binary IPC code in `src-tauri/src/pointcloud/` is a reference, but its all-points-in-memory build is unsuitable for large surveys.
 2. Test PCD LZF import against more representative producer files and broaden mesh validation for real producer variants, materials and large models. Keep each decoder in `core`.
-3. Improve the bounded 3D surface mesher toward watertight output and richer source attributes. Port themes and settings to Rust modules and native UI panels.
+3. Improve the bounded 3D surface mesher toward watertight output and richer source attributes. Broaden the native settings UI as remaining workflows migrate.
 4. Expand the documented native command API to remaining editing and selection actions, then retire the old frontend and Tauri packaging after feature parity checks.
 
 No existing application files are removed by this first slice.
