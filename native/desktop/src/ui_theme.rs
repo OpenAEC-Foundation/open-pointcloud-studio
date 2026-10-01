@@ -50,8 +50,8 @@ impl UiTheme {
                 text: Color::from_rgb8(250, 250, 249),
                 muted: Color::from_rgb8(161, 161, 170),
                 accent: Color::from_rgb8(217, 119, 6),
-                hover: Color::from_rgba8(217, 119, 6, 0.15),
-                active: Color::from_rgba8(217, 119, 6, 0.20),
+                hover: Color::from_rgba8(161, 161, 170, 0.12),
+                active: Color::from_rgb8(68, 68, 76),
             },
             Self::Light => UiColors {
                 shell: Color::from_rgb8(250, 250, 249),
@@ -63,8 +63,8 @@ impl UiTheme {
                 text: Color::from_rgb8(54, 54, 62),
                 muted: Color::from_rgb8(87, 83, 78),
                 accent: Color::from_rgb8(217, 119, 6),
-                hover: Color::from_rgba8(217, 119, 6, 0.10),
-                active: Color::from_rgba8(217, 119, 6, 0.15),
+                hover: Color::from_rgba8(54, 54, 62, 0.06),
+                active: Color::from_rgb8(231, 229, 228),
             },
             Self::Night => UiColors {
                 shell: Color::from_rgb8(39, 39, 42),
@@ -76,8 +76,8 @@ impl UiTheme {
                 text: Color::from_rgb8(250, 250, 249),
                 muted: Color::from_rgb8(161, 161, 170),
                 accent: Color::from_rgb8(217, 119, 6),
-                hover: Color::from_rgba8(217, 119, 6, 0.15),
-                active: Color::from_rgba8(217, 119, 6, 0.20),
+                hover: Color::from_rgba8(161, 161, 170, 0.12),
+                active: Color::from_rgb8(63, 63, 70),
             },
             Self::Blueprint => UiColors {
                 shell: Color::from_rgb8(15, 27, 45),
@@ -89,8 +89,8 @@ impl UiTheme {
                 text: Color::from_rgb8(224, 231, 255),
                 muted: Color::from_rgb8(152, 193, 217),
                 accent: Color::from_rgb8(96, 165, 250),
-                hover: Color::from_rgba8(96, 165, 250, 0.12),
-                active: Color::from_rgba8(96, 165, 250, 0.18),
+                hover: Color::from_rgba8(152, 193, 217, 0.12),
+                active: Color::from_rgb8(37, 58, 82),
             },
             Self::Contrast => UiColors {
                 shell: Color::BLACK,

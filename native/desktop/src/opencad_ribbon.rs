@@ -71,26 +71,18 @@ pub fn tool_btn_style(theme: &Theme, is_active: bool, status: button::Status) ->
             } else {
                 colors.accent
             },
-            Color {
-                a: 0.4,
-                ..colors.accent
-            },
+            colors.accent,
         ),
-        (_, button::Status::Hovered | button::Status::Pressed) => (
-            Some(colors.hover),
-            colors.text,
-            Color {
-                a: 0.3,
-                ..colors.accent
-            },
-        ),
+        (_, button::Status::Hovered | button::Status::Pressed) => {
+            (Some(colors.hover), colors.text, colors.border)
+        }
         _ => (None, colors.text, Color::TRANSPARENT),
     };
     button::Style {
         background: background.map(Background::Color),
         text_color,
         border: Border {
-            radius: 2.0.into(),
+            radius: 3.0.into(),
             color: border,
             width: 1.0,
         },
