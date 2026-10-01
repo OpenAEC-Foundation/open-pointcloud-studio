@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -35,6 +35,37 @@ use ui_theme::UiTheme;
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
 const AUTO_INDEX_MIN_POINTS: u64 = 1_000_000;
+
+fn export_format_for_path(path: &Path) -> Option<ExportFormat> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("ply") => Some(ExportFormat::PlyBinary),
+        Some("xyz") => Some(ExportFormat::Xyz),
+        Some("pts") => Some(ExportFormat::Pts),
+        Some("csv") => Some(ExportFormat::Csv),
+        Some("las") => Some(ExportFormat::Las),
+        Some("laz") => Some(ExportFormat::Laz),
+        _ => None,
+    }
+}
+
+fn open_for_export(source: &Path) -> Result<PointCloud, pointcloud_core::LoadError> {
+    let is_las = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
+        });
+    if is_las {
+        pointcloud_core::open_las_header(source)
+    } else {
+        pointcloud_core::open(source, 1)
+    }
+}
 
 fn display_name(path: &std::path::Path) -> &str {
     let name = path
@@ -129,38 +160,62 @@ fn main() -> iced::Result {
         };
         let source = PathBuf::from(source);
         let destination = PathBuf::from(destination);
-        let format = match destination
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
+        let Some(format) = export_format_for_path(&destination) else {
+            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz");
+            std::process::exit(2);
+        };
+        match open_for_export(&source)
+            .and_then(|cloud| pointcloud_core::export_full(&cloud, &destination, format))
         {
-            Some("ply") => ExportFormat::PlyBinary,
-            Some("xyz") => ExportFormat::Xyz,
-            Some("pts") => ExportFormat::Pts,
-            Some("csv") => ExportFormat::Csv,
-            Some("las") => ExportFormat::Las,
-            Some("laz") => ExportFormat::Laz,
-            _ => {
-                eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz");
-                std::process::exit(2);
-            }
-        };
-        let is_las = source
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
-            });
-        let input = if is_las {
-            pointcloud_core::open_las_header(&source)
-        } else {
-            pointcloud_core::open(&source, 1)
-        };
-        match input.and_then(|cloud| pointcloud_core::export_full(&cloud, &destination, format)) {
             Ok(()) => return Ok(()),
             Err(error) => {
                 eprintln!("Export failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if first.as_deref() == Some(OsStr::new("--section")) {
+        let (Some(source), Some(limits), Some(destination), None) =
+            (args.next(), args.next(), args.next(), args.next())
+        else {
+            eprintln!(
+                "Usage: open-pointcloud-studio-native --section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT"
+            );
+            std::process::exit(2);
+        };
+        let source = PathBuf::from(source);
+        let destination = PathBuf::from(destination);
+        let Some(format) = export_format_for_path(&destination) else {
+            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz");
+            std::process::exit(2);
+        };
+        let Some(values) = limits.to_str().and_then(|value| {
+            value
+                .split(',')
+                .map(str::parse::<f64>)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+        }) else {
+            eprintln!("Section limits must be six comma-separated numbers");
+            std::process::exit(2);
+        };
+        if values.len() != 6 {
+            eprintln!("Section limits must be six comma-separated numbers");
+            std::process::exit(2);
+        }
+        let section = Bounds {
+            min: [values[0], values[1], values[2]],
+            max: [values[3], values[4], values[5]],
+        };
+        match open_for_export(&source).and_then(|cloud| {
+            pointcloud_core::export_section(&cloud, &destination, format, section)
+        }) {
+            Ok(count) => {
+                println!("Exported {count} points to {}", destination.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Section export failed: {error}");
                 std::process::exit(1);
             }
         }

@@ -24,6 +24,7 @@ cd native
 cargo run -p open-pointcloud-studio-native
 cargo run -p open-pointcloud-studio-native -- /path/to/scan.laz
 cargo run -p open-pointcloud-studio-native -- --export /path/to/scan.laz /path/to/scan.ply
+cargo run -p open-pointcloud-studio-native -- --section /path/to/scan.laz 207440,474000,-100,208000,475000,1000 /path/to/crop.laz
 cargo run -p open-pointcloud-studio-native -- --mesh /path/to/scan.laz /path/to/terrain.obj
 cargo run -p open-pointcloud-studio-native -- --surface /path/to/scan.e57 /path/to/surface.obj
 cargo run -p open-pointcloud-studio-native -- --bag3d 91000,398000,92000,399000 2.2 /path/to/buildings.obj
@@ -51,7 +52,7 @@ File open and save dialogs use `rfd::AsyncFileDialog`, so the native UI stays re
 | Full-resolution point selection | Index-guided exact box selection when available, full-source fallback, exact indexed single-point pick and selected export |
 | Editing | Native Delete/Undo/Redo on original source ordinals across multiple clouds; full/section export, stride decimation, exact-percentage thinning, XYZ translation, independent XYZ scaling and both meshers honor the remaining points. Transforms, crop and save-minus remain file-based |
 | Surface reconstruction | Full-source 2.5D terrain TIN and bounded 3D local surface reconstruction to OBJ with native GPU face display; watertight and adaptive reconstruction remain |
-| PLY, LAS, LAZ, XYZ, PTS, CSV export | Full same-format LAS/LAZ export copies the original file byte-for-byte; full LAS↔LAZ conversion streams native LAS records with their metadata and point attributes. Filtered or transformed LAS/LAZ output keeps XYZ, RGB, intensity and classification and copies projection VLRs. Other LAS-specific point attributes are not yet retained by the common point model |
+| PLY, LAS, LAZ, XYZ, PTS, CSV export | Full same-format LAS/LAZ export copies the original file byte-for-byte; full LAS↔LAZ conversion streams native LAS records with their metadata and point attributes. Filtered or transformed LAS/LAZ output preserves the original point format, GPS time, return data, 16-bit RGB, projection records and coordinate grid while applying edits to source records. Non-LAS input uses the common XYZ, RGB8, intensity and classification model |
 | OBJ mesh export | Implemented for the terrain TIN |
 | 3DBAG | Native RD map with PDOK raster tiles, rectangle drawing, pan/zoom, typed/scan/section-box bounds, LoD choice, paginated CityJSONFeatures import and GPU mesh display |
 | Themes | Five native OpenAEC palettes, selected from Home and persisted locally; model space remains dark |

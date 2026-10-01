@@ -240,9 +240,12 @@ retaining RGB, intensity and classification. Full LAS-to-LAS and LAZ-to-LAZ
 exports were byte-identical to their sources. LAS-to-LAZ and LAZ-to-LAS
 conversions stream original LAS point records; a round trip test checks GPS
 time, return numbers, 16-bit RGB and projection metadata. An out-of-range
-coordinate failed without publishing a partial LAS file. Filtered or
-transformed output uses the common point model, which does not yet retain
-LAS-only GPS times, return metadata or full 16-bit RGB values.
+coordinate failed without publishing a partial LAS file. Filtered and
+transformed LAS/LAZ output now writes the original LAS point records with only
+the edited fields changed. The source point format, GPS time, return data,
+16-bit RGB, projection records and coordinate grid remain intact. The common
+point model for non-LAS input still contains only XYZ, RGB8, intensity and
+classification.
 
 Parallel LAZ compression was exercised with 1,200,000 deterministic XYZ points:
 the generated LAZ header reported exactly 1,200,000 points and the native
@@ -251,3 +254,11 @@ octree index reopened all of them. On this host an eight-worker run took
 (99% CPU, 87 MiB RSS) with `RAYON_NUM_THREADS=1`. Input text parsing dominates
 this small benchmark, so these figures do not predict throughput for larger
 LAS/LAZ conversions. The batch size remains bounded at 400,000 points.
+
+The native `--section` command was then run on the public 463 MB AHN6 tile with
+45,839,678 points, selecting X = 207980..208000, Y = 474000..475000 and Z =
+-100..1000. It wrote an 8.6 MB LAZ with 876,086 points in 418 seconds and
+130 MiB peak RSS. The native octree index reopened all 876,086 points. The
+output retained the source's compressed point format 7, 42-byte point record,
+0.001 coordinate scales and zero offsets. Its LAS header X range was
+207980.000..207999.999, inside the requested section.

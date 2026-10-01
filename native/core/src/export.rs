@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use super::{visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
+use super::{convert_las_point, visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
 
 // The LAZ compressor parallelizes only when a write contains multiple chunks.
 // Eight default 50,000-point chunks keep memory bounded and can use eight cores.
@@ -453,36 +453,25 @@ fn export_las_map_count(
         })
         .map(|_| las::Reader::from_path(&cloud.path).map(|reader| reader.header().clone()))
         .transpose()?;
-    let mut builder = Builder::from((1, 4));
-    builder.generating_software = "Open Pointcloud Studio".into();
-    let extended = cloud.total_points > u64::from(u32::MAX)
-        || source_header
-            .as_ref()
-            .is_some_and(|header| header.point_format().is_extended);
-    builder.point_format = Format::new(match (extended, cloud.has_rgb) {
-        (false, false) => 0,
-        (false, true) => 2,
-        (true, false) => 6,
-        (true, true) => 7,
-    })?;
+    let extended = cloud.total_points > u64::from(u32::MAX);
+    let mut builder = if let Some(header) = &source_header {
+        let mut builder = Builder::from(header.clone());
+        builder.vlrs.retain(|vlr| {
+            !(vlr.record_id == 22204 && vlr.user_id.eq_ignore_ascii_case("laszip encoded"))
+        });
+        builder
+    } else {
+        let mut builder = Builder::from((1, 4));
+        builder.generating_software = "Open Pointcloud Studio".into();
+        builder.point_format = Format::new(match (extended, cloud.has_rgb) {
+            (false, false) => 0,
+            (false, true) => 2,
+            (true, false) => 6,
+            (true, true) => 7,
+        })?;
+        builder
+    };
     builder.point_format.is_compressed = format == ExportFormat::Laz;
-    if let Some(header) = &source_header {
-        builder.file_source_id = header.file_source_id();
-        builder.system_identifier = header.system_identifier().into();
-        builder.has_wkt_crs = header.has_wkt_crs();
-        builder.vlrs = header
-            .vlrs()
-            .iter()
-            .filter(|vlr| vlr.user_id == "LASF_Projection")
-            .cloned()
-            .collect();
-        builder.evlrs = header
-            .evlrs()
-            .iter()
-            .filter(|vlr| vlr.user_id == "LASF_Projection")
-            .cloned()
-            .collect();
-    }
     let transforms: [Transform; 3] = if let Some(header) = &source_header {
         let source = header.transforms();
         [source.x, source.y, source.z]
@@ -511,54 +500,108 @@ fn export_las_map_count(
     let mut batch = Vec::with_capacity(batch_limit);
     let mut source_count = 0u64;
     let mut written_count = 0u64;
-    let stream_result = visit_points(&cloud.path, &mut |point| {
-        let ordinal = source_count;
-        source_count += 1;
-        let Some(point) = map(ordinal, point) else {
-            return Ok(());
-        };
-        if !point.xyz.iter().all(|value| value.is_finite()) {
-            return Err(LoadError::InvalidData(
-                "transform produced non-finite coordinates".into(),
-            ));
-        }
-        for (axis, transform) in transforms.iter().enumerate() {
-            transform.inverse(point.xyz[axis])?;
-        }
-        let class_code = point.classification.unwrap_or(1);
-        let overlap = class_code == 12;
-        let classification = las::point::Classification::new(if overlap { 1 } else { class_code })?;
-        let color = point.rgb.map(|rgb| {
-            Color::new(
-                u16::from(rgb[0]) * 257,
-                u16::from(rgb[1]) * 257,
-                u16::from(rgb[2]) * 257,
-            )
-        });
-        batch.push(LasPoint {
-            x: point.xyz[0],
-            y: point.xyz[1],
-            z: point.xyz[2],
-            intensity: point.intensity.unwrap_or(0),
-            return_number: 1,
-            number_of_returns: 1,
-            classification,
-            is_overlap: overlap,
-            gps_time: extended.then_some(0.0),
-            color: if cloud.has_rgb {
-                Some(color.unwrap_or_else(|| Color::new(0, 0, 0)))
-            } else {
-                None
-            },
-            ..LasPoint::default()
-        });
-        if batch.len() == batch_limit {
-            writer.write_points(&batch)?;
-            batch.clear();
-        }
-        written_count += 1;
-        Ok(())
-    });
+    let stream_result = if source_header.is_some() {
+        (|| -> Result<(), LoadError> {
+            let mut reader = las::Reader::from_path(&cloud.path)?;
+            for raw_point in reader.points() {
+                let mut raw_point = raw_point?;
+                let original = convert_las_point(&raw_point);
+                let ordinal = source_count;
+                source_count += 1;
+                let Some(point) = map(ordinal, original) else {
+                    continue;
+                };
+                if !point.xyz.iter().all(|value| value.is_finite()) {
+                    return Err(LoadError::InvalidData(
+                        "transform produced non-finite coordinates".into(),
+                    ));
+                }
+                for (axis, transform) in transforms.iter().enumerate() {
+                    transform.inverse(point.xyz[axis])?;
+                }
+                [raw_point.x, raw_point.y, raw_point.z] = point.xyz;
+                if point.rgb != original.rgb {
+                    raw_point.color = point.rgb.map(|rgb| {
+                        Color::new(
+                            u16::from(rgb[0]) * 257,
+                            u16::from(rgb[1]) * 257,
+                            u16::from(rgb[2]) * 257,
+                        )
+                    });
+                }
+                if point.intensity != original.intensity {
+                    raw_point.intensity = point.intensity.unwrap_or(0);
+                }
+                if point.classification != original.classification {
+                    let class_code = point.classification.unwrap_or(1);
+                    raw_point.is_overlap = class_code == 12;
+                    raw_point.classification =
+                        las::point::Classification::new(if class_code == 12 {
+                            1
+                        } else {
+                            class_code
+                        })?;
+                }
+                batch.push(raw_point);
+                if batch.len() == batch_limit {
+                    writer.write_points(&batch)?;
+                    batch.clear();
+                }
+                written_count += 1;
+            }
+            Ok(())
+        })()
+    } else {
+        visit_points(&cloud.path, &mut |point| {
+            let ordinal = source_count;
+            source_count += 1;
+            let Some(point) = map(ordinal, point) else {
+                return Ok(());
+            };
+            if !point.xyz.iter().all(|value| value.is_finite()) {
+                return Err(LoadError::InvalidData(
+                    "transform produced non-finite coordinates".into(),
+                ));
+            }
+            for (axis, transform) in transforms.iter().enumerate() {
+                transform.inverse(point.xyz[axis])?;
+            }
+            let class_code = point.classification.unwrap_or(1);
+            let overlap = class_code == 12;
+            let classification =
+                las::point::Classification::new(if overlap { 1 } else { class_code })?;
+            let color = point.rgb.map(|rgb| {
+                Color::new(
+                    u16::from(rgb[0]) * 257,
+                    u16::from(rgb[1]) * 257,
+                    u16::from(rgb[2]) * 257,
+                )
+            });
+            batch.push(LasPoint {
+                x: point.xyz[0],
+                y: point.xyz[1],
+                z: point.xyz[2],
+                intensity: point.intensity.unwrap_or(0),
+                return_number: 1,
+                number_of_returns: 1,
+                classification,
+                is_overlap: overlap,
+                gps_time: extended.then_some(0.0),
+                color: if cloud.has_rgb {
+                    Some(color.unwrap_or_else(|| Color::new(0, 0, 0)))
+                } else {
+                    None
+                },
+                ..LasPoint::default()
+            });
+            if batch.len() == batch_limit {
+                writer.write_points(&batch)?;
+                batch.clear();
+            }
+            written_count += 1;
+            Ok(())
+        })
+    };
     let stream_result = stream_result.and_then(|()| {
         if !batch.is_empty() {
             writer.write_points(&batch)?;
@@ -889,6 +932,12 @@ mod tests {
             description: "GeoKeyDirectoryTag".into(),
             data: vec![1, 0, 1, 0],
         });
+        builder.vlrs.push(las::Vlr {
+            user_id: "OpenPTS".into(),
+            record_id: 65_000,
+            description: "Producer metadata".into(),
+            data: vec![7, 8, 9],
+        });
         let mut writer = las::Writer::new(
             std::fs::File::create(&source).unwrap(),
             builder.into_header().unwrap(),
@@ -948,6 +997,91 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(restored_point, original_point);
+
+        let selected = dir.path().join("selected.laz");
+        export_where(&laz_cloud, &selected, ExportFormat::Laz, 1, |_, _| true).unwrap();
+        let mut selected_reader = las::Reader::from_path(&selected).unwrap();
+        assert_eq!(selected_reader.header().number_of_points(), 1);
+        assert!(selected_reader
+            .header()
+            .vlrs()
+            .iter()
+            .any(|vlr| vlr.user_id == "LASF_Projection" && vlr.record_id == 34735));
+        assert!(selected_reader.header().vlrs().iter().any(|vlr| {
+            vlr.user_id == "OpenPTS" && vlr.record_id == 65_000 && vlr.data == [7, 8, 9]
+        }));
+        assert_eq!(
+            selected_reader.points().next().unwrap().unwrap(),
+            original_point
+        );
+
+        let moved = dir.path().join("moved.laz");
+        export_affine(&laz_cloud, &moved, ExportFormat::Laz, [10.0, 0.0, 0.0], 1.0).unwrap();
+        let moved_point = las::Reader::from_path(&moved)
+            .unwrap()
+            .points()
+            .next()
+            .unwrap()
+            .unwrap();
+        let mut expected_moved = original_point;
+        expected_moved.x += 10.0;
+        assert_eq!(moved_point, expected_moved);
+    }
+
+    #[test]
+    fn filtered_las_keeps_original_millimeter_grid() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("survey.las");
+        let mut builder = las::Builder::from((1, 4));
+        builder.transforms = las::Vector {
+            x: las::Transform {
+                scale: 0.001,
+                offset: 207_000.0,
+            },
+            y: las::Transform {
+                scale: 0.001,
+                offset: 474_000.0,
+            },
+            z: las::Transform {
+                scale: 0.001,
+                offset: 0.0,
+            },
+        };
+        let mut writer = las::Writer::new(
+            std::fs::File::create(&source).unwrap(),
+            builder.into_header().unwrap(),
+        )
+        .unwrap();
+        for x in [207_000.001, 207_000.002] {
+            writer
+                .write_point(las::Point {
+                    x,
+                    y: 474_000.003,
+                    z: 1.234,
+                    ..las::Point::default()
+                })
+                .unwrap();
+        }
+        writer.close().unwrap();
+        drop(writer);
+
+        let cloud = open(&source, 1).unwrap();
+        let destination = dir.path().join("selected.laz");
+        export_where(&cloud, &destination, ExportFormat::Laz, 1, |ordinal, _| {
+            ordinal == 0
+        })
+        .unwrap();
+        let mut source_reader = las::Reader::from_path(&source).unwrap();
+        let mut output_reader = las::Reader::from_path(&destination).unwrap();
+        assert_eq!(output_reader.header().number_of_points(), 1);
+        assert_eq!(
+            output_reader.header().transforms(),
+            source_reader.header().transforms()
+        );
+        assert_eq!(
+            output_reader.points().next().unwrap().unwrap(),
+            source_reader.points().next().unwrap().unwrap()
+        );
     }
 
     #[test]

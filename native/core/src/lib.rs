@@ -263,7 +263,7 @@ pub fn open_las_preview(
             .min(count - start)
             .min(target - cloud.points.len() as u64);
         for (offset, point) in reader.read_points(length)?.into_iter().enumerate() {
-            cloud.points.push(convert_las_point(point));
+            cloud.points.push(convert_las_point(&point));
             cloud.point_ordinals.push(if compressed && count > target {
                 u64::MAX
             } else {
@@ -393,12 +393,12 @@ fn read_las(
 ) -> Result<(), LoadError> {
     let mut reader = las::Reader::from_path(path)?;
     for point in reader.points() {
-        push(convert_las_point(point?))?;
+        push(convert_las_point(&point?))?;
     }
     Ok(())
 }
 
-fn convert_las_point(point: las::Point) -> Point {
+fn convert_las_point(point: &las::Point) -> Point {
     let rgb = point.color.map(|color| {
         let channels = [color.red, color.green, color.blue];
         if channels.iter().all(|channel| *channel <= 255) {
