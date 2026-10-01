@@ -66,6 +66,7 @@ pub enum ApiCommand {
         min: [f64; 3],
         max: [f64; 3],
     },
+    CancelSelection,
     ClearSelection,
     DeleteSelection,
     UndoDelete,

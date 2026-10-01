@@ -50,6 +50,10 @@ The job and `status.result.selected_points` report exact counts. For very large
 selections the viewport draws a representative highlight sample rather than
 uploading every selected point again; the native status line reports how many
 highlights are shown.
+`cancel_selection` stops a running world-box or viewport-box scan; the job
+becomes `cancelled` and no partial selection replaces the previous one. Escape
+or Clear in the native UI also stops an in-progress scan. An in-progress point
+pick is discarded when cancelled.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
@@ -69,6 +73,7 @@ highlights are shown.
 | `set_section` | `min`, `max` | Enables an XYZ section box using two three-number arrays inside the visible model bounds |
 | `clear_section` | — | Disables the section box |
 | `select_world` | `min`, `max` | Selects all exact source points in an inclusive XYZ box, returning a job ID |
+| `cancel_selection` | — | Stops a running full-resolution box selection or discards an in-progress point pick |
 | `clear_selection` | — | Clears the current point selection |
 | `delete_selection` | — | Hides selected points in the open view; may first queue an octree build for LAZ |
 | `undo_delete` | — | Restores the latest deletion batch |

@@ -1,7 +1,12 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use crate::CloudTransform;
-use pointcloud_core::{visit_points, Bounds, IndexedPoint, OctreeIndex, Point, PointCloud};
+use pointcloud_core::{
+    visit_points, Bounds, IndexedPoint, LoadError, OctreeIndex, Point, PointCloud,
+};
 
 const HIGHLIGHT_LIMIT: usize = 8_000;
 
@@ -556,29 +561,62 @@ pub struct SelectionSource {
     pub transform: CloudTransform,
 }
 
+#[cfg(test)]
 pub fn select_full(
     sources: Vec<SelectionSource>,
     projection: Projection,
     rectangle: ScreenRect,
     filter: ClassFilter,
 ) -> Result<Vec<(usize, Arc<SelectionMask>)>, String> {
+    select_full_cancellable(
+        sources,
+        projection,
+        rectangle,
+        filter,
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+pub fn select_full_cancellable(
+    sources: Vec<SelectionSource>,
+    projection: Projection,
+    rectangle: ScreenRect,
+    filter: ClassFilter,
+    cancel: Arc<AtomicBool>,
+) -> Result<Vec<(usize, Arc<SelectionMask>)>, String> {
     let workers: Vec<_> = sources
         .into_iter()
-        .map(|source| std::thread::spawn(move || select_one(source, projection, rectangle, filter)))
+        .map(|source| {
+            let cancel = Arc::clone(&cancel);
+            std::thread::spawn(move || select_one(source, projection, rectangle, filter, &cancel))
+        })
         .collect();
     let mut result = Vec::with_capacity(workers.len());
     for worker in workers {
         result.push(worker.join().map_err(|_| "selection worker panicked")??);
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
     }
     Ok(result)
 }
 
 /// Select exact source points inside a world-coordinate box. Indexed files
 /// only visit intersecting leaves; unindexed files stream the entire source.
+#[cfg(test)]
 pub fn select_world(
     sources: Vec<SelectionSource>,
     bounds: Bounds,
     filter: ClassFilter,
+) -> Result<Vec<(usize, Arc<SelectionMask>)>, String> {
+    select_world_cancellable(sources, bounds, filter, Arc::new(AtomicBool::new(false)))
+}
+
+pub fn select_world_cancellable(
+    sources: Vec<SelectionSource>,
+    bounds: Bounds,
+    filter: ClassFilter,
+    cancel: Arc<AtomicBool>,
 ) -> Result<Vec<(usize, Arc<SelectionMask>)>, String> {
     if !(0..3).all(|axis| {
         bounds.min[axis].is_finite()
@@ -589,11 +627,17 @@ pub fn select_world(
     }
     let workers: Vec<_> = sources
         .into_iter()
-        .map(|source| std::thread::spawn(move || select_one_world(source, bounds, filter)))
+        .map(|source| {
+            let cancel = Arc::clone(&cancel);
+            std::thread::spawn(move || select_one_world(source, bounds, filter, &cancel))
+        })
         .collect();
     let mut result = Vec::with_capacity(workers.len());
     for worker in workers {
         result.push(worker.join().map_err(|_| "selection worker panicked")??);
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
     }
     Ok(result)
 }
@@ -606,7 +650,11 @@ fn select_one_world(
     source: SelectionSource,
     bounds: Bounds,
     filter: ClassFilter,
+    cancel: &AtomicBool,
 ) -> Result<(usize, Arc<SelectionMask>), String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
+    }
     let SelectionSource {
         index,
         cloud,
@@ -617,6 +665,7 @@ fn select_one_world(
     cloud.validate_source().map_err(|error| error.to_string())?;
     let mut mask = SelectionMask::new(cloud.total_points)?;
     let mut random_state = 0xd1b5_4a32_d192_ed03u64;
+    let mut visited = 0u64;
     let mut consider = |ordinal: u64, point: Point| {
         let point = transform.point(point);
         if !deleted.as_ref().is_some_and(|mask| mask.contains(ordinal))
@@ -631,12 +680,17 @@ fn select_one_world(
     if let Some(tree) = tree {
         tree.visit_intersecting(
             |node| {
-                bounds_overlap(transform.bounds(node), bounds)
+                !cancel.load(Ordering::Relaxed)
+                    && bounds_overlap(transform.bounds(node), bounds)
                     && filter
                         .section
                         .is_none_or(|section| bounds_overlap(transform.bounds(node), section))
             },
             |record| {
+                visited += 1;
+                if visited & 0xfff == 0 && cancel.load(Ordering::Relaxed) {
+                    return Err(LoadError::Cancelled);
+                }
                 consider(record.ordinal, record.point);
                 Ok(())
             },
@@ -645,6 +699,9 @@ fn select_one_world(
     } else {
         let mut ordinal = 0u64;
         visit_points(&cloud.path, &mut |point| {
+            if ordinal & 0xfff == 0 && cancel.load(Ordering::Relaxed) {
+                return Err(LoadError::Cancelled);
+            }
             consider(ordinal, point);
             ordinal += 1;
             Ok(())
@@ -653,6 +710,9 @@ fn select_one_world(
         if ordinal != cloud.total_points {
             return Err(format!("{} changed while selecting", cloud.path.display()));
         }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
     }
     cloud.validate_source().map_err(|error| error.to_string())?;
     Ok((index, Arc::new(mask)))
@@ -663,7 +723,11 @@ fn select_one(
     projection: Projection,
     rectangle: ScreenRect,
     filter: ClassFilter,
+    cancel: &AtomicBool,
 ) -> Result<(usize, Arc<SelectionMask>), String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
+    }
     let SelectionSource {
         index,
         cloud,
@@ -674,6 +738,7 @@ fn select_one(
     cloud.validate_source().map_err(|error| error.to_string())?;
     let mut mask = SelectionMask::new(cloud.total_points)?;
     let mut random_state = 0xd1b5_4a32_d192_ed03u64;
+    let mut visited = 0u64;
     let mut consider = |ordinal: u64, point: Point| {
         let point = transform.point(point);
         if !deleted.as_ref().is_some_and(|mask| mask.contains(ordinal)) && filter.accepts(&point) {
@@ -687,6 +752,9 @@ fn select_one(
     if let Some(tree) = tree {
         tree.visit_intersecting(
             |bounds| {
+                if cancel.load(Ordering::Relaxed) {
+                    return false;
+                }
                 if filter.section.is_some_and(|section| {
                     (0..3).any(|axis| {
                         transform.bounds(bounds).max[axis] < section.min[axis]
@@ -698,6 +766,10 @@ fn select_one(
                 node_overlaps_rectangle(transform.bounds(bounds), projection, rectangle)
             },
             |record| {
+                visited += 1;
+                if visited & 0xfff == 0 && cancel.load(Ordering::Relaxed) {
+                    return Err(LoadError::Cancelled);
+                }
                 consider(record.ordinal, record.point);
                 Ok(())
             },
@@ -706,6 +778,9 @@ fn select_one(
     } else {
         let mut ordinal = 0u64;
         visit_points(&cloud.path, &mut |point| {
+            if ordinal & 0xfff == 0 && cancel.load(Ordering::Relaxed) {
+                return Err(LoadError::Cancelled);
+            }
             consider(ordinal, point);
             ordinal += 1;
             Ok(())
@@ -714,6 +789,9 @@ fn select_one(
         if ordinal != cloud.total_points {
             return Err(format!("{} changed while selecting", cloud.path.display()));
         }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
     }
     cloud.validate_source().map_err(|error| error.to_string())?;
     Ok((index, Arc::new(mask)))
@@ -939,6 +1017,33 @@ mod tests {
         assert!(stream[0].1.contains(45));
         assert!(!stream[0].1.contains(40));
         assert_eq!(stream[0].1.bits, indexed[0].1.bits);
+    }
+
+    #[test]
+    fn cancelled_selection_does_not_publish_partial_masks() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("cancel.xyz");
+        fs::write(&source, "0 0 0\n1 0 0\n2 0 0\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 1).unwrap());
+        let cancel = Arc::new(AtomicBool::new(true));
+        let filter = ClassFilter {
+            ground: true,
+            vegetation: true,
+            buildings: true,
+            other: true,
+            classes: ClassVisibility::default(),
+            section: None,
+        };
+        let result = select_world_cancellable(
+            vec![selection_source(cloud, None, None)],
+            Bounds {
+                min: [0.0, 0.0, 0.0],
+                max: [2.0, 0.0, 0.0],
+            },
+            filter,
+            cancel,
+        );
+        assert_eq!(result.unwrap_err(), "Operation cancelled");
     }
 
     #[test]

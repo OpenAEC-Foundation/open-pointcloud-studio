@@ -71,6 +71,15 @@ seconds. The selected LAZ remains locally at
 `/tmp/ops-ahn6-selection-11m.laz` for follow-up tests. The development view
 was returned to zero selected and zero deleted points afterward.
 
+A full-scene world selection across the same three indexed AHN6 files was
+started, then cancelled by each of the native API, the Select ribbon's
+**Cancel selection** button, and Escape. Each 129,398,587-point search ended
+with a `cancelled` job and zero selected points, without publishing a partial
+mask. The [ribbon screenshot](../screenshots/native-cancel-selection-ribbon.png)
+shows the button while the exact scan is running. A new selection immediately
+after Escape completed with the same 11,019,954 exact points in 6.87 seconds;
+the development view was cleared afterward.
+
 The same three indexed tiles were used to check deep-zoom LOD allocation at
 0.08046× zoom. An equal split of the 80,000-point budget rendered 32,810
 points because two tiles could supply only 2,048 and 4,096 visible points.

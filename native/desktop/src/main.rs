@@ -36,9 +36,12 @@ use pointcloud_core::{
     BagBounds, BagLod, Bounds, ExportFormat, IndexConfig, IndexProgress, IndexStage, IndexedPoint,
     MeshGeometry, OctreeIndex, Point, PointCloud, SurfaceMeshConfig,
 };
+#[cfg(test)]
+use selection::select_world;
 use selection::{
-    pick_full_transformed, pick_indexed_transformed, select_full, select_world, ClassFilter,
-    ClassVisibility, DeletionMask, Projection, ScreenRect, SelectionMask, SelectionSource,
+    pick_full_transformed, pick_indexed_transformed, select_full_cancellable,
+    select_world_cancellable, ClassFilter, ClassVisibility, DeletionMask, Projection, ScreenRect,
+    SelectionMask, SelectionSource,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1048,6 +1051,7 @@ enum Message {
     ContextAction(ContextAction),
     DismissContextMenu,
     Escape,
+    CancelSelection,
     ToggleBoxSelect,
     TogglePickSelect,
     ClearSelection,
@@ -1135,6 +1139,7 @@ struct Studio {
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     selection_pending: bool,
+    selection_cancel: Arc<AtomicBool>,
     pending_delete: bool,
     index_pending: bool,
     index_progress: Option<Arc<Mutex<IndexProgress>>>,
@@ -1412,6 +1417,7 @@ impl Default for Studio {
             drag_rectangle: None,
             context_menu: None,
             selection_pending: false,
+            selection_cancel: Arc::new(AtomicBool::new(false)),
             pending_delete: false,
             index_pending: false,
             index_progress: None,
@@ -1783,6 +1789,8 @@ impl Studio {
                             section: self.section_bounds(),
                         };
                         self.selection_pending = true;
+                        let cancel = Arc::new(AtomicBool::new(false));
+                        self.selection_cancel = Arc::clone(&cancel);
                         self.pending_delete = false;
                         self.status = format!(
                             "Selecting exact points in {} visible file(s)…",
@@ -1791,7 +1799,7 @@ impl Studio {
                         let task = Task::perform(
                             async move {
                                 tokio::task::spawn_blocking(move || {
-                                    select_world(sources, bounds, filter)
+                                    select_world_cancellable(sources, bounds, filter, cancel)
                                 })
                                 .await
                                 .map_err(|error| error.to_string())?
@@ -1806,6 +1814,17 @@ impl Studio {
                         );
                         (json!({"ok": true, "accepted": true, "job_id": id}), task)
                     }
+                }
+            }
+            ApiCommand::CancelSelection => {
+                if !self.selection_pending {
+                    (
+                        json!({"ok": false, "error": "no selection is running"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::CancelSelection);
+                    (json!({"ok": true, "cancelling": true}), task)
                 }
             }
             ApiCommand::ClearSelection => {
@@ -2522,7 +2541,10 @@ impl Studio {
             }
             Message::ApiWorldSelectionReady(id, revision, result) => {
                 self.selection_pending = false;
-                let job = if revision != self.revision {
+                let job = if self.selection_cancel.load(Ordering::Relaxed) {
+                    self.status = "Selection cancelled".into();
+                    json!({"state": "cancelled"})
+                } else if revision != self.revision {
                     let error = "selection discarded because files or view filters changed";
                     self.status = error.into();
                     json!({"state": "failed", "error": error})
@@ -4817,12 +4839,22 @@ impl Studio {
                     self.file_open = false;
                     return Task::none();
                 }
+                let cancelling = self.cancel_selection();
                 self.context_menu = None;
                 self.box_select = false;
                 self.pick_mode = false;
                 self.bag_map_drawing = false;
                 self.drag_rectangle = None;
-                self.status = "Selection tool closed; orbit and right-click menu available".into();
+                self.status = if cancelling {
+                    "Cancelling selection; orbit and right-click menu available".into()
+                } else {
+                    "Selection tool closed; orbit and right-click menu available".into()
+                };
+            }
+            Message::CancelSelection => {
+                if self.cancel_selection() {
+                    self.status = "Cancelling full-resolution selection…".into();
+                }
             }
             Message::ToggleBoxSelect => {
                 self.box_select = !self.box_select;
@@ -4838,6 +4870,9 @@ impl Studio {
             }
             Message::ClearSelection => {
                 self.pending_delete = false;
+                if self.selection_pending {
+                    self.selection_cancel.store(true, Ordering::Relaxed);
+                }
                 self.revision += 1;
                 for entry in &mut self.clouds {
                     entry.selection = None;
@@ -4903,6 +4938,7 @@ impl Studio {
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
                     let transform = entry.transform;
                     self.selection_pending = true;
+                    self.selection_cancel = Arc::new(AtomicBool::new(false));
                     self.status = if tree.is_some() {
                         "Finding nearest point through the octree…".into()
                     } else {
@@ -4944,6 +4980,8 @@ impl Studio {
                 }
                 let rectangle = ScreenRect::from_corners(start, end);
                 self.selection_pending = true;
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.selection_cancel = Arc::clone(&cancel);
                 self.status = if sources.iter().all(|source| source.tree.is_some()) {
                     format!(
                         "Selecting exact points through octrees in {} file(s)…",
@@ -4955,7 +4993,7 @@ impl Studio {
                 return Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            select_full(sources, projection, rectangle, filter)
+                            select_full_cancellable(sources, projection, rectangle, filter, cancel)
                         })
                         .await
                         .map_err(|error| error.to_string())?
@@ -4965,6 +5003,10 @@ impl Studio {
             }
             Message::SelectionReady(revision, result) => {
                 self.selection_pending = false;
+                if self.selection_cancel.load(Ordering::Relaxed) {
+                    self.status = "Selection cancelled".into();
+                    return Task::none();
+                }
                 if revision != self.revision {
                     self.status = "Selection discarded because files changed".into();
                     return Task::none();
@@ -4986,6 +5028,10 @@ impl Studio {
             }
             Message::PickReady(revision, index, result) => {
                 self.selection_pending = false;
+                if self.selection_cancel.load(Ordering::Relaxed) {
+                    self.status = "Point pick cancelled".into();
+                    return Task::none();
+                }
                 if revision != self.revision {
                     self.status = "Point pick discarded because the view changed".into();
                     return Task::none();
@@ -5029,6 +5075,16 @@ impl Studio {
             .filter_map(|entry| entry.selection.as_ref())
             .map(|selection| selection.count)
             .sum()
+    }
+
+    fn cancel_selection(&mut self) -> bool {
+        if !self.selection_pending {
+            return false;
+        }
+        if !self.selection_cancel.swap(true, Ordering::Relaxed) {
+            self.revision += 1;
+        }
+        true
     }
 
     fn selection_status(&self) -> String {
@@ -5683,7 +5739,16 @@ impl Studio {
                             Message::RemoveSelection,
                             false
                         )),
-                    ],
+                    ]
+                    .into_iter()
+                    .chain(self.selection_pending.then(|| {
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
+                            "Cancel selection",
+                            Message::CancelSelection,
+                            false,
+                        ))
+                    }))
+                    .collect(),
                 ),
                 ribbon_group(
                     "RESULT",
