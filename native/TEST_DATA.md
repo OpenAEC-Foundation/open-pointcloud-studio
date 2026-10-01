@@ -278,6 +278,9 @@ scan transforms. The native Properties panel lists four stations and the View
 ribbon's **Fit stations** action frames their markers together with the
 160,838-point cloud; see
 [`native-e57-scan-positions-framed.png`](../screenshots/native-e57-scan-positions-framed.png).
+Two E57 scans share one position; the latest view groups their overlapping
+screen markers as **2 stations** while Properties keeps all four records:
+[`native-e57-scan-positions-grouped.png`](../screenshots/native-e57-scan-positions-grouped.png).
 The same position collection is checked by PTX and PCD parser tests.
 
 The GUI also opened a 22,801-point XYZ grid with **Indexed: No**. Pick point

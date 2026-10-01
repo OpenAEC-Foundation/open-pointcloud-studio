@@ -4635,6 +4635,34 @@ struct PointViewport<'a> {
     viewport_size: Size,
 }
 
+struct ScanMarker {
+    x: f32,
+    y: f32,
+    labels: Vec<String>,
+}
+
+fn push_scan_marker(markers: &mut Vec<ScanMarker>, x: f32, y: f32, label: &str, group: bool) {
+    if group {
+        if let Some(marker) = markers.iter_mut().find(|marker| {
+            let dx = marker.x - x;
+            let dy = marker.y - y;
+            dx * dx + dy * dy <= 12.0 * 12.0
+        }) {
+            marker.labels.push(label.to_owned());
+            return;
+        }
+    }
+    markers.push(ScanMarker {
+        x,
+        y,
+        labels: if group {
+            vec![label.to_owned()]
+        } else {
+            Vec::new()
+        },
+    });
+}
+
 #[derive(Debug, Clone, Copy)]
 enum DragMode {
     Orbit,
@@ -5146,40 +5174,55 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 .filter(|entry| entry.visible)
                 .map(|entry| entry.cloud.scan_poses.len())
                 .sum();
+            let show_labels = pose_count <= 24;
+            let mut markers = Vec::with_capacity(pose_count);
             for entry in self.clouds.iter().filter(|entry| entry.visible) {
                 for pose in &entry.cloud.scan_poses {
                     let Some((x, y, _)) = projection.project(pose.position) else {
                         continue;
                     };
-                    let center = UiPoint::new(x, y);
-                    let ring = canvas::Path::circle(center, 6.0);
-                    frame.fill(&ring, Color::from_rgb8(42, 42, 50));
+                    push_scan_marker(&mut markers, x, y, &pose.label, show_labels);
+                }
+            }
+            for marker in markers {
+                let center = UiPoint::new(marker.x, marker.y);
+                let ring = canvas::Path::circle(center, 6.0);
+                frame.fill(&ring, Color::from_rgb8(42, 42, 50));
+                frame.stroke(
+                    &ring,
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb8(245, 158, 11))
+                        .with_width(2.0),
+                );
+                for (start, end) in [
+                    (
+                        UiPoint::new(marker.x - 10.0, marker.y),
+                        UiPoint::new(marker.x + 10.0, marker.y),
+                    ),
+                    (
+                        UiPoint::new(marker.x, marker.y - 10.0),
+                        UiPoint::new(marker.x, marker.y + 10.0),
+                    ),
+                ] {
                     frame.stroke(
-                        &ring,
+                        &canvas::Path::line(start, end),
                         canvas::Stroke::default()
                             .with_color(Color::from_rgb8(245, 158, 11))
-                            .with_width(2.0),
+                            .with_width(1.0),
                     );
-                    for (start, end) in [
-                        (UiPoint::new(x - 10.0, y), UiPoint::new(x + 10.0, y)),
-                        (UiPoint::new(x, y - 10.0), UiPoint::new(x, y + 10.0)),
-                    ] {
-                        frame.stroke(
-                            &canvas::Path::line(start, end),
-                            canvas::Stroke::default()
-                                .with_color(Color::from_rgb8(245, 158, 11))
-                                .with_width(1.0),
-                        );
-                    }
-                    if pose_count <= 24 {
-                        frame.fill_text(canvas::Text {
-                            content: pose.label.clone(),
-                            position: UiPoint::new(x + 12.0, y + 4.0),
-                            size: iced::Pixels(10.0),
-                            color: Color::from_rgb8(245, 188, 100),
-                            ..canvas::Text::default()
-                        });
-                    }
+                }
+                if show_labels {
+                    frame.fill_text(canvas::Text {
+                        content: if marker.labels.len() == 1 {
+                            marker.labels.into_iter().next().unwrap_or_default()
+                        } else {
+                            format!("{} stations", marker.labels.len())
+                        },
+                        position: UiPoint::new(marker.x + 12.0, marker.y + 4.0),
+                        size: iced::Pixels(10.0),
+                        color: Color::from_rgb8(245, 188, 100),
+                        ..canvas::Text::default()
+                    });
                 }
             }
         }
@@ -5431,6 +5474,25 @@ mod section_box_tests {
         studio.section_coordinate_inputs[0] = ["208100".into(), "208200".into()];
         let _ = studio.update(Message::ApplySectionCoordinates);
         assert_eq!(studio.section_bounds(), Some(section));
+    }
+}
+
+#[cfg(test)]
+mod scan_marker_tests {
+    use super::*;
+
+    #[test]
+    fn nearby_scan_positions_share_one_marker_and_distant_ones_remain_distinct() {
+        let mut markers = Vec::new();
+        push_scan_marker(&mut markers, 100.0, 100.0, "Scan 1", true);
+        push_scan_marker(&mut markers, 107.0, 104.0, "Scan 2", true);
+        push_scan_marker(&mut markers, 140.0, 100.0, "Scan 3", true);
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0].labels, ["Scan 1", "Scan 2"]);
+        assert_eq!(markers[1].labels, ["Scan 3"]);
+
+        push_scan_marker(&mut markers, 100.0, 100.0, "Scan 4", false);
+        assert_eq!(markers.len(), 3);
     }
 }
 
