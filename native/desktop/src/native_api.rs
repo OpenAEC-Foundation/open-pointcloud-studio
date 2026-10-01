@@ -38,6 +38,13 @@ pub enum ApiCommand {
     Camera {
         preset: String,
     },
+    SetCamera {
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+    },
+    ZoomAll,
     SetTheme {
         theme: String,
     },

@@ -82,6 +82,8 @@ pick is discarded when cancelled.
 | `set_active` | `index` | Chooses the active layer |
 | `set_visible` | `index`, `visible` | Shows or hides a point layer |
 | `camera` | `preset` | Chooses `top`, `bottom`, `front`, `back`, `left`, `right` or `isometric` |
+| `set_camera` | `yaw`, `pitch`, `zoom`, `pan` | Sets an exact camera view; angles are radians, zoom is 0.000001–10000, and pan is a two-number screen-pixel array. Rejects non-finite or out-of-range values without changing the view |
+| `zoom_all` | — | Fits the complete model at the default isometric orientation, matching the ribbon button and `F` shortcut |
 | `set_theme` | `theme` | Chooses and persists `forge`, `light`, `night`, `blueprint` or `contrast`; `openaec` remains an alias for Night Build |
 | `set_color` | `mode` | Chooses `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code`, `visible` | Shows or hides one classification code in the viewport and exact selection |

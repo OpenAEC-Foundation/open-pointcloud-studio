@@ -31,6 +31,12 @@ Pressing `F` outside a text field fitted the whole model at 1.0× while
 retaining all 432,975 selected points; the
 [keyboard Zoom All screenshot](../screenshots/native-f-zoom-all-114m-ply.png)
 shows the resulting overview.
+The native command API then set an exact camera pose on the indexed PLY
+(`yaw=0.25`, `pitch=0.4`, `zoom=0.05`, `pan=[120,-80]`). An invalid pitch of
+2.0 radians was rejected without changing that pose. `zoom_all` restored the
+isometric 1.0× view and zero pan. Another indexed world-box selection found
+the same 432,975 points, and `zoom_selection` framed them at 19.4× in the
+[latest native dev build](../screenshots/native-114m-ply-camera-selection.png).
 
 On 1 October 2026, the native GUI opened a separate 1,200,000-point LAS test
 source and reported octree source-reading progress. `cancel_index` stopped its

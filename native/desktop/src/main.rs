@@ -1839,6 +1839,42 @@ impl Studio {
                     )
                 }
             }
+            ApiCommand::SetCamera {
+                yaw,
+                pitch,
+                zoom,
+                pan,
+            } => {
+                if !(-std::f32::consts::PI..=std::f32::consts::PI).contains(&yaw)
+                    || !(-1.56..=1.56).contains(&pitch)
+                    || !(0.000_001..=10_000.0).contains(&zoom)
+                    || !pan.iter().all(|value| value.is_finite())
+                {
+                    (
+                        json!({"ok": false, "error": "camera requires finite yaw within ±π, pitch within ±1.56, zoom from 0.000001 to 10000, and finite pan"}),
+                        Task::none(),
+                    )
+                } else {
+                    self.yaw = yaw;
+                    self.pitch = pitch;
+                    self.zoom = zoom;
+                    self.pan = pan;
+                    self.view_label = "CUSTOM";
+                    self.revision += 1;
+                    let task = self.schedule_detail();
+                    (
+                        json!({"ok": true, "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label}}),
+                        task,
+                    )
+                }
+            }
+            ApiCommand::ZoomAll => {
+                let task = self.update(Message::ResetCamera);
+                (
+                    json!({"ok": true, "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label}}),
+                    task,
+                )
+            }
             ApiCommand::SetTheme { theme } => {
                 if let Some(theme) = UiTheme::from_key(&theme.to_ascii_lowercase()) {
                     let task = self.update(Message::Theme(theme));
@@ -10114,5 +10150,61 @@ mod viewport_drag_tests {
                 ..
             })
         ));
+    }
+}
+
+#[cfg(test)]
+mod camera_api_tests {
+    use super::*;
+
+    fn send(studio: &mut Studio, command: native_api::ApiCommand) -> Value {
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.handle_api(native_api::ApiRequest { command, reply });
+        receive.recv().unwrap()
+    }
+
+    #[test]
+    fn exact_camera_and_zoom_all_validate_and_update_one_view() {
+        let mut studio = Studio::default();
+        let accepted = send(
+            &mut studio,
+            native_api::ApiCommand::SetCamera {
+                yaw: 0.4,
+                pitch: -0.2,
+                zoom: 0.01,
+                pan: [120.0, -80.0],
+            },
+        );
+        assert_eq!(accepted["ok"], true);
+        assert_eq!(studio.yaw, 0.4);
+        assert_eq!(studio.pitch, -0.2);
+        assert_eq!(studio.zoom, 0.01);
+        assert_eq!(studio.pan, [120.0, -80.0]);
+        assert_eq!(studio.view_label, "CUSTOM");
+
+        for command in [
+            native_api::ApiCommand::SetCamera {
+                yaw: 0.4,
+                pitch: -0.2,
+                zoom: 0.0,
+                pan: [0.0, 0.0],
+            },
+            native_api::ApiCommand::SetCamera {
+                yaw: 0.4,
+                pitch: -0.2,
+                zoom: 1.0,
+                pan: [f32::NAN, 0.0],
+            },
+        ] {
+            assert_eq!(send(&mut studio, command)["ok"], false);
+            assert_eq!(studio.zoom, 0.01);
+            assert_eq!(studio.pan, [120.0, -80.0]);
+        }
+
+        let fitted = send(&mut studio, native_api::ApiCommand::ZoomAll);
+        assert_eq!(fitted["ok"], true);
+        assert_eq!(studio.zoom, 1.0);
+        assert_eq!(studio.pan, [0.0, 0.0]);
+        assert_eq!(studio.view_label, "ISOMETRIC");
     }
 }
