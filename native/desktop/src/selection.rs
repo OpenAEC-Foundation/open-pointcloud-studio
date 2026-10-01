@@ -10,6 +10,12 @@ use pointcloud_core::{
 
 const HIGHLIGHT_LIMIT: usize = 8_000;
 
+#[derive(Clone, Copy)]
+pub(crate) struct PickTarget {
+    pub pointer: [f32; 2],
+    pub radius: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct SelectionMask {
     pub bits: Vec<u64>,
@@ -414,28 +420,40 @@ pub fn pick_indexed(
     pick_indexed_transformed(
         tree,
         projection,
-        pointer,
-        radius,
+        PickTarget { pointer, radius },
         filter,
         deleted,
         CloudTransform::default(),
+        &AtomicBool::new(false),
     )
 }
 
 pub fn pick_indexed_transformed(
     tree: &OctreeIndex,
     projection: Projection,
-    pointer: [f32; 2],
-    radius: f32,
+    target: PickTarget,
     filter: ClassFilter,
     deleted: Option<&DeletionMask>,
     transform: CloudTransform,
+    cancel: &AtomicBool,
 ) -> Result<Option<IndexedPoint>, String> {
+    let PickTarget { pointer, radius } = target;
     validate_pick(pointer, radius)?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
+    }
     let mut best: Option<(IndexedPoint, f32, f64)> = None;
+    let mut visited = 0u64;
     tree.visit_intersecting(
-        |bounds| node_overlaps_pointer(transform.bounds(bounds), projection, pointer, radius),
+        |bounds| {
+            !cancel.load(Ordering::Relaxed)
+                && node_overlaps_pointer(transform.bounds(bounds), projection, pointer, radius)
+        },
         |record| {
+            visited += 1;
+            if visited & 0xfff == 0 && cancel.load(Ordering::Relaxed) {
+                return Err(LoadError::Cancelled);
+            }
             consider_pick(
                 transform.record(record),
                 projection,
@@ -449,6 +467,9 @@ pub fn pick_indexed_transformed(
         },
     )
     .map_err(|error| error.to_string())?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
+    }
     Ok(best.map(|(record, _, _)| record))
 }
 
@@ -465,28 +486,35 @@ pub fn pick_full(
     pick_full_transformed(
         cloud,
         projection,
-        pointer,
-        radius,
+        PickTarget { pointer, radius },
         filter,
         deleted,
         CloudTransform::default(),
+        &AtomicBool::new(false),
     )
 }
 
 pub fn pick_full_transformed(
     cloud: &PointCloud,
     projection: Projection,
-    pointer: [f32; 2],
-    radius: f32,
+    target: PickTarget,
     filter: ClassFilter,
     deleted: Option<&DeletionMask>,
     transform: CloudTransform,
+    cancel: &AtomicBool,
 ) -> Result<Option<IndexedPoint>, String> {
+    let PickTarget { pointer, radius } = target;
     validate_pick(pointer, radius)?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
+    }
     cloud.validate_source().map_err(|error| error.to_string())?;
     let mut best = None;
     let mut ordinal = 0u64;
     visit_points(&cloud.path, &mut |point| {
+        if ordinal & 0xfff == 0 && cancel.load(Ordering::Relaxed) {
+            return Err(LoadError::Cancelled);
+        }
         consider_pick(
             transform.record(IndexedPoint { point, ordinal }),
             projection,
@@ -500,6 +528,9 @@ pub fn pick_full_transformed(
         Ok(())
     })
     .map_err(|error| error.to_string())?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
+    }
     if ordinal != cloud.total_points {
         return Err(format!("{} changed while picking", cloud.path.display()));
     }
@@ -1359,6 +1390,66 @@ mod tests {
         let exported = pointcloud_core::open(destination, 10).unwrap();
         assert_eq!(exported.total_points, 1);
         assert_eq!(exported.points[0].xyz, [20.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn cancelled_point_pick_stops_indexed_and_source_scans() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pick.xyz");
+        fs::write(&path, "0 0 0\n1 0 0\n2 0 0\n").unwrap();
+        let cloud = pointcloud_core::open(&path, 1).unwrap();
+        let index = OctreeIndex::build(
+            &cloud,
+            pointcloud_core::IndexConfig {
+                leaf_points: 1,
+                preview_points: 1,
+                max_depth: 4,
+                scratch_dir: Some(directory.path().to_path_buf()),
+            },
+        )
+        .unwrap();
+        let camera = Projection::new(cloud.bounds, 0.0, 0.0, 1.0, [0.0; 2], 800.0, 600.0);
+        let filter = ClassFilter {
+            ground: true,
+            vegetation: true,
+            buildings: true,
+            other: true,
+            classes: ClassVisibility::default(),
+            section: None,
+        };
+        let cancel = AtomicBool::new(true);
+        assert_eq!(
+            pick_indexed_transformed(
+                &index,
+                camera,
+                PickTarget {
+                    pointer: [400.0, 300.0],
+                    radius: 8.0,
+                },
+                filter,
+                None,
+                CloudTransform::default(),
+                &cancel,
+            )
+            .unwrap_err(),
+            "Operation cancelled"
+        );
+        assert_eq!(
+            pick_full_transformed(
+                &cloud,
+                camera,
+                PickTarget {
+                    pointer: [400.0, 300.0],
+                    radius: 8.0,
+                },
+                filter,
+                None,
+                CloudTransform::default(),
+                &cancel,
+            )
+            .unwrap_err(),
+            "Operation cancelled"
+        );
     }
 
     #[test]

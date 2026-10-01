@@ -42,8 +42,8 @@ use preferences::{MAX_POINT_BUDGET, MIN_POINT_BUDGET};
 use selection::select_world;
 use selection::{
     pick_full_transformed, pick_indexed_transformed, select_full_cancellable,
-    select_world_cancellable, ClassFilter, ClassVisibility, DeletionMask, Projection, ScreenRect,
-    SelectionMask, SelectionSource,
+    select_world_cancellable, ClassFilter, ClassVisibility, DeletionMask, PickTarget, Projection,
+    ScreenRect, SelectionMask, SelectionSource,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -5439,6 +5439,7 @@ impl Studio {
                     let transform = entry.transform;
                     self.selection_pending = true;
                     self.selection_cancel = Arc::new(AtomicBool::new(false));
+                    let cancel = Arc::clone(&self.selection_cancel);
                     self.status = if tree.is_some() {
                         "Finding nearest point through the octree…".into()
                     } else {
@@ -5452,21 +5453,27 @@ impl Studio {
                                     pick_indexed_transformed(
                                         &tree,
                                         projection,
-                                        end,
-                                        8.0,
+                                        PickTarget {
+                                            pointer: end,
+                                            radius: 8.0,
+                                        },
                                         filter,
                                         deleted.as_deref(),
                                         transform,
+                                        &cancel,
                                     )?
                                 } else {
                                     pick_full_transformed(
                                         &cloud,
                                         projection,
-                                        end,
-                                        8.0,
+                                        PickTarget {
+                                            pointer: end,
+                                            radius: 8.0,
+                                        },
                                         filter,
                                         deleted.as_deref(),
                                         transform,
+                                        &cancel,
                                     )?
                                 };
                                 cloud.validate_source().map_err(|error| error.to_string())?;

@@ -92,7 +92,7 @@ pick is discarded when cancelled.
 | `set_section` | `min`, `max` | Enables an XYZ section box using two three-number arrays inside the visible model bounds |
 | `clear_section` | — | Disables the section box |
 | `select_world` | `min`, `max` | Selects all exact source points in an inclusive XYZ box, returning a job ID |
-| `cancel_selection` | — | Stops a running full-resolution box selection or discards an in-progress point pick |
+| `cancel_selection` | — | Stops a running full-resolution box selection or point-pick source scan |
 | `clear_selection` | — | Clears the current point selection |
 | `zoom_selection` | — | Frames the exact selected source points in the 3D view without changing the section box; poll `selection_bounds_pending` in status until the camera updates |
 | `delete_selection` | — | Hides selected points in the open view; may first queue an octree build for LAZ |

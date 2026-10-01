@@ -737,3 +737,15 @@ shows the denser result at the same camera position. A right-button pan of
 50 × 20 pixels at this zoom changed the camera by exactly that amount and
 refreshed to 12,633 visible points within the 0.3-second polling interval.
 Zoom All restored the overview and its 250,000-point LOD.
+
+The native point-pick button was exercised directly in the 114,174,907-point
+GUI scene. One click selected exact source ordinal 89,630,851 (displayed as
+point 89,630,852) at X 208096.792, Y 475119.231, Z 14.385 in about 0.5–0.75
+seconds. The [selected-point screenshot](../screenshots/native-pick-exact-114m.png)
+shows its source attributes and one-point count after Escape exited the tool.
+On a second click, Escape was pressed while the octree lookup was running:
+the pending flag cleared within the first 0.05-second status poll and the
+[cancelled-pick screenshot](../screenshots/native-pick-cancel-114m.png) shows
+zero selected points. A subsequent normal pick still selected the same exact
+source ordinal, confirming that cancellation did not poison the next search.
+A cancelled replacement pick also left the previously selected point intact.
