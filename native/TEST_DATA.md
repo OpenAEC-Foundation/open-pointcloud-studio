@@ -20,6 +20,12 @@ During the subsequent manual index build, a physical right-drag moved camera
 pan by exactly `[60, 30]` pixels while keeping the 432,975-point selection.
 The [index-progress view](../screenshots/native-3.2gib-ply-index-progress.png)
 shows the GUI and its cancellable source-read progress.
+The completed PLY octree has 7,852 nodes, 6,770 leaves and depth 6. Reopening
+the 3.2 GiB file in the latest native build attached the cached index and
+returned a 250,000-point LOD. Repeating the same exact world selection took
+0.56 s including API polling and again found 432,975 points; the unindexed
+scan had taken about 29 s. The [indexed close-up](../screenshots/native-3.2gib-ply-indexed-selection-latest.png)
+shows the selection with detail from the full disk octree.
 
 On 1 October 2026, the native GUI opened a separate 1,200,000-point LAS test
 source and reported octree source-reading progress. `cancel_index` stopped its
