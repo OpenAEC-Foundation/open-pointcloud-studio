@@ -239,6 +239,7 @@ pub fn export_section_where(
             cloud,
             destination.as_ref(),
             None,
+            [0.0; 3],
             &mut |ordinal, point| section_contains(section, point.xyz) && include(ordinal, point),
         );
     }
@@ -265,6 +266,7 @@ pub fn export_where(
             cloud,
             destination.as_ref(),
             Some(expected_count),
+            [0.0; 3],
             &mut include,
         )?;
         return Ok(());
@@ -284,6 +286,41 @@ fn source_is_e57(cloud: &PointCloud) -> bool {
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"))
+}
+
+/// Preserve E57 scan identities and raw point fields while translating all
+/// scanner poses. Returns `None` when a source scan has no pose, so callers
+/// can use a coordinate-writing export instead of inventing a station.
+pub fn export_e57_translated_where(
+    cloud: &PointCloud,
+    destination: impl AsRef<Path>,
+    expected_count: Option<u64>,
+    translation: [f64; 3],
+    mut include: impl FnMut(u64, &Point) -> bool,
+) -> Result<Option<u64>, LoadError> {
+    if !source_is_e57(cloud) {
+        return Ok(None);
+    }
+    if !translation.iter().all(|value| value.is_finite()) {
+        return Err(LoadError::InvalidData("non-finite E57 translation".into()));
+    }
+    cloud.validate_source()?;
+    let reader = e57::E57Reader::from_file(&cloud.path)?;
+    if reader
+        .pointclouds()
+        .iter()
+        .any(|scan| scan.transform.is_none())
+    {
+        return Ok(None);
+    }
+    export_e57_filtered_count(
+        cloud,
+        destination.as_ref(),
+        expected_count,
+        translation,
+        &mut include,
+    )
+    .map(Some)
 }
 
 /// Keep an evenly distributed, exact percentage of the remaining source stream.
@@ -649,6 +686,7 @@ fn export_e57_filtered_count(
     cloud: &PointCloud,
     destination: &Path,
     expected_count: Option<u64>,
+    translation: [f64; 3],
     include: &mut dyn FnMut(u64, &Point) -> bool,
 ) -> Result<u64, LoadError> {
     use e57::{CartesianCoordinate, E57Reader, E57Writer};
@@ -686,7 +724,20 @@ fn export_e57_filtered_count(
         output_scan.set_name(source_scan.name.clone());
         output_scan.set_description(source_scan.description.clone());
         output_scan.set_original_guids(source_scan.guid.clone().map(|guid| vec![guid]));
-        output_scan.set_transform(source_scan.transform.clone());
+        let transform = source_scan.transform.clone().map(|mut pose| {
+            pose.translation.x += translation[0];
+            pose.translation.y += translation[1];
+            pose.translation.z += translation[2];
+            pose
+        });
+        if transform.as_ref().is_some_and(|pose| {
+            ![pose.translation.x, pose.translation.y, pose.translation.z]
+                .into_iter()
+                .all(f64::is_finite)
+        }) {
+            return Err(LoadError::InvalidData("non-finite E57 scan pose".into()));
+        }
+        output_scan.set_transform(transform);
         output_scan.set_acquisition_start(source_scan.acquisition_start.clone());
         output_scan.set_acquisition_end(source_scan.acquisition_end.clone());
         output_scan.set_sensor_vendor(source_scan.sensor_vendor.clone());
@@ -1592,6 +1643,42 @@ mod tests {
             assert_eq!(output_point, source_point);
         }
 
+        let translated = dir.path().join("translated.e57");
+        assert_eq!(
+            export_e57_translated_where(
+                &cloud,
+                &translated,
+                Some(2),
+                [10.0, -5.0, 2.0],
+                |ordinal, _| ordinal == 0 || ordinal == 2,
+            )
+            .unwrap(),
+            Some(2)
+        );
+        let moved = open(&translated, 4).unwrap();
+        assert_eq!(moved.scan_poses.len(), 2);
+        assert_eq!(moved.scan_poses[0].position, [110.0, 195.0, 12.0]);
+        assert_eq!(moved.scan_poses[1].position, [210.0, 295.0, 22.0]);
+        assert!((moved.points[0].xyz[0] - 111.0).abs() < 1e-9);
+        assert!((moved.points[1].xyz[1] - 296.0).abs() < 1e-9);
+        let moved_headers = E57Reader::from_file(&translated).unwrap().pointclouds();
+        let mut moved_reader = E57Reader::from_file(&translated).unwrap();
+        for (source_scan, moved_scan) in source_headers.iter().zip(&moved_headers) {
+            let source_point = source_reader
+                .pointcloud_raw(source_scan)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            let moved_point = moved_reader
+                .pointcloud_raw(moved_scan)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(moved_point, source_point);
+        }
+
         let section = dir.path().join("section.e57");
         let written = export_section(
             &cloud,
@@ -1634,6 +1721,19 @@ mod tests {
         assert_eq!(reopened.bounds, cloud.bounds);
         assert_eq!(reopened.points[1].rgb, Some([40, 50, 60]));
         assert_eq!(reopened.points[1].intensity, Some(5678));
+        let no_pose_translation = dir.path().join("no-pose-translation.e57");
+        assert_eq!(
+            export_e57_translated_where(
+                &reopened,
+                &no_pose_translation,
+                Some(3),
+                [1.0, 2.0, 3.0],
+                |_, _| true,
+            )
+            .unwrap(),
+            None
+        );
+        assert!(!no_pose_translation.exists());
 
         let copy = dir.path().join("copy.e57");
         export_full(&reopened, &copy, ExportFormat::E57).unwrap();

@@ -120,6 +120,19 @@ fn export_edited_where(
     if transform.is_identity() {
         pointcloud_core::export_where(cloud, destination, format, expected_count, include)
     } else {
+        if format == ExportFormat::E57
+            && transform.scale == [1.0; 3]
+            && pointcloud_core::export_e57_translated_where(
+                cloud,
+                destination,
+                Some(expected_count),
+                transform.offset,
+                &mut include,
+            )?
+            .is_some()
+        {
+            return Ok(());
+        }
         pointcloud_core::export_map(
             cloud,
             destination,
@@ -154,6 +167,24 @@ fn export_edited_section(
             deleted.is_none_or(|mask| !mask.contains(ordinal))
         })
     } else {
+        if format == ExportFormat::E57 && transform.scale == [1.0; 3] {
+            let translated = pointcloud_core::export_e57_translated_where(
+                cloud,
+                destination,
+                None,
+                transform.offset,
+                |ordinal, point| {
+                    let xyz = transform.xyz(point.xyz);
+                    deleted.is_none_or(|mask| !mask.contains(ordinal))
+                        && (0..3).all(|axis| {
+                            xyz[axis] >= section.min[axis] && xyz[axis] <= section.max[axis]
+                        })
+                },
+            )?;
+            if let Some(count) = translated {
+                return Ok(count);
+            }
+        }
         pointcloud_core::export_map_auto_count(cloud, destination, format, |ordinal, point| {
             if deleted.is_some_and(|mask| mask.contains(ordinal)) {
                 return None;
