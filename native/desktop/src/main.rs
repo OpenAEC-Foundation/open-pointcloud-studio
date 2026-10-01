@@ -869,9 +869,27 @@ struct MeshStart {
     surface_config: SurfaceMeshConfig,
     cloud: Arc<PointCloud>,
     deleted: Option<Arc<DeletionMask>>,
+    filter: ClassFilter,
     transform: CloudTransform,
     path: PathBuf,
     api_job_id: Option<String>,
+}
+
+fn mesh_accepts(
+    ordinal: u64,
+    point: &Point,
+    deleted: Option<&DeletionMask>,
+    filter: ClassFilter,
+    transform: CloudTransform,
+) -> bool {
+    if deleted.is_some_and(|mask| mask.contains(ordinal)) {
+        return false;
+    }
+    if filter.section.is_some() {
+        filter.accepts(&transform.point(*point))
+    } else {
+        filter.accepts(point)
+    }
 }
 
 #[derive(Clone)]
@@ -1643,6 +1661,17 @@ impl Studio {
         self.active
             .and_then(|index| self.clouds.get(index))
             .map(|entry| camera_views::source_key(&entry.cloud.path))
+    }
+
+    fn mesh_filter(&self) -> ClassFilter {
+        ClassFilter {
+            ground: self.filter_ground,
+            vegetation: self.filter_vegetation,
+            buildings: self.filter_buildings,
+            other: self.filter_other,
+            classes: self.class_visibility,
+            section: self.section_bounds(),
+        }
     }
 
     fn queue_preferences_save(&mut self) -> Task<Message> {
@@ -2431,6 +2460,7 @@ impl Studio {
                             surface_config: config,
                             cloud,
                             deleted,
+                            filter: self.mesh_filter(),
                             transform,
                             path: path.clone(),
                             api_job_id: Some(id.clone()),
@@ -2910,6 +2940,7 @@ impl Studio {
             surface_config,
             cloud,
             deleted,
+            filter,
             transform,
             path,
             api_job_id,
@@ -2924,7 +2955,7 @@ impl Studio {
             api_job_id,
         });
         self.status = format!(
-            "Meshing {remaining} remaining points; progress and Cancel are available below"
+            "Meshing visible points from {remaining} remaining source points; progress and Cancel are available below"
         );
         let worker = Task::perform(
             async move {
@@ -2935,8 +2966,8 @@ impl Studio {
                             &cloud,
                             &path,
                             pointcloud_core::MeshConfig::default(),
-                            |ordinal, _| {
-                                deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
+                            |ordinal, point| {
+                                mesh_accepts(ordinal, point, deleted.as_deref(), filter, transform)
                             },
                             |progress| control.report(progress),
                         ),
@@ -2944,8 +2975,8 @@ impl Studio {
                             &cloud,
                             &path,
                             surface_config,
-                            |ordinal, _| {
-                                deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
+                            |ordinal, point| {
+                                mesh_accepts(ordinal, point, deleted.as_deref(), filter, transform)
                             },
                             |progress| control.report(progress),
                         ),
@@ -3598,6 +3629,7 @@ impl Studio {
                     surface_config: config,
                     cloud,
                     deleted,
+                    filter: self.mesh_filter(),
                     transform,
                     path,
                     api_job_id: None,
@@ -9401,6 +9433,43 @@ impl PointViewport<'_> {
 #[cfg(test)]
 mod surface_settings_tests {
     use super::*;
+
+    #[test]
+    fn meshing_uses_world_section_and_visible_classification() {
+        let point = Point {
+            xyz: [1.0, 2.0, 3.0],
+            rgb: None,
+            intensity: None,
+            classification: Some(2),
+        };
+        let transform = CloudTransform {
+            scale: [2.0, 1.0, 1.0],
+            offset: [10.0, 0.0, 0.0],
+        };
+        let mut filter = ClassFilter {
+            ground: true,
+            vegetation: true,
+            buildings: true,
+            other: true,
+            classes: ClassVisibility::default(),
+            section: Some(Bounds {
+                min: [11.0, 1.0, 2.0],
+                max: [13.0, 3.0, 4.0],
+            }),
+        };
+        assert!(mesh_accepts(0, &point, None, filter, transform));
+        filter.section = Some(Bounds {
+            min: [0.0, 1.0, 2.0],
+            max: [2.0, 3.0, 4.0],
+        });
+        assert!(!mesh_accepts(0, &point, None, filter, transform));
+        filter.section = None;
+        filter.ground = false;
+        assert!(!mesh_accepts(0, &point, None, filter, transform));
+        filter.ground = true;
+        filter.classes.set(2, false);
+        assert!(!mesh_accepts(0, &point, None, filter, transform));
+    }
 
     #[test]
     fn ui_surface_settings_validate_before_meshing() {

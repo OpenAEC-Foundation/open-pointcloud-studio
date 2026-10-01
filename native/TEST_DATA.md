@@ -659,6 +659,20 @@ edges remained. The revised result is shown in
 Contradictory cycles and sampling holes still need a stronger reconstruction
 algorithm.
 
+The current native Tools and API meshing jobs now honor the active section box
+and visible classifications as well as deleted points. On the public pye57
+`test.e57`, a centered XYZ section retained 17,591 of 160,838 source points;
+the 3D surface job produced 5,000 vertices and 16,497 triangles, and every
+OBJ vertex stayed inside the requested world-coordinate section. On the public
+45,839,678-point AHN6 `207000_474000` LAZ, a 100 m by 100 m section retained
+350,550 points with all classes visible. Hiding ground class 2 reduced this
+to 229,603 points. The filtered 3D surface had 5,000 vertices and 13,939
+triangles; the filtered terrain TIN used the same 229,603 points and had 987
+vertices and 1,934 triangles. All output vertices were inside the section.
+See the native [surface](../screenshots/native-ahn6-section-class-mesh-45m.png)
+and [terrain](../screenshots/native-ahn6-section-terrain-45m.png) views with
+the section box active.
+
 The 50,000 selected XYZ vertices were replayed as a separate source to tune
 the local triangulation in about 3–8 seconds per setting. Raising the edge
 factor from 4 to 6 or 8 added only 260 or 300 faces and increased open edges.

@@ -113,7 +113,7 @@ pick is discarded when cancelled.
 | `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
 | `set_surface_settings` | `max_vertices`, `neighbors`, `edge_factor` | Sets the native GUI's 3D surface reconstruction limits atomically: 3–1,000,000 vertices, 3–32 neighbors and a finite positive edge factor |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
-| `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path; surface mode uses the current 3D surface settings and returns a job ID |
+| `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings and returns a job ID |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task |
 | `merge_visible` | `path` | Merges the visible LAS/LAZ layers to an absolute `.las` or `.laz` path; returns a job ID |
 | `cancel_merge` | — | Requests cancellation of the running merge task |
