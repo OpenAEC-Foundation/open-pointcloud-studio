@@ -474,3 +474,16 @@ and [`strength 5`](../screenshots/native-eye-dome-strength-5-ahn45m.png).
 The live development build was returned to the default strength 1 afterward.
 The expanded native point-size range also accepted 0.1 and 20, rejected 0.05,
 and was restored to 2 before the screenshots.
+
+On 1 October 2026, `--mesh` streamed the complete public AHN6
+`207000_474000` LAZ tile (45,839,678 points) into a colored terrain OBJ.
+The run produced 95,872 vertices, 95,872 per-vertex normals and 191,104
+triangles in 383.52 seconds with 59,040 KiB peak RSS. The 18 MB OBJ was
+opened in the running Rust GUI beside the three indexed AHN6 tiles; the
+other tiles were hidden temporarily to inspect the colored faces in
+[`native-ahn6-45m-rgb-terrain-mesh.png`](../screenshots/native-ahn6-45m-rgb-terrain-mesh.png).
+All three source tiles were then made visible again (129,398,587 points).
+`--mesh-export` reimported and rewrote the generated OBJ in 2.51 seconds with
+28,020 KiB peak RSS. An independent record comparison found identical values
+for all vertex coordinates and RGB channels, identical face indices, and a
+maximum normal-component difference of `5.0e-8` from decimal formatting.

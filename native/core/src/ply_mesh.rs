@@ -410,11 +410,14 @@ fn add_attributes(
 ) -> Result<(), LoadError> {
     if let (Some(colors), Some(indices)) = (&mut mesh.colors, color_indices) {
         let mut rgb = [0; 3];
+        let normalized_float = indices.iter().all(|(index, scalar)| {
+            matches!(scalar, Scalar::F32 | Scalar::F64) && (0.0..=1.0).contains(&values[*index])
+        });
         for (axis, (index, scalar)) in indices.iter().copied().enumerate() {
             let value = values[index];
             let value = match scalar {
-                Scalar::U16 | Scalar::I16 => value / 257.0,
-                Scalar::F32 | Scalar::F64 if value <= 1.0 => value * 255.0,
+                Scalar::U16 => value / 257.0,
+                Scalar::F32 | Scalar::F64 if normalized_float => value * 255.0,
                 _ => value,
             };
             if !value.is_finite() || !(0.0..=255.0).contains(&value) {
@@ -556,5 +559,16 @@ mod tests {
             vec![[255, 0, 0], [0, 128, 0], [0, 0, 255]]
         );
         assert_eq!(mesh.normals.unwrap(), vec![[0.0, 0.0, 1.0]; 3]);
+    }
+
+    #[test]
+    fn interprets_float_mesh_colors_consistently_per_vertex() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty float red\nproperty float green\nproperty float blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 0.5 0.25 1\n1 0 0 0.5 128 32\n0 1 0 255 64 0\n3 0 1 2\n").unwrap();
+        let mesh = read_ply_mesh(file.path()).unwrap().unwrap();
+        assert_eq!(
+            mesh.colors.unwrap(),
+            vec![[128, 64, 255], [1, 128, 32], [255, 64, 0]]
+        );
     }
 }
