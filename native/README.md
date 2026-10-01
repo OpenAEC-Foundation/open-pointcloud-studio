@@ -86,7 +86,7 @@ File open and save dialogs use `rfd::AsyncFileDialog`, so the native UI stays re
 | OBJ mesh export | Terrain and 3D surface meshers save RGB and per-vertex normals in OBJ; any resident OBJ, PLY, OFF, STL or DXF triangle mesh can also be exported from the Tools ribbon or Properties. Imported OBJ/PLY colors and aligned normals survive conversion. The writer saves atomically and keeps 3DBAG attribution where applicable |
 | 3DBAG | Native RD map with PDOK raster tiles, rectangle drawing, pan/zoom, typed/scan/section-box bounds, LoD choice, paginated CityJSONFeatures import and GPU mesh display |
 | Themes | Five native OpenAEC palettes, selected from Home and persisted locally; model space remains dark |
-| Settings and automation API | Theme, display/indexing defaults and named camera views persist in native configuration files. A local token-protected Rust command API controls open layers, camera, visibility, section boxes, exact point selection, deletion/undo/redo and exports; more commands and settings remain to port |
+| Settings and automation API | Theme, display/indexing defaults and named camera views persist in native configuration files. A local token-protected Rust command API controls open layers, camera, visibility, section boxes, exact point selection, deletion/undo/redo, percentage thinning and exports; more commands and settings remain to port |
 
 Mesh export writes all vertices and faces from the mesh currently held by the viewer, validates indices before touching the destination, and saves atomically. The Tools ribbon and Properties panel expose it for imported OBJ, PLY, OFF, STL and DXF meshes. The `--mesh-export INPUT OUTPUT.obj` command supports batch conversion; 3DBAG output retains the required attribution header.
 

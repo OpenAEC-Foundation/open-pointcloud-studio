@@ -80,6 +80,14 @@ shows the button while the exact scan is running. A new selection immediately
 after Escape completed with the same 11,019,954 exact points in 6.87 seconds;
 the development view was cleared afterward.
 
+Native Thin was run through the local command API on the first AHN6 tile with
+45,839,678 source points. Keeping 50% hid exactly 22,919,839 points in 2.16
+seconds; a second run took 4.11 seconds while the GUI was active. Properties
+showed 22,919,839 remaining and 22,919,839 deleted in the
+[Tools screenshot](../screenshots/native-ahn6-thin-45m-50-percent.png). Undo
+restored all 45,839,678 points in the open view. The source LAZ was not edited.
+The API rejected keep percentages 0 and 101.
+
 At a two-million-point viewport budget, the three cached AHN6 octrees first
 returned a new 250,000-point view after right-drag pan in 0.16–0.46 seconds,
 then refined to the full 2,000,000 points in 2.28–2.41 seconds. The previous

@@ -35,6 +35,10 @@ for processed and total source points; it becomes `null` when the transform
 finishes or is cancelled. `cancel_scale` stops the scan without applying the
 new factors. Repeating Scale after a successful run reuses the exact centroid
 until the set of remaining points changes.
+`thin` accepts a keep percentage from 1 to 100 and runs in the background.
+Poll `status.result.thin_pending`; after it becomes false, the active cloud's
+`remaining` and `deleted` counts reflect the exact edit. `undo_delete` restores
+the removed points without changing the source file.
 While an uncached octree is built, `status.result.index_progress` reports the
 source-read count and known total, then tree records handled, depth and leaf
 count. Its `stage` is `reading_source`, `building_tree` or `ready`, and
@@ -78,6 +82,7 @@ pick is discarded when cancelled.
 | `delete_selection` | — | Hides selected points in the open view; may first queue an octree build for LAZ |
 | `undo_delete` | — | Restores the latest deletion batch |
 | `redo_delete` | — | Reapplies the latest undone deletion batch |
+| `thin` | `percent` | Keeps an exact percentage of the active cloud's remaining points, with Undo support |
 | `translate` | `offset` | Applies three finite XYZ offsets to the active cloud view |
 | `scale` | `factors` | Scales the active view around the exact centroid of remaining points; large sources stream from the disk octree in the background |
 | `cancel_scale` | — | Cancels a running centroid calculation without changing the source |

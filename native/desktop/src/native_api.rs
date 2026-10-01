@@ -71,6 +71,9 @@ pub enum ApiCommand {
     DeleteSelection,
     UndoDelete,
     RedoDelete,
+    Thin {
+        percent: u8,
+    },
     Translate {
         offset: [f64; 3],
     },

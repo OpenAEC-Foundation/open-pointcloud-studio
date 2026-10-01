@@ -1529,6 +1529,7 @@ impl Studio {
                         "section": section,
                         "selected_points": self.selected_total(),
                         "selection_pending": self.selection_pending,
+                        "thin_pending": self.thin_pending,
                         "color_mode": self.color_mode.to_string(),
                         "hidden_classes": (0..=u8::MAX)
                             .filter(|code| !self.class_visibility.allows(Some(*code)))
@@ -1866,6 +1867,31 @@ impl Studio {
                 } else {
                     let task = self.update(Message::RedoDelete);
                     (json!({"ok": true, "status": self.status}), task)
+                }
+            }
+            ApiCommand::Thin { percent } => {
+                if !(1..=100).contains(&percent) {
+                    (
+                        json!({"ok": false, "error": "thin percentage must be between 1 and 100"}),
+                        Task::none(),
+                    )
+                } else if self.active.is_none() {
+                    (
+                        json!({"ok": false, "error": "no active point cloud to thin"}),
+                        Task::none(),
+                    )
+                } else if self.thin_pending {
+                    (
+                        json!({"ok": false, "error": "thinning is already in progress"}),
+                        Task::none(),
+                    )
+                } else {
+                    self.thin_percent = percent;
+                    let task = self.update(Message::Thin);
+                    (
+                        json!({"ok": true, "accepted": true, "percent": percent}),
+                        task,
+                    )
                 }
             }
             ApiCommand::Translate { offset } => {
@@ -3577,7 +3603,7 @@ impl Studio {
                     self.thin_pending = true;
                     self.status = format!(
                         "Keeping {percent}% of {} points in the open view…",
-                        entry.remaining_count()
+                        format_count(entry.remaining_count())
                     );
                     return Task::perform(
                         async move {
@@ -3669,7 +3695,8 @@ impl Studio {
                 self.redo_deletions.clear();
                 self.revision += 1;
                 self.status = format!(
-                    "Kept {percent}% of the open cloud; hidden {removed} points. Undo restores them"
+                    "Kept {percent}% of the open cloud; hidden {} points. Undo restores them",
+                    format_count(removed)
                 );
                 return self.schedule_detail();
             }
