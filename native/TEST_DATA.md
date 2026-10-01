@@ -62,6 +62,15 @@ cd native
 cargo run -p pointcloud-core --example lod_bench -- /tmp/open-pointcloud-AHN6_2025_C_207000_474000.LAZ 80000
 ```
 
+The running WGPU viewport was checked after geometry caching was added. A
+middle-button pan moved the 80,000-point AHN6 view while keeping the cloud
+visible and LOD ready; see
+[`native-ahn-pan-render-cache.png`](../screenshots/native-ahn-pan-render-cache.png).
+The renderer test checks that camera, point-size and eye-dome redraws reuse
+the same CPU geometry, while color, classification filters, section clipping
+and replacement LOD points rebuild it. GPU vertex/index uploads follow that
+geometry identity; the camera uniform still updates on every redraw.
+
 The native 3DBAG client was checked against the live
 [`pand/items` API](https://api.3dbag.nl/collections/pand/items) on 1 October
 2026. The RD box `91440,398430,91460,398450` returned one LoD 2.2 building

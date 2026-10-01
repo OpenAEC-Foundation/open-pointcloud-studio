@@ -762,7 +762,7 @@ struct CloudEntry {
     index: Option<Arc<OctreeIndex>>,
     auto_index_queued: bool,
     index_building: bool,
-    detail_points: Option<Vec<IndexedPoint>>,
+    detail_points: Option<Arc<[IndexedPoint]>>,
 }
 
 struct EditBatch {
@@ -773,7 +773,7 @@ impl CloudEntry {
     fn view_len(&self) -> usize {
         self.detail_points
             .as_ref()
-            .map_or(self.cloud.points.len(), Vec::len)
+            .map_or(self.cloud.points.len(), |points| points.len())
     }
 
     fn view_records(&self) -> Box<dyn Iterator<Item = IndexedPoint> + '_> {
@@ -2140,7 +2140,7 @@ impl Studio {
                         for (index, points) in details {
                             count += points.len();
                             if let Some(entry) = self.clouds.get_mut(index) {
-                                entry.detail_points = Some(points);
+                                entry.detail_points = Some(points.into());
                             }
                         }
                         if !self.section_export_pending {
@@ -3872,8 +3872,8 @@ impl Studio {
             .into()
     }
 
-    fn view(&self) -> Element<'_, Message> {
-        let point_view = PointViewport {
+    fn point_viewport(&self) -> PointViewport<'_> {
+        PointViewport {
             clouds: &self.clouds,
             color_mode: self.color_mode,
             point_size: self.point_size,
@@ -3895,7 +3895,11 @@ impl Studio {
             drag_rectangle: self.drag_rectangle,
             context_menu: self.context_menu,
             viewport_size: self.viewport_size,
-        };
+        }
+    }
+
+    fn view(&self) -> Element<'_, Message> {
+        let point_view = self.point_viewport();
         let canvas = stack![
             gpu_viewport::GpuViewport {
                 overlay: point_view

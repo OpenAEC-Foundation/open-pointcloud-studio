@@ -1,56 +1,133 @@
 //! Native WGPU point-sprite renderer embedded in Iced's shader widget.
 //! Survey coordinates are rebased in f64 before f32 upload to retain precision.
 
-use crate::{combined_bounds, Message, PointViewport, Projection};
+use std::cell::RefCell;
+use std::sync::Arc;
+
+use crate::selection::DeletionMask;
+use crate::{combined_bounds, CloudEntry, ColorMode, Message, PointViewport, Projection};
 use bytemuck::{Pod, Zeroable};
 use iced::mouse;
 use iced::widget::shader::{self, Shader};
 use iced::Rectangle;
 use iced_wgpu::primitive::{Primitive, Storage};
 use iced_wgpu::wgpu;
+use pointcloud_core::{Bounds, IndexedPoint, MeshGeometry, PointCloud};
 
 #[derive(Clone, Copy)]
 pub struct GpuViewport<'a> {
     pub overlay: PointViewport<'a>,
 }
 
+#[derive(Default)]
+pub struct RenderCache {
+    key: Option<SceneKey>,
+    geometry: Option<Arc<RenderGeometry>>,
+}
+
+struct SceneKey {
+    clouds: Vec<CloudKey>,
+    bounds: Option<Bounds>,
+    section: Option<Bounds>,
+    color_mode: ColorMode,
+    budget: usize,
+    filters: [bool; 4],
+}
+
+struct CloudKey {
+    source: Arc<PointCloud>,
+    detail: Option<Arc<[IndexedPoint]>>,
+    deleted: Option<Arc<DeletionMask>>,
+    mesh: Option<Arc<MeshGeometry>>,
+    visible: bool,
+    mesh_visible: bool,
+}
+
+fn same_arc<T: ?Sized>(left: &Option<Arc<T>>, right: &Option<Arc<T>>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+impl SceneKey {
+    fn capture(view: PointViewport<'_>, bounds: Option<Bounds>) -> Self {
+        Self {
+            clouds: view
+                .clouds
+                .iter()
+                .map(|entry| CloudKey {
+                    source: Arc::clone(&entry.cloud),
+                    detail: entry.detail_points.clone(),
+                    deleted: entry.deleted.clone(),
+                    mesh: entry.mesh.clone(),
+                    visible: entry.visible,
+                    mesh_visible: entry.mesh_visible,
+                })
+                .collect(),
+            bounds,
+            section: view.section,
+            color_mode: view.color_mode,
+            budget: view.budget,
+            filters: [
+                view.filter_ground,
+                view.filter_vegetation,
+                view.filter_buildings,
+                view.filter_other,
+            ],
+        }
+    }
+
+    fn matches(&self, view: PointViewport<'_>, bounds: Option<Bounds>) -> bool {
+        self.bounds == bounds
+            && self.section == view.section
+            && self.color_mode == view.color_mode
+            && self.budget == view.budget
+            && self.filters
+                == [
+                    view.filter_ground,
+                    view.filter_vegetation,
+                    view.filter_buildings,
+                    view.filter_other,
+                ]
+            && self.clouds.len() == view.clouds.len()
+            && self
+                .clouds
+                .iter()
+                .zip(view.clouds)
+                .all(|(key, entry)| key.matches(entry))
+    }
+}
+
+impl CloudKey {
+    fn matches(&self, entry: &CloudEntry) -> bool {
+        Arc::ptr_eq(&self.source, &entry.cloud)
+            && same_arc(&self.detail, &entry.detail_points)
+            && same_arc(&self.deleted, &entry.deleted)
+            && same_arc(&self.mesh, &entry.mesh)
+            && self.visible == entry.visible
+            && self.mesh_visible == entry.mesh_visible
+    }
+}
+
 impl<'a> GpuViewport<'a> {
     pub fn widget(self) -> Shader<Message, Self> {
         Shader::new(self)
     }
-}
 
-impl shader::Program<Message> for GpuViewport<'_> {
-    type State = ();
-    type Primitive = CloudPrimitive;
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        _cursor: mouse::Cursor,
-        bounds: Rectangle,
-    ) -> Self::Primitive {
+    fn build_geometry(&self, overall_bounds: Option<Bounds>) -> RenderGeometry {
         let mut points = Vec::new();
         let mut mesh_vertices = Vec::new();
         let mut mesh_indices = Vec::new();
-        let mut camera = CameraUniform::zeroed();
-        if let Some(overall_bounds) = combined_bounds(self.overlay.clouds) {
-            let projection = Projection::new(
-                overall_bounds,
-                self.overlay.yaw,
-                self.overlay.pitch,
-                self.overlay.zoom,
-                self.overlay.pan,
-                bounds.width,
-                bounds.height,
-            );
+        if let Some(overall_bounds) = overall_bounds {
             let center = overall_bounds.center();
             let sampled: usize = self
                 .overlay
                 .clouds
                 .iter()
                 .filter(|entry| entry.visible)
-                .map(|entry| entry.view_len())
+                .map(CloudEntry::view_len)
                 .sum();
             let stride = sampled.div_ceil(self.overlay.budget.max(1)).max(1);
             points.reserve(sampled.div_ceil(stride));
@@ -113,6 +190,51 @@ impl shader::Program<Message> for GpuViewport<'_> {
                     mesh_indices.extend(face.map(|index| index + base));
                 }
             }
+        }
+        RenderGeometry {
+            points,
+            mesh_vertices,
+            mesh_indices,
+        }
+    }
+}
+
+impl shader::Program<Message> for GpuViewport<'_> {
+    type State = RefCell<RenderCache>;
+    type Primitive = CloudPrimitive;
+
+    fn draw(
+        &self,
+        state: &Self::State,
+        _cursor: mouse::Cursor,
+        bounds: Rectangle,
+    ) -> Self::Primitive {
+        let overall_bounds = combined_bounds(self.overlay.clouds);
+        let geometry = {
+            let mut cache = state.borrow_mut();
+            if !cache
+                .key
+                .as_ref()
+                .is_some_and(|key| key.matches(self.overlay, overall_bounds))
+            {
+                cache.geometry = Some(Arc::new(self.build_geometry(overall_bounds)));
+                cache.key = Some(SceneKey::capture(self.overlay, overall_bounds));
+            }
+            Arc::clone(cache.geometry.as_ref().expect("render geometry cached"))
+        };
+
+        let mut camera = CameraUniform::zeroed();
+        if let Some(overall_bounds) = overall_bounds {
+            let projection = Projection::new(
+                overall_bounds,
+                self.overlay.yaw,
+                self.overlay.pitch,
+                self.overlay.zoom,
+                self.overlay.pan,
+                bounds.width,
+                bounds.height,
+            );
+            let center = overall_bounds.center();
             camera.right = vec4(projection.right);
             camera.up = vec4(projection.up);
             camera.toward = vec4(projection.toward_camera);
@@ -145,12 +267,7 @@ impl shader::Program<Message> for GpuViewport<'_> {
                 camera.clip_enabled[0] = 1.0;
             }
         }
-        CloudPrimitive {
-            points,
-            mesh_vertices,
-            mesh_indices,
-            camera,
-        }
+        CloudPrimitive { geometry, camera }
     }
 }
 
@@ -180,10 +297,15 @@ struct CameraUniform {
 }
 
 #[derive(Debug)]
-pub struct CloudPrimitive {
+struct RenderGeometry {
     points: Vec<GpuPoint>,
     mesh_vertices: Vec<GpuPoint>,
     mesh_indices: Vec<u32>,
+}
+
+#[derive(Debug)]
+pub struct CloudPrimitive {
+    geometry: Arc<RenderGeometry>,
     camera: CameraUniform,
 }
 
@@ -203,6 +325,7 @@ struct GpuState {
     mesh_index_buffer: wgpu::Buffer,
     mesh_index_capacity: u64,
     mesh_index_count: u32,
+    uploaded_geometry: Option<Arc<RenderGeometry>>,
     depth_texture: Option<wgpu::Texture>,
     depth_view: Option<wgpu::TextureView>,
     color_texture: Option<wgpu::Texture>,
@@ -411,6 +534,7 @@ impl GpuState {
             mesh_index_buffer,
             mesh_index_capacity,
             mesh_index_count: 0,
+            uploaded_geometry: None,
             depth_texture: None,
             depth_view: None,
             color_texture: None,
@@ -490,55 +614,68 @@ impl Primitive for CloudPrimitive {
             storage.store(GpuState::new(device, format));
         }
         let state = storage.get_mut::<GpuState>().expect("pointcloud GPU state");
-        let byte_count = (self.points.len() * std::mem::size_of::<GpuPoint>()) as u64;
-        if byte_count > state.point_capacity {
-            state.point_capacity = byte_count.next_power_of_two();
-            state.point_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("pointcloud points"),
-                size: state.point_capacity,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+        if state
+            .uploaded_geometry
+            .as_ref()
+            .is_none_or(|previous| !Arc::ptr_eq(previous, &self.geometry))
+        {
+            let geometry = &self.geometry;
+            let byte_count = (geometry.points.len() * std::mem::size_of::<GpuPoint>()) as u64;
+            if byte_count > state.point_capacity {
+                state.point_capacity = byte_count.next_power_of_two();
+                state.point_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("pointcloud points"),
+                    size: state.point_capacity,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            if !geometry.points.is_empty() {
+                queue.write_buffer(
+                    &state.point_buffer,
+                    0,
+                    bytemuck::cast_slice(&geometry.points),
+                );
+            }
+            state.point_count = geometry.points.len() as u32;
+            let vertex_bytes =
+                (geometry.mesh_vertices.len() * std::mem::size_of::<GpuPoint>()) as u64;
+            if vertex_bytes > state.mesh_vertex_capacity {
+                state.mesh_vertex_capacity = vertex_bytes.next_power_of_two();
+                state.mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("terrain mesh vertices"),
+                    size: state.mesh_vertex_capacity,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            if !geometry.mesh_vertices.is_empty() {
+                queue.write_buffer(
+                    &state.mesh_vertex_buffer,
+                    0,
+                    bytemuck::cast_slice(&geometry.mesh_vertices),
+                );
+            }
+            let index_bytes = (geometry.mesh_indices.len() * std::mem::size_of::<u32>()) as u64;
+            if index_bytes > state.mesh_index_capacity {
+                state.mesh_index_capacity = index_bytes.next_power_of_two();
+                state.mesh_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("terrain mesh indices"),
+                    size: state.mesh_index_capacity,
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            if !geometry.mesh_indices.is_empty() {
+                queue.write_buffer(
+                    &state.mesh_index_buffer,
+                    0,
+                    bytemuck::cast_slice(&geometry.mesh_indices),
+                );
+            }
+            state.mesh_index_count = geometry.mesh_indices.len() as u32;
+            state.uploaded_geometry = Some(Arc::clone(&self.geometry));
         }
-        if !self.points.is_empty() {
-            queue.write_buffer(&state.point_buffer, 0, bytemuck::cast_slice(&self.points));
-        }
-        state.point_count = self.points.len() as u32;
-        let vertex_bytes = (self.mesh_vertices.len() * std::mem::size_of::<GpuPoint>()) as u64;
-        if vertex_bytes > state.mesh_vertex_capacity {
-            state.mesh_vertex_capacity = vertex_bytes.next_power_of_two();
-            state.mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("terrain mesh vertices"),
-                size: state.mesh_vertex_capacity,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-        if !self.mesh_vertices.is_empty() {
-            queue.write_buffer(
-                &state.mesh_vertex_buffer,
-                0,
-                bytemuck::cast_slice(&self.mesh_vertices),
-            );
-        }
-        let index_bytes = (self.mesh_indices.len() * std::mem::size_of::<u32>()) as u64;
-        if index_bytes > state.mesh_index_capacity {
-            state.mesh_index_capacity = index_bytes.next_power_of_two();
-            state.mesh_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("terrain mesh indices"),
-                size: state.mesh_index_capacity,
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-        if !self.mesh_indices.is_empty() {
-            queue.write_buffer(
-                &state.mesh_index_buffer,
-                0,
-                bytemuck::cast_slice(&self.mesh_indices),
-            );
-        }
-        state.mesh_index_count = self.mesh_indices.len() as u32;
         let size = viewport.physical_size();
         state.resize_depth(device, (size.width, size.height));
         let mut camera = self.camera;
@@ -630,5 +767,86 @@ impl Primitive for CloudPrimitive {
             &[],
         );
         pass.draw(0..3, 0..1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Studio;
+
+    #[test]
+    fn camera_redraw_reuses_geometry_and_data_changes_invalidate_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("camera.xyz");
+        std::fs::write(&source, "0 0 0\n1 0 0\n0 1 0\n1 1 1\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 4).unwrap());
+        let mut studio = Studio::default();
+        studio.clouds.push(CloudEntry {
+            cloud,
+            mesh: None,
+            mesh_visible: false,
+            bag_source: false,
+            visible: true,
+            selection: None,
+            deleted: None,
+            index: None,
+            auto_index_queued: false,
+            index_building: false,
+            detail_points: None,
+        });
+        let state = RefCell::new(RenderCache::default());
+        let bounds = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        let draw = |studio: &Studio| {
+            let viewport = GpuViewport {
+                overlay: studio.point_viewport(),
+            };
+            shader::Program::draw(&viewport, &state, mouse::Cursor::Unavailable, bounds)
+        };
+
+        let first = draw(&studio);
+        studio.yaw += 0.2;
+        studio.pan[0] += 30.0;
+        let camera_moved = draw(&studio);
+        assert!(Arc::ptr_eq(&first.geometry, &camera_moved.geometry));
+        assert_ne!(first.camera.right, camera_moved.camera.right);
+
+        studio.point_size = 4.0;
+        studio.eye_dome = false;
+        let display_changed = draw(&studio);
+        assert!(Arc::ptr_eq(
+            &camera_moved.geometry,
+            &display_changed.geometry
+        ));
+        assert_ne!(camera_moved.camera.view, display_changed.camera.view);
+
+        studio.color_mode = ColorMode::Elevation;
+        let recolored = draw(&studio);
+        assert!(!Arc::ptr_eq(&display_changed.geometry, &recolored.geometry));
+
+        studio.filter_other = false;
+        let filtered = draw(&studio);
+        assert!(!Arc::ptr_eq(&recolored.geometry, &filtered.geometry));
+        assert!(filtered.geometry.points.is_empty());
+
+        studio.filter_other = true;
+        studio.section_enabled = true;
+        studio.section_reference_bounds = Some(studio.clouds[0].cloud.bounds);
+        studio.section_max_percent[0] = 0.0;
+        let clipped = draw(&studio);
+        assert!(!Arc::ptr_eq(&filtered.geometry, &clipped.geometry));
+        assert_eq!(clipped.geometry.points.len(), 2);
+
+        studio.section_enabled = false;
+        studio.clouds[0].detail_points = Some(
+            vec![IndexedPoint {
+                point: studio.clouds[0].cloud.points[0],
+                ordinal: 0,
+            }]
+            .into(),
+        );
+        let detailed = draw(&studio);
+        assert!(!Arc::ptr_eq(&clipped.geometry, &detailed.geometry));
+        assert_eq!(detailed.geometry.points.len(), 1);
     }
 }
