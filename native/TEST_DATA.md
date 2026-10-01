@@ -466,7 +466,9 @@ intensity matched the source point-by-point after translation; the largest
 coordinate deviation was about `1.42e-14` m. With a section box inside the
 translated bounds, the GUI exported 77,166 points, still with four poses and
 identical point attributes. A scan without a source pose uses the coordinate
-export path so Translate does not invent a scanner station.
+export path so Translate does not invent a scanner station. The live translated
+cloud with the section box and four listed stations appears in
+[`native-e57-translated-section-poses.png`](../screenshots/native-e57-translated-section-poses.png).
 The 1,200,000-point LAS fixture exported to E57 in 5.13 seconds with 22,288
 KiB peak RSS, and the E57 reopened and exported to a 1,200,000-point PLY in
 5.00 seconds with 21,736 KiB peak RSS. Comparing that PLY with a direct LAS
