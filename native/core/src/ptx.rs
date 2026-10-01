@@ -29,11 +29,21 @@ pub fn read(
         let scanner_line = next_line(&mut lines)?
             .ok_or_else(|| LoadError::InvalidData("truncated PTX scanner position".into()))?;
         let scanner = parse_values(&scanner_line, 3)?;
-        for _ in 0..3 {
+        let mut axes = [[0.0f64; 3]; 3];
+        for axis in &mut axes {
             let basis_line = next_line(&mut lines)?
                 .ok_or_else(|| LoadError::InvalidData("truncated PTX basis".into()))?;
-            parse_values(&basis_line, 3)?;
+            let values = parse_values(&basis_line, 3)?;
+            axis.copy_from_slice(&values[..3]);
         }
+        let axes = axes.map(|axis| {
+            let norm = axis.iter().map(|value| value * value).sum::<f64>().sqrt();
+            (norm.is_finite() && norm > f64::EPSILON).then(|| axis.map(|value| value / norm))
+        });
+        let axes = axes
+            .iter()
+            .all(Option::is_some)
+            .then(|| axes.map(Option::unwrap));
         let mut transform = [[0.0f64; 4]; 4];
         for row in &mut transform {
             let line = next_line(&mut lines)?
@@ -51,6 +61,7 @@ pub fn read(
             pose_push(ScanPose {
                 label: format!("Scan {scan}"),
                 position: scanner_position,
+                axes,
             });
         }
         for _ in 0..count {
@@ -135,7 +146,7 @@ mod tests {
     fn reads_multiple_transformed_scans() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("multi.ptx");
-        let standard = "1\n2\n10 20 30\n1 0 0\n0 1 0\n0 0 1\n0 1 0 0\n-1 0 0 0\n0 0 1 0\n10 20 30 1\n0 0 0 0\n1 2 3 0.5 10 20 30\n";
+        let standard = "1\n2\n10 20 30\n0 1 0\n-1 0 0\n0 0 1\n0 1 0 0\n-1 0 0 0\n0 0 1 0\n10 20 30 1\n0 0 0 0\n1 2 3 0.5 10 20 30\n";
         let legacy = "1\n2\n10 20 30\n1 0 0\n0 1 0\n0 0 1\n1 0 0 10\n0 1 0 20\n0 0 1 30\n0 0 0 1\n0 0 0 0\n1 2 3 0.5 10 20 30\n";
         std::fs::write(&path, format!("{standard}{legacy}")).unwrap();
         let cloud = super::super::open(&path, 10).unwrap();
@@ -146,5 +157,13 @@ mod tests {
         assert_eq!(cloud.scan_poses.len(), 2);
         assert_eq!(cloud.scan_poses[0].position, [10.0, 20.0, 30.0]);
         assert_eq!(cloud.scan_poses[1].position, [10.0, 20.0, 30.0]);
+        assert_eq!(
+            cloud.scan_poses[0].axes,
+            Some([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+        );
+        assert_eq!(
+            cloud.scan_poses[1].axes,
+            Some([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        );
     }
 }

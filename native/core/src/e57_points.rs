@@ -4,7 +4,7 @@ use std::path::Path;
 
 use e57::{CartesianCoordinate, E57Reader};
 
-use super::{LoadError, Point, ScanPose};
+use super::{quaternion_axes, LoadError, Point, ScanPose};
 
 pub fn read(
     path: &Path,
@@ -27,6 +27,12 @@ pub fn read(
                         .filter(|name| !name.is_empty())
                         .unwrap_or_else(|| format!("Scan {}", index + 1)),
                     position,
+                    axes: quaternion_axes([
+                        transform.rotation.w,
+                        transform.rotation.x,
+                        transform.rotation.y,
+                        transform.rotation.z,
+                    ]),
                 });
             }
         }

@@ -172,6 +172,14 @@ fn main() -> iced::Result {
                         "{}: {:.6}, {:.6}, {:.6}",
                         pose.label, pose.position[0], pose.position[1], pose.position[2]
                     );
+                    if let Some(axes) = pose.axes {
+                        for (label, axis) in ["X", "Y", "Z"].into_iter().zip(axes) {
+                            println!(
+                                "  {label}: {:+.6}, {:+.6}, {:+.6}",
+                                axis[0], axis[1], axis[2]
+                            );
+                        }
+                    }
                 }
                 return Ok(());
             }
@@ -4043,6 +4051,16 @@ impl Studio {
                                         pose.position[0], pose.position[1], pose.position[2]
                                     ))
                                     .size(10),
+                                    text(match pose.axes {
+                                        Some(axes) => format!(
+                                            "X {:+.2} {:+.2} {:+.2}\nY {:+.2} {:+.2} {:+.2}\nZ {:+.2} {:+.2} {:+.2}",
+                                            axes[0][0], axes[0][1], axes[0][2],
+                                            axes[1][0], axes[1][1], axes[1][2],
+                                            axes[2][0], axes[2][1], axes[2][2],
+                                        ),
+                                        None => "Orientation unavailable".into(),
+                                    })
+                                    .size(9),
                                 ]
                                 .spacing(2),
                             )
@@ -4863,9 +4881,17 @@ struct ScanMarker {
     x: f32,
     y: f32,
     labels: Vec<String>,
+    axes: Option<[[f64; 3]; 3]>,
 }
 
-fn push_scan_marker(markers: &mut Vec<ScanMarker>, x: f32, y: f32, label: &str, group: bool) {
+fn push_scan_marker(
+    markers: &mut Vec<ScanMarker>,
+    x: f32,
+    y: f32,
+    label: &str,
+    axes: Option<[[f64; 3]; 3]>,
+    group: bool,
+) {
     if group {
         if let Some(marker) = markers.iter_mut().find(|marker| {
             let dx = marker.x - x;
@@ -4873,6 +4899,9 @@ fn push_scan_marker(markers: &mut Vec<ScanMarker>, x: f32, y: f32, label: &str, 
             dx * dx + dy * dy <= 12.0 * 12.0
         }) {
             marker.labels.push(label.to_owned());
+            // Nearby stations can have different orientations. Do not draw
+            // one station's axes on a marker representing several scans.
+            marker.axes = None;
             return;
         }
     }
@@ -4884,6 +4913,7 @@ fn push_scan_marker(markers: &mut Vec<ScanMarker>, x: f32, y: f32, label: &str, 
         } else {
             Vec::new()
         },
+        axes,
     });
 }
 
@@ -5451,11 +5481,49 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     let Some((x, y, _)) = projection.project(pose.position) else {
                         continue;
                     };
-                    push_scan_marker(&mut markers, x, y, &pose.label, show_labels);
+                    push_scan_marker(&mut markers, x, y, &pose.label, pose.axes, show_labels);
                 }
             }
             for marker in markers {
                 let center = UiPoint::new(marker.x, marker.y);
+                if show_labels {
+                    if let Some(axes) = marker.axes {
+                        for (axis, label, color) in [
+                            (axes[0], "X", Color::from_rgb8(190, 104, 98)),
+                            (axes[1], "Y", Color::from_rgb8(124, 171, 116)),
+                            (axes[2], "Z", Color::from_rgb8(112, 153, 192)),
+                        ] {
+                            let horizontal = axis
+                                .iter()
+                                .zip(projection.right)
+                                .map(|(a, b)| a * b)
+                                .sum::<f64>() as f32;
+                            let vertical = -axis
+                                .iter()
+                                .zip(projection.up)
+                                .map(|(a, b)| a * b)
+                                .sum::<f64>() as f32;
+                            let tip = UiPoint::new(
+                                marker.x + horizontal * 22.0,
+                                marker.y + vertical * 22.0,
+                            );
+                            if (tip.x - marker.x).hypot(tip.y - marker.y) < 8.0 {
+                                continue;
+                            }
+                            frame.stroke(
+                                &canvas::Path::line(center, tip),
+                                canvas::Stroke::default().with_color(color).with_width(2.0),
+                            );
+                            frame.fill_text(canvas::Text {
+                                content: label.into(),
+                                position: UiPoint::new(tip.x + 2.0, tip.y + 2.0),
+                                size: iced::Pixels(9.0),
+                                color,
+                                ..canvas::Text::default()
+                            });
+                        }
+                    }
+                }
                 let ring = canvas::Path::circle(center, 6.0);
                 frame.fill(&ring, Color::from_rgb8(42, 42, 50));
                 frame.stroke(
@@ -5788,14 +5856,17 @@ mod scan_marker_tests {
     #[test]
     fn nearby_scan_positions_share_one_marker_and_distant_ones_remain_distinct() {
         let mut markers = Vec::new();
-        push_scan_marker(&mut markers, 100.0, 100.0, "Scan 1", true);
-        push_scan_marker(&mut markers, 107.0, 104.0, "Scan 2", true);
-        push_scan_marker(&mut markers, 140.0, 100.0, "Scan 3", true);
+        let axes = Some([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        push_scan_marker(&mut markers, 100.0, 100.0, "Scan 1", axes, true);
+        push_scan_marker(&mut markers, 107.0, 104.0, "Scan 2", axes, true);
+        push_scan_marker(&mut markers, 140.0, 100.0, "Scan 3", axes, true);
         assert_eq!(markers.len(), 2);
         assert_eq!(markers[0].labels, ["Scan 1", "Scan 2"]);
+        assert_eq!(markers[0].axes, None);
         assert_eq!(markers[1].labels, ["Scan 3"]);
+        assert_eq!(markers[1].axes, axes);
 
-        push_scan_marker(&mut markers, 100.0, 100.0, "Scan 4", false);
+        push_scan_marker(&mut markers, 100.0, 100.0, "Scan 4", axes, false);
         assert_eq!(markers.len(), 3);
     }
 }

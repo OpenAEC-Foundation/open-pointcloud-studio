@@ -6,7 +6,7 @@ use std::path::Path;
 
 use memmap2::MmapOptions;
 
-use super::{LoadError, Point, ScanPose};
+use super::{quaternion_axes, LoadError, Point, ScanPose};
 
 struct Field {
     name: String,
@@ -122,6 +122,7 @@ pub fn read(
         pose_push(ScanPose {
             label: "VIEWPOINT".into(),
             position: viewpoint.translation,
+            axes: quaternion_axes(viewpoint.rotation),
         });
     }
     let (mut record_size, mut column) = (0usize, 0usize);
@@ -472,6 +473,10 @@ mod tests {
             let cloud = super::super::open(&path, 1).unwrap();
             assert_eq!(cloud.scan_poses.len(), 1);
             assert_eq!(cloud.scan_poses[0].position, [10.0, 20.0, 30.0]);
+            let axes = cloud.scan_poses[0].axes.unwrap();
+            for (actual, expected) in axes[0].into_iter().zip([0.0, 1.0, 0.0]) {
+                assert!((actual - expected).abs() < 1e-8, "{mode}: {axes:?}");
+            }
             let xyz = cloud.points[0].xyz;
             for (actual, expected) in xyz.into_iter().zip([10.0, 21.0, 30.0]) {
                 assert!((actual - expected).abs() < 1e-8, "{mode}: {xyz:?}");

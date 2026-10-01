@@ -69,6 +69,40 @@ pub struct Point {
 pub struct ScanPose {
     pub label: String,
     pub position: [f64; 3],
+    /// Registered unit directions of the scanner's local X, Y and Z axes.
+    pub axes: Option<[[f64; 3]; 3]>,
+}
+
+fn quaternion_axes(rotation: [f64; 4]) -> Option<[[f64; 3]; 3]> {
+    if !rotation.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    let norm = rotation
+        .iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt();
+    if !norm.is_finite() || norm <= f64::EPSILON {
+        return None;
+    }
+    let [w, x, y, z] = rotation.map(|value| value / norm);
+    Some([
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y + w * z),
+            2.0 * (x * z - w * y),
+        ],
+        [
+            2.0 * (x * y - w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z + w * x),
+        ],
+        [
+            2.0 * (x * z + w * y),
+            2.0 * (y * z - w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

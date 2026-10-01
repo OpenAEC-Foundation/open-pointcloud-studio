@@ -286,6 +286,13 @@ of the viewport without changing the -46°/34° orbit angle or 3.510× zoom;
 clicking another station marker then centered that station as well. See
 [`native-e57-center-station.png`](../screenshots/native-e57-center-station.png).
 The same position collection is checked by PTX and PCD parser tests.
+The native reader now also retains E57 quaternion, PCD `VIEWPOINT` quaternion
+and PTX registered basis directions. `--scans` on `test.e57` reported four
+orientations; Scan 1's X axis was `(-0.444356, -0.895850, 0)` and Scan 4's
+was `(0.999620, 0.027552, 0)`. The GUI showed the corresponding small axes
+at each ungrouped marker and in the expanded Properties list. Grouped markers
+do not show one scan's orientation on behalf of several scans. See
+[`native-e57-scan-orientation.png`](../screenshots/native-e57-scan-orientation.png).
 
 The GUI also opened a 22,801-point XYZ grid with **Indexed: No**. Pick point
 selected source point 11,550 at X -2.000, Y 1.000, Z 0.593 by scanning the
