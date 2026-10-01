@@ -535,3 +535,16 @@ GUI returned a job ID and completed with exactly 25,000 vertices, 25,000
 normals and 76,875 triangles from all 50,000 source points. The point layer
 was hidden while its resulting colored mesh and chosen settings were captured
 in [`native-surface-settings-25k-mesh.png`](../screenshots/native-surface-settings-25k-mesh.png).
+
+The shared LAS/LAZ full-source reader was changed from single-point calls to
+bounded `read_points_into` batches. This activates `las`'s parallel LAZ
+decompressor on full scans while retaining ordered callbacks and cancellation.
+On the same public 45,839,678-point AHN6 `207000_474000` tile, reading the
+first 2,000,000 points fell from 2.360 to 0.852 seconds in the native debug
+build. A full read took 17.645 seconds with 111,316 KiB peak RSS. The complete
+3D surface command then fell from the earlier 349.12 to 145.70 seconds with
+137,460 KiB peak RSS. Its 50,000-vertex, 153,658-triangle OBJ was byte-for-byte
+identical to the earlier oriented mesh (SHA-256
+`089cc49965a17b09de32b51038796847b0db0f2eae952f5556ddc54af14b0742`).
+Repeat the bounded reader timing with
+`cargo run -p pointcloud-core --example visit_bench -- FILE.laz 2000000`.

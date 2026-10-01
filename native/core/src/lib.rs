@@ -476,8 +476,31 @@ fn read_las(
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
     let mut reader = las::Reader::from_path(path)?;
-    for point in reader.points() {
-        push(convert_las_point(&point?))?;
+    // The LAZ reader only uses its parallel decompressor for read_points_into;
+    // calling read() for every point silently takes the serial path. Eight
+    // default 50,000-point chunks bound memory while using multiple cores.
+    let batch_limit = if reader.header().point_format().is_compressed {
+        400_000
+    } else {
+        16_384
+    };
+    read_las_batches(&mut reader, push, batch_limit)
+}
+
+fn read_las_batches(
+    reader: &mut las::Reader,
+    push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    batch_limit: usize,
+) -> Result<(), LoadError> {
+    let mut batch = Vec::with_capacity(batch_limit);
+    loop {
+        batch.clear();
+        if reader.read_points_into(batch_limit as u64, &mut batch)? == 0 {
+            break;
+        }
+        for point in &batch {
+            push(convert_las_point(point))?;
+        }
     }
     Ok(())
 }
@@ -685,6 +708,67 @@ mod tests {
             assert_eq!(reopened.points[0].rgb, Some([255, 0, 127]));
             std::fs::remove_file(path).unwrap();
             std::fs::remove_file(exported).unwrap();
+        }
+    }
+
+    #[test]
+    fn las_and_laz_batches_keep_point_order_and_stop_at_callback_error() {
+        let dir = tempfile::tempdir().unwrap();
+        for extension in ["las", "laz"] {
+            let path = dir.path().join(format!("ordered.{extension}"));
+            let mut builder = las::Builder::from((1, 2));
+            builder.point_format = las::point::Format::new(2).unwrap();
+            let mut writer = las::Writer::from_path(&path, builder.into_header().unwrap()).unwrap();
+            for index in 0..7 {
+                writer
+                    .write_point(las::Point {
+                        x: index as f64,
+                        intensity: 100 + index as u16,
+                        color: Some(las::Color {
+                            red: index as u16 * 257,
+                            green: 0,
+                            blue: 0,
+                        }),
+                        ..las::Point::default()
+                    })
+                    .unwrap();
+            }
+            drop(writer);
+
+            let mut reader = las::Reader::from_path(&path).unwrap();
+            let mut points = Vec::new();
+            read_las_batches(
+                &mut reader,
+                &mut |point| {
+                    points.push(point);
+                    Ok(())
+                },
+                2,
+            )
+            .unwrap();
+            assert_eq!(points.len(), 7);
+            for (index, point) in points.iter().enumerate() {
+                assert_eq!(point.xyz[0], index as f64);
+                assert_eq!(point.intensity, Some(100 + index as u16));
+                assert_eq!(point.rgb, Some([index as u8, 0, 0]));
+            }
+
+            let mut reader = las::Reader::from_path(&path).unwrap();
+            let mut visited = Vec::new();
+            let stopped = read_las_batches(
+                &mut reader,
+                &mut |point| {
+                    visited.push(point.xyz[0]);
+                    if visited.len() == 3 {
+                        Err(LoadError::Cancelled)
+                    } else {
+                        Ok(())
+                    }
+                },
+                2,
+            );
+            assert!(matches!(stopped, Err(LoadError::Cancelled)));
+            assert_eq!(visited, [0.0, 1.0, 2.0]);
         }
     }
 
