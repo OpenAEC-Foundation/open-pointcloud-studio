@@ -723,3 +723,17 @@ used about 641 MiB process RSS after refinement, and displayed that sample in
 The local command API rejected a budget of 10,000,001, and restoring the
 250,000-point default returned a ready viewport sample. The requested budget
 is a ceiling; view-dependent octree culling can return fewer points.
+
+At 270× zoom into the same merged AHN6 LAZ, the former node-preview path
+returned 250,000 candidate points at the default budget; raising that budget
+to ten million returned 559,825 candidates. Many candidates projected off
+screen, leaving the [default-budget view](../screenshots/native-deep-zoom-node-preview-114m.png)
+visibly thin. The new bounded
+exact-leaf path read the intersecting leaves, filtered source points through
+the current camera and retained 12,400 points actually inside the viewport
+at the default 250,000-point budget. The
+[deep-zoom screenshot](../screenshots/native-deep-zoom-exact-visible-114m.png)
+shows the denser result at the same camera position. A right-button pan of
+50 × 20 pixels at this zoom changed the camera by exactly that amount and
+refreshed to 12,633 visible points within the 0.3-second polling interval.
+Zoom All restored the overview and its 250,000-point LOD.

@@ -51,6 +51,8 @@ use ui_theme::UiTheme;
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
 const FAST_LOD_PREVIEW_LIMIT: usize = 250_000;
+const EXACT_VISIBLE_LOD_ZOOM: f32 = 0.05;
+const MAX_EXACT_VISIBLE_LOD_CANDIDATES: u64 = 2_000_000;
 const AUTO_INDEX_MIN_POINTS: u64 = 1_000_000;
 const ASPRS_CLASSIFICATIONS: &[(u8, &str)] = &[
     (0, "Never classified"),
@@ -1321,6 +1323,7 @@ struct LodRefinement {
     projection: Projection,
     cancel: Arc<AtomicBool>,
     budget: usize,
+    deep_zoom: bool,
 }
 
 impl LodRefinement {
@@ -1337,25 +1340,48 @@ impl LodRefinement {
                 let limit = self.requested[slot];
                 let section = self.section;
                 let projection = self.projection;
+                let deep_zoom = self.deep_zoom;
                 std::thread::spawn(move || {
-                    tree.sample_lod_indexed_cancellable(
-                        limit,
-                        |node_bounds| {
-                            let node_bounds = transform.bounds(node_bounds);
-                            if section.is_some_and(|clip| {
-                                (0..3).any(|axis| {
-                                    node_bounds.max[axis] < clip.min[axis]
-                                        || node_bounds.min[axis] > clip.max[axis]
-                                })
-                            }) {
-                                return None;
-                            }
-                            projection.screen_span(node_bounds)
-                        },
-                        || cancel.load(Ordering::Relaxed),
-                    )
-                    .map(|points| (slot, points))
-                    .map_err(|error| error.to_string())
+                    let projected = |node_bounds: Bounds| {
+                        let node_bounds = transform.bounds(node_bounds);
+                        if section.is_some_and(|clip| {
+                            (0..3).any(|axis| {
+                                node_bounds.max[axis] < clip.min[axis]
+                                    || node_bounds.min[axis] > clip.max[axis]
+                            })
+                        }) {
+                            return None;
+                        }
+                        projection.screen_span(node_bounds)
+                    };
+                    let exact = if deep_zoom {
+                        tree.sample_visible_indexed_cancellable(
+                            limit,
+                            MAX_EXACT_VISIBLE_LOD_CANDIDATES,
+                            |bounds| projected(bounds).is_some(),
+                            |record| {
+                                let xyz = transform.xyz(record.point.xyz);
+                                section.is_none_or(|clip| {
+                                    (0..3).all(|axis| {
+                                        xyz[axis] >= clip.min[axis] && xyz[axis] <= clip.max[axis]
+                                    })
+                                }) && projection.project(xyz).is_some()
+                            },
+                            || cancel.load(Ordering::Relaxed),
+                        )
+                        .map_err(|error| error.to_string())?
+                    } else {
+                        None
+                    };
+                    exact
+                        .map(Ok)
+                        .unwrap_or_else(|| {
+                            tree.sample_lod_indexed_cancellable(limit, projected, || {
+                                cancel.load(Ordering::Relaxed)
+                            })
+                        })
+                        .map(|points| (slot, points))
+                        .map_err(|error| error.to_string())
                 })
             })
             .collect();
@@ -4598,6 +4624,7 @@ impl Studio {
                     projection,
                     cancel,
                     budget,
+                    deep_zoom: self.zoom <= EXACT_VISIBLE_LOD_ZOOM,
                 };
                 let stream =
                     iced::futures::stream::unfold(Some((refinement, 0u8)), |state| async move {

@@ -535,6 +535,76 @@ impl OctreeIndex {
         Ok(points)
     }
 
+    /// At deep zoom, read nearby leaves exactly and sample only points that
+    /// project into the viewport. Return `None` when the candidate leaves are
+    /// too large, allowing the caller to use the regular node-preview LOD.
+    pub fn sample_visible_indexed_cancellable(
+        &self,
+        limit: usize,
+        max_scan_points: u64,
+        mut visible_node: impl FnMut(Bounds) -> bool,
+        mut visible_point: impl FnMut(IndexedPoint) -> bool,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Option<Vec<IndexedPoint>>, LoadError> {
+        if limit == 0 || max_scan_points == 0 {
+            return Err(LoadError::InvalidData("read limit must be positive".into()));
+        }
+        if cancelled() {
+            return Err(LoadError::Cancelled);
+        }
+        let mut leaves = Vec::new();
+        let mut candidates = 0u64;
+        if collect_visible_leaves(
+            &self.root,
+            &mut visible_node,
+            &mut leaves,
+            &mut candidates,
+            max_scan_points,
+        ) {
+            return Ok(None);
+        }
+        let initial_capacity = limit
+            .min(usize::try_from(candidates).unwrap_or(usize::MAX))
+            .min(65_536);
+        let mut points = Vec::with_capacity(initial_capacity);
+        let mut matched = 0u64;
+        let mut random_state = 0x6a09_e667_f3bc_c909u64;
+        for leaf in leaves {
+            if cancelled() {
+                return Err(LoadError::Cancelled);
+            }
+            let mut read = 0u64;
+            read_records(&self.storage.path().join(&leaf.data_path), |record| {
+                if read.is_multiple_of(4_096) && cancelled() {
+                    return Err(LoadError::Cancelled);
+                }
+                read += 1;
+                if visible_point(record) {
+                    matched += 1;
+                    if points.len() < limit {
+                        points.push(record);
+                    } else {
+                        random_state ^= random_state << 13;
+                        random_state ^= random_state >> 7;
+                        random_state ^= random_state << 17;
+                        let replacement = random_state % matched;
+                        if replacement < limit as u64 {
+                            points[replacement as usize] = record;
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+            if read != leaf.stored_points {
+                return Err(LoadError::InvalidData("damaged octree leaf".into()));
+            }
+        }
+        if cancelled() {
+            return Err(LoadError::Cancelled);
+        }
+        Ok(Some(points))
+    }
+
     /// Visit exact source points in leaves whose bounds pass a spatial test.
     /// Every record carries its ordinal in the original file for selection.
     pub fn visit_intersecting(
@@ -570,6 +640,29 @@ fn visit_intersecting_node(
         }
     }
     Ok(())
+}
+
+fn collect_visible_leaves<'a>(
+    node: &'a IndexedNode,
+    visible: &mut impl FnMut(Bounds) -> bool,
+    leaves: &mut Vec<&'a IndexedNode>,
+    candidates: &mut u64,
+    max_scan_points: u64,
+) -> bool {
+    if !visible(node.bounds) {
+        return false;
+    }
+    if node.is_leaf() {
+        *candidates = candidates.saturating_add(node.stored_points);
+        if *candidates > max_scan_points {
+            return true;
+        }
+        leaves.push(node);
+        return false;
+    }
+    node.children
+        .iter()
+        .any(|child| collect_visible_leaves(child, visible, leaves, candidates, max_scan_points))
 }
 
 fn cache_root() -> PathBuf {
@@ -1158,6 +1251,64 @@ mod tests {
             .unwrap();
         assert!(!west.is_empty());
         assert!(west.iter().all(|point| point.xyz[0] < 8.0));
+    }
+
+    #[test]
+    fn exact_visible_sample_uses_source_ordinals_and_skips_large_scans() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("grid.xyz");
+        let mut contents = String::new();
+        for x in 0..32 {
+            for y in 0..16 {
+                contents.push_str(&format!("{x} {y} 0\n"));
+            }
+        }
+        fs::write(&path, contents).unwrap();
+        let cloud = super::super::open(&path, 8).unwrap();
+        let index = OctreeIndex::build(
+            &cloud,
+            IndexConfig {
+                leaf_points: 8,
+                preview_points: 4,
+                max_depth: 8,
+                scratch_dir: Some(directory.path().to_path_buf()),
+            },
+        )
+        .unwrap();
+        let overlaps = |bounds: Bounds| {
+            bounds.min[0] <= 12.0
+                && bounds.max[0] >= 8.0
+                && bounds.min[1] <= 8.0
+                && bounds.max[1] >= 4.0
+        };
+        let visible = |record: IndexedPoint| {
+            (8.0..=12.0).contains(&record.point.xyz[0])
+                && (4.0..=8.0).contains(&record.point.xyz[1])
+        };
+        let exact = index
+            .sample_visible_indexed_cancellable(100, 512, overlaps, visible, || false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(exact.len(), 25);
+        assert!(exact.iter().all(|record| visible(*record)));
+        assert!(exact.iter().all(|record| {
+            record.ordinal == record.point.xyz[0] as u64 * 16 + record.point.xyz[1] as u64
+        }));
+
+        let sample = index
+            .sample_visible_indexed_cancellable(7, 512, overlaps, visible, || false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(sample.len(), 7);
+        assert!(sample.iter().all(|record| visible(*record)));
+        assert!(index
+            .sample_visible_indexed_cancellable(7, 1, overlaps, visible, || false)
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            index.sample_visible_indexed_cancellable(7, 512, overlaps, visible, || true),
+            Err(LoadError::Cancelled)
+        ));
     }
 
     #[test]
