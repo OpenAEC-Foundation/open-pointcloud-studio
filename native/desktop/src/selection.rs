@@ -269,36 +269,87 @@ pub fn pick_indexed(
     filter: ClassFilter,
     deleted: Option<&DeletionMask>,
 ) -> Result<Option<IndexedPoint>, String> {
-    if !pointer.iter().all(|value| value.is_finite()) || !radius.is_finite() || radius <= 0.0 {
-        return Err("invalid point-pick position".into());
-    }
+    validate_pick(pointer, radius)?;
     let mut best: Option<(IndexedPoint, f32, f64)> = None;
     tree.visit_intersecting(
         |bounds| node_overlaps_pointer(bounds, projection, pointer, radius),
         |record| {
-            if deleted.is_some_and(|mask| mask.contains(record.ordinal))
-                || !filter.accepts(&record.point)
-            {
-                return Ok(());
-            }
-            if let Some((x, y, depth)) = projection.project(record.point.xyz) {
-                let dx = x - pointer[0];
-                let dy = y - pointer[1];
-                let distance_squared = dx * dx + dy * dy;
-                if distance_squared <= radius * radius
-                    && best.as_ref().is_none_or(|(_, best_distance, best_depth)| {
-                        distance_squared < *best_distance
-                            || (distance_squared == *best_distance && depth < *best_depth)
-                    })
-                {
-                    best = Some((record, distance_squared, depth));
-                }
-            }
+            consider_pick(
+                record, projection, pointer, radius, filter, deleted, &mut best,
+            );
             Ok(())
         },
     )
     .map_err(|error| error.to_string())?;
     Ok(best.map(|(record, _, _)| record))
+}
+
+/// Pick directly from the source when no disk octree has been built yet.
+pub fn pick_full(
+    cloud: &PointCloud,
+    projection: Projection,
+    pointer: [f32; 2],
+    radius: f32,
+    filter: ClassFilter,
+    deleted: Option<&DeletionMask>,
+) -> Result<Option<IndexedPoint>, String> {
+    validate_pick(pointer, radius)?;
+    cloud.validate_source().map_err(|error| error.to_string())?;
+    let mut best = None;
+    let mut ordinal = 0u64;
+    visit_points(&cloud.path, &mut |point| {
+        consider_pick(
+            IndexedPoint { point, ordinal },
+            projection,
+            pointer,
+            radius,
+            filter,
+            deleted,
+            &mut best,
+        );
+        ordinal += 1;
+        Ok(())
+    })
+    .map_err(|error| error.to_string())?;
+    if ordinal != cloud.total_points {
+        return Err(format!("{} changed while picking", cloud.path.display()));
+    }
+    cloud.validate_source().map_err(|error| error.to_string())?;
+    Ok(best.map(|(record, _, _)| record))
+}
+
+fn validate_pick(pointer: [f32; 2], radius: f32) -> Result<(), String> {
+    if !pointer.iter().all(|value| value.is_finite()) || !radius.is_finite() || radius <= 0.0 {
+        return Err("invalid point-pick position".into());
+    }
+    Ok(())
+}
+
+fn consider_pick(
+    record: IndexedPoint,
+    projection: Projection,
+    pointer: [f32; 2],
+    radius: f32,
+    filter: ClassFilter,
+    deleted: Option<&DeletionMask>,
+    best: &mut Option<(IndexedPoint, f32, f64)>,
+) {
+    if deleted.is_some_and(|mask| mask.contains(record.ordinal)) || !filter.accepts(&record.point) {
+        return;
+    }
+    if let Some((x, y, depth)) = projection.project(record.point.xyz) {
+        let dx = x - pointer[0];
+        let dy = y - pointer[1];
+        let distance_squared = dx * dx + dy * dy;
+        if distance_squared <= radius * radius
+            && best.as_ref().is_none_or(|(_, best_distance, best_depth)| {
+                distance_squared < *best_distance
+                    || (distance_squared == *best_distance && depth < *best_depth)
+            })
+        {
+            *best = Some((record, distance_squared, depth));
+        }
+    }
 }
 
 fn node_overlaps_pointer(
@@ -741,5 +792,48 @@ mod tests {
         let exported = pointcloud_core::open(destination, 10).unwrap();
         assert_eq!(exported.total_points, 1);
         assert_eq!(exported.points[0].xyz, [20.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn picks_exact_source_point_without_octree_and_honors_deletions_and_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("pick.xyz");
+        fs::write(&source, "0 0 0\n10 0 0\n20 0 0\n").unwrap();
+        let cloud = pointcloud_core::open(&source, 1).unwrap();
+        assert_eq!(cloud.points.len(), 1);
+        let camera = Projection::new(cloud.bounds, 0.0, 0.0, 1.0, [0.0, 0.0], 800.0, 600.0);
+        let filter = ClassFilter {
+            ground: true,
+            vegetation: true,
+            buildings: true,
+            other: true,
+            section: None,
+        };
+        let picked = pick_full(&cloud, camera, [400.0, 300.0], 8.0, filter, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(picked.ordinal, 2);
+        let mut deleted = DeletionMask::new(cloud.total_points).unwrap();
+        deleted
+            .apply(&SelectionMask::single(cloud.total_points, picked).unwrap())
+            .unwrap();
+        let picked = pick_full(&cloud, camera, [400.0, 300.0], 8.0, filter, Some(&deleted))
+            .unwrap()
+            .unwrap();
+        assert_eq!(picked.ordinal, 1);
+        let section = ClassFilter {
+            section: Some(Bounds {
+                min: [0.0, -1.0, -1.0],
+                max: [5.0, 1.0, 1.0],
+            }),
+            ..filter
+        };
+        assert_eq!(
+            pick_full(&cloud, camera, [400.0, 300.0], 8.0, section, None)
+                .unwrap()
+                .unwrap()
+                .ordinal,
+            0
+        );
     }
 }

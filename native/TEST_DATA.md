@@ -272,3 +272,17 @@ saved as `View 1`, the camera was switched to Top, then `View 1` restored.
 After restarting the dev build, `View 1` was still listed for that scan.
 Screenshots: [`native-camera-views-saved.png`](../screenshots/native-camera-views-saved.png)
 and [`native-camera-view-restored.png`](../screenshots/native-camera-view-restored.png).
+
+The pye57 `test.e57` fixture exposes four scanner positions through the E57
+scan transforms. The native Properties panel lists four stations and the View
+ribbon's **Fit stations** action frames their markers together with the
+160,838-point cloud; see
+[`native-e57-scan-positions-framed.png`](../screenshots/native-e57-scan-positions-framed.png).
+The same position collection is checked by PTX and PCD parser tests.
+
+The GUI also opened a 22,801-point XYZ grid with **Indexed: No**. Pick point
+selected source point 11,550 at X -2.000, Y 1.000, Z 0.593 by scanning the
+source in the background; the Properties panel displayed those coordinates.
+The native test separately verifies a picked ordinal beyond a one-point
+preview, deletion filtering and section-box filtering. See
+[`native-pick-without-index.png`](../screenshots/native-pick-without-index.png).

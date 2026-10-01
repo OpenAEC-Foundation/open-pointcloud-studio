@@ -30,8 +30,8 @@ use pointcloud_core::{
     Point, PointCloud,
 };
 use selection::{
-    pick_indexed, select_full, ClassFilter, DeletionMask, Projection, ScreenRect, SelectionMask,
-    SelectionSource,
+    pick_full, pick_indexed, select_full, ClassFilter, DeletionMask, Projection, ScreenRect,
+    SelectionMask, SelectionSource,
 };
 use ui_theme::UiTheme;
 
@@ -2591,27 +2591,38 @@ impl Studio {
                         self.status = "Choose a visible point cloud to pick from".into();
                         return Task::none();
                     };
-                    let Some(tree) = entry.index.as_ref().map(Arc::clone) else {
-                        self.status =
-                            "Build an index for the active cloud before point picking".into();
-                        return Task::none();
-                    };
+                    let tree = entry.index.as_ref().map(Arc::clone);
                     let cloud = Arc::clone(&entry.cloud);
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
                     self.selection_pending = true;
-                    self.status = "Finding nearest point in the active cloud…".into();
+                    self.status = if tree.is_some() {
+                        "Finding nearest point through the octree…".into()
+                    } else {
+                        "Scanning the full source for the nearest point…".into()
+                    };
                     return Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
                                 cloud.validate_source().map_err(|error| error.to_string())?;
-                                let result = pick_indexed(
-                                    &tree,
-                                    projection,
-                                    end,
-                                    8.0,
-                                    filter,
-                                    deleted.as_deref(),
-                                )?;
+                                let result = if let Some(tree) = tree {
+                                    pick_indexed(
+                                        &tree,
+                                        projection,
+                                        end,
+                                        8.0,
+                                        filter,
+                                        deleted.as_deref(),
+                                    )?
+                                } else {
+                                    pick_full(
+                                        &cloud,
+                                        projection,
+                                        end,
+                                        8.0,
+                                        filter,
+                                        deleted.as_deref(),
+                                    )?
+                                };
                                 cloud.validate_source().map_err(|error| error.to_string())?;
                                 Ok(result)
                             })
@@ -3781,6 +3792,38 @@ impl Studio {
                         entry.cloud.bounds.min[axis], entry.cloud.bounds.max[axis]
                     ),
                 ));
+            }
+            if let Some(point) = entry
+                .selection
+                .as_deref()
+                .filter(|selection| selection.count == 1)
+                .and_then(|selection| selection.highlights.first())
+            {
+                properties = properties.push(opencad_properties::section_header("Selected point"));
+                for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
+                    properties = properties.push(opencad_properties::property_row(
+                        label,
+                        format!("{:.3}", point.xyz[axis]),
+                    ));
+                }
+                if let Some(rgb) = point.rgb {
+                    properties = properties.push(opencad_properties::property_row(
+                        "RGB",
+                        format!("{}, {}, {}", rgb[0], rgb[1], rgb[2]),
+                    ));
+                }
+                if let Some(intensity) = point.intensity {
+                    properties = properties.push(opencad_properties::property_row(
+                        "Intensity",
+                        intensity.to_string(),
+                    ));
+                }
+                if let Some(classification) = point.classification {
+                    properties = properties.push(opencad_properties::property_row(
+                        "Class",
+                        classification.to_string(),
+                    ));
+                }
             }
             if !entry.cloud.scan_poses.is_empty() {
                 properties = properties

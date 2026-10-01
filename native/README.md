@@ -9,6 +9,7 @@ The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-boo
 OpenCADStudio's SVG icons under `assets/icons/` were copied into [`assets/opencad-icons/`](assets/opencad-icons/) and are embedded by Rust `iced::widget::svg`. No HTML, CSS, JavaScript or webview is used in the native desktop crate.
 
 Camera views can be named and saved from the View ribbon or Properties panel, then restored or deleted from Properties. They persist per source scan in `camera-views.json` under the native XDG configuration directory.
+E57 scan transforms, PCD `VIEWPOINT` headers and PTX scanner positions appear as station markers in the native 3D view. The View ribbon frames stations together with the cloud; Properties lists each station's coordinates. Use `--scans INPUT` to print available positions.
 
 The [opencadcodec](https://github.com/HakanSeven12/opencadcodec) repository was inspected at commit `5ef9376` (MPL-2.0). Its `PointCloudData`, `PointCloudExData`, definitions, clips and color maps model *DWG/DXF point-cloud references* and scan placement. Its `source_filename`/`source_files` fields link to scan data; this is not a LAS/LAZ/E57 point decoder or point-processing kernel. OpenCADStudio itself still reports `POINTCLOUDATTACH` as unimplemented and renders existing point-cloud CAD entities as frames/wires. Its `opencadkernel` dependency handles CAD curves and B-rep geometry, not the point stream. Our existing streaming decoders and disk octree therefore remain the scan engine. A future CAD-reference workflow should use `opencadcodec` to resolve and display attached scans and apply its transforms/crops, while keeping scan points on disk.
 
@@ -29,6 +30,7 @@ cargo run -p open-pointcloud-studio-native -- --export /path/to/scan.laz /path/t
 cargo run -p open-pointcloud-studio-native -- --section /path/to/scan.laz 207440,474000,-100,208000,475000,1000 /path/to/crop.laz
 cargo run -p open-pointcloud-studio-native -- --mesh /path/to/scan.laz /path/to/terrain.obj
 cargo run -p open-pointcloud-studio-native -- --surface /path/to/scan.e57 /path/to/surface.obj
+cargo run -p open-pointcloud-studio-native -- --scans /path/to/scan.e57
 cargo run -p open-pointcloud-studio-native -- --bag3d 91000,398000,92000,399000 2.2 /path/to/buildings.obj
 cargo test --workspace
 ```
@@ -51,7 +53,7 @@ File open and save dialogs use `rfd::AsyncFileDialog`, so the native UI stays re
 | Multiple clouds, visibility, orbit, pan, deep zoom, 3D view cube, right-click menu, rounded points, colors, point size, budget, class groups | Native implementation; named camera views save and restore yaw, pitch, zoom and pan per source scan. Advanced navigation polish remains |
 | Section box | Three-axis clipping with visible wireframe, six draggable face handles, six limit sliders and precise XYZ fields. Fit box to selection uses exact selected source points, including points outside the preview; Zoom box frames the clipped volume in the viewport. Clipping applies to GPU rendering, full-resolution selection and a separate clipped export |
 | Octree LOD and eye-dome lighting | Existing disk-backed octrees attach when a scan opens. Uncached scans with at least one million points are indexed automatically, one at a time, after their preview loads; the Tools ribbon can disable this or start a manual build. Camera movement selects visible nodes by projected size and refreshes a bounded point sample; the point-budget control reaches 2 million. Native screen-space eye-dome shading is toggleable in Home and View |
-| Full-resolution point selection | Index-guided exact box selection when available, full-source fallback, exact indexed single-point pick and selected export |
+| Full-resolution point selection | Index-guided exact box selection when available, full-source fallback, exact single-point picking with or without an index, selected point properties and selected export |
 | Editing | Native Delete/Undo/Redo on original source ordinals across multiple clouds; full/section export, stride decimation, exact-percentage thinning, XYZ translation, independent XYZ scaling and both meshers honor the remaining points. Transforms, crop and save-minus remain file-based |
 | Surface reconstruction | Full-source 2.5D terrain TIN and bounded 3D local surface reconstruction to OBJ with native GPU face display; watertight and adaptive reconstruction remain |
 | PLY, LAS, LAZ, XYZ, PTS, CSV export | Full same-format LAS/LAZ export copies the original file byte-for-byte; full LAS↔LAZ conversion streams native LAS records with their metadata and point attributes. Filtered or transformed LAS/LAZ output preserves the original point format, GPS time, return data, 16-bit RGB, projection records and coordinate grid while applying edits to source records. Non-LAS input uses the common XYZ, RGB8, intensity and classification model |
