@@ -52,10 +52,16 @@ selection predicate.
 Both meshers keep their full-source loops inside the optimized Rust core in
 development builds; the native desktop supplies edit and progress callbacks
 without recompiling those loops at the desktop's lower optimization level.
-XYZ, PTS, CSV and ASCII PLY exports format bounded 65,536-point batches on
-multiple Rust threads and write the finished chunks in source order. The
+XYZ, PTS, CSV and both ASCII and binary PLY exports encode bounded
+65,536-point batches on multiple Rust threads and write the finished chunks
+in source order. The
 temporary output is published only after the full source and any selected
 point count have been verified.
+On the local eight-core development machine, exporting the 114,174,907-point
+AHN6 LAZ to binary PLY produced a 3,425,247,452-byte file in 59.23 seconds,
+with 130,924 KiB peak process memory. The PLY header count and calculated
+record length matched the final file size; first, middle and last records
+decoded within the source bounds.
 
 ## Build
 

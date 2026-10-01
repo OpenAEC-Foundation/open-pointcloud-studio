@@ -11,8 +11,8 @@ use super::{convert_las_point, visit_points, Bounds, LoadError, Point, PointClou
 // Eight default 50,000-point chunks keep memory bounded and can use eight cores.
 const PARALLEL_LAZ_BATCH_POINTS: usize = 400_000;
 const LAS_BATCH_POINTS: usize = 16_384;
-const PARALLEL_TEXT_BATCH_POINTS: usize = 65_536;
-const TEXT_FORMAT_CHUNK_POINTS: usize = 4_096;
+const PARALLEL_FORMAT_BATCH_POINTS: usize = 65_536;
+const FORMAT_CHUNK_POINTS: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -401,16 +401,7 @@ fn export_map_count_inner(
     };
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
-        let mut text_batch = Vec::with_capacity(
-            if matches!(
-                format,
-                ExportFormat::Xyz | ExportFormat::Pts | ExportFormat::Csv | ExportFormat::PlyAscii
-            ) {
-                PARALLEL_TEXT_BATCH_POINTS
-            } else {
-                0
-            },
-        );
+        let mut point_batch = Vec::with_capacity(PARALLEL_FORMAT_BATCH_POINTS);
         match format {
             ExportFormat::Pts => writeln!(writer, "{count_text}")?,
             ExportFormat::Csv => {
@@ -448,18 +439,18 @@ fn export_map_count_inner(
                 ExportFormat::Xyz
                 | ExportFormat::Pts
                 | ExportFormat::Csv
-                | ExportFormat::PlyAscii => {
-                    text_batch.push(point);
-                    if text_batch.len() == PARALLEL_TEXT_BATCH_POINTS {
-                        write_parallel_text_batch(&mut writer, &mut text_batch, cloud, format)?;
+                | ExportFormat::PlyAscii
+                | ExportFormat::PlyBinary => {
+                    point_batch.push(point);
+                    if point_batch.len() == PARALLEL_FORMAT_BATCH_POINTS {
+                        write_parallel_point_batch(&mut writer, &mut point_batch, cloud, format)?;
                     }
                 }
-                ExportFormat::PlyBinary => write_ply_binary(&mut writer, point, cloud)?,
                 ExportFormat::Las | ExportFormat::Laz | ExportFormat::E57 => unreachable!(),
             }
             Ok(())
         })?;
-        write_parallel_text_batch(&mut writer, &mut text_batch, cloud, format)?;
+        write_parallel_point_batch(&mut writer, &mut point_batch, cloud, format)?;
         writer.flush()?;
     }
 
@@ -491,7 +482,7 @@ fn export_map_count_inner(
     Ok(written_count)
 }
 
-fn write_parallel_text_batch(
+fn write_parallel_point_batch(
     writer: &mut impl Write,
     points: &mut Vec<Point>,
     cloud: &PointCloud,
@@ -501,7 +492,7 @@ fn write_parallel_text_batch(
         return Ok(());
     }
     let chunks: Result<Vec<Vec<u8>>, LoadError> = points
-        .par_chunks(TEXT_FORMAT_CHUNK_POINTS)
+        .par_chunks(FORMAT_CHUNK_POINTS)
         .map(|chunk| {
             let mut bytes = Vec::with_capacity(chunk.len() * 48);
             for point in chunk {
@@ -510,7 +501,8 @@ fn write_parallel_text_batch(
                         write_text_point(&mut bytes, *point, cloud, format)?;
                     }
                     ExportFormat::PlyAscii => write_ply_ascii(&mut bytes, *point, cloud)?,
-                    _ => unreachable!("only text formats use parallel batches"),
+                    ExportFormat::PlyBinary => write_ply_binary(&mut bytes, *point, cloud)?,
+                    _ => unreachable!("only point formats use parallel batches"),
                 }
             }
             Ok(bytes)
@@ -1242,7 +1234,7 @@ mod tests {
     use crate::open;
 
     #[test]
-    fn parallel_text_export_keeps_order_and_exact_count_across_batches() {
+    fn parallel_point_export_keeps_order_and_exact_count_across_batches() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("ordered.xyz");
         let mut source_file = BufWriter::new(fs::File::create(&source).unwrap());
@@ -1256,6 +1248,7 @@ mod tests {
             ExportFormat::Pts,
             ExportFormat::Csv,
             ExportFormat::PlyAscii,
+            ExportFormat::PlyBinary,
         ] {
             let destination = directory
                 .path()
