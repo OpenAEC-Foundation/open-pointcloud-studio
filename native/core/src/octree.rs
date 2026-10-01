@@ -10,6 +10,7 @@ use std::time::UNIX_EPOCH;
 use super::{visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
 
 const RECORD_BYTES: usize = 40;
+const LEAF_LOD_POINTS: usize = 2_048;
 
 #[derive(Debug, Clone, Copy)]
 pub struct IndexedPoint {
@@ -251,17 +252,32 @@ impl OctreeIndex {
             .ok_or_else(|| LoadError::InvalidData(format!("octree node not found: {id}")))?;
         let target = limit.min(usize::try_from(node.stored_points).unwrap_or(usize::MAX));
         let mut points = Vec::with_capacity(target);
+        let path = self.storage.path().join(&node.data_path);
+        let (path, stored_points) = if node.is_leaf()
+            && target <= LEAF_LOD_POINTS
+            && node.stored_points > (LEAF_LOD_POINTS * 4) as u64
+        {
+            let preview = leaf_lod_path(self.storage.path(), id);
+            match ensure_leaf_lod(&path, &preview, node.stored_points) {
+                Ok(()) => (preview, LEAF_LOD_POINTS as u64),
+                // A read-only cache still remains usable through the full leaf.
+                Err(LoadError::Io(_)) => (path, node.stored_points),
+                Err(error) => return Err(error),
+            }
+        } else {
+            (path, node.stored_points)
+        };
         let mut index = 0u64;
-        read_records(&self.storage.path().join(&node.data_path), |point| {
+        read_records(&path, |point| {
             let sample_bin =
-                (u128::from(index) * target as u128) / u128::from(node.stored_points.max(1));
+                (u128::from(index) * target as u128) / u128::from(stored_points.max(1));
             if sample_bin >= points.len() as u128 {
                 points.push(point);
             }
             index += 1;
             Ok(())
         })?;
-        if index != node.stored_points || points.len() != target {
+        if index != stored_points || points.len() != target {
             return Err(LoadError::InvalidData(format!("damaged octree node: {id}")));
         }
         Ok(points)
@@ -559,6 +575,9 @@ fn build_node(
     config: &IndexConfig,
 ) -> Result<IndexedNode, LoadError> {
     if count <= config.leaf_points || depth >= config.max_depth || bounds.extent() <= f64::EPSILON {
+        if count > (LEAF_LOD_POINTS * 4) as u64 {
+            ensure_leaf_lod(&input_path, &leaf_lod_path(directory, &id), count)?;
+        }
         let data_path = PathBuf::from(format!("{id}.bin"));
         return Ok(IndexedNode {
             id,
@@ -691,27 +710,121 @@ fn read_records(
             break;
         }
         reader.read_exact(&mut bytes[1..])?;
-        let xyz = array::from_fn(|axis| {
-            let start = axis * 8;
-            f64::from_le_bytes(bytes[start..start + 8].try_into().unwrap())
-        });
-        let flags = bytes[30];
-        push(IndexedPoint {
-            point: Point {
-                xyz,
-                rgb: (flags & 1 != 0).then_some([bytes[24], bytes[25], bytes[26]]),
-                intensity: (flags & 2 != 0).then_some(u16::from_le_bytes([bytes[27], bytes[28]])),
-                classification: (flags & 4 != 0).then_some(bytes[29]),
-            },
-            ordinal: u64::from_le_bytes(bytes[32..40].try_into().unwrap()),
-        })?;
+        push(decode_record(&bytes))?;
     }
     Ok(())
+}
+
+fn leaf_lod_path(directory: &Path, id: &str) -> PathBuf {
+    directory.join(format!("{id}-lod.bin"))
+}
+
+fn ensure_leaf_lod(source: &Path, preview: &Path, count: u64) -> Result<(), LoadError> {
+    let source_bytes = count
+        .checked_mul(RECORD_BYTES as u64)
+        .ok_or_else(|| LoadError::InvalidData("damaged octree leaf".into()))?;
+    if fs::metadata(source)?.len() != source_bytes {
+        return Err(LoadError::InvalidData("damaged octree leaf".into()));
+    }
+    let preview_bytes = LEAF_LOD_POINTS as u64 * RECORD_BYTES as u64;
+    if fs::metadata(preview).is_ok_and(|metadata| metadata.len() == preview_bytes) {
+        return Ok(());
+    }
+    let directory = preview
+        .parent()
+        .ok_or_else(|| LoadError::InvalidData("invalid octree preview path".into()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    let mut seen = 0u64;
+    let mut written = 0usize;
+    {
+        let mut writer = BufWriter::new(temporary.as_file_mut());
+        read_records(source, |point| {
+            let bin = (u128::from(seen) * LEAF_LOD_POINTS as u128) / u128::from(count);
+            if bin >= written as u128 {
+                write_record(&mut writer, point)?;
+                written += 1;
+            }
+            seen += 1;
+            Ok(())
+        })?;
+        writer.flush()?;
+    }
+    if seen != count || written != LEAF_LOD_POINTS {
+        return Err(LoadError::InvalidData("damaged octree leaf".into()));
+    }
+    temporary
+        .persist(preview)
+        .map_err(|error| LoadError::Io(error.error))?;
+    Ok(())
+}
+
+fn decode_record(bytes: &[u8; RECORD_BYTES]) -> IndexedPoint {
+    let xyz = array::from_fn(|axis| {
+        let start = axis * 8;
+        f64::from_le_bytes(bytes[start..start + 8].try_into().unwrap())
+    });
+    let flags = bytes[30];
+    IndexedPoint {
+        point: Point {
+            xyz,
+            rgb: (flags & 1 != 0).then_some([bytes[24], bytes[25], bytes[26]]),
+            intensity: (flags & 2 != 0).then_some(u16::from_le_bytes([bytes[27], bytes[28]])),
+            classification: (flags & 4 != 0).then_some(bytes[29]),
+        },
+        ordinal: u64::from_le_bytes(bytes[32..40].try_into().unwrap()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaf_lod_preview_keeps_source_ordinals_and_repairs_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("line.xyz");
+        let mut lines = String::new();
+        for ordinal in 0..16384 {
+            lines.push_str(&format!("{ordinal} 0 0\n"));
+        }
+        fs::write(&source, lines).unwrap();
+        let cloud = super::super::open(&source, 16).unwrap();
+        let index = OctreeIndex::build(
+            &cloud,
+            IndexConfig {
+                leaf_points: 20000,
+                preview_points: 16,
+                max_depth: 4,
+                scratch_dir: Some(directory.path().to_path_buf()),
+            },
+        )
+        .unwrap();
+        let preview = leaf_lod_path(index.storage.path(), "r");
+        assert_eq!(
+            fs::metadata(&preview).unwrap().len(),
+            2048 * RECORD_BYTES as u64
+        );
+        fs::remove_file(&preview).unwrap();
+        let sample = index.read_node_indexed("r", 61).unwrap();
+        assert!(preview.exists());
+        assert_eq!(sample.len(), 61);
+        for (bin, record) in sample.into_iter().enumerate() {
+            let preview_index = (bin as u64 * 2048).div_ceil(61);
+            let expected = preview_index * 8;
+            assert_eq!(record.ordinal, expected);
+            assert_eq!(record.point.xyz, [expected as f64, 0.0, 0.0]);
+        }
+        fs::write(&preview, [0]).unwrap();
+        assert_eq!(index.read_node_indexed("r", 61).unwrap().len(), 61);
+        assert_eq!(
+            fs::metadata(&preview).unwrap().len(),
+            2048 * RECORD_BYTES as u64
+        );
+        let path = index.storage.path().join(&index.root.data_path);
+        let file = File::options().write(true).open(path).unwrap();
+        file.set_len(16383 * RECORD_BYTES as u64).unwrap();
+        assert!(index.read_node_indexed("r", 61).is_err());
+    }
 
     #[test]
     fn partitions_to_disk_without_losing_points() {

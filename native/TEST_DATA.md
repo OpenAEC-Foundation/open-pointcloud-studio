@@ -47,6 +47,21 @@ development build. On 1 October, the cached index build completed in 72.3
 seconds with 16 MB peak RSS and a second CLI run reopened it in 0.07 seconds.
 Both pye57 scans also indexed successfully.
 
+On 1 October, the 45,839,678-point AHN6 tile also exercised compact leaf LOD
+previews. The existing octree was reused; its first 80,000-point sample built
+281 leaf preview files in 1.64 s. After those files existed, alternating
+previous-reader and new-reader runs with `POSIX_FADV_DONTNEED` applied to the
+index files measured 1.55–1.59 s versus 0.54–0.55 s respectively. The same
+`/usr/bin/time -v` runs reported about 784,000 versus 105,000 file-system
+input blocks. Both readers returned exactly 80,000 indexed points. A
+2,000,000-point request completed in 2.09 s with 96,716 KiB peak RSS. The
+repeatable benchmark command is:
+
+```bash
+cd native
+cargo run -p pointcloud-core --example lod_bench -- /tmp/open-pointcloud-AHN6_2025_C_207000_474000.LAZ 80000
+```
+
 The native 3DBAG client was checked against the live
 [`pand/items` API](https://api.3dbag.nl/collections/pand/items) on 1 October
 2026. The RD box `91440,398430,91460,398450` returned one LoD 2.2 building
