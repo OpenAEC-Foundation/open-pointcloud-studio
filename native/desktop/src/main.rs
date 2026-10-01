@@ -48,6 +48,7 @@ use serde_json::{json, Value};
 use ui_theme::UiTheme;
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
+const FAST_LOD_PREVIEW_LIMIT: usize = 250_000;
 const AUTO_INDEX_MIN_POINTS: u64 = 1_000_000;
 const ASPRS_CLASSIFICATIONS: &[(u8, &str)] = &[
     (0, "Never classified"),
@@ -4133,7 +4134,12 @@ impl Studio {
                         )
                     })
                     .collect();
-                let limits = distribute_lod_budget(budget, &source_weights);
+                let initial_budget = if budget > FAST_LOD_PREVIEW_LIMIT * 2 {
+                    FAST_LOD_PREVIEW_LIMIT
+                } else {
+                    budget
+                };
+                let limits = distribute_lod_budget(initial_budget, &source_weights);
                 let revision = self.revision;
                 let cancel = Arc::new(AtomicBool::new(false));
                 self.detail_cancel = Arc::clone(&cancel);

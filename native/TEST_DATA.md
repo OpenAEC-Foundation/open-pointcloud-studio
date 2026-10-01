@@ -80,6 +80,15 @@ shows the button while the exact scan is running. A new selection immediately
 after Escape completed with the same 11,019,954 exact points in 6.87 seconds;
 the development view was cleared afterward.
 
+At a two-million-point viewport budget, the three cached AHN6 octrees first
+returned a new 250,000-point view after right-drag pan in 0.16–0.46 seconds,
+then refined to the full 2,000,000 points in 2.28–2.41 seconds. The previous
+single-pass pan took 2.18 seconds before new octree detail appeared. The
+[first-pass screenshot](../screenshots/native-ahn6-progressive-preview-2m.png)
+and [full-detail screenshot](../screenshots/native-ahn6-progressive-full-2m.png)
+show the same camera position during and after refinement. The old sample
+remains visible during the first load, so navigation itself is immediate.
+
 The same three indexed tiles were used to check deep-zoom LOD allocation at
 0.08046× zoom. An equal split of the 80,000-point budget rendered 32,810
 points because two tiles could supply only 2,048 and 4,096 visible points.
