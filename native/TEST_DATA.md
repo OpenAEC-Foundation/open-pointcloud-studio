@@ -26,6 +26,11 @@ returned a 250,000-point LOD. Repeating the same exact world selection took
 0.56 s including API polling and again found 432,975 points; the unindexed
 scan had taken about 29 s. The [indexed close-up](../screenshots/native-3.2gib-ply-indexed-selection-latest.png)
 shows the selection with detail from the full disk octree.
+On that indexed scan, typing `f` into the camera-view name left zoom at 19.4×.
+Pressing `F` outside a text field fitted the whole model at 1.0× while
+retaining all 432,975 selected points; the
+[keyboard Zoom All screenshot](../screenshots/native-f-zoom-all-114m-ply.png)
+shows the resulting overview.
 
 On 1 October 2026, the native GUI opened a separate 1,200,000-point LAS test
 source and reported octree source-reading progress. `cancel_index` stopped its

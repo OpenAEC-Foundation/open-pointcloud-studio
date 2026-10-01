@@ -668,6 +668,18 @@ fn main() -> iced::Result {
                     key: iced::keyboard::Key::Character(value),
                     modifiers,
                     ..
+                }) if status == iced::event::Status::Ignored
+                    && !modifiers.control()
+                    && !modifiers.alt()
+                    && !modifiers.logo()
+                    && value.eq_ignore_ascii_case("f") =>
+                {
+                    Some(Message::ResetCamera)
+                }
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Character(value),
+                    modifiers,
+                    ..
                 }) if status == iced::event::Status::Ignored && modifiers.control() => {
                     if value.eq_ignore_ascii_case("z") {
                         Some(if modifiers.shift() {
