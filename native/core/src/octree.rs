@@ -26,6 +26,56 @@ pub struct IndexConfig {
     pub scratch_dir: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexStage {
+    ReadingSource,
+    BuildingTree,
+    Ready,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexProgress {
+    pub stage: IndexStage,
+    /// Source points read, or cumulative point records handled by tree nodes.
+    pub completed: u64,
+    /// Known only while reading the original source.
+    pub total: u64,
+    pub depth: u8,
+    pub leaves: u64,
+}
+
+impl IndexProgress {
+    fn reading(completed: u64, total: u64) -> Self {
+        Self {
+            stage: IndexStage::ReadingSource,
+            completed,
+            total,
+            depth: 0,
+            leaves: 0,
+        }
+    }
+
+    fn building(completed: u64, depth: u8, leaves: u64) -> Self {
+        Self {
+            stage: IndexStage::BuildingTree,
+            completed,
+            total: 0,
+            depth,
+            leaves,
+        }
+    }
+
+    fn ready(total: u64, leaves: u64) -> Self {
+        Self {
+            stage: IndexStage::Ready,
+            completed: total,
+            total,
+            depth: 0,
+            leaves,
+        }
+    }
+}
+
 impl Default for IndexConfig {
     fn default() -> Self {
         Self {
@@ -84,6 +134,14 @@ impl IndexStorage {
 
 impl OctreeIndex {
     pub fn build(cloud: &PointCloud, config: IndexConfig) -> Result<Self, LoadError> {
+        Self::build_with_progress(cloud, config, |_| Ok(()))
+    }
+
+    pub fn build_with_progress(
+        cloud: &PointCloud,
+        config: IndexConfig,
+        mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
+    ) -> Result<Self, LoadError> {
         if config.leaf_points == 0 || config.preview_points == 0 || config.max_depth == 0 {
             return Err(LoadError::InvalidData(
                 "octree limits must be positive".into(),
@@ -107,9 +165,13 @@ impl OctreeIndex {
         };
         let root_path = storage.path().join("r.bin");
         let mut root_count = 0u64;
+        progress(IndexProgress::reading(0, cloud.total_points))?;
         {
             let mut writer = BufWriter::new(File::create(&root_path)?);
             visit_points(&cloud.path, &mut |point| {
+                if root_count.is_multiple_of(65_536) {
+                    progress(IndexProgress::reading(root_count, cloud.total_points))?;
+                }
                 if !point.xyz.iter().all(|value| value.is_finite()) {
                     return Err(LoadError::InvalidData("non-finite coordinate".into()));
                 }
@@ -125,20 +187,31 @@ impl OctreeIndex {
             })?;
             writer.flush()?;
         }
+        progress(IndexProgress::reading(root_count, cloud.total_points))?;
         if root_count != cloud.total_points || SourceStamp::read(&cloud.path)? != expected_stamp {
             return Err(LoadError::InvalidData(
                 "source changed while indexing".into(),
             ));
         }
+        let mut handled_records = 0u64;
+        let mut ready_leaves = 0u64;
+        progress(IndexProgress::building(0, 0, 0))?;
+        let mut context = BuildContext {
+            directory: storage.path(),
+            config: &config,
+            handled_records: &mut handled_records,
+            ready_leaves: &mut ready_leaves,
+            progress: &mut progress,
+        };
         let root = build_node(
-            storage.path(),
             "r".to_owned(),
             root_path,
             cloud.bounds,
             root_count,
             0,
-            &config,
+            &mut context,
         )?;
+        progress(IndexProgress::ready(root_count, ready_leaves))?;
         Ok(Self {
             root,
             storage: IndexStorage::Temporary(storage),
@@ -146,7 +219,15 @@ impl OctreeIndex {
     }
 
     /// Reuse a completed index for the same source revision and configuration.
-    pub fn build_cached(cloud: &PointCloud, mut config: IndexConfig) -> Result<Self, LoadError> {
+    pub fn build_cached(cloud: &PointCloud, config: IndexConfig) -> Result<Self, LoadError> {
+        Self::build_cached_with_progress(cloud, config, |_| Ok(()))
+    }
+
+    pub fn build_cached_with_progress(
+        cloud: &PointCloud,
+        mut config: IndexConfig,
+        mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
+    ) -> Result<Self, LoadError> {
         let stamp = cloud
             .source_stamp
             .ok_or_else(|| LoadError::InvalidData("source identity is unavailable".into()))?;
@@ -161,12 +242,16 @@ impl OctreeIndex {
         let cache_path = cache_directory(&cache_root, &fingerprint);
         if cache_path.exists() {
             if let Ok(index) = Self::open_cached(cloud, &cache_path, &fingerprint) {
+                progress(IndexProgress::ready(
+                    cloud.total_points,
+                    count_leaves(&index.root),
+                ))?;
                 return Ok(index);
             }
             fs::remove_dir_all(&cache_path)?;
         }
         config.scratch_dir = Some(cache_root);
-        let index = Self::build(cloud, config)?;
+        let index = Self::build_with_progress(cloud, config, &mut progress)?;
         let Self { root, storage } = index;
         let IndexStorage::Temporary(storage) = storage else {
             unreachable!("fresh octree build uses temporary storage")
@@ -582,6 +667,14 @@ fn open_cached_node(
     })
 }
 
+fn count_leaves(node: &IndexedNode) -> u64 {
+    if node.is_leaf() {
+        1
+    } else {
+        node.children.iter().map(count_leaves).sum()
+    }
+}
+
 fn collect_intersecting_leaves<'a>(
     node: &'a IndexedNode,
     focus: [f64; 3],
@@ -602,19 +695,43 @@ fn collect_intersecting_leaves<'a>(
     }
 }
 
-fn build_node(
-    directory: &Path,
+struct BuildContext<'a, F> {
+    directory: &'a Path,
+    config: &'a IndexConfig,
+    handled_records: &'a mut u64,
+    ready_leaves: &'a mut u64,
+    progress: &'a mut F,
+}
+
+impl<F: FnMut(IndexProgress) -> Result<(), LoadError>> BuildContext<'_, F> {
+    fn emit(&mut self, depth: u8) -> Result<(), LoadError> {
+        (self.progress)(IndexProgress::building(
+            *self.handled_records,
+            depth,
+            *self.ready_leaves,
+        ))
+    }
+}
+
+fn build_node<F: FnMut(IndexProgress) -> Result<(), LoadError>>(
     id: String,
     input_path: PathBuf,
     bounds: Bounds,
     count: u64,
     depth: u8,
-    config: &IndexConfig,
+    context: &mut BuildContext<'_, F>,
 ) -> Result<IndexedNode, LoadError> {
-    if count <= config.leaf_points || depth >= config.max_depth || bounds.extent() <= f64::EPSILON {
+    context.emit(depth)?;
+    if count <= context.config.leaf_points
+        || depth >= context.config.max_depth
+        || bounds.extent() <= f64::EPSILON
+    {
         if count > (LEAF_LOD_POINTS * 4) as u64 {
-            ensure_leaf_lod(&input_path, &leaf_lod_path(directory, &id), count)?;
+            ensure_leaf_lod(&input_path, &leaf_lod_path(context.directory, &id), count)?;
         }
+        *context.handled_records = context.handled_records.saturating_add(count);
+        *context.ready_leaves += 1;
+        context.emit(depth)?;
         let data_path = PathBuf::from(format!("{id}.bin"));
         return Ok(IndexedNode {
             id,
@@ -630,18 +747,22 @@ fn build_node(
     let center = bounds.center();
     let mut writers: [Option<BufWriter<File>>; 8] = array::from_fn(|_| None);
     let mut child_counts = [0u64; 8];
-    let mut preview = Vec::with_capacity(config.preview_points);
+    let mut preview = Vec::with_capacity(context.config.preview_points);
     let mut random_state = 0x9e37_79b9_7f4a_7c15u64 ^ (count << (depth % 32));
     read_records(&input_path, |point| {
+        if context.handled_records.is_multiple_of(65_536) {
+            context.emit(depth)?;
+        }
         let index = octant(point.point.xyz, center);
         if writers[index].is_none() {
-            let child_path = directory.join(format!("{id}{index}.bin"));
+            let child_path = context.directory.join(format!("{id}{index}.bin"));
             writers[index] = Some(BufWriter::new(File::create(child_path)?));
         }
         write_record(writers[index].as_mut().unwrap(), point)?;
         child_counts[index] += 1;
+        *context.handled_records += 1;
 
-        if preview.len() < config.preview_points {
+        if preview.len() < context.config.preview_points {
             preview.push(point);
         } else {
             random_state ^= random_state << 13;
@@ -649,7 +770,7 @@ fn build_node(
             random_state ^= random_state << 17;
             let seen = child_counts.iter().sum::<u64>();
             let chosen = random_state % seen;
-            if chosen < config.preview_points as u64 {
+            if chosen < context.config.preview_points as u64 {
                 preview[chosen as usize] = point;
             }
         }
@@ -660,7 +781,7 @@ fn build_node(
     }
     drop(writers);
 
-    let preview_path = directory.join(format!("{id}-preview.bin"));
+    let preview_path = context.directory.join(format!("{id}-preview.bin"));
     {
         let mut writer = BufWriter::new(File::create(&preview_path)?);
         for point in &preview {
@@ -676,15 +797,14 @@ fn build_node(
             continue;
         }
         let child_id = format!("{id}{index}");
-        let child_path = directory.join(format!("{child_id}.bin"));
+        let child_path = context.directory.join(format!("{child_id}.bin"));
         children.push(build_node(
-            directory,
             child_id,
             child_path,
             child_bounds(bounds, index),
             child_count,
             depth + 1,
-            config,
+            context,
         )?);
     }
 
@@ -833,6 +953,70 @@ fn decode_record(bytes: &[u8; RECORD_BYTES]) -> IndexedPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexing_reports_work_and_cancel_leaves_no_partial_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("progress.xyz");
+        let mut contents = String::new();
+        for x in 0..32 {
+            for y in 0..16 {
+                contents.push_str(&format!("{x} {y} 0\n"));
+            }
+        }
+        fs::write(&source, contents).unwrap();
+        let cloud = super::super::open(&source, 8).unwrap();
+        let config = IndexConfig {
+            leaf_points: 8,
+            preview_points: 4,
+            max_depth: 8,
+            scratch_dir: Some(directory.path().join("cache")),
+        };
+        let mut updates = Vec::new();
+        let index = OctreeIndex::build_cached_with_progress(&cloud, config.clone(), |value| {
+            updates.push(value);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(index.root.total_points, 512);
+        assert!(updates.iter().any(|value| {
+            value.stage == IndexStage::ReadingSource && value.completed == 512 && value.total == 512
+        }));
+        assert!(updates
+            .iter()
+            .any(|value| value.stage == IndexStage::BuildingTree && value.leaves > 0));
+        assert_eq!(updates.last().unwrap().stage, IndexStage::Ready);
+        assert_eq!(updates.last().unwrap().leaves, count_leaves(&index.root));
+        drop(index);
+
+        let mut cached_updates = Vec::new();
+        OctreeIndex::build_cached_with_progress(&cloud, config.clone(), |value| {
+            cached_updates.push(value);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(cached_updates.len(), 1);
+        assert_eq!(cached_updates[0].stage, IndexStage::Ready);
+
+        let cancelled_config = IndexConfig {
+            leaf_points: 4,
+            ..config
+        };
+        let result =
+            OctreeIndex::build_cached_with_progress(&cloud, cancelled_config.clone(), |value| {
+                if value.stage == IndexStage::BuildingTree && value.leaves > 0 {
+                    Err(LoadError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+        assert!(matches!(result, Err(LoadError::Cancelled)));
+        assert!(
+            OctreeIndex::open_cached_if_present(&cloud, cancelled_config)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn leaf_lod_preview_keeps_source_ordinals_and_repairs_cache() {

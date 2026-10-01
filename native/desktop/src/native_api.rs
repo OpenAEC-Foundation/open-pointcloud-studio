@@ -41,6 +41,7 @@ pub enum ApiCommand {
     Translate { offset: [f64; 3] },
     Scale { factors: [f64; 3] },
     CancelScale,
+    CancelIndex,
     ResetTransform,
     Mesh { mode: String, path: PathBuf },
     CancelMesh,

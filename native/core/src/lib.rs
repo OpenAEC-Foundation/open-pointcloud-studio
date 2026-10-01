@@ -34,7 +34,7 @@ pub use mesher::{
     MeshProgress, MeshStage, MeshStats,
 };
 pub use obj_mesh::{read_obj_mesh, write_obj_mesh, MeshGeometry};
-pub use octree::{IndexConfig, IndexedNode, IndexedPoint, OctreeIndex};
+pub use octree::{IndexConfig, IndexProgress, IndexStage, IndexedNode, IndexedPoint, OctreeIndex};
 pub use ply_mesh::read_ply_mesh;
 pub use surface_mesh::{
     mesh_surface_obj, mesh_surface_obj_where, mesh_surface_obj_where_progress, SurfaceMeshConfig,

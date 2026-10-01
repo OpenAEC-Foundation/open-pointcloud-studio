@@ -35,6 +35,12 @@ for processed and total source points; it becomes `null` when the transform
 finishes or is cancelled. `cancel_scale` stops the scan without applying the
 new factors. Repeating Scale after a successful run reuses the exact centroid
 until the set of remaining points changes.
+While an uncached octree is built, `status.result.index_progress` reports the
+source-read count and known total, then tree records handled, depth and leaf
+count. Its `stage` is `reading_source`, `building_tree` or `ready`, and
+`cancelling` shows whether cancellation has been requested. The field becomes
+`null` after the build finishes. `cancel_index` stops the build and discards
+its temporary files without publishing a partial cache.
 World-box selection also returns a job ID and uses the same query. Its limits
 are inclusive source XYZ coordinates, independent of the viewport camera and
 point budget. It selects across visible layers while respecting class filters,
@@ -43,7 +49,7 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera, section box, scale progress and current status text |
+| `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera, section box, index and scale progress, and current status text |
 | `job` | `id` | Reads an export, selection or mesh task's state and result |
 | `open` | `path` | Opens a point cloud or mesh in the running GUI |
 | `remove` | `index` | Removes a layer from the project |
@@ -66,6 +72,7 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 | `translate` | `offset` | Applies three finite XYZ offsets to the active cloud view |
 | `scale` | `factors` | Scales the active view around the exact centroid of remaining points; large sources stream from the disk octree in the background |
 | `cancel_scale` | — | Cancels a running centroid calculation without changing the source |
+| `cancel_index` | — | Cancels a running octree build without publishing a partial index |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
 | `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path; returns a job ID |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task |

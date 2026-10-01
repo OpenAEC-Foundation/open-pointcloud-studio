@@ -32,8 +32,8 @@ use iced::widget::{
 };
 use iced::{Color, Element, Fill, Font, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 use pointcloud_core::{
-    BagBounds, BagLod, Bounds, ExportFormat, IndexConfig, IndexedPoint, MeshGeometry, OctreeIndex,
-    Point, PointCloud,
+    BagBounds, BagLod, Bounds, ExportFormat, IndexConfig, IndexProgress, IndexStage, IndexedPoint,
+    MeshGeometry, OctreeIndex, Point, PointCloud,
 };
 use selection::{
     pick_full_transformed, pick_indexed_transformed, select_full, select_world, ClassFilter,
@@ -896,6 +896,8 @@ enum Message {
     CancelScale,
     ResetTransform,
     BuildIndex,
+    IndexPoll,
+    CancelIndex,
     IndexReady(Arc<PointCloud>, Result<Arc<OctreeIndex>, String>),
     AutoIndexReady(Arc<PointCloud>, Result<Arc<OctreeIndex>, String>),
     SetAutoIndex(bool),
@@ -1039,6 +1041,8 @@ struct Studio {
     selection_pending: bool,
     pending_delete: bool,
     index_pending: bool,
+    index_progress: Option<Arc<Mutex<IndexProgress>>>,
+    index_cancel: Arc<AtomicBool>,
     detail_pending: bool,
     detail_cancel: Arc<AtomicBool>,
     auto_index: bool,
@@ -1219,6 +1223,8 @@ impl Default for Studio {
             selection_pending: false,
             pending_delete: false,
             index_pending: false,
+            index_progress: None,
+            index_cancel: Arc::new(AtomicBool::new(false)),
             detail_pending: false,
             detail_cancel: Arc::new(AtomicBool::new(false)),
             auto_index: true,
@@ -1274,6 +1280,18 @@ impl Studio {
                         "point_size": self.point_size,
                         "budget": self.budget,
                         "mesh": self.mesh_job.as_ref().map(MeshJob::progress_value),
+                        "index_progress": self.index_progress.as_ref().and_then(|value| value.lock().ok().map(|progress| json!({
+                            "stage": match progress.stage {
+                                IndexStage::ReadingSource => "reading_source",
+                                IndexStage::BuildingTree => "building_tree",
+                                IndexStage::Ready => "ready",
+                            },
+                            "completed": progress.completed,
+                            "total": progress.total,
+                            "depth": progress.depth,
+                            "leaves": progress.leaves,
+                            "cancelling": self.index_cancel.load(Ordering::Relaxed),
+                        }))),
                         "scale": self.scale_job.as_ref().map(|job| json!({
                             "source_index": job.cloud_index,
                             "completed": job.progress.load(Ordering::Relaxed),
@@ -1619,6 +1637,17 @@ impl Studio {
                     (json!({"ok": true, "status": self.status}), task)
                 }
             }
+            ApiCommand::CancelIndex => {
+                if !self.index_pending {
+                    (
+                        json!({"ok": false, "error": "no octree build is running"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::CancelIndex);
+                    (json!({"ok": true, "status": self.status}), task)
+                }
+            }
             ApiCommand::ResetTransform => {
                 if self.active.is_none() {
                     (
@@ -1824,6 +1853,82 @@ impl Studio {
             },
             Message::ScalePoll,
         )
+    }
+
+    fn index_poll_task() -> Task<Message> {
+        Task::perform(
+            async { tokio::time::sleep(Duration::from_millis(250)).await },
+            |()| Message::IndexPoll,
+        )
+    }
+
+    fn index_progress_text(progress: IndexProgress) -> String {
+        match progress.stage {
+            IndexStage::ReadingSource => format!(
+                "Reading source for octree: {} / {} points ({:.0}%)",
+                progress.completed,
+                progress.total,
+                if progress.total == 0 {
+                    0.0
+                } else {
+                    progress.completed as f64 / progress.total as f64 * 100.0
+                }
+            ),
+            IndexStage::BuildingTree => format!(
+                "Building octree: {} point records, {} leaves (depth {})",
+                progress.completed, progress.leaves, progress.depth
+            ),
+            IndexStage::Ready => format!(
+                "Octree ready: {} source points, {} leaves",
+                progress.completed, progress.leaves
+            ),
+        }
+    }
+
+    fn start_index_job(&mut self, source: Arc<PointCloud>, automatic: bool) -> Task<Message> {
+        let progress = Arc::new(Mutex::new(IndexProgress {
+            stage: IndexStage::ReadingSource,
+            completed: 0,
+            total: source.total_points,
+            depth: 0,
+            leaves: 0,
+        }));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.index_pending = true;
+        self.index_progress = Some(Arc::clone(&progress));
+        self.index_cancel = Arc::clone(&cancel);
+        let message_source = Arc::clone(&source);
+        let worker = Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    OctreeIndex::build_cached_with_progress(
+                        &source,
+                        IndexConfig::default(),
+                        |update| {
+                            if cancel.load(Ordering::Relaxed) {
+                                return Err(pointcloud_core::LoadError::Cancelled);
+                            }
+                            if let Ok(mut current) = progress.lock() {
+                                *current = update;
+                            }
+                            Ok(())
+                        },
+                    )
+                    .map(Arc::new)
+                    .map_err(|error| error.to_string())
+                })
+                .await
+                .map_err(|error| error.to_string())?
+            },
+            move |result| {
+                if automatic {
+                    Message::AutoIndexReady(Arc::clone(&message_source), result)
+                } else {
+                    Message::IndexReady(Arc::clone(&message_source), result)
+                }
+            },
+        );
+        Task::batch([worker, Self::index_poll_task()])
     }
 
     fn apply_scale_from_source_centroid(
@@ -3372,25 +3477,34 @@ impl Studio {
                 }
                 entry.auto_index_queued = false;
                 entry.index_building = true;
-                let cloud = Arc::clone(&entry.cloud);
-                let source = Arc::clone(&cloud);
-                self.index_pending = true;
-                self.status = format!("Building disk octree for {} points…", cloud.total_points);
-                return Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            OctreeIndex::build_cached(&cloud, IndexConfig::default())
-                                .map(Arc::new)
-                                .map_err(|error| error.to_string())
-                        })
-                        .await
-                        .map_err(|error| error.to_string())?
-                    },
-                    move |result| Message::IndexReady(Arc::clone(&source), result),
-                );
+                let source = Arc::clone(&entry.cloud);
+                self.status = format!("Building disk octree for {} points…", source.total_points);
+                return self.start_index_job(source, false);
+            }
+            Message::IndexPoll => {
+                if self.index_pending {
+                    if !self.index_cancel.load(Ordering::Relaxed) {
+                        if let Some(snapshot) = self
+                            .index_progress
+                            .as_ref()
+                            .and_then(|value| value.lock().ok().map(|value| *value))
+                        {
+                            self.status = Self::index_progress_text(snapshot);
+                        }
+                    }
+                    return Self::index_poll_task();
+                }
+            }
+            Message::CancelIndex => {
+                if self.index_pending {
+                    self.index_cancel.store(true, Ordering::Relaxed);
+                    self.status = "Cancelling octree build…".into();
+                }
             }
             Message::IndexReady(source, result) | Message::AutoIndexReady(source, result) => {
                 self.index_pending = false;
+                self.index_progress = None;
+                let was_cancelled = self.index_cancel.load(Ordering::Relaxed);
                 let mut ready = false;
                 if let Some(entry) = self
                     .clouds
@@ -3404,7 +3518,13 @@ impl Studio {
                             self.status = format!("Octree ready for {}", source.path.display());
                             ready = true;
                         }
-                        Err(error) => self.status = format!("Octree failed: {error}"),
+                        Err(error) => {
+                            self.status = if was_cancelled {
+                                "Octree build cancelled".into()
+                            } else {
+                                format!("Octree failed: {error}")
+                            };
+                        }
                     }
                 }
                 let detail = if ready {
@@ -4443,26 +4563,13 @@ impl Studio {
         let entry = &mut self.clouds[index];
         entry.auto_index_queued = false;
         entry.index_building = true;
-        let cloud = Arc::clone(&entry.cloud);
-        let source = Arc::clone(&cloud);
-        self.index_pending = true;
+        let source = Arc::clone(&entry.cloud);
         self.status = format!(
             "Indexing {} points for viewport detail: {}",
-            cloud.total_points,
-            display_name(&cloud.path)
+            source.total_points,
+            display_name(&source.path)
         );
-        Task::perform(
-            async move {
-                tokio::task::spawn_blocking(move || {
-                    OctreeIndex::build_cached(&cloud, IndexConfig::default())
-                        .map(Arc::new)
-                        .map_err(|error| error.to_string())
-                })
-                .await
-                .map_err(|error| error.to_string())?
-            },
-            move |result| Message::AutoIndexReady(Arc::clone(&source), result),
-        )
+        self.start_index_job(source, true)
     }
 
     fn schedule_detail(&self) -> Task<Message> {
@@ -4644,6 +4751,24 @@ impl Studio {
         .align_y(iced::Alignment::Center);
         if self.scale_job.is_some() {
             scale_tools = scale_tools.push(ribbon_button("Cancel", Message::CancelScale));
+        }
+        let mut detail_tools = row![
+            ribbon_button_when(
+                "Build index",
+                Message::BuildIndex,
+                self.active.is_some() && !self.index_pending
+            ),
+            ribbon_button_when(
+                "Refresh LOD",
+                Message::LoadDetail,
+                self.active
+                    .and_then(|index| self.clouds.get(index))
+                    .is_some_and(|entry| entry.index.is_some())
+            ),
+        ]
+        .spacing(3);
+        if self.index_pending {
+            detail_tools = detail_tools.push(ribbon_button("Cancel index", Message::CancelIndex));
         }
         let groups: Element<'_, Message> = match self.ribbon_tab {
             RibbonTab::Home => row![
@@ -4982,25 +5107,7 @@ impl Studio {
             .spacing(6)
             .into(),
             RibbonTab::Tools => row![
-                ribbon_group(
-                    "DETAIL LOD",
-                    row![
-                        ribbon_button_when(
-                            "Build index",
-                            Message::BuildIndex,
-                            self.active.is_some()
-                        ),
-                        ribbon_button_when(
-                            "Refresh LOD",
-                            Message::LoadDetail,
-                            self.active
-                                .and_then(|index| self.clouds.get(index))
-                                .is_some_and(|entry| entry.index.is_some())
-                        ),
-                    ]
-                    .spacing(3)
-                    .into()
-                ),
+                ribbon_group("DETAIL LOD", detail_tools.into()),
                 ribbon_group(
                     "AUTO INDEX",
                     container(
@@ -5479,6 +5586,57 @@ impl Studio {
         ]
         .spacing(0)
         .width(270);
+        if let Some(progress) = self
+            .index_progress
+            .as_ref()
+            .and_then(|value| value.lock().ok().map(|value| *value))
+        {
+            let cancelling = self.index_cancel.load(Ordering::Relaxed);
+            properties = properties
+                .push(opencad_properties::section_header("Octree index"))
+                .push(
+                    container(
+                        text(if cancelling {
+                            "Cancelling octree build…".into()
+                        } else {
+                            Self::index_progress_text(progress)
+                        })
+                        .size(11),
+                    )
+                    .padding([6, 8]),
+                );
+            if progress.stage == IndexStage::ReadingSource {
+                properties = properties.push(
+                    container(
+                        iced::widget::progress_bar(
+                            0.0..=1.0,
+                            if progress.total == 0 {
+                                0.0
+                            } else {
+                                progress.completed as f32 / progress.total as f32
+                            },
+                        )
+                        .height(8)
+                        .style(|theme| {
+                            let colors = ui_theme::colors(theme);
+                            iced::widget::progress_bar::Style {
+                                background: colors.panel_alt.into(),
+                                bar: colors.accent.into(),
+                                border: iced::Border::default(),
+                            }
+                        }),
+                    )
+                    .padding([2, 8])
+                    .width(Fill),
+                );
+            }
+            if !cancelling {
+                properties = properties.push(
+                    container(button("Cancel index").on_press(Message::CancelIndex))
+                        .padding([5, 8]),
+                );
+            }
+        }
         if let Some(job) = &self.mesh_job {
             let progress = job.control.snapshot();
             properties = properties
