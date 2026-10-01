@@ -5578,58 +5578,69 @@ impl Studio {
             .spacing(6)
             .into(),
             RibbonTab::View => row![
-                ribbon_group(
+                opencad_ribbon::render_group_items(
                     "CAMERA VIEWS",
-                    row![
-                        tool_button(
+                    vec![
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
                             "Top",
                             Message::CameraPreset(CameraPreset::Top),
                             self.view_label == "TOP"
-                        ),
-                        tool_button(
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
                             "Front",
                             Message::CameraPreset(CameraPreset::Front),
                             self.view_label == "FRONT"
-                        ),
-                        tool_button(
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
                             "Right",
                             Message::CameraPreset(CameraPreset::Right),
                             self.view_label == "RIGHT"
-                        ),
-                        tool_button(
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
+                            "Bottom",
+                            Message::CameraPreset(CameraPreset::Bottom),
+                            self.view_label == "BOTTOM"
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
+                            "Back",
+                            Message::CameraPreset(CameraPreset::Back),
+                            self.view_label == "BACK"
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
+                            "Left",
+                            Message::CameraPreset(CameraPreset::Left),
+                            self.view_label == "LEFT"
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
                             "Isometric",
                             Message::CameraPreset(CameraPreset::Isometric),
                             self.view_label == "ISOMETRIC"
-                        ),
-                        tool_button_when(
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
                             "Save view",
                             Message::SaveView,
                             false,
                             self.active.is_some(),
-                        ),
-                    ]
-                    .spacing(2)
-                    .into()
+                        )),
+                    ],
                 ),
-                ribbon_group(
+                opencad_ribbon::render_group_items(
                     "SCANNERS",
-                    row![
-                        tool_button(
+                    vec![
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
                             "Stations",
                             Message::ShowScanPoses(!self.show_scan_poses),
                             self.show_scan_poses,
-                        ),
-                        tool_button_when(
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
                             "Fit stations",
                             Message::FitScanPoses,
                             false,
                             self.clouds.iter().any(|entry| {
                                 entry.visible && !entry.cloud.scan_poses.is_empty()
                             }),
-                        ),
-                    ]
-                    .spacing(2)
-                    .into()
+                        )),
+                    ],
                 ),
                 ribbon_group(
                     "POINT DISPLAY",
@@ -5637,7 +5648,7 @@ impl Studio {
                         text(format!("Point size  {:.1}", self.point_size)).size(12),
                         slider(0.1..=20.0, self.point_size, Message::PointSize)
                             .step(0.1_f32)
-                            .width(180),
+                            .width(140),
                     ]
                     .spacing(5)
                     .into()
@@ -5669,57 +5680,73 @@ impl Studio {
                     .align_y(iced::Alignment::Center)
                     .into()
                 ),
-                ribbon_group(
+                opencad_ribbon::render_group_items(
                     "SECTION BOX",
-                    row![
-                        tool_button(
+                    vec![
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
                             "Section box",
                             Message::SetSectionEnabled(!self.section_enabled),
                             self.section_enabled,
-                        ),
-                        tool_button("Reset box", Message::ResetSectionBox, false),
-                        tool_button_when(
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button(
+                            "Reset box",
+                            Message::ResetSectionBox,
+                            false,
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
                             "Zoom box",
                             Message::ZoomToSection,
                             false,
                             self.section_bounds().is_some(),
-                        ),
-                        tool_button_when(
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
                             "Fit selection",
                             Message::FitSectionToSelection,
                             false,
                             self.selected_total() > 0 && !self.section_fit_pending,
-                        ),
-                    ]
-                    .spacing(2)
-                    .into()
+                        )),
+                    ],
                 ),
                 ribbon_group(
                     "POINT BUDGET",
                     column![
-                        text(format!("{} preview points", self.budget)).size(12),
-                        slider(1_000..=2_000_000, self.budget, Message::Budget).width(200),
+                        text(format!("{} preview points", format_count(self.budget))).size(12),
+                        slider(1_000..=2_000_000, self.budget, Message::Budget).width(140),
                     ]
                     .spacing(5)
                     .into()
                 ),
                 ribbon_group(
                     "CLASSIFICATION",
-                    row![
-                        checkbox("Ground", self.filter_ground)
-                            .on_toggle(Message::FilterGround)
-                            .style(muted_checkbox_style),
-                        checkbox("Vegetation", self.filter_vegetation)
-                            .on_toggle(Message::FilterVegetation)
-                            .style(muted_checkbox_style),
-                        checkbox("Buildings", self.filter_buildings)
-                            .on_toggle(Message::FilterBuildings)
-                            .style(muted_checkbox_style),
-                        checkbox("Other", self.filter_other)
-                            .on_toggle(Message::FilterOther)
-                            .style(muted_checkbox_style),
+                    column![
+                        row![
+                            checkbox("Ground", self.filter_ground)
+                                .on_toggle(Message::FilterGround)
+                                .style(muted_checkbox_style)
+                                .text_size(11)
+                                .size(12),
+                            checkbox("Vegetation", self.filter_vegetation)
+                                .on_toggle(Message::FilterVegetation)
+                                .style(muted_checkbox_style)
+                                .text_size(11)
+                                .size(12),
+                        ]
+                        .spacing(9),
+                        row![
+                            checkbox("Buildings", self.filter_buildings)
+                                .on_toggle(Message::FilterBuildings)
+                                .style(muted_checkbox_style)
+                                .text_size(11)
+                                .size(12),
+                            checkbox("Other", self.filter_other)
+                                .on_toggle(Message::FilterOther)
+                                .style(muted_checkbox_style)
+                                .text_size(11)
+                                .size(12),
+                        ]
+                        .spacing(9),
                     ]
-                    .spacing(12)
+                    .spacing(10)
                     .into()
                 ),
             ]
@@ -5905,21 +5932,6 @@ impl Studio {
                 ribbon_group(
                     "CITY DATA",
                     tool_button("3D BAG", Message::ToggleBagPanel, self.bag_panel),
-                ),
-                ribbon_group(
-                    "EXPORT",
-                    row![
-                        pick_list(
-                            ExportFormat::ALL,
-                            Some(self.export_format),
-                            Message::ExportFormat
-                        )
-                        .style(themed_pick_list_style),
-                        ribbon_button_when("Export", Message::Export, self.active.is_some()),
-                    ]
-                    .spacing(8)
-                    .align_y(iced::Alignment::Center)
-                    .into()
                 ),
             ]
             .spacing(6)

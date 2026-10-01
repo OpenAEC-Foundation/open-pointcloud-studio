@@ -6,6 +6,14 @@ The design follows [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio
 
 The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-book) was cloned beside this repository (commit `dfdcd41`). The native ribbon uses the old application's compact button grouping, OpenCADStudio's Rust three-row ribbon primitives and quick-access pattern, and OpenAEC's Deep Forge, Night Build, Scaffold Gray, Construction Amber and Warm Gold tokens. Its top strip now keeps Import, Export, Undo and Redo before the tabs, with muted disabled actions and tooltips. Its tab strip, group captions and active/hover states follow the style-book ribbon tokens; wide tool groups scroll horizontally with visible left/right controls instead of being clipped. Unavailable Cancel mesh and Export mesh actions do not consume ribbon space; they appear when a mesh job or surface makes them relevant. The Home ribbon has native Deep Forge, Blueprint Light, Night Build, Blueprint Blue and High Contrast choices. The selection persists in `open-pointcloud-studio-native/theme` under the XDG configuration directory (or `~/.config`); the CAD viewport stays dark across themes. The old web ribbon's CSS and TypeScript components are not used in the native build. Inter and Space Grotesk are bundled as OFL-licensed native font assets. Visual checks are saved in [`../screenshots/`](../screenshots/).
 
+At the default 1440-pixel window width, the View tab packs all six axial
+camera directions, isometric view, scanner and
+section actions into OpenCADStudio's three-row small-tool columns and puts the
+four class switches in a two-by-two block. The Tools tab keeps editing,
+meshing and 3D BAG in view; the duplicate general export controls remain in
+File, Home and Properties. Both tabs show their regular controls without
+horizontal scrolling at this width.
+
 The amber File tab opens a native backstage view with the currently open scans, direct scan activation, import, full/selected/section/mesh export, format choice and appearance choice. The File view covers the tool ribbon and model space, while keeping quick access and the status bar visible; Escape or Return to model closes it. Unavailable exports appear muted. This uses the existing Rust import/export commands and no web components.
 
 Native display and indexing defaults now persist in `settings.json` under the same configuration directory as the theme: color mode, point size, eye-dome switch and strength, scanner-marker visibility, point budget, auto-index and the four broad classification groups. New configurations start at a 250,000-point viewport budget; the ribbon can raise it to two million. Changes from the ribbon or local command API are saved after a short debounce; invalid stored numeric values fall back to safe defaults. Source scans and their per-file edits are unaffected.

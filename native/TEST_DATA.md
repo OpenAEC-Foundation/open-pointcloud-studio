@@ -55,6 +55,14 @@ The same development build opened three adjacent public AHN6 LAZ tiles
 (1,374,660,640 source bytes and 129,398,587 points), attached all three disk
 indexes and rendered a combined 79,998-point LOD; see
 [`native-ribbon-quick-access-three-ahn.png`](../screenshots/native-ribbon-quick-access-three-ahn.png).
+With these same three scans open at 1440×900, the compact native
+[View ribbon](../screenshots/native-view-ribbon-compact-ahn6.png) displays all
+camera, scanner, point display, depth, section, budget and classification
+groups at once. The [Tools ribbon](../screenshots/native-tools-ribbon-compact-ahn6.png)
+shows LOD, auto-index, translate, scale, thin, decimate, surface and 3D BAG
+without clipping; export format remains in the File backstage and Properties.
+Clicking Bottom and then Isometric in the View ribbon changed the native camera
+status to `BOTTOM` and `ISOMETRIC` respectively.
 An exact world box across the first two tile boundaries selected 5,365 and
 6,416 points respectively (11,781 total), with zero from the third tile.
 
@@ -376,9 +384,10 @@ classification; a same-format unedited E57 copy preserves all original bytes.
 The same 1,200,000-point LAS fixture was also exported through the native GUI's
 E57 picker and GTK save dialog. Reopening the saved E57 and comparing its PLY
 output with direct LAS-to-PLY again found zero XYZ or intensity differences.
-The native Tools ribbon offers E57 in its export picker while the 45.8-million-
-point AHN6 tile remains visible in
-[`native-e57-export-ribbon.png`](../screenshots/native-e57-export-ribbon.png).
+The earlier Tools export picker with E57 and the 45.8-million-point AHN6 tile
+is preserved in
+[`native-e57-export-ribbon.png`](../screenshots/native-e57-export-ribbon.png);
+the current export-format picker is in File and Properties.
 The AHN6 OBJ was reopened in the native GUI and its 191,104 triangles were
 rendered with the source point layer hidden. The visual result is saved as
 [`native-terrain-mesh-faces.png`](../screenshots/native-terrain-mesh-faces.png).
