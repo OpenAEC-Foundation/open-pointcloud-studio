@@ -887,6 +887,14 @@ the pending flag cleared within the first 0.05-second status poll and the
 zero selected points. A subsequent normal pick still selected the same exact
 source ordinal, confirming that cancellation did not poison the next search.
 A cancelled replacement pick also left the previously selected point intact.
+On 2 October, a right-click on the rebuilt 129,398,587-point three-tile AHN6
+dev view exposed the [native context menu](../screenshots/native-context-menu-aligned-129m.png).
+Before the alignment fix, clicking the visible `Pick point` label activated
+`Section box`, because canvas text started near the bottom of the previous
+hit row. After moving labels inside their actual 25-pixel hit rows, that click
+activated Pick point. A viewport click selected exact source point 25,171,224
+at X 208260.888, Y 474996.039, Z 11.359; Escape exited the tool while
+retaining the [selected point](../screenshots/native-context-pick-escape-129m.png).
 
 On 1 October, the release 3D surface mesher was checked before and after
 parallelizing its nearest-neighbor and normal calculations. For the public

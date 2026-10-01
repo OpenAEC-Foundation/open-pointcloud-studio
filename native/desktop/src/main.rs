@@ -8728,24 +8728,56 @@ const CONTEXT_ACTIONS: [(ContextAction, &str); 6] = [
     (ContextAction::FitView, "Zoom all"),
     (ContextAction::ClearSelection, "Clear selection"),
 ];
+const CONTEXT_MENU_HEADER_H: f32 = 22.0;
+const CONTEXT_MENU_ROW_H: f32 = 25.0;
 
 fn context_menu_bounds(at: [f32; 2], viewport: Rectangle) -> Rectangle {
+    let height = CONTEXT_MENU_HEADER_H + CONTEXT_MENU_ROW_H * CONTEXT_ACTIONS.len() as f32 + 6.0;
     Rectangle::new(
         UiPoint::new(
             at[0].min((viewport.width - 184.0).max(0.0)).max(0.0),
-            at[1].min((viewport.height - 190.0).max(0.0)).max(0.0),
+            at[1]
+                .min((viewport.height - height - 4.0).max(0.0))
+                .max(0.0),
         ),
-        Size::new(180.0, 186.0),
+        Size::new(180.0, height),
     )
 }
 
 fn context_action_at(point: UiPoint, at: [f32; 2], viewport: Rectangle) -> Option<ContextAction> {
     let menu = context_menu_bounds(at, viewport);
-    if !menu.contains(point) || point.y < menu.y + 22.0 {
+    if !menu.contains(point) || point.y < menu.y + CONTEXT_MENU_HEADER_H {
         return None;
     }
-    let index = ((point.y - menu.y - 22.0) / 25.0) as usize;
+    let index = ((point.y - menu.y - CONTEXT_MENU_HEADER_H) / CONTEXT_MENU_ROW_H) as usize;
     CONTEXT_ACTIONS.get(index).map(|(action, _)| *action)
+}
+
+#[cfg(test)]
+mod context_menu_tests {
+    use super::*;
+
+    #[test]
+    fn visible_menu_rows_match_their_click_targets() {
+        let viewport = Rectangle::new(UiPoint::ORIGIN, Size::new(400.0, 300.0));
+        let at = [100.0, 50.0];
+        let menu = context_menu_bounds(at, viewport);
+        for (index, (action, _)) in CONTEXT_ACTIONS.iter().enumerate() {
+            let center = UiPoint::new(
+                menu.x + 24.0,
+                menu.y + CONTEXT_MENU_HEADER_H + (index as f32 + 0.5) * CONTEXT_MENU_ROW_H,
+            );
+            assert_eq!(context_action_at(center, at, viewport), Some(*action));
+        }
+        assert_eq!(
+            context_action_at(
+                UiPoint::new(menu.x + 24.0, menu.y + CONTEXT_MENU_HEADER_H * 0.5),
+                at,
+                viewport
+            ),
+            None
+        );
+    }
 }
 
 fn draw_context_menu(
@@ -8766,18 +8798,18 @@ fn draw_context_menu(
     );
     frame.fill_text(canvas::Text {
         content: "VIEWPORT".into(),
-        position: UiPoint::new(menu.x + 10.0, menu.y + 15.0),
+        position: UiPoint::new(menu.x + 10.0, menu.y + 5.0),
         size: iced::Pixels(10.0),
         color: Color::from_rgb8(161, 161, 170),
         ..canvas::Text::default()
     });
     let hovered_action = hovered.and_then(|point| context_action_at(point, at, viewport));
     for (index, (action, label)) in CONTEXT_ACTIONS.iter().enumerate() {
-        let y = menu.y + 22.0 + index as f32 * 25.0;
+        let y = menu.y + CONTEXT_MENU_HEADER_H + index as f32 * CONTEXT_MENU_ROW_H;
         if hovered_action == Some(*action) {
             frame.fill_rectangle(
                 UiPoint::new(menu.x + 3.0, y),
-                Size::new(menu.width - 6.0, 25.0),
+                Size::new(menu.width - 6.0, CONTEXT_MENU_ROW_H),
                 Color::from_rgb8(78, 63, 47),
             );
         }
@@ -8788,7 +8820,7 @@ fn draw_context_menu(
         };
         frame.fill_text(canvas::Text {
             content: label.into(),
-            position: UiPoint::new(menu.x + 12.0, y + 17.0),
+            position: UiPoint::new(menu.x + 12.0, y + 5.0),
             size: iced::Pixels(12.0),
             color: Color::from_rgb8(241, 241, 240),
             ..canvas::Text::default()
