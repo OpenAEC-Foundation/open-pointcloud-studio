@@ -61,6 +61,11 @@ The job and `status.result.selected_points` report exact counts. For very large
 selections the viewport draws a representative highlight sample rather than
 uploading every selected point again; the native status line reports how many
 highlights are shown.
+Selections retain their exact source-coordinate bounds. `zoom_selection` uses
+those bounds to frame the points quickly even after a live transform; the
+selection highlight follows the current transform. The command leaves the
+section box unchanged and `status.result.selection_bounds_pending` reports
+whether a bounds calculation is still running.
 `cancel_selection` stops a running world-box or viewport-box scan; the job
 becomes `cancelled` and no partial selection replaces the previous one. Escape
 or Clear in the native UI also stops an in-progress scan. An in-progress point
@@ -87,6 +92,7 @@ pick is discarded when cancelled.
 | `select_world` | `min`, `max` | Selects all exact source points in an inclusive XYZ box, returning a job ID |
 | `cancel_selection` | — | Stops a running full-resolution box selection or discards an in-progress point pick |
 | `clear_selection` | — | Clears the current point selection |
+| `zoom_selection` | — | Frames the exact selected source points in the 3D view without changing the section box; poll `selection_bounds_pending` in status until the camera updates |
 | `delete_selection` | — | Hides selected points in the open view; may first queue an octree build for LAZ |
 | `undo_delete` | — | Restores the latest deletion batch |
 | `redo_delete` | — | Reapplies the latest undone deletion batch |

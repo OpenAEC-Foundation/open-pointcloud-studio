@@ -209,6 +209,19 @@ fn format_count(value: impl ToString) -> String {
     grouped
 }
 
+fn format_zoom_level(zoom: f32) -> String {
+    let magnification = 1.0 / f64::from(zoom);
+    if magnification >= 100.0 {
+        format!("{}×", format_count(magnification.round() as u64))
+    } else if magnification >= 10.0 {
+        format!("{magnification:.1}×")
+    } else if magnification >= 0.01 {
+        format!("{magnification:.2}×")
+    } else {
+        format!("{magnification:.4}×")
+    }
+}
+
 fn is_bag3d_obj(path: &std::path::Path) -> bool {
     if !path
         .extension()
@@ -1153,7 +1166,9 @@ enum Message {
     ResetSectionBox,
     ZoomToSection,
     FitSectionToSelection,
-    SectionFitReady(
+    ZoomToSelection,
+    SelectionBoundsReady(
+        bool,
         u64,
         Vec<(usize, Arc<SelectionMask>)>,
         Result<(Bounds, u64), String>,
@@ -1244,7 +1259,7 @@ struct Studio {
     mesh_job: Option<MeshJob>,
     merge_job: Option<MergeJob>,
     merge_dialog_pending: bool,
-    section_fit_pending: bool,
+    selection_bounds_pending: bool,
     section_reference_bounds: Option<Bounds>,
     section_min_percent: [f64; 3],
     section_max_percent: [f64; 3],
@@ -1522,7 +1537,7 @@ impl Default for Studio {
             mesh_job: None,
             merge_job: None,
             merge_dialog_pending: false,
-            section_fit_pending: false,
+            selection_bounds_pending: false,
             section_reference_bounds: None,
             section_min_percent: [0.0; 3],
             section_max_percent: [100.0; 3],
@@ -1657,6 +1672,7 @@ impl Studio {
                         "section": section,
                         "selected_points": self.selected_total(),
                         "selection_pending": self.selection_pending,
+                        "selection_bounds_pending": self.selection_bounds_pending,
                         "thin_pending": self.thin_pending,
                         "color_mode": self.color_mode.to_string(),
                         "theme": self.ui_theme.key(),
@@ -1979,6 +1995,17 @@ impl Studio {
             ApiCommand::ClearSelection => {
                 let task = self.update(Message::ClearSelection);
                 (json!({"ok": true, "selected_points": 0}), task)
+            }
+            ApiCommand::ZoomSelection => {
+                if self.selected_total() == 0 || self.selection_bounds_pending {
+                    (
+                        json!({"ok": false, "error": "zoom selection needs selected points and no running bounds task"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::ZoomToSelection);
+                    (json!({"ok": true, "accepted": true}), task)
+                }
             }
             ApiCommand::DeleteSelection => {
                 if self.selection_pending || self.selected_total() == 0 {
@@ -2665,7 +2692,6 @@ impl Studio {
             return Task::none();
         };
         entry.transform = next;
-        entry.selection = None;
         if !self.section_enabled {
             self.section_reference_bounds = combined_bounds(&self.clouds);
             self.sync_section_coordinate_inputs();
@@ -4145,7 +4171,6 @@ impl Studio {
                             entry.transform.translated([x, y, z], entry.cloud.bounds)
                         {
                             entry.transform = next;
-                            entry.selection = None;
                             if !self.section_enabled {
                                 self.section_reference_bounds = combined_bounds(&self.clouds);
                                 self.sync_section_coordinate_inputs();
@@ -4326,7 +4351,6 @@ impl Studio {
                 });
                 if let Some(entry) = self.active.and_then(|index| self.clouds.get_mut(index)) {
                     entry.transform = CloudTransform::default();
-                    entry.selection = None;
                     if reset_section || !self.section_enabled {
                         self.section_reference_bounds = combined_bounds(&self.clouds);
                         if reset_section {
@@ -4951,10 +4975,11 @@ impl Studio {
                 self.status = "Section box framed in the viewport".into();
                 return self.schedule_detail();
             }
-            Message::FitSectionToSelection => {
-                if self.section_fit_pending {
+            purpose @ (Message::FitSectionToSelection | Message::ZoomToSelection) => {
+                if self.selection_bounds_pending {
                     return Task::none();
                 }
+                let focus_camera = matches!(purpose, Message::ZoomToSelection);
                 let sources: Vec<_> = self
                     .clouds
                     .iter()
@@ -4974,7 +4999,7 @@ impl Studio {
                     })
                     .collect();
                 if sources.is_empty() {
-                    self.status = "Select points before fitting the section box".into();
+                    self.status = "Select points before framing them".into();
                     return Task::none();
                 }
                 let snapshots: Vec<(usize, Arc<SelectionMask>)> = sources
@@ -4982,7 +5007,7 @@ impl Studio {
                     .map(|source| (source.index, Arc::clone(&source.selection)))
                     .collect();
                 let revision = self.revision;
-                self.section_fit_pending = true;
+                self.selection_bounds_pending = true;
                 self.status = "Finding exact bounds of selected source points…".into();
                 return Task::perform(
                     async move {
@@ -4990,11 +5015,18 @@ impl Studio {
                             .await
                             .map_err(|error| error.to_string())?
                     },
-                    move |result| Message::SectionFitReady(revision, snapshots.clone(), result),
+                    move |result| {
+                        Message::SelectionBoundsReady(
+                            focus_camera,
+                            revision,
+                            snapshots.clone(),
+                            result,
+                        )
+                    },
                 );
             }
-            Message::SectionFitReady(revision, snapshots, result) => {
-                self.section_fit_pending = false;
+            Message::SelectionBoundsReady(focus_camera, revision, snapshots, result) => {
+                self.selection_bounds_pending = false;
                 let current_count = self
                     .clouds
                     .iter()
@@ -5015,10 +5047,31 @@ impl Studio {
                 let (selected, count) = match result {
                     Ok(result) => result,
                     Err(error) => {
-                        self.status = format!("Could not fit section box: {error}");
+                        self.status = format!("Could not frame selection: {error}");
                         return Task::none();
                     }
                 };
+                if focus_camera {
+                    let Some(scene) = combined_bounds(&self.clouds) else {
+                        return Task::none();
+                    };
+                    let focus = padded_selection_bounds(scene, selected);
+                    let Some((zoom, pan)) = camera_to_frame_bounds(
+                        scene,
+                        focus,
+                        self.yaw,
+                        self.pitch,
+                        self.viewport_size,
+                    ) else {
+                        self.status = "Selected points cannot be framed in this view".into();
+                        return Task::none();
+                    };
+                    self.zoom = zoom;
+                    self.pan = pan;
+                    self.revision += 1;
+                    self.status = format!("Framed {count} selected points");
+                    return self.schedule_detail();
+                }
                 let Some(reference) = loaded_bounds(&self.clouds) else {
                     return Task::none();
                 };
@@ -5464,7 +5517,12 @@ impl Studio {
                             let Some(entry) = self.clouds.get_mut(index) else {
                                 return Task::none();
                             };
-                            match SelectionMask::single(entry.cloud.total_points, record) {
+                            let source_xyz = entry.transform.source_xyz(record.point.xyz);
+                            match SelectionMask::single_with_source(
+                                entry.cloud.total_points,
+                                record,
+                                source_xyz,
+                            ) {
                                 Ok(mask) => {
                                     entry.selection = Some(Arc::new(mask));
                                     self.status = format!(
@@ -6089,7 +6147,7 @@ impl Studio {
                             "Fit selection",
                             Message::FitSectionToSelection,
                             false,
-                            self.selected_total() > 0 && !self.section_fit_pending,
+                            self.selected_total() > 0 && !self.selection_bounds_pending,
                         )),
                     ],
                 ),
@@ -6156,6 +6214,12 @@ impl Studio {
                             "Clear",
                             Message::ClearSelection,
                             false
+                        )),
+                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
+                            "Zoom selection",
+                            Message::ZoomToSelection,
+                            false,
+                            self.selected_total() > 0 && !self.selection_bounds_pending,
                         )),
                         opencad_ribbon::RibbonItem::Small(small_tool_button(
                             "Crop",
@@ -7147,6 +7211,15 @@ impl Studio {
                 .filter(|selection| selection.count == 1)
                 .and_then(|selection| selection.highlights.first())
             {
+                let point = if entry
+                    .selection
+                    .as_ref()
+                    .is_some_and(|selection| selection.highlights_source)
+                {
+                    entry.transform.point(*point)
+                } else {
+                    *point
+                };
                 properties = properties.push(opencad_properties::section_header("Selected point"));
                 for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
                     properties = properties.push(opencad_properties::property_row(
@@ -7251,7 +7324,7 @@ impl Studio {
             ))
             .push(opencad_properties::property_row(
                 "Zoom",
-                format!("{:.3}×", self.zoom),
+                format_zoom_level(self.zoom),
             ))
             .push(
                 container(
@@ -7387,7 +7460,7 @@ impl Studio {
                 row![
                     button("Fit to selection")
                         .on_press_maybe(
-                            (self.selected_total() > 0 && !self.section_fit_pending)
+                            (self.selected_total() > 0 && !self.selection_bounds_pending)
                                 .then_some(Message::FitSectionToSelection),
                         )
                         .style(flat_tool_style),
@@ -7704,7 +7777,8 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::FitScanPoses => ToolIcon::Fit,
         Message::SetSectionEnabled(_)
         | Message::ResetSectionBox
-        | Message::FitSectionToSelection => ToolIcon::Select,
+        | Message::FitSectionToSelection
+        | Message::ZoomToSelection => ToolIcon::Select,
         _ => ToolIcon::Cloud,
     }
 }
@@ -8099,6 +8173,19 @@ fn camera_to_frame_bounds(
     Some((zoom, pan))
 }
 
+fn padded_selection_bounds(scene: Bounds, selected: Bounds) -> Bounds {
+    let minimum_span = (scene.extent() * 0.004).clamp(0.5, 50.0);
+    let mut focus = selected;
+    for axis in 0..3 {
+        if focus.max[axis] - focus.min[axis] < minimum_span {
+            let center = (focus.min[axis] + focus.max[axis]) * 0.5;
+            focus.min[axis] = center - minimum_span * 0.5;
+            focus.max[axis] = center + minimum_span * 0.5;
+        }
+    }
+    focus
+}
+
 fn pan_to_world(
     scene: Bounds,
     target: [f64; 3],
@@ -8143,12 +8230,14 @@ fn selected_source_bounds(sources: &[SelectedSource]) -> Result<(Bounds, u64), S
         let selection = &source.selection;
         let deleted = &source.deleted;
         cloud.validate_source().map_err(|error| error.to_string())?;
-        if deleted.is_none() && selection.count == selection.highlights.len() as u64 {
-            for point in &selection.highlights {
-                include_bounds(&mut bounds, point.xyz);
-                count += 1;
+        if deleted.is_none() {
+            if let Some(source_bounds) = selection.source_bounds {
+                let world_bounds = source.transform.bounds(source_bounds);
+                include_bounds(&mut bounds, world_bounds.min);
+                include_bounds(&mut bounds, world_bounds.max);
+                count += selection.count;
+                continue;
             }
-            continue;
         }
         let mut ordinal = 0u64;
         pointcloud_core::visit_points(&cloud.path, &mut |point| {
@@ -8710,8 +8799,13 @@ impl canvas::Program<Message> for PointViewport<'_> {
         );
         for entry in self.clouds.iter().filter(|entry| entry.visible) {
             if let Some(selection) = &entry.selection {
-                for point in &selection.highlights {
-                    if !self.accepts(point) {
+                for source_point in &selection.highlights {
+                    let point = if selection.highlights_source {
+                        entry.transform.point(*source_point)
+                    } else {
+                        *source_point
+                    };
+                    if !self.accepts(&point) {
                         continue;
                     }
                     if let Some((x, y, _)) = projection.project(point.xyz) {
@@ -9097,6 +9191,61 @@ mod section_box_tests {
     use super::*;
 
     #[test]
+    fn selected_point_frames_camera_without_enabling_section() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("survey.xyz");
+        std::fs::write(&path, "0 0 0\n100 100 10\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 2).unwrap());
+        let record = IndexedPoint {
+            point: cloud.points[1],
+            ordinal: 1,
+        };
+        let selection = Arc::new(SelectionMask::single(cloud.total_points, record).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        studio.clouds[0].selection = Some(Arc::clone(&selection));
+        let _ = studio.update(Message::ZoomToSelection);
+        assert!(studio.selection_bounds_pending);
+        let bounds = selected_source_bounds(&[SelectedSource {
+            index: 0,
+            cloud: Arc::clone(&studio.clouds[0].cloud),
+            selection: Arc::clone(&selection),
+            deleted: None,
+            transform: studio.clouds[0].transform,
+        }])
+        .unwrap();
+        let _ = studio.update(Message::SelectionBoundsReady(
+            true,
+            studio.revision,
+            vec![(0, selection)],
+            Ok(bounds),
+        ));
+        assert!(!studio.selection_bounds_pending);
+        assert!(!studio.section_enabled);
+        assert!(studio.zoom < 1.0);
+        let scene = combined_bounds(&studio.clouds).unwrap();
+        let projection = Projection::new(
+            scene,
+            studio.yaw,
+            studio.pitch,
+            studio.zoom,
+            studio.pan,
+            studio.viewport_size.width,
+            studio.viewport_size.height,
+        );
+        let (x, y, _) = projection.project(record.point.xyz).unwrap();
+        assert!((x - studio.viewport_size.width * 0.5).abs() < 5.0);
+        assert!((y - studio.viewport_size.height * 0.5).abs() < 5.0);
+    }
+
+    #[test]
+    fn zoom_label_reports_magnification_instead_of_inverse_scale() {
+        assert_eq!(format_zoom_level(1.0), "1.00×");
+        assert_eq!(format_zoom_level(0.01), "100×");
+        assert_eq!(format_zoom_level(0.000_001), "1.000.000×");
+    }
+
+    #[test]
     fn displayed_rounded_limits_clamp_to_precise_survey_bounds() {
         let model = Bounds {
             min: [206600.0, 474000.0, 0.803],
@@ -9168,6 +9317,8 @@ mod section_box_tests {
             bits,
             count: 2,
             highlights: Vec::new(),
+            highlights_source: true,
+            source_bounds: None,
         });
         let selected = selected_source_bounds(&[SelectedSource {
             index: 0,
@@ -9185,14 +9336,15 @@ mod section_box_tests {
         let _ = studio.update(Message::Loaded(Ok(cloud)));
         studio.clouds[0].selection = Some(Arc::clone(&selection));
         let _ = studio.update(Message::FitSectionToSelection);
-        assert!(studio.section_fit_pending);
-        let _ = studio.update(Message::SectionFitReady(
+        assert!(studio.selection_bounds_pending);
+        let _ = studio.update(Message::SelectionBoundsReady(
+            false,
             studio.revision,
             vec![(0, selection)],
             Ok(selected),
         ));
         assert!(studio.section_enabled);
-        assert!(!studio.section_fit_pending);
+        assert!(!studio.selection_bounds_pending);
         let section = studio.section_bounds().unwrap();
         for axis in 0..3 {
             assert!(section.min[axis] <= selected.0.min[axis]);
@@ -9290,6 +9442,55 @@ mod editing_tests {
     use super::*;
 
     #[test]
+    fn selection_stays_on_source_points_through_live_transforms() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("selected.xyz");
+        std::fs::write(&path, "0 0 0\n10 0 0\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 2).unwrap());
+        let selection = Arc::new(
+            SelectionMask::single(
+                cloud.total_points,
+                IndexedPoint {
+                    point: cloud.points[1],
+                    ordinal: 1,
+                },
+            )
+            .unwrap(),
+        );
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        studio.clouds[0].selection = Some(Arc::clone(&selection));
+        let selected_x = |studio: &Studio| {
+            let entry = &studio.clouds[0];
+            assert!(Arc::ptr_eq(entry.selection.as_ref().unwrap(), &selection));
+            let bounds = selected_source_bounds(&[SelectedSource {
+                index: 0,
+                cloud: Arc::clone(&entry.cloud),
+                selection: Arc::clone(&selection),
+                deleted: None,
+                transform: entry.transform,
+            }])
+            .unwrap()
+            .0;
+            assert_eq!(bounds.min[0], bounds.max[0]);
+            assert_eq!(
+                entry.transform.point(selection.highlights[0]).xyz[0],
+                bounds.min[0]
+            );
+            bounds.min[0]
+        };
+        assert_eq!(selected_x(&studio), 10.0);
+        studio.translate_x = "5".into();
+        let _ = studio.update(Message::ApplyTranslation);
+        assert_eq!(selected_x(&studio), 15.0);
+        studio.scale_inputs = ["2".into(), "1".into(), "1".into()];
+        let _ = studio.update(Message::ApplyScale);
+        assert_eq!(selected_x(&studio), 20.0);
+        let _ = studio.update(Message::ResetTransform);
+        assert_eq!(selected_x(&studio), 10.0);
+    }
+
+    #[test]
     fn mesh_normals_follow_nonuniform_and_reflected_scale() {
         let normal = [std::f32::consts::FRAC_1_SQRT_2; 2];
         let transformed =
@@ -9369,6 +9570,34 @@ mod editing_tests {
             .unwrap();
             assert_eq!(selected[0].1.count, 2);
             assert!(!selected[0].1.contains(0));
+            assert!(selected[0].1.highlights_source);
+            assert_eq!(selected[0].1.highlights[0].xyz[0], 10.0);
+            assert!(
+                (entry.transform.point(selected[0].1.highlights[0]).xyz[0] - expected_x_max).abs()
+                    < 1e-10
+            );
+            assert_eq!(
+                selected[0].1.source_bounds,
+                Some(Bounds {
+                    min: [10.0, 0.0, 0.0],
+                    max: [10.0, 10.0, 10.0],
+                })
+            );
+            let moved = CloudTransform {
+                offset: std::array::from_fn(|axis| entry.transform.offset[axis] + 5.0),
+                ..entry.transform
+            };
+            let moved_bounds = selected_source_bounds(&[SelectedSource {
+                index: 0,
+                cloud: Arc::clone(&cloud),
+                selection: Arc::clone(&selected[0].1),
+                deleted: None,
+                transform: moved,
+            }])
+            .unwrap();
+            assert!((moved_bounds.0.min[0] - (expected_x_max + 5.0)).abs() < 1e-10);
+            assert_eq!(moved_bounds.0.min[1..], [205.0, 5.0]);
+            assert_eq!(moved_bounds.0.max[1..], [215.0, 15.0]);
         }
         let selected_bounds = selected_source_bounds(&[SelectedSource {
             index: 0,
@@ -9377,6 +9606,8 @@ mod editing_tests {
                 bits: vec![0b110],
                 count: 2,
                 highlights: Vec::new(),
+                highlights_source: true,
+                source_bounds: None,
             }),
             deleted: None,
             transform: entry.transform,

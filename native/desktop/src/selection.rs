@@ -15,6 +15,10 @@ pub struct SelectionMask {
     pub bits: Vec<u64>,
     pub count: u64,
     pub highlights: Vec<Point>,
+    /// False only when a degenerate transform prevents recovering a picked source point.
+    pub highlights_source: bool,
+    /// Exact source-coordinate extent, independent of later live transforms.
+    pub source_bounds: Option<Bounds>,
 }
 
 impl SelectionMask {
@@ -25,6 +29,8 @@ impl SelectionMask {
             bits: vec![0; words],
             count: 0,
             highlights: Vec::with_capacity(HIGHLIGHT_LIMIT),
+            highlights_source: true,
+            source_bounds: None,
         })
     }
 
@@ -34,28 +40,59 @@ impl SelectionMask {
             .is_some_and(|bits| bits & (1u64 << (ordinal % 64)) != 0)
     }
 
-    fn insert(&mut self, ordinal: u64, point: Point, random_state: &mut u64) {
+    fn insert(&mut self, ordinal: u64, point: Point, source_xyz: [f64; 3], random_state: &mut u64) {
         self.bits[(ordinal / 64) as usize] |= 1u64 << (ordinal % 64);
         self.count += 1;
+        if let Some(bounds) = &mut self.source_bounds {
+            for (axis, value) in source_xyz.into_iter().enumerate() {
+                bounds.min[axis] = bounds.min[axis].min(value);
+                bounds.max[axis] = bounds.max[axis].max(value);
+            }
+        } else {
+            self.source_bounds = Some(Bounds {
+                min: source_xyz,
+                max: source_xyz,
+            });
+        }
+        let mut source_point = point;
+        source_point.xyz = source_xyz;
         if self.highlights.len() < HIGHLIGHT_LIMIT {
-            self.highlights.push(point);
+            self.highlights.push(source_point);
         } else {
             *random_state ^= *random_state << 13;
             *random_state ^= *random_state >> 7;
             *random_state ^= *random_state << 17;
             let replacement = *random_state % self.count;
             if replacement < HIGHLIGHT_LIMIT as u64 {
-                self.highlights[replacement as usize] = point;
+                self.highlights[replacement as usize] = source_point;
             }
         }
     }
 
+    #[cfg(test)]
     pub fn single(total_points: u64, record: IndexedPoint) -> Result<Self, String> {
+        Self::single_with_source(total_points, record, Some(record.point.xyz))
+    }
+
+    pub fn single_with_source(
+        total_points: u64,
+        record: IndexedPoint,
+        source_xyz: Option<[f64; 3]>,
+    ) -> Result<Self, String> {
         if record.ordinal >= total_points {
             return Err("indexed point number is outside the source".into());
         }
         let mut mask = Self::new(total_points)?;
-        mask.insert(record.ordinal, record.point, &mut 0);
+        mask.insert(
+            record.ordinal,
+            record.point,
+            source_xyz.unwrap_or(record.point.xyz),
+            &mut 0,
+        );
+        if source_xyz.is_none() {
+            mask.source_bounds = None;
+            mask.highlights_source = false;
+        }
         Ok(mask)
     }
 
@@ -666,15 +703,15 @@ fn select_one_world(
     let mut mask = SelectionMask::new(cloud.total_points)?;
     let mut random_state = 0xd1b5_4a32_d192_ed03u64;
     let mut visited = 0u64;
-    let mut consider = |ordinal: u64, point: Point| {
-        let point = transform.point(point);
+    let mut consider = |ordinal: u64, source_point: Point| {
+        let point = transform.point(source_point);
         if !deleted.as_ref().is_some_and(|mask| mask.contains(ordinal))
             && filter.accepts(&point)
             && (0..3).all(|axis| {
                 point.xyz[axis] >= bounds.min[axis] && point.xyz[axis] <= bounds.max[axis]
             })
         {
-            mask.insert(ordinal, point, &mut random_state);
+            mask.insert(ordinal, point, source_point.xyz, &mut random_state);
         }
     };
     if let Some(tree) = tree {
@@ -739,12 +776,12 @@ fn select_one(
     let mut mask = SelectionMask::new(cloud.total_points)?;
     let mut random_state = 0xd1b5_4a32_d192_ed03u64;
     let mut visited = 0u64;
-    let mut consider = |ordinal: u64, point: Point| {
-        let point = transform.point(point);
+    let mut consider = |ordinal: u64, source_point: Point| {
+        let point = transform.point(source_point);
         if !deleted.as_ref().is_some_and(|mask| mask.contains(ordinal)) && filter.accepts(&point) {
             if let Some((x, y, _)) = projection.project(point.xyz) {
                 if rectangle.contains(x, y) {
-                    mask.insert(ordinal, point, &mut random_state);
+                    mask.insert(ordinal, point, source_point.xyz, &mut random_state);
                 }
             }
         }

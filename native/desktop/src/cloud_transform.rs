@@ -26,6 +26,15 @@ impl CloudTransform {
         std::array::from_fn(|axis| source[axis] * self.scale[axis] + self.offset[axis])
     }
 
+    pub fn source_xyz(self, world: [f64; 3]) -> Option<[f64; 3]> {
+        self.scale
+            .iter()
+            .all(|value| value.is_finite() && value.abs() > f64::EPSILON)
+            .then(|| {
+                std::array::from_fn(|axis| (world[axis] - self.offset[axis]) / self.scale[axis])
+            })
+    }
+
     /// Map a surface normal through the inverse-transpose of this scale.
     /// The determinant sign keeps it aligned with transformed triangle winding.
     pub fn normal(self, source: [f32; 3]) -> Option<[f32; 3]> {
@@ -137,5 +146,21 @@ mod tests {
         assert_eq!(scaled.xyz([10.0, 20.0, 30.0]), [30.0, 15.0, 30.0]);
         assert_eq!(scaled.bounds(source).min, [10.0, 15.0, 30.0]);
         assert_eq!(scaled.bounds(source).max, [30.0, 25.0, 50.0]);
+    }
+
+    #[test]
+    fn inverse_point_coordinates_handle_reflection_and_reject_flat_axis() {
+        let transform = CloudTransform {
+            scale: [-2.0, 0.5, 3.0],
+            offset: [100.0, -4.0, 1.0],
+        };
+        let source = [8.0, 12.0, 2.0];
+        assert_eq!(transform.source_xyz(transform.xyz(source)), Some(source));
+        assert!(CloudTransform {
+            scale: [0.0, 1.0, 1.0],
+            offset: [0.0; 3],
+        }
+        .source_xyz(source)
+        .is_none());
     }
 }

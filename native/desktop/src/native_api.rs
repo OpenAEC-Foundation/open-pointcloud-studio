@@ -71,6 +71,7 @@ pub enum ApiCommand {
     },
     CancelSelection,
     ClearSelection,
+    ZoomSelection,
     DeleteSelection,
     UndoDelete,
     RedoDelete,
