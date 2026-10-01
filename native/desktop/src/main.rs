@@ -4596,6 +4596,55 @@ impl Studio {
                 !self.mesh_export_pending,
             ));
         }
+        let mut scale_tools = row![
+            column![
+                row![
+                    text("X").size(10).width(12),
+                    text_input("1", &self.scale_inputs[0])
+                        .on_input(|value| Message::ScaleAxis(0, value))
+                        .size(11)
+                        .padding([2, 4])
+                        .width(76)
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+                row![
+                    text("Y").size(10).width(12),
+                    text_input("1", &self.scale_inputs[1])
+                        .on_input(|value| Message::ScaleAxis(1, value))
+                        .size(11)
+                        .padding([2, 4])
+                        .width(76)
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+                row![
+                    text("Z").size(10).width(12),
+                    text_input("1", &self.scale_inputs[2])
+                        .on_input(|value| Message::ScaleAxis(2, value))
+                        .size(11)
+                        .padding([2, 4])
+                        .width(76)
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+            ]
+            .spacing(1),
+            ribbon_button_when(
+                if self.scale_job.is_some() {
+                    "Working…"
+                } else {
+                    "Apply"
+                },
+                Message::ApplyScale,
+                self.active.is_some() && self.scale_job.is_none()
+            ),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+        if self.scale_job.is_some() {
+            scale_tools = scale_tools.push(ribbon_button("Cancel", Message::CancelScale));
+        }
         let groups: Element<'_, Message> = match self.ribbon_tab {
             RibbonTab::Home => row![
                 opencad_ribbon::render_group_items(
@@ -5011,61 +5060,7 @@ impl Studio {
                     .align_y(iced::Alignment::Center)
                     .into()
                 ),
-                ribbon_group(
-                    "SCALE",
-                    row![
-                        column![
-                            row![
-                                text("X").size(10).width(12),
-                                text_input("1", &self.scale_inputs[0])
-                                    .on_input(|value| Message::ScaleAxis(0, value))
-                                    .size(11)
-                                    .padding([2, 4])
-                                    .width(76)
-                            ]
-                            .spacing(4)
-                            .align_y(iced::Alignment::Center),
-                            row![
-                                text("Y").size(10).width(12),
-                                text_input("1", &self.scale_inputs[1])
-                                    .on_input(|value| Message::ScaleAxis(1, value))
-                                    .size(11)
-                                    .padding([2, 4])
-                                    .width(76)
-                            ]
-                            .spacing(4)
-                            .align_y(iced::Alignment::Center),
-                            row![
-                                text("Z").size(10).width(12),
-                                text_input("1", &self.scale_inputs[2])
-                                    .on_input(|value| Message::ScaleAxis(2, value))
-                                    .size(11)
-                                    .padding([2, 4])
-                                    .width(76)
-                            ]
-                            .spacing(4)
-                            .align_y(iced::Alignment::Center),
-                        ]
-                        .spacing(1),
-                        ribbon_button_when(
-                            if self.scale_job.is_some() {
-                                "Working…"
-                            } else {
-                                "Apply"
-                            },
-                            Message::ApplyScale,
-                            self.active.is_some() && self.scale_job.is_none()
-                        ),
-                        ribbon_button_when(
-                            "Cancel",
-                            Message::CancelScale,
-                            self.scale_job.is_some()
-                        ),
-                    ]
-                    .spacing(6)
-                    .align_y(iced::Alignment::Center)
-                    .into()
-                ),
+                ribbon_group("SCALE", scale_tools.into()),
                 ribbon_group(
                     "THIN",
                     row![

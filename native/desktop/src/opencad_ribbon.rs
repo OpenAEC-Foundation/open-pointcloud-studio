@@ -107,14 +107,11 @@ pub fn render_group_items<'a>(
                     .width(Fill)
                     .height(1)
                     .style(|theme| container::Style::default().background(Color {
-                        a: 0.15,
-                        ..ui_theme::colors(theme).accent
+                        a: 0.55,
+                        ..ui_theme::colors(theme).border
                     })),
                 text(title).size(9).style(|theme| text::Style {
-                    color: Some(Color {
-                        a: 0.8,
-                        ..ui_theme::colors(theme).accent
-                    }),
+                    color: Some(ui_theme::colors(theme).muted),
                 }),
             ]
             .align_x(iced::Alignment::Center)
