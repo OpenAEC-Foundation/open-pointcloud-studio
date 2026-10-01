@@ -19,14 +19,16 @@ pub enum ExportFormat {
     PlyBinary,
     Las,
     Laz,
+    E57,
 }
 
 impl ExportFormat {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::PlyBinary,
         Self::PlyAscii,
         Self::Las,
         Self::Laz,
+        Self::E57,
         Self::Xyz,
         Self::Pts,
         Self::Csv,
@@ -40,6 +42,7 @@ impl ExportFormat {
             Self::PlyAscii | Self::PlyBinary => "ply",
             Self::Las => "las",
             Self::Laz => "laz",
+            Self::E57 => "e57",
         }
     }
 }
@@ -54,6 +57,7 @@ impl fmt::Display for ExportFormat {
             Self::PlyBinary => "PLY (binary)",
             Self::Las => "LAS",
             Self::Laz => "LAZ",
+            Self::E57 => "E57",
         })
     }
 }
@@ -79,6 +83,9 @@ pub fn export_full(
     ) || matches!(
         (source_extension, format),
         (Some(extension), ExportFormat::Laz) if extension.eq_ignore_ascii_case("laz")
+    ) || matches!(
+        (source_extension, format),
+        (Some(extension), ExportFormat::E57) if extension.eq_ignore_ascii_case("e57")
     ) {
         return copy_full_source(cloud, destination.as_ref());
     }
@@ -328,6 +335,9 @@ fn export_map_count(
             map,
         );
     }
+    if format == ExportFormat::E57 {
+        return export_e57_map_count(cloud, destination, expected_count, expected_stamp, map);
+    }
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -348,7 +358,11 @@ fn export_map_count(
                 };
                 Some(format!("ply\nformat {encoding} 1.0\nelement vertex ").len() as u64)
             }
-            ExportFormat::Xyz | ExportFormat::Csv | ExportFormat::Las | ExportFormat::Laz => None,
+            ExportFormat::Xyz
+            | ExportFormat::Csv
+            | ExportFormat::Las
+            | ExportFormat::Laz
+            | ExportFormat::E57 => None,
         }
     } else {
         None
@@ -373,7 +387,7 @@ fn export_map_count(
             ExportFormat::PlyAscii | ExportFormat::PlyBinary => {
                 write_ply_header(&mut writer, cloud, format, &count_text)?
             }
-            ExportFormat::Xyz | ExportFormat::Las | ExportFormat::Laz => {}
+            ExportFormat::Xyz | ExportFormat::Las | ExportFormat::Laz | ExportFormat::E57 => {}
         }
 
         visit_points(&cloud.path, &mut |point| {
@@ -394,7 +408,7 @@ fn export_map_count(
                 }
                 ExportFormat::PlyAscii => write_ply_ascii(&mut writer, point, cloud)?,
                 ExportFormat::PlyBinary => write_ply_binary(&mut writer, point, cloud)?,
-                ExportFormat::Las | ExportFormat::Laz => unreachable!(),
+                ExportFormat::Las | ExportFormat::Laz | ExportFormat::E57 => unreachable!(),
             }
             Ok(())
         })?;
@@ -418,6 +432,107 @@ fn export_map_count(
         temporary.as_file_mut().seek(SeekFrom::Start(offset))?;
         write!(temporary.as_file_mut(), "{written_count:020}")?;
     }
+    if SourceStamp::read(&cloud.path)? != expected_stamp {
+        return Err(LoadError::InvalidData(
+            "source changed during export".into(),
+        ));
+    }
+    temporary
+        .persist(destination)
+        .map_err(|error| LoadError::Io(error.error))?;
+    Ok(written_count)
+}
+
+fn export_e57_map_count(
+    cloud: &PointCloud,
+    destination: &Path,
+    expected_count: Option<u64>,
+    expected_stamp: SourceStamp,
+    mut map: impl FnMut(u64, Point) -> Option<Point>,
+) -> Result<u64, LoadError> {
+    use e57::{E57Writer, Record, RecordDataType, RecordName, RecordValue};
+
+    let parent = destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let temporary = tempfile::NamedTempFile::new_in(parent)?;
+    let mut prototype = vec![
+        Record::CARTESIAN_X_F64,
+        Record::CARTESIAN_Y_F64,
+        Record::CARTESIAN_Z_F64,
+    ];
+    if cloud.has_rgb {
+        for name in [
+            RecordName::ColorRed,
+            RecordName::ColorGreen,
+            RecordName::ColorBlue,
+        ] {
+            prototype.push(Record {
+                name,
+                data_type: RecordDataType::U8,
+            });
+        }
+    }
+    if cloud.has_intensity {
+        prototype.push(Record {
+            name: RecordName::Intensity,
+            data_type: RecordDataType::U16,
+        });
+    }
+    let file_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
+    let scan_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
+    let mut writer = E57Writer::new(temporary.reopen()?, &file_guid)?;
+    let mut source_count = 0u64;
+    let mut written_count = 0u64;
+    {
+        let mut scan = writer.add_pointcloud(&scan_guid, prototype)?;
+        scan.set_name(Some("Open Pointcloud Studio export".into()));
+        visit_points(&cloud.path, &mut |point| {
+            let ordinal = source_count;
+            source_count += 1;
+            let Some(point) = map(ordinal, point) else {
+                return Ok(());
+            };
+            if !point.xyz.iter().all(|value| value.is_finite()) {
+                return Err(LoadError::InvalidData(
+                    "transform produced non-finite coordinates".into(),
+                ));
+            }
+            let mut values: Vec<RecordValue> =
+                point.xyz.into_iter().map(RecordValue::Double).collect();
+            if cloud.has_rgb {
+                let rgb = point.rgb.unwrap_or([0, 0, 0]);
+                values.extend(
+                    rgb.into_iter()
+                        .map(|value| RecordValue::Integer(i64::from(value))),
+                );
+            }
+            if cloud.has_intensity {
+                values.push(RecordValue::Integer(i64::from(
+                    point.intensity.unwrap_or(0),
+                )));
+            }
+            scan.add_point(values)?;
+            written_count += 1;
+            Ok(())
+        })?;
+        if source_count != cloud.total_points {
+            return Err(LoadError::InvalidData(format!(
+                "source changed since loading (expected {} points, found {source_count})",
+                cloud.total_points
+            )));
+        }
+        if let Some(expected_count) = expected_count {
+            if written_count != expected_count {
+                return Err(LoadError::InvalidData(format!(
+                    "selection changed during export (expected {expected_count} points, wrote {written_count})"
+                )));
+            }
+        }
+        scan.finalize()?;
+    }
+    writer.finalize()?;
     if SourceStamp::read(&cloud.path)? != expected_stamp {
         return Err(LoadError::InvalidData(
             "source changed during export".into(),
@@ -880,6 +995,90 @@ mod tests {
             assert_eq!(reopened.bounds, cloud.bounds);
             assert!(reopened.has_rgb);
         }
+    }
+
+    #[test]
+    fn e57_export_round_trips_attributes_and_keeps_full_source_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("survey.ply");
+        fs::write(
+            &source,
+            "ply\nformat ascii 1.0\nelement vertex 3\nproperty double x\nproperty double y\nproperty double z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nproperty ushort intensity\nend_header\n207000.001 474000.002 1.234 10 20 30 1234\n207001.003 474001.004 2.345 40 50 60 5678\n207002.005 474002.006 3.456 70 80 90 9012\n",
+        )
+        .unwrap();
+        let cloud = open(&source, 1).unwrap();
+        let output = dir.path().join("survey.e57");
+        export_full(&cloud, &output, ExportFormat::E57).unwrap();
+        let reopened = open(&output, 3).unwrap();
+        assert_eq!(reopened.total_points, 3);
+        assert_eq!(reopened.bounds, cloud.bounds);
+        assert_eq!(reopened.points[1].rgb, Some([40, 50, 60]));
+        assert_eq!(reopened.points[1].intensity, Some(5678));
+
+        let copy = dir.path().join("copy.e57");
+        export_full(&reopened, &copy, ExportFormat::E57).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), fs::read(&output).unwrap());
+
+        let selected = dir.path().join("selected.e57");
+        export_where(&reopened, &selected, ExportFormat::E57, 2, |ordinal, _| {
+            ordinal != 1
+        })
+        .unwrap();
+        let selected = open(&selected, 2).unwrap();
+        assert_eq!(selected.total_points, 2);
+        assert_eq!(selected.points[1].xyz, [207002.005, 474002.006, 3.456]);
+        assert_eq!(selected.points[1].intensity, Some(9012));
+
+        let moved = dir.path().join("moved.e57");
+        export_affine(&reopened, &moved, ExportFormat::E57, [10.0, 0.0, 0.0], 1.0).unwrap();
+        let moved = open(&moved, 3).unwrap();
+        assert_eq!(moved.total_points, 3);
+        assert_eq!(moved.points[0].xyz, [207010.001, 474000.002, 1.234]);
+
+        let section = dir.path().join("section.e57");
+        let written = export_section(
+            &reopened,
+            &section,
+            ExportFormat::E57,
+            Bounds {
+                min: [207001.0, 474001.0, 2.0],
+                max: [207003.0, 474003.0, 4.0],
+            },
+        )
+        .unwrap();
+        assert_eq!(written, 2);
+        assert_eq!(open(&section, 2).unwrap().total_points, 2);
+    }
+
+    #[test]
+    fn e57_export_round_trips_xyz_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("points.xyz");
+        fs::write(&source, "1 2 3\n4 5 6\n7 8 9\n").unwrap();
+        let cloud = open(&source, 1).unwrap();
+        let output = dir.path().join("points.e57");
+        export_full(&cloud, &output, ExportFormat::E57).unwrap();
+        let reopened = open(&output, 3).unwrap();
+        assert_eq!(reopened.total_points, 3);
+        assert!(!reopened.has_rgb);
+    }
+
+    #[test]
+    fn e57_intensity_only_does_not_invent_rgb() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("intensity.ply");
+        fs::write(
+            &source,
+            "ply\nformat ascii 1.0\nelement vertex 2\nproperty double x\nproperty double y\nproperty double z\nproperty ushort intensity\nend_header\n1 2 3 1234\n4 5 6 5678\n",
+        )
+        .unwrap();
+        let cloud = open(&source, 1).unwrap();
+        let output = dir.path().join("intensity.e57");
+        export_full(&cloud, &output, ExportFormat::E57).unwrap();
+        let reopened = open(&output, 2).unwrap();
+        assert_eq!(reopened.total_points, 2);
+        assert!(!reopened.has_rgb);
+        assert_eq!(reopened.points[1].intensity, Some(5678));
     }
 
     #[test]

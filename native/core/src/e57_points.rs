@@ -38,6 +38,9 @@ pub fn read(
         }
         let mut points = file.pointcloud_simple(&scan)?;
         points.spherical_to_cartesian(true);
+        // Preserve whether the scan actually contains RGB. The e57 crate's
+        // default converts intensity-only points into synthetic grey colors.
+        points.intensity_to_color(false);
         points.apply_pose(true);
         for point in points {
             let point = point?;

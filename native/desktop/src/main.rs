@@ -56,6 +56,7 @@ fn export_format_for_path(path: &Path) -> Option<ExportFormat> {
         Some("csv") => Some(ExportFormat::Csv),
         Some("las") => Some(ExportFormat::Las),
         Some("laz") => Some(ExportFormat::Laz),
+        Some("e57") => Some(ExportFormat::E57),
         _ => None,
     }
 }
@@ -198,7 +199,7 @@ fn main() -> iced::Result {
         let source = PathBuf::from(source);
         let destination = PathBuf::from(destination);
         let Some(format) = export_format_for_path(&destination) else {
-            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz");
+            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz, .e57");
             std::process::exit(2);
         };
         match open_for_export(&source)
@@ -223,7 +224,7 @@ fn main() -> iced::Result {
         let source = PathBuf::from(source);
         let destination = PathBuf::from(destination);
         let Some(format) = export_format_for_path(&destination) else {
-            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz");
+            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz, .e57");
             std::process::exit(2);
         };
         let Some(values) = limits.to_str().and_then(|value| {

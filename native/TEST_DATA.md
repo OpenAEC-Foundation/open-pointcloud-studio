@@ -225,6 +225,26 @@ The E57 test scan yielded 50,000 vertices and 172,820 triangles in 5.90
 seconds with 60,968 KiB peak RSS. These coverage counts measure selected
 vertices, not a watertight surface guarantee; terrain TIN remains preferable
 for continuous ground coverage.
+The native E57 writer was checked with a full copy of the public pye57
+`test.e57` fixture: the 14 MB copy has the same SHA-256 as its source, including
+all scan poses and metadata. A separate section export streamed all 160,838
+valid points through the writer into one world-coordinate E57 scan in 3.20
+seconds with 25,304 KiB peak RSS. Exporting the original and this new E57 to
+binary PLY yielded byte-identical 160,838-point files (XYZ and intensity).
+The 1,200,000-point LAS fixture exported to E57 in 5.13 seconds with 22,288
+KiB peak RSS, and the E57 reopened and exported to a 1,200,000-point PLY in
+5.00 seconds with 21,736 KiB peak RSS. Comparing that PLY with a direct LAS
+export found zero differences in XYZ or intensity across all points. This LAS
+fixture has no RGB; the E57 reader now leaves RGB absent instead of deriving a
+synthetic grey color from intensity. The writer emits RGB and intensity when
+present, but new E57 exports flatten scan stations and do not carry LAS
+classification; a same-format unedited E57 copy preserves all original bytes.
+The same 1,200,000-point LAS fixture was also exported through the native GUI's
+E57 picker and GTK save dialog. Reopening the saved E57 and comparing its PLY
+output with direct LAS-to-PLY again found zero XYZ or intensity differences.
+The native Tools ribbon offers E57 in its export picker while the 45.8-million-
+point AHN6 tile remains visible in
+[`native-e57-export-ribbon.png`](../screenshots/native-e57-export-ribbon.png).
 The AHN6 OBJ was reopened in the native GUI and its 191,104 triangles were
 rendered with the source point layer hidden. The visual result is saved as
 [`native-terrain-mesh-faces.png`](../screenshots/native-terrain-mesh-faces.png).
