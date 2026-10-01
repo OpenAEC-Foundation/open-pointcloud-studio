@@ -29,6 +29,27 @@ impl Default for SurfaceMeshConfig {
     }
 }
 
+impl SurfaceMeshConfig {
+    pub fn validate(self) -> Result<(), LoadError> {
+        if !(3..=1_000_000).contains(&self.max_vertices) {
+            return Err(LoadError::InvalidData(
+                "3D surface vertices must be 3..=1,000,000".into(),
+            ));
+        }
+        if !(3..=32).contains(&self.neighbors) {
+            return Err(LoadError::InvalidData(
+                "3D surface neighbors must be 3..=32".into(),
+            ));
+        }
+        if !self.max_edge_factor.is_finite() || self.max_edge_factor <= 0.0 {
+            return Err(LoadError::InvalidData(
+                "3D surface edge factor must be finite and positive".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy)]
 struct KdNode {
     vertex: usize,
@@ -377,13 +398,7 @@ pub fn mesh_surface_obj_where_progress(
             "source and destination must differ".into(),
         ));
     }
-    if !(3..=1_000_000).contains(&config.max_vertices)
-        || !(3..=32).contains(&config.neighbors)
-        || !config.max_edge_factor.is_finite()
-        || config.max_edge_factor <= 0.0
-    {
-        return Err(LoadError::InvalidData("invalid 3D mesh settings".into()));
-    }
+    config.validate()?;
     cloud.validate_source()?;
     // Keep a bounded surplus so occupied regions have candidates even when
     // source density varies by orders of magnitude across a scan.

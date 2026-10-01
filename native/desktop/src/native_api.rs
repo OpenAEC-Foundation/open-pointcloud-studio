@@ -19,38 +19,92 @@ const MAX_BODY_BYTES: u64 = 64 * 1024;
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum ApiCommand {
     Status,
-    Job { id: String },
-    Open { path: PathBuf },
-    Remove { index: usize },
-    SetActive { index: usize },
-    SetVisible { index: usize, visible: bool },
-    Camera { preset: String },
-    SetColor { mode: String },
-    SetClassVisible { code: u8, visible: bool },
-    SetPointSize { size: f32 },
-    SetEyeDome { enabled: bool },
-    SetEyeDomeStrength { strength: f32 },
-    SetBudget { points: u32 },
-    SetSection { min: [f64; 3], max: [f64; 3] },
+    Job {
+        id: String,
+    },
+    Open {
+        path: PathBuf,
+    },
+    Remove {
+        index: usize,
+    },
+    SetActive {
+        index: usize,
+    },
+    SetVisible {
+        index: usize,
+        visible: bool,
+    },
+    Camera {
+        preset: String,
+    },
+    SetColor {
+        mode: String,
+    },
+    SetClassVisible {
+        code: u8,
+        visible: bool,
+    },
+    SetPointSize {
+        size: f32,
+    },
+    SetEyeDome {
+        enabled: bool,
+    },
+    SetEyeDomeStrength {
+        strength: f32,
+    },
+    SetBudget {
+        points: u32,
+    },
+    SetSection {
+        min: [f64; 3],
+        max: [f64; 3],
+    },
     ClearSection,
-    SelectWorld { min: [f64; 3], max: [f64; 3] },
+    SelectWorld {
+        min: [f64; 3],
+        max: [f64; 3],
+    },
     ClearSelection,
     DeleteSelection,
     UndoDelete,
     RedoDelete,
-    Translate { offset: [f64; 3] },
-    Scale { factors: [f64; 3] },
+    Translate {
+        offset: [f64; 3],
+    },
+    Scale {
+        factors: [f64; 3],
+    },
     CancelScale,
     BuildIndex,
     CancelIndex,
-    SetAutoIndex { enabled: bool },
+    SetAutoIndex {
+        enabled: bool,
+    },
+    SetSurfaceSettings {
+        max_vertices: usize,
+        neighbors: usize,
+        edge_factor: f64,
+    },
     ResetTransform,
-    Mesh { mode: String, path: PathBuf },
+    Mesh {
+        mode: String,
+        path: PathBuf,
+    },
     CancelMesh,
-    Export { path: PathBuf },
-    ExportSection { path: PathBuf },
-    ExportSelection { path: PathBuf },
-    ExportMinusSelection { path: PathBuf },
+    Export {
+        path: PathBuf,
+    },
+    ExportSection {
+        path: PathBuf,
+    },
+    ExportSelection {
+        path: PathBuf,
+    },
+    ExportMinusSelection {
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug)]

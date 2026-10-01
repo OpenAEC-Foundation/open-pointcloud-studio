@@ -523,3 +523,15 @@ Raising neighbor count from 12 to 16, 24 or 32 increased faces to 191,635,
 205,331. The default remains 12 neighbors and edge factor 4. The headless
 `--surface` command now accepts `--max-vertices`, `--neighbors` and
 `--edge-factor` for further controlled tests.
+
+The native Tools-tab Properties panel was then exercised with a colored
+50,000-point XYZ fixture extracted from that AHN6 surface sample. Its
+Max vertices, Neighbors and Edge factor fields displayed `25000`, `12` and
+`4` in
+[`native-surface-settings-tools-25k.png`](../screenshots/native-surface-settings-tools-25k.png).
+The typed native API rejected a zero vertex limit without changing the
+settings, then accepted 25,000. Starting `surface` meshing in the same running
+GUI returned a job ID and completed with exactly 25,000 vertices, 25,000
+normals and 76,875 triangles from all 50,000 source points. The point layer
+was hidden while its resulting colored mesh and chosen settings were captured
+in [`native-surface-settings-25k-mesh.png`](../screenshots/native-surface-settings-25k-mesh.png).

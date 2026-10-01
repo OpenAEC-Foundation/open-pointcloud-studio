@@ -49,7 +49,7 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera, section box, auto-index setting, index and scale progress, and current status text |
+| `status` | — | Lists clouds, point counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
 | `job` | `id` | Reads an export, selection or mesh task's state and result |
 | `open` | `path` | Opens a point cloud or mesh in the running GUI |
 | `remove` | `index` | Removes a layer from the project |
@@ -75,8 +75,9 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 | `build_index` | — | Starts an octree build for the active unindexed cloud |
 | `cancel_index` | — | Cancels a running octree build without publishing a partial index |
 | `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
+| `set_surface_settings` | `max_vertices`, `neighbors`, `edge_factor` | Sets the native GUI's 3D surface reconstruction limits atomically: 3–1,000,000 vertices, 3–32 neighbors and a finite positive edge factor |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
-| `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path; returns a job ID |
+| `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path; surface mode uses the current 3D surface settings and returns a job ID |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |

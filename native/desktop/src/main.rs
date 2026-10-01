@@ -33,7 +33,7 @@ use iced::widget::{
 use iced::{Color, Element, Fill, Font, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 use pointcloud_core::{
     BagBounds, BagLod, Bounds, ExportFormat, IndexConfig, IndexProgress, IndexStage, IndexedPoint,
-    MeshGeometry, OctreeIndex, Point, PointCloud,
+    MeshGeometry, OctreeIndex, Point, PointCloud, SurfaceMeshConfig,
 };
 use selection::{
     pick_full_transformed, pick_indexed_transformed, select_full, select_world, ClassFilter,
@@ -747,6 +747,16 @@ struct MeshJob {
     api_job_id: Option<String>,
 }
 
+struct MeshStart {
+    mode: MeshMode,
+    surface_config: SurfaceMeshConfig,
+    cloud: Arc<PointCloud>,
+    deleted: Option<Arc<DeletionMask>>,
+    transform: CloudTransform,
+    path: PathBuf,
+    api_job_id: Option<String>,
+}
+
 impl MeshJob {
     fn progress_value(&self) -> Value {
         let progress = self.control.snapshot();
@@ -885,9 +895,11 @@ enum Message {
         percent: u8,
         result: Result<Arc<SelectionMask>, String>,
     },
+    SurfaceSetting(usize, String),
     MeshRequest(MeshMode),
     MeshPathChosen(
         MeshMode,
+        SurfaceMeshConfig,
         Arc<PointCloud>,
         Option<Arc<DeletionMask>>,
         Option<PathBuf>,
@@ -1031,6 +1043,7 @@ struct Studio {
     decimation_stride: u64,
     thin_percent: u8,
     thin_pending: bool,
+    surface_settings: [String; 3],
     translate_x: String,
     translate_y: String,
     translate_z: String,
@@ -1189,6 +1202,7 @@ impl CloudEntry {
 
 impl Default for Studio {
     fn default() -> Self {
+        let surface = SurfaceMeshConfig::default();
         Self {
             api_receiver: None,
             api_handle: None,
@@ -1203,6 +1217,11 @@ impl Default for Studio {
             decimation_stride: 10,
             thin_percent: 50,
             thin_pending: false,
+            surface_settings: [
+                surface.max_vertices.to_string(),
+                surface.neighbors.to_string(),
+                surface.max_edge_factor.to_string(),
+            ],
             translate_x: "0".into(),
             translate_y: "0".into(),
             translate_z: "0".into(),
@@ -1281,6 +1300,36 @@ impl Default for Studio {
 }
 
 impl Studio {
+    fn surface_mesh_config(&self) -> Result<SurfaceMeshConfig, String> {
+        let max_vertices = self.surface_settings[0]
+            .trim()
+            .parse()
+            .map_err(|_| "3D surface vertices must be a whole number".to_string())?;
+        let neighbors = self.surface_settings[1]
+            .trim()
+            .parse()
+            .map_err(|_| "3D surface neighbors must be a whole number".to_string())?;
+        let max_edge_factor = self.surface_settings[2]
+            .trim()
+            .parse()
+            .map_err(|_| "3D surface edge factor must be a number".to_string())?;
+        let config = SurfaceMeshConfig {
+            max_vertices,
+            neighbors,
+            max_edge_factor,
+        };
+        config.validate().map_err(|error| error.to_string())?;
+        Ok(config)
+    }
+
+    fn set_surface_mesh_config(&mut self, config: SurfaceMeshConfig) {
+        self.surface_settings = [
+            config.max_vertices.to_string(),
+            config.neighbors.to_string(),
+            config.max_edge_factor.to_string(),
+        ];
+    }
+
     fn handle_api(&mut self, request: native_api::ApiRequest) -> Task<Message> {
         use native_api::ApiCommand;
 
@@ -1327,6 +1376,11 @@ impl Studio {
                         "point_size": self.point_size,
                         "budget": self.budget,
                         "auto_index": self.auto_index,
+                        "surface_settings": {
+                            "max_vertices": self.surface_settings[0],
+                            "neighbors": self.surface_settings[1],
+                            "edge_factor": self.surface_settings[2],
+                        },
                         "mesh": self.mesh_job.as_ref().map(MeshJob::progress_value),
                         "index_progress": self.index_progress.as_ref().and_then(|value| value.lock().ok().map(|progress| json!({
                             "stage": match progress.stage {
@@ -1723,6 +1777,34 @@ impl Studio {
                 let task = self.update(Message::SetAutoIndex(enabled));
                 (json!({"ok": true, "auto_index": self.auto_index}), task)
             }
+            ApiCommand::SetSurfaceSettings {
+                max_vertices,
+                neighbors,
+                edge_factor,
+            } => {
+                let config = SurfaceMeshConfig {
+                    max_vertices,
+                    neighbors,
+                    max_edge_factor: edge_factor,
+                };
+                match config.validate() {
+                    Ok(()) => {
+                        self.set_surface_mesh_config(config);
+                        (
+                            json!({"ok": true, "surface_settings": {
+                                "max_vertices": max_vertices,
+                                "neighbors": neighbors,
+                                "edge_factor": edge_factor,
+                            }}),
+                            Task::none(),
+                        )
+                    }
+                    Err(error) => (
+                        json!({"ok": false, "error": error.to_string()}),
+                        Task::none(),
+                    ),
+                }
+            }
             ApiCommand::ResetTransform => {
                 if self.active.is_none() {
                     (
@@ -1740,6 +1822,11 @@ impl Studio {
                     "surface" | "3d" => Some(MeshMode::Surface),
                     _ => None,
                 };
+                let config = if matches!(mode, Some(MeshMode::Surface)) {
+                    self.surface_mesh_config()
+                } else {
+                    Ok(SurfaceMeshConfig::default())
+                };
                 if self.mesh_dialog_pending || self.mesh_job.is_some() {
                     (
                         json!({"ok": false, "error": "a mesh task is already open or running"}),
@@ -1754,7 +1841,10 @@ impl Studio {
                         json!({"ok": false, "error": "mesh requires an absolute .obj destination"}),
                         Task::none(),
                     )
+                } else if let Err(error) = &config {
+                    (json!({"ok": false, "error": error}), Task::none())
                 } else if let Some(mode) = mode {
+                    let config = config.expect("validated surface settings");
                     if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
                         let cloud = Arc::clone(&entry.cloud);
                         let deleted = entry.deleted.as_ref().map(Arc::clone);
@@ -1762,14 +1852,15 @@ impl Studio {
                         let id = self.record_api_job(json!({
                             "state": "running", "operation": "mesh", "mode": mode.label(), "path": path
                         }));
-                        let task = self.start_mesh_job(
+                        let task = self.start_mesh_job(MeshStart {
                             mode,
+                            surface_config: config,
                             cloud,
                             deleted,
                             transform,
-                            path.clone(),
-                            Some(id.clone()),
-                        );
+                            path: path.clone(),
+                            api_job_id: Some(id.clone()),
+                        });
                         (
                             json!({"ok": true, "accepted": true, "job_id": id, "path": path}),
                             task,
@@ -2102,15 +2193,16 @@ impl Studio {
         self.schedule_detail()
     }
 
-    fn start_mesh_job(
-        &mut self,
-        mode: MeshMode,
-        cloud: Arc<PointCloud>,
-        deleted: Option<Arc<DeletionMask>>,
-        transform: CloudTransform,
-        path: PathBuf,
-        api_job_id: Option<String>,
-    ) -> Task<Message> {
+    fn start_mesh_job(&mut self, request: MeshStart) -> Task<Message> {
+        let MeshStart {
+            mode,
+            surface_config,
+            cloud,
+            deleted,
+            transform,
+            path,
+            api_job_id,
+        } = request;
         let remaining = cloud.total_points - deleted.as_ref().map_or(0, |mask| mask.count);
         let control = Arc::new(MeshControl::new(cloud.total_points));
         self.mesh_job = Some(MeshJob {
@@ -2140,7 +2232,7 @@ impl Studio {
                         MeshMode::Surface => pointcloud_core::mesh_surface_obj_where_progress(
                             &cloud,
                             &path,
-                            pointcloud_core::SurfaceMeshConfig::default(),
+                            surface_config,
                             |ordinal, _| {
                                 deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
                             },
@@ -2574,11 +2666,27 @@ impl Studio {
                     Err(error) => self.status = format!("Section export failed: {error}"),
                 }
             }
+            Message::SurfaceSetting(index, value) => {
+                if let Some(field) = self.surface_settings.get_mut(index) {
+                    *field = value;
+                }
+            }
             Message::MeshRequest(mode) => {
                 if self.mesh_dialog_pending || self.mesh_job.is_some() {
                     self.status = "A mesh task is already open or running".into();
                     return Task::none();
                 }
+                let config = if matches!(mode, MeshMode::Surface) {
+                    match self.surface_mesh_config() {
+                        Ok(config) => config,
+                        Err(error) => {
+                            self.status = error;
+                            return Task::none();
+                        }
+                    }
+                } else {
+                    SurfaceMeshConfig::default()
+                };
                 if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
                     let stem = entry
                         .cloud
@@ -2613,6 +2721,7 @@ impl Studio {
                         move |path| {
                             Message::MeshPathChosen(
                                 mode,
+                                config,
                                 Arc::clone(&cloud),
                                 deleted.as_ref().map(Arc::clone),
                                 path,
@@ -2621,7 +2730,7 @@ impl Studio {
                     );
                 }
             }
-            Message::MeshPathChosen(mode, cloud, deleted, Some(path)) => {
+            Message::MeshPathChosen(mode, config, cloud, deleted, Some(path)) => {
                 self.mesh_dialog_pending = false;
                 if self.mesh_job.is_some() {
                     self.status = "A mesh task is already running".into();
@@ -2636,9 +2745,17 @@ impl Studio {
                     self.status = "Mesh source is no longer open".into();
                     return Task::none();
                 };
-                return self.start_mesh_job(mode, cloud, deleted, transform, path, None);
+                return self.start_mesh_job(MeshStart {
+                    mode,
+                    surface_config: config,
+                    cloud,
+                    deleted,
+                    transform,
+                    path,
+                    api_job_id: None,
+                });
             }
-            Message::MeshPathChosen(_, _, _, None) => {
+            Message::MeshPathChosen(_, _, _, _, None) => {
                 self.mesh_dialog_pending = false;
                 self.status = "Mesh save cancelled".into();
             }
@@ -5735,10 +5852,32 @@ impl Studio {
             opencad_properties::property_row("View sample", view_points.to_string()),
             opencad_properties::property_row("Indexed", if indexed { "Yes" } else { "No" }.into()),
             opencad_properties::property_row("Selected", selected_points.to_string()),
-            opencad_properties::section_header("Geometry"),
         ]
         .spacing(0)
         .width(270);
+        if self.ribbon_tab == RibbonTab::Tools {
+            properties = properties
+                .push(opencad_properties::section_header("3D surface settings"))
+                .push(opencad_properties::property_input(
+                    "Max vertices",
+                    "50000",
+                    &self.surface_settings[0],
+                    |value| Message::SurfaceSetting(0, value),
+                ))
+                .push(opencad_properties::property_input(
+                    "Neighbors",
+                    "12",
+                    &self.surface_settings[1],
+                    |value| Message::SurfaceSetting(1, value),
+                ))
+                .push(opencad_properties::property_input(
+                    "Edge factor",
+                    "4",
+                    &self.surface_settings[2],
+                    |value| Message::SurfaceSetting(2, value),
+                ));
+        }
+        properties = properties.push(opencad_properties::section_header("Geometry"));
         if let Some(progress) = self
             .index_progress
             .as_ref()
@@ -7689,6 +7828,34 @@ impl PointViewport<'_> {
             },
         };
         Color::from_rgb8(rgb[0], rgb[1], rgb[2])
+    }
+}
+
+#[cfg(test)]
+mod surface_settings_tests {
+    use super::*;
+
+    #[test]
+    fn ui_surface_settings_validate_before_meshing() {
+        let mut studio = Studio::default();
+        let defaults = studio.surface_mesh_config().unwrap();
+        assert_eq!(defaults.max_vertices, 50_000);
+        assert_eq!(defaults.neighbors, 12);
+        assert_eq!(defaults.max_edge_factor, 4.0);
+
+        let _ = studio.update(Message::SurfaceSetting(0, "25000".into()));
+        let _ = studio.update(Message::SurfaceSetting(1, "16".into()));
+        let _ = studio.update(Message::SurfaceSetting(2, "5.5".into()));
+        let chosen = studio.surface_mesh_config().unwrap();
+        assert_eq!(chosen.max_vertices, 25_000);
+        assert_eq!(chosen.neighbors, 16);
+        assert_eq!(chosen.max_edge_factor, 5.5);
+
+        let _ = studio.update(Message::SurfaceSetting(1, "33".into()));
+        assert!(studio.surface_mesh_config().is_err());
+        let _ = studio.update(Message::SurfaceSetting(1, "12".into()));
+        let _ = studio.update(Message::SurfaceSetting(2, "NaN".into()));
+        assert!(studio.surface_mesh_config().is_err());
     }
 }
 
