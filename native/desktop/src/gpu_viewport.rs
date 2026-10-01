@@ -896,6 +896,7 @@ mod tests {
         let cloud = Arc::new(pointcloud_core::open(&source, 4).unwrap());
         let mut studio = Studio::default();
         studio.clouds.push(CloudEntry {
+            load_identity: Arc::clone(&cloud),
             cloud,
             transform: CloudTransform::default(),
             centroid_cache: None,

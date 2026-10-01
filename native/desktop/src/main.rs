@@ -1054,7 +1054,7 @@ enum Message {
     FilesChosen(Option<Vec<PathBuf>>),
     Loaded(Result<Arc<PointCloud>, String>),
     MeshLoaded(Arc<PointCloud>, Result<Option<Arc<MeshGeometry>>, String>),
-    Refined(PathBuf, Result<Arc<PointCloud>, String>),
+    Refined(Arc<PointCloud>, Result<Arc<PointCloud>, String>),
     Export,
     ExportSection,
     SectionExportPathChosen(
@@ -1311,6 +1311,9 @@ struct Studio {
 
 struct CloudEntry {
     cloud: Arc<PointCloud>,
+    /// Stable identity for asynchronous work started before a LAS preview
+    /// replaces the initial header-only cloud.
+    load_identity: Arc<PointCloud>,
     transform: CloudTransform,
     centroid_cache: Option<CentroidCache>,
     mesh: Option<Arc<MeshGeometry>>,
@@ -1462,6 +1465,10 @@ struct EditBatch {
 }
 
 impl CloudEntry {
+    fn matches_source(&self, source: &Arc<PointCloud>) -> bool {
+        Arc::ptr_eq(&self.cloud, source) || Arc::ptr_eq(&self.load_identity, source)
+    }
+
     fn view_len(&self) -> usize {
         self.detail_points
             .as_ref()
@@ -2874,6 +2881,7 @@ impl Studio {
                     let header_cloud = Arc::new(header_cloud);
                     self.clouds.push(CloudEntry {
                         cloud: Arc::clone(&header_cloud),
+                        load_identity: Arc::clone(&header_cloud),
                         transform: CloudTransform::default(),
                         centroid_cache: None,
                         mesh: None,
@@ -2893,7 +2901,7 @@ impl Studio {
                         self.section_reference_bounds = combined_bounds(&self.clouds);
                         self.sync_section_coordinate_inputs();
                     }
-                    let identity = path.clone();
+                    let identity = Arc::clone(&header_cloud);
                     let preview_task = Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
@@ -2904,7 +2912,7 @@ impl Studio {
                             .map(Arc::new)
                             .map_err(|error| error.to_string())
                         },
-                        move |result| Message::Refined(identity.clone(), result),
+                        move |result| Message::Refined(Arc::clone(&identity), result),
                     );
                     return Task::batch([cached_index_task(header_cloud), preview_task]);
                 }
@@ -3173,6 +3181,7 @@ impl Studio {
                     );
                     self.clouds.push(CloudEntry {
                         bag_source: is_bag3d_obj(&cloud.path),
+                        load_identity: Arc::clone(&cloud),
                         cloud,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
@@ -3242,11 +3251,11 @@ impl Studio {
                     }
                 }
             }
-            Message::Refined(path, result) => {
+            Message::Refined(source, result) => {
                 if let Some(entry) = self
                     .clouds
                     .iter_mut()
-                    .find(|entry| entry.cloud.path == path)
+                    .find(|entry| entry.matches_source(&source))
                 {
                     match result {
                         Ok(cloud) => {
@@ -3256,7 +3265,7 @@ impl Studio {
                             self.status = format!(
                                 "Ready: {} points from {}",
                                 format_count(count),
-                                path.display()
+                                source.path.display()
                             );
                             return if indexed {
                                 self.schedule_detail()
@@ -3522,7 +3531,7 @@ impl Studio {
                         if let Some(entry) = self
                             .clouds
                             .iter_mut()
-                            .find(|entry| entry.cloud.same_source_revision(&source))
+                            .find(|entry| entry.matches_source(&source))
                         {
                             entry.mesh = Some(mesh);
                             self.status = format!(
@@ -4031,7 +4040,7 @@ impl Studio {
                     if let Some(entry) = self
                         .clouds
                         .iter_mut()
-                        .find(|entry| entry.cloud.same_source_revision(source))
+                        .find(|entry| entry.matches_source(source))
                     {
                         if let Some(deleted) = entry.deleted.as_mut() {
                             match Arc::make_mut(deleted).undo(selection) {
@@ -4058,7 +4067,7 @@ impl Studio {
                     if let Some(entry) = self
                         .clouds
                         .iter_mut()
-                        .find(|entry| entry.cloud.same_source_revision(source))
+                        .find(|entry| entry.matches_source(source))
                     {
                         if let Some(deleted) = entry.deleted.as_mut() {
                             match Arc::make_mut(deleted).apply(selection) {
@@ -4387,7 +4396,7 @@ impl Studio {
                     self.status = "Scale cancelled: cloud is no longer open".into();
                     return Task::none();
                 };
-                if !entry.cloud.same_source_revision(&job.source)
+                if !entry.matches_source(&job.source)
                     || entry.transform != job.transform
                     || !same_deletion_mask(entry.deleted.as_ref(), job.deleted.as_ref())
                 {
@@ -4492,7 +4501,7 @@ impl Studio {
                 if let Some(entry) = self
                     .clouds
                     .iter_mut()
-                    .find(|entry| entry.cloud.same_source_revision(&source))
+                    .find(|entry| entry.matches_source(&source))
                 {
                     entry.index_building = false;
                     match result {
@@ -4528,7 +4537,7 @@ impl Studio {
                 if let Some(entry) = self
                     .clouds
                     .iter_mut()
-                    .find(|entry| entry.cloud.same_source_revision(&source))
+                    .find(|entry| entry.matches_source(&source))
                 {
                     match result {
                         Ok(Some(index)) => {
@@ -10206,5 +10215,52 @@ mod camera_api_tests {
         assert_eq!(studio.zoom, 1.0);
         assert_eq!(studio.pan, [0.0, 0.0]);
         assert_eq!(studio.view_label, "ISOMETRIC");
+    }
+}
+
+#[cfg(test)]
+mod duplicate_layer_tests {
+    use super::*;
+
+    #[test]
+    fn background_results_update_their_own_copy_of_a_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("same.xyz");
+        std::fs::write(&path, "0 0 0\n1 0 0\n2 0 0\n3 0 0\n").unwrap();
+        let first = Arc::new(pointcloud_core::open(&path, 2).unwrap());
+        let second = Arc::new(pointcloud_core::open(&path, 2).unwrap());
+        let refined = Arc::new(pointcloud_core::open(&path, 4).unwrap());
+        std::fs::create_dir_all(directory.path().join("index")).unwrap();
+        let index = Arc::new(
+            OctreeIndex::build(
+                &first,
+                IndexConfig {
+                    scratch_dir: Some(directory.path().join("index")),
+                    ..IndexConfig::default()
+                },
+            )
+            .unwrap(),
+        );
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&first))));
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&second))));
+        assert_eq!(studio.clouds.len(), 2);
+
+        let _ = studio.update(Message::Refined(
+            Arc::clone(&first),
+            Ok(Arc::clone(&refined)),
+        ));
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &refined));
+        assert!(Arc::ptr_eq(&studio.clouds[1].cloud, &second));
+
+        let _ = studio.update(Message::CachedIndexReady(
+            first,
+            Ok(Some(Arc::clone(&index))),
+        ));
+        assert!(studio.clouds[0].index.is_some());
+        assert!(studio.clouds[1].index.is_none());
+
+        let _ = studio.update(Message::CachedIndexReady(second, Ok(Some(index))));
+        assert!(studio.clouds[1].index.is_some());
     }
 }

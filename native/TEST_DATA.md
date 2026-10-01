@@ -58,6 +58,13 @@ two XYZ exports contained 150,258 and 1,049,742 lines respectively. All
 1,200,000 output points were on the expected side of the selection boundary;
 their counts sum to the complete source. An export request without an active
 selection was rejected before creating an output file.
+In a later native dev build, that 1,200,000-point LAS was opened twice as
+separate layers. Both received a 100,000-point preview and their own cached
+index. With the first copy hidden, a world-box selection picked all 1,200,000
+points in the second copy only. Delete, Undo and Redo changed only that copy;
+the first kept zero selected and deleted points throughout. The
+[two-layer screenshot](../screenshots/native-duplicate-las-layer-selection.png)
+shows the independent selection after Undo.
 
 On 1 October 2026, the bounded multithreaded text writer exported a
 1,200,000-point LAS fixture to CSV in 2.54 s with 27,556 KiB peak RSS. The
