@@ -1,0 +1,634 @@
+//! Native WGPU point-sprite renderer embedded in Iced's shader widget.
+//! Survey coordinates are rebased in f64 before f32 upload to retain precision.
+
+use crate::{combined_bounds, Message, PointViewport, Projection};
+use bytemuck::{Pod, Zeroable};
+use iced::mouse;
+use iced::widget::shader::{self, Shader};
+use iced::Rectangle;
+use iced_wgpu::primitive::{Primitive, Storage};
+use iced_wgpu::wgpu;
+
+#[derive(Clone, Copy)]
+pub struct GpuViewport<'a> {
+    pub overlay: PointViewport<'a>,
+}
+
+impl<'a> GpuViewport<'a> {
+    pub fn widget(self) -> Shader<Message, Self> {
+        Shader::new(self)
+    }
+}
+
+impl shader::Program<Message> for GpuViewport<'_> {
+    type State = ();
+    type Primitive = CloudPrimitive;
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        _cursor: mouse::Cursor,
+        bounds: Rectangle,
+    ) -> Self::Primitive {
+        let mut points = Vec::new();
+        let mut mesh_vertices = Vec::new();
+        let mut mesh_indices = Vec::new();
+        let mut camera = CameraUniform::zeroed();
+        if let Some(overall_bounds) = combined_bounds(self.overlay.clouds) {
+            let projection = Projection::new(
+                overall_bounds,
+                self.overlay.yaw,
+                self.overlay.pitch,
+                self.overlay.zoom,
+                self.overlay.pan,
+                bounds.width,
+                bounds.height,
+            );
+            let center = overall_bounds.center();
+            let sampled: usize = self
+                .overlay
+                .clouds
+                .iter()
+                .filter(|entry| entry.visible)
+                .map(|entry| entry.view_len())
+                .sum();
+            let stride = sampled.div_ceil(self.overlay.budget.max(1)).max(1);
+            points.reserve(sampled.div_ceil(stride));
+            for record in self
+                .overlay
+                .clouds
+                .iter()
+                .filter(|entry| entry.visible)
+                .flat_map(|entry| {
+                    entry
+                        .view_records()
+                        .filter(move |record| entry.record_visible(*record))
+                })
+                .step_by(stride)
+            {
+                let point = &record.point;
+                if !self.overlay.accepts(point) {
+                    continue;
+                }
+                let color = self.overlay.color(point, overall_bounds);
+                points.push(GpuPoint {
+                    relative: [
+                        (point.xyz[0] - center[0]) as f32,
+                        (point.xyz[1] - center[1]) as f32,
+                        (point.xyz[2] - center[2]) as f32,
+                        0.0,
+                    ],
+                    color: [color.r, color.g, color.b, color.a],
+                });
+            }
+            for mesh in self
+                .overlay
+                .clouds
+                .iter()
+                .filter(|entry| entry.mesh_visible)
+                .filter_map(|entry| entry.mesh.as_deref())
+            {
+                let Ok(base) = u32::try_from(mesh_vertices.len()) else {
+                    break;
+                };
+                if mesh_vertices.len() + mesh.vertices.len() > u32::MAX as usize
+                    || mesh_indices.len() + mesh.triangles.len() * 3 > u32::MAX as usize
+                {
+                    break;
+                }
+                mesh_vertices.reserve(mesh.vertices.len());
+                for xyz in &mesh.vertices {
+                    mesh_vertices.push(GpuPoint {
+                        relative: [
+                            (xyz[0] - center[0]) as f32,
+                            (xyz[1] - center[1]) as f32,
+                            (xyz[2] - center[2]) as f32,
+                            0.0,
+                        ],
+                        color: [0.56, 0.55, 0.51, 0.82],
+                    });
+                }
+                mesh_indices.reserve(mesh.triangles.len() * 3);
+                for face in &mesh.triangles {
+                    mesh_indices.extend(face.map(|index| index + base));
+                }
+            }
+            camera.right = vec4(projection.right);
+            camera.up = vec4(projection.up);
+            camera.toward = vec4(projection.toward_camera);
+            camera.projection = [
+                bounds.width,
+                bounds.height,
+                projection.scale as f32,
+                projection.distance as f32,
+            ];
+            camera.view = [
+                self.overlay.pan[0],
+                self.overlay.pan[1],
+                self.overlay.point_size,
+                1.0,
+            ];
+            camera.clip_enabled[1] = if self.overlay.eye_dome { 1.0 } else { 0.0 };
+            if let Some(section) = self.overlay.section {
+                camera.clip_min = [
+                    (section.min[0] - center[0]) as f32,
+                    (section.min[1] - center[1]) as f32,
+                    (section.min[2] - center[2]) as f32,
+                    0.0,
+                ];
+                camera.clip_max = [
+                    (section.max[0] - center[0]) as f32,
+                    (section.max[1] - center[1]) as f32,
+                    (section.max[2] - center[2]) as f32,
+                    0.0,
+                ];
+                camera.clip_enabled[0] = 1.0;
+            }
+        }
+        CloudPrimitive {
+            points,
+            mesh_vertices,
+            mesh_indices,
+            camera,
+        }
+    }
+}
+
+fn vec4(value: [f64; 3]) -> [f32; 4] {
+    [value[0] as f32, value[1] as f32, value[2] as f32, 0.0]
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct GpuPoint {
+    relative: [f32; 4],
+    color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct CameraUniform {
+    right: [f32; 4],
+    up: [f32; 4],
+    toward: [f32; 4],
+    projection: [f32; 4],
+    view: [f32; 4],
+    target: [f32; 4],
+    clip_min: [f32; 4],
+    clip_max: [f32; 4],
+    clip_enabled: [f32; 4],
+}
+
+#[derive(Debug)]
+pub struct CloudPrimitive {
+    points: Vec<GpuPoint>,
+    mesh_vertices: Vec<GpuPoint>,
+    mesh_indices: Vec<u32>,
+    camera: CameraUniform,
+}
+
+struct GpuState {
+    pipeline: wgpu::RenderPipeline,
+    mesh_pipeline: wgpu::RenderPipeline,
+    composite_pipeline: wgpu::RenderPipeline,
+    scene_layout: wgpu::BindGroupLayout,
+    scene_group: Option<wgpu::BindGroup>,
+    camera_buffer: wgpu::Buffer,
+    camera_group: wgpu::BindGroup,
+    point_buffer: wgpu::Buffer,
+    point_capacity: u64,
+    point_count: u32,
+    mesh_vertex_buffer: wgpu::Buffer,
+    mesh_vertex_capacity: u64,
+    mesh_index_buffer: wgpu::Buffer,
+    mesh_index_capacity: u64,
+    mesh_index_count: u32,
+    depth_texture: Option<wgpu::Texture>,
+    depth_view: Option<wgpu::TextureView>,
+    color_texture: Option<wgpu::Texture>,
+    color_view: Option<wgpu::TextureView>,
+    depth_size: (u32, u32),
+}
+
+impl GpuState {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let scene_format = wgpu::TextureFormat::Rgba8Unorm;
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("pointcloud sprites"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("points.wgsl").into()),
+        });
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("pointcloud camera layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pointcloud camera"),
+            size: std::mem::size_of::<CameraUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("pointcloud camera group"),
+            layout: &camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("pointcloud pipeline layout"),
+            bind_group_layouts: &[&camera_layout],
+            push_constant_ranges: &[],
+        });
+        let attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("pointcloud sprite pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<GpuPoint>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &attributes,
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_point",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: scene_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..wgpu::PrimitiveState::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("terrain mesh pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_mesh",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<GpuPoint>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &attributes,
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: scene_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..wgpu::PrimitiveState::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("pointcloud scene textures layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("pointcloud eye-dome layout"),
+            bind_group_layouts: &[&camera_layout, &scene_layout],
+            push_constant_ranges: &[],
+        });
+        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("pointcloud eye-dome pipeline"),
+            layout: Some(&composite_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_composite",
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_composite",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let point_capacity = std::mem::size_of::<GpuPoint>() as u64;
+        let point_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pointcloud points"),
+            size: point_capacity,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mesh_vertex_capacity = std::mem::size_of::<GpuPoint>() as u64;
+        let mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("terrain mesh vertices"),
+            size: mesh_vertex_capacity,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mesh_index_capacity = std::mem::size_of::<u32>() as u64;
+        let mesh_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("terrain mesh indices"),
+            size: mesh_index_capacity,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            pipeline,
+            mesh_pipeline,
+            composite_pipeline,
+            scene_layout,
+            scene_group: None,
+            camera_buffer,
+            camera_group,
+            point_buffer,
+            point_capacity,
+            point_count: 0,
+            mesh_vertex_buffer,
+            mesh_vertex_capacity,
+            mesh_index_buffer,
+            mesh_index_capacity,
+            mesh_index_count: 0,
+            depth_texture: None,
+            depth_view: None,
+            color_texture: None,
+            color_view: None,
+            depth_size: (0, 0),
+        }
+    }
+
+    fn resize_depth(&mut self, device: &wgpu::Device, size: (u32, u32)) {
+        if self.depth_size == size {
+            return;
+        }
+        let color_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pointcloud scene color"),
+            size: wgpu::Extent3d {
+                width: size.0.max(1),
+                height: size.1.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pointcloud depth"),
+            size: wgpu::Extent3d {
+                width: size.0.max(1),
+                height: size.1.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth24Plus,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let scene_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("pointcloud scene textures"),
+            layout: &self.scene_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+            ],
+        });
+        self.color_texture = Some(color_texture);
+        self.color_view = Some(color_view);
+        self.depth_texture = Some(texture);
+        self.depth_view = Some(view);
+        self.scene_group = Some(scene_group);
+        self.depth_size = size;
+    }
+}
+
+impl Primitive for CloudPrimitive {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        storage: &mut Storage,
+        bounds: &Rectangle,
+        viewport: &shader::Viewport,
+    ) {
+        if !storage.has::<GpuState>() {
+            storage.store(GpuState::new(device, format));
+        }
+        let state = storage.get_mut::<GpuState>().expect("pointcloud GPU state");
+        let byte_count = (self.points.len() * std::mem::size_of::<GpuPoint>()) as u64;
+        if byte_count > state.point_capacity {
+            state.point_capacity = byte_count.next_power_of_two();
+            state.point_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("pointcloud points"),
+                size: state.point_capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        if !self.points.is_empty() {
+            queue.write_buffer(&state.point_buffer, 0, bytemuck::cast_slice(&self.points));
+        }
+        state.point_count = self.points.len() as u32;
+        let vertex_bytes = (self.mesh_vertices.len() * std::mem::size_of::<GpuPoint>()) as u64;
+        if vertex_bytes > state.mesh_vertex_capacity {
+            state.mesh_vertex_capacity = vertex_bytes.next_power_of_two();
+            state.mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("terrain mesh vertices"),
+                size: state.mesh_vertex_capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        if !self.mesh_vertices.is_empty() {
+            queue.write_buffer(
+                &state.mesh_vertex_buffer,
+                0,
+                bytemuck::cast_slice(&self.mesh_vertices),
+            );
+        }
+        let index_bytes = (self.mesh_indices.len() * std::mem::size_of::<u32>()) as u64;
+        if index_bytes > state.mesh_index_capacity {
+            state.mesh_index_capacity = index_bytes.next_power_of_two();
+            state.mesh_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("terrain mesh indices"),
+                size: state.mesh_index_capacity,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        if !self.mesh_indices.is_empty() {
+            queue.write_buffer(
+                &state.mesh_index_buffer,
+                0,
+                bytemuck::cast_slice(&self.mesh_indices),
+            );
+        }
+        state.mesh_index_count = self.mesh_indices.len() as u32;
+        let size = viewport.physical_size();
+        state.resize_depth(device, (size.width, size.height));
+        let mut camera = self.camera;
+        camera.view[3] = viewport.scale_factor() as f32;
+        camera.target = [bounds.x, bounds.y, size.width as f32, size.height as f32];
+        queue.write_buffer(&state.camera_buffer, 0, bytemuck::bytes_of(&camera));
+    }
+
+    fn render(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        storage: &Storage,
+        target: &wgpu::TextureView,
+        clip_bounds: &Rectangle<u32>,
+    ) {
+        let state = storage.get::<GpuState>().expect("pointcloud GPU state");
+        if (state.point_count == 0 && state.mesh_index_count == 0)
+            || clip_bounds.width == 0
+            || clip_bounds.height == 0
+        {
+            return;
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("pointcloud scene pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: state.color_view.as_ref().expect("pointcloud color view"),
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: state.depth_view.as_ref().expect("pointcloud depth view"),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_scissor_rect(
+                clip_bounds.x,
+                clip_bounds.y,
+                clip_bounds.width,
+                clip_bounds.height,
+            );
+            pass.set_bind_group(0, &state.camera_group, &[]);
+            if state.mesh_index_count > 0 {
+                pass.set_pipeline(&state.mesh_pipeline);
+                pass.set_vertex_buffer(0, state.mesh_vertex_buffer.slice(..));
+                pass.set_index_buffer(state.mesh_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..state.mesh_index_count, 0, 0..1);
+            }
+            if state.point_count > 0 {
+                pass.set_pipeline(&state.pipeline);
+                pass.set_vertex_buffer(0, state.point_buffer.slice(..));
+                pass.draw(0..6, 0..state.point_count);
+            }
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("pointcloud eye-dome pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_scissor_rect(
+            clip_bounds.x,
+            clip_bounds.y,
+            clip_bounds.width,
+            clip_bounds.height,
+        );
+        pass.set_pipeline(&state.composite_pipeline);
+        pass.set_bind_group(0, &state.camera_group, &[]);
+        pass.set_bind_group(
+            1,
+            state.scene_group.as_ref().expect("pointcloud scene group"),
+            &[],
+        );
+        pass.draw(0..3, 0..1);
+    }
+}

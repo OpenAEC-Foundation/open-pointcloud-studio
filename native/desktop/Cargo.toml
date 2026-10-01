@@ -1,0 +1,19 @@
+[package]
+name = "open-pointcloud-studio-native"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-only"
+
+[dependencies]
+pointcloud-core = { path = "../core" }
+iced = { version = "0.13.1", features = ["canvas", "image", "svg", "tokio"] }
+iced_wgpu = "0.13.5"
+bytemuck = { version = "1", features = ["derive"] }
+rfd = "0.15"
+tokio = { version = "1", features = ["rt"] }
+open = "5.3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+image = { version = "0.24", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+tempfile = "3"

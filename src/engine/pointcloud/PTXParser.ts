@@ -1,5 +1,5 @@
 /**
- * Browser-side PTX file parser (Leica structured scan format).
+ * Browser-side PTX file parser (structured scan format).
  *
  * PTX files contain one or more scans, each with a header:
  *   columns

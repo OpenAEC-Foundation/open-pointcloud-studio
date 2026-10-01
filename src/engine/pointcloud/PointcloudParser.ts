@@ -5,7 +5,7 @@
  * Supported formats:
  *   .las  — ASPRS LAS (uncompressed)
  *   .laz  — ASPRS LAZ (compressed, via laz-perf WASM)
- *   .pts  — Leica PTS (text)
+ *   .pts  — PTS (text)
  *   .ply  — Stanford PLY (ASCII + binary LE)
  *   .xyz  — XYZ text
  *   .asc  — ASCII point cloud (same as XYZ)
@@ -13,7 +13,7 @@
  *   .csv  — Comma-separated (same as XYZ)
  *   .obj  — Wavefront OBJ mesh/points
  *   .pcd  — Point Cloud Data (PCL/ROS)
- *   .ptx  — Leica PTX structured scan
+ *   .ptx  — PTX structured scan
  *   .off  — Object File Format
  *   .stl  — Stereolithography (ASCII + binary)
  *   .dxf  — AutoCAD Drawing Exchange Format

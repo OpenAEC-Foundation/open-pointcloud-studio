@@ -153,11 +153,11 @@ export function exportToXYZ(parsed: ParsedPointcloud): string {
 }
 
 // ============================================================================
-// PTS Export (Leica format)
+// PTS Export (text format)
 // ============================================================================
 
 /**
- * Export a pointcloud to PTS (Leica) text format.
+ * Export a pointcloud to PTS text format.
  * First line: point count
  * Format: X Y Z intensity R G B (one point per line)
  *

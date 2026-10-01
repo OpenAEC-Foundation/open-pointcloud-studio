@@ -1,7 +1,7 @@
 /**
  * Browser-side PTS file parser.
  *
- * PTS (Leica) is a text-based format. Each line contains space-separated values:
+ * PTS is a text-based format. Each line contains space-separated values:
  *   X Y Z [Intensity] [R G B]
  *
  * The first line may contain the point count.

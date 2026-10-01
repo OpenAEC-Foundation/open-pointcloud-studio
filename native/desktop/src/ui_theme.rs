@@ -1,0 +1,186 @@
+//! Native OpenAEC palettes. Values follow the local OpenAEC style book's
+//! `project-templates/Tauri+React/src/themes.css` at commit dfdcd41.
+
+use std::fmt;
+use std::path::PathBuf;
+
+use iced::{Color, Theme};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiTheme {
+    Forge,
+    Light,
+    Night,
+    Blueprint,
+    Contrast,
+}
+
+impl UiTheme {
+    pub const ALL: [Self; 5] = [
+        Self::Forge,
+        Self::Light,
+        Self::Night,
+        Self::Blueprint,
+        Self::Contrast,
+    ];
+
+    pub fn iced(self) -> Theme {
+        let colors = self.colors();
+        Theme::custom(
+            self.to_string(),
+            iced::theme::Palette {
+                background: colors.shell,
+                text: colors.text,
+                primary: colors.accent,
+                success: Color::from_rgb8(74, 222, 128),
+                danger: Color::from_rgb8(248, 113, 113),
+            },
+        )
+    }
+
+    pub fn colors(self) -> UiColors {
+        match self {
+            Self::Forge => UiColors {
+                shell: Color::from_rgb8(54, 54, 62),
+                tabs: Color::from_rgb8(68, 68, 76),
+                panel: Color::from_rgb8(42, 42, 50),
+                panel_alt: Color::from_rgb8(54, 54, 62),
+                panel_title: Color::from_rgb8(63, 63, 70),
+                border: Color::from_rgb8(63, 63, 70),
+                text: Color::from_rgb8(250, 250, 249),
+                muted: Color::from_rgb8(161, 161, 170),
+                accent: Color::from_rgb8(217, 119, 6),
+                hover: Color::from_rgba8(217, 119, 6, 0.15),
+                active: Color::from_rgba8(217, 119, 6, 0.20),
+            },
+            Self::Light => UiColors {
+                shell: Color::from_rgb8(250, 250, 249),
+                tabs: Color::WHITE,
+                panel: Color::WHITE,
+                panel_alt: Color::from_rgb8(245, 245, 244),
+                panel_title: Color::from_rgb8(231, 229, 228),
+                border: Color::from_rgb8(214, 211, 209),
+                text: Color::from_rgb8(54, 54, 62),
+                muted: Color::from_rgb8(87, 83, 78),
+                accent: Color::from_rgb8(217, 119, 6),
+                hover: Color::from_rgba8(217, 119, 6, 0.10),
+                active: Color::from_rgba8(217, 119, 6, 0.15),
+            },
+            Self::Night => UiColors {
+                shell: Color::from_rgb8(39, 39, 42),
+                tabs: Color::from_rgb8(54, 54, 62),
+                panel: Color::from_rgb8(28, 25, 23),
+                panel_alt: Color::from_rgb8(39, 39, 42),
+                panel_title: Color::from_rgb8(63, 63, 70),
+                border: Color::from_rgb8(63, 63, 70),
+                text: Color::from_rgb8(250, 250, 249),
+                muted: Color::from_rgb8(161, 161, 170),
+                accent: Color::from_rgb8(217, 119, 6),
+                hover: Color::from_rgba8(217, 119, 6, 0.15),
+                active: Color::from_rgba8(217, 119, 6, 0.20),
+            },
+            Self::Blueprint => UiColors {
+                shell: Color::from_rgb8(15, 27, 45),
+                tabs: Color::from_rgb8(26, 44, 69),
+                panel: Color::from_rgb8(10, 19, 32),
+                panel_alt: Color::from_rgb8(26, 44, 69),
+                panel_title: Color::from_rgb8(37, 58, 82),
+                border: Color::from_rgb8(61, 90, 128),
+                text: Color::from_rgb8(224, 231, 255),
+                muted: Color::from_rgb8(152, 193, 217),
+                accent: Color::from_rgb8(96, 165, 250),
+                hover: Color::from_rgba8(96, 165, 250, 0.12),
+                active: Color::from_rgba8(96, 165, 250, 0.18),
+            },
+            Self::Contrast => UiColors {
+                shell: Color::BLACK,
+                tabs: Color::from_rgb8(10, 10, 10),
+                panel: Color::BLACK,
+                panel_alt: Color::from_rgb8(10, 10, 10),
+                panel_title: Color::from_rgb8(25, 25, 25),
+                border: Color::from_rgb8(255, 215, 0),
+                text: Color::WHITE,
+                muted: Color::from_rgb8(229, 229, 229),
+                accent: Color::from_rgb8(255, 215, 0),
+                hover: Color::from_rgba8(255, 215, 0, 0.25),
+                active: Color::from_rgb8(255, 215, 0),
+            },
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Forge => "forge",
+            Self::Light => "light",
+            Self::Night => "openaec",
+            Self::Blueprint => "blueprint",
+            Self::Contrast => "contrast",
+        }
+    }
+
+    fn from_key(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|theme| theme.key() == value)
+    }
+
+    pub fn load() -> Self {
+        theme_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|value| Self::from_key(value.trim()))
+            .unwrap_or(Self::Forge)
+    }
+
+    pub fn save(self) {
+        if let Some(path) = theme_path() {
+            if let Some(directory) = path.parent() {
+                if std::fs::create_dir_all(directory).is_ok() {
+                    let _ = std::fs::write(path, self.key());
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for UiTheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Forge => "Deep Forge",
+            Self::Light => "Blueprint Light",
+            Self::Night => "Night Build",
+            Self::Blueprint => "Blueprint Blue",
+            Self::Contrast => "High Contrast",
+        };
+        f.write_str(label)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct UiColors {
+    pub shell: Color,
+    pub tabs: Color,
+    pub panel: Color,
+    pub panel_alt: Color,
+    pub panel_title: Color,
+    pub border: Color,
+    pub text: Color,
+    pub muted: Color,
+    pub accent: Color,
+    pub hover: Color,
+    pub active: Color,
+}
+
+pub fn colors(theme: &Theme) -> UiColors {
+    let background = theme.palette().background;
+    UiTheme::ALL
+        .into_iter()
+        .find(|variant| variant.colors().shell == background)
+        .unwrap_or(UiTheme::Forge)
+        .colors()
+}
+
+fn theme_path() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|directory| directory.join("open-pointcloud-studio-native/theme"))
+}

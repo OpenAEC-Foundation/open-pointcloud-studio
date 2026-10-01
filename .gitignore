@@ -28,6 +28,7 @@ npm-debug.log*
 
 # Tauri
 src-tauri/target/
+classic/dist/
 
 # TypeScript
 *.tsbuildinfo

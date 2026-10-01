@@ -1,0 +1,18 @@
+[workspace]
+members = ["core", "desktop"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-3.0-or-later"
+
+# Keep large LAZ scans usable during native development builds.
+[profile.dev.package.pointcloud-core]
+opt-level = 2
+
+[profile.dev.package.las]
+opt-level = 2
+
+[profile.dev.package.laz]
+opt-level = 2
