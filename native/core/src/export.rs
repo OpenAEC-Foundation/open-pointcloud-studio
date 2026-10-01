@@ -624,6 +624,214 @@ fn export_e57_map_count(
     Ok(written_count)
 }
 
+fn update_las_record(
+    raw_point: &mut las::Point,
+    original: Point,
+    point: Point,
+    transforms: &[las::Transform; 3],
+) -> Result<(), LoadError> {
+    if !point.xyz.iter().all(|value| value.is_finite()) {
+        return Err(LoadError::InvalidData(
+            "transform produced non-finite coordinates".into(),
+        ));
+    }
+    for (axis, transform) in transforms.iter().enumerate() {
+        transform.inverse(point.xyz[axis])?;
+    }
+    [raw_point.x, raw_point.y, raw_point.z] = point.xyz;
+    if point.rgb != original.rgb {
+        raw_point.color = point.rgb.map(|rgb| {
+            las::Color::new(
+                u16::from(rgb[0]) * 257,
+                u16::from(rgb[1]) * 257,
+                u16::from(rgb[2]) * 257,
+            )
+        });
+    }
+    if point.intensity != original.intensity {
+        raw_point.intensity = point.intensity.unwrap_or(0);
+    }
+    if point.classification != original.classification {
+        let class_code = point.classification.unwrap_or(1);
+        raw_point.is_overlap = class_code == 12;
+        raw_point.classification =
+            las::point::Classification::new(if class_code == 12 { 1 } else { class_code })?;
+    }
+    Ok(())
+}
+
+/// Merge LAS/LAZ sources with matching point layouts and coordinate grids.
+/// Original LAS attributes survive unless `map` edits a common point field.
+/// The destination is published only after every source and count is verified.
+pub fn merge_las_map_count(
+    sources: &[&PointCloud],
+    destination: impl AsRef<Path>,
+    format: ExportFormat,
+    expected_count: Option<u64>,
+    map: &mut dyn FnMut(usize, u64, Point) -> Option<Point>,
+    progress: &mut dyn FnMut(u64, u64, u64) -> Result<(), LoadError>,
+) -> Result<u64, LoadError> {
+    if sources.len() < 2 || !matches!(format, ExportFormat::Las | ExportFormat::Laz) {
+        return Err(LoadError::InvalidData(
+            "merge needs at least two LAS/LAZ sources and a LAS/LAZ destination".into(),
+        ));
+    }
+    let destination = destination.as_ref();
+    let mut total_points = 0u64;
+    let mut headers = Vec::with_capacity(sources.len());
+    for source in sources {
+        if !source
+            .path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| {
+                value.eq_ignore_ascii_case("las") || value.eq_ignore_ascii_case("laz")
+            })
+        {
+            return Err(LoadError::InvalidData(
+                "merge accepts LAS and LAZ sources only".into(),
+            ));
+        }
+        if destination == source.path
+            || fs::canonicalize(destination).ok() == fs::canonicalize(&source.path).ok()
+        {
+            return Err(LoadError::InvalidData(
+                "merge destination must differ from every source".into(),
+            ));
+        }
+        source.validate_source()?;
+        total_points = total_points
+            .checked_add(source.total_points)
+            .ok_or_else(|| LoadError::InvalidData("merged point count overflows".into()))?;
+        let reader = las::Reader::from_path(&source.path)?;
+        headers.push(reader.header().clone());
+    }
+    let first = &headers[0];
+    let mut first_format = *first.point_format();
+    first_format.is_compressed = false;
+    let first_vlrs: Vec<_> = first
+        .vlrs()
+        .iter()
+        .filter(|vlr| {
+            !(vlr.record_id == 22204 && vlr.user_id.eq_ignore_ascii_case("laszip encoded"))
+        })
+        .collect();
+    for header in headers.iter().skip(1) {
+        let mut point_format = *header.point_format();
+        point_format.is_compressed = false;
+        let vlrs: Vec<_> = header
+            .vlrs()
+            .iter()
+            .filter(|vlr| {
+                !(vlr.record_id == 22204 && vlr.user_id.eq_ignore_ascii_case("laszip encoded"))
+            })
+            .collect();
+        if header.version() != first.version()
+            || point_format != first_format
+            || header.transforms() != first.transforms()
+            || vlrs != first_vlrs
+            || header.evlrs() != first.evlrs()
+        {
+            return Err(LoadError::InvalidData(
+                "LAS/LAZ sources have incompatible point formats, coordinate grids or metadata"
+                    .into(),
+            ));
+        }
+    }
+    let parent = destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let temporary = tempfile::NamedTempFile::new_in(parent)?;
+    let mut builder = las::Builder::from(first.clone());
+    builder.point_format.is_compressed = format == ExportFormat::Laz;
+    builder.generating_software = "Open Pointcloud Studio".into();
+    builder.vlrs.retain(|vlr| {
+        !(vlr.record_id == 22204 && vlr.user_id.eq_ignore_ascii_case("laszip encoded"))
+    });
+    let transforms = [
+        first.transforms().x,
+        first.transforms().y,
+        first.transforms().z,
+    ];
+    let options = las::WriterOptions::default().with_laz_parallelism(las::LazParallelism::Yes);
+    let mut writer =
+        las::Writer::with_options(temporary.reopen()?, builder.into_header()?, options)?;
+    let output_limit = if format == ExportFormat::Laz {
+        PARALLEL_LAZ_BATCH_POINTS
+    } else {
+        LAS_BATCH_POINTS
+    };
+    let mut output = Vec::with_capacity(output_limit);
+    let mut processed = 0u64;
+    let mut written = 0u64;
+    let stream_result = (|| -> Result<(), LoadError> {
+        for (source_index, source) in sources.iter().enumerate() {
+            let mut reader = las::Reader::from_path(&source.path)?;
+            let read_limit = if reader.header().point_format().is_compressed {
+                PARALLEL_LAZ_BATCH_POINTS
+            } else {
+                LAS_BATCH_POINTS
+            };
+            let mut input = Vec::with_capacity(read_limit);
+            let mut ordinal = 0u64;
+            loop {
+                input.clear();
+                if reader.read_points_into(read_limit as u64, &mut input)? == 0 {
+                    break;
+                }
+                for mut raw_point in input.drain(..) {
+                    let original = convert_las_point(&raw_point);
+                    if let Some(mapped) = map(source_index, ordinal, original) {
+                        update_las_record(&mut raw_point, original, mapped, &transforms)?;
+                        output.push(raw_point);
+                        written += 1;
+                        if output.len() == output_limit {
+                            writer.write_points(&output)?;
+                            output.clear();
+                        }
+                    }
+                    ordinal += 1;
+                    processed += 1;
+                }
+                progress(processed, total_points, written)?;
+            }
+            if ordinal != source.total_points {
+                return Err(LoadError::InvalidData(format!(
+                    "{} changed while merging",
+                    source.path.display()
+                )));
+            }
+            source.validate_source()?;
+        }
+        if !output.is_empty() {
+            writer.write_points(&output)?;
+        }
+        if expected_count.is_some_and(|expected| expected != written) {
+            return Err(LoadError::InvalidData(
+                "merged point count differs from the expected view".into(),
+            ));
+        }
+        for source in sources {
+            source.validate_source()?;
+        }
+        progress(processed, total_points, written)?;
+        Ok(())
+    })();
+    let close_result = writer.close();
+    if close_result.is_err() {
+        std::mem::forget(writer);
+    } else {
+        drop(writer);
+    }
+    stream_result?;
+    close_result?;
+    temporary
+        .persist(destination)
+        .map_err(|error| LoadError::Io(error.error))?;
+    Ok(written)
+}
+
 fn export_las_map_count(
     cloud: &PointCloud,
     destination: &Path,
@@ -716,37 +924,7 @@ fn export_las_map_count(
                     let Some(point) = map(ordinal, original) else {
                         continue;
                     };
-                    if !point.xyz.iter().all(|value| value.is_finite()) {
-                        return Err(LoadError::InvalidData(
-                            "transform produced non-finite coordinates".into(),
-                        ));
-                    }
-                    for (axis, transform) in transforms.iter().enumerate() {
-                        transform.inverse(point.xyz[axis])?;
-                    }
-                    [raw_point.x, raw_point.y, raw_point.z] = point.xyz;
-                    if point.rgb != original.rgb {
-                        raw_point.color = point.rgb.map(|rgb| {
-                            Color::new(
-                                u16::from(rgb[0]) * 257,
-                                u16::from(rgb[1]) * 257,
-                                u16::from(rgb[2]) * 257,
-                            )
-                        });
-                    }
-                    if point.intensity != original.intensity {
-                        raw_point.intensity = point.intensity.unwrap_or(0);
-                    }
-                    if point.classification != original.classification {
-                        let class_code = point.classification.unwrap_or(1);
-                        raw_point.is_overlap = class_code == 12;
-                        raw_point.classification =
-                            las::point::Classification::new(if class_code == 12 {
-                                1
-                            } else {
-                                class_code
-                            })?;
-                    }
+                    update_las_record(&mut raw_point, original, point, &transforms)?;
                     batch.push(raw_point);
                     if batch.len() == batch_limit {
                         writer.write_points(&batch)?;
@@ -1347,6 +1525,129 @@ mod tests {
         let mut expected_moved = original_point;
         expected_moved.x += 10.0;
         assert_eq!(moved_point, expected_moved);
+    }
+
+    #[test]
+    fn merged_laz_keeps_attributes_edits_and_atomic_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let make_source = |name: &str, points: &[las::Point]| {
+            let path = dir.path().join(name);
+            let mut builder = las::Builder::from((1, 4));
+            builder.point_format = las::point::Format::new(3).unwrap();
+            builder.transforms = las::Vector {
+                x: las::Transform {
+                    scale: 0.001,
+                    offset: 0.0,
+                },
+                y: las::Transform {
+                    scale: 0.001,
+                    offset: 0.0,
+                },
+                z: las::Transform {
+                    scale: 0.001,
+                    offset: 0.0,
+                },
+            };
+            builder.vlrs.push(las::Vlr {
+                user_id: "LASF_Projection".into(),
+                record_id: 34735,
+                description: "GeoKeyDirectoryTag".into(),
+                data: vec![1, 0, 1, 0],
+            });
+            let mut writer = las::Writer::new(
+                std::fs::File::create(&path).unwrap(),
+                builder.into_header().unwrap(),
+            )
+            .unwrap();
+            for point in points {
+                writer.write_point(point.clone()).unwrap();
+            }
+            writer.close().unwrap();
+            path
+        };
+        let make_point = |x: f64, time: f64| las::Point {
+            x,
+            y: 474_000.003,
+            z: 1.234,
+            return_number: 2,
+            number_of_returns: 3,
+            gps_time: Some(time),
+            color: Some(las::Color::new(12_345, 23_456, 34_567)),
+            ..las::Point::default()
+        };
+        let first_points = [make_point(207_000.001, 1.25), make_point(207_000.002, 2.5)];
+        let second_points = [make_point(208_000.001, 3.75), make_point(208_000.002, 5.0)];
+        let first = make_source("first.las", &first_points);
+        let second = make_source("second.las", &second_points);
+        let first_cloud = crate::open_las_header(&first).unwrap();
+        let second_cloud = crate::open_las_header(&second).unwrap();
+        let sources = [&first_cloud, &second_cloud];
+        let destination = dir.path().join("merged.laz");
+        let mut last_progress = (0, 0, 0);
+        let written = merge_las_map_count(
+            &sources,
+            &destination,
+            ExportFormat::Laz,
+            Some(3),
+            &mut |index, ordinal, mut point| {
+                if index == 0 && ordinal == 1 {
+                    return None;
+                }
+                if index == 1 && ordinal == 0 {
+                    point.xyz[0] += 10.0;
+                }
+                Some(point)
+            },
+            &mut |processed, total, written| {
+                last_progress = (processed, total, written);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(written, 3);
+        assert_eq!(last_progress, (4, 4, 3));
+        let mut reader = las::Reader::from_path(&destination).unwrap();
+        assert_eq!(reader.header().number_of_points(), 3);
+        assert_eq!(
+            reader.header().transforms(),
+            las::Reader::from_path(&first)
+                .unwrap()
+                .header()
+                .transforms()
+        );
+        assert!(reader
+            .header()
+            .vlrs()
+            .iter()
+            .any(|vlr| vlr.user_id == "LASF_Projection"));
+        let points = reader.points().collect::<Result<Vec<_>, _>>().unwrap();
+        let first_source_points = las::Reader::from_path(&first)
+            .unwrap()
+            .points()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let second_source_points = las::Reader::from_path(&second)
+            .unwrap()
+            .points()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(points[0], first_source_points[0]);
+        let mut moved = second_source_points[0].clone();
+        moved.x += 10.0;
+        assert_eq!(points[1], moved);
+        assert_eq!(points[2], second_source_points[1]);
+
+        fs::write(&destination, b"existing output").unwrap();
+        let cancelled = merge_las_map_count(
+            &sources,
+            &destination,
+            ExportFormat::Laz,
+            None,
+            &mut |_, _, point| Some(point),
+            &mut |_, _, _| Err(LoadError::Cancelled),
+        );
+        assert!(matches!(cancelled, Err(LoadError::Cancelled)));
+        assert_eq!(fs::read(&destination).unwrap(), b"existing output");
     }
 
     #[test]
