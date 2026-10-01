@@ -3,6 +3,16 @@
 The files themselves are deliberately kept outside the repository. Check the
 source terms before redistributing a dataset or screenshots from it.
 
+On 1 October 2026, the native GUI mesher reported reading progress on the
+45,839,678-point AHN6 tile while the viewport remained responsive. Cancelling
+after more than two million points stopped the job and preserved an existing
+OBJ destination byte for byte. The visible progress and Cancel control are
+shown in [`native-ahn-mesh-progress.png`](../screenshots/native-ahn-mesh-progress.png).
+A separate 30 × 30 XYZ grid exposed an overly strict default terrain edge
+limit; after using the median local Delaunay neighbor spacing, the same native
+API mesh command completed with 900 vertices and 1,682 triangles. The test
+for two distant scan patches still confirms that their gap is not bridged.
+
 | Dataset | Size / scale | Format | Intended test |
 | --- | --- | --- | --- |
 | [AHN6 tile `207000_474000`](https://fsn1.your-objectstorage.com/hwh-ahn/AHN6/01_LAZ/AHN6_2025_C_207000_474000.LAZ) | 485,317,717 bytes; 45,839,678 points | LAZ 1.4 | Large classified geographic scan and octree |

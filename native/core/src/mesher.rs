@@ -108,7 +108,6 @@ pub fn mesh_terrain_obj_where_progress(
     cloud.validate_source()?;
     let cells_per_side = (config.max_vertices as f64).sqrt().floor().max(2.0) as u32;
     let cell = x_span.max(y_span) / cells_per_side as f64;
-    let edge_limit_squared = (cell * config.max_edge_cells).powi(2);
     let mut cells: BTreeMap<(u32, u32), Point> = BTreeMap::new();
     let mut visited = 0u64;
     let mut source_points = 0u64;
@@ -171,6 +170,23 @@ pub fn mesh_terrain_obj_where_progress(
         })
         .collect();
     let topology = triangulate(&planar);
+    let mut nearest = vec![f64::INFINITY; planar.len()];
+    for triangle in topology.triangles.as_chunks::<3>().0 {
+        for (left, right) in [
+            (triangle[0], triangle[1]),
+            (triangle[1], triangle[2]),
+            (triangle[2], triangle[0]),
+        ] {
+            let distance =
+                (planar[left].x - planar[right].x).hypot(planar[left].y - planar[right].y);
+            nearest[left] = nearest[left].min(distance);
+            nearest[right] = nearest[right].min(distance);
+        }
+    }
+    nearest.retain(|distance| distance.is_finite());
+    nearest.sort_by(f64::total_cmp);
+    let typical_spacing = nearest.get(nearest.len() / 2).copied().unwrap_or(cell);
+    let edge_limit_squared = (cell.max(typical_spacing) * config.max_edge_cells).powi(2);
     let faces: Vec<[usize; 3]> = topology
         .triangles
         .as_chunks::<3>()
@@ -305,6 +321,24 @@ mod tests {
         .unwrap();
         assert_eq!(stats.vertices, 6);
         assert_eq!(stats.triangles, 2);
+    }
+
+    #[test]
+    fn default_settings_mesh_sparse_regular_grid() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("grid.xyz");
+        let destination = directory.path().join("grid.obj");
+        let mut points = String::new();
+        for x in 0..30 {
+            for y in 0..30 {
+                points.push_str(&format!("{x} {y} 0\n"));
+            }
+        }
+        fs::write(&source, points).unwrap();
+        let cloud = super::super::open(&source, 900).unwrap();
+        let stats = mesh_terrain_obj(&cloud, &destination, MeshConfig::default()).unwrap();
+        assert_eq!(stats.source_points, 900);
+        assert!(stats.triangles >= 1_000);
     }
 
     #[test]

@@ -4846,14 +4846,25 @@ impl Studio {
                 .push(opencad_properties::section_header("Mesh progress"))
                 .push(container(text(job.progress_text()).size(11)).padding([6, 8]))
                 .push(
-                    container(iced::widget::progress_bar(
-                        0.0..=1.0,
-                        if progress.total == 0 {
-                            0.0
-                        } else {
-                            progress.completed as f32 / progress.total as f32
-                        },
-                    ))
+                    container(
+                        iced::widget::progress_bar(
+                            0.0..=1.0,
+                            if progress.total == 0 {
+                                0.0
+                            } else {
+                                progress.completed as f32 / progress.total as f32
+                            },
+                        )
+                        .height(8)
+                        .style(|theme| {
+                            let colors = ui_theme::colors(theme);
+                            iced::widget::progress_bar::Style {
+                                background: colors.panel_alt.into(),
+                                bar: colors.accent.into(),
+                                border: iced::Border::default(),
+                            }
+                        }),
+                    )
                     .padding([2, 8])
                     .width(Fill),
                 )

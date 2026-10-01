@@ -27,6 +27,9 @@ the GUI starts loading; poll `status` for the new layer. Exports return
 `accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
 for a durable `running`, `complete` (with point count), or `failed` result.
 The newest 32 jobs remain queryable even if the GUI status line changes.
+Mesh jobs report `reading`, `reconstructing`, or `writing` with completed and
+total units. `cancel_mesh` requests cancellation; a cancelled mesh leaves an
+existing destination untouched. Only one mesh job runs at a time.
 World-box selection also returns a job ID and uses the same query. Its limits
 are inclusive source XYZ coordinates, independent of the viewport camera and
 point budget. It selects across visible layers while respecting class filters,
@@ -36,7 +39,7 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 | Command | JSON fields | Effect |
 | --- | --- | --- |
 | `status` | — | Lists clouds, point counts, selected/deleted counts, visibility, active layer, camera, section box and current status text |
-| `job` | `id` | Reads an export or selection task's state and result |
+| `job` | `id` | Reads an export, selection or mesh task's state and result |
 | `open` | `path` | Opens a point cloud or mesh in the running GUI |
 | `remove` | `index` | Removes a layer from the project |
 | `set_active` | `index` | Chooses the active layer |
@@ -55,6 +58,8 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 | `delete_selection` | — | Hides selected points in the open view; may first queue an octree build for LAZ |
 | `undo_delete` | — | Restores the latest deletion batch |
 | `redo_delete` | — | Reapplies the latest undone deletion batch |
+| `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path; returns a job ID |
+| `cancel_mesh` | — | Requests cancellation of the running mesh task |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 
