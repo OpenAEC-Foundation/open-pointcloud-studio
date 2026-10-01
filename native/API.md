@@ -44,7 +44,9 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 | `camera` | `preset` | Chooses `top`, `bottom`, `front`, `back`, `left`, `right` or `isometric` |
 | `set_color` | `mode` | Chooses `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code`, `visible` | Shows or hides one classification code in the viewport and exact selection |
-| `set_point_size` | `size` | Sets point size from 1 to 8 |
+| `set_point_size` | `size` | Sets point size from 0.1 to 20 |
+| `set_eye_dome` | `enabled` | Enables or disables the depth-based shading pass |
+| `set_eye_dome_strength` | `strength` | Sets depth-shading strength from 0 to 5; 1 is the default |
 | `set_budget` | `points` | Sets visible point budget from 1,000 to 2,000,000 |
 | `set_section` | `min`, `max` | Enables an XYZ section box using two three-number arrays inside the visible model bounds |
 | `clear_section` | — | Disables the section box |

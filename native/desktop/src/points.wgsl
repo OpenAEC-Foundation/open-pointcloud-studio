@@ -169,6 +169,6 @@ fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32
             edge += contrast * weight;
         }
     }
-    let shade = max(exp(-edge * 0.42), 0.50);
+    let shade = max(exp(-edge * 0.42 * camera.clip_enabled.z), 0.50);
     return vec4<f32>(color.rgb * shade, color.a);
 }

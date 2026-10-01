@@ -28,6 +28,8 @@ pub enum ApiCommand {
     SetColor { mode: String },
     SetClassVisible { code: u8, visible: bool },
     SetPointSize { size: f32 },
+    SetEyeDome { enabled: bool },
+    SetEyeDomeStrength { strength: f32 },
     SetBudget { points: u32 },
     SetSection { min: [f64; 3], max: [f64; 3] },
     ClearSection,

@@ -254,6 +254,7 @@ impl shader::Program<Message> for GpuViewport<'_> {
                 1.0,
             ];
             camera.clip_enabled[1] = if self.overlay.eye_dome { 1.0 } else { 0.0 };
+            camera.clip_enabled[2] = self.overlay.eye_dome_strength;
             if let Some(section) = self.overlay.section {
                 camera.clip_min = [
                     (section.min[0] - center[0]) as f32,
@@ -823,9 +824,19 @@ mod tests {
         ));
         assert_ne!(camera_moved.camera.view, display_changed.camera.view);
 
+        studio.eye_dome = true;
+        studio.eye_dome_strength = 3.0;
+        let depth_changed = draw(&studio);
+        assert!(Arc::ptr_eq(
+            &display_changed.geometry,
+            &depth_changed.geometry
+        ));
+        assert_eq!(depth_changed.camera.clip_enabled[1], 1.0);
+        assert_eq!(depth_changed.camera.clip_enabled[2], 3.0);
+
         studio.color_mode = ColorMode::Elevation;
         let recolored = draw(&studio);
-        assert!(!Arc::ptr_eq(&display_changed.geometry, &recolored.geometry));
+        assert!(!Arc::ptr_eq(&depth_changed.geometry, &recolored.geometry));
 
         studio.filter_other = false;
         let filtered = draw(&studio);

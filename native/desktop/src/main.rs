@@ -705,6 +705,7 @@ enum Message {
     ColorMode(ColorMode),
     PointSize(f32),
     SetEyeDome(bool),
+    EyeDomeStrength(f32),
     ShowScanPoses(bool),
     ExpandScanPoses(bool),
     FitScanPoses,
@@ -791,6 +792,7 @@ struct Studio {
     color_mode: ColorMode,
     point_size: f32,
     eye_dome: bool,
+    eye_dome_strength: f32,
     show_scan_poses: bool,
     expand_scan_poses: bool,
     budget: u32,
@@ -926,6 +928,7 @@ impl Default for Studio {
             color_mode: ColorMode::Rgb,
             point_size: 2.0,
             eye_dome: true,
+            eye_dome_strength: 1.0,
             show_scan_poses: true,
             expand_scan_poses: false,
             budget: 80_000,
@@ -1009,6 +1012,7 @@ impl Studio {
                             .filter(|code| !self.class_visibility.allows(Some(*code)))
                             .collect::<Vec<_>>(),
                         "eye_dome": self.eye_dome,
+                        "eye_dome_strength": self.eye_dome_strength,
                         "point_size": self.point_size,
                         "budget": self.budget,
                         "api_port": self.api_handle.as_ref().map(|handle| handle.port),
@@ -1117,14 +1121,29 @@ impl Studio {
                 (json!({"ok": true, "code": code, "visible": visible}), task)
             }
             ApiCommand::SetPointSize { size } => {
-                if !size.is_finite() || !(1.0..=8.0).contains(&size) {
+                if !size.is_finite() || !(0.1..=20.0).contains(&size) {
                     (
-                        json!({"ok": false, "error": "point size must be between 1 and 8"}),
+                        json!({"ok": false, "error": "point size must be between 0.1 and 20"}),
                         Task::none(),
                     )
                 } else {
                     let task = self.update(Message::PointSize(size));
                     (json!({"ok": true, "point_size": size}), task)
+                }
+            }
+            ApiCommand::SetEyeDome { enabled } => {
+                let task = self.update(Message::SetEyeDome(enabled));
+                (json!({"ok": true, "eye_dome": enabled}), task)
+            }
+            ApiCommand::SetEyeDomeStrength { strength } => {
+                if !strength.is_finite() || !(0.0..=5.0).contains(&strength) {
+                    (
+                        json!({"ok": false, "error": "eye-dome strength must be between 0 and 5"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::EyeDomeStrength(strength));
+                    (json!({"ok": true, "eye_dome_strength": strength}), task)
                 }
             }
             ApiCommand::SetBudget { points } => {
@@ -2774,6 +2793,7 @@ impl Studio {
             Message::ColorMode(mode) => self.color_mode = mode,
             Message::PointSize(size) => self.point_size = size,
             Message::SetEyeDome(enabled) => self.eye_dome = enabled,
+            Message::EyeDomeStrength(strength) => self.eye_dome_strength = strength,
             Message::ShowScanPoses(enabled) => self.show_scan_poses = enabled,
             Message::ExpandScanPoses(expanded) => self.expand_scan_poses = expanded,
             Message::FitScanPoses => {
@@ -3740,7 +3760,9 @@ impl Studio {
                     column![
                         row![
                             text("Size").size(11).width(43),
-                            slider(1.0..=8.0, self.point_size, Message::PointSize).width(102),
+                            slider(0.1..=20.0, self.point_size, Message::PointSize)
+                                .step(0.1_f32)
+                                .width(102),
                             text(format!("{:.1}", self.point_size)).size(11).width(32),
                         ]
                         .spacing(6)
@@ -3866,18 +3888,39 @@ impl Studio {
                     "POINT DISPLAY",
                     column![
                         text(format!("Point size  {:.1}", self.point_size)).size(12),
-                        slider(1.0..=8.0, self.point_size, Message::PointSize).width(180),
+                        slider(0.1..=20.0, self.point_size, Message::PointSize)
+                            .step(0.1_f32)
+                            .width(180),
                     ]
                     .spacing(5)
                     .into()
                 ),
                 ribbon_group(
                     "DEPTH",
-                    tool_button(
-                        "Eye-dome",
-                        Message::SetEyeDome(!self.eye_dome),
-                        self.eye_dome,
-                    )
+                    row![
+                        tool_button(
+                            "Eye-dome",
+                            Message::SetEyeDome(!self.eye_dome),
+                            self.eye_dome,
+                        ),
+                        column![
+                            text("Strength").size(11),
+                            row![
+                                slider(0.0..=5.0, self.eye_dome_strength, Message::EyeDomeStrength)
+                                    .step(0.1_f32)
+                                    .width(85),
+                                text(format!("{:.1}", self.eye_dome_strength))
+                                    .size(11)
+                                    .width(24),
+                            ]
+                            .spacing(4)
+                            .align_y(iced::Alignment::Center),
+                        ]
+                        .spacing(5),
+                    ]
+                    .spacing(7)
+                    .align_y(iced::Alignment::Center)
+                    .into()
                 ),
                 ribbon_group(
                     "SECTION BOX",
@@ -4444,6 +4487,7 @@ impl Studio {
             color_mode: self.color_mode,
             point_size: self.point_size,
             eye_dome: self.eye_dome,
+            eye_dome_strength: self.eye_dome_strength,
             show_scan_poses: self.show_scan_poses,
             budget: self.budget as usize,
             filter_ground: self.filter_ground,
@@ -4846,7 +4890,31 @@ impl Studio {
                         .style(themed_pick_list_style),
                 )
                 .padding([6, 8]),
+            )
+            .push(
+                container(
+                    checkbox("Eye-dome", self.eye_dome)
+                        .on_toggle(Message::SetEyeDome)
+                        .style(muted_checkbox_style),
+                )
+                .padding([2, 8]),
             );
+        if self.eye_dome {
+            properties = properties.push(
+                container(
+                    row![
+                        text("Strength").size(11).width(52),
+                        slider(0.0..=5.0, self.eye_dome_strength, Message::EyeDomeStrength,)
+                            .step(0.1_f32)
+                            .width(155),
+                        text(format!("{:.1}", self.eye_dome_strength)).size(11),
+                    ]
+                    .spacing(5)
+                    .align_y(iced::Alignment::Center),
+                )
+                .padding([3, 8]),
+            );
+        }
         if self.color_mode == ColorMode::Classification
             && active_cloud.is_some_and(|entry| entry.cloud.has_classification)
         {
@@ -5449,6 +5517,7 @@ struct PointViewport<'a> {
     color_mode: ColorMode,
     point_size: f32,
     eye_dome: bool,
+    eye_dome_strength: f32,
     show_scan_poses: bool,
     budget: usize,
     filter_ground: bool,

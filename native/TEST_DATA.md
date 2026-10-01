@@ -399,3 +399,13 @@ ground-hidden and scrolled Properties views are saved as
 [`all classes`](../screenshots/native-class-filter-all-ahn45m.png),
 [`without Ground`](../screenshots/native-class-filter-no-ground-ahn45m.png) and
 [`class controls`](../screenshots/native-class-filter-controls-ahn45m.png).
+
+The native WGPU eye-dome strength control was checked on the same 45.8-million-
+point AHN6 tile at an unchanged isometric camera and 250,000-point viewport
+sample. Setting strength 0 and then 5 through the native API changed 124,279
+pixels in the model-space viewport crop; the ribbon label and slider showed
+both requested values. See [`strength 0`](../screenshots/native-eye-dome-strength-0-ahn45m.png)
+and [`strength 5`](../screenshots/native-eye-dome-strength-5-ahn45m.png).
+The live development build was returned to the default strength 1 afterward.
+The expanded native point-size range also accepted 0.1 and 20, rejected 0.05,
+and was restored to 2 before the screenshots.
