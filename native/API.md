@@ -43,6 +43,7 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 | `set_visible` | `index`, `visible` | Shows or hides a point layer |
 | `camera` | `preset` | Chooses `top`, `bottom`, `front`, `back`, `left`, `right` or `isometric` |
 | `set_color` | `mode` | Chooses `rgb`, `elevation`, `intensity` or `classification` |
+| `set_class_visible` | `code`, `visible` | Shows or hides one classification code in the viewport and exact selection |
 | `set_point_size` | `size` | Sets point size from 1 to 8 |
 | `set_budget` | `points` | Sets visible point budget from 1,000 to 2,000,000 |
 | `set_section` | `min`, `max` | Enables an XYZ section box using two three-number arrays inside the visible model bounds |
@@ -57,6 +58,9 @@ intersecting octree leaves; unindexed layers stream their complete sources.
 
 The destination extension selects PLY, XYZ, PTS, CSV, LAS, LAZ or E57. Export
 is atomic and scans the complete source rather than the viewport sample.
+`status.result.hidden_classes` lists disabled numeric classification codes.
+The View ribbon's broad Ground, Vegetation, Buildings and Other groups also
+apply; a point must pass both its group and individual class switch.
 The server binds only to loopback, limits request bodies to 64 KiB, and has
 no permissive browser CORS headers. After an unclean shutdown, an old
 discovery file may remain until the next native launch; clients should check

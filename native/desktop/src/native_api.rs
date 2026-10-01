@@ -26,6 +26,7 @@ pub enum ApiCommand {
     SetVisible { index: usize, visible: bool },
     Camera { preset: String },
     SetColor { mode: String },
+    SetClassVisible { code: u8, visible: bool },
     SetPointSize { size: f32 },
     SetBudget { points: u32 },
     SetSection { min: [f64; 3], max: [f64; 3] },

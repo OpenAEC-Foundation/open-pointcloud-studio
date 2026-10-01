@@ -32,14 +32,31 @@ use pointcloud_core::{
     Point, PointCloud,
 };
 use selection::{
-    pick_full, pick_indexed, select_full, select_world, ClassFilter, DeletionMask, Projection,
-    ScreenRect, SelectionMask, SelectionSource,
+    pick_full, pick_indexed, select_full, select_world, ClassFilter, ClassVisibility, DeletionMask,
+    Projection, ScreenRect, SelectionMask, SelectionSource,
 };
 use serde_json::{json, Value};
 use ui_theme::UiTheme;
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
 const AUTO_INDEX_MIN_POINTS: u64 = 1_000_000;
+const ASPRS_CLASSIFICATIONS: &[(u8, &str)] = &[
+    (0, "Never classified"),
+    (1, "Unassigned"),
+    (2, "Ground"),
+    (3, "Low vegetation"),
+    (4, "Medium vegetation"),
+    (5, "High vegetation"),
+    (6, "Building"),
+    (7, "Low point / noise"),
+    (9, "Water"),
+    (10, "Rail"),
+    (11, "Road surface"),
+    (13, "Wire guard"),
+    (14, "Wire conductor"),
+    (15, "Transmission tower"),
+    (17, "Bridge deck"),
+];
 const BAG3D_MESH_COMMENTS: &[&str] = &[
     "© 3DBAG door tudelft3d en 3DGI · CC BY 4.0",
     "https://docs.3dbag.nl/nl/copyright/",
@@ -697,6 +714,7 @@ enum Message {
     FilterVegetation(bool),
     FilterBuildings(bool),
     FilterOther(bool),
+    FilterClass(u8, bool),
     SetSectionEnabled(bool),
     SectionMin(usize, f32),
     SectionMax(usize, f32),
@@ -780,6 +798,7 @@ struct Studio {
     filter_vegetation: bool,
     filter_buildings: bool,
     filter_other: bool,
+    class_visibility: ClassVisibility,
     section_enabled: bool,
     section_export_pending: bool,
     mesh_export_pending: bool,
@@ -914,6 +933,7 @@ impl Default for Studio {
             filter_vegetation: true,
             filter_buildings: true,
             filter_other: true,
+            class_visibility: ClassVisibility::default(),
             section_enabled: false,
             section_export_pending: false,
             mesh_export_pending: false,
@@ -985,6 +1005,9 @@ impl Studio {
                         "selected_points": self.selected_total(),
                         "selection_pending": self.selection_pending,
                         "color_mode": self.color_mode.to_string(),
+                        "hidden_classes": (0..=u8::MAX)
+                            .filter(|code| !self.class_visibility.allows(Some(*code)))
+                            .collect::<Vec<_>>(),
                         "eye_dome": self.eye_dome,
                         "point_size": self.point_size,
                         "budget": self.budget,
@@ -1088,6 +1111,10 @@ impl Studio {
                         Task::none(),
                     )
                 }
+            }
+            ApiCommand::SetClassVisible { code, visible } => {
+                let task = self.update(Message::FilterClass(code, visible));
+                (json!({"ok": true, "code": code, "visible": visible}), task)
             }
             ApiCommand::SetPointSize { size } => {
                 if !size.is_finite() || !(1.0..=8.0).contains(&size) {
@@ -1204,6 +1231,7 @@ impl Studio {
                             vegetation: self.filter_vegetation,
                             buildings: self.filter_buildings,
                             other: self.filter_other,
+                            classes: self.class_visibility,
                             section: self.section_bounds(),
                         };
                         self.selection_pending = true;
@@ -2802,10 +2830,26 @@ impl Studio {
                 self.revision += 1;
                 return self.schedule_detail();
             }
-            Message::FilterGround(value) => self.filter_ground = value,
-            Message::FilterVegetation(value) => self.filter_vegetation = value,
-            Message::FilterBuildings(value) => self.filter_buildings = value,
-            Message::FilterOther(value) => self.filter_other = value,
+            Message::FilterGround(value) => {
+                self.filter_ground = value;
+                self.revision += 1;
+            }
+            Message::FilterVegetation(value) => {
+                self.filter_vegetation = value;
+                self.revision += 1;
+            }
+            Message::FilterBuildings(value) => {
+                self.filter_buildings = value;
+                self.revision += 1;
+            }
+            Message::FilterOther(value) => {
+                self.filter_other = value;
+                self.revision += 1;
+            }
+            Message::FilterClass(code, visible) => {
+                self.class_visibility.set(code, visible);
+                self.revision += 1;
+            }
             Message::SetSectionEnabled(enabled) => {
                 if enabled && self.section_reference_bounds.is_none() {
                     self.section_reference_bounds = combined_bounds(&self.clouds);
@@ -3281,6 +3325,7 @@ impl Studio {
                     vegetation: self.filter_vegetation,
                     buildings: self.filter_buildings,
                     other: self.filter_other,
+                    classes: self.class_visibility,
                     section: self.section_bounds(),
                 };
                 let revision = self.revision;
@@ -4405,6 +4450,7 @@ impl Studio {
             filter_vegetation: self.filter_vegetation,
             filter_buildings: self.filter_buildings,
             filter_other: self.filter_other,
+            class_visibility: self.class_visibility,
             section: self.section_bounds(),
             section_reference: self.section_reference_bounds,
             yaw: self.yaw,
@@ -4792,7 +4838,7 @@ impl Studio {
                     .padding([4, 8]),
                 );
         }
-        let properties = properties
+        let mut properties = properties
             .push(opencad_properties::section_header("Display"))
             .push(
                 container(
@@ -4801,6 +4847,26 @@ impl Studio {
                 )
                 .padding([6, 8]),
             );
+        if self.color_mode == ColorMode::Classification
+            && active_cloud.is_some_and(|entry| entry.cloud.has_classification)
+        {
+            properties = properties
+                .push(opencad_properties::section_header("Class visibility"))
+                .push(container(text("View groups also apply").size(10)).padding([4, 8]));
+            for &(code, label) in ASPRS_CLASSIFICATIONS {
+                properties = properties.push(
+                    container(
+                        checkbox(
+                            format!("{code:02}  {label}"),
+                            self.class_visibility.allows(Some(code)),
+                        )
+                        .on_toggle(move |visible| Message::FilterClass(code, visible))
+                        .style(muted_checkbox_style),
+                    )
+                    .padding([2, 8]),
+                );
+            }
+        }
         let properties: Element<'_, Message> = if self.bag_panel {
             self.bag_panel_view()
         } else {
@@ -5389,6 +5455,7 @@ struct PointViewport<'a> {
     filter_vegetation: bool,
     filter_buildings: bool,
     filter_other: bool,
+    class_visibility: ClassVisibility,
     section: Option<Bounds>,
     section_reference: Option<Bounds>,
     yaw: f32,
@@ -6193,6 +6260,9 @@ impl PointViewport<'_> {
             }) {
                 return false;
             }
+        }
+        if !self.class_visibility.allows(point.classification) {
+            return false;
         }
         match point.classification {
             Some(2) => self.filter_ground,

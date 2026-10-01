@@ -388,3 +388,14 @@ A second AHN6 API selection covered X 207400..207600 and Y 474400..474600,
 returning 1,569,701 exact source ordinals. The top-view GUI highlighted a
 bounded 8,000-point sample of that selection over a 250,000-point viewport
 LOD; see [`native-api-select-world-ahn45m.png`](../screenshots/native-api-select-world-ahn45m.png).
+
+The native per-code ASPRS controls were then checked on the same indexed AHN6
+tile. With every class visible, the 200 × 200 m world box selected 1,569,701
+points. Disabling class 2 (Ground) through the typed API left 1,015,681
+selected points, a difference of 554,020. `status.hidden_classes` reported
+`[2]`. At unchanged top camera and 250,000-point viewport budget, 98,963
+pixels changed in the model-space portion of the screenshots. The full-class,
+ground-hidden and scrolled Properties views are saved as
+[`all classes`](../screenshots/native-class-filter-all-ahn45m.png),
+[`without Ground`](../screenshots/native-class-filter-no-ground-ahn45m.png) and
+[`class controls`](../screenshots/native-class-filter-controls-ahn45m.png).

@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use crate::selection::DeletionMask;
+use crate::selection::{ClassVisibility, DeletionMask};
 use crate::{combined_bounds, CloudEntry, ColorMode, Message, PointViewport, Projection};
 use bytemuck::{Pod, Zeroable};
 use iced::mouse;
@@ -32,6 +32,7 @@ struct SceneKey {
     color_mode: ColorMode,
     budget: usize,
     filters: [bool; 4],
+    class_visibility: ClassVisibility,
 }
 
 struct CloudKey {
@@ -76,6 +77,7 @@ impl SceneKey {
                 view.filter_buildings,
                 view.filter_other,
             ],
+            class_visibility: view.class_visibility,
         }
     }
 
@@ -91,6 +93,7 @@ impl SceneKey {
                     view.filter_buildings,
                     view.filter_other,
                 ]
+            && self.class_visibility == view.class_visibility
             && self.clouds.len() == view.clouds.len()
             && self
                 .clouds

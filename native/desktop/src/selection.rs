@@ -112,7 +112,36 @@ pub struct ClassFilter {
     pub vegetation: bool,
     pub buildings: bool,
     pub other: bool,
+    pub classes: ClassVisibility,
     pub section: Option<Bounds>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClassVisibility([u64; 4]);
+
+impl Default for ClassVisibility {
+    fn default() -> Self {
+        Self([u64::MAX; 4])
+    }
+}
+
+impl ClassVisibility {
+    pub fn allows(self, code: Option<u8>) -> bool {
+        code.is_none_or(|code| {
+            let word = usize::from(code / 64);
+            self.0[word] & (1u64 << (code % 64)) != 0
+        })
+    }
+
+    pub fn set(&mut self, code: u8, visible: bool) {
+        let word = usize::from(code / 64);
+        let bit = 1u64 << (code % 64);
+        if visible {
+            self.0[word] |= bit;
+        } else {
+            self.0[word] &= !bit;
+        }
+    }
 }
 
 impl ClassFilter {
@@ -123,6 +152,9 @@ impl ClassFilter {
             }) {
                 return false;
             }
+        }
+        if !self.classes.allows(point.classification) {
+            return false;
         }
         match point.classification {
             Some(2) => self.ground,
@@ -625,6 +657,7 @@ mod tests {
                 vegetation: true,
                 buildings: true,
                 other: true,
+                classes: ClassVisibility::default(),
                 section: None,
             },
         )
@@ -656,6 +689,7 @@ mod tests {
                 vegetation: true,
                 buildings: true,
                 other: true,
+                classes: ClassVisibility::default(),
                 section: None,
             },
         )
@@ -673,6 +707,7 @@ mod tests {
                 vegetation: true,
                 buildings: true,
                 other: true,
+                classes: ClassVisibility::default(),
                 section: None,
             },
         )
@@ -686,6 +721,7 @@ mod tests {
                 vegetation: true,
                 buildings: true,
                 other: true,
+                classes: ClassVisibility::default(),
                 section: None,
             },
         )
@@ -741,6 +777,7 @@ mod tests {
             vegetation: true,
             buildings: true,
             other: true,
+            classes: ClassVisibility::default(),
             section: Some(Bounds {
                 min: [35.0, 0.0, 0.0],
                 max: [45.0, 0.0, 0.0],
@@ -767,6 +804,58 @@ mod tests {
         assert!(stream[0].1.contains(45));
         assert!(!stream[0].1.contains(40));
         assert_eq!(stream[0].1.bits, indexed[0].1.bits);
+    }
+
+    #[test]
+    fn per_class_visibility_filters_indexed_and_streamed_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("classified.ply");
+        fs::write(
+            &source,
+            "ply\nformat ascii 1.0\nelement vertex 3\nproperty double x\nproperty double y\nproperty double z\nproperty uchar classification\nend_header\n0 0 0 2\n1 0 0 6\n2 0 0 9\n",
+        )
+        .unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 1).unwrap());
+        let tree = Arc::new(
+            OctreeIndex::build(
+                &cloud,
+                pointcloud_core::IndexConfig {
+                    leaf_points: 1,
+                    preview_points: 1,
+                    max_depth: 4,
+                    scratch_dir: Some(dir.path().to_path_buf()),
+                },
+            )
+            .unwrap(),
+        );
+        let mut classes = ClassVisibility::default();
+        classes.set(2, false);
+        let filter = ClassFilter {
+            ground: true,
+            vegetation: true,
+            buildings: true,
+            other: true,
+            classes,
+            section: None,
+        };
+        let bounds = cloud.bounds;
+        let streamed = select_world(
+            vec![selection_source(Arc::clone(&cloud), None, None)],
+            bounds,
+            filter,
+        )
+        .unwrap();
+        let indexed = select_world(
+            vec![selection_source(cloud, Some(tree), None)],
+            bounds,
+            filter,
+        )
+        .unwrap();
+        assert_eq!(streamed[0].1.count, 2);
+        assert!(!streamed[0].1.contains(0));
+        assert!(streamed[0].1.contains(1));
+        assert!(streamed[0].1.contains(2));
+        assert_eq!(streamed[0].1.bits, indexed[0].1.bits);
     }
 
     #[test]
@@ -798,6 +887,7 @@ mod tests {
             vegetation: true,
             buildings: true,
             other: true,
+            classes: ClassVisibility::default(),
             section: None,
         };
         let selection = select_full(
@@ -835,6 +925,7 @@ mod tests {
                 vegetation: true,
                 buildings: true,
                 other: true,
+                classes: ClassVisibility::default(),
                 section: Some(Bounds {
                     min: [30.0, -1.0, -1.0],
                     max: [49.0, 1.0, 1.0],
@@ -908,6 +999,7 @@ mod tests {
                 vegetation: true,
                 buildings: true,
                 other: true,
+                classes: ClassVisibility::default(),
                 section: None,
             },
             None,
@@ -931,6 +1023,7 @@ mod tests {
                 vegetation: true,
                 buildings: true,
                 other: true,
+                classes: ClassVisibility::default(),
                 section: None,
             },
             Some(&deleted),
@@ -965,6 +1058,7 @@ mod tests {
             vegetation: true,
             buildings: true,
             other: true,
+            classes: ClassVisibility::default(),
             section: None,
         };
         let picked = pick_full(&cloud, camera, [400.0, 300.0], 8.0, filter, None)
