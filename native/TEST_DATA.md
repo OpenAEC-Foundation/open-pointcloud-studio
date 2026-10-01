@@ -53,6 +53,13 @@ the full-source result to be discarded.
 The refreshed native dev build remains open on that PLY with a 250,000-point
 LOD and the 432,975-point exact selection; see the
 [current screenshot](../screenshots/native-current-114m-ply-selection.png).
+After adding native camera-view commands, a fresh development instance reopened
+the same indexed 3.2 GiB PLY and displayed its 250,000-point LOD. The exact
+world-box selection over X 208000–208100, Y 475000–475100 and Z 0–100 again
+found 432,975 points in 0.45 s including API polling. `zoom_selection` framed
+them at 19.38×, and `save_camera_view` persisted the pose for that source.
+The [current native screenshot](../screenshots/native-current-114m-ply-camera-api.png)
+shows the selected points and saved view in Properties.
 
 On 1 October 2026, the native GUI opened a separate 1,200,000-point LAS test
 source and reported octree source-reading progress. `cancel_index` stopped its
