@@ -121,11 +121,16 @@ fn export_edited_where(
         pointcloud_core::export_where(cloud, destination, format, expected_count, include)
     } else {
         if format == ExportFormat::E57
-            && transform.scale == [1.0; 3]
-            && pointcloud_core::export_e57_translated_where(
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
+            && pointcloud_core::export_e57_uniform_affine_where(
                 cloud,
                 destination,
                 Some(expected_count),
+                transform.scale[0],
                 transform.offset,
                 &mut include,
             )?
@@ -167,11 +172,18 @@ fn export_edited_section(
             deleted.is_none_or(|mask| !mask.contains(ordinal))
         })
     } else {
-        if format == ExportFormat::E57 && transform.scale == [1.0; 3] {
-            let translated = pointcloud_core::export_e57_translated_where(
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
+        {
+            let translated = pointcloud_core::export_e57_uniform_affine_where(
                 cloud,
                 destination,
                 None,
+                transform.scale[0],
                 transform.offset,
                 |ordinal, point| {
                     let xyz = transform.xyz(point.xyz);

@@ -239,6 +239,7 @@ pub fn export_section_where(
             cloud,
             destination.as_ref(),
             None,
+            1.0,
             [0.0; 3],
             &mut |ordinal, point| section_contains(section, point.xyz) && include(ordinal, point),
         );
@@ -266,6 +267,7 @@ pub fn export_where(
             cloud,
             destination.as_ref(),
             Some(expected_count),
+            1.0,
             [0.0; 3],
             &mut include,
         )?;
@@ -296,10 +298,36 @@ pub fn export_e57_translated_where(
     destination: impl AsRef<Path>,
     expected_count: Option<u64>,
     translation: [f64; 3],
+    include: impl FnMut(u64, &Point) -> bool,
+) -> Result<Option<u64>, LoadError> {
+    export_e57_uniform_affine_where(
+        cloud,
+        destination,
+        expected_count,
+        1.0,
+        translation,
+        include,
+    )
+}
+
+/// A positive uniform scale commutes with each scan's rigid rotation. Scale
+/// local XYZ/range records and scanner translations while retaining all other
+/// raw attributes and the original scan orientations.
+pub fn export_e57_uniform_affine_where(
+    cloud: &PointCloud,
+    destination: impl AsRef<Path>,
+    expected_count: Option<u64>,
+    scale: f64,
+    translation: [f64; 3],
     mut include: impl FnMut(u64, &Point) -> bool,
 ) -> Result<Option<u64>, LoadError> {
     if !source_is_e57(cloud) {
         return Ok(None);
+    }
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(LoadError::InvalidData(
+            "E57 scan-preserving scale must be finite and positive".into(),
+        ));
     }
     if !translation.iter().all(|value| value.is_finite()) {
         return Err(LoadError::InvalidData("non-finite E57 translation".into()));
@@ -317,6 +345,7 @@ pub fn export_e57_translated_where(
         cloud,
         destination.as_ref(),
         expected_count,
+        scale,
         translation,
         &mut include,
     )
@@ -686,10 +715,11 @@ fn export_e57_filtered_count(
     cloud: &PointCloud,
     destination: &Path,
     expected_count: Option<u64>,
+    scale: f64,
     translation: [f64; 3],
     include: &mut dyn FnMut(u64, &Point) -> bool,
 ) -> Result<u64, LoadError> {
-    use e57::{CartesianCoordinate, E57Reader, E57Writer};
+    use e57::{CartesianCoordinate, E57Reader, E57Writer, RecordDataType, RecordName, RecordValue};
 
     if destination == cloud.path
         || fs::canonicalize(destination).ok() == fs::canonicalize(&cloud.path).ok()
@@ -719,15 +749,32 @@ fn export_e57_filtered_count(
     let mut source_count = 0u64;
     let mut written_count = 0u64;
     for source_scan in reader.pointclouds() {
+        let mut prototype = source_scan.prototype.clone();
+        if scale != 1.0 {
+            for record in &mut prototype {
+                if matches!(
+                    record.name,
+                    RecordName::CartesianX
+                        | RecordName::CartesianY
+                        | RecordName::CartesianZ
+                        | RecordName::SphericalRange
+                ) {
+                    record.data_type = RecordDataType::Double {
+                        min: None,
+                        max: None,
+                    };
+                }
+            }
+        }
         let scan_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
-        let mut output_scan = writer.add_pointcloud(&scan_guid, source_scan.prototype.clone())?;
+        let mut output_scan = writer.add_pointcloud(&scan_guid, prototype)?;
         output_scan.set_name(source_scan.name.clone());
         output_scan.set_description(source_scan.description.clone());
         output_scan.set_original_guids(source_scan.guid.clone().map(|guid| vec![guid]));
         let transform = source_scan.transform.clone().map(|mut pose| {
-            pose.translation.x += translation[0];
-            pose.translation.y += translation[1];
-            pose.translation.z += translation[2];
+            pose.translation.x = pose.translation.x * scale + translation[0];
+            pose.translation.y = pose.translation.y * scale + translation[1];
+            pose.translation.z = pose.translation.z * scale + translation[2];
             pose
         });
         if transform.as_ref().is_some_and(|pose| {
@@ -759,7 +806,7 @@ fn export_e57_filtered_count(
         points.apply_pose(true);
         for simple in points {
             let simple = simple?;
-            let values = raw_points.next().ok_or_else(|| {
+            let mut values = raw_points.next().ok_or_else(|| {
                 LoadError::InvalidData("E57 raw and decoded streams have different lengths".into())
             })??;
             let CartesianCoordinate::Valid { x, y, z } = &simple.cartesian else {
@@ -774,6 +821,25 @@ fn export_e57_filtered_count(
             }
             if !point.xyz.iter().all(|value| value.is_finite()) {
                 return Err(LoadError::InvalidData("non-finite E57 coordinate".into()));
+            }
+            if scale != 1.0 {
+                for (value, record) in values.iter_mut().zip(&source_scan.prototype) {
+                    if matches!(
+                        record.name,
+                        RecordName::CartesianX
+                            | RecordName::CartesianY
+                            | RecordName::CartesianZ
+                            | RecordName::SphericalRange
+                    ) {
+                        let scaled = value.to_f64(&record.data_type)? * scale;
+                        if !scaled.is_finite() {
+                            return Err(LoadError::InvalidData(
+                                "scale produced non-finite E57 coordinate".into(),
+                            ));
+                        }
+                        *value = RecordValue::Double(scaled);
+                    }
+                }
             }
             output_scan.add_point(values)?;
             written_count += 1;
@@ -1677,6 +1743,44 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(moved_point, source_point);
+        }
+
+        let scaled = dir.path().join("scaled.e57");
+        assert_eq!(
+            export_e57_uniform_affine_where(
+                &cloud,
+                &scaled,
+                Some(2),
+                2.0,
+                [10.0, -5.0, 2.0],
+                |ordinal, _| ordinal == 0 || ordinal == 2,
+            )
+            .unwrap(),
+            Some(2)
+        );
+        let resized = open(&scaled, 4).unwrap();
+        assert_eq!(resized.scan_poses.len(), 2);
+        assert_eq!(resized.scan_poses[0].position, [210.0, 395.0, 22.0]);
+        assert_eq!(resized.scan_poses[1].position, [410.0, 595.0, 42.0]);
+        assert!((resized.points[0].xyz[0] - 212.0).abs() < 1e-9);
+        assert!((resized.points[1].xyz[1] - 597.0).abs() < 1e-9);
+        let scaled_headers = E57Reader::from_file(&scaled).unwrap().pointclouds();
+        let mut scaled_reader = E57Reader::from_file(&scaled).unwrap();
+        for (source_scan, scaled_scan) in source_headers.iter().zip(&scaled_headers) {
+            let source_point = source_reader
+                .pointcloud_raw(source_scan)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            let scaled_point = scaled_reader
+                .pointcloud_raw(scaled_scan)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(scaled_point[3..], source_point[3..]);
+            assert_eq!(scaled_point[0], RecordValue::Double(2.0));
         }
 
         let section = dir.path().join("section.e57");

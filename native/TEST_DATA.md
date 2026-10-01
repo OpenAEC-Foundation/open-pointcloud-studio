@@ -469,6 +469,14 @@ identical point attributes. A scan without a source pose uses the coordinate
 export path so Translate does not invent a scanner station. The live translated
 cloud with the section box and four listed stations appears in
 [`native-e57-translated-section-poses.png`](../screenshots/native-e57-translated-section-poses.png).
+On the same public E57, whose Cartesian coordinates use scaled-integer source
+records, the native GUI applied a uniform 2× Scale around the exact source
+centroid. Export retained all 160,838 points and four transformed scanner
+poses; the maximum reopened XYZ deviation from the live affine transform was
+`9.31e-10` m, with identical point attributes. A scaled section export kept
+49,079 points and four poses with the same coordinate and attribute checks.
+The live scale and section are shown in
+[`native-e57-scaled-section-poses.png`](../screenshots/native-e57-scaled-section-poses.png).
 The 1,200,000-point LAS fixture exported to E57 in 5.13 seconds with 22,288
 KiB peak RSS, and the E57 reopened and exported to a 1,200,000-point PLY in
 5.00 seconds with 21,736 KiB peak RSS. Comparing that PLY with a direct LAS

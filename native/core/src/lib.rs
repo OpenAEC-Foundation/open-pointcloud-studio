@@ -25,9 +25,9 @@ pub use bag3d::{fetch_bag3d_obj, BagBounds, BagLod, BagStats};
 pub use dxf::read_mesh as read_dxf_mesh;
 pub use export::{
     export_affine, export_affine_axes, export_affine_axes_where, export_affine_where,
-    export_e57_translated_where, export_full, export_map, export_map_auto_count, export_section,
-    export_section_where, export_thin_percent_where, export_where, merge_las_map_count,
-    ExportFormat,
+    export_e57_translated_where, export_e57_uniform_affine_where, export_full, export_map,
+    export_map_auto_count, export_section, export_section_where, export_thin_percent_where,
+    export_where, merge_las_map_count, ExportFormat,
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
 pub use mesher::{
