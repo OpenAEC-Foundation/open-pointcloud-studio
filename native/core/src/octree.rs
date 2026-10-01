@@ -10,6 +10,7 @@ use std::time::UNIX_EPOCH;
 use super::{visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
 
 const RECORD_BYTES: usize = 40;
+const RECORD_BATCH_POINTS: usize = 8_192;
 const LEAF_LOD_POINTS: usize = 2_048;
 
 #[derive(Debug, Clone, Copy)]
@@ -934,18 +935,20 @@ fn child_bounds(parent: Bounds, index: usize) -> Bounds {
 
 fn write_record(writer: &mut impl Write, indexed: IndexedPoint) -> Result<(), LoadError> {
     let point = indexed.point;
-    for coordinate in point.xyz {
-        writer.write_all(&coordinate.to_le_bytes())?;
+    let mut record = [0u8; RECORD_BYTES];
+    for (axis, coordinate) in point.xyz.into_iter().enumerate() {
+        let start = axis * 8;
+        record[start..start + 8].copy_from_slice(&coordinate.to_le_bytes());
     }
-    let rgb = point.rgb.unwrap_or([0; 3]);
-    writer.write_all(&rgb)?;
-    writer.write_all(&point.intensity.unwrap_or(0).to_le_bytes())?;
-    writer.write_all(&[point.classification.unwrap_or(0)])?;
+    record[24..27].copy_from_slice(&point.rgb.unwrap_or([0; 3]));
+    record[27..29].copy_from_slice(&point.intensity.unwrap_or(0).to_le_bytes());
+    record[29] = point.classification.unwrap_or(0);
     let flags = u8::from(point.rgb.is_some())
         | (u8::from(point.intensity.is_some()) << 1)
         | (u8::from(point.classification.is_some()) << 2);
-    writer.write_all(&[flags, 0])?;
-    writer.write_all(&indexed.ordinal.to_le_bytes())?;
+    record[30] = flags;
+    record[32..40].copy_from_slice(&indexed.ordinal.to_le_bytes());
+    writer.write_all(&record)?;
     Ok(())
 }
 
@@ -954,13 +957,28 @@ fn read_records(
     mut push: impl FnMut(IndexedPoint) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
     let mut reader = BufReader::new(File::open(path)?);
+    let mut batch = vec![0u8; RECORD_BATCH_POINTS * RECORD_BYTES];
     loop {
-        let mut bytes = [0u8; RECORD_BYTES];
-        if reader.read(&mut bytes[..1])? == 0 {
+        let mut filled = 0;
+        while filled < batch.len() {
+            let amount = reader.read(&mut batch[filled..])?;
+            if amount == 0 {
+                break;
+            }
+            filled += amount;
+        }
+        if filled == 0 {
             break;
         }
-        reader.read_exact(&mut bytes[1..])?;
-        push(decode_record(&bytes))?;
+        if !filled.is_multiple_of(RECORD_BYTES) {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+        }
+        for bytes in batch[..filled].as_chunks::<RECORD_BYTES>().0 {
+            push(decode_record(bytes))?;
+        }
+        if filled < batch.len() {
+            break;
+        }
     }
     Ok(())
 }
@@ -1046,6 +1064,54 @@ fn decode_record(bytes: &[u8; RECORD_BYTES]) -> IndexedPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_records_keep_ordinals_attributes_and_reject_truncation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("records.bin");
+        let count = RECORD_BATCH_POINTS + 3;
+        let mut writer = BufWriter::new(File::create(&path).unwrap());
+        for ordinal in 0..count {
+            write_record(
+                &mut writer,
+                IndexedPoint {
+                    point: Point {
+                        xyz: [ordinal as f64, -2.5, 3.25],
+                        rgb: (ordinal % 2 == 0).then_some([10, 20, 30]),
+                        intensity: (ordinal % 3 == 0).then_some(12_345),
+                        classification: (ordinal % 5 == 0).then_some(6),
+                    },
+                    ordinal: ordinal as u64,
+                },
+            )
+            .unwrap();
+        }
+        writer.flush().unwrap();
+        drop(writer);
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            (count * RECORD_BYTES) as u64
+        );
+        let mut seen = 0;
+        read_records(&path, |indexed| {
+            assert_eq!(indexed.ordinal, seen as u64);
+            assert_eq!(indexed.point.xyz, [seen as f64, -2.5, 3.25]);
+            assert_eq!(indexed.point.rgb, (seen % 2 == 0).then_some([10, 20, 30]));
+            assert_eq!(indexed.point.intensity, (seen % 3 == 0).then_some(12_345));
+            assert_eq!(indexed.point.classification, (seen % 5 == 0).then_some(6));
+            seen += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, count);
+
+        let file = File::options().write(true).open(&path).unwrap();
+        file.set_len((count * RECORD_BYTES - 1) as u64).unwrap();
+        assert!(matches!(
+            read_records(&path, |_| Ok(())),
+            Err(LoadError::Io(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof
+        ));
+    }
 
     #[test]
     fn indexing_reports_work_and_cancel_leaves_no_partial_cache() {

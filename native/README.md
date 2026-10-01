@@ -49,6 +49,9 @@ Filtered LAS/LAZ exports use the same bounded input batches while retaining
 the source's native LAS attributes and coordinate grid. The export scan itself
 stays in the optimized Rust core when the desktop supplies a section, edit or
 selection predicate.
+The disk octree's fixed 40-byte records now use one write per point and
+bounded 8,192-record reads while preserving exact source ordinals and
+cancellation between records.
 Both meshers keep their full-source loops inside the optimized Rust core in
 development builds; the native desktop supplies edit and progress callbacks
 without recompiling those loops at the desktop's lower optimization level.

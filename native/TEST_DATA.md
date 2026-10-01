@@ -16,6 +16,10 @@ Y 475000–475100 and Z 0–100 found 432,975 exact points. The
 [overview](../screenshots/native-3.2gib-ply-432k-selection.png) and
 [19.4× selection view](../screenshots/native-3.2gib-ply-432k-selection-zoom.png)
 show the selection in the Rust GUI.
+During the subsequent manual index build, a physical right-drag moved camera
+pan by exactly `[60, 30]` pixels while keeping the 432,975-point selection.
+The [index-progress view](../screenshots/native-3.2gib-ply-index-progress.png)
+shows the GUI and its cancellable source-read progress.
 
 On 1 October 2026, the native GUI opened a separate 1,200,000-point LAS test
 source and reported octree source-reading progress. `cancel_index` stopped its
