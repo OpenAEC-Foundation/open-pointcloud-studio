@@ -37,6 +37,7 @@ use pointcloud_core::{
     BagBounds, BagLod, Bounds, ExportFormat, IndexConfig, IndexProgress, IndexStage, IndexedPoint,
     MeshGeometry, OctreeIndex, Point, PointCloud, SurfaceMeshConfig,
 };
+use preferences::{MAX_POINT_BUDGET, MIN_POINT_BUDGET};
 #[cfg(test)]
 use selection::select_world;
 use selection::{
@@ -1857,9 +1858,9 @@ impl Studio {
                 }
             }
             ApiCommand::SetBudget { points } => {
-                if !(1_000..=2_000_000).contains(&points) {
+                if !(MIN_POINT_BUDGET..=MAX_POINT_BUDGET).contains(&points) {
                     (
-                        json!({"ok": false, "error": "point budget must be between 1000 and 2000000"}),
+                        json!({"ok": false, "error": "point budget must be between 1000 and 10000000"}),
                         Task::none(),
                     )
                 } else {
@@ -5960,7 +5961,9 @@ impl Studio {
                         .align_y(iced::Alignment::Center),
                         row![
                             text("Budget").size(11).width(43),
-                            slider(1_000..=2_000_000, self.budget, Message::Budget).width(102),
+                            slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
+                                .step(100_000_u32)
+                                .width(102),
                             text(if self.budget >= 1_000_000 {
                                 format!("{:.1}M", self.budget as f64 / 1_000_000.0)
                             } else {
@@ -6155,7 +6158,9 @@ impl Studio {
                     "POINT BUDGET",
                     column![
                         text(format!("{} preview points", format_count(self.budget))).size(12),
-                        slider(1_000..=2_000_000, self.budget, Message::Budget).width(140),
+                        slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
+                            .step(100_000_u32)
+                            .width(140),
                     ]
                     .spacing(5)
                     .into()

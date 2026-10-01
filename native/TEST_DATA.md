@@ -713,3 +713,13 @@ The exact cached source bounds were reused after comparing selection and
 deletion bitmasks, without decoding the 1.208 GB LAZ again. The
 [screenshot](../screenshots/native-selected-after-disjoint-delete-114m.png)
 shows both counts; Undo restored all 303,276 deleted points afterward.
+
+The same indexed 114,174,907-point LAZ was opened in a rebuilt native dev
+viewer with a 10,000,000-point budget. The current isometric view returned
+5,451,630 visible LOD points in about four seconds, requiring three WGPU
+point buffers (at most 2,000,000 points per buffer). The renderer stayed live,
+used about 641 MiB process RSS after refinement, and displayed that sample in
+[the high-budget screenshot](../screenshots/native-10m-budget-114m-ahn6.png).
+The local command API rejected a budget of 10,000,001, and restoring the
+250,000-point default returned a ready viewport sample. The requested budget
+is a ceiling; view-dependent octree culling can return fewer points.

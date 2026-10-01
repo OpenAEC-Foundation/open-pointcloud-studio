@@ -15,6 +15,10 @@ use iced_wgpu::primitive::{Primitive, Storage};
 use iced_wgpu::wgpu;
 use pointcloud_core::{Bounds, IndexedPoint, MeshGeometry, PointCloud};
 
+// Keep each upload below conservative WGPU adapter buffer limits. The full
+// viewport budget can span multiple draw calls without losing detail.
+const POINTS_PER_BUFFER: usize = 2_000_000;
+
 fn derived_mesh_normals(mesh: &MeshGeometry) -> Vec<[f32; 3]> {
     let mut normals = vec![[0.0_f64; 3]; mesh.vertices.len()];
     for &[a, b, c] in &mesh.triangles {
@@ -383,6 +387,12 @@ struct RenderGeometry {
     mesh_indices: Vec<u32>,
 }
 
+struct PointBufferChunk {
+    buffer: wgpu::Buffer,
+    capacity: u64,
+    count: u32,
+}
+
 #[derive(Debug)]
 pub struct CloudPrimitive {
     geometry: Arc<RenderGeometry>,
@@ -397,9 +407,7 @@ struct GpuState {
     scene_group: Option<wgpu::BindGroup>,
     camera_buffer: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
-    point_buffer: wgpu::Buffer,
-    point_capacity: u64,
-    point_count: u32,
+    point_buffers: Vec<PointBufferChunk>,
     mesh_vertex_buffer: wgpu::Buffer,
     mesh_vertex_capacity: u64,
     mesh_index_buffer: wgpu::Buffer,
@@ -579,13 +587,6 @@ impl GpuState {
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
-        let point_capacity = std::mem::size_of::<GpuPoint>() as u64;
-        let point_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("pointcloud points"),
-            size: point_capacity,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let mesh_vertex_capacity = std::mem::size_of::<GpuMeshVertex>() as u64;
         let mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("terrain mesh vertices"),
@@ -608,9 +609,7 @@ impl GpuState {
             scene_group: None,
             camera_buffer,
             camera_group,
-            point_buffer,
-            point_capacity,
-            point_count: 0,
+            point_buffers: Vec::new(),
             mesh_vertex_buffer,
             mesh_vertex_capacity,
             mesh_index_buffer,
@@ -702,24 +701,37 @@ impl Primitive for CloudPrimitive {
             .is_none_or(|previous| !Arc::ptr_eq(previous, &self.geometry))
         {
             let geometry = &self.geometry;
-            let byte_count = (geometry.points.len() * std::mem::size_of::<GpuPoint>()) as u64;
-            if byte_count > state.point_capacity {
-                state.point_capacity = byte_count.next_power_of_two();
-                state.point_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("pointcloud points"),
-                    size: state.point_capacity,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
+            for (index, points) in geometry.points.chunks(POINTS_PER_BUFFER).enumerate() {
+                let byte_count = std::mem::size_of_val(points) as u64;
+                let capacity = byte_count.next_power_of_two();
+                if index == state.point_buffers.len() {
+                    state.point_buffers.push(PointBufferChunk {
+                        buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("pointcloud points"),
+                            size: capacity,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        }),
+                        capacity,
+                        count: 0,
+                    });
+                }
+                let chunk = &mut state.point_buffers[index];
+                if byte_count > chunk.capacity {
+                    chunk.buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("pointcloud points"),
+                        size: capacity,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    chunk.capacity = capacity;
+                }
+                queue.write_buffer(&chunk.buffer, 0, bytemuck::cast_slice(points));
+                chunk.count = points.len() as u32;
             }
-            if !geometry.points.is_empty() {
-                queue.write_buffer(
-                    &state.point_buffer,
-                    0,
-                    bytemuck::cast_slice(&geometry.points),
-                );
-            }
-            state.point_count = geometry.points.len() as u32;
+            state
+                .point_buffers
+                .truncate(geometry.points.len().div_ceil(POINTS_PER_BUFFER));
             let vertex_bytes =
                 (geometry.mesh_vertices.len() * std::mem::size_of::<GpuMeshVertex>()) as u64;
             if vertex_bytes > state.mesh_vertex_capacity {
@@ -774,7 +786,7 @@ impl Primitive for CloudPrimitive {
         clip_bounds: &Rectangle<u32>,
     ) {
         let state = storage.get::<GpuState>().expect("pointcloud GPU state");
-        if (state.point_count == 0 && state.mesh_index_count == 0)
+        if (state.point_buffers.is_empty() && state.mesh_index_count == 0)
             || clip_bounds.width == 0
             || clip_bounds.height == 0
         {
@@ -815,10 +827,12 @@ impl Primitive for CloudPrimitive {
                 pass.set_index_buffer(state.mesh_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..state.mesh_index_count, 0, 0..1);
             }
-            if state.point_count > 0 {
+            if !state.point_buffers.is_empty() {
                 pass.set_pipeline(&state.pipeline);
-                pass.set_vertex_buffer(0, state.point_buffer.slice(..));
-                pass.draw(0..6, 0..state.point_count);
+                for chunk in &state.point_buffers {
+                    pass.set_vertex_buffer(0, chunk.buffer.slice(..));
+                    pass.draw(0..6, 0..chunk.count);
+                }
             }
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

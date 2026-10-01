@@ -88,7 +88,7 @@ pick is discarded when cancelled.
 | `set_point_size` | `size` | Sets point size from 0.1 to 20 |
 | `set_eye_dome` | `enabled` | Enables or disables the depth-based shading pass |
 | `set_eye_dome_strength` | `strength` | Sets depth-shading strength from 0 to 5; 1 is the default |
-| `set_budget` | `points` | Sets visible point budget from 1,000 to 2,000,000 |
+| `set_budget` | `points` | Sets visible point budget from 1,000 to 10,000,000 |
 | `set_section` | `min`, `max` | Enables an XYZ section box using two three-number arrays inside the visible model bounds |
 | `clear_section` | — | Disables the section box |
 | `select_world` | `min`, `max` | Selects all exact source points in an inclusive XYZ box, returning a job ID |

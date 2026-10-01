@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ColorMode;
 
+pub(crate) const MIN_POINT_BUDGET: u32 = 1_000;
+pub(crate) const MAX_POINT_BUDGET: u32 = 10_000_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Preferences {
@@ -51,7 +54,7 @@ impl Preferences {
         if !self.eye_dome_strength.is_finite() || !(0.0..=5.0).contains(&self.eye_dome_strength) {
             self.eye_dome_strength = defaults.eye_dome_strength;
         }
-        if !(1_000..=2_000_000).contains(&self.budget) {
+        if !(MIN_POINT_BUDGET..=MAX_POINT_BUDGET).contains(&self.budget) {
             self.budget = defaults.budget;
         }
         self
@@ -131,5 +134,15 @@ mod tests {
         assert_eq!(repaired.eye_dome_strength, 1.0);
         assert_eq!(repaired.budget, 250_000);
         assert!(!repaired.auto_index);
+
+        let high_budget = Preferences {
+            budget: MAX_POINT_BUDGET,
+            ..Preferences::default()
+        };
+        save_to(&path, &high_budget).unwrap();
+        assert_eq!(load_from(&path).budget, MAX_POINT_BUDGET);
+
+        fs::write(&path, r#"{"budget": 10000001}"#).unwrap();
+        assert_eq!(load_from(&path).budget, 250_000);
     }
 }
