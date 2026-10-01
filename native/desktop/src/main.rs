@@ -5915,27 +5915,31 @@ impl Studio {
             .active
             .and_then(|index| self.clouds.get(index))
             .is_some_and(|entry| entry.mesh.is_some());
-        let mut surface_tools = row![
-            ribbon_button_when(
+        let mut surface_tools = vec![
+            opencad_ribbon::RibbonItem::Large(ribbon_button_when(
                 "Terrain mesh",
                 Message::MeshRequest(MeshMode::Terrain),
-                self.active.is_some() && self.mesh_job.is_none() && !self.mesh_dialog_pending
-            ),
-            ribbon_button_when(
+                self.active.is_some() && self.mesh_job.is_none() && !self.mesh_dialog_pending,
+            )),
+            opencad_ribbon::RibbonItem::Large(ribbon_button_when(
                 "3D surface",
                 Message::MeshRequest(MeshMode::Surface),
-                self.active.is_some() && self.mesh_job.is_none() && !self.mesh_dialog_pending
-            ),
-        ]
-        .spacing(2);
+                self.active.is_some() && self.mesh_job.is_none() && !self.mesh_dialog_pending,
+            )),
+        ];
         if self.mesh_job.is_some() {
-            surface_tools = surface_tools.push(ribbon_button("Cancel mesh", Message::CancelMesh));
+            surface_tools.push(opencad_ribbon::RibbonItem::Small(small_tool_button(
+                "Cancel mesh",
+                Message::CancelMesh,
+                false,
+            )));
         }
-        surface_tools = surface_tools.push(ribbon_button_when(
+        surface_tools.push(opencad_ribbon::RibbonItem::Small(small_tool_button_when(
             "Export mesh",
             Message::ExportMesh,
+            false,
             mesh_available && !self.mesh_export_pending,
-        ));
+        )));
         let mut scale_tools = row![
             column![
                 row![
@@ -5985,23 +5989,28 @@ impl Studio {
         if self.scale_job.is_some() {
             scale_tools = scale_tools.push(ribbon_button("Cancel", Message::CancelScale));
         }
-        let mut detail_tools = row![
-            ribbon_button_when(
+        let mut detail_tools = vec![
+            opencad_ribbon::RibbonItem::Small(small_tool_button_when(
                 "Build index",
                 Message::BuildIndex,
-                self.active.is_some() && !self.index_pending
-            ),
-            ribbon_button_when(
+                false,
+                self.active.is_some() && !self.index_pending,
+            )),
+            opencad_ribbon::RibbonItem::Small(small_tool_button_when(
                 "Refresh LOD",
                 Message::LoadDetail,
+                false,
                 self.active
                     .and_then(|index| self.clouds.get(index))
-                    .is_some_and(|entry| entry.index.is_some())
-            ),
-        ]
-        .spacing(3);
+                    .is_some_and(|entry| entry.index.is_some()),
+            )),
+        ];
         if self.index_pending {
-            detail_tools = detail_tools.push(ribbon_button("Cancel index", Message::CancelIndex));
+            detail_tools.push(opencad_ribbon::RibbonItem::Small(small_tool_button(
+                "Cancel index",
+                Message::CancelIndex,
+                false,
+            )));
         }
         let groups: Element<'_, Message> = match self.ribbon_tab {
             RibbonTab::Home => row![
@@ -6455,42 +6464,47 @@ impl Studio {
                     .align_y(iced::Alignment::Center)
                     .into()
                 ),
-                ribbon_group("SURFACE", surface_tools.into(),),
+                opencad_ribbon::render_group_items("SURFACE", surface_tools),
                 ribbon_group(
                     "CITY DATA",
                     tool_button("3D BAG", Message::ToggleBagPanel, self.bag_panel),
                 ),
-                ribbon_group("DETAIL LOD", detail_tools.into()),
-                ribbon_group(
+                opencad_ribbon::render_group_items("DETAIL LOD", detail_tools),
+                opencad_ribbon::render_group_items(
                     "AUTO INDEX",
-                    container(
-                        checkbox("Auto-index large scans", self.auto_index)
-                            .on_toggle(Message::SetAutoIndex)
-                            .style(muted_checkbox_style)
-                            .text_size(11)
-                            .size(12),
-                    )
-                    .height(64)
-                    .align_y(iced::Alignment::Center)
-                    .into()
+                    vec![opencad_ribbon::RibbonItem::Small(small_tool_button(
+                        "Auto-index scans",
+                        Message::SetAutoIndex(!self.auto_index),
+                        self.auto_index,
+                    ))],
                 ),
                 ribbon_group(
                     "DECIMATE",
-                    row![
-                        pick_list(
-                            [2u64, 5, 10, 20, 50, 100],
-                            Some(self.decimation_stride),
-                            Message::DecimationStride
-                        )
-                        .style(themed_pick_list_style),
-                        ribbon_button_when("Keep 1 in N", Message::Decimate, self.active.is_some()),
+                    column![
+                        row![
+                            text("Keep 1 in").size(11),
+                            pick_list(
+                                [2u64, 5, 10, 20, 50, 100],
+                                Some(self.decimation_stride),
+                                Message::DecimationStride
+                            )
+                            .style(themed_pick_list_style)
+                            .width(66),
+                        ]
+                        .spacing(5)
+                        .align_y(iced::Alignment::Center),
+                        small_tool_button_when(
+                            "Apply decimation",
+                            Message::Decimate,
+                            false,
+                            self.active.is_some(),
+                        ),
                     ]
-                    .spacing(8)
-                    .align_y(iced::Alignment::Center)
+                    .spacing(4)
                     .into()
                 ),
             ]
-            .spacing(6)
+            .spacing(2)
             .into(),
         };
         let group_strip = scrollable(

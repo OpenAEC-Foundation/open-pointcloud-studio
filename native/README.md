@@ -23,6 +23,12 @@ in a two-by-two block. The Tools tab keeps Classic's editing, meshing and
 with the horizontal scrollbar or arrow buttons. Compare the
 [Classic tool order](../screenshots/classic-v0.3-tools.jpg) with the
 [native Tools ribbon](../screenshots/native-tools-ribbon-classic-order-114m.png).
+The advanced Tools groups now use OpenCADStudio's three-row small-button
+columns for mesh export, index controls and auto-index, with Decimate's
+number and Apply action stacked. At the default 1440-pixel width all eight
+groups remain visible in [the updated ribbon screenshot](../screenshots/native-tools-ribbon-compact-1440.png);
+at narrower widths the same controls remain available through horizontal
+scrolling.
 
 The amber File tab opens a native backstage view with the currently open scans, direct scan activation, import, full/selected/section/mesh export, format choice and appearance choice. The File view covers the tool ribbon and model space, while keeping quick access and the status bar visible; Escape or Return to model closes it. Unavailable exports appear muted. This uses the existing Rust import/export commands and no web components.
 
