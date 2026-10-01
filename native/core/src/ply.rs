@@ -2,7 +2,13 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
+use rayon::prelude::*;
+
 use super::{LoadError, Point};
+
+const BINARY_BATCH_BYTES: usize = 2 * 1024 * 1024;
+const MAX_BINARY_BATCH_POINTS: usize = 65_536;
+const PARALLEL_DECODE_MIN_POINTS: usize = 4_096;
 
 #[derive(Clone, Copy)]
 enum Encoding {
@@ -14,6 +20,67 @@ enum Encoding {
 struct Property {
     name: String,
     data_type: ScalarType,
+}
+
+#[derive(Clone, Copy)]
+struct BinaryField {
+    offset: usize,
+    data_type: ScalarType,
+}
+
+impl BinaryField {
+    fn read(self, record: &[u8]) -> f64 {
+        self.data_type
+            .read(&record[self.offset..self.offset + self.data_type.size()])
+    }
+}
+
+struct BinaryLayout {
+    xyz: [BinaryField; 3],
+    rgb: Option<[BinaryField; 3]>,
+    intensity: Option<BinaryField>,
+    classification: Option<BinaryField>,
+}
+
+impl BinaryLayout {
+    fn new(properties: &[Property]) -> Self {
+        let find = |names: &[&str]| {
+            let mut offset = 0;
+            for property in properties {
+                let field = BinaryField {
+                    offset,
+                    data_type: property.data_type,
+                };
+                if names.contains(&property.name.as_str()) {
+                    return Some(field);
+                }
+                offset += property.data_type.size();
+            }
+            None
+        };
+        let xyz = ["x", "y", "z"].map(|axis| find(&[axis]).expect("validated PLY axis"));
+        let rgb = find(&["red", "r"])
+            .zip(find(&["green", "g"]))
+            .zip(find(&["blue", "b"]))
+            .map(|((red, green), blue)| [red, green, blue]);
+        Self {
+            xyz,
+            rgb,
+            intensity: find(&["intensity", "scalar_intensity"]),
+            classification: find(&["classification", "class"]),
+        }
+    }
+
+    fn decode(&self, record: &[u8]) -> Result<Point, LoadError> {
+        make_point(
+            self.xyz.map(|field| field.read(record)),
+            self.rgb
+                .map(|fields| fields.map(|field| field.read(record))),
+            self.intensity
+                .map(|field| (field.read(record), field.data_type)),
+            self.classification.map(|field| field.read(record)),
+        )
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -196,17 +263,30 @@ pub(super) fn read(
                     "PLY vertex record is too large".into(),
                 ));
             }
-            let mut record = vec![0u8; record_size];
-            let mut values = vec![0.0; properties.len()];
-            for _ in 0..vertex_count {
-                reader.read_exact(&mut record)?;
-                let mut offset = 0;
-                for (index, property) in properties.iter().enumerate() {
-                    let size = property.data_type.size();
-                    values[index] = property.data_type.read(&record[offset..offset + size]);
-                    offset += size;
+            let layout = BinaryLayout::new(&properties);
+            let batch_points = (BINARY_BATCH_BYTES / record_size).clamp(1, MAX_BINARY_BATCH_POINTS);
+            let mut batch = vec![0u8; batch_points * record_size];
+            let mut remaining = vertex_count;
+            while remaining > 0 {
+                let count = remaining.min(batch_points);
+                let records = &mut batch[..count * record_size];
+                reader.read_exact(records)?;
+                let decoded: Result<Vec<Point>, LoadError> = if count >= PARALLEL_DECODE_MIN_POINTS
+                {
+                    records
+                        .par_chunks_exact(record_size)
+                        .map(|record| layout.decode(record))
+                        .collect()
+                } else {
+                    records
+                        .chunks_exact(record_size)
+                        .map(|record| layout.decode(record))
+                        .collect()
+                };
+                for point in decoded? {
+                    push(point)?;
                 }
-                push(to_point(&properties, &values)?)?;
+                remaining -= count;
             }
         }
     }
@@ -232,8 +312,25 @@ fn to_point(properties: &[Property], values: &[f64]) -> Result<Point, LoadError>
         value(&["green", "g"]),
         value(&["blue", "b"]),
     ) {
-        (Some(red), Some(green), Some(blue)) => {
-            let channels = [red, green, blue];
+        (Some(red), Some(green), Some(blue)) => Some([red, green, blue]),
+        _ => None,
+    };
+    make_point(
+        xyz,
+        rgb,
+        scalar(&["intensity", "scalar_intensity"]),
+        value(&["classification", "class"]),
+    )
+}
+
+fn make_point(
+    xyz: [f64; 3],
+    rgb: Option<[f64; 3]>,
+    intensity: Option<(f64, ScalarType)>,
+    classification: Option<f64>,
+) -> Result<Point, LoadError> {
+    let rgb = rgb
+        .map(|channels| {
             if channels
                 .iter()
                 .any(|channel| !channel.is_finite() || *channel < 0.0 || *channel > 65535.0)
@@ -241,22 +338,20 @@ fn to_point(properties: &[Property], values: &[f64]) -> Result<Point, LoadError>
                 return Err(LoadError::InvalidData("invalid PLY RGB channel".into()));
             }
             if channels.iter().all(|channel| *channel <= 255.0) {
-                Some(channels.map(|channel| channel as u8))
+                Ok(channels.map(|channel| channel as u8))
             } else {
-                Some(channels.map(|channel| (channel / 257.0).round() as u8))
+                Ok(channels.map(|channel| (channel / 257.0).round() as u8))
             }
-        }
-        _ => None,
-    };
-    let intensity = scalar(&["intensity", "scalar_intensity"]).map(|(value, data_type)| {
+        })
+        .transpose()?;
+    let intensity = intensity.map(|(value, data_type)| {
         if matches!(data_type, ScalarType::F32 | ScalarType::F64) && value <= 1.0 {
             (value.clamp(0.0, 1.0) * 65535.0).round() as u16
         } else {
             value.clamp(0.0, 65535.0) as u16
         }
     });
-    let classification =
-        value(&["classification", "class"]).map(|value| value.clamp(0.0, 255.0) as u8);
+    let classification = classification.map(|value| value.clamp(0.0, 255.0) as u8);
     Ok(Point {
         xyz,
         rgb,
@@ -267,6 +362,8 @@ fn to_point(properties: &[Property], values: &[f64]) -> Result<Point, LoadError>
 
 #[cfg(test)]
 mod tests {
+    use std::io::{BufWriter, Write};
+
     #[test]
     fn reads_ascii_and_binary_ply() {
         for binary in [false, true] {
@@ -296,5 +393,48 @@ mod tests {
             assert_eq!(cloud.points[0].xyz, [1.0, 2.0, 3.0]);
             assert_eq!(cloud.points[0].rgb, Some([10, 20, 30]));
         }
+    }
+
+    #[test]
+    fn binary_batches_preserve_field_layout_attributes_and_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mixed-fields.ply");
+        let mut writer = BufWriter::new(std::fs::File::create(&path).unwrap());
+        writer.write_all(b"ply\nformat binary_little_endian 1.0\nelement vertex 65541\nproperty uchar classification\nproperty double z\nproperty uchar ignored\nproperty ushort red\nproperty float y\nproperty ushort green\nproperty double x\nproperty ushort blue\nproperty float intensity\nend_header\n").unwrap();
+        for ordinal in 0..65_541_u64 {
+            writer.write_all(&[(ordinal % 32) as u8]).unwrap();
+            writer.write_all(&(-3.0_f64).to_le_bytes()).unwrap();
+            writer.write_all(&[99]).unwrap();
+            writer.write_all(&2570_u16.to_le_bytes()).unwrap();
+            writer.write_all(&1.5_f32.to_le_bytes()).unwrap();
+            writer.write_all(&5140_u16.to_le_bytes()).unwrap();
+            writer.write_all(&(ordinal as f64).to_le_bytes()).unwrap();
+            writer.write_all(&7710_u16.to_le_bytes()).unwrap();
+            writer.write_all(&0.5_f32.to_le_bytes()).unwrap();
+        }
+        writer.flush().unwrap();
+        let mut ordinal = 0_u64;
+        super::super::visit_points(&path, &mut |point| {
+            assert_eq!(point.xyz, [ordinal as f64, 1.5, -3.0]);
+            assert_eq!(point.rgb, Some([10, 20, 30]));
+            assert_eq!(point.intensity, Some(32_768));
+            assert_eq!(point.classification, Some((ordinal % 32) as u8));
+            ordinal += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(ordinal, 65_541);
+
+        let mut visited = 0;
+        let stopped = super::super::visit_points(&path, &mut |_| {
+            visited += 1;
+            if visited == 7 {
+                Err(super::LoadError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(stopped, Err(super::LoadError::Cancelled)));
+        assert_eq!(visited, 7);
     }
 }

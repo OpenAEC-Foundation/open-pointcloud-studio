@@ -62,8 +62,11 @@ AHN6 LAZ to binary PLY produced a 3,425,247,452-byte file in 59.23 seconds,
 with 130,924 KiB peak process memory. The PLY header count and calculated
 record length matched the final file size; first, middle and last records
 decoded within the source bounds.
-Reopening and scanning the full 3.2 GiB PLY through the native reader then
-completed in 56.61 seconds with 18,568 KiB peak process memory.
+Before the binary PLY reader was batched, reopening and scanning the full
+3.2 GiB file took 56.61 seconds with 18,568 KiB peak process memory. The
+bounded parallel reader reduced that full scan to 18.13 seconds with
+32,836 KiB peak memory on the same machine. A separate full-source visit
+counted all 114,174,907 records in order.
 
 ## Build
 

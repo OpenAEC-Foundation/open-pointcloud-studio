@@ -3,6 +3,20 @@
 The files themselves are deliberately kept outside the repository. Check the
 source terms before redistributing a dataset or screenshots from it.
 
+On 1 October 2026, the merged 114,174,907-point AHN6 LAZ was exported to a
+3,425,247,452-byte binary PLY. The previous native reader scanned this file
+in 56.61 s on one core; after bounded, parallel binary decoding it took
+18.13 s with 32,836 KiB peak RSS. A second full-source visit counted exactly
+114,174,907 points. The source PLY remains at
+`/tmp/open-pointcloud-AHN6-merged-114m-parallel.ply` for native GUI tests.
+The native GUI loaded its 100,000-point preview and reported the full count;
+see the [3.2 GiB PLY overview](../screenshots/native-3.2gib-ply-114m.png).
+Without an index, a full-source world-box selection over X 208000–208100,
+Y 475000–475100 and Z 0–100 found 432,975 exact points. The
+[overview](../screenshots/native-3.2gib-ply-432k-selection.png) and
+[19.4× selection view](../screenshots/native-3.2gib-ply-432k-selection-zoom.png)
+show the selection in the Rust GUI.
+
 On 1 October 2026, the native GUI opened a separate 1,200,000-point LAS test
 source and reported octree source-reading progress. `cancel_index` stopped its
 first cold build, leaving the layer unindexed and no completed cache for that
