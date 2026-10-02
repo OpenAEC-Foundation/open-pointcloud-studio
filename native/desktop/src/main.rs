@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod bag_map;
+mod bcf;
 mod camera_views;
 mod cloud_centroid;
 mod cloud_transform;
@@ -27,9 +28,9 @@ mod settings_dialog;
 mod station_photos;
 mod ui_theme;
 mod view_cube;
+mod views;
 
 use bag_map::{BagMap, MapView, TileKey};
-use camera_views::SavedView;
 use cloud_transform::CloudTransform;
 use iced::futures::SinkExt;
 use iced::mouse;
@@ -1009,6 +1010,7 @@ enum FileAction {
     ExportSection,
     ExportDecimated,
     ExportMesh,
+    ExportBcf,
     MergeVisible,
     CancelMerge,
 }
@@ -1494,10 +1496,7 @@ enum Message {
     CameraPreset(CameraPreset),
     CubeCorner([i8; 3]),
     CubeEdge([i8; 3]),
-    ViewName(String),
-    SaveView,
-    RestoreView(usize),
-    DeleteView(usize),
+    Views(views::ViewAction),
     ShowContextMenu([f32; 2]),
     ContextAction(ContextAction),
     DismissContextMenu,
@@ -1617,8 +1616,7 @@ struct Studio {
     zoom: f32,
     pan: [f32; 2],
     view_label: &'static str,
-    saved_views: Vec<SavedView>,
-    view_name: String,
+    views: views::ViewTool,
     viewport_size: Size,
     ribbon_viewport: Option<(f32, f32, f32)>,
     file_open: bool,
@@ -1965,8 +1963,7 @@ impl Default for Studio {
             zoom: 1.0,
             pan: [0.0, 0.0],
             view_label: "ISOMETRIC",
-            saved_views: camera_views::load(),
-            view_name: String::new(),
+            views: views::ViewTool::load(),
             viewport_size: Size::new(915.0, 743.0),
             ribbon_viewport: None,
             file_open: false,
@@ -2013,7 +2010,7 @@ impl Studio {
     fn active_camera_source(&self) -> Option<PathBuf> {
         self.active
             .and_then(|index| self.clouds.get(index))
-            .map(|entry| camera_views::source_key(&entry.cloud.path))
+            .map(|entry| self.views.source_of(&entry.cloud.path))
     }
 
     fn mesh_filter(&self) -> ClassFilter {
@@ -2635,7 +2632,8 @@ impl Studio {
                     .map(|bounds| json!({"min": bounds.min, "max": bounds.max}));
                 let active_source = self.active_camera_source();
                 let camera_views: Vec<_> = self
-                    .saved_views
+                    .views
+                    .list
                     .iter()
                     .filter(|view| active_source.as_ref() == Some(&view.source))
                     .collect();
@@ -2656,6 +2654,7 @@ impl Studio {
                         "photo_stations": self.photo_atlas.as_ref().map_or(0, |atlas| atlas.sets.len()),
                         "photos_loading": self.photo_loading.len(),
                         "camera_views": camera_views,
+                        "views": self.views_value(),
                         "section": section,
                         "selected_points": self.selected_total(),
                         "selection_pending": self.selection_pending,
@@ -2920,110 +2919,19 @@ impl Studio {
                     task,
                 )
             }
-            ApiCommand::ListCameraViews => {
-                let source = self.active_camera_source();
-                let views: Vec<_> = self
-                    .saved_views
-                    .iter()
-                    .filter(|view| source.as_ref() == Some(&view.source))
-                    .collect();
-                (
-                    json!({"ok": true, "source": source, "views": views}),
-                    Task::none(),
-                )
-            }
-            ApiCommand::SaveCameraView { name } => {
-                let name = name.trim().to_owned();
-                if let Some(source) = self.active_camera_source() {
-                    let matching: Vec<_> = self
-                        .saved_views
-                        .iter()
-                        .filter(|view| view.source == source)
-                        .collect();
-                    if name.is_empty()
-                        || name.chars().count() > 64
-                        || matching.len() >= 32
-                        || matching
-                            .iter()
-                            .any(|view| view.name.eq_ignore_ascii_case(&name))
-                    {
-                        (
-                            json!({"ok": false, "error": "choose a unique camera view name of 1 to 64 characters; each scan allows at most 32 views"}),
-                            Task::none(),
-                        )
-                    } else {
-                        self.saved_views.push(SavedView {
-                            source,
-                            name: name.clone(),
-                            yaw: self.yaw,
-                            pitch: self.pitch,
-                            zoom: self.zoom,
-                            pan: self.pan,
-                        });
-                        match camera_views::save(&self.saved_views) {
-                            Ok(()) => {
-                                self.status = format!("Saved camera view {name}");
-                                (json!({"ok": true, "name": name}), Task::none())
-                            }
-                            Err(error) => {
-                                self.saved_views.pop();
-                                (
-                                    json!({"ok": false, "error": error.to_string()}),
-                                    Task::none(),
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    (
-                        json!({"ok": false, "error": "open a scan before saving a camera view"}),
-                        Task::none(),
-                    )
-                }
-            }
-            ApiCommand::RestoreCameraView { name } => {
-                let source = self.active_camera_source();
-                if let Some(index) = self.saved_views.iter().position(|view| {
-                    source.as_ref() == Some(&view.source)
-                        && view.name.eq_ignore_ascii_case(name.trim())
-                }) {
-                    let view = self.saved_views[index].clone();
-                    let task = self.update(Message::RestoreView(index));
-                    (json!({"ok": true, "view": view}), task)
-                } else {
-                    (
-                        json!({"ok": false, "error": "camera view not found for the active scan"}),
-                        Task::none(),
-                    )
-                }
-            }
-            ApiCommand::DeleteCameraView { name } => {
-                let source = self.active_camera_source();
-                if let Some(index) = self.saved_views.iter().position(|view| {
-                    source.as_ref() == Some(&view.source)
-                        && view.name.eq_ignore_ascii_case(name.trim())
-                }) {
-                    let view = self.saved_views.remove(index);
-                    match camera_views::save(&self.saved_views) {
-                        Ok(()) => {
-                            self.status = format!("Deleted camera view {}", view.name);
-                            (json!({"ok": true, "name": view.name}), Task::none())
-                        }
-                        Err(error) => {
-                            self.saved_views.insert(index, view);
-                            (
-                                json!({"ok": false, "error": error.to_string()}),
-                                Task::none(),
-                            )
-                        }
-                    }
-                } else {
-                    (
-                        json!({"ok": false, "error": "camera view not found for the active scan"}),
-                        Task::none(),
-                    )
-                }
-            }
+            command @ (ApiCommand::ListCameraViews
+            | ApiCommand::SaveCameraView { .. }
+            | ApiCommand::UpdateCameraView { .. }
+            | ApiCommand::RenameCameraView { .. }
+            | ApiCommand::RestoreCameraView { .. }
+            | ApiCommand::DeleteCameraView { .. }
+            | ApiCommand::AddNote { .. }
+            | ApiCommand::AddLine { .. }
+            | ApiCommand::DeleteAnnotation { .. }
+            | ApiCommand::SetAnnotationTool { .. }
+            | ApiCommand::AnnotateScreen { .. }
+            | ApiCommand::SubmitNote { .. }
+            | ApiCommand::ExportBcf { .. }) => self.api_views(command),
             ApiCommand::SetTheme { theme } => {
                 if let Some(theme) = UiTheme::from_key(&theme.to_ascii_lowercase()) {
                     let task = self.update(Message::Theme(theme));
@@ -4447,6 +4355,7 @@ impl Studio {
     fn update(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
         self.track_progress();
+        self.settle_views();
         task
     }
 
@@ -4653,6 +4562,7 @@ impl Studio {
                     FileAction::ExportSection => Message::ExportSection,
                     FileAction::ExportDecimated => Message::Decimate,
                     FileAction::ExportMesh => Message::ExportMesh,
+                    FileAction::ExportBcf => Message::Views(views::ViewAction::ExportBcf),
                     FileAction::MergeVisible => Message::MergeVisible,
                     FileAction::CancelMerge => Message::CancelMerge,
                 });
@@ -7285,90 +7195,7 @@ impl Studio {
                 self.revision += 1;
                 return self.schedule_detail();
             }
-            Message::ViewName(name) => self.view_name = name,
-            Message::SaveView => {
-                let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) else {
-                    self.status = "Open a scan before saving a camera view".into();
-                    return Task::none();
-                };
-                let source = camera_views::source_key(&entry.cloud.path);
-                let existing: Vec<_> = self
-                    .saved_views
-                    .iter()
-                    .filter(|view| view.source == source)
-                    .collect();
-                if existing.len() >= 32 {
-                    self.status = "A scan can have at most 32 saved camera views".into();
-                    return Task::none();
-                }
-                let name = if self.view_name.trim().is_empty() {
-                    (1..=32)
-                        .map(|number| format!("View {number}"))
-                        .find(|name| !existing.iter().any(|view| view.name == *name))
-                        .unwrap()
-                } else {
-                    self.view_name.trim().to_owned()
-                };
-                if name.chars().count() > 64
-                    || existing
-                        .iter()
-                        .any(|view| view.name.eq_ignore_ascii_case(&name))
-                {
-                    self.status =
-                        "Choose a unique camera view name of 64 characters or fewer".into();
-                    return Task::none();
-                }
-                self.saved_views.push(SavedView {
-                    source,
-                    name: name.clone(),
-                    yaw: self.yaw,
-                    pitch: self.pitch,
-                    zoom: self.zoom,
-                    pan: self.pan,
-                });
-                self.view_name.clear();
-                self.status = match camera_views::save(&self.saved_views) {
-                    Ok(()) => format!("Saved camera view {name}"),
-                    Err(error) => format!("Camera view is in memory; saving failed: {error}"),
-                };
-            }
-            Message::RestoreView(index) => {
-                let Some(view) = self.saved_views.get(index).cloned() else {
-                    return Task::none();
-                };
-                let active_source = self
-                    .active
-                    .and_then(|index| self.clouds.get(index))
-                    .map(|entry| camera_views::source_key(&entry.cloud.path));
-                if active_source.as_ref() != Some(&view.source) {
-                    return Task::none();
-                }
-                self.yaw = view.yaw;
-                self.pitch = view.pitch;
-                self.zoom = view.zoom;
-                self.pan = view.pan;
-                self.view_label = "SAVED VIEW";
-                self.status = format!("Restored camera view {}", view.name);
-                self.revision += 1;
-                return self.schedule_detail();
-            }
-            Message::DeleteView(index) => {
-                let Some(view) = self.saved_views.get(index) else {
-                    return Task::none();
-                };
-                let active_source = self
-                    .active
-                    .and_then(|index| self.clouds.get(index))
-                    .map(|entry| camera_views::source_key(&entry.cloud.path));
-                if active_source.as_ref() != Some(&view.source) {
-                    return Task::none();
-                }
-                let name = self.saved_views.remove(index).name;
-                self.status = match camera_views::save(&self.saved_views) {
-                    Ok(()) => format!("Deleted camera view {name}"),
-                    Err(error) => format!("Camera view removed in memory; saving failed: {error}"),
-                };
-            }
+            Message::Views(action) => return self.update_views(action),
             Message::ShowContextMenu(point) => self.context_menu = Some(point),
             Message::DismissContextMenu => self.context_menu = None,
             Message::ContextAction(action) => {
@@ -7378,6 +7205,7 @@ impl Studio {
                         self.box_select = false;
                         self.pick_mode = false;
                         self.measure.leave(true);
+                        self.views.leave_tool();
                         self.drag_rectangle = None;
                         self.status = "Orbit mode".into();
                     }
@@ -7385,12 +7213,14 @@ impl Studio {
                         self.box_select = true;
                         self.pick_mode = false;
                         self.measure.leave(true);
+                        self.views.leave_tool();
                         self.status = "Box selection active; Escape exits".into();
                     }
                     ContextAction::PickPoint => {
                         self.pick_mode = true;
                         self.box_select = false;
                         self.measure.leave(true);
+                        self.views.leave_tool();
                         self.status = "Point picking active; Escape exits".into();
                     }
                     ContextAction::SectionBox => {
@@ -7409,6 +7239,11 @@ impl Studio {
                     self.file_open = false;
                     return Task::none();
                 }
+                // A rename or a half-placed annotation ends before anything else.
+                if let Some(status) = self.views.cancel_input() {
+                    self.status = status.into();
+                    return Task::none();
+                }
                 if self.walk.is_some() {
                     return self.update(Message::LeaveWalk);
                 }
@@ -7418,6 +7253,7 @@ impl Studio {
                 self.pick_mode = false;
                 // An unfinished measurement is dropped; a finished one stays.
                 let measuring = self.measure.leave(false);
+                let annotating = self.views.leave_tool();
                 self.bag_map_drawing = false;
                 self.drag_rectangle = None;
                 let deselected = self.selected_total() > 0;
@@ -7434,6 +7270,8 @@ impl Studio {
                     "Selection cleared; orbit and right-click menu available".into()
                 } else if measuring {
                     "Measuring stopped; orbit and right-click menu available".into()
+                } else if annotating {
+                    "Annotation tool closed; orbit and right-click menu available".into()
                 } else {
                     "Selection tool closed; orbit and right-click menu available".into()
                 };
@@ -7447,12 +7285,14 @@ impl Studio {
                 self.box_select = !self.box_select;
                 self.pick_mode = false;
                 self.measure.leave(true);
+                self.views.leave_tool();
                 self.drag_rectangle = None;
             }
             Message::TogglePickSelect => {
                 self.pick_mode = !self.pick_mode;
                 self.box_select = false;
                 self.measure.leave(true);
+                self.views.leave_tool();
                 self.drag_rectangle = None;
             }
             Message::Measure(action) => return self.update_measure(action),
@@ -8157,6 +7997,7 @@ impl Studio {
             section,
             selection,
             self.measure.ribbon(),
+            self.views_ribbon(),
             edit,
             opencad_ribbon::render_group_items("SURFACE", surface_tools),
             index,
@@ -8570,6 +8411,7 @@ impl Studio {
             box_select: self.box_select,
             pick_mode: self.pick_mode,
             measure: &self.measure,
+            annotate: self.views_overlay(),
             drag_rectangle: self.drag_rectangle,
             context_menu: self.context_menu,
             viewport_size: self.viewport_size,
@@ -8660,6 +8502,11 @@ impl Studio {
                 "Surface mesh…",
                 FileAction::ExportMesh,
                 active_cloud.is_some_and(|entry| entry.mesh.is_some()) && !self.mesh_export_pending,
+            ),
+            action(
+                "Views as BCF…",
+                FileAction::ExportBcf,
+                self.can_export_bcf(),
             ),
             iced::widget::vertical_space(),
             button(text(i18n::tr("←  Return to model")).size(13))
@@ -8897,6 +8744,10 @@ impl Studio {
             )
         } else {
             canvas
+        };
+        let canvas = match self.note_prompt() {
+            Some(prompt) => canvas.push(prompt),
+            None => canvas,
         };
 
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
@@ -9216,58 +9067,7 @@ impl Studio {
         if let Some(section) = self.measure.properties() {
             properties = properties.push(section);
         }
-        properties = properties
-            .push(opencad_properties::section_header("Camera views"))
-            .push(opencad_properties::property_row(
-                "Yaw / pitch",
-                format!(
-                    "{:.0}° / {:.0}°",
-                    self.yaw.to_degrees(),
-                    self.pitch.to_degrees()
-                ),
-            ))
-            .push(opencad_properties::property_row(
-                "Zoom",
-                format_zoom_level(self.zoom),
-            ))
-            .push(
-                container(
-                    row![
-                        text_input(i18n::tr("View name"), &self.view_name)
-                            .on_input(Message::ViewName)
-                            .size(11)
-                            .padding([3, 5])
-                            .width(Fill),
-                        button(i18n::tr("Save"))
-                            .on_press_maybe(active_cloud.is_some().then_some(Message::SaveView))
-                            .style(flat_tool_style),
-                    ]
-                    .spacing(4)
-                    .align_y(iced::Alignment::Center),
-                )
-                .padding([5, 8]),
-            );
-        let active_source = active_cloud.map(|entry| camera_views::source_key(&entry.cloud.path));
-        for (index, view) in self.saved_views.iter().enumerate() {
-            if active_source.as_ref() != Some(&view.source) {
-                continue;
-            }
-            properties = properties.push(
-                container(
-                    row![
-                        button(text(view.name.as_str()).size(11))
-                            .on_press(Message::RestoreView(index))
-                            .style(flat_tool_style)
-                            .width(Fill),
-                        button("×")
-                            .on_press(Message::DeleteView(index))
-                            .style(flat_tool_style),
-                    ]
-                    .spacing(3),
-                )
-                .padding([2, 8]),
-            );
-        }
+        properties = properties.push(self.views_properties());
         if self.section_enabled {
             properties = properties.push(opencad_properties::section_header("Section box"));
             for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
@@ -9607,7 +9407,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::ResetCamera => ToolIcon::Fit,
         Message::ZoomToSection => ToolIcon::Fit,
         Message::CameraPreset(preset) => ToolIcon::Camera(*preset),
-        Message::SaveView => ToolIcon::Save,
+        Message::Views(action) => action.icon(),
         Message::ApplyTranslation => ToolIcon::Move,
         Message::ApplyScale => ToolIcon::Scale,
         Message::ToggleBoxSelect => ToolIcon::Select,
@@ -9919,6 +9719,8 @@ enum ToolIcon {
     Pick,
     MeasureDistance,
     MeasureArea,
+    Note,
+    Line,
     Clear,
     Undo,
     Redo,
@@ -9950,6 +9752,9 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
             include_bytes!("../../assets/opencad-icons/measure_distance.svg")
         }
         ToolIcon::MeasureArea => include_bytes!("../../assets/opencad-icons/measure_area.svg"),
+        // So are the two annotation icons.
+        ToolIcon::Note => include_bytes!("../../assets/opencad-icons/annotation_note.svg"),
+        ToolIcon::Line => include_bytes!("../../assets/opencad-icons/annotation_line.svg"),
         ToolIcon::Clear => include_bytes!("../../assets/opencad-icons/xclip_remove.svg"),
         ToolIcon::Undo => include_bytes!("../../assets/opencad-icons/undo.svg"),
         ToolIcon::Redo => include_bytes!("../../assets/opencad-icons/redo.svg"),
@@ -10340,6 +10145,7 @@ struct PointViewport<'a> {
     box_select: bool,
     pick_mode: bool,
     measure: &'a measure::MeasureTool,
+    annotate: views::Overlay<'a>,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     viewport_size: Size,
@@ -10455,6 +10261,8 @@ enum DragMode {
     RightPending,
     /// Left press while measuring: a click picks a point, a drag orbits.
     MeasurePending,
+    /// Left press with an annotation tool: a click picks a point, a drag orbits.
+    AnnotatePending,
     Section(usize, bool),
 }
 
@@ -10500,11 +10308,19 @@ fn finish_viewport_drag(
             Some(Message::FinishPan(dx, dy))
         }
         (mouse::Button::Left, DragMode::Orbit) if total > 0.5 => Some(Message::FinishOrbit(dx, dy)),
-        (mouse::Button::Left, DragMode::MeasurePending) if total >= 5.0 => Some(
-            Message::FinishOrbit(position.x - drag.start.x, position.y - drag.start.y),
-        ),
+        (mouse::Button::Left, DragMode::MeasurePending | DragMode::AnnotatePending)
+            if total >= 5.0 =>
+        {
+            Some(Message::FinishOrbit(
+                position.x - drag.start.x,
+                position.y - drag.start.y,
+            ))
+        }
         (mouse::Button::Left, DragMode::MeasurePending) => Some(Message::Measure(
             measure::MeasureAction::Click([position.x, position.y], size),
+        )),
+        (mouse::Button::Left, DragMode::AnnotatePending) => Some(Message::Views(
+            views::ViewAction::Click([position.x, position.y], size),
         )),
         (mouse::Button::Middle, DragMode::Turn) if total > 0.5 => {
             Some(Message::FinishOrbit(-dx, dy))
@@ -10782,6 +10598,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     && !self.box_select
                     && !self.pick_mode
                     && self.measure.mode.is_none()
+                    && self.annotate.tool.is_none()
                 {
                     if let (Some(overall), Some(position)) =
                         (combined_bounds(self.clouds), cursor.position_in(bounds))
@@ -10817,6 +10634,8 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         DragMode::Select
                     } else if self.measure.mode.is_some() {
                         DragMode::MeasurePending
+                    } else if self.annotate.tool.is_some() {
+                        DragMode::AnnotatePending
                     } else {
                         DragMode::Orbit
                     },
@@ -10873,7 +10692,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     previous.position = position;
                     if matches!(
                         previous.mode,
-                        DragMode::RightPending | DragMode::MeasurePending
+                        DragMode::RightPending
+                            | DragMode::MeasurePending
+                            | DragMode::AnnotatePending
                     ) {
                         if (position.x - previous.start.x).hypot(position.y - previous.start.y)
                             < 5.0
@@ -10894,7 +10715,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             DragMode::Orbit => Message::Orbit(dx, dy),
                             DragMode::Turn => Message::Orbit(-dx, dy),
                             DragMode::Pan => Message::Pan(dx, dy),
-                            DragMode::RightPending | DragMode::MeasurePending => unreachable!(),
+                            DragMode::RightPending
+                            | DragMode::MeasurePending
+                            | DragMode::AnnotatePending => unreachable!(),
                             DragMode::Section(axis, is_min) => {
                                 let (Some(section), Some(scene_bounds)) =
                                     (self.section, combined_bounds(self.clouds))
@@ -10977,6 +10800,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        self.annotate.drawn_at(bounds);
         if let Some(view) = self.walk {
             self.draw_walk_overlay(&mut frame, view, bounds.size());
             return vec![frame.into_geometry()];
@@ -11273,6 +11097,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
             }
         }
         self.draw_measure(&mut frame, bounds.size());
+        self.draw_annotations(&mut frame, bounds.size());
         view_cube::draw(
             &mut frame,
             bounds,
@@ -11349,7 +11174,8 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 || (self.show_scan_poses
                     && !self.box_select
                     && !self.pick_mode
-                    && self.measure.mode.is_none())
+                    && self.measure.mode.is_none()
+                    && self.annotate.tool.is_none())
                     && cursor.position_in(bounds).is_some_and(|point| {
                         combined_bounds(self.clouds).is_some_and(|overall| {
                             scan_pose_at(
@@ -11371,7 +11197,8 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     })
             {
                 mouse::Interaction::Pointer
-            } else if self.box_select || self.measure.mode.is_some() {
+            } else if self.box_select || self.measure.mode.is_some() || self.annotate.tool.is_some()
+            {
                 mouse::Interaction::Crosshair
             } else {
                 mouse::Interaction::Grab
@@ -11516,10 +11343,24 @@ impl PointViewport<'_> {
                 (event::Status::Captured, None)
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(
-                mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle,
+                button @ (mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle),
             )) => {
-                *drag = None;
-                (event::Status::Captured, None)
+                // With an annotation tool a left click without a drag picks a point.
+                let click = drag
+                    .take()
+                    .filter(|_| button == mouse::Button::Left && self.annotate.tool.is_some())
+                    .and_then(|pressed| {
+                        let position = cursor.position_from(bounds.position())?;
+                        let moved =
+                            (position.x - pressed.start.x).hypot(position.y - pressed.start.y);
+                        (moved < 5.0).then(|| {
+                            Message::Views(views::ViewAction::Click(
+                                [position.x, position.y],
+                                bounds.size(),
+                            ))
+                        })
+                    });
+                (event::Status::Captured, click)
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if let Some(previous) = drag.as_mut() {
@@ -11574,6 +11415,7 @@ impl PointViewport<'_> {
             });
         };
         self.draw_measure(frame, size);
+        self.draw_annotations(frame, size);
         let inside = self.walk_station.is_some();
         for station in self.walk_stations(view, size) {
             if inside {
@@ -13194,22 +13036,22 @@ mod camera_api_tests {
         let mut studio = Studio::default();
         let _ = studio.update(Message::Loaded(Ok(first)));
         let _ = studio.update(Message::Loaded(Ok(second)));
-        studio.saved_views.push(SavedView {
-            source: camera_views::source_key(&first_path),
-            name: "First entrance".into(),
-            yaw: 0.5,
-            pitch: 0.25,
-            zoom: 2.0,
-            pan: [12.0, -8.0],
-        });
-        studio.saved_views.push(SavedView {
-            source: camera_views::source_key(&second_path),
-            name: "Second entrance".into(),
-            yaw: -0.5,
-            pitch: 0.1,
-            zoom: 3.0,
-            pan: [4.0, 5.0],
-        });
+        studio.views.list.push(camera_views::SavedView::camera(
+            camera_views::source_key(&first_path),
+            "First entrance",
+            0.5,
+            0.25,
+            2.0,
+            [12.0, -8.0],
+        ));
+        studio.views.list.push(camera_views::SavedView::camera(
+            camera_views::source_key(&second_path),
+            "Second entrance",
+            -0.5,
+            0.1,
+            3.0,
+            [4.0, 5.0],
+        ));
 
         let _ = studio.update(Message::Select(0));
         let listed = send(&mut studio, native_api::ApiCommand::ListCameraViews);

@@ -571,6 +571,7 @@ impl Studio {
                     self.status = "Measuring stopped".into();
                 } else {
                     self.measure.mode = Some(mode);
+                    self.views.leave_tool();
                     self.box_select = false;
                     self.pick_mode = false;
                     self.drag_rectangle = None;

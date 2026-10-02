@@ -4,7 +4,7 @@ This workspace is the active all-Rust replacement for the Tauri, React and Three
 
 The design follows [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio): a Rust document and I/O core, a native `iced` user interface, and a viewport. The reference was cloned beside this repository and inspected at commit `1fec34d`. The native desktop ribbon now contains adapted source from `src/ui/ribbon/mod.rs`, `widgets.rs` and `draw_panel.rs`: its three-row panel packing, large/small tool columns and tool button styling. The properties panel adopts the two-column rows from `src/ui/properties.rs`. See [`desktop/src/opencad_ribbon.rs`](desktop/src/opencad_ribbon.rs) and [`desktop/src/opencad_properties.rs`](desktop/src/opencad_properties.rs) for source attribution and adaptation notes. OpenCADStudio is GPL-3.0, so the native desktop crate is GPL-3.0-only; its license text is at [`desktop/LICENSE-GPL-3.0`](desktop/LICENSE-GPL-3.0). The separate pointcloud core remains LGPL-3.0-or-later.
 
-The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-book) was cloned beside this repository (commit `dfdcd41`). The native ribbon uses the old application's compact button grouping, OpenCADStudio's Rust three-row ribbon primitives and quick-access pattern, and OpenAEC's Deep Forge, Night Build, Scaffold Gray, Construction Amber and Warm Gold tokens. Its top strip holds the File button and, at the right end, the quick-access actions Import, Open scan folder, Export, Undo and Redo, with muted disabled actions and tooltips. Group captions and active/hover states follow the style-book ribbon tokens; in a narrow window the tool groups scroll horizontally with visible left/right controls instead of being clipped. All tools sit on one ribbon without tabs, in the groups View, Display, Section box, Selection, Measure, Edit, Surface and Index, and every action appears there once. The 3D BAG panel is not offered in the ribbon, while `--bag3d` remains available. The cancel actions for a running selection scan, scale, mesh or index build take the place of their start buttons or appear only during the job. The File view has native Deep Forge, Blueprint Light, Night Build, Blueprint Blue and High Contrast choices. The selection persists in `open-pointcloud-studio-native/theme` under the XDG configuration directory (or `~/.config`; on Windows the roaming application data folder unless `XDG_CONFIG_HOME` is set, with disk indexes under the local application data folder); the CAD viewport stays dark across themes. The old web ribbon's CSS and TypeScript components are not used in the native build. Inter and Space Grotesk are bundled as OFL-licensed native font assets. Visual checks are saved in [`../screenshots/`](../screenshots/).
+The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-book) was cloned beside this repository (commit `dfdcd41`). The native ribbon uses the old application's compact button grouping, OpenCADStudio's Rust three-row ribbon primitives and quick-access pattern, and OpenAEC's Deep Forge, Night Build, Scaffold Gray, Construction Amber and Warm Gold tokens. Its top strip holds the File button and, at the right end, the quick-access actions Import, Open scan folder, Export, Undo and Redo, with muted disabled actions and tooltips. Group captions and active/hover states follow the style-book ribbon tokens; in a narrow window the tool groups scroll horizontally with visible left/right controls instead of being clipped. All tools sit on one ribbon without tabs, in the groups View, Display, Section box, Selection, Measure, Views, Edit, Surface and Index, and every action appears there once. The 3D BAG panel is not offered in the ribbon, while `--bag3d` remains available. The cancel actions for a running selection scan, scale, mesh or index build take the place of their start buttons or appear only during the job. The File view has native Deep Forge, Blueprint Light, Night Build, Blueprint Blue and High Contrast choices. The selection persists in `open-pointcloud-studio-native/theme` under the XDG configuration directory (or `~/.config`; on Windows the roaming application data folder unless `XDG_CONFIG_HOME` is set, with disk indexes under the local application data folder); the CAD viewport stays dark across themes. The old web ribbon's CSS and TypeScript components are not used in the native build. Inter and Space Grotesk are bundled as OFL-licensed native font assets. Visual checks are saved in [`../screenshots/`](../screenshots/).
 The ribbon's active text, group-label opacity, separators, hover and File-tab colors now match the style book's `themes.css` tokens per palette. A new configuration starts in Blueprint Light, the style book's default; saved theme choices remain in effect. Compare the native [light](../screenshots/native-openaec-ribbon-tokens-light.png) and [Deep Forge](../screenshots/native-openaec-ribbon-tokens-forge.png) screenshots.
 The ribbon's RGB, Elevation, Intensity and Classification controls now
 use native Iced line drawings at OpenCADStudio's small-tool icon scale. Inactive
@@ -35,10 +35,12 @@ resizing back to a wide window removes them again.
 
 Commands that are used rarely or need several parameters are offered once
 outside the ribbon. The File view has the export variants (full resolution,
-selected points, without selected points, section box, every Nth point and
-surface mesh), merging of visible LAS/LAZ scans and the export format.
+selected points, without selected points, section box, every Nth point,
+surface mesh and the saved views as BCF), merging of visible LAS/LAZ scans
+and the export format.
 Properties repeats nothing the ribbon offers: besides what a scan is
-and holds, it has saving a camera view, the strength of eye-dome lighting
+and holds, it has the saved views with their name field and the annotations
+of the active view, the strength of eye-dome lighting
 while that is on, the limits of the section box with Zoom box while the box
 is on, the 3D surface settings, the list of stations and the cancel buttons
 of mesh, merge and scale jobs.
@@ -54,7 +56,7 @@ the former [Home](../screenshots/native-ribbon-overflow-home-wide.png),
 navigation arrows, and the [arrows at 900 pixels](../screenshots/native-ribbon-overflow-tools-narrow.png)
 with the [right arrow disabled at the end](../screenshots/native-ribbon-overflow-tools-scrolled.png).
 
-The amber File button opens a native backstage view with the currently open scans, direct scan activation, import, the export variants (full resolution, selected points, without selected points, section box, every Nth point and surface mesh), merging of visible LAS/LAZ scans, format choice and appearance choice. The File view covers the tool ribbon and model space, while keeping quick access and the status bar visible; Escape or Return to model closes it. Unavailable exports appear muted. This uses the existing Rust import/export commands and no web components.
+The amber File button opens a native backstage view with the currently open scans, direct scan activation, import, the export variants (full resolution, selected points, without selected points, section box, every Nth point, surface mesh and saved views as BCF), merging of visible LAS/LAZ scans, format choice and appearance choice. The File view covers the tool ribbon and model space, while keeping quick access and the status bar visible; Escape or Return to model closes it. Unavailable exports appear muted. This uses the existing Rust import/export commands and no web components.
 
 The top strip has the File button, the Home tab of the ribbon beside it and, at its right end after the quick-access actions, a Settings button. Settings follows the dialog of the OpenAEC style book: General has the language (Auto-detect, English, Nederlands), Appearance the theme with its swatches, and About the version, framework and licence. A choice shows at once; Cancel or Escape puts back what was in use and Save keeps it, the language in a `language` file beside the theme. Texts are looked up by their English wording in `assets/locales/nl.json`; a text without an entry stays English, which still holds for status messages. The theme is no longer chosen in the File view.
 
@@ -62,7 +64,7 @@ Native display and indexing defaults now persist in `settings.json` under the sa
 
 OpenCADStudio's SVG icons under `assets/icons/` were copied into [`assets/opencad-icons/`](assets/opencad-icons/) and are embedded by Rust `iced::widget::svg`. No HTML, CSS, JavaScript or webview is used in the native desktop crate.
 
-Camera views can be named and saved from the Properties panel, then restored or deleted there. They persist per source scan in `camera-views.json` under the native XDG configuration directory.
+Views can be saved with the camera, the section box, the colour mode and annotations, restored, and exported as BCF; see [Saved views, annotations and BCF](#saved-views-annotations-and-bcf). They persist per source scan in `camera-views.json` under the native XDG configuration directory.
 E57 scan transforms, valid PCD `VIEWPOINT` headers and PTX scanner positions appear as station markers in the native 3D view. A PCD header with an all-zero orientation, found in public PCL samples, opens with identity orientation but has no invented scanner axes. For isolated stations, the small X/Y/Z axes show the registered scanner orientation; nearby stations grouped into one marker do not imply a shared orientation. The ribbon's **Fit stations** frames stations together with the cloud; Properties lists each station's coordinates and axis directions. Click a marker or a station's **Center** button to pan the current view to that position without changing its angle or zoom. Use `--scans INPUT` to print positions and orientations.
 
 The project panel lists the open clouds in name order, one compact row each
@@ -208,6 +210,115 @@ selection tool keeps a measurement that has enough points and drops one that
 has not. One measurement holds at most 256 points and is not saved with the
 scan.
 
+### Saved views, annotations and BCF
+
+A view holds everything needed to come back to it: the camera (the orbit
+camera, or the walking camera when the view was saved while walking), the
+section box with its limits in model coordinates and whether it was on, the
+colour mode, the time it was saved, an identifier and its annotations.
+**Save view** in the ribbon's Views group, or Save beside the name field
+under **Views** in Properties, saves what the viewport shows; without a name
+the view becomes "View 1", "View 2", …. Properties lists the views of the
+active scan: a click on a name restores the view, **Rename** changes its
+name, **Update** overwrites it with the current view and × deletes it. A scan
+has at most 32 views with names that are unique within it. Views are stored
+per source scan in `camera-views.json` in the configuration directory; files
+written before views held more than the orbit camera still load. Every view
+in the file is read on its own, so a view that this version cannot read does
+not take the others with it, and a file that cannot be read at all is copied
+to `camera-views.unreadable.json` before the next save replaces it.
+
+Restoring puts the camera, the section box and the colour mode back. The
+orbit camera is relative to the bounds of the scene and to the viewport, so a
+view also keeps those: in a viewport of another size the pan scales with the
+picture, and when other scans have been opened or closed since, the camera is
+moved to show what it showed.
+
+The view last saved or restored is the active view, shown highlighted in the
+list. Its annotations are drawn over the scene and stay on their points while
+the camera moves, in the orbit view and while walking; **Hide** stops showing
+them. **Note** and **Line** in the Views group place annotations by picking
+exact points, with the same search and eight-pixel reach as the measuring
+tool; a drag still orbits. A note is a picked point with a text: after the
+click a field over the viewport takes the text, and Enter or Add places a
+marker with a label and a leader. A line is two picked points, drawn as an
+arrow from the first to the second. Escape cancels a half-placed annotation
+and, pressed again, leaves the tool. An annotation placed while no view is
+active first saves the current view. The annotations of the active view are
+listed in Properties, each with × to delete it; a view holds at most 64, and
+a note at most 240 characters. The label of a note stays inside the viewport
+and moves away from its point past the markers and the labels of other notes
+close by. The annotation tools, the measuring tools and the selection tools
+exclude each other. A half-placed annotation is dropped when another scan
+becomes the active one, and the tool is left when the last scan is closed.
+
+Each view has a snapshot: a PNG image of the viewport alone, with the points,
+the section box and the annotations, cut from a screenshot of the window. It
+is taken shortly after a view is saved or updated and again when its
+annotations change, once the change has been drawn and the points have
+refined. A snapshot is only ever taken while the viewport shows the view: the
+view is the active one, and the camera, the section box, the colour mode and
+the bounds of the scene are what they were when the view was last saved,
+updated or restored. The camera of a view does not follow the viewport, so
+after turning or zooming to reach a point, placing or removing an annotation
+changes the view and leaves its snapshot as it is; the status line says that
+the snapshot is renewed when the view is restored, and restoring the view
+takes it. The same goes for a snapshot that could not be taken, because the
+camera moved before it was or because capturing failed, and for a view from a
+list written before snapshots existed: a view whose snapshot is missing or
+older than the view has `snapshot_due` in the list, and restoring it takes
+the snapshot. When only the size of the viewport has changed, with the window
+or with a status text of more lines, the pan first follows the picture as it
+does on restoring, and the snapshot is taken of that. A snapshot taken in a
+viewport of another size, or in a scene with other bounds, than the view was
+saved with stores the view relative to that viewport and scene, so that the
+picture and the camera of the view keep belonging together. Snapshots are
+stored as `view-snapshots/<identifier>.png` beside `camera-views.json`, at
+most 1920 pixels along their longest edge, and are removed with their view.
+When a snapshot cannot be taken the view is saved all the same.
+
+**Export BCF** in the Views group, or **Views as BCF…** among the exports of
+the File view, writes all views of the active scan as one BCF 2.1 file
+(`.bcf`, the BIM Collaboration Format of buildingSMART). The file is a ZIP
+container with `bcf.version` and one folder per view, named by the view's
+identifier:
+
+- `markup.bcf`: a topic with that identifier, the name of the view as its
+  title, its creation date and the account name of the user as author, the
+  file name of the scan in its header, and one comment per note, each
+  referring to the viewpoint.
+- `viewpoint.bcfv`: a perspective camera, the six clipping planes of the
+  section box when it was on (each on a face, pointing at the side that is
+  cut away), and lines: each line annotation, and a short upright line of
+  0.25 m at the point of each note.
+- `snapshot.png`, when the view has a snapshot.
+
+The status line reports how many views were written, how many of them with a
+snapshot, and how many changed after their snapshot was taken and wait to be
+restored. A view from a list written before times were kept gets the time of
+its first export as its creation date and keeps it.
+
+Coordinates are model coordinates in metres. The camera reproduces the view:
+it stands where the application's camera stands, with the true vertical field
+of view. The walking camera maps directly. The orbit camera stands 1.8 scene
+extents from the scene centre; panning shifts its picture instead of turning
+it, which a BCF camera cannot express, so the exported camera is turned in
+place towards what is in the middle of the viewport. Without pan the two
+pictures are the same. With pan they agree in the middle and drift apart
+towards the edges, by about the distance from the middle squared times the
+pan, divided by the focal length squared, where the focal length is 1.25
+times the shorter side of the viewport divided by the zoom. In a viewport of
+800 by 600 pixels at zoom 1, a pan of 50 pixels gives 0.7 pixels at 100
+pixels from the middle, 3 at 200 and 14 at the left and right edges; a pan
+of 200 pixels gives 7 at 200 pixels from the middle and 46 to 59 at the
+edges. A view that must match its snapshot to the edge is saved without pan.
+The BCF 2.1 schema limits `FieldOfView` to 45–60
+degrees and announces that readers should expect values outside that range;
+the file states the true angle, which lies outside it for most views (the
+orbit camera at zoom 1 has about 44 degrees and narrows as it zooms in).
+The ZIP container is written by the application itself, with deflated XML and
+stored images.
+
 The [opencadcodec](https://github.com/HakanSeven12/opencadcodec) repository was inspected at commit `5ef9376` (MPL-2.0). Its `PointCloudData`, `PointCloudExData`, definitions, clips and color maps model *DWG/DXF point-cloud references* and scan placement. Its `source_filename`/`source_files` fields link to scan data; this is not a LAS/LAZ/E57 point decoder or point-processing kernel. OpenCADStudio itself still reports `POINTCLOUDATTACH` as unimplemented and renders existing point-cloud CAD entities as frames/wires. Its `opencadkernel` dependency handles CAD curves and B-rep geometry, not the point stream. Our existing streaming decoders and disk octree therefore remain the scan engine. A future CAD-reference workflow should use `opencadcodec` to resolve and display attached scans and apply its transforms/crops, while keeping scan points on disk.
 
 LAZ writing uses the `las` crate's parallel compressor with bounded 400,000-point
@@ -336,7 +447,7 @@ shows the selected area framed at 19.4× after the Zoom selection action.
 | --- | --- |
 | LAS/LAZ, PLY, XYZ/ASC/TXT/CSV, PTS import | Implemented for point data; bounded ASCII and little-endian binary PLY polygon meshes also render |
 | PCD, PTX, OBJ, OFF, STL, DXF, E57 import | Point vertices implemented, including PCD LZF compression and VIEWPOINT transforms in all three PCD storage modes; official PCL XYZ, RGB, label/RGBA, intensity/extra-field, padding and organized captures were validated. OBJ, OFF, STL and DXF 3DFACE geometry also renders as triangles |
-| Multiple clouds, visibility, orbit, pan, deep zoom, 3D view cube, right-click menu, rounded points, colors, point size, budget, classes | Native implementation; close-up point spheres grow gently on screen so their lighting stays visible, with a capped increase over the chosen point size. Named camera views save and restore yaw, pitch, zoom and pan per source scan. The project panel lists the classification codes that occur in the open clouds; each can be shown or hidden like a layer, which filters both rendering and exact selection. Advanced navigation polish remains |
+| Multiple clouds, visibility, orbit, pan, deep zoom, 3D view cube, right-click menu, rounded points, colors, point size, budget, classes | Native implementation; close-up point spheres grow gently on screen so their lighting stays visible, with a capped increase over the chosen point size. Saved views keep the camera, the section box, the colour mode and note and line annotations per source scan, each with a snapshot, and export as BCF 2.1. The project panel lists the classification codes that occur in the open clouds; each can be shown or hidden like a layer, which filters both rendering and exact selection. Advanced navigation polish remains |
 | Section box | Three-axis clipping with visible wireframe, six draggable face handles, six limit sliders and precise XYZ fields. Fit box to selection uses exact selected source points, including points outside the preview; Zoom box frames the clipped volume in the viewport. Clipping applies to GPU rendering, full-resolution selection and a separate clipped export |
 | Octree LOD and eye-dome lighting | Existing disk-backed octrees attach when a scan opens. Uncached scans with at least one million points are indexed automatically, one at a time, after their preview loads; the ribbon's Index group can disable this or start a manual build. Source-read and tree-build progress appear in the strip above the scene and in the status bar, and a running build can be cancelled without retaining a partial cache. Camera movement selects visible nodes by projected size and refreshes a bounded point sample while retaining the previous sample until its replacement is ready; stale requests cancel during node reads and leaf-preview generation. The point-budget control reaches 10 million, with point uploads split into bounded WGPU buffers. Compact per-leaf LOD previews make repeated cold-cache navigation cheaper; old indexes create these previews on first use without a full rebuild. Native screen-space eye-dome shading has an on/off switch and an adjustable 0–5 strength in View and Properties |
 | Full-resolution point selection | Index-guided exact box selection when available, full-source fallback, single-point picking that prefers the displayed LOD and falls back to the exact full source with or without an index, selected point properties and selected export. The local API also picks by viewport pixel and returns the source ordinal and attributes. The ribbon's Zoom selection action frames the exact selected bounds without changing the section box; selection masks retain source-coordinate bounds so a later live transform and a gigabyte scan do not require a second full-source read. Long box scans can be cancelled from the ribbon, Escape or local API without applying partial results |
@@ -348,7 +459,7 @@ shows the selected area framed at 19.4× after the Zoom selection action.
 | OBJ mesh export | Terrain and 3D surface meshers save RGB and per-vertex normals in OBJ; any resident OBJ, PLY, OFF, STL or DXF triangle mesh can also be exported from the File view or Properties. Imported OBJ/PLY colors and aligned normals survive conversion. The writer saves atomically and keeps 3DBAG attribution where applicable |
 | 3DBAG | Native RD map with PDOK raster tiles, rectangle drawing, pan/zoom, typed/scan/section-box bounds, LoD choice, paginated CityJSONFeatures import and GPU mesh display |
 | Themes | Five native OpenAEC palettes, selected in the File view and persisted locally; model space remains dark |
-| Settings and automation API | Theme, display/indexing defaults and named camera views persist in native configuration files. A local token-protected Rust command API controls open layers, camera, visibility, section boxes, exact point selection, deletion/undo/redo, percentage thinning and exports; more commands and settings remain to port |
+| Settings and automation API | Theme, display/indexing defaults and saved views persist in native configuration files. A local token-protected Rust command API controls open layers, camera, visibility, section boxes, exact point selection, deletion/undo/redo, percentage thinning and exports; more commands and settings remain to port |
 
 Mesh export writes all vertices and faces from the mesh currently held by the viewer, validates indices before touching the destination, and saves atomically. The File view and Properties panel expose it for imported OBJ, PLY, OFF, STL and DXF meshes. The `--mesh-export INPUT OUTPUT.obj` command supports batch conversion; 3DBAG output retains the required attribution header.
 

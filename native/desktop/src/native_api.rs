@@ -65,13 +65,46 @@ pub enum ApiCommand {
     ZoomAll,
     ListCameraViews,
     SaveCameraView {
+        /// Empty or absent for the next free "View N".
+        #[serde(default)]
         name: String,
+    },
+    UpdateCameraView {
+        name: String,
+    },
+    RenameCameraView {
+        name: String,
+        new_name: String,
     },
     RestoreCameraView {
         name: String,
     },
     DeleteCameraView {
         name: String,
+    },
+    AddNote {
+        point: [f64; 3],
+        text: String,
+    },
+    AddLine {
+        from: [f64; 3],
+        to: [f64; 3],
+    },
+    DeleteAnnotation {
+        index: usize,
+    },
+    SetAnnotationTool {
+        /// `note`, `line`, or null to leave the tool.
+        tool: Option<String>,
+    },
+    AnnotateScreen {
+        pointer: [f32; 2],
+    },
+    SubmitNote {
+        text: String,
+    },
+    ExportBcf {
+        path: PathBuf,
     },
     SetTheme {
         theme: String,

@@ -108,10 +108,42 @@ difference is the last point's Z minus the first point's, `area` is the true
 units. `status.result.measure_mode` is the measuring mode active in the
 viewport: `distance`, `area` or `null`. Points picked there appear in
 `measure` with `finished: false` until the measurement is finished.
+A saved view holds the orbit camera (`yaw`, `pitch`, `zoom`, `pan`), the
+walking camera in `walk` when it was saved while walking, the scene bounds and
+viewport size the camera was relative to in `frame`, the section box in
+`section` (`enabled`, `min`, `max` in model coordinates, also while it is
+off), the `color_mode`, its `guid`, its `created` time in seconds since 1970,
+`snapshot_due: true` while its snapshot is missing or older than the view,
+and its `annotations`. An annotation is `{"kind":"note","point":[x,y,z],
+"text":…,"guid":…,"created":…}` or `{"kind":"line","from":[x,y,z],
+"to":[x,y,z]}`. The view last saved or restored is the active view:
+`add_note` and `add_line` add to it, and first save the current view as
+"View N" when no view is active. `status.result.views` reports the `active`
+view with its annotations (or `null`), the `annotation_tool` in use in the
+viewport (`note`, `line` or `null`), a half-placed annotation in `placing`
+(its `kind` and picked `point`: a note that waits for its text or the start of
+a line, otherwise `null`), and `snapshots_pending`: the views whose snapshot
+image is still to be written. `set_annotation_tool`, `annotate_screen` and
+`submit_note` drive the annotation tools as the ribbon and the viewport do:
+`annotate_screen` picks the exact source point at a viewport pixel like
+`pick_screen` and answers `accepted: true` when the search has started; poll
+`status.result.selection_pending` until it is false and read `placing`. A snapshot is taken shortly after a view is saved or updated or
+its annotations change, once the viewport has drawn the change, and only
+while the viewport shows that view: the camera, the section box, the colour
+mode and the scene bounds are as the view was last saved, updated or
+restored. After `set_camera`, `set_section` or another change of those,
+`add_note`, `add_line` and `delete_annotation` leave the snapshot as it is
+and the view keeps `snapshot_due`; `restore_camera_view` shows the view again
+and takes the snapshot. A snapshot taken in a viewport of another size than
+the view's `frame` rewrites `pan` and `frame` for that size. Wait for `snapshots_pending` to reach 0 before
+`export_bcf` when the file should carry the newest images. `export_bcf`
+writes all views of the active scan synchronously and answers with the
+number of `views` and of `snapshots` in the file, and with `snapshots_due`:
+the views whose snapshot is missing or older than the view.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
+| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
 | `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found), `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -125,10 +157,19 @@ viewport: `distance`, `area` or `null`. Points picked there appear in
 | `set_panorama` | `yaw`, `pitch`, `field_of_view` | Turns the walking camera; yaw within ±π, pitch within ±1.55 and a horizontal field of view from 0.35 to 2.1 radians |
 | `walk` | `eye`, `yaw`, `pitch` | Places the walking camera at a position in scene coordinates, looking along the heading `yaw` and elevation `pitch`; inside a station ball it shows that station's photos |
 | `close_panorama` | — | Leaves the walking camera and returns to the orbit view |
-| `list_camera_views` | — | Lists saved views for the active scan, including each view's yaw, pitch, zoom and pan |
-| `save_camera_view` | `name` | Saves the current camera for the active scan; the name must be unique within that scan and 1–64 characters long (maximum 32 views per scan) |
-| `restore_camera_view` | `name` | Restores a named view for the active scan, ignoring name case |
-| `delete_camera_view` | `name` | Deletes a named view for the active scan, ignoring name case |
+| `list_camera_views` | — | Lists the saved views of the active scan with everything they hold, and the name of the `active` view |
+| `save_camera_view` | optional `name` | Saves the current view of the active scan (camera, section box, colour mode) and makes it the active view; returns its `name` and `guid`. The name must be unique within that scan and 1–64 characters long; without a name the first free "View 1", "View 2", … is used (maximum 32 views per scan) |
+| `update_camera_view` | `name` | Overwrites a named view with the current view, keeping its name, identifier, time and annotations, and makes it the active view |
+| `rename_camera_view` | `name`, `new_name` | Renames a view of the active scan |
+| `restore_camera_view` | `name` | Restores a named view of the active scan, ignoring name case: its camera, section box and colour mode. It becomes the active view and its annotations are shown; a snapshot that is due is taken |
+| `delete_camera_view` | `name` | Deletes a named view of the active scan with its snapshot, ignoring name case |
+| `add_note` | `point`, `text` | Adds a note of 1–240 characters at an `[x, y, z]` scene position to the active view and returns the view's `annotations`. The snapshot is renewed when the viewport shows the view, otherwise when the view is next restored |
+| `add_line` | `from`, `to` | Adds a line (drawn as an arrow from the first to the second `[x, y, z]` scene position) to the active view and returns the view's `annotations` |
+| `delete_annotation` | `index` | Removes the annotation at that zero-based place in the active view's list |
+| `set_annotation_tool` | `tool` | Chooses the `note` or `line` tool of the viewport, or leaves it with `null`; a half-placed annotation is dropped |
+| `annotate_screen` | `pointer` | Clicks at viewport pixel `[x, y]` with the active annotation tool: the picked point becomes the point of a note that waits for its text, or the start or the end of a line |
+| `submit_note` | `text` | Gives the note that waits for its text its text, adds it to the active view and returns the view's `annotations` |
+| `export_bcf` | `path` | Writes all views of the active scan as one BCF 2.1 file at an absolute `.bcf` path |
 | `set_theme` | `theme` | Chooses and persists `forge`, `light`, `night`, `blueprint` or `contrast`; `openaec` remains an alias for Night Build |
 | `set_color` | `mode` | Chooses `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code`, `visible` | Shows or hides one classification code in the viewport and exact selection |
