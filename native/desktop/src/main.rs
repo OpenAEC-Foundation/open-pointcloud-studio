@@ -8340,18 +8340,11 @@ fn small_color_button(
     mode: ColorMode,
     current: ColorMode,
 ) -> Element<'static, Message> {
-    let color = match mode {
-        ColorMode::Rgb => Color::from_rgb8(139, 158, 169),
-        ColorMode::Elevation => Color::from_rgb8(155, 161, 144),
-        ColorMode::Intensity => Color::from_rgb8(175, 178, 180),
-        ColorMode::Classification => Color::from_rgb8(155, 149, 140),
-    };
     button(
         row![
-            container(text(" ").size(11))
-                .width(12)
-                .height(12)
-                .style(move |_| container::Style::default().background(color)),
+            Canvas::new(ColorModeGlyph(mode, mode == current))
+                .width(18)
+                .height(18),
             text(label).size(11),
         ]
         .spacing(5)
@@ -8362,6 +8355,112 @@ fn small_color_button(
     .height(opencad_ribbon::ROW_H)
     .padding([2, 4])
     .into()
+}
+
+/// Compact, theme-aware line icons for the four point-cloud color modes.
+/// These use the same visual scale as the OpenCADStudio ribbon icons while
+/// remaining native Iced geometry rather than web assets.
+struct ColorModeGlyph(ColorMode, bool);
+
+impl canvas::Program<Message> for ColorModeGlyph {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let colors = ui_theme::colors(theme);
+        let highlight = if self.1 { colors.accent } else { colors.muted };
+        let stroke = canvas::Stroke::default()
+            .with_color(colors.text)
+            .with_width(1.35);
+        let line = |points: &[[f32; 2]]| {
+            canvas::Path::new(|path| {
+                path.move_to(UiPoint::new(points[0][0], points[0][1]));
+                for point in &points[1..] {
+                    path.line_to(UiPoint::new(point[0], point[1]));
+                }
+            })
+        };
+        match self.0 {
+            ColorMode::Rgb => {
+                frame.stroke(&canvas::Path::circle(UiPoint::new(9.0, 9.0), 6.5), stroke);
+                for (point, color) in [
+                    ([6.3, 6.5], colors.muted),
+                    ([11.7, 6.5], colors.muted),
+                    ([9.0, 11.6], highlight),
+                ] {
+                    frame.fill(
+                        &canvas::Path::circle(UiPoint::new(point[0], point[1]), 1.5),
+                        color,
+                    );
+                }
+            }
+            ColorMode::Elevation => {
+                frame.stroke(
+                    &line(&[
+                        [2.0, 14.0],
+                        [5.7, 9.0],
+                        [8.2, 11.0],
+                        [11.6, 4.0],
+                        [16.0, 14.0],
+                    ]),
+                    stroke,
+                );
+                frame.stroke(&line(&[[2.0, 16.0], [16.0, 16.0]]), stroke);
+                frame.stroke(&line(&[[10.1, 9.2], [13.1, 9.2]]), stroke);
+            }
+            ColorMode::Intensity => {
+                frame.fill(
+                    &canvas::Path::new(|path| {
+                        path.move_to(UiPoint::new(9.0, 2.5));
+                        for point in [
+                            [5.7, 3.5],
+                            [3.5, 5.7],
+                            [2.5, 9.0],
+                            [3.5, 12.3],
+                            [5.7, 14.5],
+                            [9.0, 15.5],
+                        ] {
+                            path.line_to(UiPoint::new(point[0], point[1]));
+                        }
+                        path.close();
+                    }),
+                    colors.muted,
+                );
+                frame.stroke(&canvas::Path::circle(UiPoint::new(9.0, 9.0), 6.5), stroke);
+                frame.stroke(&line(&[[9.0, 2.5], [9.0, 15.5]]), stroke);
+            }
+            ColorMode::Classification => {
+                for (origin, filled) in [
+                    ([2.5, 2.5], false),
+                    ([10.0, 2.5], false),
+                    ([2.5, 10.0], false),
+                    ([10.0, 10.0], true),
+                ] {
+                    if filled {
+                        frame.fill_rectangle(
+                            UiPoint::new(origin[0], origin[1]),
+                            Size::new(5.5, 5.5),
+                            highlight,
+                        );
+                    } else {
+                        frame.stroke_rectangle(
+                            UiPoint::new(origin[0], origin[1]),
+                            Size::new(5.5, 5.5),
+                            stroke,
+                        );
+                    }
+                }
+            }
+        }
+        vec![frame.into_geometry()]
+    }
 }
 
 fn ribbon_group<'a>(label: &'static str, contents: Element<'a, Message>) -> Element<'a, Message> {

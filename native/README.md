@@ -6,6 +6,11 @@ The design follows [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio
 
 The [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-book) was cloned beside this repository (commit `dfdcd41`). The native ribbon uses the old application's compact button grouping, OpenCADStudio's Rust three-row ribbon primitives and quick-access pattern, and OpenAEC's Deep Forge, Night Build, Scaffold Gray, Construction Amber and Warm Gold tokens. Its top strip keeps Import, Export, Undo and Redo before the tabs, with muted disabled actions and tooltips. Its tab strip, group captions and active/hover states follow the style-book ribbon tokens; wide tool groups scroll horizontally with visible left/right controls instead of being clipped. The Tools tab follows Classic's Translate, Scale, Thin, Surface and 3D BAG order before advanced LOD and decimation controls. Export mesh stays visible but disabled until a mesh is available; Cancel mesh appears only during a running job. The Home ribbon has native Deep Forge, Blueprint Light, Night Build, Blueprint Blue and High Contrast choices. The selection persists in `open-pointcloud-studio-native/theme` under the XDG configuration directory (or `~/.config`); the CAD viewport stays dark across themes. The old web ribbon's CSS and TypeScript components are not used in the native build. Inter and Space Grotesk are bundled as OFL-licensed native font assets. Visual checks are saved in [`../screenshots/`](../screenshots/).
 The ribbon's active text, group-label opacity, separators, hover and File-tab colors now match the style book's `themes.css` tokens per palette. A new configuration starts in Blueprint Light, the style book's default; saved theme choices remain in effect. Compare the native [light](../screenshots/native-openaec-ribbon-tokens-light.png) and [Deep Forge](../screenshots/native-openaec-ribbon-tokens-forge.png) screenshots.
+The Home ribbon's RGB, Elevation, Intensity and Classification controls now
+use native Iced line drawings at OpenCADStudio's small-tool icon scale. Inactive
+glyphs stay neutral; the selected color mode gets the OpenAEC accent. Compare
+the Deep Forge and
+Blueprint Light views.
 
 On X11, the Rust desktop sets the system title bar's light/dark theme hint to
 match the chosen native palette while retaining normal window-manager drag,

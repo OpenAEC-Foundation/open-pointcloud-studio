@@ -281,6 +281,13 @@ An indexed screen pick then selected zero-based source ordinal 28,363,435 at
 X 10.052, Y -42.459, Z 2.658 with RGB `[153, 149, 146]`; the
 pick view
 shows the one-point selection after this fast reopen.
+On the same cached E57, the native Home ribbon's four color-mode squares were
+replaced with line glyphs drawn in Rust. A physical click on Classification
+changed the running GUI's color mode to Classification, and a click on RGB
+restored RGB. The selected control alone uses the OpenAEC accent; the new
+Deep Forge and
+Blueprint Light
+views show the icon contrast in both palettes.
 
 On 2 October 2026, the five additional official PCL producer files above
 completed full source visits in the native Rust reader. The mOSD file also
