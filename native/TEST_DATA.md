@@ -293,9 +293,16 @@ collected the preview, nine scanner poses and 46,589,344 exact points while
 writing the octree root; the complete 3,165-node index took 287.06 seconds
 in the debug build with 28,676 KiB peak RSS. A second `--index` run reopened
 that cache in 0.14 seconds with 19,712 KiB peak RSS, and `--scans` again listed
-all nine registered poses and axes. This measures the explicit CLI indexing
-workflow; the GUI's first uncached import still reads the source for its
-preview before indexing in the background.
+all nine registered poses and axes. A second hard link then exercised the
+same one-pass path in a fresh native GUI with automatic indexing enabled.
+During the single source pass the [progress view](../screenshots/native-e57-one-pass-source-progress.png)
+showed 15,532,032 decoded points. After all 46,589,344 points were read, the
+GUI displayed its 100,000-point preview and nine scanner positions while the
+octree was still building and `Indexed` remained `No`.
+Once the octree was ready, the viewer loaded a one-million-point LOD. An exact
+`select_world` box from `[-1, -33, -1]` to `[2, -31, 1]` found 27,958 source
+points, and `zoom_selection` framed them at 51.4× in the
+indexed selection view.
 An indexed screen pick then selected zero-based source ordinal 28,363,435 at
 X 10.052, Y -42.459, Z 2.658 with RGB `[153, 149, 146]`; the
 pick view

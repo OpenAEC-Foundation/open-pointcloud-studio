@@ -136,7 +136,7 @@ impl Bounds {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PointCloud {
     pub path: PathBuf,
     pub total_points: u64,

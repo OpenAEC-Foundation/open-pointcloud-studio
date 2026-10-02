@@ -301,6 +301,18 @@ impl OctreeIndex {
         path: &Path,
         sample_limit: usize,
         config: IndexConfig,
+        progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
+    ) -> Result<(PointCloud, Self), LoadError> {
+        Self::open_and_build_cached_with_preview(path, sample_limit, config, |_| Ok(()), progress)
+    }
+
+    /// Publish the checked preview as soon as the single source pass finishes,
+    /// while the same worker continues partitioning the octree on disk.
+    pub fn open_and_build_cached_with_preview(
+        path: &Path,
+        sample_limit: usize,
+        config: IndexConfig,
+        mut preview: impl FnMut(&PointCloud) -> Result<(), LoadError>,
         mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
     ) -> Result<(PointCloud, Self), LoadError> {
         if sample_limit == 0
@@ -319,6 +331,7 @@ impl OctreeIndex {
         let cache_path = cache_directory(&cache_root, &fingerprint);
         if cache_path.exists() {
             let cloud = super::open(path, sample_limit)?;
+            preview(&cloud)?;
             let index = Self::build_cached_with_progress(&cloud, config, progress)?;
             return Ok((cloud, index));
         }
@@ -356,6 +369,7 @@ impl OctreeIndex {
         let mut cloud = collector.finish(path.to_path_buf())?;
         cloud.scan_poses = poses;
         cloud.source_stamp = Some(stamp);
+        preview(&cloud)?;
 
         let mut handled_records = 0u64;
         let mut ready_leaves = 0u64;
@@ -1901,13 +1915,26 @@ mod tests {
         assert!(matches!(cancelled, Err(LoadError::Cancelled)));
         assert_eq!(fs::read_dir(&cache_root).unwrap().count(), 0);
 
-        let (cloud, index) = OctreeIndex::open_and_build_cached_with_progress(
+        let saw_preview = std::cell::Cell::new(false);
+        let (cloud, index) = OctreeIndex::open_and_build_cached_with_preview(
             &source,
             2,
             config.clone(),
-            |_| Ok(()),
+            |preview| {
+                assert_eq!(preview.total_points, 4);
+                assert_eq!(preview.scan_poses, expected.scan_poses);
+                saw_preview.set(true);
+                Ok(())
+            },
+            |update| {
+                if update.stage == IndexStage::BuildingTree {
+                    assert!(saw_preview.get());
+                }
+                Ok(())
+            },
         )
         .unwrap();
+        assert!(saw_preview.get());
         assert_eq!(cloud.total_points, expected.total_points);
         assert_eq!(cloud.bounds, expected.bounds);
         assert_eq!(cloud.scan_poses, expected.scan_poses);

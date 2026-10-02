@@ -897,6 +897,7 @@ mod tests {
         let mut studio = Studio::default();
         studio.clouds.push(CloudEntry {
             load_identity: Arc::clone(&cloud),
+            index_import_id: None,
             cloud,
             transform: CloudTransform::default(),
             centroid_cache: None,

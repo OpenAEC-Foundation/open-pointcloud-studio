@@ -81,8 +81,10 @@ pose. Older PTX manifests are refreshed after one full source read. A missing,
 stale or damaged manifest falls back to the full reader.
 For a cold explicit `--index` run, non-LAS formats now collect the bounded
 preview and exact metadata while writing the octree root in one source pass.
-The native GUI still displays its preview before building an index in the
-background, so its first uncached import uses a separate indexing pass.
+With automatic indexing enabled, the native GUI uses the same one-pass route
+for supported non-LAS sources of at least 64 MiB. It displays the checked
+preview after that source pass while the disk tree is still building; smaller
+imports retain the existing background auto-index path.
 Both meshers keep their full-source loops inside the optimized Rust core in
 development builds; the native desktop supplies edit and progress callbacks
 without recompiling those loops at the desktop's lower optimization level.
