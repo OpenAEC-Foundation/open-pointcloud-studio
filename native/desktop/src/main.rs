@@ -9181,6 +9181,62 @@ struct ScanMarker {
     axes: Option<[[f64; 3]; 3]>,
 }
 
+const SCAN_MARKER_GROUP_RADIUS: f32 = 32.0;
+
+fn scan_marker_label(marker: &ScanMarker) -> String {
+    if marker.labels.len() == 1 {
+        marker.labels[0].clone()
+    } else {
+        format!("{} stations", marker.labels.len())
+    }
+}
+
+/// Place the most informative labels first without covering another station.
+/// Unplaced labels remain available in the Properties station list.
+fn scan_marker_label_positions(markers: &[ScanMarker], viewport: Size) -> Vec<Option<UiPoint>> {
+    let mut positions = vec![None; markers.len()];
+    let mut placed = Vec::<[f32; 4]>::new();
+    let mut order: Vec<usize> = (0..markers.len()).collect();
+    order.sort_by_key(|index| std::cmp::Reverse(markers[*index].labels.len()));
+    for index in order {
+        let marker = &markers[index];
+        let width = scan_marker_label(marker).chars().count() as f32 * 6.0 + 2.0;
+        let candidates = [
+            (marker.x + 13.0, marker.y - 7.0),
+            (marker.x - width - 13.0, marker.y - 7.0),
+            (marker.x - width * 0.5, marker.y - 24.0),
+            (marker.x - width * 0.5, marker.y + 14.0),
+        ];
+        for (x, y) in candidates {
+            let rect = [x, y, x + width, y + 13.0];
+            if x < 2.0
+                || y < 2.0
+                || rect[2] > viewport.width - 2.0
+                || rect[3] > viewport.height - 2.0
+                || placed.iter().any(|other| {
+                    rect[0] < other[2] + 4.0
+                        && rect[2] + 4.0 > other[0]
+                        && rect[1] < other[3] + 4.0
+                        && rect[3] + 4.0 > other[1]
+                })
+                || markers.iter().enumerate().any(|(other_index, other)| {
+                    other_index != index
+                        && rect[0] < other.x + 9.0
+                        && rect[2] > other.x - 9.0
+                        && rect[1] < other.y + 9.0
+                        && rect[3] > other.y - 9.0
+                })
+            {
+                continue;
+            }
+            positions[index] = Some(UiPoint::new(x, y));
+            placed.push(rect);
+            break;
+        }
+    }
+    positions
+}
+
 fn push_scan_marker(
     markers: &mut Vec<ScanMarker>,
     x: f32,
@@ -9193,7 +9249,7 @@ fn push_scan_marker(
         if let Some(marker) = markers.iter_mut().find(|marker| {
             let dx = marker.x - x;
             let dy = marker.y - y;
-            dx * dx + dy * dy <= 12.0 * 12.0
+            dx * dx + dy * dy <= SCAN_MARKER_GROUP_RADIUS * SCAN_MARKER_GROUP_RADIUS
         }) {
             marker.labels.push(label.to_owned());
             // Nearby stations can have different orientations. Do not draw
@@ -9869,7 +9925,12 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     );
                 }
             }
-            for marker in markers {
+            let label_positions = if show_labels {
+                scan_marker_label_positions(&markers, bounds.size())
+            } else {
+                Vec::new()
+            };
+            for (marker_index, marker) in markers.into_iter().enumerate() {
                 let center = UiPoint::new(marker.x, marker.y);
                 if show_labels {
                     if let Some(axes) = marker.axes {
@@ -9934,14 +9995,22 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             .with_width(1.0),
                     );
                 }
-                if show_labels {
+                if let Some(position) = label_positions.get(marker_index).copied().flatten() {
+                    let content = scan_marker_label(&marker);
+                    let width = content.chars().count() as f32 * 6.0 + 2.0;
+                    let badge_position = UiPoint::new(position.x - 3.0, position.y - 2.0);
+                    let badge_size = Size::new(width + 6.0, 17.0);
+                    frame.fill_rectangle(badge_position, badge_size, Color::from_rgb8(42, 42, 50));
+                    frame.stroke_rectangle(
+                        badge_position,
+                        badge_size,
+                        canvas::Stroke::default()
+                            .with_color(Color::from_rgb8(126, 88, 44))
+                            .with_width(1.0),
+                    );
                     frame.fill_text(canvas::Text {
-                        content: if marker.labels.len() == 1 {
-                            marker.labels.into_iter().next().unwrap_or_default()
-                        } else {
-                            format!("{} stations", marker.labels.len())
-                        },
-                        position: UiPoint::new(marker.x + 12.0, marker.y + 4.0),
+                        content,
+                        position,
                         size: iced::Pixels(10.0),
                         color: Color::from_rgb8(245, 188, 100),
                         ..canvas::Text::default()
@@ -10470,6 +10539,27 @@ mod scan_marker_tests {
 
         push_scan_marker(&mut markers, 100.0, 100.0, "Scan 4", axes, false);
         assert_eq!(markers.len(), 3);
+    }
+
+    #[test]
+    fn crowded_station_labels_group_and_avoid_each_other() {
+        let mut markers = Vec::new();
+        push_scan_marker(&mut markers, 100.0, 100.0, "Scan 1", None, true);
+        push_scan_marker(&mut markers, 125.0, 110.0, "Scan 2", None, true);
+        push_scan_marker(&mut markers, 170.0, 100.0, "Scan 3", None, true);
+        assert_eq!(markers.len(), 2);
+        assert_eq!(scan_marker_label(&markers[0]), "2 stations");
+        let positions = scan_marker_label_positions(&markers, Size::new(300.0, 200.0));
+        let first = positions[0].unwrap();
+        let second = positions[1].unwrap();
+        let first_right = first.x + scan_marker_label(&markers[0]).len() as f32 * 6.0 + 2.0;
+        let second_right = second.x + scan_marker_label(&markers[1]).len() as f32 * 6.0 + 2.0;
+        assert!(
+            first_right <= second.x
+                || second_right <= first.x
+                || first.y + 13.0 <= second.y
+                || second.y + 13.0 <= first.y
+        );
     }
 }
 

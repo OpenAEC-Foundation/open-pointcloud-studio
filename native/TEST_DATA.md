@@ -303,6 +303,10 @@ Once the octree was ready, the viewer loaded a one-million-point LOD. An exact
 `select_world` box from `[-1, -33, -1]` to `[2, -31, 1]` found 27,958 source
 points, and `zoom_selection` framed them at 51.4× in the
 indexed selection view.
+At the overview scale, the nine scan stations now display as two
+non-overlapping count badges (seven and two stations). The badges remain legible
+over the cloud in the native station-label view;
+the Properties panel still lists all nine individual positions and axes.
 An indexed screen pick then selected zero-based source ordinal 28,363,435 at
 X 10.052, Y -42.459, Z 2.658 with RGB `[153, 149, 146]`; the
 pick view
