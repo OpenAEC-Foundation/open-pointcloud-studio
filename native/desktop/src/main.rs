@@ -1279,6 +1279,7 @@ enum Message {
     FilesChosen(Option<Vec<PathBuf>>),
     OpenProgress(u64),
     ImportLoaded(u64, Result<Arc<PointCloud>, String>),
+    HeaderLoaded(u64, Result<Arc<PointCloud>, String>),
     IndexedImportPreview(u64, Arc<PointCloud>),
     IndexedImportReady(u64, Result<(Arc<PointCloud>, Arc<OctreeIndex>), String>),
     CancelImport(u64),
@@ -1468,6 +1469,11 @@ struct Studio {
     api_jobs: HashMap<String, Value>,
     api_job_order: VecDeque<String>,
     imports: HashMap<u64, ImportJob>,
+    /// Layers shown from scan metadata while their import still reads points.
+    import_headers: HashMap<u64, Arc<PointCloud>>,
+    /// The camera as the application last framed it; a view the user changed
+    /// is left alone when further scans arrive.
+    auto_camera: Option<(f32, f32, f32, [f32; 2])>,
     next_import_id: u64,
     clouds: Vec<CloudEntry>,
     undo_deletions: Vec<EditBatch>,
@@ -1782,6 +1788,8 @@ impl Default for Studio {
             api_jobs: HashMap::new(),
             api_job_order: VecDeque::new(),
             imports: HashMap::new(),
+            import_headers: HashMap::new(),
+            auto_camera: None,
             next_import_id: 0,
             clouds: Vec::new(),
             undo_deletions: Vec::new(),
@@ -1923,6 +1931,121 @@ impl Studio {
             classes: self.class_visibility,
             section: self.section_bounds(),
         }
+    }
+
+    /// Read the stations and photo list of an E57 scan from its metadata, so
+    /// they can be shown while the import decodes the points.
+    fn header_task(id: u64, path: PathBuf) -> Task<Message> {
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"))
+        {
+            return Task::none();
+        }
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    pointcloud_core::open_e57_header(&path)
+                        .map(Arc::new)
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result)
+            },
+            move |result| Message::HeaderLoaded(id, result),
+        )
+    }
+
+    /// Put the checked result of an import in place: it replaces the layer
+    /// shown from metadata when there is one, and becomes a new layer otherwise.
+    fn finish_import(
+        &mut self,
+        header: Option<Arc<PointCloud>>,
+        result: Result<Arc<PointCloud>, String>,
+    ) -> Task<Message> {
+        let shown =
+            header.filter(|header| self.clouds.iter().any(|entry| entry.matches_source(header)));
+        match (shown, result) {
+            (Some(header), Ok(cloud)) => {
+                let photos = self.station_photos_task(&cloud);
+                let refined = self.update(Message::Refined(header, Ok(cloud)));
+                self.revision += 1;
+                self.frame_new_scene();
+                Task::batch([refined, photos, self.schedule_detail()])
+            }
+            (Some(header), Err(error)) => {
+                self.remove_header_layer(&header);
+                self.status = error;
+                Task::none()
+            }
+            (None, result) => self.update(Message::Loaded(result)),
+        }
+    }
+
+    fn remove_header_layer(&mut self, header: &Arc<PointCloud>) {
+        if let Some(index) = self
+            .clouds
+            .iter()
+            .position(|entry| entry.matches_source(header))
+        {
+            self.clouds.remove(index);
+            self.leave_walk();
+            self.rebuild_photo_atlas();
+            self.revision += 1;
+            self.active = self
+                .active
+                .filter(|_| !self.clouds.is_empty())
+                .map(|active| active.min(self.clouds.len() - 1));
+        }
+    }
+
+    /// Box around the scanner stations with room for what they scanned.
+    fn station_focus(&self) -> Option<Bounds> {
+        let mut focus: Option<Bounds> = None;
+        for entry in self.clouds.iter().filter(|entry| entry.visible) {
+            for pose in &entry.cloud.scan_poses {
+                include_bounds(&mut focus, entry.transform.xyz(pose.position));
+            }
+        }
+        let mut focus = focus?;
+        let margin = (focus.extent() * 0.5).max(6.0);
+        for axis in 0..3 {
+            let margin = if axis == 2 { margin.min(4.0) } else { margin };
+            focus.min[axis] -= margin;
+            focus.max[axis] += margin;
+        }
+        Some(focus)
+    }
+
+    /// Frame the scene after a scan arrived, unless the user moved the camera
+    /// since the application last framed it. Scans with stations are framed
+    /// around them: a few stray far points otherwise make the whole view tiny.
+    fn frame_new_scene(&mut self) {
+        let camera = (self.yaw, self.pitch, self.zoom, self.pan);
+        if self.walk.is_some() || (self.clouds.len() > 1 && self.auto_camera != Some(camera)) {
+            return;
+        }
+        if self.clouds.len() <= 1 {
+            self.yaw = -0.8;
+            self.pitch = 0.6;
+            self.view_label = "ISOMETRIC";
+        }
+        self.zoom = 1.0;
+        self.pan = [0.0, 0.0];
+        if let (Some(scene), Some(focus)) = (combined_bounds(&self.clouds), self.station_focus()) {
+            if let Some((zoom, pan)) =
+                camera_to_frame_bounds(scene, focus, self.yaw, self.pitch, self.viewport_size)
+            {
+                // Never zoom out beyond the whole scene.
+                if zoom < 1.0 {
+                    self.zoom = zoom;
+                    self.pan = pan;
+                }
+            }
+        }
+        self.auto_camera = Some((self.yaw, self.pitch, self.zoom, self.pan));
     }
 
     /// Decode the small ball photos of a newly opened source in the background.
@@ -3702,6 +3825,7 @@ impl Studio {
         self.status = format!("Loading {}…", path.display());
         self.next_import_id += 1;
         let id = self.next_import_id;
+        let header = Self::header_task(id, path.clone());
         let decoded = Arc::new(AtomicU64::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         self.imports.insert(
@@ -3741,13 +3865,14 @@ impl Studio {
             }
             Some((Message::OpenProgress(id), Some(done)))
         });
-        Task::batch([worker, Task::run(progress, |message| message)])
+        Task::batch([worker, Task::run(progress, |message| message), header])
     }
 
     fn load_indexed(&mut self, path: PathBuf) -> Task<Message> {
         self.status = format!("Loading and indexing {}…", path.display());
         self.next_import_id += 1;
         let id = self.next_import_id;
+        let header = Self::header_task(id, path.clone());
         let decoded = Arc::new(AtomicU64::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         let progress = Arc::new(Mutex::new(IndexProgress {
@@ -3814,6 +3939,7 @@ impl Studio {
                 Message::IndexedImportPreview(id, cloud)
             }),
             Self::index_poll_task(),
+            header,
         ])
     }
 
@@ -4205,11 +4331,51 @@ impl Studio {
                 let Some(job) = self.imports.remove(&id) else {
                     return Task::none();
                 };
+                let header = self.import_headers.remove(&id);
                 if job.cancel.load(Ordering::Relaxed) {
+                    if let Some(header) = header {
+                        self.remove_header_layer(&header);
+                    }
                     self.status = format!("Import cancelled: {}", display_name(&job.path));
                 } else {
-                    return self.update(Message::Loaded(result));
+                    return self.finish_import(header, result);
                 }
+            }
+            Message::HeaderLoaded(id, result) => {
+                let (Ok(header), Some(job)) = (result, self.imports.get(&id)) else {
+                    // The points arrived first, or the file has no usable metadata.
+                    return Task::none();
+                };
+                if job.cancel.load(Ordering::Relaxed) || self.import_headers.contains_key(&id) {
+                    return Task::none();
+                }
+                self.cancel_selection_for_scene_change();
+                self.clouds.push(CloudEntry {
+                    cloud: Arc::clone(&header),
+                    load_identity: Arc::clone(&header),
+                    index_import_id: None,
+                    transform: CloudTransform::default(),
+                    centroid_cache: None,
+                    mesh: None,
+                    mesh_visible: true,
+                    bag_source: false,
+                    visible: true,
+                    selection: None,
+                    deleted: None,
+                    index: None,
+                    auto_index_queued: false,
+                    index_building: false,
+                    detail_points: None,
+                });
+                self.import_headers.insert(id, Arc::clone(&header));
+                self.revision += 1;
+                self.active = Some(self.clouds.len() - 1);
+                if self.section_enabled && self.section_reference_bounds.is_none() {
+                    self.section_reference_bounds = combined_bounds(&self.clouds);
+                    self.sync_section_coordinate_inputs();
+                }
+                self.frame_new_scene();
+                return self.station_photos_task(&header);
             }
             Message::IndexedImportPreview(id, cloud) => {
                 let Some(job) = self.imports.get(&id) else {
@@ -4219,8 +4385,16 @@ impl Studio {
                     return Task::none();
                 }
                 self.imports.remove(&id);
-                let task = self.update(Message::Loaded(Ok(Arc::clone(&cloud))));
-                if let Some(entry) = self.clouds.last_mut() {
+                let header = self.import_headers.remove(&id);
+                let task = self.finish_import(header.clone(), Ok(Arc::clone(&cloud)));
+                let index = header
+                    .and_then(|header| {
+                        self.clouds
+                            .iter()
+                            .position(|entry| entry.matches_source(&header))
+                    })
+                    .or_else(|| self.clouds.len().checked_sub(1));
+                if let Some(entry) = index.and_then(|index| self.clouds.get_mut(index)) {
                     entry.index_import_id = Some(id);
                     entry.index_building = true;
                 }
@@ -4235,13 +4409,27 @@ impl Studio {
                 self.index_progress = None;
                 let cancelled = self.index_cancel.load(Ordering::Relaxed);
                 let import = self.imports.remove(&id);
+                let header = self.import_headers.remove(&id);
                 let mut loaded = Task::none();
                 let mut ready = false;
+                if let (Some(header), true) = (&header, cancelled || result.is_err()) {
+                    // No points will follow the metadata that was shown.
+                    self.remove_header_layer(header);
+                }
                 match result {
                     Ok((cloud, index)) if !cancelled => {
                         if import.is_some() {
-                            loaded = self.update(Message::Loaded(Ok(Arc::clone(&cloud))));
-                            if let Some(entry) = self.clouds.last_mut() {
+                            loaded = self.finish_import(header.clone(), Ok(Arc::clone(&cloud)));
+                            let position = header
+                                .and_then(|header| {
+                                    self.clouds
+                                        .iter()
+                                        .position(|entry| entry.matches_source(&header))
+                                })
+                                .or_else(|| self.clouds.len().checked_sub(1));
+                            if let Some(entry) =
+                                position.and_then(|position| self.clouds.get_mut(position))
+                            {
                                 entry.index_import_id = Some(id);
                             }
                         }
@@ -4361,13 +4549,7 @@ impl Studio {
                         self.section_reference_bounds = combined_bounds(&self.clouds);
                         self.sync_section_coordinate_inputs();
                     }
-                    if self.clouds.len() == 1 {
-                        self.yaw = -0.8;
-                        self.pitch = 0.6;
-                        self.zoom = 1.0;
-                        self.pan = [0.0, 0.0];
-                        self.view_label = "ISOMETRIC";
-                    }
+                    self.frame_new_scene();
                     let photos_task = self.station_photos_task(&cache_source);
                     let cache_task = Task::batch([cached_index_task(cache_source), photos_task]);
                     if matches!(
@@ -5974,6 +6156,18 @@ impl Studio {
                         self.index_cancel.store(true, Ordering::Relaxed);
                     }
                     self.cancel_selection_for_scene_change();
+                    let importing = self
+                        .import_headers
+                        .iter()
+                        .find(|(_, header)| self.clouds[index].matches_source(header))
+                        .map(|(id, _)| *id);
+                    if let Some(id) = importing {
+                        // Shown from metadata only: stop reading its points.
+                        self.import_headers.remove(&id);
+                        if let Some(job) = self.imports.get(&id) {
+                            job.cancel.store(true, Ordering::Relaxed);
+                        }
+                    }
                     self.clouds.remove(index);
                     self.leave_walk();
                     self.rebuild_photo_atlas();
@@ -8373,7 +8567,27 @@ impl Studio {
                 container(
                     button(text("Back to 3D view (Esc)").size(12))
                         .on_press(Message::LeaveWalk)
-                        .style(|theme, status| opencad_ribbon::tool_btn_style(theme, true, status)),
+                        .style(|_, status| button::Style {
+                            // Readable over any photo or point cloud.
+                            background: Some(
+                                if matches!(
+                                    status,
+                                    button::Status::Hovered | button::Status::Pressed
+                                ) {
+                                    Color::from_rgb8(217, 119, 6)
+                                } else {
+                                    Color::from_rgba8(42, 42, 50, 0.9)
+                                }
+                                .into(),
+                            ),
+                            text_color: Color::from_rgb8(245, 245, 244),
+                            border: iced::Border {
+                                radius: 6.0.into(),
+                                color: Color::from_rgb8(245, 158, 11),
+                                width: 1.0,
+                            },
+                            ..button::Style::default()
+                        }),
                 )
                 .padding(10),
             )

@@ -3,12 +3,14 @@
 //! face/corner snap concept with a compact OpenAEC palette.
 
 use iced::widget::canvas::{self, Frame, Path};
-use iced::{alignment, Color, Point, Rectangle, Size, Vector};
+use iced::{alignment, Color, Font, Point, Rectangle, Size, Vector};
 
 use crate::CameraPreset;
 
-const CUBE_SCALE: f32 = 30.0;
+const CUBE_SCALE: f32 = 25.0;
 const CORNER_RADIUS: f32 = 8.0;
+/// Radius of the compass ring around the foot of the cube, in cube half-edges.
+const COMPASS_RADIUS: f32 = 1.72;
 
 #[derive(Debug, Clone, Copy)]
 pub enum CubeTarget {
@@ -130,7 +132,7 @@ fn center(bounds: Rectangle) -> Point {
 
 fn home_bounds(bounds: Rectangle) -> Rectangle {
     let point = center(bounds);
-    Rectangle::new(Point::new(point.x - 25.0, 121.0), Size::new(50.0, 21.0))
+    Rectangle::new(Point::new(point.x - 22.0, 125.0), Size::new(44.0, 18.0))
 }
 
 fn face_points(face: Face, basis: Basis, center: Point) -> [Point; 4] {
@@ -216,23 +218,88 @@ pub fn hit(position: Point, bounds: Rectangle, yaw: f32, pitch: f32) -> Option<C
         .map(|face| CubeTarget::Face(face.preset))
 }
 
+fn scaled(color: [f32; 3], factor: f32) -> Color {
+    Color::from_rgb(
+        (color[0] * factor).min(1.0),
+        (color[1] * factor).min(1.0),
+        (color[2] * factor).min(1.0),
+    )
+}
+
+/// Compass ring on the ground plane under the cube: north is +Y.
+fn draw_compass(frame: &mut Frame, basis: Basis, center: Point) {
+    let on_ground = |angle: f32, radius: f32| {
+        let (sin, cos) = angle.sin_cos();
+        basis.project([radius * sin, radius * cos, -1.0], center)
+    };
+    let ring = Path::new(|path| {
+        path.move_to(on_ground(0.0, COMPASS_RADIUS));
+        for step in 1..=72 {
+            let angle = step as f32 / 72.0 * std::f32::consts::TAU;
+            path.line_to(on_ground(angle, COMPASS_RADIUS));
+        }
+        path.close();
+    });
+    frame.fill(&ring, Color::from_rgba8(18, 18, 22, 0.35));
+    frame.stroke(
+        &ring,
+        canvas::Stroke::default()
+            .with_color(Color::from_rgba8(190, 192, 200, 0.55))
+            .with_width(1.4),
+    );
+    for (index, label) in ["N", "E", "S", "W"].into_iter().enumerate() {
+        let angle = index as f32 * std::f32::consts::FRAC_PI_2;
+        let tick = Path::line(
+            on_ground(angle, COMPASS_RADIUS - 0.12),
+            on_ground(angle, COMPASS_RADIUS + 0.12),
+        );
+        let north = index == 0;
+        let color = if north {
+            Color::from_rgb8(245, 158, 11)
+        } else {
+            Color::from_rgba8(205, 207, 214, 0.85)
+        };
+        frame.stroke(
+            &tick,
+            canvas::Stroke::default().with_color(color).with_width(1.4),
+        );
+        frame.fill_text(canvas::Text {
+            content: label.into(),
+            position: on_ground(angle, COMPASS_RADIUS + 0.42),
+            horizontal_alignment: alignment::Horizontal::Center,
+            vertical_alignment: alignment::Vertical::Center,
+            size: iced::Pixels(8.5),
+            color,
+            font: Font::with_name("Space Grotesk"),
+            ..canvas::Text::default()
+        });
+    }
+}
+
 pub fn draw(frame: &mut Frame, bounds: Rectangle, yaw: f32, pitch: f32, hovered: Option<Point>) {
     let basis = Basis::new(yaw, pitch);
     let center = center(bounds);
     let hovered_target = hovered.and_then(|point| hit(point, bounds, yaw, pitch));
-    frame.fill_rectangle(
-        Point::new(center.x - 61.0, 8.0),
-        Size::new(122.0, 142.0),
-        Color::from_rgba8(42, 42, 50, 0.88),
-    );
-    frame.stroke_rectangle(
-        Point::new(center.x - 61.0, 8.0),
-        Size::new(122.0, 142.0),
-        canvas::Stroke::default()
-            .with_color(Color::from_rgb8(72, 72, 80))
-            .with_width(1.0),
+    frame.fill(
+        &Path::rounded_rectangle(
+            Point::new(center.x - 61.0, 8.0),
+            Size::new(122.0, 142.0),
+            10.0.into(),
+        ),
+        Color::from_rgba8(30, 30, 36, 0.58),
     );
 
+    // Seen from above the ring lies behind the cube, from below in front of it.
+    let from_above = basis.toward[2] >= 0.0;
+    if from_above {
+        draw_compass(frame, basis, center);
+    }
+
+    // Light from the upper left of the viewer, so the cube reads as a solid
+    // from every side.
+    let light: [f32; 3] = std::array::from_fn(|axis| {
+        -0.38 * basis.right[axis] + 0.55 * basis.up[axis] + 0.74 * basis.toward[axis]
+    });
     let mut visible: Vec<_> = FACES
         .iter()
         .copied()
@@ -243,20 +310,42 @@ pub fn draw(frame: &mut Frame, bounds: Rectangle, yaw: f32, pitch: f32, hovered:
         let points = face_points(face, basis, center);
         let hover =
             matches!(hovered_target, Some(CubeTarget::Face(preset)) if preset == face.preset);
-        let color = if hover {
-            Color::from_rgb8(164, 99, 24)
+        let base = if hover {
+            [0.86, 0.50, 0.08]
         } else if face.normal[2] > 0.0 {
-            Color::from_rgb8(92, 75, 56)
+            [0.62, 0.45, 0.25]
+        } else if face.normal[2] < 0.0 {
+            [0.44, 0.40, 0.36]
         } else {
-            Color::from_rgb8(65, 65, 73)
+            [0.36, 0.38, 0.44]
         };
+        let lit = 0.66 + 0.50 * dot(face.normal, light).clamp(0.0, 1.0);
         let path = polygon(points);
-        frame.fill(&path, color);
+        // A little brighter along the upper edge than along the lower one.
+        let upper = Point::new(
+            (points[2].x + points[3].x) * 0.5,
+            (points[2].y + points[3].y) * 0.5,
+        );
+        let lower = Point::new(
+            (points[0].x + points[1].x) * 0.5,
+            (points[0].y + points[1].y) * 0.5,
+        );
+        let shading = canvas::gradient::Linear::new(upper, lower)
+            .add_stop(0.0, scaled(base, lit * 1.10))
+            .add_stop(1.0, scaled(base, lit * 0.86));
+        frame.fill(
+            &path,
+            canvas::Fill {
+                style: canvas::Style::Gradient(canvas::Gradient::Linear(shading)),
+                ..canvas::Fill::default()
+            },
+        );
         frame.stroke(
             &path,
             canvas::Stroke::default()
-                .with_color(Color::from_rgb8(177, 177, 183))
-                .with_width(1.0),
+                .with_color(Color::from_rgba8(236, 236, 240, 0.72))
+                .with_width(1.1)
+                .with_line_join(canvas::LineJoin::Round),
         );
         // Each face lists its corners from bottom left, anticlockwise as seen
         // from outside: the first edge runs along the text, the last one up.
@@ -278,40 +367,51 @@ pub fn draw(frame: &mut Frame, bounds: Rectangle, yaw: f32, pitch: f32, hovered:
                 position: Point::ORIGIN,
                 horizontal_alignment: alignment::Horizontal::Center,
                 vertical_alignment: alignment::Vertical::Center,
-                size: iced::Pixels(10.0),
-                color: Color::from_rgb8(241, 241, 240),
+                size: iced::Pixels(9.0),
+                color: Color::from_rgb8(248, 248, 246),
+                font: Font::with_name("Space Grotesk"),
                 ..canvas::Text::default()
             });
         });
     }
+    if !from_above {
+        draw_compass(frame, basis, center);
+    }
     if let Some(CubeTarget::Corner(corner)) = hovered_target {
         let point = basis.project(corner.map(f32::from), center);
-        frame.fill(&Path::circle(point, 4.0), Color::from_rgb8(217, 119, 6));
+        frame.fill(&Path::circle(point, 4.5), Color::from_rgb8(245, 158, 11));
+        frame.stroke(
+            &Path::circle(point, 4.5),
+            canvas::Stroke::default()
+                .with_color(Color::from_rgb8(42, 42, 50))
+                .with_width(1.0),
+        );
     }
     let home = home_bounds(bounds);
     let home_hovered = matches!(hovered_target, Some(CubeTarget::Home));
-    frame.fill_rectangle(
-        home.position(),
-        home.size(),
+    let pill = Path::rounded_rectangle(home.position(), home.size(), (home.height * 0.5).into());
+    frame.fill(
+        &pill,
         if home_hovered {
-            Color::from_rgb8(145, 86, 19)
+            Color::from_rgb8(217, 119, 6)
         } else {
-            Color::from_rgb8(54, 54, 62)
+            Color::from_rgba8(70, 72, 82, 0.92)
         },
     );
-    frame.stroke_rectangle(
-        home.position(),
-        home.size(),
+    frame.stroke(
+        &pill,
         canvas::Stroke::default()
-            .with_color(Color::from_rgb8(161, 161, 170))
+            .with_color(Color::from_rgba8(236, 236, 240, 0.55))
             .with_width(1.0),
     );
     frame.fill_text(canvas::Text {
         content: "ISO".into(),
-        position: Point::new(center.x, home.y + 14.0),
+        position: Point::new(home.center_x(), home.center_y()),
         horizontal_alignment: alignment::Horizontal::Center,
-        size: iced::Pixels(10.0),
-        color: Color::from_rgb8(235, 235, 236),
+        vertical_alignment: alignment::Vertical::Center,
+        size: iced::Pixels(9.5),
+        color: Color::from_rgb8(245, 245, 244),
+        font: Font::with_name("Space Grotesk"),
         ..canvas::Text::default()
     });
 }

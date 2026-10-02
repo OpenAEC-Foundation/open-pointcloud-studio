@@ -274,6 +274,10 @@ pub fn open_with_progress(
             progress(cached.total_points)?;
             return Ok(cached);
         }
+        if let Ok(Some(cached)) = octree::open_preview_cache(path, sample_limit) {
+            progress(cached.total_points)?;
+            return Ok(cached);
+        }
     }
     let before = SourceStamp::read(path)?;
     let mut collector = Collector::new(sample_limit);
@@ -300,7 +304,60 @@ pub fn open_with_progress(
     cloud.scan_poses = scan_poses;
     cloud.scan_images = scan_images(path);
     cloud.source_stamp = Some(after);
+    // The next open of an unchanged source then needs no point decoding.
+    octree::write_preview_cache(&cloud);
     Ok(cloud)
+}
+
+/// Open an E57 scan from its metadata alone: stations, photos, stated extent
+/// and record count are available at once, with no points yet. The count is
+/// an upper bound and the bounds are a loose box, so the caller replaces this
+/// cloud with `open`'s checked result and must not index or export it.
+pub fn open_e57_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> {
+    let path = path.as_ref();
+    if !is_e57(path) {
+        return Err(LoadError::UnsupportedFormat(
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase(),
+        ));
+    }
+    let stamp = SourceStamp::read(path)?;
+    let summary = e57_points::summary(path)?;
+    // A scan that states no extent is framed by its stations instead.
+    let mut bounds = summary.bounds;
+    if bounds.is_none() {
+        for pose in &summary.poses {
+            match &mut bounds {
+                Some(bounds) => bounds.include(pose.position),
+                None => {
+                    bounds = Some(Bounds {
+                        min: pose.position,
+                        max: pose.position,
+                    })
+                }
+            }
+        }
+    }
+    let (Some(bounds), true) = (bounds, summary.records > 0) else {
+        return Err(LoadError::InvalidData(
+            "scan metadata states no points or extent".into(),
+        ));
+    };
+    Ok(PointCloud {
+        path: path.to_path_buf(),
+        total_points: summary.records,
+        bounds,
+        points: Vec::new(),
+        point_ordinals: Vec::new(),
+        has_rgb: summary.has_rgb,
+        has_intensity: summary.has_intensity,
+        has_classification: false,
+        scan_poses: summary.poses,
+        scan_images: scan_images(path),
+        source_stamp: Some(stamp),
+    })
 }
 
 fn is_e57(path: &Path) -> bool {

@@ -5,7 +5,7 @@ use std::path::Path;
 use e57::{Blob, CartesianCoordinate, E57Reader, ImageFormat, PointCloud, Projection};
 
 use super::window_reader::WindowReader;
-use super::{quaternion_axes, LoadError, Point, ScanImage, ScanImageFormat, ScanPose};
+use super::{quaternion_axes, Bounds, LoadError, Point, ScanImage, ScanImageFormat, ScanPose};
 
 /// A stored photo larger than this is treated as damaged metadata.
 const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
@@ -53,6 +53,94 @@ pub(crate) fn scan_poses(path: &Path) -> Result<Vec<ScanPose>, LoadError> {
         .enumerate()
         .filter_map(|(index, scan)| scan_pose(index, scan))
         .collect())
+}
+
+/// What E57 metadata says about a file before any point is decoded.
+pub(crate) struct Summary {
+    /// Stored point records; invalid records make the decoded count smaller.
+    pub records: u64,
+    /// Registered box around every scan that states its extent.
+    pub bounds: Option<Bounds>,
+    pub has_rgb: bool,
+    pub has_intensity: bool,
+    pub poses: Vec<ScanPose>,
+}
+
+/// Summarise an E57 file from its metadata alone.
+pub(crate) fn summary(path: &Path) -> Result<Summary, LoadError> {
+    let file = open_reader(path)?;
+    let mut summary = Summary {
+        records: 0,
+        bounds: None,
+        has_rgb: false,
+        has_intensity: false,
+        poses: Vec::new(),
+    };
+    for (index, scan) in file.pointclouds().iter().enumerate() {
+        summary.records += scan.records;
+        summary.has_rgb |= scan.has_color();
+        summary.has_intensity |= scan.has_intensity();
+        let pose = scan_pose(index, scan);
+        if let Some(local) = scan.get_cartesian_bounds() {
+            let (Some(x0), Some(x1), Some(y0), Some(y1), Some(z0), Some(z1)) = (
+                local.x_min,
+                local.x_max,
+                local.y_min,
+                local.y_max,
+                local.z_min,
+                local.z_max,
+            ) else {
+                continue;
+            };
+            // The stated extent is in the scan's own frame: register its
+            // corners with the scan pose.
+            let placed = scan.transform.as_ref().and_then(|transform| {
+                quaternion_axes([
+                    transform.rotation.w,
+                    transform.rotation.x,
+                    transform.rotation.y,
+                    transform.rotation.z,
+                ])
+                .map(|axes| {
+                    (
+                        axes,
+                        [
+                            transform.translation.x,
+                            transform.translation.y,
+                            transform.translation.z,
+                        ],
+                    )
+                })
+            });
+            for corner in 0..8 {
+                let local = [
+                    if corner & 1 == 0 { x0 } else { x1 },
+                    if corner & 2 == 0 { y0 } else { y1 },
+                    if corner & 4 == 0 { z0 } else { z1 },
+                ];
+                let xyz = match placed {
+                    Some((axes, origin)) => std::array::from_fn(|axis| {
+                        origin[axis]
+                            + axes[0][axis] * local[0]
+                            + axes[1][axis] * local[1]
+                            + axes[2][axis] * local[2]
+                    }),
+                    None => local,
+                };
+                if !xyz.iter().all(|value: &f64| value.is_finite()) {
+                    continue;
+                }
+                match &mut summary.bounds {
+                    Some(bounds) => bounds.include(xyz),
+                    None => summary.bounds = Some(Bounds { min: xyz, max: xyz }),
+                }
+            }
+        }
+        if let Some(pose) = pose {
+            summary.poses.push(pose);
+        }
+    }
+    Ok(summary)
 }
 
 /// Read the station photos listed in E57 metadata without decoding them.

@@ -336,6 +336,14 @@ impl OctreeIndex {
             return Ok((cloud, index));
         }
 
+        // A preview kept from an earlier open is shown before the source pass.
+        let previewed = match open_preview_cache(path, sample_limit) {
+            Ok(Some(cached)) => {
+                preview(&cached)?;
+                true
+            }
+            _ => false,
+        };
         let storage = tempfile::Builder::new()
             .prefix("open-pointcloud-index-")
             .tempdir_in(&cache_root)?;
@@ -370,7 +378,10 @@ impl OctreeIndex {
         cloud.scan_poses = poses;
         cloud.scan_images = super::scan_images(path);
         cloud.source_stamp = Some(stamp);
-        preview(&cloud)?;
+        write_preview_cache(&cloud);
+        if !previewed {
+            preview(&cloud)?;
+        }
 
         let mut handled_records = 0u64;
         let mut ready_leaves = 0u64;
@@ -908,6 +919,168 @@ pub(crate) fn open_cached_preview(
         cloud.points.push(record.point);
         cloud.point_ordinals.push(record.ordinal);
     }
+    if SourceStamp::read(path)? != stamp {
+        return Err(LoadError::InvalidData(
+            "source changed while loading cached preview".into(),
+        ));
+    }
+    Ok(Some(cloud))
+}
+
+/// Sources smaller than this decode faster than a cache lookup is worth.
+const PREVIEW_CACHE_MIN_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Serialize, Deserialize)]
+struct CachedPreviewHeader {
+    version: u8,
+    total_points: u64,
+    min: [f64; 3],
+    max: [f64; 3],
+    has_rgb: bool,
+    has_intensity: bool,
+    has_classification: bool,
+    points: u64,
+    scan_poses: Vec<ScanPose>,
+}
+
+fn preview_cache_directory(root: &Path, fingerprint: &[u8]) -> PathBuf {
+    cache_directory(&root.join("previews"), fingerprint)
+}
+
+/// Keep the checked preview of a large source so that reopening it unchanged
+/// does not decode its points again. Failing to write only costs that time.
+pub(crate) fn write_preview_cache(cloud: &PointCloud) {
+    if cloud
+        .source_stamp
+        .is_some_and(|stamp| stamp.length >= PREVIEW_CACHE_MIN_BYTES)
+    {
+        let _ = write_preview_cache_in(&cache_root(), cloud);
+    }
+}
+
+fn write_preview_cache_in(root: &Path, cloud: &PointCloud) -> Result<(), LoadError> {
+    let fingerprint = cache_fingerprint(cloud, &IndexConfig::default())?;
+    let directory = preview_cache_directory(root, &fingerprint);
+    fs::create_dir_all(&directory)?;
+    let mut points = tempfile::NamedTempFile::new_in(&directory)?;
+    {
+        let mut writer = BufWriter::new(points.as_file_mut());
+        for (point, ordinal) in cloud.points.iter().zip(&cloud.point_ordinals) {
+            write_record(
+                &mut writer,
+                IndexedPoint {
+                    point: *point,
+                    ordinal: *ordinal,
+                },
+            )?;
+        }
+        writer.flush()?;
+    }
+    points
+        .persist(directory.join("points.bin"))
+        .map_err(|error| error.error)?;
+    let header = CachedPreviewHeader {
+        version: 1,
+        total_points: cloud.total_points,
+        min: cloud.bounds.min,
+        max: cloud.bounds.max,
+        has_rgb: cloud.has_rgb,
+        has_intensity: cloud.has_intensity,
+        has_classification: cloud.has_classification,
+        points: cloud.points.len().min(cloud.point_ordinals.len()) as u64,
+        scan_poses: if cloud.scan_poses.len() <= MAX_CACHED_SCAN_POSES {
+            cloud.scan_poses.clone()
+        } else {
+            Vec::new()
+        },
+    };
+    let serialized = serde_json::to_vec(&header).map_err(|error| {
+        LoadError::InvalidData(format!("cannot serialize preview metadata: {error}"))
+    })?;
+    // The metadata is written last: its presence marks a complete preview.
+    let mut metadata = tempfile::NamedTempFile::new_in(&directory)?;
+    metadata.as_file_mut().write_all(&serialized)?;
+    metadata
+        .persist(directory.join("preview.json"))
+        .map_err(|error| error.error)?;
+    Ok(())
+}
+
+/// Recover a large source's checked preview from an earlier open, when the
+/// source has not changed since.
+pub(crate) fn open_preview_cache(
+    path: &Path,
+    sample_limit: usize,
+) -> Result<Option<PointCloud>, LoadError> {
+    if SourceStamp::read(path)?.length < PREVIEW_CACHE_MIN_BYTES {
+        return Ok(None);
+    }
+    open_preview_cache_in(&cache_root(), path, sample_limit)
+}
+
+fn open_preview_cache_in(
+    root: &Path,
+    path: &Path,
+    sample_limit: usize,
+) -> Result<Option<PointCloud>, LoadError> {
+    let stamp = SourceStamp::read(path)?;
+    let fingerprint = cache_fingerprint_for(path, stamp, &IndexConfig::default())?;
+    let directory = preview_cache_directory(root, &fingerprint);
+    let metadata_path = directory.join("preview.json");
+    if !metadata_path.exists() {
+        return Ok(None);
+    }
+    if fs::metadata(&metadata_path)?.len() > MAX_CLOUD_METADATA_BYTES {
+        return Ok(None);
+    }
+    let Ok(header) = serde_json::from_slice::<CachedPreviewHeader>(&fs::read(metadata_path)?)
+    else {
+        return Ok(None);
+    };
+    let points_path = directory.join("points.bin");
+    if header.version != 1
+        || header.total_points == 0
+        || header.points == 0
+        || header.points > header.total_points
+        || (0..3).any(|axis| {
+            !header.min[axis].is_finite()
+                || !header.max[axis].is_finite()
+                || header.min[axis] > header.max[axis]
+        })
+        || header.scan_poses.len() > MAX_CACHED_SCAN_POSES
+        || header.scan_poses.iter().any(|pose| {
+            !pose.position.iter().all(|value| value.is_finite())
+                || pose
+                    .axes
+                    .is_some_and(|axes| !axes.iter().flatten().all(|value| value.is_finite()))
+        })
+        || count_records(&points_path).ok() != Some(header.points)
+    {
+        return Ok(None);
+    }
+    let mut cloud = PointCloud {
+        path: path.to_path_buf(),
+        total_points: header.total_points,
+        bounds: Bounds {
+            min: header.min,
+            max: header.max,
+        },
+        points: Vec::new(),
+        point_ordinals: Vec::new(),
+        has_rgb: header.has_rgb,
+        has_intensity: header.has_intensity,
+        has_classification: header.has_classification,
+        scan_poses: header.scan_poses,
+        scan_images: super::scan_images(path),
+        source_stamp: Some(stamp),
+    };
+    read_records(&points_path, |record| {
+        if cloud.points.len() < sample_limit {
+            cloud.points.push(record.point);
+            cloud.point_ordinals.push(record.ordinal);
+        }
+        Ok(())
+    })?;
     if SourceStamp::read(path)? != stamp {
         return Err(LoadError::InvalidData(
             "source changed while loading cached preview".into(),
@@ -1826,6 +1999,101 @@ mod tests {
         assert_eq!(cached.scan_poses[0].position, [100.0, 200.0, 10.0]);
         assert_eq!(cached.points.len(), 2);
         assert_eq!(cached.point_ordinals.len(), 2);
+    }
+
+    #[test]
+    fn e57_header_and_preview_cache_open_without_decoding_points() {
+        use e57::{E57Writer, Quaternion, Record, RecordValue, Transform, Translation};
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("turned-scan.e57");
+        let mut writer = E57Writer::new(
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&source)
+                .unwrap(),
+            "{00000000-0000-4000-8000-000000000011}",
+        )
+        .unwrap();
+        {
+            let mut scan = writer
+                .add_pointcloud(
+                    "{00000000-0000-4000-8000-000000000012}",
+                    vec![
+                        Record::CARTESIAN_X_F64,
+                        Record::CARTESIAN_Y_F64,
+                        Record::CARTESIAN_Z_F64,
+                    ],
+                )
+                .unwrap();
+            scan.set_name(Some("Turned station".into()));
+            // A quarter turn about the vertical: local +X points along +Y.
+            let half = std::f64::consts::FRAC_1_SQRT_2;
+            scan.set_transform(Some(Transform {
+                rotation: Quaternion {
+                    w: half,
+                    x: 0.0,
+                    y: 0.0,
+                    z: half,
+                },
+                translation: Translation {
+                    x: 10.0,
+                    y: 20.0,
+                    z: 3.0,
+                },
+            }));
+            for x in [1.0, 2.0, 3.0, 4.0] {
+                scan.add_point(vec![
+                    RecordValue::Double(x),
+                    RecordValue::Double(0.0),
+                    RecordValue::Double(0.5),
+                ])
+                .unwrap();
+            }
+            scan.finalize().unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let exact = super::super::open(&source, 3).unwrap();
+        let header = super::super::open_e57_header(&source).unwrap();
+        assert!(header.points.is_empty());
+        assert_eq!(header.total_points, 4);
+        assert_eq!(header.scan_poses, exact.scan_poses);
+        // The stated extent, placed with the scan pose, encloses every point.
+        for axis in 0..3 {
+            assert!(header.bounds.min[axis] <= exact.bounds.min[axis] + 1e-9);
+            assert!(header.bounds.max[axis] >= exact.bounds.max[axis] - 1e-9);
+            assert!(header.bounds.max[axis] - header.bounds.min[axis] < 3.1);
+        }
+        assert!(super::super::open_e57_header(directory.path().join("scan.xyz")).is_err());
+
+        let root = directory.path().join("cache");
+        assert!(open_preview_cache_in(&root, &source, 3).unwrap().is_none());
+        write_preview_cache_in(&root, &exact).unwrap();
+        let cached = open_preview_cache_in(&root, &source, 3).unwrap().unwrap();
+        assert_eq!(cached.total_points, exact.total_points);
+        assert_eq!(cached.bounds, exact.bounds);
+        assert_eq!(cached.scan_poses, exact.scan_poses);
+        assert_eq!(cached.point_ordinals, exact.point_ordinals);
+        assert_eq!(cached.points.len(), 3);
+        for (cached, exact) in cached.points.iter().zip(&exact.points) {
+            assert_eq!(cached.xyz, exact.xyz);
+        }
+        assert_eq!(
+            open_preview_cache_in(&root, &source, 2)
+                .unwrap()
+                .unwrap()
+                .points
+                .len(),
+            2
+        );
+
+        // A changed source no longer matches its cached preview.
+        fs::write(&source, b"changed").unwrap();
+        assert!(open_preview_cache_in(&root, &source, 3).unwrap().is_none());
     }
 
     #[test]
