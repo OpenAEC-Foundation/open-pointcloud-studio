@@ -2654,6 +2654,8 @@ impl Studio {
                             "total": progress.total,
                             "depth": progress.depth,
                             "leaves": progress.leaves,
+                            "settled": progress.settled,
+                            "fraction": progress.fraction(),
                             "cancelling": self.index_cancel.load(Ordering::Relaxed),
                         }))),
                         "scale": self.scale_job.as_ref().map(|job| json!({

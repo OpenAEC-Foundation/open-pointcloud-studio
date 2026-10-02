@@ -55,7 +55,10 @@ Poll `status.result.thin_pending`; after it becomes false, the active cloud's
 the removed points without changing the source file.
 While an uncached octree is built, `status.result.index_progress` reports the
 source-read count and known total, then tree records handled, depth and leaf
-count. Its `stage` is `reading_source`, `building_tree` or `ready`, and
+count, with `settled` for the points that have reached their leaf of the
+`total` points in the cloud. `fraction` is how far the current stage is, from
+0 to 1, or `null` while the size of the source is unknown. Its `stage` is
+`reading_source`, `building_tree` or `ready`, and
 `cancelling` shows whether cancellation has been requested. The field becomes
 `null` after the build finishes. `cancel_index` stops the build and discards
 its temporary files without publishing a partial cache.

@@ -123,10 +123,8 @@ read on several threads while everything in between stays unread; an 8.7 GB
 cloud of 455 million points on a share that reads 100 MB/s shows up in about
 ten seconds. Sampling stops after six seconds on a source that seeks slowly
 and shows the packets read by then, which are spread through the file as
-well. The preview appears whether or not the import also builds an octree.
-The sampled records are decoded by the same reader as a full
-pass and are replaced by the checked cloud and its octree once the whole file
-has been read. This needs record fields that all fill whole bytes and
+well. The sampled records are decoded by the same reader as a full pass.
+This needs record fields that all fill whole bytes and
 packets that all hold the same number of records, which merged clouds
 usually have; station scans with a packed row and column index open as
 before. Only the packets that are read can be checked, so the preview is
@@ -136,6 +134,26 @@ sweep nor a name, is treated as a merged cloud: its pose places the points
 but shows no station marker.
 Without stations, a scene whose bounds are stretched by a few stray far
 points is framed around the bulk of its points.
+
+Any source of 512 MiB or more, in whatever format, is shown while it is being
+read: every three seconds the scene gets the points known so far, the spread
+preview together with an even sample of up to two million points of what the
+pass has read. The scene can be turned, sectioned and measured in the
+meantime, and the camera stays where it was put. These clouds are
+provisional; the checked cloud takes their place when the pass ends, with
+its octree when the import builds one.
+
+### Progress while opening
+
+A strip above the scene has a line for every task that is opening or indexing
+scans: the name of the scan, the step it is in, the points done of the total,
+a bar with the percentage, the time left at the pace so far and a button to
+cancel. An import that also builds an octree reports two steps, reading and
+building. Scans opened together share a line that says how many are ready.
+The percentage needs a known total: an E57 file states its record count, and
+a tree build knows the points of its cloud; other formats show the points
+read so far without a bar. Each row of the project list shows the percentage
+of its own scan with a thin bar underneath.
 
 In a distant overview, stations projected within 32 pixels share a count marker;
 labels move around neighboring markers and use a dark badge for contrast over
@@ -187,9 +205,14 @@ Filtered LAS/LAZ exports use the same bounded input batches while retaining
 the source's native LAS attributes and coordinate grid. The export scan itself
 stays in the optimized Rust core when the desktop supplies a section, edit or
 selection predicate.
-The disk octree's fixed 40-byte records now use one write per point and
-bounded 8,192-record reads while preserving exact source ordinals and
-cancellation between records.
+The disk octree is built on several threads. A node is read in blocks of
+65,536 of its fixed 40-byte records, which are assigned to the eight children
+in parallel and written in block order, and subtrees are built side by side
+on a bounded pool; large nodes are split one at a time so that the disk does
+not hold every level at once. The files are identical to those of a
+single-threaded build, which the tests keep as a reference, with exact source
+ordinals and cancellation between blocks. On a synthetic cloud of 256 million
+points the build went from 336 to about 50 seconds.
 Completed PLY, E57, PCD, PTX, XYZ, ASC, TXT, CSV and PTS indexes also keep
 exact source bounds, count and attribute flags in an atomic cache manifest. Reopening an
 unchanged indexed file in these formats reads that manifest and a small octree
@@ -296,7 +319,7 @@ shows the selected area framed at 19.4× after the new Zoom selection action.
 | PCD, PTX, OBJ, OFF, STL, DXF, E57 import | Point vertices implemented, including PCD LZF compression and VIEWPOINT transforms in all three PCD storage modes; official PCL XYZ, RGB, label/RGBA, intensity/extra-field, padding and organized captures were validated. OBJ, OFF, STL and DXF 3DFACE geometry also renders as triangles |
 | Multiple clouds, visibility, orbit, pan, deep zoom, 3D view cube, right-click menu, rounded points, colors, point size, budget, classes | Native implementation; close-up point spheres grow gently on screen so their lighting stays visible, with a capped increase over the chosen point size. Named camera views save and restore yaw, pitch, zoom and pan per source scan. The project panel lists the classification codes that occur in the open clouds; each can be shown or hidden like a layer, which filters both rendering and exact selection. Advanced navigation polish remains |
 | Section box | Three-axis clipping with visible wireframe, six draggable face handles, six limit sliders and precise XYZ fields. Fit box to selection uses exact selected source points, including points outside the preview; Zoom box frames the clipped volume in the viewport. Clipping applies to GPU rendering, full-resolution selection and a separate clipped export |
-| Octree LOD and eye-dome lighting | Existing disk-backed octrees attach when a scan opens. Uncached scans with at least one million points are indexed automatically, one at a time, after their preview loads; the Tools ribbon can disable this or start a manual build. Source-read and tree-build progress appear in the status and Properties panels, and a running build can be cancelled without retaining a partial cache. Camera movement selects visible nodes by projected size and refreshes a bounded point sample while retaining the previous sample until its replacement is ready; stale requests cancel during node reads and leaf-preview generation. The point-budget control reaches 10 million, with point uploads split into bounded WGPU buffers. Compact per-leaf LOD previews make repeated cold-cache navigation cheaper; old indexes create these previews on first use without a full rebuild. Native screen-space eye-dome shading has an on/off switch and an adjustable 0–5 strength in View and Properties |
+| Octree LOD and eye-dome lighting | Existing disk-backed octrees attach when a scan opens. Uncached scans with at least one million points are indexed automatically, one at a time, after their preview loads; the Tools ribbon can disable this or start a manual build. Source-read and tree-build progress appear in the strip above the scene and in the status bar, and a running build can be cancelled without retaining a partial cache. Camera movement selects visible nodes by projected size and refreshes a bounded point sample while retaining the previous sample until its replacement is ready; stale requests cancel during node reads and leaf-preview generation. The point-budget control reaches 10 million, with point uploads split into bounded WGPU buffers. Compact per-leaf LOD previews make repeated cold-cache navigation cheaper; old indexes create these previews on first use without a full rebuild. Native screen-space eye-dome shading has an on/off switch and an adjustable 0–5 strength in View and Properties |
 | Full-resolution point selection | Index-guided exact box selection when available, full-source fallback, single-point picking that prefers the displayed LOD and falls back to the exact full source with or without an index, selected point properties and selected export. The local API also picks by viewport pixel and returns the source ordinal and attributes. The Select ribbon's Zoom selection action frames the exact selected bounds without changing the section box; selection masks retain source-coordinate bounds so a later live transform and a gigabyte scan do not require a second full-source read. Long box scans can be cancelled from the Select ribbon, Escape or local API without applying partial results |
 | Measuring | Distance along a polyline and area of a polygon between exact picked source points, with segment lengths, horizontal length, height difference, true and plan area and perimeter in the viewport, Properties and the local API |
 | Editing | Native Delete/Undo/Redo on original source ordinals across multiple clouds; exact-percentage Thin edits the open view and can be undone without copying the source. Translate and independent XYZ Scale now edit the open view through a lazy affine transform. The 3D view, disk-octree selection, section box, scan markers, exports and mesh display use the transformed coordinates. Scale uses the exact centroid of all remaining points as pivot, streaming large scans from the octree with progress and cancellation. Reset Transform restores source coordinates and reopens the full section if the old box no longer intersects the cloud. Export saves the edited coordinates; the source file stays unchanged. Crop and save-minus remain file-based |
