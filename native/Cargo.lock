@@ -2932,6 +2932,7 @@ name = "open-pointcloud-studio-native"
 version = "0.4.0"
 dependencies = [
  "bytemuck",
+ "flate2",
  "iced",
  "iced_wgpu",
  "image",

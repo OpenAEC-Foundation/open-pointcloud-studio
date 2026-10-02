@@ -18,6 +18,7 @@ mod native_chrome;
 mod opencad_properties;
 mod opencad_ribbon;
 mod preferences;
+mod project_open;
 mod selection;
 mod station_photos;
 mod ui_theme;
@@ -447,6 +448,28 @@ fn main() -> iced::Result {
             }
         }
     }
+    if first.as_deref() == Some(OsStr::new("--list-scans")) {
+        let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+        if paths.is_empty() {
+            eprintln!("Usage: open-pointcloud-studio --list-scans PATH [PATH ...]");
+            std::process::exit(2);
+        }
+        let expansion = project_open::expand(&paths, &[]);
+        for file in &expansion.files {
+            println!("{}", file.display());
+        }
+        eprintln!("{} scan file(s)", expansion.files.len());
+        if expansion.missing > 0 {
+            eprintln!("{} listed scan(s) not found", expansion.missing);
+        }
+        for error in &expansion.errors {
+            eprintln!("{error}");
+        }
+        if !expansion.errors.is_empty() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if first.as_deref() == Some(OsStr::new("--photos")) {
         let (Some(source), Some(directory), None) = (args.next(), args.next(), args.next()) else {
             eprintln!("Usage: open-pointcloud-studio --photos INPUT OUTPUT_DIRECTORY");
@@ -807,6 +830,9 @@ fn main() -> iced::Result {
         .subscription(|studio| {
             let keyboard = iced::event::listen_with(|event, status, _| match event {
                 iced::Event::Window(iced::window::Event::Resized(_)) => Some(Message::RibbonReset),
+                iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+                    Some(Message::FileDropped(path))
+                }
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                     ..
@@ -910,12 +936,7 @@ fn main() -> iced::Result {
                 },
                 Message::SyncWindowChrome,
             );
-            let task = Task::batch(
-                startup_files
-                    .into_iter()
-                    .map(|path| studio.load(path))
-                    .chain(std::iter::once(chrome)),
-            );
+            let task = Task::batch([studio.open_paths(startup_files), chrome]);
             (studio, task)
         })
 }
@@ -960,6 +981,7 @@ enum RibbonTab {
 #[derive(Debug, Clone, Copy)]
 enum FileAction {
     Import,
+    ImportFolder,
     Activate(usize),
     ExportFull,
     ExportSelection,
@@ -1276,7 +1298,16 @@ enum Message {
     Theme(UiTheme),
     PersistSettings(u64),
     Open,
+    OpenFolder,
     FilesChosen(Option<Vec<PathBuf>>),
+    FileDropped(PathBuf),
+    DroppedFilesReady,
+    ScansExpanded(project_open::Expansion),
+    ApiScansExpanded(
+        std::sync::mpsc::Sender<Value>,
+        PathBuf,
+        project_open::Expansion,
+    ),
     OpenProgress(u64),
     ImportLoaded(u64, Result<Arc<PointCloud>, String>),
     HeaderLoaded(u64, Result<Arc<PointCloud>, String>),
@@ -1475,6 +1506,8 @@ struct Studio {
     /// is left alone when further scans arrive.
     auto_camera: Option<(f32, f32, f32, [f32; 2])>,
     next_import_id: u64,
+    /// Paths dropped on the window that are waiting to be opened together.
+    dropped_paths: Vec<PathBuf>,
     clouds: Vec<CloudEntry>,
     undo_deletions: Vec<EditBatch>,
     redo_deletions: Vec<EditBatch>,
@@ -1791,6 +1824,7 @@ impl Default for Studio {
             import_headers: HashMap::new(),
             auto_camera: None,
             next_import_id: 0,
+            dropped_paths: Vec::new(),
             clouds: Vec::new(),
             undo_deletions: Vec::new(),
             redo_deletions: Vec::new(),
@@ -2421,19 +2455,21 @@ impl Studio {
                 }
             }
             ApiCommand::Open { path } => {
-                if !path.is_absolute() || !path.is_file() {
+                if !path.is_absolute() {
                     (
-                        json!({"ok": false, "error": "open requires an absolute path to an existing file"}),
+                        json!({"ok": false, "error": "open requires an absolute path to an existing file, folder or scan project file"}),
                         Task::none(),
                     )
                 } else {
-                    let before = self.next_import_id;
-                    let task = self.load(path.clone());
-                    let import_id = (self.next_import_id != before).then_some(self.next_import_id);
-                    (
-                        json!({"ok": true, "accepted": true, "path": path, "import_id": import_id}),
-                        task,
-                    )
+                    // The answer lists the accepted files, so it is sent once
+                    // the folder or project file has been read off this thread.
+                    let reply = request.reply;
+                    return Task::perform(
+                        Self::expand_paths(vec![path.clone()], self.open_scan_paths()),
+                        move |expansion| {
+                            Message::ApiScansExpanded(reply.clone(), path.clone(), expansion)
+                        },
+                    );
                 }
             }
             ApiCommand::CancelImport { id } => {
@@ -3745,6 +3781,58 @@ impl Studio {
         Task::batch([worker, Self::mesh_poll_task()])
     }
 
+    /// Paths of the scans that are open or still being imported.
+    fn open_scan_paths(&self) -> Vec<PathBuf> {
+        self.clouds
+            .iter()
+            .map(|entry| entry.cloud.path.clone())
+            .chain(self.imports.values().map(|job| job.path.clone()))
+            .collect()
+    }
+
+    /// Listing a folder or reading a scan project file touches the disk,
+    /// often a network share, so it runs on a worker thread.
+    async fn expand_paths(paths: Vec<PathBuf>, open: Vec<PathBuf>) -> project_open::Expansion {
+        tokio::task::spawn_blocking(move || project_open::expand(&paths, &open))
+            .await
+            .unwrap_or_else(|error| project_open::Expansion {
+                errors: vec![error.to_string()],
+                ..project_open::Expansion::default()
+            })
+    }
+
+    /// Open scan files, folders and scan project files chosen by the user.
+    fn open_paths(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
+        if paths.is_empty() {
+            return Task::none();
+        }
+        self.status = "Looking for scans…".into();
+        Task::perform(
+            Self::expand_paths(paths, self.open_scan_paths()),
+            Message::ScansExpanded,
+        )
+    }
+
+    /// Start loading the scans of an expanded selection and report how many
+    /// are being opened. Returns what was accepted.
+    fn open_expanded(
+        &mut self,
+        mut expansion: project_open::Expansion,
+    ) -> (project_open::Expansion, Task<Message>) {
+        // Scans opened while this selection was being expanded are skipped too.
+        expansion.skip_open(&self.open_scan_paths());
+        let tasks: Vec<_> = expansion
+            .files
+            .iter()
+            .map(|path| self.load(path.clone()))
+            .collect();
+        // A single file keeps the more detailed status of its own loader.
+        if expansion.files.len() != 1 || expansion.has_notes() {
+            self.status = expansion.summary();
+        }
+        (expansion, Task::batch(tasks))
+    }
+
     fn load(&mut self, path: PathBuf) -> Task<Message> {
         self.cancel_selection_for_scene_change();
         let is_las = path
@@ -4245,6 +4333,7 @@ impl Studio {
                 self.file_open = false;
                 return self.update(match action {
                     FileAction::Import => Message::Open,
+                    FileAction::ImportFolder => Message::OpenFolder,
                     FileAction::Activate(index) => Message::Select(index),
                     FileAction::ExportFull => Message::Export,
                     FileAction::ExportSelection => Message::ExportSelection,
@@ -4284,14 +4373,10 @@ impl Studio {
             Message::Open => {
                 return Task::perform(
                     async {
+                        let mut extensions = project_open::SCAN_EXTENSIONS.to_vec();
+                        extensions.push(project_open::PROJECT_EXTENSION);
                         rfd::AsyncFileDialog::new()
-                            .add_filter(
-                                "Point clouds",
-                                &[
-                                    "las", "laz", "ply", "xyz", "csv", "asc", "txt", "pts", "ptx",
-                                    "pcd", "obj", "off", "stl", "dxf", "e57",
-                                ],
-                            )
+                            .add_filter("Point clouds and scan projects", &extensions)
                             .pick_files()
                             .await
                             .map(|files| {
@@ -4304,10 +4389,57 @@ impl Studio {
                     Message::FilesChosen,
                 );
             }
-            Message::FilesChosen(Some(paths)) => {
-                return Task::batch(paths.into_iter().map(|path| self.load(path)));
+            Message::OpenFolder => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Open scan folder")
+                            .pick_folder()
+                            .await
+                            .map(|folder| vec![folder.path().to_path_buf()])
+                    },
+                    Message::FilesChosen,
+                );
             }
+            Message::FilesChosen(Some(paths)) => return self.open_paths(paths),
             Message::FilesChosen(None) => {}
+            Message::FileDropped(path) => {
+                // Several dropped items arrive one event each; open them as
+                // one selection so they are ordered and reported together.
+                self.dropped_paths.push(path);
+                if self.dropped_paths.len() == 1 {
+                    return Task::perform(tokio::time::sleep(Duration::from_millis(100)), |_| {
+                        Message::DroppedFilesReady
+                    });
+                }
+            }
+            Message::DroppedFilesReady => {
+                let paths = std::mem::take(&mut self.dropped_paths);
+                return self.open_paths(paths);
+            }
+            Message::ScansExpanded(expansion) => return self.open_expanded(expansion).1,
+            Message::ApiScansExpanded(reply, path, expansion) => {
+                let before = self.next_import_id;
+                let (expansion, task) = self.open_expanded(expansion);
+                let response = if expansion.files.is_empty() {
+                    json!({"ok": false, "error": expansion.summary()})
+                } else {
+                    let import_ids: Vec<u64> = (before + 1..=self.next_import_id).collect();
+                    json!({
+                        "ok": true,
+                        "accepted": true,
+                        "path": path,
+                        "files": expansion.files,
+                        "missing": expansion.missing,
+                        "already_open": expansion.already_open,
+                        "errors": expansion.errors,
+                        "import_id": import_ids.last(),
+                        "import_ids": import_ids,
+                    })
+                };
+                let _ = reply.send(response);
+                return task;
+            }
             Message::OpenProgress(id) => {
                 if let Some(job) = self.imports.get(&id) {
                     let label = display_name(&job.path);
@@ -8045,6 +8177,10 @@ impl Studio {
                 .on_press(Message::Open)
                 .style(flat_tool_style)
                 .width(Fill),
+            button("+  Open scan folder…")
+                .on_press(Message::OpenFolder)
+                .style(flat_tool_style)
+                .width(Fill),
         ]
         .spacing(9);
         for (index, entry) in self.clouds.iter().enumerate() {
@@ -8328,6 +8464,7 @@ impl Studio {
         let menu = column![
             container(text("FILE").size(12).color(self.ui_theme.colors().accent)).padding([20, 18]),
             action("Import point cloud…", FileAction::Import, true),
+            action("Open scan folder…", FileAction::ImportFolder, true),
             container(text("EXPORT").size(10).color(self.ui_theme.colors().muted)).padding(
                 iced::Padding {
                     top: 22.0,
@@ -12539,6 +12676,44 @@ mod import_api_tests {
         let _ = studio.update(Message::IndexedImportReady(21, Err("cancelled".into())));
         assert_eq!(studio.clouds.len(), 1);
         assert_eq!(studio.status, "Octree build cancelled");
+    }
+
+    #[test]
+    fn expanded_folder_opens_each_scan_once_and_answers_the_api() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_path_buf();
+        let scans: Vec<PathBuf> = ["scan 2.xyz", "scan 10.xyz"]
+            .iter()
+            .map(|name| {
+                let path = folder.join(name);
+                std::fs::write(&path, "1 2 3\n").unwrap();
+                path
+            })
+            .collect();
+        let expansion = project_open::expand(std::slice::from_ref(&folder), &[]);
+        let mut studio = Studio::default();
+
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.update(Message::ApiScansExpanded(
+            reply,
+            folder.clone(),
+            expansion.clone(),
+        ));
+        let response = receive.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["files"], json!(scans));
+        assert_eq!(response["import_ids"], json!([1, 2]));
+        assert_eq!(response["import_id"], 2);
+        assert_eq!(studio.imports.len(), 2);
+        assert_eq!(studio.status, "Opening 2 scans…");
+
+        // Both scans are still being imported, so nothing is opened twice.
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.update(Message::ApiScansExpanded(reply, folder, expansion));
+        let response = receive.recv().unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"], "No scans opened: 2 already open");
+        assert_eq!(studio.imports.len(), 2);
     }
 }
 

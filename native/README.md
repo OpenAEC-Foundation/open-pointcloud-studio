@@ -51,6 +51,31 @@ OpenCADStudio's SVG icons under `assets/icons/` were copied into [`assets/openca
 Camera views can be named and saved from the View ribbon or Properties panel, then restored or deleted from Properties. They persist per source scan in `camera-views.json` under the native XDG configuration directory.
 E57 scan transforms, valid PCD `VIEWPOINT` headers and PTX scanner positions appear as station markers in the native 3D view. A PCD header with an all-zero orientation, found in public PCL samples, opens with identity orientation but has no invented scanner axes. For isolated stations, the small X/Y/Z axes show the registered scanner orientation; nearby stations grouped into one marker do not imply a shared orientation. The View ribbon frames stations together with the cloud; Properties lists each station's coordinates and axis directions. Click a marker or a station's **Center** button to pan the current view to that position without changing its angle or zoom. Use `--scans INPUT` to print positions and orientations.
 
+### Opening a whole scan project
+
+A scan project is usually a folder with one scan file per station, often with
+a scan project file (`.rcp`) that lists them. Either opens in one step:
+
+- **Open scan folder…** in the File view or the project panel, or a folder on
+  the command line, opens every supported point-cloud or mesh file directly
+  inside that folder. Sub-folders are not searched. The files are ordered by
+  name with numbers compared as numbers, so `scan 2` comes before `scan 10`.
+- A scan project file can be picked in the Import dialog or given on the
+  command line. It is a ZIP container holding an XML document, and only that
+  document is read. Every listed scan is looked up beside the project file,
+  first by its stored relative path and then as `<scan name>.<extension>`,
+  ignoring letter case. The absolute paths stored in a project belong to the
+  machine that wrote it and are never used.
+- Files, folders and project files can be dropped on the window, and the
+  [command API](API.md) `open` command accepts all three.
+
+The status line reports how many scans are being opened and how many listed
+scans were not found. A scan that is already open or still loading is
+skipped, so a folder and its project file together add every scan once.
+Folders and project files are read on a worker thread, which keeps the window
+responsive on a network share. Use `--list-scans PATH [PATH ...]` to print the
+files that would be opened, one per line, without starting the GUI.
+
 ### Station photos and walking
 
 E57 scans often carry the photos taken at each station as pinhole images, for
@@ -150,6 +175,9 @@ seconds to read the source and backfill metadata.
 cd native
 cargo run -p open-pointcloud-studio-native
 cargo run -p open-pointcloud-studio-native -- /path/to/scan.laz
+cargo run -p open-pointcloud-studio-native -- /path/to/scan-folder
+cargo run -p open-pointcloud-studio-native -- /path/to/project.rcp
+cargo run -p open-pointcloud-studio-native -- --list-scans /path/to/scan-folder /path/to/project.rcp
 cargo run -p open-pointcloud-studio-native -- --export /path/to/scan.laz /path/to/scan.ply
 cargo run -p open-pointcloud-studio-native -- --export /path/to/scan.las /path/to/scan.e57
 cargo run -p open-pointcloud-studio-native -- --section /path/to/scan.laz 207440,474000,-100,208000,475000,1000 /path/to/crop.laz
@@ -176,8 +204,8 @@ As in Classic, `F` fits the whole model while focus is outside text inputs.
 Right-drag panning now applies the whole gesture when it crosses the
 right-click threshold, and orbit, pan and section-handle drags continue while
 the cursor crosses the model-space boundary.
-Opening the same source twice creates two independent layers. Preview and
-octree jobs, meshing, deletion and Undo/Redo now match the specific layer
+Opening a scan that is already open or still loading is skipped. Preview and
+octree jobs, meshing, deletion and Undo/Redo match the specific layer
 instance instead of the shared file path and timestamp.
 The point-pick tool searches the full source or disk octree for the nearest source point within eight screen pixels. Escape exits the tool while keeping an existing selection; during a search it now stops the indexed or streamed scan and discards the unfinished result. The [114-million-point pick screenshot](../screenshots/native-pick-exact-114m.png) shows one exact selected point after Escape.
 Opening, hiding or removing a layer also cancels an in-flight full-resolution

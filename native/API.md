@@ -23,7 +23,9 @@ curl -H 'Content-Type: application/json' -H 'X-OPS-Token: TOKEN' \
 
 Commands use absolute file paths. They return JSON with `ok: true` or
 `ok: false` and an `error`. File opening returns `accepted: true` as soon as
-the GUI starts loading; poll `status` for the new layer. Exports return
+the GUI starts loading; poll `status` for the new layer. `open` answers after
+a folder or scan project file has been read on a worker thread, with the list
+of files it started loading. Exports return
 `accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
 for a durable `running`, `complete` (with point count), or `failed` result.
 The newest 32 jobs remain queryable even if the GUI status line changes.
@@ -94,7 +96,7 @@ pick is discarded when cancelled.
 | --- | --- | --- |
 | `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
 | `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
-| `open` | `path` | Opens a point cloud or mesh in the running GUI; full-stream readers return an `import_id` |
+| `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found), `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |
 | `set_active` | `index` | Chooses the active layer |
