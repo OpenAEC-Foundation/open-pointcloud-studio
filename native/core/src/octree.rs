@@ -1,12 +1,17 @@
-//! Disk-backed octree indexing. Only node metadata and one small preview at a
-//! time need to be held in memory; point records stay in temporary files.
+//! Disk-backed octree indexing. Only node metadata, small previews and a
+//! bounded set of record blocks are held in memory; point records stay in
+//! temporary files.
 
 use std::array;
+use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Condvar, Mutex, OnceLock, PoisonError};
 use std::time::UNIX_EPOCH;
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::snapshots::Snapshots;
@@ -18,6 +23,17 @@ use super::{
 const RECORD_BYTES: usize = 40;
 const RECORD_BATCH_POINTS: usize = 8_192;
 const LEAF_LOD_POINTS: usize = 2_048;
+const ROOT_WRITE_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+/// Records a node partition reads, classifies and writes as one block.
+const PARTITION_BLOCK_RECORDS: usize = 65_536;
+/// Blocks a wide partition handles per round, each on its own worker.
+const WIDE_ROUND_BLOCKS: usize = 8;
+/// Smaller nodes are partitioned one block at a time on a single worker.
+const WIDE_NODE_MIN_BLOCKS: u64 = 32;
+/// Records that may wait in small nodes when the next large node is split.
+const BACKLOG_RECORDS: u64 = 4 * 1024 * 1024;
+/// Workers in each of the two build pools; more only contend for the disk.
+const MAX_BUILD_THREADS: usize = 16;
 const MAX_CLOUD_METADATA_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CACHED_SCAN_POSES: usize = 4_096;
 
@@ -194,7 +210,8 @@ impl OctreeIndex {
         let mut root_count = 0u64;
         progress(IndexProgress::reading(0, cloud.total_points))?;
         {
-            let mut writer = BufWriter::new(File::create(&root_path)?);
+            let mut writer =
+                BufWriter::with_capacity(ROOT_WRITE_BUFFER_BYTES, File::create(&root_path)?);
             visit_points(&cloud.path, &mut |point| {
                 if root_count.is_multiple_of(65_536) {
                     progress(IndexProgress::reading(root_count, cloud.total_points))?;
@@ -394,7 +411,8 @@ impl OctreeIndex {
         let mut poses = Vec::new();
         progress(IndexProgress::reading(0, 0))?;
         {
-            let mut writer = BufWriter::new(File::create(&root_path)?);
+            let mut writer =
+                BufWriter::with_capacity(ROOT_WRITE_BUFFER_BYTES, File::create(&root_path)?);
             visit_points_with_poses(
                 path,
                 &mut |point| {
@@ -1335,14 +1353,576 @@ struct BuildContext<'a, F> {
     progress: &'a mut F,
 }
 
-impl<F: FnMut(IndexProgress) -> Result<(), LoadError>> BuildContext<'_, F> {
-    fn emit(&mut self, depth: u8) -> Result<(), LoadError> {
-        (self.progress)(IndexProgress::building(
-            *self.handled_records,
-            depth,
-            *self.ready_leaves,
+/// Block and round sizes of a node partition. Tests shrink them so that a
+/// small cloud still spans many blocks and rounds.
+#[derive(Clone, Copy)]
+struct PartitionTuning {
+    block_records: usize,
+    round_blocks: usize,
+    wide_node_blocks: u64,
+    backlog_records: u64,
+}
+
+impl Default for PartitionTuning {
+    fn default() -> Self {
+        Self {
+            block_records: PARTITION_BLOCK_RECORDS,
+            round_blocks: WIDE_ROUND_BLOCKS,
+            wide_node_blocks: WIDE_NODE_MIN_BLOCKS,
+            backlog_records: BACKLOG_RECORDS,
+        }
+    }
+}
+
+/// Index builds share two small pools and leave the global one free. Each
+/// worker of the node pool has at most one small node open, and the wide
+/// pool runs the blocks of one large node at a time, so the pool sizes bound
+/// the open files and block buffers however many builds run.
+fn build_pool(wide: bool) -> Result<&'static rayon::ThreadPool, LoadError> {
+    static POOLS: [OnceLock<Result<rayon::ThreadPool, String>>; 2] =
+        [OnceLock::new(), OnceLock::new()];
+    POOLS[usize::from(wide)]
+        .get_or_init(|| {
+            let threads = std::thread::available_parallelism()
+                .map_or(1, usize::from)
+                .min(MAX_BUILD_THREADS);
+            let kind = if wide { "wide" } else { "node" };
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .thread_name(move |index| format!("octree-{kind}-{index}"))
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map_err(|error| LoadError::Io(std::io::Error::other(error.clone())))
+}
+
+struct NodeJob {
+    id: String,
+    input_path: PathBuf,
+    bounds: Bounds,
+    count: u64,
+    depth: u8,
+}
+
+struct BuiltNode {
+    bounds: Bounds,
+    total_points: u64,
+    stored_points: u64,
+    depth: u8,
+    leaf: bool,
+}
+
+#[derive(Clone, Copy)]
+struct RoundLayout {
+    center: [f64; 3],
+    length: u64,
+    block_bytes: usize,
+    wide: bool,
+}
+
+/// One block of a round: its own handle on the node's input and the raw
+/// records it read.
+struct Block {
+    reader: File,
+    records: Vec<u8>,
+    octants: Vec<u8>,
+}
+
+impl Block {
+    fn load(&mut self, offset: u64, bytes: usize) -> Result<(), LoadError> {
+        self.records.resize(bytes, 0);
+        if bytes > 0 {
+            self.reader.seek(SeekFrom::Start(offset))?;
+            self.reader.read_exact(&mut self.records)?;
+        }
+        Ok(())
+    }
+
+    fn record(&self, index: usize) -> &[u8] {
+        &self.records[index * RECORD_BYTES..(index + 1) * RECORD_BYTES]
+    }
+}
+
+/// A block's records grouped by octant, in input order within each octant.
+struct Sorted {
+    bytes: Vec<u8>,
+    ends: [usize; 8],
+}
+
+impl Sorted {
+    fn segment(&self, child: usize) -> &[u8] {
+        let start = if child == 0 { 0 } else { self.ends[child - 1] };
+        &self.bytes[start..self.ends[child]]
+    }
+}
+
+/// Only the coordinates are decoded; the records are copied as stored.
+fn classify(center: [f64; 3], records: &[u8], octants: &mut Vec<u8>, sorted: &mut Sorted) {
+    let (records, _) = records.as_chunks::<RECORD_BYTES>();
+    let mut next = [0usize; 8];
+    octants.clear();
+    octants.extend(records.iter().map(|record| {
+        let xyz = array::from_fn(|axis| {
+            let start = axis * 8;
+            f64::from_le_bytes(record[start..start + 8].try_into().unwrap())
+        });
+        let index = octant(xyz, center);
+        next[index] += 1;
+        index as u8
+    }));
+    let mut start = 0;
+    for slot in &mut next {
+        start += std::mem::replace(slot, start);
+    }
+    sorted.bytes.resize(records.len() * RECORD_BYTES, 0);
+    let (grouped, _) = sorted.bytes.as_chunks_mut::<RECORD_BYTES>();
+    for (record, index) in records.iter().zip(octants.iter()) {
+        let slot = &mut next[usize::from(*index)];
+        grouped[*slot] = *record;
+        *slot += 1;
+    }
+    sorted.ends = next.map(|end| end * RECORD_BYTES);
+}
+
+/// The node preview: the first `limit` records, after which every record
+/// replaces a pseudo-randomly chosen one with a probability of `limit / seen`.
+struct Reservoir {
+    records: Vec<u8>,
+    limit: usize,
+    seen: u64,
+    random_state: u64,
+    appended: usize,
+    replaced: Vec<(usize, usize)>,
+}
+
+impl Reservoir {
+    fn new(limit: usize, count: u64, depth: u8) -> Self {
+        Self {
+            records: Vec::with_capacity((limit as u64).min(count) as usize * RECORD_BYTES),
+            limit,
+            seen: 0,
+            random_state: 0x9e37_79b9_7f4a_7c15u64 ^ (count << (depth % 32)),
+            appended: 0,
+            replaced: Vec::new(),
+        }
+    }
+
+    /// Decide which of the next `records` records enter the preview. Only
+    /// their positions matter here, so this can run while they are read.
+    fn draw(&mut self, records: usize) {
+        self.replaced.clear();
+        self.appended = (self.limit as u64)
+            .saturating_sub(self.seen)
+            .min(records as u64) as usize;
+        let limit = self.limit as u64;
+        let mut seen = self.seen + self.appended as u64;
+        let mut random_state = self.random_state;
+        for index in self.appended..records {
+            random_state ^= random_state << 13;
+            random_state ^= random_state >> 7;
+            random_state ^= random_state << 17;
+            seen += 1;
+            let chosen = random_state % seen;
+            if chosen < limit {
+                self.replaced.push((index, chosen as usize));
+            }
+        }
+        self.seen = seen;
+        self.random_state = random_state;
+    }
+
+    /// Copy the drawn records, looked up by their position in the round.
+    fn copy_drawn<'a>(&mut self, record: impl Fn(usize) -> &'a [u8]) {
+        for index in 0..self.appended {
+            self.records.extend_from_slice(record(index));
+        }
+        for &(index, slot) in &self.replaced {
+            self.records[slot * RECORD_BYTES..(slot + 1) * RECORD_BYTES]
+                .copy_from_slice(record(index));
+        }
+    }
+}
+
+/// State shared by the workers of one tree build.
+struct TreeBuild<'a> {
+    directory: &'a Path,
+    config: &'a IndexConfig,
+    tuning: PartitionTuning,
+    handled_records: AtomicU64,
+    ready_leaves: AtomicU64,
+    aborted: AtomicBool,
+    failure: Mutex<Option<LoadError>>,
+    nodes: Mutex<HashMap<String, BuiltNode>>,
+    /// Records in small nodes that are waiting for a worker or being built.
+    backlog: Mutex<u64>,
+    backlog_changed: Condvar,
+}
+
+impl TreeBuild<'_> {
+    /// Keep the first error and make every worker stop at its next block.
+    fn fail(&self, error: LoadError) {
+        let mut failure = self.failure.lock().unwrap();
+        if failure.is_none() {
+            *failure = Some(error);
+        }
+        self.aborted.store(true, Ordering::Release);
+        drop(failure);
+        let _backlog = self.backlog.lock().unwrap();
+        self.backlog_changed.notify_all();
+    }
+
+    fn aborted(&self) -> bool {
+        self.aborted.load(Ordering::Acquire)
+    }
+
+    fn check(&self) -> Result<(), LoadError> {
+        if self.aborted() {
+            return Err(LoadError::Cancelled);
+        }
+        Ok(())
+    }
+
+    fn is_large(&self, job: &NodeJob) -> bool {
+        job.count.div_ceil(self.tuning.block_records as u64) >= self.tuning.wide_node_blocks
+    }
+
+    /// Large nodes are split one after another, depth first and with a wide
+    /// partition, while the node pool works on their small subtrees. Files
+    /// are then read back soon after they are written, and little data is in
+    /// flight at any time.
+    fn descend<'scope>(
+        &'scope self,
+        scope: &rayon::Scope<'scope>,
+        job: NodeJob,
+        events: &mpsc::Sender<u8>,
+    ) -> Result<(), LoadError> {
+        if !self.is_large(&job) {
+            *self.backlog.lock().unwrap() += job.count;
+            let events = events.clone();
+            scope.spawn(move |scope| self.run(scope, job, events));
+            return Ok(());
+        }
+        // Let the node pool catch up before more small nodes are written.
+        let mut backlog = self.backlog.lock().unwrap();
+        while *backlog > self.tuning.backlog_records && !self.aborted() {
+            backlog = self.backlog_changed.wait(backlog).unwrap();
+        }
+        drop(backlog);
+        let (small, large): (Vec<_>, Vec<_>) = self
+            .build(job, true, events)?
+            .into_iter()
+            .partition(|child| !self.is_large(child));
+        for child in small.into_iter().chain(large) {
+            self.descend(scope, child, events)?;
+        }
+        Ok(())
+    }
+
+    /// A small subtree on the node pool. Children are spawned rather than
+    /// awaited, so a worker never holds a node open while it picks up
+    /// another one.
+    fn run<'scope>(
+        &'scope self,
+        scope: &rayon::Scope<'scope>,
+        job: NodeJob,
+        events: mpsc::Sender<u8>,
+    ) {
+        let count = job.count;
+        match self.build(job, false, &events) {
+            Ok(children) => {
+                let added: u64 = children.iter().map(|child| child.count).sum();
+                let mut backlog = self.backlog.lock().unwrap();
+                *backlog = (*backlog + added).saturating_sub(count);
+                drop(backlog);
+                self.backlog_changed.notify_all();
+                for child in children {
+                    let events = events.clone();
+                    scope.spawn(move |scope| self.run(scope, child, events));
+                }
+            }
+            Err(error) => self.fail(error),
+        }
+    }
+
+    /// Finish a leaf, or split an inner node and return its children.
+    fn build(
+        &self,
+        job: NodeJob,
+        wide: bool,
+        events: &mpsc::Sender<u8>,
+    ) -> Result<Vec<NodeJob>, LoadError> {
+        self.check()?;
+        let leaf = job.count <= self.config.leaf_points
+            || job.depth >= self.config.max_depth
+            || job.bounds.extent() <= f64::EPSILON;
+        let mut children = Vec::new();
+        let stored_points = if leaf {
+            if job.count > (LEAF_LOD_POINTS * 4) as u64 {
+                ensure_leaf_lod_where(
+                    &job.input_path,
+                    &leaf_lod_path(self.directory, &job.id),
+                    job.count,
+                    &|| self.aborted(),
+                )?;
+            }
+            self.handled_records.fetch_add(job.count, Ordering::AcqRel);
+            self.ready_leaves.fetch_add(1, Ordering::AcqRel);
+            job.count
+        } else {
+            let (child_counts, stored_points) = self.partition(&job, wide, events)?;
+            for (index, count) in child_counts.into_iter().enumerate() {
+                if count == 0 {
+                    continue;
+                }
+                let id = format!("{}{index}", job.id);
+                children.push(NodeJob {
+                    input_path: self.directory.join(format!("{id}.bin")),
+                    id,
+                    bounds: child_bounds(job.bounds, index),
+                    count,
+                    depth: job.depth + 1,
+                });
+            }
+            stored_points
+        };
+        self.nodes.lock().unwrap().insert(
+            job.id,
+            BuiltNode {
+                bounds: job.bounds,
+                total_points: job.count,
+                stored_points,
+                depth: job.depth,
+                leaf,
+            },
+        );
+        let _ = events.send(job.depth);
+        Ok(children)
+    }
+
+    /// Split an inner node: one block at a time on the current thread, or
+    /// with several blocks per round on the wide pool.
+    fn partition(
+        &self,
+        job: &NodeJob,
+        wide: bool,
+        events: &mpsc::Sender<u8>,
+    ) -> Result<([u64; 8], u64), LoadError> {
+        let tuning = self.tuning;
+        let length = fs::metadata(&job.input_path)?.len();
+        if !length.is_multiple_of(RECORD_BYTES as u64) {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+        }
+        let layout = RoundLayout {
+            center: job.bounds.center(),
+            length,
+            block_bytes: tuning.block_records * RECORD_BYTES,
+            wide,
+        };
+        if !wide {
+            return self.split(job, layout, events);
+        }
+        // One wide partition at a time, across all builds.
+        static WIDE_TURN: Mutex<()> = Mutex::new(());
+        let _turn = WIDE_TURN.lock().unwrap_or_else(PoisonError::into_inner);
+        build_pool(true)?.install(|| self.split(job, layout, events))
+    }
+
+    /// Distribute a node's records over its child files and write its
+    /// preview. Records keep their input order within each child, whatever
+    /// the block and round sizes are.
+    fn split(
+        &self,
+        job: &NodeJob,
+        layout: RoundLayout,
+        events: &mpsc::Sender<u8>,
+    ) -> Result<([u64; 8], u64), LoadError> {
+        let tuning = self.tuning;
+        let RoundLayout {
+            length,
+            block_bytes,
+            wide,
+            ..
+        } = layout;
+        let width = if wide { tuning.round_blocks } else { 1 };
+        let rounds = length.div_ceil((width * block_bytes) as u64);
+        let capacity = length.min(block_bytes as u64) as usize;
+        let mut blocks = (0..width)
+            .map(|_| {
+                Ok(Block {
+                    reader: File::open(&job.input_path)?,
+                    records: Vec::with_capacity(capacity),
+                    octants: Vec::with_capacity(capacity / RECORD_BYTES),
+                })
+            })
+            .collect::<Result<Vec<_>, LoadError>>()?;
+        // A wide partition fills its next round while the current one is
+        // written, which takes a second set of grouped blocks.
+        let mut sorted: Vec<Vec<Sorted>> = (0..if wide { 2 } else { 1 })
+            .map(|_| {
+                (0..width)
+                    .map(|_| Sorted {
+                        bytes: Vec::with_capacity(capacity),
+                        ends: [0; 8],
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut reservoir = Reservoir::new(self.config.preview_points, job.count, job.depth);
+        let mut writers: [Option<File>; 8] = array::from_fn(|_| None);
+        let mut child_counts = [0u64; 8];
+
+        let mut records = 0;
+        if rounds > 0 {
+            records = self.fill_round(layout, 0, &mut blocks, &mut sorted[0], &mut reservoir)?;
+        }
+        for round in 0..rounds {
+            let current = (round % sorted.len() as u64) as usize;
+            reservoir.copy_drawn(|index| {
+                blocks[index / tuning.block_records].record(index % tuning.block_records)
+            });
+            for (child, count) in child_counts.iter_mut().enumerate() {
+                let bytes: usize = sorted[current]
+                    .iter()
+                    .map(|block| block.segment(child).len())
+                    .sum();
+                *count += (bytes / RECORD_BYTES) as u64;
+            }
+            self.handled_records
+                .fetch_add(records as u64, Ordering::AcqRel);
+            let _ = events.send(job.depth);
+
+            let last = round + 1 == rounds;
+            if wide && !last {
+                let (even, odd) = sorted.split_at_mut(1);
+                let (current, next) = if current == 0 {
+                    (&even[0], &mut odd[0])
+                } else {
+                    (&odd[0], &mut even[0])
+                };
+                let (written, filled) = rayon::join(
+                    || self.write_round(&job.id, &mut writers, current, wide),
+                    || self.fill_round(layout, round + 1, &mut blocks, next, &mut reservoir),
+                );
+                written?;
+                records = filled?;
+            } else {
+                self.write_round(&job.id, &mut writers, &sorted[current], wide)?;
+                if !last {
+                    let next = &mut sorted[current];
+                    records =
+                        self.fill_round(layout, round + 1, &mut blocks, next, &mut reservoir)?;
+                }
+            }
+        }
+        drop(writers);
+        drop(blocks);
+
+        let preview_path = self.directory.join(format!("{}-preview.bin", job.id));
+        fs::write(preview_path, &reservoir.records)?;
+        fs::remove_file(&job.input_path)?;
+        Ok((
+            child_counts,
+            (reservoir.records.len() / RECORD_BYTES) as u64,
         ))
     }
+
+    /// Read and classify one round of blocks and draw its preview records.
+    fn fill_round(
+        &self,
+        layout: RoundLayout,
+        round: u64,
+        blocks: &mut [Block],
+        sorted: &mut [Sorted],
+        reservoir: &mut Reservoir,
+    ) -> Result<usize, LoadError> {
+        let capacity = (blocks.len() * layout.block_bytes) as u64;
+        let start = round * capacity;
+        let round_bytes = (layout.length - start).min(capacity) as usize;
+        let records = round_bytes / RECORD_BYTES;
+        let load = |(slot, (block, sorted)): (usize, (&mut Block, &mut Sorted))| {
+            self.check()?;
+            let skipped = (slot * layout.block_bytes).min(round_bytes);
+            let bytes = (round_bytes - skipped).min(layout.block_bytes);
+            block.load(start + skipped as u64, bytes)?;
+            classify(layout.center, &block.records, &mut block.octants, sorted);
+            Ok::<(), LoadError>(())
+        };
+        if layout.wide {
+            let (loaded, ()) = rayon::join(
+                || {
+                    blocks
+                        .par_iter_mut()
+                        .zip(sorted.par_iter_mut())
+                        .enumerate()
+                        .try_for_each(load)
+                },
+                || reservoir.draw(records),
+            );
+            loaded?;
+        } else {
+            blocks
+                .iter_mut()
+                .zip(sorted.iter_mut())
+                .enumerate()
+                .try_for_each(load)?;
+            reservoir.draw(records);
+        }
+        Ok(records)
+    }
+
+    /// Append every child's records of a round to its file, in block order.
+    fn write_round(
+        &self,
+        id: &str,
+        writers: &mut [Option<File>; 8],
+        sorted: &[Sorted],
+        wide: bool,
+    ) -> Result<(), LoadError> {
+        let write = |(child, writer): (usize, &mut Option<File>)| {
+            for block in sorted {
+                let segment = block.segment(child);
+                if segment.is_empty() {
+                    continue;
+                }
+                let file = match writer {
+                    Some(file) => file,
+                    None => {
+                        let path = self.directory.join(format!("{id}{child}.bin"));
+                        writer.insert(File::create(path)?)
+                    }
+                };
+                file.write_all(segment)?;
+            }
+            Ok::<(), LoadError>(())
+        };
+        if wide {
+            writers.par_iter_mut().enumerate().try_for_each(write)
+        } else {
+            writers.iter_mut().enumerate().try_for_each(write)
+        }
+    }
+}
+
+fn assemble_node(nodes: &mut HashMap<String, BuiltNode>, id: String) -> Option<IndexedNode> {
+    let node = nodes.remove(&id)?;
+    let (children, data_path) = if node.leaf {
+        (Vec::new(), format!("{id}.bin"))
+    } else {
+        let children = (0..8)
+            .filter_map(|octant| assemble_node(nodes, format!("{id}{octant}")))
+            .collect();
+        (children, format!("{id}-preview.bin"))
+    };
+    Some(IndexedNode {
+        id,
+        bounds: node.bounds,
+        total_points: node.total_points,
+        stored_points: node.stored_points,
+        depth: node.depth,
+        children,
+        data_path: PathBuf::from(data_path),
+    })
 }
 
 fn build_node<F: FnMut(IndexProgress) -> Result<(), LoadError>>(
@@ -1353,103 +1933,76 @@ fn build_node<F: FnMut(IndexProgress) -> Result<(), LoadError>>(
     depth: u8,
     context: &mut BuildContext<'_, F>,
 ) -> Result<IndexedNode, LoadError> {
-    context.emit(depth)?;
-    if count <= context.config.leaf_points
-        || depth >= context.config.max_depth
-        || bounds.extent() <= f64::EPSILON
-    {
-        if count > (LEAF_LOD_POINTS * 4) as u64 {
-            ensure_leaf_lod(&input_path, &leaf_lod_path(context.directory, &id), count)?;
-        }
-        *context.handled_records = context.handled_records.saturating_add(count);
-        *context.ready_leaves += 1;
-        context.emit(depth)?;
-        let data_path = PathBuf::from(format!("{id}.bin"));
-        return Ok(IndexedNode {
-            id,
-            bounds,
-            total_points: count,
-            stored_points: count,
-            depth,
-            children: Vec::new(),
-            data_path,
-        });
-    }
+    let job = NodeJob {
+        id,
+        input_path,
+        bounds,
+        count,
+        depth,
+    };
+    build_tree(job, PartitionTuning::default(), context)
+}
 
-    let center = bounds.center();
-    let mut writers: [Option<BufWriter<File>>; 8] = array::from_fn(|_| None);
-    let mut child_counts = [0u64; 8];
-    let mut preview = Vec::with_capacity(context.config.preview_points);
-    let mut random_state = 0x9e37_79b9_7f4a_7c15u64 ^ (count << (depth % 32));
-    read_records(&input_path, |point| {
-        if context.handled_records.is_multiple_of(65_536) {
-            context.emit(depth)?;
-        }
-        let index = octant(point.point.xyz, center);
-        if writers[index].is_none() {
-            let child_path = context.directory.join(format!("{id}{index}.bin"));
-            writers[index] = Some(BufWriter::new(File::create(child_path)?));
-        }
-        write_record(writers[index].as_mut().unwrap(), point)?;
-        child_counts[index] += 1;
-        *context.handled_records += 1;
-
-        if preview.len() < context.config.preview_points {
-            preview.push(point);
-        } else {
-            random_state ^= random_state << 13;
-            random_state ^= random_state >> 7;
-            random_state ^= random_state << 17;
-            let seen = child_counts.iter().sum::<u64>();
-            let chosen = random_state % seen;
-            if chosen < context.config.preview_points as u64 {
-                preview[chosen as usize] = point;
+/// Build the subtree of `job` on the build pools. The progress callback is
+/// not required to be `Send`, so it stays on the calling thread, which
+/// reports what the workers have handled each time one of them signals.
+fn build_tree<F: FnMut(IndexProgress) -> Result<(), LoadError>>(
+    job: NodeJob,
+    tuning: PartitionTuning,
+    context: &mut BuildContext<'_, F>,
+) -> Result<IndexedNode, LoadError> {
+    let pool = build_pool(false)?;
+    let build = TreeBuild {
+        directory: context.directory,
+        config: context.config,
+        tuning,
+        handled_records: AtomicU64::new(*context.handled_records),
+        ready_leaves: AtomicU64::new(*context.ready_leaves),
+        aborted: AtomicBool::new(false),
+        failure: Mutex::new(None),
+        nodes: Mutex::new(HashMap::new()),
+        backlog: Mutex::new(0),
+        backlog_changed: Condvar::new(),
+    };
+    let root_id = job.id.clone();
+    let (events, updates) = mpsc::channel();
+    std::thread::scope(|threads| {
+        let build = &build;
+        std::thread::Builder::new().spawn_scoped(threads, move || {
+            pool.in_place_scope(|scope| {
+                if let Err(error) = build.descend(scope, job, &events) {
+                    build.fail(error);
+                }
+            });
+        })?;
+        // The channel closes once the last node has finished or given up.
+        for mut depth in &updates {
+            if build.aborted() {
+                continue;
+            }
+            while let Ok(newer) = updates.try_recv() {
+                depth = newer;
+            }
+            let update = IndexProgress::building(
+                build.handled_records.load(Ordering::Acquire),
+                depth,
+                build.ready_leaves.load(Ordering::Acquire),
+            );
+            if let Err(error) = (context.progress)(update) {
+                build.fail(error);
             }
         }
-        Ok(())
+        Ok::<(), LoadError>(())
     })?;
-    for writer in writers.iter_mut().flatten() {
-        writer.flush()?;
+    *context.handled_records = build.handled_records.into_inner();
+    *context.ready_leaves = build.ready_leaves.into_inner();
+    if let Some(error) = build.failure.into_inner().unwrap() {
+        return Err(error);
     }
-    drop(writers);
-
-    let preview_path = context.directory.join(format!("{id}-preview.bin"));
-    {
-        let mut writer = BufWriter::new(File::create(&preview_path)?);
-        for point in &preview {
-            write_record(&mut writer, *point)?;
-        }
-        writer.flush()?;
-    }
-    fs::remove_file(&input_path)?;
-
-    let mut children = Vec::new();
-    for (index, child_count) in child_counts.into_iter().enumerate() {
-        if child_count == 0 {
-            continue;
-        }
-        let child_id = format!("{id}{index}");
-        let child_path = context.directory.join(format!("{child_id}.bin"));
-        children.push(build_node(
-            child_id,
-            child_path,
-            child_bounds(bounds, index),
-            child_count,
-            depth + 1,
-            context,
-        )?);
-    }
-
-    let data_path = PathBuf::from(format!("{id}-preview.bin"));
-    Ok(IndexedNode {
-        id,
-        bounds,
-        total_points: count,
-        stored_points: preview.len() as u64,
-        depth,
-        children,
-        data_path,
-    })
+    let mut nodes = build.nodes.into_inner().unwrap();
+    assemble_node(&mut nodes, root_id)
+        .filter(|_| nodes.is_empty())
+        .ok_or_else(|| LoadError::InvalidData("incomplete octree build".into()))
 }
 
 fn octant(xyz: [f64; 3], center: [f64; 3]) -> usize {
@@ -1525,10 +2078,6 @@ fn leaf_lod_path(directory: &Path, id: &str) -> PathBuf {
     directory.join(format!("{id}-lod.bin"))
 }
 
-fn ensure_leaf_lod(source: &Path, preview: &Path, count: u64) -> Result<(), LoadError> {
-    ensure_leaf_lod_where(source, preview, count, &|| false)
-}
-
 fn ensure_leaf_lod_where(
     source: &Path,
     preview: &Path,
@@ -1602,6 +2151,393 @@ fn decode_record(bytes: &[u8; RECORD_BYTES]) -> IndexedPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The record-by-record partition on one thread. The block-parallel
+    /// build has to produce the same files and the same tree.
+    fn reference_node(
+        directory: &Path,
+        config: &IndexConfig,
+        id: String,
+        input_path: PathBuf,
+        bounds: Bounds,
+        count: u64,
+        depth: u8,
+    ) -> Result<IndexedNode, LoadError> {
+        if count <= config.leaf_points
+            || depth >= config.max_depth
+            || bounds.extent() <= f64::EPSILON
+        {
+            if count > (LEAF_LOD_POINTS * 4) as u64 {
+                let preview = leaf_lod_path(directory, &id);
+                ensure_leaf_lod_where(&input_path, &preview, count, &|| false)?;
+            }
+            let data_path = PathBuf::from(format!("{id}.bin"));
+            return Ok(IndexedNode {
+                id,
+                bounds,
+                total_points: count,
+                stored_points: count,
+                depth,
+                children: Vec::new(),
+                data_path,
+            });
+        }
+
+        let center = bounds.center();
+        let mut writers: [Option<BufWriter<File>>; 8] = array::from_fn(|_| None);
+        let mut child_counts = [0u64; 8];
+        let mut preview = Vec::with_capacity(config.preview_points);
+        let mut random_state = 0x9e37_79b9_7f4a_7c15u64 ^ (count << (depth % 32));
+        read_records(&input_path, |point| {
+            let index = octant(point.point.xyz, center);
+            if writers[index].is_none() {
+                let child_path = directory.join(format!("{id}{index}.bin"));
+                writers[index] = Some(BufWriter::new(File::create(child_path)?));
+            }
+            write_record(writers[index].as_mut().unwrap(), point)?;
+            child_counts[index] += 1;
+
+            if preview.len() < config.preview_points {
+                preview.push(point);
+            } else {
+                random_state ^= random_state << 13;
+                random_state ^= random_state >> 7;
+                random_state ^= random_state << 17;
+                let seen = child_counts.iter().sum::<u64>();
+                let chosen = random_state % seen;
+                if chosen < config.preview_points as u64 {
+                    preview[chosen as usize] = point;
+                }
+            }
+            Ok(())
+        })?;
+        for writer in writers.iter_mut().flatten() {
+            writer.flush()?;
+        }
+        drop(writers);
+
+        let preview_path = directory.join(format!("{id}-preview.bin"));
+        {
+            let mut writer = BufWriter::new(File::create(&preview_path)?);
+            for point in &preview {
+                write_record(&mut writer, *point)?;
+            }
+            writer.flush()?;
+        }
+        fs::remove_file(&input_path)?;
+
+        let mut children = Vec::new();
+        for (index, child_count) in child_counts.into_iter().enumerate() {
+            if child_count == 0 {
+                continue;
+            }
+            let child_id = format!("{id}{index}");
+            let child_path = directory.join(format!("{child_id}.bin"));
+            children.push(reference_node(
+                directory,
+                config,
+                child_id,
+                child_path,
+                child_bounds(bounds, index),
+                child_count,
+                depth + 1,
+            )?);
+        }
+
+        let data_path = PathBuf::from(format!("{id}-preview.bin"));
+        Ok(IndexedNode {
+            id,
+            bounds,
+            total_points: count,
+            stored_points: preview.len() as u64,
+            depth,
+            children,
+            data_path,
+        })
+    }
+
+    /// Write pseudo-random root records and return their bounds. A clustered
+    /// cloud keeps most points near one corner and repeats one coordinate
+    /// often enough to reach the depth limit with a large leaf.
+    fn write_root_records(path: &Path, count: u64, clustered: bool) -> Bounds {
+        let mut state = 0x2545_f491_4f6c_dd1du64 ^ count;
+        let mut unit = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut bounds: Option<Bounds> = None;
+        let mut writer = BufWriter::new(File::create(path).unwrap());
+        for ordinal in 0..count {
+            let xyz = if !clustered || ordinal % 16 == 0 {
+                [unit() * 100.0 - 50.0, unit() * 80.0, unit() * 30.0]
+            } else if ordinal % 16 == 1 {
+                [41.25, 72.5, 27.75]
+            } else {
+                [
+                    50.0 - unit() * unit() * 12.0,
+                    80.0 - unit() * unit() * 9.0,
+                    30.0 - unit() * unit() * 4.0,
+                ]
+            };
+            match &mut bounds {
+                Some(bounds) => bounds.include(xyz),
+                None => bounds = Some(Bounds { min: xyz, max: xyz }),
+            }
+            let point = Point {
+                xyz,
+                rgb: (ordinal % 3 != 0).then_some([ordinal as u8, (ordinal >> 8) as u8, 7]),
+                intensity: (ordinal % 5 != 0).then_some((ordinal % 65_521) as u16),
+                classification: (ordinal % 7 == 0).then_some((ordinal % 31) as u8),
+            };
+            write_record(&mut writer, IndexedPoint { point, ordinal }).unwrap();
+        }
+        writer.flush().unwrap();
+        bounds.unwrap()
+    }
+
+    fn file_names(directory: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn assert_same_tree(built: &IndexedNode, reference: &IndexedNode, case: &str) {
+        let id = &reference.id;
+        assert_eq!(&built.id, id, "{case}");
+        assert_eq!(built.bounds, reference.bounds, "{case}: {id}");
+        assert_eq!(built.total_points, reference.total_points, "{case}: {id}");
+        assert_eq!(built.stored_points, reference.stored_points, "{case}: {id}");
+        assert_eq!(built.depth, reference.depth, "{case}: {id}");
+        assert_eq!(built.data_path, reference.data_path, "{case}: {id}");
+        assert_eq!(
+            built.children.len(),
+            reference.children.len(),
+            "{case}: {id}"
+        );
+        for (built, reference) in built.children.iter().zip(&reference.children) {
+            assert_same_tree(built, reference, case);
+        }
+    }
+
+    fn handled_by(node: &IndexedNode) -> u64 {
+        node.total_points + node.children.iter().map(handled_by).sum::<u64>()
+    }
+
+    #[test]
+    fn block_parallel_build_matches_the_sequential_reference() {
+        // Every inner node wide, every node on the pool, and a mix in which
+        // large nodes wait for the small subtrees to catch up.
+        let tunings = [
+            ("default", PartitionTuning::default()),
+            (
+                "wide rounds",
+                PartitionTuning {
+                    block_records: 257,
+                    round_blocks: 5,
+                    wide_node_blocks: 2,
+                    backlog_records: 0,
+                },
+            ),
+            (
+                "single blocks",
+                PartitionTuning {
+                    block_records: 1_000,
+                    round_blocks: 4,
+                    wide_node_blocks: u64::MAX,
+                    backlog_records: 0,
+                },
+            ),
+            (
+                "large and small nodes",
+                PartitionTuning {
+                    block_records: 64,
+                    round_blocks: 16,
+                    wide_node_blocks: 40,
+                    backlog_records: 4_000,
+                },
+            ),
+        ];
+        let count = 300_000;
+        for clustered in [false, true] {
+            // The larger preview is filled across several blocks and rounds.
+            let config = IndexConfig {
+                leaf_points: 1_500,
+                preview_points: if clustered { 1_400 } else { 37 },
+                max_depth: 7,
+                scratch_dir: None,
+            };
+            let source = tempfile::tempdir().unwrap();
+            let records = source.path().join("records.bin");
+            let bounds = write_root_records(&records, count, clustered);
+
+            let expected = tempfile::tempdir().unwrap();
+            let root_path = expected.path().join("r.bin");
+            fs::copy(&records, &root_path).unwrap();
+            let reference = reference_node(
+                expected.path(),
+                &config,
+                "r".to_owned(),
+                root_path,
+                bounds,
+                count,
+                0,
+            )
+            .unwrap();
+            let names = file_names(expected.path());
+            assert!(reference.children.iter().any(|child| !child.is_leaf()));
+            assert_eq!(
+                names.iter().any(|name| name.ends_with("-lod.bin")),
+                clustered
+            );
+
+            for (name, tuning) in tunings {
+                let case = format!("{name}, clustered: {clustered}");
+                let directory = tempfile::tempdir().unwrap();
+                let root_path = directory.path().join("r.bin");
+                fs::copy(&records, &root_path).unwrap();
+                let mut handled_records = 0;
+                let mut ready_leaves = 0;
+                let mut updates = Vec::new();
+                let mut progress = |update: IndexProgress| {
+                    updates.push(update);
+                    Ok(())
+                };
+                let mut context = BuildContext {
+                    directory: directory.path(),
+                    config: &config,
+                    handled_records: &mut handled_records,
+                    ready_leaves: &mut ready_leaves,
+                    progress: &mut progress,
+                };
+                let job = NodeJob {
+                    id: "r".to_owned(),
+                    input_path: root_path,
+                    bounds,
+                    count,
+                    depth: 0,
+                };
+                let built = build_tree(job, tuning, &mut context).unwrap();
+
+                assert_same_tree(&built, &reference, &case);
+                assert_eq!(file_names(directory.path()), names, "{case}");
+                for name in &names {
+                    assert!(
+                        fs::read(directory.path().join(name)).unwrap()
+                            == fs::read(expected.path().join(name)).unwrap(),
+                        "{case}: {name} differs"
+                    );
+                }
+                assert_eq!(handled_records, handled_by(&reference), "{case}");
+                assert_eq!(ready_leaves, count_leaves(&reference), "{case}");
+                assert!(
+                    updates
+                        .iter()
+                        .all(|update| update.stage == IndexStage::BuildingTree)
+                        && updates.windows(2).all(|pair| {
+                            pair[0].completed <= pair[1].completed
+                                && pair[0].leaves <= pair[1].leaves
+                        }),
+                    "{case}"
+                );
+                let last = updates.last().unwrap();
+                assert_eq!(
+                    (last.completed, last.leaves),
+                    (handled_records, ready_leaves),
+                    "{case}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn failed_progress_stops_the_workers_and_keeps_the_first_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("cloud.xyz");
+        let mut contents = String::new();
+        for index in 0..150_000u64 {
+            let (x, y, z) = (index % 97, (index / 97) % 89, (index * 7_919) % 53);
+            contents.push_str(&format!("{x} {y} {z}\n"));
+        }
+        fs::write(&source, contents).unwrap();
+        let cloud = super::super::open(&source, 8).unwrap();
+        let cache = directory.path().join("cache");
+        let config = IndexConfig {
+            leaf_points: 512,
+            preview_points: 64,
+            max_depth: 8,
+            scratch_dir: Some(cache.clone()),
+        };
+        let mut calls_after_failure = 0;
+        let mut failed = false;
+        let result = OctreeIndex::build_cached_with_progress(&cloud, config.clone(), |update| {
+            if failed {
+                calls_after_failure += 1;
+            }
+            if update.stage == IndexStage::BuildingTree && update.completed > 0 {
+                failed = true;
+                return Err(LoadError::InvalidData("stopped by the caller".into()));
+            }
+            Ok(())
+        });
+        assert!(matches!(
+            result,
+            Err(LoadError::InvalidData(reason)) if reason == "stopped by the caller"
+        ));
+        assert_eq!(calls_after_failure, 0);
+        assert!(file_names(&cache).is_empty());
+        assert!(OctreeIndex::open_cached_if_present(&cloud, config.clone())
+            .unwrap()
+            .is_none());
+
+        // Once a build has failed, no worker reads or writes another block.
+        let nodes = directory.path().join("nodes");
+        fs::create_dir(&nodes).unwrap();
+        let bounds = write_root_records(&nodes.join("r.bin"), 20_000, false);
+        let build = TreeBuild {
+            directory: &nodes,
+            config: &config,
+            tuning: PartitionTuning::default(),
+            handled_records: AtomicU64::new(0),
+            ready_leaves: AtomicU64::new(0),
+            aborted: AtomicBool::new(false),
+            failure: Mutex::new(None),
+            nodes: Mutex::new(HashMap::new()),
+            backlog: Mutex::new(0),
+            backlog_changed: Condvar::new(),
+        };
+        build.fail(LoadError::InvalidData("first".into()));
+        build.fail(LoadError::InvalidData("second".into()));
+        let job = || NodeJob {
+            id: "r".to_owned(),
+            input_path: nodes.join("r.bin"),
+            bounds,
+            count: 20_000,
+            depth: 0,
+        };
+        let (events, updates) = mpsc::channel();
+        for wide in [false, true] {
+            assert!(matches!(
+                build.partition(&job(), wide, &events),
+                Err(LoadError::Cancelled)
+            ));
+            assert!(matches!(
+                build.build(job(), wide, &events),
+                Err(LoadError::Cancelled)
+            ));
+        }
+        assert!(updates.try_recv().is_err());
+        assert_eq!(file_names(&nodes), ["r.bin"]);
+        assert_eq!(build.handled_records.into_inner(), 0);
+        assert!(matches!(
+            build.failure.into_inner().unwrap(),
+            Some(LoadError::InvalidData(reason)) if reason == "first"
+        ));
+    }
 
     #[test]
     fn batched_records_keep_ordinals_attributes_and_reject_truncation() {
