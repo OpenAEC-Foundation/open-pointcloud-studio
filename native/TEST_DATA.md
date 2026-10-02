@@ -310,6 +310,16 @@ returned class 30 instead, confirming that a nonstandard producer label field
 participates in exact selection filtering. The five downloaded PCD files stay
 outside Git under `/tmp/ops-pcl-*.pcd`.
 
+With cached PCD reopen enabled, the official PCL region-growing RGB file's
+LZF-compressed points were revisited by `--index` in 0.01 seconds with 7,400
+KiB peak RSS. The native debug GUI attached the 24-node octree, displayed all
+259,847 finite points and retained the valid `VIEWPOINT` as one scanner
+station; see the [cached PCD view](../screenshots/native-pcl-pcd-cached-viewpoint.png).
+An indexed screen pick selected zero-based ordinal 61,937 at X 0.353, Y 0.537,
+Z -2.409 with RGB `[173, 138, 124]`; the
+[pick screenshot](../screenshots/native-pcl-pcd-cached-pick.png) shows its exact
+source attributes after the fast reopen.
+
 On 1 October 2026, the Rust reader visited all 968,520 finite points in the
 PCL couch file, all 112,586 in the room scan, and 259,847 finite points in the
 organized RGB file (the remaining records contain non-finite XYZ). The couch

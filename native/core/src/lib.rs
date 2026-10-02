@@ -256,7 +256,7 @@ pub fn open_with_progress(
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            ["ply", "e57", "xyz", "asc", "txt", "csv", "pts"]
+            ["ply", "e57", "pcd", "xyz", "asc", "txt", "csv", "pts"]
                 .iter()
                 .any(|format| extension.eq_ignore_ascii_case(format))
         })

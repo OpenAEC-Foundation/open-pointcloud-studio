@@ -82,6 +82,40 @@ impl Viewpoint {
             iz * w - iw * qz - ix * qy + iy * qx + self.translation[2],
         ]
     }
+
+    fn scan_pose(self, present: bool) -> Option<ScanPose> {
+        (present && self.orientation_known).then(|| ScanPose {
+            label: "VIEWPOINT".into(),
+            position: self.translation,
+            axes: quaternion_axes(self.rotation),
+        })
+    }
+}
+
+/// Recover the scanner pose from a cached PCD's bounded text header without
+/// decoding any of its ASCII, binary or LZF-compressed point records.
+pub(crate) fn scan_poses(path: &Path) -> Result<Vec<ScanPose>, LoadError> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut viewpoint = Viewpoint::default();
+    let mut has_viewpoint = false;
+    let mut header_bytes = 0usize;
+    loop {
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line)?;
+        header_bytes = header_bytes.saturating_add(bytes);
+        if bytes == 0 || header_bytes > 1_048_576 {
+            return Err(invalid("PCD header has no DATA line within 1 MiB"));
+        }
+        let mut words = line.split_whitespace();
+        match words.next().map(str::to_ascii_uppercase).as_deref() {
+            Some("VIEWPOINT") => {
+                viewpoint = Viewpoint::parse(words)?;
+                has_viewpoint = true;
+            }
+            Some("DATA") => return Ok(viewpoint.scan_pose(has_viewpoint).into_iter().collect()),
+            _ => {}
+        }
+    }
 }
 
 pub fn read(
@@ -129,12 +163,8 @@ pub fn read(
     if names.is_empty() || points == 0 {
         return Err(invalid("PCD file has no points or fields"));
     }
-    if has_viewpoint && viewpoint.orientation_known {
-        pose_push(ScanPose {
-            label: "VIEWPOINT".into(),
-            position: viewpoint.translation,
-            axes: quaternion_axes(viewpoint.rotation),
-        });
+    if let Some(pose) = viewpoint.scan_pose(has_viewpoint) {
+        pose_push(pose);
     }
     let (mut record_size, mut column) = (0usize, 0usize);
     let mut fields = Vec::with_capacity(names.len());

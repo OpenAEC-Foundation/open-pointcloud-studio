@@ -9,7 +9,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-use super::{e57_points, visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
+use super::{e57_points, pcd, visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
 
 const RECORD_BYTES: usize = 40;
 const RECORD_BATCH_POINTS: usize = 8_192;
@@ -683,7 +683,7 @@ fn collect_visible_leaves<'a>(
         .any(|child| collect_visible_leaves(child, visible, leaves, candidates, max_scan_points))
 }
 
-/// Recover exact PLY, E57 or text-cloud metadata and a small preview from an
+/// Recover exact PLY, E57, PCD or text-cloud metadata and a small preview from an
 /// already validated disk index, without decoding the source points again.
 pub(crate) fn open_cached_preview(
     path: &Path,
@@ -744,6 +744,12 @@ pub(crate) fn open_cached_preview(
         .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"))
     {
         cloud.scan_poses = e57_points::scan_poses(path)?;
+    } else if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pcd"))
+    {
+        cloud.scan_poses = pcd::scan_poses(path)?;
     }
     for record in index.read_node_indexed("r", sample_limit)? {
         cloud.points.push(record.point);
@@ -1639,6 +1645,31 @@ mod tests {
         assert_eq!(cached.scan_poses[0].label, "West station");
         assert_eq!(cached.scan_poses[0].position, [100.0, 200.0, 10.0]);
         assert_eq!(cached.points.len(), 2);
+        assert_eq!(cached.point_ordinals.len(), 2);
+    }
+
+    #[test]
+    fn cached_pcd_preview_preserves_viewpoint_and_world_bounds() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("posed-scan.pcd");
+        fs::write(
+            &source,
+            "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nWIDTH 4\nHEIGHT 1\nPOINTS 4\nVIEWPOINT 10 20 30 1 0 0 0\nDATA ascii\n0 0 0\n1 0 0\n2 0 0\n3 0 0\n",
+        )
+        .unwrap();
+        let cloud = super::super::open(&source, 2).unwrap();
+        let config = IndexConfig {
+            leaf_points: 2,
+            preview_points: 2,
+            max_depth: 4,
+            scratch_dir: Some(directory.path().join("cache")),
+        };
+        let _index = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
+        let cached = open_cached_preview(&source, 2, config).unwrap().unwrap();
+        assert_eq!(cached.total_points, cloud.total_points);
+        assert_eq!(cached.bounds, cloud.bounds);
+        assert_eq!(cached.scan_poses, cloud.scan_poses);
+        assert_eq!(cached.scan_poses[0].position, [10.0, 20.0, 30.0]);
         assert_eq!(cached.point_ordinals.len(), 2);
     }
 

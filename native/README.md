@@ -70,12 +70,13 @@ selection predicate.
 The disk octree's fixed 40-byte records now use one write per point and
 bounded 8,192-record reads while preserving exact source ordinals and
 cancellation between records.
-Completed PLY, E57, XYZ, ASC, TXT, CSV and PTS indexes also keep exact source
+Completed PLY, E57, PCD, XYZ, ASC, TXT, CSV and PTS indexes also keep exact source
 bounds, count and attribute flags in an atomic cache manifest. Reopening an
 unchanged indexed file in these formats reads that manifest and a small octree
 preview instead of scanning the source file again. E57 scanner positions come
-from the file's metadata without decoding its point records. A missing, stale
-or damaged manifest falls back to the full reader.
+from the file's metadata, while PCD `VIEWPOINT` comes from its short text
+header; neither requires decoding point records. A missing, stale or damaged
+manifest falls back to the full reader.
 Both meshers keep their full-source loops inside the optimized Rust core in
 development builds; the native desktop supplies edit and progress callbacks
 without recompiling those loops at the desktop's lower optimization level.
