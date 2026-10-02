@@ -108,6 +108,35 @@ labels move around neighboring markers and use a dark badge for contrast over
 light point data. Zooming in separates the stations again, while Properties
 always retains the individual poses.
 
+### Measuring distances and areas
+
+The Select ribbon has **Distance** and **Area** next to the selection tools.
+In either mode a left click picks the exact source point under the pointer
+from the active layer, with the same search and eight-pixel reach as the
+point-pick tool. A drag still orbits and pan and zoom work as usual, so the
+view can be turned between two points. Backspace removes the last point,
+Enter finishes the measurement, and Escape stops measuring and drops an
+unfinished measurement. In Area mode a click on the first point also finishes.
+
+Distance measures a polyline: each segment shows its length, and the total 3D
+length, the horizontal length as seen from above and the height difference
+between the first and the last point are reported. Area measures the closed
+polygon through the points: its true area, so a sloped roof or a vertical wall
+is measured in its own plane, the plan area as seen from above, and the
+perimeter. The area is the length of the polygon's vector area; for points
+that are not in one plane that is the largest area the polygon shows from any
+direction.
+
+The measurement is drawn over the points with a label on every segment and one
+for the total or the area (a single segment carries one label), and it is
+listed under **Measure** in Properties with a Clear button. Values are in scene units with three decimals. A
+measurement keeps its scene coordinates and stays visible while walking; new
+points are picked in the orbit view. A finished measurement remains until
+**Clear measurement** or the first point of the next one. Switching to a
+selection tool keeps a measurement that has enough points and drops one that
+has not. One measurement holds at most 256 points and is not saved with the
+scan.
+
 The [opencadcodec](https://github.com/HakanSeven12/opencadcodec) repository was inspected at commit `5ef9376` (MPL-2.0). Its `PointCloudData`, `PointCloudExData`, definitions, clips and color maps model *DWG/DXF point-cloud references* and scan placement. Its `source_filename`/`source_files` fields link to scan data; this is not a LAS/LAZ/E57 point decoder or point-processing kernel. OpenCADStudio itself still reports `POINTCLOUDATTACH` as unimplemented and renders existing point-cloud CAD entities as frames/wires. Its `opencadkernel` dependency handles CAD curves and B-rep geometry, not the point stream. Our existing streaming decoders and disk octree therefore remain the scan engine. A future CAD-reference workflow should use `opencadcodec` to resolve and display attached scans and apply its transforms/crops, while keeping scan points on disk.
 
 LAZ writing uses the `las` crate's parallel compressor with bounded 400,000-point
@@ -235,6 +264,7 @@ shows the selected area framed at 19.4× after the new Zoom selection action.
 | Section box | Three-axis clipping with visible wireframe, six draggable face handles, six limit sliders and precise XYZ fields. Fit box to selection uses exact selected source points, including points outside the preview; Zoom box frames the clipped volume in the viewport. Clipping applies to GPU rendering, full-resolution selection and a separate clipped export |
 | Octree LOD and eye-dome lighting | Existing disk-backed octrees attach when a scan opens. Uncached scans with at least one million points are indexed automatically, one at a time, after their preview loads; the Tools ribbon can disable this or start a manual build. Source-read and tree-build progress appear in the status and Properties panels, and a running build can be cancelled without retaining a partial cache. Camera movement selects visible nodes by projected size and refreshes a bounded point sample while retaining the previous sample until its replacement is ready; stale requests cancel during node reads and leaf-preview generation. The point-budget control reaches 10 million, with point uploads split into bounded WGPU buffers. Compact per-leaf LOD previews make repeated cold-cache navigation cheaper; old indexes create these previews on first use without a full rebuild. Native screen-space eye-dome shading has an on/off switch and an adjustable 0–5 strength in View and Properties |
 | Full-resolution point selection | Index-guided exact box selection when available, full-source fallback, single-point picking that prefers the displayed LOD and falls back to the exact full source with or without an index, selected point properties and selected export. The local API also picks by viewport pixel and returns the source ordinal and attributes. The Select ribbon's Zoom selection action frames the exact selected bounds without changing the section box; selection masks retain source-coordinate bounds so a later live transform and a gigabyte scan do not require a second full-source read. Long box scans can be cancelled from the Select ribbon, Escape or local API without applying partial results |
+| Measuring | Distance along a polyline and area of a polygon between exact picked source points, with segment lengths, horizontal length, height difference, true and plan area and perimeter in the viewport, Properties and the local API |
 | Editing | Native Delete/Undo/Redo on original source ordinals across multiple clouds; exact-percentage Thin edits the open view and can be undone without copying the source. Translate and independent XYZ Scale now edit the open view through a lazy affine transform. The 3D view, disk-octree selection, section box, scan markers, exports and mesh display use the transformed coordinates. Scale uses the exact centroid of all remaining points as pivot, streaming large scans from the octree with progress and cancellation. Reset Transform restores source coordinates and reopens the full section if the old box no longer intersects the cloud. Export saves the edited coordinates; the source file stays unchanged. Crop and save-minus remain file-based |
 | Surface reconstruction | Full-source 2.5D terrain TIN and bounded 3D local surface reconstruction to OBJ with native GPU face display. Both modes honor deleted points, the active section box and visible classifications; watertight and adaptive reconstruction remain |
 | PLY, LAS, LAZ, E57, XYZ, PTS, CSV export | Full same-format LAS/LAZ/E57 export copies the original file byte-for-byte; full LAS↔LAZ conversion streams native LAS records with their metadata and point attributes. Filtered or transformed LAS/LAZ output preserves the original point format, GPS time, return data, 16-bit RGB, projection records and coordinate grid while applying edits to source records. Filtered E57 output retains each source scan, scanner pose, name, original record types and values, color/intensity limits, custom point fields and coordinate metadata. Translate and positive uniform Scale keep the scan structure when every source scan has a pose; Scale writes local Cartesian coordinates or spherical ranges as doubles while preserving other raw fields. New E57 output and transforms that cannot retain a valid scan pose stream XYZ, RGB8 and intensity as one world-coordinate scan; E57 has no standard classification field in this writer, and absent individual color/intensity values are written as zero. Non-LAS input uses the common XYZ, RGB8, intensity and classification model |

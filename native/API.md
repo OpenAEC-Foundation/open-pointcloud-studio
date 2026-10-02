@@ -91,10 +91,24 @@ when its deletion mask has no ordinal in common with the current selection.
 becomes `cancelled` and no partial selection replaces the previous one. Escape
 or Clear in the native UI also stops an in-progress scan. An in-progress point
 pick is discarded when cancelled.
+`measure` sets a finished distance or area measurement from scene coordinates,
+as if its points had been picked in the viewport. It replaces the current
+measurement, leaves the active tool unchanged and returns the measurement.
+`distance` takes 2–256 points and `area` 3–256. `status.result.measure` is
+`null` without a measurement. Otherwise it holds `mode`, `finished`, the
+`points` and the `segments` lengths in order, where an area includes its
+closing edge, followed by `length`, `horizontal_length` and
+`height_difference` for a distance, or `area`, `plan_area` and `perimeter` for
+an area. `length` and `horizontal_length` follow the polyline, the height
+difference is the last point's Z minus the first point's, `area` is the true
+3D area and `plan_area` the area seen from above. Values are unrounded scene
+units. `status.result.measure_mode` is the measuring mode active in the
+viewport: `distance`, `area` or `null`. Points picked there appear in
+`measure` with `finished: false` until the measurement is finished.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
+| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
 | `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found), `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -125,6 +139,8 @@ pick is discarded when cancelled.
 | `pick_screen` | `pointer`, optional `radius` | Picks a drawn source point near viewport pixel `[x, y]` when possible, then falls back to the full source; returns a job ID |
 | `cancel_selection` | — | Stops a running full-resolution box selection or point-pick source scan |
 | `clear_selection` | — | Clears the current point selection |
+| `measure` | `mode`, `points` | Sets a finished `distance` (polyline) or `area` (closed polygon) measurement through an array of `[x, y, z]` scene coordinates and returns its computed values |
+| `clear_measure` | — | Removes the current measurement |
 | `zoom_selection` | — | Frames the exact selected source points in the 3D view without changing the section box; poll `selection_bounds_pending` in status until the camera updates |
 | `delete_selection` | — | Hides selected points in the open view; may first queue an octree build for LAZ |
 | `undo_delete` | — | Restores the latest deletion batch |

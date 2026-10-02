@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Measure distance" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <line x1="2.5" y1="15.5" x2="8.5" y2="21.5" stroke="#A1A1AA" stroke-width="1.5"/>
+  <line x1="15.5" y1="2.5" x2="21.5" y2="8.5" stroke="#A1A1AA" stroke-width="1.5"/>
+  <line x1="5.5" y1="18.5" x2="18.5" y2="5.5" stroke="#D97706" stroke-width="1.75"/>
+  <circle cx="5.5" cy="18.5" r="2.2" fill="#D97706" stroke="none"/>
+  <circle cx="18.5" cy="5.5" r="2.2" fill="#D97706" stroke="none"/>
+</svg>

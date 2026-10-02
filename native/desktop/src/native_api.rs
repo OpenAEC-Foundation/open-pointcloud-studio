@@ -110,6 +110,11 @@ pub enum ApiCommand {
     },
     CancelSelection,
     ClearSelection,
+    Measure {
+        mode: String,
+        points: Vec<[f64; 3]>,
+    },
+    ClearMeasure,
     ZoomSelection,
     DeleteSelection,
     UndoDelete,

@@ -450,6 +450,13 @@ impl Projection {
         Some((x as f32, y as f32, depth))
     }
 
+    /// Distance of a position in front of the eye along the viewing
+    /// direction; `project_unclipped` rejects depths of 0.01 or less.
+    pub fn depth(self, xyz: [f64; 3]) -> f64 {
+        let relative = std::array::from_fn(|axis| xyz[axis] - self.center[axis]);
+        self.eye[2] - dot(relative, self.toward_camera)
+    }
+
     fn projected_extents(self, bounds: Bounds) -> Option<[f32; 4]> {
         let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
         let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);

@@ -13,6 +13,7 @@ mod camera_views;
 mod cloud_centroid;
 mod cloud_transform;
 mod gpu_viewport;
+mod measure;
 mod native_api;
 mod native_chrome;
 mod opencad_properties;
@@ -841,6 +842,19 @@ fn main() -> iced::Result {
                     key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete),
                     ..
                 }) if status == iced::event::Status::Ignored => Some(Message::DeleteSelection),
+                // Backspace and Enter edit and finish a measurement.
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace),
+                    ..
+                }) if status == iced::event::Status::Ignored => {
+                    Some(Message::Measure(measure::MeasureAction::RemoveLast))
+                }
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+                    ..
+                }) if status == iced::event::Status::Ignored => {
+                    Some(Message::Measure(measure::MeasureAction::Finish))
+                }
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Character(value),
                     modifiers,
@@ -1481,6 +1495,7 @@ enum Message {
     CancelSelection,
     ToggleBoxSelect,
     TogglePickSelect,
+    Measure(measure::MeasureAction),
     ClearSelection,
     SelectionDrag([f32; 2], [f32; 2]),
     BoxSelect {
@@ -1589,6 +1604,7 @@ struct Studio {
     settings_revision: u64,
     box_select: bool,
     pick_mode: bool,
+    measure: measure::MeasureTool,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     selection_pending: bool,
@@ -1915,6 +1931,7 @@ impl Default for Studio {
             settings_revision: 0,
             box_select: false,
             pick_mode: false,
+            measure: measure::MeasureTool::default(),
             drag_rectangle: None,
             context_menu: None,
             selection_pending: false,
@@ -2395,6 +2412,8 @@ impl Studio {
                         "selected_points": self.selected_total(),
                         "selection_pending": self.selection_pending,
                         "selection_bounds_pending": self.selection_bounds_pending,
+                        "measure": self.measure.value(),
+                        "measure_mode": self.measure.mode.map(measure::MeasureMode::key),
                         "thin_pending": self.thin_pending,
                         "color_mode": self.color_mode.to_string(),
                         "theme": self.ui_theme.key(),
@@ -2982,6 +3001,11 @@ impl Studio {
             ApiCommand::ClearSelection => {
                 let task = self.update(Message::ClearSelection);
                 (json!({"ok": true, "selected_points": 0}), task)
+            }
+            ApiCommand::Measure { mode, points } => (self.api_measure(&mode, points), Task::none()),
+            ApiCommand::ClearMeasure => {
+                let task = self.update(Message::Measure(measure::MeasureAction::Clear));
+                (json!({"ok": true, "measure": null}), task)
             }
             ApiCommand::ZoomSelection => {
                 if self.selected_total() == 0 || self.selection_bounds_pending {
@@ -7002,18 +7026,21 @@ impl Studio {
                     ContextAction::Orbit => {
                         self.box_select = false;
                         self.pick_mode = false;
+                        self.measure.leave(true);
                         self.drag_rectangle = None;
                         self.status = "Orbit mode".into();
                     }
                     ContextAction::BoxSelect => {
                         self.box_select = true;
                         self.pick_mode = false;
+                        self.measure.leave(true);
                         self.ribbon_tab = RibbonTab::Select;
                         self.status = "Box selection active; Escape exits".into();
                     }
                     ContextAction::PickPoint => {
                         self.pick_mode = true;
                         self.box_select = false;
+                        self.measure.leave(true);
                         self.ribbon_tab = RibbonTab::Select;
                         self.status = "Point picking active; Escape exits".into();
                     }
@@ -7036,6 +7063,8 @@ impl Studio {
                 self.context_menu = None;
                 self.box_select = false;
                 self.pick_mode = false;
+                // An unfinished measurement is dropped; a finished one stays.
+                let measuring = self.measure.leave(false);
                 self.bag_map_drawing = false;
                 self.drag_rectangle = None;
                 let deselected = self.selected_total() > 0;
@@ -7050,6 +7079,8 @@ impl Studio {
                     "Cancelling selection; orbit and right-click menu available".into()
                 } else if deselected {
                     "Selection cleared; orbit and right-click menu available".into()
+                } else if measuring {
+                    "Measuring stopped; orbit and right-click menu available".into()
                 } else {
                     "Selection tool closed; orbit and right-click menu available".into()
                 };
@@ -7062,15 +7093,18 @@ impl Studio {
             Message::ToggleBoxSelect => {
                 self.box_select = !self.box_select;
                 self.pick_mode = false;
+                self.measure.leave(true);
                 self.ribbon_tab = RibbonTab::Select;
                 self.drag_rectangle = None;
             }
             Message::TogglePickSelect => {
                 self.pick_mode = !self.pick_mode;
                 self.box_select = false;
+                self.measure.leave(true);
                 self.ribbon_tab = RibbonTab::Select;
                 self.drag_rectangle = None;
             }
+            Message::Measure(action) => return self.update_measure(action),
             Message::ClearSelection => {
                 self.pending_delete = false;
                 if self.selection_pending {
@@ -7967,6 +8001,7 @@ impl Studio {
                     }))
                     .collect(),
                 ),
+                self.measure.ribbon(),
                 ribbon_group(
                     "RESULT",
                     column![
@@ -8432,6 +8467,7 @@ impl Studio {
             pan: self.pan,
             box_select: self.box_select,
             pick_mode: self.pick_mode,
+            measure: &self.measure,
             drag_rectangle: self.drag_rectangle,
             context_menu: self.context_menu,
             viewport_size: self.viewport_size,
@@ -9116,6 +9152,9 @@ impl Studio {
                 }
             }
         }
+        if let Some(section) = self.measure.properties() {
+            properties = properties.push(section);
+        }
         properties = properties
             .push(opencad_properties::section_header("Camera views"))
             .push(opencad_properties::property_row(
@@ -9584,6 +9623,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::ApplyScale => ToolIcon::Scale,
         Message::ToggleBoxSelect => ToolIcon::Select,
         Message::TogglePickSelect => ToolIcon::Pick,
+        Message::Measure(action) => action.icon(),
         Message::ClearSelection => ToolIcon::Clear,
         Message::SetEyeDome(_) => ToolIcon::Shading,
         Message::ShowScanPoses(_) => ToolIcon::Pick,
@@ -9818,6 +9858,8 @@ enum ToolIcon {
     Cloud,
     Select,
     Pick,
+    MeasureDistance,
+    MeasureArea,
     Clear,
     Undo,
     Redo,
@@ -9840,6 +9882,11 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Cloud => include_bytes!("../../assets/opencad-icons/revcloud.svg"),
         ToolIcon::Select => include_bytes!("../../assets/opencad-icons/select_objects.svg"),
         ToolIcon::Pick => include_bytes!("../../assets/opencad-icons/pick_point.svg"),
+        // The two measure icons are drawn for this app in the same palette.
+        ToolIcon::MeasureDistance => {
+            include_bytes!("../../assets/opencad-icons/measure_distance.svg")
+        }
+        ToolIcon::MeasureArea => include_bytes!("../../assets/opencad-icons/measure_area.svg"),
         ToolIcon::Clear => include_bytes!("../../assets/opencad-icons/xclip_remove.svg"),
         ToolIcon::Undo => include_bytes!("../../assets/opencad-icons/undo.svg"),
         ToolIcon::Redo => include_bytes!("../../assets/opencad-icons/redo.svg"),
@@ -10203,6 +10250,7 @@ struct PointViewport<'a> {
     pan: [f32; 2],
     box_select: bool,
     pick_mode: bool,
+    measure: &'a measure::MeasureTool,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     viewport_size: Size,
@@ -10316,6 +10364,8 @@ enum DragMode {
     Pan,
     Select,
     RightPending,
+    /// Left press while measuring: a click picks a point, a drag orbits.
+    MeasurePending,
     Section(usize, bool),
 }
 
@@ -10361,6 +10411,12 @@ fn finish_viewport_drag(
             Some(Message::FinishPan(dx, dy))
         }
         (mouse::Button::Left, DragMode::Orbit) if total > 0.5 => Some(Message::FinishOrbit(dx, dy)),
+        (mouse::Button::Left, DragMode::MeasurePending) if total >= 5.0 => Some(
+            Message::FinishOrbit(position.x - drag.start.x, position.y - drag.start.y),
+        ),
+        (mouse::Button::Left, DragMode::MeasurePending) => Some(Message::Measure(
+            measure::MeasureAction::Click([position.x, position.y], size),
+        )),
         (mouse::Button::Middle, DragMode::Turn) if total > 0.5 => {
             Some(Message::FinishOrbit(-dx, dy))
         }
@@ -10632,7 +10688,11 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         return (event::Status::Captured, None);
                     }
                 }
-                if self.show_scan_poses && !self.box_select && !self.pick_mode {
+                if self.show_scan_poses
+                    && !self.box_select
+                    && !self.pick_mode
+                    && self.measure.mode.is_none()
+                {
                     if let (Some(overall), Some(position)) =
                         (combined_bounds(self.clouds), cursor.position_in(bounds))
                     {
@@ -10665,6 +10725,8 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     position,
                     mode: if self.box_select || self.pick_mode {
                         DragMode::Select
+                    } else if self.measure.mode.is_some() {
+                        DragMode::MeasurePending
                     } else {
                         DragMode::Orbit
                     },
@@ -10719,13 +10781,20 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     let mut dx = position.x - previous.position.x;
                     let mut dy = position.y - previous.position.y;
                     previous.position = position;
-                    if matches!(previous.mode, DragMode::RightPending) {
+                    if matches!(
+                        previous.mode,
+                        DragMode::RightPending | DragMode::MeasurePending
+                    ) {
                         if (position.x - previous.start.x).hypot(position.y - previous.start.y)
                             < 5.0
                         {
                             return (event::Status::Captured, None);
                         }
-                        previous.mode = DragMode::Pan;
+                        previous.mode = if matches!(previous.mode, DragMode::RightPending) {
+                            DragMode::Pan
+                        } else {
+                            DragMode::Orbit
+                        };
                         dx = position.x - previous.start.x;
                         dy = position.y - previous.start.y;
                     }
@@ -10735,7 +10804,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             DragMode::Orbit => Message::Orbit(dx, dy),
                             DragMode::Turn => Message::Orbit(-dx, dy),
                             DragMode::Pan => Message::Pan(dx, dy),
-                            DragMode::RightPending => unreachable!(),
+                            DragMode::RightPending | DragMode::MeasurePending => unreachable!(),
                             DragMode::Section(axis, is_min) => {
                                 let (Some(section), Some(scene_bounds)) =
                                     (self.section, combined_bounds(self.clouds))
@@ -11113,6 +11182,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 }
             }
         }
+        self.draw_measure(&mut frame, bounds.size());
         view_cube::draw(
             &mut frame,
             bounds,
@@ -11186,7 +11256,10 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         })
                     })
                 })
-                || (self.show_scan_poses && !self.box_select && !self.pick_mode)
+                || (self.show_scan_poses
+                    && !self.box_select
+                    && !self.pick_mode
+                    && self.measure.mode.is_none())
                     && cursor.position_in(bounds).is_some_and(|point| {
                         combined_bounds(self.clouds).is_some_and(|overall| {
                             scan_pose_at(
@@ -11208,7 +11281,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     })
             {
                 mouse::Interaction::Pointer
-            } else if self.box_select {
+            } else if self.box_select || self.measure.mode.is_some() {
                 mouse::Interaction::Crosshair
             } else {
                 mouse::Interaction::Grab
@@ -11410,6 +11483,7 @@ impl PointViewport<'_> {
                 ..canvas::Text::default()
             });
         };
+        self.draw_measure(frame, size);
         let inside = self.walk_station.is_some();
         for station in self.walk_stations(view, size) {
             if inside {
