@@ -909,28 +909,34 @@ fn fill_triangular_gaps(
     boundary: &[BoundaryEdge],
     max_edge_sq: f64,
 ) -> usize {
+    const MAX_BOUNDARY_BRANCH: usize = 32;
     let mut outgoing = HashMap::<u32, Vec<usize>>::new();
+    let mut directed = HashMap::<(u32, u32), usize>::new();
     for (index, edge) in boundary.iter().enumerate() {
         outgoing.entry(edge.start).or_default().push(index);
+        directed.insert((edge.start, edge.end), index);
     }
     let mut added = 0;
     for &first in boundary {
         let Some(seconds) = outgoing.get(&first.end) else {
             continue;
         };
+        if seconds.len() > MAX_BOUNDARY_BRANCH {
+            continue;
+        }
         for &second_index in seconds {
             let second = boundary[second_index];
             if second.end == first.start {
                 continue;
             }
-            let Some(thirds) = outgoing.get(&second.end) else {
+            if outgoing
+                .get(&second.end)
+                .is_some_and(|edges| edges.len() > MAX_BOUNDARY_BRANCH)
+            {
                 continue;
-            };
-            for &third_index in thirds {
+            }
+            if let Some(&third_index) = directed.get(&(second.end, first.start)) {
                 let third = boundary[third_index];
-                if third.end != first.start {
-                    continue;
-                }
                 let patch = [first.start, second.end, first.end];
                 let mut key = patch;
                 key.sort_unstable();
