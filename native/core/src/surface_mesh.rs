@@ -624,7 +624,14 @@ fn mesh_surface_obj_inner(
         ));
     }
     let mut face_normals = orient_surface_faces(&vertices, &normals, &mut faces);
-    if fill_small_planar_holes(&vertices, &mut faces, &edge_uses, &mut known, max_edge_sq) > 0 {
+    if fill_small_planar_holes(
+        &vertices,
+        &mut faces,
+        &mut edge_uses,
+        &mut known,
+        max_edge_sq,
+    ) > 0
+    {
         face_normals = vertex_normals_from_faces(&vertices, &normals, &faces);
     }
     progress(MeshProgress::new(
@@ -739,7 +746,7 @@ struct BoundaryEdge {
 fn fill_small_planar_holes(
     vertices: &[[f64; 3]],
     faces: &mut Vec<[u32; 3]>,
-    edge_uses: &HashMap<(u32, u32), u8>,
+    edge_uses: &mut HashMap<(u32, u32), u8>,
     known: &mut HashSet<[u32; 3]>,
     max_edge_sq: f64,
 ) -> usize {
@@ -882,7 +889,94 @@ fn fill_small_planar_holes(
         added += patch.len();
         for (face, key) in patch {
             known.insert(key);
+            for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
+                *edge_uses.entry(edge_key(a, b)).or_default() += 1;
+            }
             faces.push(face);
+        }
+    }
+    added += fill_triangular_gaps(vertices, faces, edge_uses, known, &boundary, max_edge_sq);
+    added
+}
+
+/// A three-edge gap can share vertices with other boundary chains. Cap it only
+/// when every neighboring face agrees with the new face's orientation.
+fn fill_triangular_gaps(
+    vertices: &[[f64; 3]],
+    faces: &mut Vec<[u32; 3]>,
+    edge_uses: &mut HashMap<(u32, u32), u8>,
+    known: &mut HashSet<[u32; 3]>,
+    boundary: &[BoundaryEdge],
+    max_edge_sq: f64,
+) -> usize {
+    let mut outgoing = HashMap::<u32, Vec<usize>>::new();
+    for (index, edge) in boundary.iter().enumerate() {
+        outgoing.entry(edge.start).or_default().push(index);
+    }
+    let mut added = 0;
+    for &first in boundary {
+        let Some(seconds) = outgoing.get(&first.end) else {
+            continue;
+        };
+        for &second_index in seconds {
+            let second = boundary[second_index];
+            if second.end == first.start {
+                continue;
+            }
+            let Some(thirds) = outgoing.get(&second.end) else {
+                continue;
+            };
+            for &third_index in thirds {
+                let third = boundary[third_index];
+                if third.end != first.start {
+                    continue;
+                }
+                let patch = [first.start, second.end, first.end];
+                let mut key = patch;
+                key.sort_unstable();
+                if known.contains(&key) {
+                    continue;
+                }
+                let edges = [first, second, third];
+                if edges
+                    .iter()
+                    .any(|edge| edge_uses.get(&edge_key(edge.start, edge.end)) != Some(&1))
+                {
+                    continue;
+                }
+                let [a, b, c] = patch;
+                let ab = difference(vertices[b as usize], vertices[a as usize]);
+                let ac = difference(vertices[c as usize], vertices[a as usize]);
+                if [edge_key(a, b), edge_key(b, c), edge_key(c, a)]
+                    .iter()
+                    .any(|edge| {
+                        let delta =
+                            difference(vertices[edge.0 as usize], vertices[edge.1 as usize]);
+                        dot(delta, delta) > max_edge_sq
+                    })
+                {
+                    continue;
+                }
+                let Some(patch_normal) = unit(cross(ab, ac)) else {
+                    continue;
+                };
+                if edges.iter().any(|edge| {
+                    let [a, b, c] = faces[edge.face];
+                    let adjacent = cross(
+                        difference(vertices[b as usize], vertices[a as usize]),
+                        difference(vertices[c as usize], vertices[a as usize]),
+                    );
+                    unit(adjacent).is_none_or(|normal| dot(normal, patch_normal) < 0.5)
+                }) {
+                    continue;
+                }
+                known.insert(key);
+                for edge in edges {
+                    *edge_uses.entry(edge_key(edge.start, edge.end)).or_default() += 1;
+                }
+                faces.push(patch);
+                added += 1;
+            }
         }
     }
     added
@@ -1014,7 +1108,7 @@ mod tests {
                 faces.push([a, d, c]);
             }
         }
-        let edge_uses = face_edges(&faces);
+        let mut edge_uses = face_edges(&faces);
         assert_eq!(edge_uses.values().filter(|&&count| count == 1).count(), 20);
         let mut known: HashSet<[u32; 3]> = faces
             .iter()
@@ -1025,7 +1119,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            fill_small_planar_holes(&vertices, &mut faces, &edge_uses, &mut known, 4.0),
+            fill_small_planar_holes(&vertices, &mut faces, &mut edge_uses, &mut known, 4.0),
             2
         );
         assert_eq!(
@@ -1047,13 +1141,55 @@ mod tests {
             [0.0, 1.0, 0.0],
         ];
         let mut faces = vec![[0, 1, 2], [0, 2, 3]];
-        let edge_uses = face_edges(&faces);
+        let mut edge_uses = face_edges(&faces);
         let mut known = HashSet::new();
         assert_eq!(
-            fill_small_planar_holes(&vertices, &mut faces, &edge_uses, &mut known, 4.0),
+            fill_small_planar_holes(&vertices, &mut faces, &mut edge_uses, &mut known, 4.0),
             0
         );
         assert_eq!(faces.len(), 2);
+    }
+
+    #[test]
+    fn repairs_triangular_gap_at_branching_boundary_vertices() {
+        let vertices = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.8, 0.0],
+            [0.5, -1.0, 0.0],
+            [1.5, 0.8, 0.0],
+            [-0.5, 0.8, 0.0],
+        ];
+        let mut faces = vec![[1, 0, 3], [2, 1, 4], [0, 2, 5]];
+        let mut edge_uses = face_edges(&faces);
+        let mut known = HashSet::new();
+        assert_eq!(
+            fill_small_planar_holes(&vertices, &mut faces, &mut edge_uses, &mut known, 4.0),
+            1
+        );
+        assert_eq!(faces.len(), 4);
+        assert!(faces.contains(&[1, 2, 0]));
+        assert_eq!(edge_uses.values().filter(|&&count| count == 1).count(), 6);
+    }
+
+    #[test]
+    fn leaves_sharply_folded_triangular_gap_open() {
+        let vertices = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.8, 0.0],
+            [0.5, -1.0, 0.0],
+            [1.5, 0.8, 0.0],
+            [-0.5, 0.8, 3.0],
+        ];
+        let mut faces = vec![[1, 0, 3], [2, 1, 4], [0, 2, 5]];
+        let mut edge_uses = face_edges(&faces);
+        let mut known = HashSet::new();
+        assert_eq!(
+            fill_small_planar_holes(&vertices, &mut faces, &mut edge_uses, &mut known, 4.0),
+            0
+        );
+        assert_eq!(faces.len(), 3);
     }
 
     #[test]

@@ -582,6 +582,14 @@ The E57 test scan yielded 50,000 vertices and 172,820 triangles in 5.90
 seconds with 60,968 KiB peak RSS. These coverage counts measure selected
 vertices, not a watertight surface guarantee; terrain TIN remains preferable
 for continuous ground coverage.
+On 2 October, conservative 3D hole repair was checked against the public
+160,838-point pye57 `test.e57` scan. The rebuilt dev CLI produced 50,000
+vertices and 172,953 triangles in 1.52 seconds at 90,828 KiB peak RSS. The
+same source before triangular-gap repair produced 172,820 triangles. A separate
+OBJ edge audit counted 104,352 open edges before and 103,953 after repair;
+both had zero duplicate faces and zero edges shared by more than two faces.
+The remaining open edges show that this local repair does not make the mesh
+watertight.
 The native E57 writer was checked with a full copy of the public pye57
 `test.e57` fixture: the 14 MB copy has the same SHA-256 as its source, including
 all scan poses and metadata. A separate section export streamed all 160,838
