@@ -9661,6 +9661,8 @@ impl canvas::Program<Message> for ColorModeGlyph {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        // The glyphs are drawn on an 18-unit square.
+        frame.scale(bounds.width.min(bounds.height) / 18.0);
         let colors = ui_theme::colors(theme);
         let highlight = if self.1 { colors.accent } else { colors.muted };
         let stroke = canvas::Stroke::default()
