@@ -287,6 +287,15 @@ the same cached source and validated its 3,165-node octree in 0.09 seconds,
 with 8,444 KiB peak RSS on this host. No full E57 point decode ran. A fresh
 native debug GUI immediately showed the full 46,589,344-point count, a
 758,104-point LOD and all nine scanner stations.
+The new cold `--index` path was also run against a hard link to the same public
+E57 bytes under a distinct cache identity. Its single source pass
+collected the preview, nine scanner poses and 46,589,344 exact points while
+writing the octree root; the complete 3,165-node index took 287.06 seconds
+in the debug build with 28,676 KiB peak RSS. A second `--index` run reopened
+that cache in 0.14 seconds with 19,712 KiB peak RSS, and `--scans` again listed
+all nine registered poses and axes. This measures the explicit CLI indexing
+workflow; the GUI's first uncached import still reads the source for its
+preview before indexing in the background.
 An indexed screen pick then selected zero-based source ordinal 28,363,435 at
 X 10.052, Y -42.459, Z 2.658 with RGB `[153, 149, 146]`; the
 pick view

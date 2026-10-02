@@ -10,7 +10,8 @@ use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    e57_points, pcd, visit_points, Bounds, LoadError, Point, PointCloud, ScanPose, SourceStamp,
+    e57_points, pcd, visit_points, visit_points_with_poses, Bounds, Collector, LoadError, Point,
+    PointCloud, ScanPose, SourceStamp,
 };
 
 const RECORD_BYTES: usize = 40;
@@ -291,6 +292,108 @@ impl OctreeIndex {
             root,
             storage: IndexStorage::Persistent(cache_path),
         })
+    }
+
+    /// For explicit pre-indexing, collect the preview and write the octree's
+    /// root records during the same source pass. This avoids decoding large
+    /// non-LAS files twice before the index is ready.
+    pub fn open_and_build_cached_with_progress(
+        path: &Path,
+        sample_limit: usize,
+        config: IndexConfig,
+        mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
+    ) -> Result<(PointCloud, Self), LoadError> {
+        if sample_limit == 0
+            || config.leaf_points == 0
+            || config.preview_points == 0
+            || config.max_depth == 0
+        {
+            return Err(LoadError::InvalidData(
+                "octree and preview limits must be positive".into(),
+            ));
+        }
+        let stamp = SourceStamp::read(path)?;
+        let fingerprint = cache_fingerprint_for(path, stamp, &config)?;
+        let cache_root = config.scratch_dir.clone().unwrap_or_else(cache_root);
+        fs::create_dir_all(&cache_root)?;
+        let cache_path = cache_directory(&cache_root, &fingerprint);
+        if cache_path.exists() {
+            let cloud = super::open(path, sample_limit)?;
+            let index = Self::build_cached_with_progress(&cloud, config, progress)?;
+            return Ok((cloud, index));
+        }
+
+        let storage = tempfile::Builder::new()
+            .prefix("open-pointcloud-index-")
+            .tempdir_in(&cache_root)?;
+        let root_path = storage.path().join("r.bin");
+        let mut collector = Collector::new(sample_limit);
+        let mut poses = Vec::new();
+        progress(IndexProgress::reading(0, 0))?;
+        {
+            let mut writer = BufWriter::new(File::create(&root_path)?);
+            visit_points_with_poses(
+                path,
+                &mut |point| {
+                    let ordinal = collector.total;
+                    collector.push(point)?;
+                    write_record(&mut writer, IndexedPoint { point, ordinal })?;
+                    if collector.total.is_multiple_of(65_536) {
+                        progress(IndexProgress::reading(collector.total, 0))?;
+                    }
+                    Ok(())
+                },
+                &mut |pose| poses.push(pose),
+            )?;
+            writer.flush()?;
+        }
+        progress(IndexProgress::reading(collector.total, collector.total))?;
+        if SourceStamp::read(path)? != stamp {
+            return Err(LoadError::InvalidData(
+                "source changed while indexing".into(),
+            ));
+        }
+        let mut cloud = collector.finish(path.to_path_buf())?;
+        cloud.scan_poses = poses;
+        cloud.source_stamp = Some(stamp);
+
+        let mut handled_records = 0u64;
+        let mut ready_leaves = 0u64;
+        progress(IndexProgress::building(0, 0, 0))?;
+        let mut context = BuildContext {
+            directory: storage.path(),
+            config: &config,
+            handled_records: &mut handled_records,
+            ready_leaves: &mut ready_leaves,
+            progress: &mut progress,
+        };
+        let root = build_node(
+            "r".to_owned(),
+            root_path,
+            cloud.bounds,
+            cloud.total_points,
+            0,
+            &mut context,
+        )?;
+        progress(IndexProgress::ready(cloud.total_points, ready_leaves))?;
+        fs::write(storage.path().join("source.meta"), &fingerprint)?;
+        write_cached_cloud_header(storage.path(), &cloud)?;
+        let temporary_path = storage.keep();
+        if let Err(error) = fs::rename(&temporary_path, &cache_path) {
+            let _ = fs::remove_dir_all(&temporary_path);
+            if cache_path.exists() {
+                let index = Self::open_cached(&cloud, &cache_path, &fingerprint)?;
+                return Ok((cloud, index));
+            }
+            return Err(error.into());
+        }
+        Ok((
+            cloud,
+            Self {
+                root,
+                storage: IndexStorage::Persistent(cache_path),
+            },
+        ))
     }
 
     /// Attach a valid persistent index without starting an expensive build.
@@ -1764,6 +1867,55 @@ mod tests {
                 .scan_poses,
             cloud.scan_poses
         );
+    }
+
+    #[test]
+    fn single_pass_index_keeps_ptx_poses_and_cleans_cancelled_build() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("one-station.ptx");
+        fs::write(
+            &source,
+            "2\n2\n10 20 30\n1 0 0\n0 1 0\n0 0 1\n1 0 0 0\n0 1 0 0\n0 0 1 0\n10 20 30 1\n1 0 1 0.5 10 20 30\n2 0 1 0.5 20 30 40\n1 1 1 0.5 30 40 50\n2 1 1 0.5 40 50 60\n",
+        )
+        .unwrap();
+        let expected = super::super::open(&source, 2).unwrap();
+        let cache_root = directory.path().join("cache");
+        let config = IndexConfig {
+            leaf_points: 2,
+            preview_points: 2,
+            max_depth: 4,
+            scratch_dir: Some(cache_root.clone()),
+        };
+        let cancelled = OctreeIndex::open_and_build_cached_with_progress(
+            &source,
+            2,
+            config.clone(),
+            |update| {
+                if update.stage == IndexStage::BuildingTree {
+                    Err(LoadError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(matches!(cancelled, Err(LoadError::Cancelled)));
+        assert_eq!(fs::read_dir(&cache_root).unwrap().count(), 0);
+
+        let (cloud, index) = OctreeIndex::open_and_build_cached_with_progress(
+            &source,
+            2,
+            config.clone(),
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(cloud.total_points, expected.total_points);
+        assert_eq!(cloud.bounds, expected.bounds);
+        assert_eq!(cloud.scan_poses, expected.scan_poses);
+        assert_eq!(cloud.point_ordinals, expected.point_ordinals);
+        assert_eq!(index.root.total_points, 4);
+        let cached = open_cached_preview(&source, 2, config).unwrap().unwrap();
+        assert_eq!(cached.scan_poses, expected.scan_poses);
+        assert_eq!(cached.total_points, 4);
     }
 
     #[test]

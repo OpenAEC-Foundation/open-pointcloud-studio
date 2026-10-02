@@ -303,12 +303,19 @@ fn main() -> iced::Result {
             .is_some_and(|extension| {
                 extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
             });
-        let cloud = if is_las {
+        let index = if is_las {
             pointcloud_core::open_las_header(&source)
+                .and_then(|cloud| OctreeIndex::build_cached(&cloud, IndexConfig::default()))
         } else {
-            pointcloud_core::open(&source, 100_000)
+            OctreeIndex::open_and_build_cached_with_progress(
+                &source,
+                100_000,
+                IndexConfig::default(),
+                |_| Ok(()),
+            )
+            .map(|(_, index)| index)
         };
-        match cloud.and_then(|cloud| OctreeIndex::build_cached(&cloud, IndexConfig::default())) {
+        match index {
             Ok(index) => {
                 let mut nodes = 0u64;
                 let mut leaves = 0u64;
