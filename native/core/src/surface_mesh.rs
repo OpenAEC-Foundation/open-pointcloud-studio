@@ -623,7 +623,10 @@ fn mesh_surface_obj_inner(
             "3D surface reconstruction produced no triangles".into(),
         ));
     }
-    let normals = orient_surface_faces(&vertices, &normals, &mut faces);
+    let mut face_normals = orient_surface_faces(&vertices, &normals, &mut faces);
+    if fill_small_planar_holes(&vertices, &mut faces, &edge_uses, &mut known, max_edge_sq) > 0 {
+        face_normals = vertex_normals_from_faces(&vertices, &normals, &faces);
+    }
     progress(MeshProgress::new(
         MeshStage::Reconstructing,
         reconstruct_total,
@@ -669,7 +672,7 @@ fn mesh_surface_obj_inner(
                 ))?;
             }
         }
-        for (index, normal) in normals.iter().enumerate() {
+        for (index, normal) in face_normals.iter().enumerate() {
             writeln!(
                 writer,
                 "vn {:.8} {:.8} {:.8}",
@@ -722,6 +725,167 @@ fn mesh_surface_obj_inner(
 
 fn edge_key(a: u32, b: u32) -> (u32, u32) {
     (a.min(b), a.max(b))
+}
+
+#[derive(Clone, Copy)]
+struct BoundaryEdge {
+    start: u32,
+    end: u32,
+    face: usize,
+}
+
+/// Fill only short, convex inner loops. Outer borders, non-manifold vertices,
+/// warped loops and long gaps remain open rather than inventing a surface.
+fn fill_small_planar_holes(
+    vertices: &[[f64; 3]],
+    faces: &mut Vec<[u32; 3]>,
+    edge_uses: &HashMap<(u32, u32), u8>,
+    known: &mut HashSet<[u32; 3]>,
+    max_edge_sq: f64,
+) -> usize {
+    const MAX_HOLE_EDGES: usize = 8;
+    let mut boundary = Vec::<BoundaryEdge>::new();
+    let mut outgoing = HashMap::<u32, usize>::new();
+    let mut incoming = HashMap::<u32, u8>::new();
+    let mut ambiguous = HashSet::<u32>::new();
+    for (face_index, &[a, b, c]) in faces.iter().enumerate() {
+        for (start, end) in [(a, b), (b, c), (c, a)] {
+            if edge_uses.get(&edge_key(start, end)) != Some(&1) {
+                continue;
+            }
+            let index = boundary.len();
+            boundary.push(BoundaryEdge {
+                start,
+                end,
+                face: face_index,
+            });
+            if outgoing.insert(start, index).is_some() {
+                ambiguous.insert(start);
+            }
+            let count = incoming.entry(end).or_default();
+            *count = count.saturating_add(1);
+        }
+    }
+    let mut visited = vec![false; boundary.len()];
+    let mut added = 0;
+    for seed in 0..boundary.len() {
+        if visited[seed] {
+            continue;
+        }
+        let start = boundary[seed].start;
+        if ambiguous.contains(&start) || incoming.get(&start) != Some(&1) {
+            visited[seed] = true;
+            continue;
+        }
+        let mut loop_edges = Vec::new();
+        let mut current = seed;
+        let mut closed = false;
+        while !visited[current] {
+            visited[current] = true;
+            loop_edges.push(boundary[current]);
+            let end = boundary[current].end;
+            if end == boundary[seed].start {
+                closed = true;
+                break;
+            }
+            if ambiguous.contains(&end) || incoming.get(&end) != Some(&1) {
+                break;
+            }
+            let Some(&next) = outgoing.get(&end) else {
+                break;
+            };
+            current = next;
+        }
+        if !closed || !(3..=MAX_HOLE_EDGES).contains(&loop_edges.len()) {
+            continue;
+        }
+        let loop_vertices: Vec<u32> = loop_edges.iter().map(|edge| edge.start).collect();
+        if loop_vertices.iter().copied().collect::<HashSet<_>>().len() != loop_vertices.len() {
+            continue;
+        }
+        let mut normal_sum = [0.0; 3];
+        for edge in &loop_edges {
+            let [a, b, c] = faces[edge.face];
+            let normal = cross(
+                difference(vertices[b as usize], vertices[a as usize]),
+                difference(vertices[c as usize], vertices[a as usize]),
+            );
+            for axis in 0..3 {
+                normal_sum[axis] += normal[axis];
+            }
+        }
+        let Some(normal) = unit(normal_sum) else {
+            continue;
+        };
+        let origin = vertices[loop_vertices[0] as usize];
+        let mut area_vector = [0.0; 3];
+        let mut valid = true;
+        for index in 0..loop_vertices.len() {
+            let previous = vertices
+                [loop_vertices[(index + loop_vertices.len() - 1) % loop_vertices.len()] as usize];
+            let current = vertices[loop_vertices[index] as usize];
+            let next = vertices[loop_vertices[(index + 1) % loop_vertices.len()] as usize];
+            if dot(difference(current, origin), normal).abs() > max_edge_sq.sqrt() * 0.15
+                || dot(
+                    cross(difference(current, previous), difference(next, current)),
+                    normal,
+                ) >= -max_edge_sq * 1e-10
+            {
+                valid = false;
+                break;
+            }
+            let cross_segment = cross(difference(current, origin), difference(next, origin));
+            for axis in 0..3 {
+                area_vector[axis] += cross_segment[axis];
+            }
+            for &other in &loop_vertices {
+                let delta = difference(current, vertices[other as usize]);
+                if dot(delta, delta) > max_edge_sq {
+                    valid = false;
+                    break;
+                }
+            }
+            if !valid {
+                break;
+            }
+        }
+        let area = dot(area_vector, normal) * 0.5;
+        if !valid || area >= -max_edge_sq * 1e-10 || area.abs() > max_edge_sq * 2.0 {
+            continue;
+        }
+        let mut patch = Vec::with_capacity(loop_vertices.len() - 2);
+        let mut new_edge_uses = HashMap::<(u32, u32), u8>::new();
+        for index in 1..loop_vertices.len() - 1 {
+            let face = [
+                loop_vertices[0],
+                loop_vertices[index + 1],
+                loop_vertices[index],
+            ];
+            let mut key = face;
+            key.sort_unstable();
+            if known.contains(&key) {
+                valid = false;
+                break;
+            }
+            for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
+                *new_edge_uses.entry(edge_key(a, b)).or_default() += 1;
+            }
+            patch.push((face, key));
+        }
+        if !valid
+            || new_edge_uses
+                .iter()
+                .any(|(edge, count)| edge_uses.get(edge).copied().unwrap_or_default() + *count > 2)
+        {
+            continue;
+        }
+        added += patch.len();
+        for (face, key) in patch {
+            known.insert(key);
+            faces.push(face);
+        }
+    }
+    added
 }
 
 /// Propagate edge orientation across each connected patch and then derive
@@ -789,6 +953,14 @@ fn orient_surface_faces(
             face.swap(1, 2);
         }
     }
+    vertex_normals_from_faces(vertices, estimated_normals, faces)
+}
+
+fn vertex_normals_from_faces(
+    vertices: &[[f64; 3]],
+    estimated_normals: &[[f64; 3]],
+    faces: &[[u32; 3]],
+) -> Vec<[f64; 3]> {
     let mut normals = vec![[0.0_f64; 3]; vertices.len()];
     for &[a, b, c] in faces.iter() {
         let normal = cross(
@@ -812,6 +984,77 @@ fn orient_surface_faces(
 mod tests {
     use super::*;
     use crate::{open, read_obj_mesh};
+
+    fn face_edges(faces: &[[u32; 3]]) -> HashMap<(u32, u32), u8> {
+        let mut uses = HashMap::new();
+        for &[a, b, c] in faces {
+            for (start, end) in [(a, b), (b, c), (c, a)] {
+                *uses.entry(edge_key(start, end)).or_default() += 1;
+            }
+        }
+        uses
+    }
+
+    #[test]
+    fn repairs_small_planar_inner_hole_without_capping_outer_border() {
+        let vertices: Vec<[f64; 3]> = (0..5)
+            .flat_map(|y| (0..5).map(move |x| [f64::from(x), f64::from(y), 0.0]))
+            .collect();
+        let mut faces = Vec::new();
+        for y in 0..4 {
+            for x in 0..4 {
+                if (x, y) == (1, 1) {
+                    continue;
+                }
+                let a = y * 5 + x;
+                let b = a + 1;
+                let c = a + 5;
+                let d = c + 1;
+                faces.push([a, b, d]);
+                faces.push([a, d, c]);
+            }
+        }
+        let edge_uses = face_edges(&faces);
+        assert_eq!(edge_uses.values().filter(|&&count| count == 1).count(), 20);
+        let mut known: HashSet<[u32; 3]> = faces
+            .iter()
+            .map(|face| {
+                let mut key = *face;
+                key.sort_unstable();
+                key
+            })
+            .collect();
+        assert_eq!(
+            fill_small_planar_holes(&vertices, &mut faces, &edge_uses, &mut known, 4.0),
+            2
+        );
+        assert_eq!(
+            face_edges(&faces)
+                .values()
+                .filter(|&&count| count == 1)
+                .count(),
+            16
+        );
+        assert_eq!(faces.len(), 32);
+    }
+
+    #[test]
+    fn leaves_a_small_open_patch_uncapped() {
+        let vertices = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ];
+        let mut faces = vec![[0, 1, 2], [0, 2, 3]];
+        let edge_uses = face_edges(&faces);
+        let mut known = HashSet::new();
+        assert_eq!(
+            fill_small_planar_holes(&vertices, &mut faces, &edge_uses, &mut known, 4.0),
+            0
+        );
+        assert_eq!(faces.len(), 2);
+    }
 
     #[test]
     fn orients_adjacent_surface_faces_and_recomputes_normals() {
