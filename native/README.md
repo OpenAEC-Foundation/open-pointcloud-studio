@@ -385,6 +385,22 @@ With the completed index present, the same `--index` command reopened that
 index validation; the first run after adding its cache manifest took 18.50
 seconds to read the source and backfill metadata.
 
+## Windows installer
+
+Releases carry a Windows installer beside the archives: the file ending in
+`windows-setup.exe`. It installs for the current user without elevation, or
+for all users when chosen in its first dialog, adds a Start menu entry and
+optionally a desktop icon, lists the application under "Open with" for
+E57, LAS, LAZ, PLY, PCD, PTX, PTS and XYZ files without changing what opens
+them by default, and comes with an uninstaller. Its dialogs are in English
+or Dutch. The application needs nothing besides Windows 10 or 11 itself.
+
+The release workflow builds it from [`installer/windows.iss`](installer/windows.iss)
+with the same folder it packs into the archive, and signs it when signing
+is configured. To build it by hand, put the executable and the licence
+texts in a folder and compile the script with the version and that folder:
+`ISCC /DAppVersion=0.6.0 /DSourceDir=path\to\folder installer\windows.iss`.
+
 ## Build
 
 ```bash

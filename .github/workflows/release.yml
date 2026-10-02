@@ -40,7 +40,7 @@ jobs:
           if ! gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --draft \
               --title "Open Pointcloud Studio $VERSION" \
-              --notes "Native Rust desktop application for Windows, Linux and macOS. Each archive holds the application binary and the licence texts; no installer, web frontend or webview is involved. The desktop application is GPL-3.0-only, the point-cloud core LGPL-3.0-or-later."
+              --notes "Native Rust desktop application for Windows, Linux and macOS. For Windows there is an installer (the file ending in windows-setup.exe) besides the archive; each archive holds the application binary and the licence texts. No web frontend or webview is involved. The desktop application is GPL-3.0-only, the point-cloud core LGPL-3.0-or-later."
           fi
 
   build-native:
@@ -132,6 +132,50 @@ jobs:
             shasum -a 256 "$archive" > "$archive.sha256"
           fi
           gh release upload "$VERSION" "$archive" "$archive.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+      # The installer packs the same folder as the archive: the signed
+      # application with its licence texts.
+      - name: Build Windows installer
+        if: matrix.artifact == 'windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --no-progress -y
+          }
+          $number = $env:VERSION.TrimStart('v')
+          & $compiler "/DAppVersion=$number" "/DSourceDir=..\open-pointcloud-studio-$($env:VERSION)-windows" installer\windows.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Sign Windows installer
+        if: matrix.artifact == 'windows'
+        continue-on-error: true
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}/native/target/installer
+          files-folder-filter: exe
+          files-folder-depth: 1
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Upload Windows installer
+        if: matrix.artifact == 'windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          cd target/installer
+          setup="open-pointcloud-studio-${VERSION}-windows-setup.exe"
+          test -f "$setup"
+          sha256sum "$setup" > "$setup.sha256"
+          gh release upload "$VERSION" "$setup" "$setup.sha256" --clobber --repo "$GITHUB_REPOSITORY"
 
   publish-release:
     needs: [create-release, build-native]
