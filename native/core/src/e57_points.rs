@@ -1,8 +1,9 @@
 //! Stream all scans in an E57 file through the pure-Rust e57 decoder.
 
+use std::io::{Read, Seek};
 use std::path::Path;
 
-use e57::{Blob, CartesianCoordinate, E57Reader, ImageFormat, PointCloud, Projection};
+use e57::{Blob, CartesianCoordinate, E57Reader, ImageFormat, PointCloud, Projection, RecordName};
 
 use super::window_reader::WindowReader;
 use super::{quaternion_axes, Bounds, LoadError, Point, ScanImage, ScanImageFormat, ScanPose};
@@ -18,8 +19,26 @@ pub(crate) fn open_reader(path: &Path) -> Result<E57Reader<WindowReader>, LoadEr
     Ok(E57Reader::new(WindowReader::open(path)?)?)
 }
 
-fn scan_pose(index: usize, scan: &PointCloud) -> Option<ScanPose> {
+/// The scanner station of a scan. A merged cloud is stored as a scan too,
+/// but its pose only places its coordinates: a scan with neither the grid or
+/// angles of a scanner sweep nor a name has no station.
+pub(crate) fn scan_pose(index: usize, scan: &PointCloud) -> Option<ScanPose> {
     let transform = scan.transform.as_ref()?;
+    let swept = scan.index_bounds.is_some()
+        || scan.spherical_bounds.is_some()
+        || scan.prototype.iter().any(|record| {
+            matches!(
+                record.name,
+                RecordName::RowIndex
+                    | RecordName::ColumnIndex
+                    | RecordName::SphericalRange
+                    | RecordName::SphericalAzimuth
+                    | RecordName::SphericalElevation
+            )
+        });
+    if !swept && scan.name.as_ref().is_none_or(|name| name.is_empty()) {
+        return None;
+    }
     let position = [
         transform.translation.x,
         transform.translation.y,
@@ -265,20 +284,30 @@ pub fn read(
         if let Some(pose) = scan_pose(index, &scan) {
             pose_push(pose);
         }
-        let mut points = file.pointcloud_simple(&scan)?;
-        points.spherical_to_cartesian(true);
-        // Preserve whether the scan actually contains RGB. The e57 crate's
-        // default converts intensity-only points into synthetic grey colors.
-        points.intensity_to_color(false);
-        points.apply_pose(true);
-        for point in points {
-            let point = point?;
-            let CartesianCoordinate::Valid { x, y, z } = &point.cartesian else {
-                continue;
-            };
-            let xyz = [*x, *y, *z];
-            push(simple_point(point, xyz))?;
-        }
+        read_scan(&mut file, &scan, push)?;
+    }
+    Ok(())
+}
+
+/// Stream the registered, valid points of one scan.
+pub(crate) fn read_scan<T: Read + Seek>(
+    file: &mut E57Reader<T>,
+    scan: &PointCloud,
+    push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+) -> Result<(), LoadError> {
+    let mut points = file.pointcloud_simple(scan)?;
+    points.spherical_to_cartesian(true);
+    // Preserve whether the scan actually contains RGB. The e57 crate's
+    // default converts intensity-only points into synthetic grey colors.
+    points.intensity_to_color(false);
+    points.apply_pose(true);
+    for point in points {
+        let point = point?;
+        let CartesianCoordinate::Valid { x, y, z } = &point.cartesian else {
+            continue;
+        };
+        let xyz = [*x, *y, *z];
+        push(simple_point(point, xyz))?;
     }
     Ok(())
 }

@@ -115,6 +115,21 @@ E57 files are read through a buffered window, because the format is decoded
 in 1 KiB pages and a seek per page is very slow on a network share. One
 10-million-point scan on a share that takes about a minute page by page now
 decodes in a few seconds.
+
+A merged cloud of several gigabytes still takes minutes to read in full, and
+a network share sets the pace. From 512 MiB such a file first shows a preview
+of two million points taken from data packets spread evenly through the file,
+read on several threads while everything in between stays unread; an 8.7 GB
+cloud of 455 million points on a share that reads 100 MB/s shows up in about
+ten seconds. The sampled records are decoded by the same reader as a full
+pass and are replaced by the checked cloud and its octree once the whole file
+has been read. This needs record fields that all fill whole bytes, which
+merged clouds usually have; station scans with a packed row and column index
+open as before. A scan with neither a scanner sweep nor a name is treated as
+a merged cloud: its pose places the points but shows no station marker.
+Without stations, a scene whose bounds are stretched by a few stray far
+points is framed around the bulk of its points.
+
 In a distant overview, stations projected within 32 pixels share a count marker;
 labels move around neighboring markers and use a dark badge for contrast over
 light point data. Zooming in separates the stations again, while Properties

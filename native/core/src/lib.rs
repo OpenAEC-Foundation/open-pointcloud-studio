@@ -9,6 +9,7 @@ use std::time::SystemTime;
 mod bag3d;
 mod dxf;
 mod e57_points;
+mod e57_quick;
 mod export;
 mod mesh_formats;
 mod mesh_points;
@@ -358,6 +359,23 @@ pub fn open_e57_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         scan_images: scan_images(path),
         source_stamp: Some(stamp),
     })
+}
+
+/// Open a bounded preview of a large E57 scan by reading point records
+/// spread through the file, on several threads, instead of all of it. `None`
+/// means the file is not stored in a way that allows this. The count is the
+/// stated number of records and the bounds cover only the sampled points, so
+/// the caller replaces this cloud with `open`'s checked result and must not
+/// index or export it.
+pub fn open_e57_quick_preview(
+    path: impl AsRef<Path>,
+    sample_limit: usize,
+) -> Result<Option<PointCloud>, LoadError> {
+    let path = path.as_ref();
+    if !is_e57(path) {
+        return Ok(None);
+    }
+    e57_quick::preview(path, sample_limit)
 }
 
 fn is_e57(path: &Path) -> bool {

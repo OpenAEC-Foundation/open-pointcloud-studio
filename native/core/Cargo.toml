@@ -6,7 +6,8 @@ license.workspace = true
 
 [dependencies]
 las = { version = "0.9.11", features = ["laz-parallel"] }
-e57 = "0.11.13"
+e57 = { version = "0.11.13", features = ["crc32c"] }
+crc32c = "0.6"
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 memmap2 = "0.9"

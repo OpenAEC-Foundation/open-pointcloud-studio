@@ -303,15 +303,38 @@ impl OctreeIndex {
         config: IndexConfig,
         progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
     ) -> Result<(PointCloud, Self), LoadError> {
-        Self::open_and_build_cached_with_preview(path, sample_limit, config, |_| Ok(()), progress)
+        Self::open_and_build(path, sample_limit, config, None, |_| Ok(()), progress)
     }
 
-    /// Publish the checked preview as soon as the single source pass finishes,
-    /// while the same worker continues partitioning the octree on disk.
+    /// Publish a preview while the single source pass and the partitioning of
+    /// the octree on disk continue on the same worker. The preview is the
+    /// checked cloud once the pass finishes, unless one could be shown
+    /// earlier: a preview kept from an earlier open, or for a large scan that
+    /// allows it, points spread through the file. The latter has loose
+    /// bounds, so the caller replaces it with the returned cloud.
     pub fn open_and_build_cached_with_preview(
         path: &Path,
         sample_limit: usize,
         config: IndexConfig,
+        preview: impl FnMut(&PointCloud) -> Result<(), LoadError>,
+        progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
+    ) -> Result<(PointCloud, Self), LoadError> {
+        Self::open_and_build(
+            path,
+            sample_limit,
+            config,
+            Some(SPREAD_PREVIEW_MIN_BYTES),
+            preview,
+            progress,
+        )
+    }
+
+    /// `spread_from` is the source size from which a spread preview is tried.
+    pub(crate) fn open_and_build(
+        path: &Path,
+        sample_limit: usize,
+        config: IndexConfig,
+        spread_from: Option<u64>,
         mut preview: impl FnMut(&PointCloud) -> Result<(), LoadError>,
         mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
     ) -> Result<(PointCloud, Self), LoadError> {
@@ -337,13 +360,21 @@ impl OctreeIndex {
         }
 
         // A preview kept from an earlier open is shown before the source pass.
-        let previewed = match open_preview_cache(path, sample_limit) {
+        let mut previewed = match open_preview_cache(path, sample_limit) {
             Ok(Some(cached)) => {
                 preview(&cached)?;
                 true
             }
             _ => false,
         };
+        // A large scan otherwise shows nothing until all of it has been read.
+        if !previewed && spread_from.is_some_and(|minimum| stamp.length >= minimum) {
+            let points = SPREAD_PREVIEW_POINTS.max(sample_limit);
+            if let Ok(Some(spread)) = super::open_e57_quick_preview(path, points) {
+                preview(&spread)?;
+                previewed = true;
+            }
+        }
         let storage = tempfile::Builder::new()
             .prefix("open-pointcloud-index-")
             .tempdir_in(&cache_root)?;
@@ -929,6 +960,10 @@ pub(crate) fn open_cached_preview(
 
 /// Sources smaller than this decode faster than a cache lookup is worth.
 const PREVIEW_CACHE_MIN_BYTES: u64 = 16 * 1024 * 1024;
+/// Source size from which a preview spread through the file is read before
+/// the full pass, and the number of points it holds.
+const SPREAD_PREVIEW_MIN_BYTES: u64 = 512 * 1024 * 1024;
+const SPREAD_PREVIEW_POINTS: usize = 2_000_000;
 
 #[derive(Serialize, Deserialize)]
 struct CachedPreviewHeader {

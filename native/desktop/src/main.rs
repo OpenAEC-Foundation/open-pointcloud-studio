@@ -2104,6 +2104,41 @@ impl Studio {
         Some(focus)
     }
 
+    /// Box to frame when the scene bounds would make the view tiny: around
+    /// the stations of scans that have them, otherwise around the bulk of the
+    /// points when a few stray far ones stretch the bounds.
+    fn scene_focus(&self) -> Option<Bounds> {
+        if let Some(stations) = self.station_focus() {
+            return Some(stations);
+        }
+        let mut focus: Option<Bounds> = None;
+        let mut tightened = false;
+        for entry in self.clouds.iter().filter(|entry| entry.visible) {
+            let bulk = bulk_bounds(&entry.cloud.points)
+                .filter(|bulk| bulk.extent() < entry.cloud.bounds.extent() * 0.5);
+            match bulk {
+                Some(bulk) => {
+                    tightened = true;
+                    let margin = bulk.extent() * 0.15;
+                    include_bounds(
+                        &mut focus,
+                        entry.transform.xyz(bulk.min.map(|v| v - margin)),
+                    );
+                    include_bounds(
+                        &mut focus,
+                        entry.transform.xyz(bulk.max.map(|v| v + margin)),
+                    );
+                }
+                None => {
+                    let bounds = entry.bounds();
+                    include_bounds(&mut focus, bounds.min);
+                    include_bounds(&mut focus, bounds.max);
+                }
+            }
+        }
+        focus.filter(|_| tightened)
+    }
+
     /// Frame the scene after a scan arrived, unless the user moved the camera
     /// since the application last framed it. Scans with stations are framed
     /// around them: a few stray far points otherwise make the whole view tiny.
@@ -2119,7 +2154,7 @@ impl Studio {
         }
         self.zoom = 1.0;
         self.pan = [0.0, 0.0];
-        if let (Some(scene), Some(focus)) = (combined_bounds(&self.clouds), self.station_focus()) {
+        if let (Some(scene), Some(focus)) = (combined_bounds(&self.clouds), self.scene_focus()) {
             if let Some((zoom, pan)) =
                 camera_to_frame_bounds(scene, focus, self.yaw, self.pitch, self.viewport_size)
             {
@@ -4726,6 +4761,8 @@ impl Studio {
                                 entry.index_import_id = Some(id);
                             }
                         }
+                        let scene = combined_bounds(&self.clouds);
+                        let mut replaced = false;
                         if let Some(entry) = self
                             .clouds
                             .iter_mut()
@@ -4733,6 +4770,14 @@ impl Studio {
                         {
                             entry.index_import_id = None;
                             entry.index_building = false;
+                            // A preview sampled before the full pass has
+                            // loose bounds: the checked cloud takes its place.
+                            if entry.cloud.bounds != cloud.bounds
+                                || entry.cloud.total_points != cloud.total_points
+                            {
+                                entry.cloud = Arc::clone(&cloud);
+                                replaced = true;
+                            }
                             entry.index = Some(index);
                             self.revision += 1;
                             self.status = format!(
@@ -4741,6 +4786,14 @@ impl Studio {
                                 display_name(&cloud.path)
                             );
                             ready = true;
+                        }
+                        if replaced {
+                            let camera = (self.yaw, self.pitch, self.zoom, self.pan);
+                            if self.auto_camera == Some(camera) {
+                                self.frame_new_scene();
+                            } else {
+                                self.preserve_camera_for_scene_change(scene);
+                            }
                         }
                     }
                     Err(error) => {
@@ -10316,6 +10369,32 @@ fn pan_to_world(
     pan.iter().all(|value| value.is_finite()).then_some(pan)
 }
 
+/// Box that holds all but the outermost fiftieth of the points on each side
+/// of every axis, judged from an even sample of them.
+fn bulk_bounds(points: &[Point]) -> Option<Bounds> {
+    const SAMPLES: usize = 20_000;
+    if points.len() < 1_000 {
+        return None;
+    }
+    let step = points.len().div_ceil(SAMPLES);
+    let mut bounds = Bounds {
+        min: [0.0; 3],
+        max: [0.0; 3],
+    };
+    for axis in 0..3 {
+        let mut values: Vec<f64> = points
+            .iter()
+            .step_by(step)
+            .map(|point| point.xyz[axis])
+            .collect();
+        let cut = values.len() / 50;
+        let last = values.len() - 1 - cut;
+        bounds.min[axis] = *values.select_nth_unstable_by(cut, f64::total_cmp).1;
+        bounds.max[axis] = *values.select_nth_unstable_by(last, f64::total_cmp).1;
+    }
+    Some(bounds)
+}
+
 fn include_bounds(bounds: &mut Option<Bounds>, xyz: [f64; 3]) {
     if let Some(bounds) = bounds {
         for (axis, value) in xyz.into_iter().enumerate() {
@@ -12798,11 +12877,61 @@ mod import_api_tests {
         assert!(studio.clouds[0].index_building);
         assert_eq!(studio.clouds[0].index_import_id, Some(17));
 
+        let preview = Arc::clone(&studio.clouds[0].cloud);
         let _ = studio.update(Message::IndexedImportReady(17, Ok((cloud, index))));
         assert!(!studio.index_pending);
         assert!(studio.clouds[0].index.is_some());
         assert!(!studio.clouds[0].index_building);
         assert_eq!(studio.clouds[0].index_import_id, None);
+        // A checked preview stays in place when its octree arrives.
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &preview));
+    }
+
+    #[test]
+    fn indexed_import_replaces_a_loose_preview_with_the_checked_cloud() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scan.xyz");
+        std::fs::write(&path, "1 2 3\n2 3 4\n3 4 5\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 2).unwrap());
+        let index = Arc::new(
+            OctreeIndex::build_cached(
+                &cloud,
+                IndexConfig {
+                    scratch_dir: Some(dir.path().join("cache")),
+                    ..IndexConfig::default()
+                },
+            )
+            .unwrap(),
+        );
+        // Sampled before the full pass: the bounds miss the farthest point.
+        let mut loose = (*cloud).clone();
+        loose.bounds.max = [2.0, 3.0, 4.0];
+        let mut studio = Studio {
+            index_pending: true,
+            ..Studio::default()
+        };
+        studio.imports.insert(
+            23,
+            ImportJob {
+                path,
+                decoded: Arc::new(AtomicU64::new(0)),
+                cancel: Arc::clone(&studio.index_cancel),
+            },
+        );
+        let _ = studio.update(Message::IndexedImportPreview(23, Arc::new(loose)));
+        assert_eq!(studio.clouds[0].cloud.bounds.max, [2.0, 3.0, 4.0]);
+        // The user moved the camera while the scan was still being read.
+        studio.yaw = 1.0;
+        studio.zoom = 0.4;
+
+        let _ = studio.update(Message::IndexedImportReady(
+            23,
+            Ok((Arc::clone(&cloud), index)),
+        ));
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
+        assert!(studio.clouds[0].index.is_some());
+        assert_eq!(studio.clouds.len(), 1);
+        assert_eq!(studio.yaw, 1.0);
     }
 
     #[test]

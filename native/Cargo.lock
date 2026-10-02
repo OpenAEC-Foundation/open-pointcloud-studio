@@ -750,6 +750,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc32c"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a47af21622d091a8f0fb295b88bc886ac74efcc613efc19f5d0b21de5c89e47"
+dependencies = [
+ "rustc_version",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1006,6 +1015,7 @@ version = "0.11.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fcfee41a50fbd70278c70cc477b8671ffe03951cba028cc2c057777a9ee6a3cc"
 dependencies = [
+ "crc32c",
  "roxmltree 0.21.1",
 ]
 
@@ -3182,6 +3192,7 @@ dependencies = [
 name = "pointcloud-core"
 version = "0.4.2"
 dependencies = [
+ "crc32c",
  "delaunator",
  "e57",
  "earcutr",
