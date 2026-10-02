@@ -333,7 +333,7 @@ impl OctreeIndex {
             path,
             sample_limit,
             config,
-            Some(SPREAD_PREVIEW_MIN_BYTES),
+            Some(super::E57_QUICK_PREVIEW_MIN_BYTES),
             preview,
             progress,
         )
@@ -379,7 +379,7 @@ impl OctreeIndex {
         };
         // A large scan otherwise shows nothing until all of it has been read.
         if !previewed && spread_from.is_some_and(|minimum| stamp.length >= minimum) {
-            let points = SPREAD_PREVIEW_POINTS.max(sample_limit);
+            let points = super::E57_QUICK_PREVIEW_POINTS.max(sample_limit);
             if let Ok(Some(spread)) = super::open_e57_quick_preview(path, points) {
                 preview(&spread)?;
                 previewed = true;
@@ -971,10 +971,6 @@ pub(crate) fn open_cached_preview(
 
 /// Sources smaller than this decode faster than a cache lookup is worth.
 const PREVIEW_CACHE_MIN_BYTES: u64 = 16 * 1024 * 1024;
-/// Source size from which a preview spread through the file is read before
-/// the full pass, and the number of points it holds.
-const SPREAD_PREVIEW_MIN_BYTES: u64 = 512 * 1024 * 1024;
-const SPREAD_PREVIEW_POINTS: usize = 2_000_000;
 
 #[derive(Serialize, Deserialize)]
 struct CachedPreviewHeader {

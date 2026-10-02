@@ -366,6 +366,11 @@ pub fn open_e57_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
     })
 }
 
+/// Source size from which `open_e57_quick_preview` is worth trying ahead of
+/// a full pass, and the number of points to ask it for.
+pub const E57_QUICK_PREVIEW_MIN_BYTES: u64 = 512 * 1024 * 1024;
+pub const E57_QUICK_PREVIEW_POINTS: usize = 2_000_000;
+
 /// Open a bounded preview of a large E57 scan by reading point records
 /// spread through the file, on several threads, instead of all of it. `None`
 /// means the file is not stored in a way that allows this. The count is the

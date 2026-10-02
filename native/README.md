@@ -123,7 +123,8 @@ read on several threads while everything in between stays unread; an 8.7 GB
 cloud of 455 million points on a share that reads 100 MB/s shows up in about
 ten seconds. Sampling stops after six seconds on a source that seeks slowly
 and shows the packets read by then, which are spread through the file as
-well. The sampled records are decoded by the same reader as a full
+well. The preview appears whether or not the import also builds an octree.
+The sampled records are decoded by the same reader as a full
 pass and are replaced by the checked cloud and its octree once the whole file
 has been read. This needs record fields that all fill whole bytes and
 packets that all hold the same number of records, which merged clouds
