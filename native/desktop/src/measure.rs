@@ -511,7 +511,7 @@ impl MeasureTool {
             section
                 .push(
                     container(
-                        button("Clear")
+                        button(crate::i18n::tr("Clear"))
                             .on_press_maybe(
                                 self.current
                                     .is_some()

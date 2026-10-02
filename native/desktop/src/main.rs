@@ -13,6 +13,7 @@ mod camera_views;
 mod cloud_centroid;
 mod cloud_transform;
 mod gpu_viewport;
+mod i18n;
 mod measure;
 mod native_api;
 mod native_chrome;
@@ -22,6 +23,7 @@ mod opencad_ribbon;
 mod preferences;
 mod project_open;
 mod selection;
+mod settings_dialog;
 mod station_photos;
 mod ui_theme;
 mod view_cube;
@@ -834,6 +836,7 @@ fn main() -> iced::Result {
         }
     };
     release_own_console();
+    i18n::set(i18n::load());
     iced::application("Open Pointcloud Studio", Studio::update, Studio::view)
         // Controls without an explicit size match the compact property rows.
         .settings(iced::Settings {
@@ -1328,6 +1331,7 @@ enum Message {
     ImportSnapshot(u64, Arc<PointCloud>),
     IndexedImportReady(u64, Result<(Arc<PointCloud>, Arc<OctreeIndex>), String>),
     CancelImport(u64),
+    Settings(settings_dialog::SettingsAction),
     /// Cancel every import that reads its source without building an octree.
     CancelOpening,
     Loaded(Result<Arc<PointCloud>, String>),
@@ -1529,6 +1533,8 @@ struct Studio {
     opening_total: usize,
     /// When each task that reports progress was first seen.
     progress_marks: HashMap<open_progress::Phase, open_progress::Mark>,
+    /// The Settings dialog, while it is open.
+    settings: Option<settings_dialog::SettingsDialog>,
     /// The camera as the application last framed it; a view the user changed
     /// is left alone when further scans arrive.
     auto_camera: Option<(f32, f32, f32, [f32; 2])>,
@@ -1871,6 +1877,7 @@ impl Default for Studio {
             import_expected: HashMap::new(),
             opening_total: 0,
             progress_marks: HashMap::new(),
+            settings: None,
             auto_camera: None,
             next_import_id: 0,
             dropped_paths: Vec::new(),
@@ -4770,6 +4777,7 @@ impl Studio {
                 }
                 self.status = "Cancelling imports…".into();
             }
+            Message::Settings(action) => self.settings_action(action),
             Message::CancelImport(id) => {
                 if let Some(job) = self.imports.get(&id) {
                     job.cancel.store(true, Ordering::Relaxed);
@@ -7393,6 +7401,10 @@ impl Studio {
                 }
             }
             Message::Escape => {
+                if self.settings.is_some() {
+                    self.settings_action(settings_dialog::SettingsAction::Cancel);
+                    return Task::none();
+                }
                 if self.file_open {
                     self.file_open = false;
                     return Task::none();
@@ -7826,7 +7838,7 @@ impl Studio {
         use opencad_ribbon::RibbonItem;
 
         let file_button = container(
-            button(text("File").size(12))
+            button(text(i18n::tr("File")).size(12))
                 .on_press(Message::ToggleFile)
                 .style(|theme, status| {
                     opencad_ribbon::file_tab_style(theme, self.file_open, status)
@@ -7834,6 +7846,11 @@ impl Studio {
                 .padding([5, 13]),
         )
         .padding([1, 8]);
+        // The one tab of the ribbon; it also leads back from the File view.
+        let home_tab = button(text(i18n::tr("Home")).size(12))
+            .on_press_maybe(self.file_open.then_some(Message::ToggleFile))
+            .style(|theme, status| opencad_ribbon::tab_style(theme, !self.file_open, status))
+            .padding([5, 13]);
         let quick_access = row![
             opencad_ribbon::quick_access_btn(
                 icon_svg(ToolIcon::Open, 20.0),
@@ -7862,6 +7879,10 @@ impl Studio {
             ),
         ]
         .spacing(4);
+        let settings_button = button(text(i18n::tr("Settings")).size(12))
+            .on_press(Message::Settings(settings_dialog::SettingsAction::Open))
+            .style(|theme, status| opencad_ribbon::tab_style(theme, false, status))
+            .padding([5, 13]);
         let logo = svg(svg::Handle::from_memory(
             include_bytes!("../../assets/icons/logo.svg").as_slice(),
         ))
@@ -7871,8 +7892,10 @@ impl Studio {
             row![
                 logo,
                 file_button,
+                home_tab,
                 iced::widget::horizontal_space(),
-                quick_access
+                quick_access,
+                settings_button
             ]
             .width(Fill)
             .align_y(iced::Alignment::Center)
@@ -7941,7 +7964,7 @@ impl Studio {
                         self.show_scan_poses,
                     ),
                     iced::widget::Space::with_width(4),
-                    text("Size").size(11),
+                    text(i18n::tr("Size")).size(12),
                     slider(0.1..=20.0, self.point_size, Message::PointSize)
                         .step(0.1_f32)
                         .width(88),
@@ -7951,7 +7974,7 @@ impl Studio {
                 .align_y(iced::Alignment::Center)
                 .height(opencad_ribbon::ROW_H),
                 row![
-                    text("Budget").size(11),
+                    text(i18n::tr("Budget")).size(12),
                     slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
                         .step(100_000_u32)
                         .width(230),
@@ -8059,7 +8082,7 @@ impl Studio {
                 .align_y(iced::Alignment::Center)
                 .height(opencad_ribbon::ROW_H),
                 row![
-                    text("Keep").size(11).width(28),
+                    text(i18n::tr("Keep")).size(12).width(44),
                     slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
                     text(format!("{}%", self.thin_percent)).size(11).width(30),
                     edit_action(small_tool_button_when(
@@ -8214,17 +8237,17 @@ impl Studio {
             cloud_count.push_str(&format!("  ·  {picked} selected"));
         }
         let mut files = column![
-            text("PROJECT")
+            text(i18n::tr("PROJECT"))
                 .size(14)
                 .font(Font::with_name("Space Grotesk")),
             text(cloud_count)
                 .size(11)
                 .color(self.ui_theme.colors().muted),
-            button("+  Add point cloud")
+            button(i18n::tr("+  Add point cloud"))
                 .on_press(Message::Open)
                 .style(flat_tool_style)
                 .width(Fill),
-            button("+  Open scan folder…")
+            button(i18n::tr("+  Open scan folder…"))
                 .on_press(Message::OpenFolder)
                 .style(flat_tool_style)
                 .width(Fill),
@@ -8329,7 +8352,7 @@ impl Studio {
             }
             if entry.mesh.is_some() {
                 item = item.push(
-                    checkbox("Surface", entry.mesh_visible)
+                    checkbox(i18n::tr("Surface"), entry.mesh_visible)
                         .on_toggle(move |value| Message::SetMeshVisible(index, value))
                         .style(muted_checkbox_style)
                         .text_size(11)
@@ -8366,8 +8389,10 @@ impl Studio {
         // Classes that occur in the open clouds, each shown or hidden like a layer.
         let classes = self.class_codes();
         if !classes.is_empty() {
-            let mut list =
-                column![text("CLASSES").size(11).color(self.ui_theme.colors().muted)].spacing(3);
+            let mut list = column![text(i18n::tr("CLASSES"))
+                .size(11)
+                .color(self.ui_theme.colors().muted)]
+            .spacing(3);
             for code in classes {
                 let label = ASPRS_CLASSIFICATIONS
                     .iter()
@@ -8412,7 +8437,7 @@ impl Studio {
         .height(bag_map::HEIGHT);
         let mut panel = column![
             row![
-                text("3D BAG")
+                text(i18n::tr("3D BAG"))
                     .size(15)
                     .font(Font::with_name("Space Grotesk"))
                     .width(Fill),
@@ -8421,7 +8446,7 @@ impl Studio {
                     .style(flat_tool_style),
             ]
             .align_y(iced::Alignment::Center),
-            text("Download buildings in RD New + NAP (EPSG:7415).")
+            text(i18n::tr("Download buildings in RD New + NAP (EPSG:7415)."))
                 .size(11)
                 .color(self.ui_theme.colors().muted),
             container(map)
@@ -8436,10 +8461,10 @@ impl Studio {
                 })
                 .on_press(Message::BagMapDraw(!self.bag_map_drawing))
                 .style(flat_tool_style),
-                button("Fit area")
+                button(i18n::tr("Fit area"))
                     .on_press(Message::BagMapFitFields)
                     .style(flat_tool_style),
-                button("Amsterdam")
+                button(i18n::tr("Amsterdam"))
                     .on_press(Message::BagMapHome)
                     .style(flat_tool_style),
             ]
@@ -8457,19 +8482,19 @@ impl Studio {
                         UiPoint::new(bag_map::WIDTH * 0.5, bag_map::HEIGHT * 0.5),
                     ))
                     .style(flat_tool_style),
-                text("Drag to pan · scroll to zoom").size(10),
+                text(i18n::tr("Drag to pan · scroll to zoom")).size(10),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
             row![
-                text("© Kadaster (BRT) via PDOK · CC BY 4.0").size(10),
-                button("Licentie ↗")
+                text(i18n::tr("© Kadaster (BRT) via PDOK · CC BY 4.0")).size(10),
+                button(i18n::tr("Licentie ↗"))
                     .on_press(Message::OpenPdokLicense)
                     .style(flat_tool_style),
             ]
             .spacing(5)
             .align_y(iced::Alignment::Center),
-            button("Use scan / section box")
+            button(i18n::tr("Use scan / section box"))
                 .on_press(Message::BagFromSection)
                 .style(flat_tool_style),
         ]
@@ -8488,7 +8513,7 @@ impl Studio {
             );
         }
         panel = panel
-            .push(text("Level of detail").size(11))
+            .push(text(i18n::tr("Level of detail")).size(11))
             .push(
                 pick_list(BagLod::ALL, Some(self.bag_lod), Message::BagLod)
                     .style(themed_pick_list_style),
@@ -8512,9 +8537,9 @@ impl Studio {
             );
         }
         panel
-            .push(text("© 3DBAG door tudelft3d en 3DGI").size(10))
+            .push(text(i18n::tr("© 3DBAG door tudelft3d en 3DGI")).size(10))
             .push(
-                button("CC BY 4.0 · bron en licentie ↗")
+                button(i18n::tr("CC BY 4.0 · bron en licentie ↗"))
                     .on_press(Message::OpenBagLicense)
                     .style(flat_tool_style),
             )
@@ -8575,17 +8600,25 @@ impl Studio {
             .and_then(|entry| entry.selection.as_ref())
             .map_or(0, |selection| selection.count);
         let menu = column![
-            container(text("FILE").size(12).color(self.ui_theme.colors().accent)).padding([20, 18]),
+            container(
+                text(i18n::tr("FILE"))
+                    .size(12)
+                    .color(self.ui_theme.colors().accent)
+            )
+            .padding([20, 18]),
             action("Import point cloud…", FileAction::Import, true),
             action("Open scan folder…", FileAction::ImportFolder, true),
-            container(text("EXPORT").size(10).color(self.ui_theme.colors().muted)).padding(
-                iced::Padding {
-                    top: 22.0,
-                    right: 18.0,
-                    bottom: 7.0,
-                    left: 18.0,
-                }
-            ),
+            container(
+                text(i18n::tr("EXPORT"))
+                    .size(10)
+                    .color(self.ui_theme.colors().muted)
+            )
+            .padding(iced::Padding {
+                top: 22.0,
+                right: 18.0,
+                bottom: 7.0,
+                left: 18.0,
+            }),
             action(
                 "Full resolution…",
                 FileAction::ExportFull,
@@ -8629,7 +8662,7 @@ impl Studio {
                 active_cloud.is_some_and(|entry| entry.mesh.is_some()) && !self.mesh_export_pending,
             ),
             iced::widget::vertical_space(),
-            button(text("←  Return to model").size(13))
+            button(text(i18n::tr("←  Return to model")).size(13))
                 .on_press(Message::ToggleFile)
                 .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
                 .width(Fill)
@@ -8668,7 +8701,7 @@ impl Studio {
             },
         );
         let mut details = column![
-            text("Point cloud workspace")
+            text(i18n::tr("Point cloud workspace"))
                 .size(26)
                 .font(Font::with_name("Space Grotesk")),
             text(format!(
@@ -8680,7 +8713,7 @@ impl Studio {
             .size(13)
             .color(self.ui_theme.colors().muted),
             container(
-                text("CURRENT SCAN")
+                text(i18n::tr("CURRENT SCAN"))
                     .size(10)
                     .color(self.ui_theme.colors().muted)
             )
@@ -8691,7 +8724,7 @@ impl Studio {
             }),
             text(active_name).size(16),
             container(
-                text("OPEN SCANS")
+                text(i18n::tr("OPEN SCANS"))
                     .size(10)
                     .color(self.ui_theme.colors().muted)
             )
@@ -8702,7 +8735,7 @@ impl Studio {
             }),
             container(open_scans).width(Fill).max_width(560),
             container(
-                text("EXPORT FORMAT")
+                text(i18n::tr("EXPORT FORMAT"))
                     .size(10)
                     .color(self.ui_theme.colors().muted)
             )
@@ -8719,7 +8752,7 @@ impl Studio {
             .style(themed_pick_list_style)
             .width(240),
             container(
-                text("EVERY NTH POINT")
+                text(i18n::tr("EVERY NTH POINT"))
                     .size(10)
                     .color(self.ui_theme.colors().muted)
             )
@@ -8729,7 +8762,7 @@ impl Studio {
                 ..iced::Padding::ZERO
             }),
             row![
-                text("Keep 1 in").size(13),
+                text(i18n::tr("Keep 1 in")).size(13),
                 pick_list(
                     [2u64, 5, 10, 20, 50, 100],
                     Some(self.decimation_stride),
@@ -8741,22 +8774,11 @@ impl Studio {
             .spacing(8)
             .align_y(iced::Alignment::Center),
             container(
-                text("APPEARANCE")
-                    .size(10)
-                    .color(self.ui_theme.colors().muted)
-            )
-            .padding(iced::Padding {
-                top: 28.0,
-                bottom: 4.0,
-                ..iced::Padding::ZERO
-            }),
-            pick_list(UiTheme::ALL, Some(self.ui_theme), Message::Theme)
-                .style(themed_pick_list_style)
-                .width(240),
-            container(
-                text("Choose an export format, then save the active scan or selection.")
-                    .size(12)
-                    .color(self.ui_theme.colors().muted),
+                text(i18n::tr(
+                    "Choose an export format, then save the active scan or selection."
+                ))
+                .size(12)
+                .color(self.ui_theme.colors().muted),
             )
             .padding(iced::Padding {
                 top: 32.0,
@@ -8784,7 +8806,7 @@ impl Studio {
                     ))
                     .size(11),
                 )
-                .push(button("Cancel merge").on_press(Message::CancelMerge));
+                .push(button(i18n::tr("Cancel merge")).on_press(Message::CancelMerge));
         }
         row![
             menu,
@@ -8816,7 +8838,7 @@ impl Studio {
             .padding([7, 12]);
             if let Some((&id, job)) = self.imports.iter().max_by_key(|(id, _)| *id) {
                 status_bar = status_bar.push(
-                    button("Cancel import")
+                    button(i18n::tr("Cancel import"))
                         .on_press_maybe(
                             (!job.cancel.load(Ordering::Relaxed))
                                 .then_some(Message::CancelImport(id)),
@@ -8847,7 +8869,7 @@ impl Studio {
         let canvas = if self.walk.is_some() {
             canvas.push(
                 container(
-                    button(text("Back to 3D view (Esc)").size(12))
+                    button(text(i18n::tr("Back to 3D view (Esc)")).size(12))
                         .on_press(Message::LeaveWalk)
                         .style(|_, status| button::Style {
                             // Readable over any photo or point cloud.
@@ -8888,7 +8910,7 @@ impl Studio {
             active_cloud.map_or("No file loaded", |entry| display_name(&entry.cloud.path));
         let mut properties = column![
             container(
-                text("Properties")
+                text(i18n::tr("Properties"))
                     .size(12)
                     .font(Font::with_name("Space Grotesk"))
             )
@@ -8967,7 +8989,8 @@ impl Studio {
                     .width(Fill),
                 )
                 .push(
-                    container(button("Cancel mesh").on_press(Message::CancelMesh)).padding([5, 8]),
+                    container(button(i18n::tr("Cancel mesh")).on_press(Message::CancelMesh))
+                        .padding([5, 8]),
                 );
         }
         if let Some(job) = &self.merge_job {
@@ -8987,7 +9010,7 @@ impl Studio {
                     .width(Fill),
                 )
                 .push(
-                    container(button("Cancel merge").on_press(Message::CancelMerge))
+                    container(button(i18n::tr("Cancel merge")).on_press(Message::CancelMerge))
                         .padding([5, 8]),
                 );
         }
@@ -9024,7 +9047,7 @@ impl Studio {
                     .width(Fill),
                 )
                 .push(
-                    container(button("Cancel scale").on_press(Message::CancelScale))
+                    container(button(i18n::tr("Cancel scale")).on_press(Message::CancelScale))
                         .padding([5, 8]),
                 );
         }
@@ -9061,7 +9084,7 @@ impl Studio {
                     ))
                     .push(
                         container(
-                            button("Reset transform")
+                            button(i18n::tr("Reset transform"))
                                 .on_press(Message::ResetTransform)
                                 .style(flat_tool_style),
                         )
@@ -9139,7 +9162,7 @@ impl Studio {
                                 column![
                                     row![
                                         text(pose.label.as_str()).size(11).width(Fill),
-                                        button("Photo")
+                                        button(i18n::tr("Photo"))
                                             .on_press_maybe(
                                                 self.active
                                                     .filter(|_| {
@@ -9157,7 +9180,7 @@ impl Studio {
                                                     }),
                                             )
                                             .style(flat_tool_style),
-                                        button("Center")
+                                        button(i18n::tr("Center"))
                                             .on_press_maybe(self.active.map(|cloud_index| {
                                                 Message::CenterScanPose(cloud_index, pose_index)
                                             }))
@@ -9210,12 +9233,12 @@ impl Studio {
             .push(
                 container(
                     row![
-                        text_input("View name", &self.view_name)
+                        text_input(i18n::tr("View name"), &self.view_name)
                             .on_input(Message::ViewName)
                             .size(11)
                             .padding([3, 5])
                             .width(Fill),
-                        button("Save")
+                        button(i18n::tr("Save"))
                             .on_press_maybe(active_cloud.is_some().then_some(Message::SaveView))
                             .style(flat_tool_style),
                     ]
@@ -9292,20 +9315,22 @@ impl Studio {
                         .padding([2, 8]),
                     );
             }
-            properties = properties
-                .push(container(text("XYZ limits · model coordinates").size(10)).padding([7, 8]));
+            properties = properties.push(
+                container(text(i18n::tr("XYZ limits · model coordinates")).size(10))
+                    .padding([7, 8]),
+            );
             for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
                 properties = properties.push(
                     container(
                         row![
                             text(label).size(11).width(15),
-                            text_input("Min", &self.section_coordinate_inputs[axis][0])
+                            text_input(i18n::tr("Min"), &self.section_coordinate_inputs[axis][0])
                                 .on_input(move |value| Message::SectionCoordinate(
                                     axis, true, value
                                 ))
                                 .size(11)
                                 .width(Fill),
-                            text_input("Max", &self.section_coordinate_inputs[axis][1])
+                            text_input(i18n::tr("Max"), &self.section_coordinate_inputs[axis][1])
                                 .on_input(move |value| Message::SectionCoordinate(
                                     axis, false, value
                                 ))
@@ -9321,10 +9346,10 @@ impl Studio {
             properties = properties.push(
                 container(
                     row![
-                        button("Apply XYZ limits")
+                        button(i18n::tr("Apply XYZ limits"))
                             .on_press(Message::ApplySectionCoordinates)
                             .style(flat_tool_style),
-                        button("Zoom box")
+                        button(i18n::tr("Zoom box"))
                             .on_press(Message::ZoomToSection)
                             .style(flat_tool_style),
                     ]
@@ -9346,7 +9371,7 @@ impl Studio {
                 ))
                 .push(
                     container(
-                        button("Export mesh as OBJ")
+                        button(i18n::tr("Export mesh as OBJ"))
                             .on_press_maybe(
                                 (!self.mesh_export_pending).then_some(Message::ExportMesh),
                             )
@@ -9362,7 +9387,7 @@ impl Studio {
                 .push(
                     container(
                         row![
-                            text("Strength").size(11).width(52),
+                            text(i18n::tr("Strength")).size(11).width(52),
                             slider(0.0..=5.0, self.eye_dome_strength, Message::EyeDomeStrength,)
                                 .step(0.1_f32)
                                 .width(155),
@@ -9381,7 +9406,7 @@ impl Studio {
         };
 
         let viewport_header = row![
-            text("MODEL SPACE")
+            text(i18n::tr("MODEL SPACE"))
                 .size(12)
                 .font(Font::with_name("Space Grotesk"))
                 .color(Color::from_rgb8(250, 250, 249)),
@@ -9408,8 +9433,8 @@ impl Studio {
             viewport = viewport.push(
                 container(
                     row![
-                        text("© 3DBAG door tudelft3d en 3DGI").size(10),
-                        button("Bron en licentie ↗")
+                        text(i18n::tr("© 3DBAG door tudelft3d en 3DGI")).size(10),
+                        button(i18n::tr("Bron en licentie ↗"))
                             .on_press(Message::OpenBagLicense)
                             .style(flat_tool_style),
                     ]
@@ -9449,20 +9474,23 @@ impl Studio {
         .padding([7, 12]);
         if let Some((&id, job)) = self.imports.iter().max_by_key(|(id, _)| *id) {
             status_bar = status_bar.push(
-                button("Cancel import")
+                button(i18n::tr("Cancel import"))
                     .on_press_maybe(
                         (!job.cancel.load(Ordering::Relaxed)).then_some(Message::CancelImport(id)),
                     )
                     .style(flat_tool_style),
             );
         }
-        column![
+        let window = column![
             self.ribbon(),
             content,
             container(status_bar).width(Fill).style(status_style)
         ]
-        .height(Fill)
-        .into()
+        .height(Fill);
+        match self.settings_view() {
+            Some(dialog) => stack![window, dialog].into(),
+            None => window.into(),
+        }
     }
 }
 
@@ -9544,8 +9572,8 @@ fn small_tool_button_when(
 ) -> Element<'static, Message> {
     let icon = tool_icon(&message);
     button(
-        row![icon_svg(icon, 18.0), text(label).size(11),]
-            .spacing(4)
+        row![icon_svg(icon, 24.0), text(i18n::tr(label)).size(12),]
+            .spacing(6)
             .align_y(iced::Alignment::Center),
     )
     .on_press_maybe(enabled.then_some(message))
@@ -9602,17 +9630,17 @@ fn small_color_button(
     button(
         row![
             Canvas::new(ColorModeGlyph(mode, mode == current))
-                .width(18)
-                .height(18),
-            text(label).size(11),
+                .width(24)
+                .height(24),
+            text(i18n::tr(label)).size(12),
         ]
-        .spacing(5)
+        .spacing(6)
         .align_y(iced::Alignment::Center),
     )
     .on_press(Message::ColorMode(mode))
     .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, mode == current, status))
     .height(opencad_ribbon::ROW_H)
-    .padding([2, 4])
+    .padding([2, 6])
     .into()
 }
 

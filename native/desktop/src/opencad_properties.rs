@@ -13,6 +13,7 @@ const FONT_SZ: f32 = ROW_H * 0.42;
 
 /// OpenCADStudio's two-column label/value row, adapted for read-only scan data.
 pub fn property_row(label: &'static str, value: String) -> Element<'static, Message> {
+    let label = crate::i18n::tr(label);
     let label_col = container(text(label).size(FONT_SZ).style(|theme| text::Style {
         color: Some(ui_theme::colors(theme).muted),
     }))
@@ -94,6 +95,7 @@ pub fn property_input<'a>(
     value: &'a str,
     on_input: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message> {
+    let label = crate::i18n::tr(label);
     let label_col = container(text(label).size(FONT_SZ).style(|theme| text::Style {
         color: Some(ui_theme::colors(theme).muted),
     }))
@@ -128,7 +130,7 @@ pub fn property_input<'a>(
 }
 
 pub fn section_header(title: &'static str) -> Element<'static, Message> {
-    container(text(title).size(FONT_SZ))
+    container(text(crate::i18n::tr(title)).size(FONT_SZ))
         .width(Fill)
         .padding([4, 6])
         .style(|theme| container::Style {

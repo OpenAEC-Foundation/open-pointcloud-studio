@@ -36,8 +36,8 @@ resizing back to a wide window removes them again.
 Commands that are used rarely or need several parameters are offered once
 outside the ribbon. The File view has the export variants (full resolution,
 selected points, without selected points, section box, every Nth point and
-surface mesh), merging of visible LAS/LAZ scans, the export format and the
-theme. Properties repeats nothing the ribbon offers: besides what a scan is
+surface mesh), merging of visible LAS/LAZ scans and the export format.
+Properties repeats nothing the ribbon offers: besides what a scan is
 and holds, it has saving a camera view, the strength of eye-dome lighting
 while that is on, the limits of the section box with Zoom box while the box
 is on, the 3D surface settings, the list of stations and the cancel buttons
@@ -55,6 +55,8 @@ navigation arrows, and the [arrows at 900 pixels](../screenshots/native-ribbon-o
 with the [right arrow disabled at the end](../screenshots/native-ribbon-overflow-tools-scrolled.png).
 
 The amber File button opens a native backstage view with the currently open scans, direct scan activation, import, the export variants (full resolution, selected points, without selected points, section box, every Nth point and surface mesh), merging of visible LAS/LAZ scans, format choice and appearance choice. The File view covers the tool ribbon and model space, while keeping quick access and the status bar visible; Escape or Return to model closes it. Unavailable exports appear muted. This uses the existing Rust import/export commands and no web components.
+
+The top strip has the File button, the Home tab of the ribbon beside it and, at its right end after the quick-access actions, a Settings button. Settings follows the dialog of the OpenAEC style book: General has the language (Auto-detect, English, Nederlands), Appearance the theme with its swatches, and About the version, framework and licence. A choice shows at once; Cancel or Escape puts back what was in use and Save keeps it, the language in a `language` file beside the theme. Texts are looked up by their English wording in `assets/locales/nl.json`; a text without an entry stays English, which still holds for status messages. The theme is no longer chosen in the File view.
 
 Native display and indexing defaults now persist in `settings.json` under the same configuration directory as the theme: color mode, point size, eye-dome switch and strength, scanner-marker visibility, point budget and auto-index. New configurations start at a 250,000-point viewport budget; the ribbon can raise it to ten million, matching Classic. Changes from the ribbon or local command API are saved after a short debounce; invalid stored numeric values fall back to safe defaults. Source scans and their per-file edits are unaffected.
 

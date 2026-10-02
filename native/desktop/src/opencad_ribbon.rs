@@ -9,8 +9,8 @@ use iced::{Background, Border, Color, Element, Fill, Length, Theme};
 use crate::ui_theme;
 use crate::Message;
 
-pub const ROW_H: f32 = 26.0;
-pub const TOOL_BAR_H: f32 = 3.0 * ROW_H + 18.0;
+pub const ROW_H: f32 = 32.0;
+pub const TOOL_BAR_H: f32 = 3.0 * ROW_H + 20.0;
 pub const QUICK_ACCESS_W: f32 = 30.0;
 
 /// OpenCADStudio's compact top-strip action, adapted to native point-cloud
@@ -28,7 +28,7 @@ pub fn quick_access_btn<'a>(
         .padding([2, 0]);
     tooltip(
         control,
-        container(text(label).size(11))
+        container(text(crate::i18n::tr(label)).size(11))
             .padding([4, 7])
             .style(|theme| {
                 let colors = ui_theme::colors(theme);
@@ -119,7 +119,7 @@ pub fn render_group_items<'a>(
     let tools = row(items_row).spacing(2).height(Fill).width(Length::Shrink);
     let content = column![
         container(tools)
-            .height(TOOL_BAR_H - 18.0)
+            .height(TOOL_BAR_H - 20.0)
             .align_y(iced::Alignment::Start),
         container(
             column![
@@ -127,9 +127,11 @@ pub fn render_group_items<'a>(
                     container::Style::default()
                         .background(ui_theme::colors(theme).ribbon_group_separator)
                 }),
-                text(title).size(9).style(|theme| text::Style {
-                    color: Some(ui_theme::colors(theme).ribbon_group_label),
-                }),
+                text(crate::i18n::tr(title))
+                    .size(10)
+                    .style(|theme| text::Style {
+                        color: Some(ui_theme::colors(theme).ribbon_group_label),
+                    }),
             ]
             .align_x(iced::Alignment::Center)
             .spacing(0),
@@ -156,6 +158,33 @@ pub fn render_group_items<'a>(
     .spacing(2)
     .width(Length::Shrink)
     .into()
+}
+
+/// A tab of the ribbon: the open one joins the tool bar below it.
+pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button::Style {
+    let colors = ui_theme::colors(theme);
+    let hovered = matches!(status, button::Status::Hovered);
+    button::Style {
+        background: Some(Background::Color(if active {
+            colors.shell
+        } else if hovered {
+            colors.ribbon_hover
+        } else {
+            colors.tabs
+        })),
+        text_color: if active {
+            colors.ribbon_active_text
+        } else if hovered {
+            colors.accent
+        } else {
+            colors.text
+        },
+        border: Border {
+            radius: iced::border::Radius::default().top(4),
+            ..Border::default()
+        },
+        ..button::Style::default()
+    }
 }
 
 /// OpenAEC's File entry stays at the start of the native ribbon and opens the
