@@ -256,7 +256,9 @@ pub fn open_with_progress(
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("ply") || extension.eq_ignore_ascii_case("e57")
+            ["ply", "e57", "xyz", "asc", "txt", "csv", "pts"]
+                .iter()
+                .any(|format| extension.eq_ignore_ascii_case(format))
         })
     {
         if let Ok(Some(cached)) =

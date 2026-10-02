@@ -683,8 +683,8 @@ fn collect_visible_leaves<'a>(
         .any(|child| collect_visible_leaves(child, visible, leaves, candidates, max_scan_points))
 }
 
-/// Recover exact PLY or E57 metadata and a small preview from an already
-/// validated disk index, without decoding the multi-gigabyte source again.
+/// Recover exact PLY, E57 or text-cloud metadata and a small preview from an
+/// already validated disk index, without decoding the source points again.
 pub(crate) fn open_cached_preview(
     path: &Path,
     sample_limit: usize,
@@ -1640,5 +1640,50 @@ mod tests {
         assert_eq!(cached.scan_poses[0].position, [100.0, 200.0, 10.0]);
         assert_eq!(cached.points.len(), 2);
         assert_eq!(cached.point_ordinals.len(), 2);
+    }
+
+    #[test]
+    fn cached_text_cloud_preview_preserves_count_bounds_and_attributes() {
+        let directory = tempfile::tempdir().unwrap();
+        for extension in ["xyz", "asc", "txt", "csv", "pts"] {
+            let source = directory.path().join(format!("scan.{extension}"));
+            let separator = if extension == "csv" { "," } else { " " };
+            let mut input = if extension == "pts" {
+                String::from("4\n")
+            } else {
+                String::new()
+            };
+            for x in 0..4 {
+                let fields = if extension == "pts" {
+                    vec![x, 0, 0, 100, 10, 20, 30]
+                } else {
+                    vec![x, 0, 0, 10, 20, 30]
+                };
+                input.push_str(
+                    &fields
+                        .into_iter()
+                        .map(|value| value.to_string())
+                        .collect::<Vec<_>>()
+                        .join(separator),
+                );
+                input.push('\n');
+            }
+            fs::write(&source, input).unwrap();
+            let cloud = super::super::open(&source, 2).unwrap();
+            let config = IndexConfig {
+                leaf_points: 2,
+                preview_points: 2,
+                max_depth: 4,
+                scratch_dir: Some(directory.path().join("cache")),
+            };
+            let _index = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
+            let cached = open_cached_preview(&source, 2, config).unwrap().unwrap();
+            assert_eq!(cached.total_points, 4, "{extension}");
+            assert_eq!(cached.bounds, cloud.bounds, "{extension}");
+            assert_eq!(cached.has_rgb, cloud.has_rgb, "{extension}");
+            assert_eq!(cached.has_intensity, cloud.has_intensity, "{extension}");
+            assert_eq!(cached.points.len(), 2, "{extension}");
+            assert_eq!(cached.point_ordinals.len(), 2, "{extension}");
+        }
     }
 }

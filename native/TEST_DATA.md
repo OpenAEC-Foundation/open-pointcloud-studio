@@ -116,6 +116,16 @@ The same writer exported the public AHN6 `207000_474000` LAZ tile to XYZ:
 41,268 KiB peak RSS. The final file appeared only after the temporary output
 was complete. Its SHA-256 is
 `142bec5664af80226ca0447fb56e80c8a82a4395c3c15d7da053122f8b12e09f`.
+On 2 October, the release `--index` command built a disk octree for that
+2,582,457,357-byte XYZ in 82.33 seconds with 12,932 KiB peak RSS: 2,948 nodes,
+2,543 leaves and depth 5 for all 45,839,678 points. The next run validated
+and reopened the same index in 0.10 seconds with 8,288 KiB peak RSS, using the
+cached metadata and preview instead of reading 2.58 GB of text again. A new
+native debug GUI showed the complete count and a 1,000,000-point viewport LOD
+in the [cached reopen screenshot](../screenshots/native-2p58gib-xyz-cached-reopen.png).
+Its indexed screen pick selected zero-based source ordinal 13,540,984 at X
+207632.995, Y 474343.318, Z 17.643 with RGB `[78, 82, 94]` and intensity
+37,005; see the [exact pick](../screenshots/native-2p58gib-xyz-cached-pick.png).
 The native viewer then exercised cancellable octree LOD reads on that same
 45.8-million-point tile. A 2,000,000-point viewport request was interrupted
 by successive Top, Front, Right and Isometric camera commands; the final
