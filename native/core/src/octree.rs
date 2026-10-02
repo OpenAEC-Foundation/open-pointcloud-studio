@@ -9,7 +9,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-use super::{visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
+use super::{e57_points, visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
 
 const RECORD_BYTES: usize = 40;
 const RECORD_BATCH_POINTS: usize = 8_192;
@@ -683,9 +683,9 @@ fn collect_visible_leaves<'a>(
         .any(|child| collect_visible_leaves(child, visible, leaves, candidates, max_scan_points))
 }
 
-/// Recover exact PLY metadata and a small preview from an already validated
-/// disk index, without reading the multi-gigabyte source again.
-pub(crate) fn open_cached_ply_preview(
+/// Recover exact PLY or E57 metadata and a small preview from an already
+/// validated disk index, without decoding the multi-gigabyte source again.
+pub(crate) fn open_cached_preview(
     path: &Path,
     sample_limit: usize,
     config: IndexConfig,
@@ -738,6 +738,13 @@ pub(crate) fn open_cached_ply_preview(
         source_stamp: Some(stamp),
     };
     let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint)?;
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"))
+    {
+        cloud.scan_poses = e57_points::scan_poses(path)?;
+    }
     for record in index.read_node_indexed("r", sample_limit)? {
         cloud.points.push(record.point);
         cloud.point_ordinals.push(record.ordinal);
@@ -1547,7 +1554,7 @@ mod tests {
         let cache_path = index.storage.path().to_path_buf();
         assert!(cache_path.join("cloud.json").exists());
 
-        let reopened = open_cached_ply_preview(&source, 2, config.clone())
+        let reopened = open_cached_preview(&source, 2, config.clone())
             .unwrap()
             .unwrap();
         assert_eq!(reopened.total_points, 4);
@@ -1556,7 +1563,7 @@ mod tests {
         assert_eq!(reopened.point_ordinals.len(), 2);
 
         fs::remove_file(cache_path.join("cloud.json")).unwrap();
-        assert!(open_cached_ply_preview(&source, 2, config.clone())
+        assert!(open_cached_preview(&source, 2, config.clone())
             .unwrap()
             .is_none());
         OctreeIndex::open_cached_if_present(&cloud, config.clone())
@@ -1565,8 +1572,73 @@ mod tests {
         assert!(cache_path.join("cloud.json").exists());
 
         fs::write(&source, "changed source").unwrap();
-        assert!(open_cached_ply_preview(&source, 2, config)
-            .unwrap()
-            .is_none());
+        assert!(open_cached_preview(&source, 2, config).unwrap().is_none());
+    }
+
+    #[test]
+    fn cached_e57_preview_preserves_scanner_pose_without_decoding_points() {
+        use e57::{E57Writer, Record, RecordValue, Transform, Translation};
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("posed-scan.e57");
+        let mut writer = E57Writer::new(
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&source)
+                .unwrap(),
+            "{00000000-0000-4000-8000-000000000001}",
+        )
+        .unwrap();
+        {
+            let mut scan = writer
+                .add_pointcloud(
+                    "{00000000-0000-4000-8000-000000000002}",
+                    vec![
+                        Record::CARTESIAN_X_F64,
+                        Record::CARTESIAN_Y_F64,
+                        Record::CARTESIAN_Z_F64,
+                    ],
+                )
+                .unwrap();
+            scan.set_name(Some("West station".into()));
+            scan.set_transform(Some(Transform {
+                rotation: Default::default(),
+                translation: Translation {
+                    x: 100.0,
+                    y: 200.0,
+                    z: 10.0,
+                },
+            }));
+            for x in [1.0, 2.0, 3.0, 4.0] {
+                scan.add_point(vec![
+                    RecordValue::Double(x),
+                    RecordValue::Double(0.0),
+                    RecordValue::Double(0.0),
+                ])
+                .unwrap();
+            }
+            scan.finalize().unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let cloud = super::super::open(&source, 2).unwrap();
+        let config = IndexConfig {
+            leaf_points: 2,
+            preview_points: 2,
+            max_depth: 4,
+            scratch_dir: Some(directory.path().join("cache")),
+        };
+        let _index = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
+        let cached = open_cached_preview(&source, 2, config).unwrap().unwrap();
+        assert_eq!(cached.total_points, cloud.total_points);
+        assert_eq!(cached.bounds, cloud.bounds);
+        assert_eq!(cached.scan_poses, cloud.scan_poses);
+        assert_eq!(cached.scan_poses[0].label, "West station");
+        assert_eq!(cached.scan_poses[0].position, [100.0, 200.0, 10.0]);
+        assert_eq!(cached.points.len(), 2);
+        assert_eq!(cached.point_ordinals.len(), 2);
     }
 }

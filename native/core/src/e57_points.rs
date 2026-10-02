@@ -2,9 +2,46 @@
 
 use std::path::Path;
 
-use e57::{CartesianCoordinate, E57Reader};
+use e57::{CartesianCoordinate, E57Reader, PointCloud};
 
 use super::{quaternion_axes, LoadError, Point, ScanPose};
+
+fn scan_pose(index: usize, scan: &PointCloud) -> Option<ScanPose> {
+    let transform = scan.transform.as_ref()?;
+    let position = [
+        transform.translation.x,
+        transform.translation.y,
+        transform.translation.z,
+    ];
+    position
+        .iter()
+        .all(|value| value.is_finite())
+        .then(|| ScanPose {
+            label: scan
+                .name
+                .clone()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| format!("Scan {}", index + 1)),
+            position,
+            axes: quaternion_axes([
+                transform.rotation.w,
+                transform.rotation.x,
+                transform.rotation.y,
+                transform.rotation.z,
+            ]),
+        })
+}
+
+/// Read scanner stations from E57 metadata without decoding point records.
+pub(crate) fn scan_poses(path: &Path) -> Result<Vec<ScanPose>, LoadError> {
+    let file = E57Reader::from_file(path)?;
+    Ok(file
+        .pointclouds()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, scan)| scan_pose(index, scan))
+        .collect())
+}
 
 pub fn read(
     path: &Path,
@@ -13,28 +50,8 @@ pub fn read(
 ) -> Result<(), LoadError> {
     let mut file = E57Reader::from_file(path)?;
     for (index, scan) in file.pointclouds().into_iter().enumerate() {
-        if let Some(transform) = &scan.transform {
-            let position = [
-                transform.translation.x,
-                transform.translation.y,
-                transform.translation.z,
-            ];
-            if position.iter().all(|value| value.is_finite()) {
-                pose_push(ScanPose {
-                    label: scan
-                        .name
-                        .clone()
-                        .filter(|name| !name.is_empty())
-                        .unwrap_or_else(|| format!("Scan {}", index + 1)),
-                    position,
-                    axes: quaternion_axes([
-                        transform.rotation.w,
-                        transform.rotation.x,
-                        transform.rotation.y,
-                        transform.rotation.z,
-                    ]),
-                });
-            }
+        if let Some(pose) = scan_pose(index, &scan) {
+            pose_push(pose);
         }
         let mut points = file.pointcloud_simple(&scan)?;
         points.spherical_to_cartesian(true);

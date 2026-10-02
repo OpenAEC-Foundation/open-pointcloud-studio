@@ -255,10 +255,12 @@ pub fn open_with_progress(
     if path
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("ply"))
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("ply") || extension.eq_ignore_ascii_case("e57")
+        })
     {
         if let Ok(Some(cached)) =
-            octree::open_cached_ply_preview(path, sample_limit, octree::IndexConfig::default())
+            octree::open_cached_preview(path, sample_limit, octree::IndexConfig::default())
         {
             progress(cached.total_points)?;
             return Ok(cached);

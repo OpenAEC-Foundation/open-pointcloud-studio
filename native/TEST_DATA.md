@@ -272,6 +272,15 @@ from model space into the Properties panel, crossing the click-to-pan threshold
 in two small steps. The camera reported the full 110-pixel pan while the LOD
 remained available before
 and after.
+After enabling metadata-only E57 reopen, the release `--index` command opened
+the same cached source and validated its 3,165-node octree in 0.09 seconds,
+with 8,444 KiB peak RSS on this host. No full E57 point decode ran. A fresh
+native debug GUI immediately showed the full 46,589,344-point count, a
+758,104-point LOD and all nine scanner stations.
+An indexed screen pick then selected zero-based source ordinal 28,363,435 at
+X 10.052, Y -42.459, Z 2.658 with RGB `[153, 149, 146]`; the
+pick view
+shows the one-point selection after this fast reopen.
 
 On 2 October 2026, the five additional official PCL producer files above
 completed full source visits in the native Rust reader. The mOSD file also
