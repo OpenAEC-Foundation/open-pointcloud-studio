@@ -368,6 +368,7 @@ impl OctreeIndex {
         }
         let mut cloud = collector.finish(path.to_path_buf())?;
         cloud.scan_poses = poses;
+        cloud.scan_images = super::scan_images(path);
         cloud.source_stamp = Some(stamp);
         preview(&cloud)?;
 
@@ -885,6 +886,7 @@ pub(crate) fn open_cached_preview(
         } else {
             Vec::new()
         },
+        scan_images: Vec::new(),
         source_stamp: Some(stamp),
     };
     let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint)?;
@@ -894,6 +896,7 @@ pub(crate) fn open_cached_preview(
         .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"))
     {
         cloud.scan_poses = e57_points::scan_poses(path)?;
+        cloud.scan_images = super::scan_images(path);
     } else if path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -948,12 +951,25 @@ fn write_cached_cloud_header(directory: &Path, cloud: &PointCloud) -> Result<(),
     Ok(())
 }
 
+/// Where disk indexes are kept: `XDG_CACHE_HOME` when set, otherwise the
+/// local application data folder on Windows and `~/.cache` elsewhere. The
+/// temporary directory is the last resort because the system may empty it.
 fn cache_root() -> PathBuf {
-    if let Some(root) = std::env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(root).join("open-pointcloud-studio/indexes");
+    let set = |name: &str| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(root) = set("XDG_CACHE_HOME") {
+        return root.join("open-pointcloud-studio/indexes");
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".cache/open-pointcloud-studio/indexes");
+    if cfg!(windows) {
+        if let Some(local) = set("LOCALAPPDATA") {
+            return local.join("open-pointcloud-studio/indexes");
+        }
+    }
+    if let Some(home) = set("HOME") {
+        return home.join(".cache/open-pointcloud-studio/indexes");
     }
     std::env::temp_dir().join("open-pointcloud-studio-indexes")
 }

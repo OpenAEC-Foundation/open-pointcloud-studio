@@ -333,7 +333,7 @@ pub fn export_e57_uniform_affine_where(
         return Err(LoadError::InvalidData("non-finite E57 translation".into()));
     }
     cloud.validate_source()?;
-    let reader = e57::E57Reader::from_file(&cloud.path)?;
+    let reader = super::e57_points::open_reader(&cloud.path)?;
     if reader
         .pointclouds()
         .iter()
@@ -719,7 +719,7 @@ fn export_e57_filtered_count(
     translation: [f64; 3],
     include: &mut dyn FnMut(u64, &Point) -> bool,
 ) -> Result<u64, LoadError> {
-    use e57::{CartesianCoordinate, E57Reader, E57Writer, RecordDataType, RecordName, RecordValue};
+    use e57::{CartesianCoordinate, E57Writer, RecordDataType, RecordName, RecordValue};
 
     if destination == cloud.path
         || fs::canonicalize(destination).ok() == fs::canonicalize(&cloud.path).ok()
@@ -737,8 +737,8 @@ fn export_e57_filtered_count(
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let temporary = tempfile::NamedTempFile::new_in(parent)?;
-    let mut reader = E57Reader::from_file(&cloud.path)?;
-    let mut raw_reader = E57Reader::from_file(&cloud.path)?;
+    let mut reader = super::e57_points::open_reader(&cloud.path)?;
+    let mut raw_reader = super::e57_points::open_reader(&cloud.path)?;
     let file_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
     let mut writer = E57Writer::new(temporary.reopen()?, &file_guid)?;
     writer.set_creation(reader.creation());

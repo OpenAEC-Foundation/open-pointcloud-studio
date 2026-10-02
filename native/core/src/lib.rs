@@ -19,7 +19,9 @@ mod pcd;
 mod ply;
 mod ply_mesh;
 mod ptx;
+mod scan_image;
 mod surface_mesh;
+mod window_reader;
 
 pub use bag3d::{fetch_bag3d_obj, BagBounds, BagLod, BagStats};
 pub use dxf::read_mesh as read_dxf_mesh;
@@ -37,6 +39,7 @@ pub use mesher::{
 pub use obj_mesh::{read_obj_mesh, write_obj_mesh, MeshGeometry};
 pub use octree::{IndexConfig, IndexProgress, IndexStage, IndexedNode, IndexedPoint, OctreeIndex};
 pub use ply_mesh::read_ply_mesh;
+pub use scan_image::{select_scan_image, ScanImage, ScanImageFormat};
 pub use surface_mesh::{
     mesh_surface_obj, mesh_surface_obj_where, mesh_surface_obj_where_progress, SurfaceMeshConfig,
 };
@@ -150,6 +153,8 @@ pub struct PointCloud {
     pub has_intensity: bool,
     pub has_classification: bool,
     pub scan_poses: Vec<ScanPose>,
+    /// Photos stored with the scanner stations, listed without decoding them.
+    pub scan_images: Vec<ScanImage>,
     source_stamp: Option<SourceStamp>,
 }
 
@@ -293,8 +298,52 @@ pub fn open_with_progress(
     }
     let mut cloud = collector.finish(path.to_path_buf())?;
     cloud.scan_poses = scan_poses;
+    cloud.scan_images = scan_images(path);
     cloud.source_stamp = Some(after);
     Ok(cloud)
+}
+
+fn is_e57(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"))
+}
+
+/// List the station photos of a source. Photos are optional extras: a file
+/// whose photo metadata cannot be read still opens, without photos.
+fn scan_images(path: &Path) -> Vec<ScanImage> {
+    if !is_e57(path) {
+        return Vec::new();
+    }
+    e57_points::scan_images(path).unwrap_or_default()
+}
+
+/// Read scanner stations and their photo list from file metadata alone,
+/// without decoding any point. Formats without such metadata return nothing.
+pub fn scan_stations(path: impl AsRef<Path>) -> Result<(Vec<ScanPose>, Vec<ScanImage>), LoadError> {
+    let path = path.as_ref();
+    if !is_e57(path) {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    Ok((
+        e57_points::scan_poses(path)?,
+        e57_points::scan_images(path)?,
+    ))
+}
+
+/// Read the encoded bytes (JPEG or PNG) of station photos from their source
+/// file, in the order given. The descriptors come from `PointCloud::scan_images`.
+pub fn read_scan_images(
+    path: impl AsRef<Path>,
+    images: &[ScanImage],
+) -> Result<Vec<Vec<u8>>, LoadError> {
+    let path = path.as_ref();
+    if !is_e57(path) {
+        return Err(LoadError::InvalidData(
+            "this format stores no station photos".into(),
+        ));
+    }
+    e57_points::read_images(path, images)
 }
 
 /// Open LAS/LAZ metadata immediately, before the preview sampling pass finishes.
@@ -337,6 +386,7 @@ pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         has_intensity: true,
         has_classification: true,
         scan_poses: Vec::new(),
+        scan_images: Vec::new(),
         source_stamp: Some(stamp),
     })
 }
@@ -505,6 +555,7 @@ impl Collector {
             has_intensity: self.has_intensity,
             has_classification: self.has_classification,
             scan_poses: Vec::new(),
+            scan_images: Vec::new(),
             source_stamp: None,
         })
     }
