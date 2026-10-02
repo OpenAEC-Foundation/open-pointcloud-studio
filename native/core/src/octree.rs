@@ -9,11 +9,15 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-use super::{e57_points, pcd, visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp};
+use super::{
+    e57_points, pcd, visit_points, Bounds, LoadError, Point, PointCloud, ScanPose, SourceStamp,
+};
 
 const RECORD_BYTES: usize = 40;
 const RECORD_BATCH_POINTS: usize = 8_192;
 const LEAF_LOD_POINTS: usize = 2_048;
+const MAX_CLOUD_METADATA_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_CACHED_SCAN_POSES: usize = 4_096;
 
 #[derive(Serialize, Deserialize)]
 struct CachedCloudHeader {
@@ -24,6 +28,8 @@ struct CachedCloudHeader {
     has_rgb: bool,
     has_intensity: bool,
     has_classification: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scan_poses: Option<Vec<ScanPose>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -683,7 +689,7 @@ fn collect_visible_leaves<'a>(
         .any(|child| collect_visible_leaves(child, visible, leaves, candidates, max_scan_points))
 }
 
-/// Recover exact PLY, E57, PCD or text-cloud metadata and a small preview from an
+/// Recover exact PLY, E57, PCD, PTX or text-cloud metadata and a small preview from an
 /// already validated disk index, without decoding the source points again.
 pub(crate) fn open_cached_preview(
     path: &Path,
@@ -703,7 +709,7 @@ pub(crate) fn open_cached_preview(
         ));
     }
     let metadata_path = directory.join("cloud.json");
-    if fs::metadata(&metadata_path)?.len() > 4_096 {
+    if fs::metadata(&metadata_path)?.len() > MAX_CLOUD_METADATA_BYTES {
         return Err(LoadError::InvalidData(
             "oversized octree cloud metadata".into(),
         ));
@@ -722,6 +728,29 @@ pub(crate) fn open_cached_preview(
     {
         return Err(LoadError::InvalidData("invalid octree cloud bounds".into()));
     }
+    let is_ptx = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ptx"));
+    if is_ptx && header.scan_poses.is_none() {
+        // Older manifests cannot recover PTX scanner positions from a cheap
+        // header read: every scan block can contain a different pose.
+        return Ok(None);
+    }
+    if let Some(poses) = &header.scan_poses {
+        if poses.len() > MAX_CACHED_SCAN_POSES
+            || poses.iter().any(|pose| {
+                !pose.position.iter().all(|value| value.is_finite())
+                    || pose
+                        .axes
+                        .is_some_and(|axes| !axes.iter().flatten().all(|value| value.is_finite()))
+            })
+        {
+            return Err(LoadError::InvalidData(
+                "invalid cached scanner poses".into(),
+            ));
+        }
+    }
     let mut cloud = PointCloud {
         path: path.to_path_buf(),
         total_points: header.total_points,
@@ -734,7 +763,11 @@ pub(crate) fn open_cached_preview(
         has_rgb: header.has_rgb,
         has_intensity: header.has_intensity,
         has_classification: header.has_classification,
-        scan_poses: Vec::new(),
+        scan_poses: if is_ptx {
+            header.scan_poses.unwrap_or_default()
+        } else {
+            Vec::new()
+        },
         source_stamp: Some(stamp),
     };
     let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint)?;
@@ -764,7 +797,12 @@ pub(crate) fn open_cached_preview(
 }
 
 fn write_cached_cloud_header(directory: &Path, cloud: &PointCloud) -> Result<(), LoadError> {
-    let header = CachedCloudHeader {
+    let is_ptx = cloud
+        .path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ptx"));
+    let mut header = CachedCloudHeader {
         version: 1,
         total_points: cloud.total_points,
         min: cloud.bounds.min,
@@ -772,11 +810,20 @@ fn write_cached_cloud_header(directory: &Path, cloud: &PointCloud) -> Result<(),
         has_rgb: cloud.has_rgb,
         has_intensity: cloud.has_intensity,
         has_classification: cloud.has_classification,
+        scan_poses: (is_ptx && cloud.scan_poses.len() <= MAX_CACHED_SCAN_POSES)
+            .then(|| cloud.scan_poses.clone()),
     };
-    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-    serde_json::to_writer(temporary.as_file_mut(), &header).map_err(|error| {
-        LoadError::InvalidData(format!("cannot write octree metadata: {error}"))
+    let mut serialized = serde_json::to_vec(&header).map_err(|error| {
+        LoadError::InvalidData(format!("cannot serialize octree metadata: {error}"))
     })?;
+    if serialized.len() as u64 > MAX_CLOUD_METADATA_BYTES {
+        header.scan_poses = None;
+        serialized = serde_json::to_vec(&header).map_err(|error| {
+            LoadError::InvalidData(format!("cannot serialize octree metadata: {error}"))
+        })?;
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    temporary.as_file_mut().write_all(&serialized)?;
     temporary.as_file_mut().sync_all()?;
     temporary
         .persist(directory.join("cloud.json"))
@@ -1671,6 +1718,52 @@ mod tests {
         assert_eq!(cached.scan_poses, cloud.scan_poses);
         assert_eq!(cached.scan_poses[0].position, [10.0, 20.0, 30.0]);
         assert_eq!(cached.point_ordinals.len(), 2);
+    }
+
+    #[test]
+    fn cached_ptx_preview_preserves_multiple_scanner_poses() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("two-stations.ptx");
+        let first = "1\n2\n10 20 30\n0 1 0\n-1 0 0\n0 0 1\n0 1 0 0\n-1 0 0 0\n0 0 1 0\n10 20 30 1\n0 0 0 0\n1 2 3 0.5 10 20 30\n";
+        let second = "1\n2\n40 50 60\n1 0 0\n0 1 0\n0 0 1\n1 0 0 40\n0 1 0 50\n0 0 1 60\n0 0 0 1\n0 0 0 0\n1 2 3 0.5 30 20 10\n";
+        fs::write(&source, format!("{first}{second}")).unwrap();
+        let cloud = super::super::open(&source, 2).unwrap();
+        assert_eq!(cloud.scan_poses.len(), 2);
+        let config = IndexConfig {
+            leaf_points: 2,
+            preview_points: 2,
+            max_depth: 4,
+            scratch_dir: Some(directory.path().join("cache")),
+        };
+        let index = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
+        let metadata_path = index.storage.path().join("cloud.json");
+        let cached = open_cached_preview(&source, 2, config.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached.total_points, cloud.total_points);
+        assert_eq!(cached.bounds, cloud.bounds);
+        assert_eq!(cached.scan_poses, cloud.scan_poses);
+        assert_eq!(cached.scan_poses[0].position, [10.0, 20.0, 30.0]);
+        assert_eq!(cached.scan_poses[1].position, [40.0, 50.0, 60.0]);
+        assert_eq!(cached.point_ordinals.len(), 2);
+
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("scan_poses");
+        fs::write(&metadata_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(open_cached_preview(&source, 2, config.clone())
+            .unwrap()
+            .is_none());
+        OctreeIndex::open_cached_if_present(&cloud, config.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            open_cached_preview(&source, 2, config)
+                .unwrap()
+                .unwrap()
+                .scan_poses,
+            cloud.scan_poses
+        );
     }
 
     #[test]

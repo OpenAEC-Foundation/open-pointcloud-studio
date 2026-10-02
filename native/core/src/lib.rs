@@ -71,7 +71,7 @@ pub struct Point {
     pub classification: Option<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScanPose {
     pub label: String,
     pub position: [f64; 3],
@@ -256,9 +256,11 @@ pub fn open_with_progress(
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            ["ply", "e57", "pcd", "xyz", "asc", "txt", "csv", "pts"]
-                .iter()
-                .any(|format| extension.eq_ignore_ascii_case(format))
+            [
+                "ply", "e57", "pcd", "ptx", "xyz", "asc", "txt", "csv", "pts",
+            ]
+            .iter()
+            .any(|format| extension.eq_ignore_ascii_case(format))
         })
     {
         if let Ok(Some(cached)) =

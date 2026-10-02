@@ -735,6 +735,18 @@ at each ungrouped marker and in the expanded Properties list. Grouped markers
 do not show one scan's orientation on behalf of several scans. See
 [`native-e57-scan-orientation.png`](../screenshots/native-e57-scan-orientation.png).
 
+A locally generated two-station PTX (40,000 points, 1.48 MB) checked the new
+pose-aware disk cache. The first `--index` pass took 0.12 seconds; the second
+validated and reopened the index in 0.02 seconds with 18,196 KiB peak RSS.
+`--scans` still reported both registered stations at `(0, 0, 3)` and
+`(50, 0, 3)` with their X/Y/Z axes. The native GUI rendered both station
+markers and showed **Indexed: Yes** with all 40,000 points in
+[`native-ptx-two-station-cache.png`](../screenshots/native-ptx-two-station-cache.png).
+The cache unit test also removes the pose field from a manifest to verify that
+an older PTX index falls back to a full source read before its metadata is
+refreshed. This fixture verifies correctness and cache behavior; it is not a
+gigabyte PTX performance result.
+
 The GUI also opened a 22,801-point XYZ grid with **Indexed: No**. Pick point
 selected source point 11,550 at X -2.000, Y 1.000, Z 0.593 by scanning the
 source in the background; the Properties panel displayed those coordinates.
