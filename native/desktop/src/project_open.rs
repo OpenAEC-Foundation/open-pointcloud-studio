@@ -157,7 +157,7 @@ fn path_key(path: &Path) -> String {
 
 /// Orders names the way people read them: runs of digits compare as numbers
 /// ("scan 2" before "scan 10") and letters compare without case.
-fn natural_cmp(left: &str, right: &str) -> Ordering {
+pub(crate) fn natural_cmp(left: &str, right: &str) -> Ordering {
     let mut a = left.chars().peekable();
     let mut b = right.chars().peekable();
     loop {

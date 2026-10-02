@@ -23,10 +23,9 @@ screenshots show the 114,174,907-point merged AHN6 cloud in that build.
 
 At the default 1440-pixel window width, the View tab packs all six axial
 camera directions, isometric view, scanner and section actions into
-OpenCADStudio's three-row small-tool columns and puts the four class switches
-in a two-by-two block. The Tools tab keeps Classic's editing, meshing and
-3D BAG controls in view, followed by advanced controls that can be reached
-with the horizontal scrollbar or arrow buttons. Compare the
+OpenCADStudio's three-row small-tool columns. The Tools tab keeps Classic's
+editing and meshing controls in view, followed by advanced controls that can
+be reached with the horizontal scrollbar or arrow buttons. Compare the
 [Classic tool order](../screenshots/classic-v0.3-tools.jpg) with the
 [native Tools ribbon](../screenshots/native-tools-ribbon-classic-order-114m.png).
 The advanced Tools groups now use OpenCADStudio's three-row small-button
@@ -44,12 +43,19 @@ Resizing back to a wide window removes them again.
 
 The amber File tab opens a native backstage view with the currently open scans, direct scan activation, import, full/selected/section/mesh export, format choice and appearance choice. The File view covers the tool ribbon and model space, while keeping quick access and the status bar visible; Escape or Return to model closes it. Unavailable exports appear muted. This uses the existing Rust import/export commands and no web components.
 
-Native display and indexing defaults now persist in `settings.json` under the same configuration directory as the theme: color mode, point size, eye-dome switch and strength, scanner-marker visibility, point budget, auto-index and the four broad classification groups. New configurations start at a 250,000-point viewport budget; the ribbon can raise it to ten million, matching Classic. Changes from the ribbon or local command API are saved after a short debounce; invalid stored numeric values fall back to safe defaults. Source scans and their per-file edits are unaffected.
+Native display and indexing defaults now persist in `settings.json` under the same configuration directory as the theme: color mode, point size, eye-dome switch and strength, scanner-marker visibility, point budget and auto-index. New configurations start at a 250,000-point viewport budget; the ribbon can raise it to ten million, matching Classic. Changes from the ribbon or local command API are saved after a short debounce; invalid stored numeric values fall back to safe defaults. Source scans and their per-file edits are unaffected.
 
 OpenCADStudio's SVG icons under `assets/icons/` were copied into [`assets/opencad-icons/`](assets/opencad-icons/) and are embedded by Rust `iced::widget::svg`. No HTML, CSS, JavaScript or webview is used in the native desktop crate.
 
 Camera views can be named and saved from the View ribbon or Properties panel, then restored or deleted from Properties. They persist per source scan in `camera-views.json` under the native XDG configuration directory.
 E57 scan transforms, valid PCD `VIEWPOINT` headers and PTX scanner positions appear as station markers in the native 3D view. A PCD header with an all-zero orientation, found in public PCL samples, opens with identity orientation but has no invented scanner axes. For isolated stations, the small X/Y/Z axes show the registered scanner orientation; nearby stations grouped into one marker do not imply a shared orientation. The View ribbon frames stations together with the cloud; Properties lists each station's coordinates and axis directions. Click a marker or a station's **Center** button to pan the current view to that position without changing its angle or zoom. Use `--scans INPUT` to print positions and orientations.
+
+The project panel lists the open clouds in name order, one compact row each
+with a visibility switch, the point count and a remove button; a second line
+appears only while a cloud is loading or indexing, or when it has selected or
+deleted points. The top strip starts with the application logo and the File
+tab, with the quick-access actions at its right end. The same logo is the
+window icon and, on Windows, the icon of the executable.
 
 ### Opening a whole scan project
 
@@ -260,7 +266,7 @@ shows the selected area framed at 19.4× after the new Zoom selection action.
 | --- | --- |
 | LAS/LAZ, PLY, XYZ/ASC/TXT/CSV, PTS import | Implemented for point data; bounded ASCII and little-endian binary PLY polygon meshes also render |
 | PCD, PTX, OBJ, OFF, STL, DXF, E57 import | Point vertices implemented, including PCD LZF compression and VIEWPOINT transforms in all three PCD storage modes; official PCL XYZ, RGB, label/RGBA, intensity/extra-field, padding and organized captures were validated. OBJ, OFF, STL and DXF 3DFACE geometry also renders as triangles |
-| Multiple clouds, visibility, orbit, pan, deep zoom, 3D view cube, right-click menu, rounded points, colors, point size, budget, class groups | Native implementation; close-up point spheres grow gently on screen so their lighting stays visible, with a capped increase over the chosen point size. Named camera views save and restore yaw, pitch, zoom and pan per source scan. Per-code classification switches in Properties filter both rendering and exact selection, alongside the View ribbon groups. Advanced navigation polish remains |
+| Multiple clouds, visibility, orbit, pan, deep zoom, 3D view cube, right-click menu, rounded points, colors, point size, budget, classes | Native implementation; close-up point spheres grow gently on screen so their lighting stays visible, with a capped increase over the chosen point size. Named camera views save and restore yaw, pitch, zoom and pan per source scan. The project panel lists the classification codes that occur in the open clouds; each can be shown or hidden like a layer, which filters both rendering and exact selection. Advanced navigation polish remains |
 | Section box | Three-axis clipping with visible wireframe, six draggable face handles, six limit sliders and precise XYZ fields. Fit box to selection uses exact selected source points, including points outside the preview; Zoom box frames the clipped volume in the viewport. Clipping applies to GPU rendering, full-resolution selection and a separate clipped export |
 | Octree LOD and eye-dome lighting | Existing disk-backed octrees attach when a scan opens. Uncached scans with at least one million points are indexed automatically, one at a time, after their preview loads; the Tools ribbon can disable this or start a manual build. Source-read and tree-build progress appear in the status and Properties panels, and a running build can be cancelled without retaining a partial cache. Camera movement selects visible nodes by projected size and refreshes a bounded point sample while retaining the previous sample until its replacement is ready; stale requests cancel during node reads and leaf-preview generation. The point-budget control reaches 10 million, with point uploads split into bounded WGPU buffers. Compact per-leaf LOD previews make repeated cold-cache navigation cheaper; old indexes create these previews on first use without a full rebuild. Native screen-space eye-dome shading has an on/off switch and an adjustable 0–5 strength in View and Properties |
 | Full-resolution point selection | Index-guided exact box selection when available, full-source fallback, single-point picking that prefers the displayed LOD and falls back to the exact full source with or without an index, selected point properties and selected export. The local API also picks by viewport pixel and returns the source ordinal and attributes. The Select ribbon's Zoom selection action frames the exact selected bounds without changing the section box; selection masks retain source-coordinate bounds so a later live transform and a gigabyte scan do not require a second full-source read. Long box scans can be cancelled from the Select ribbon, Escape or local API without applying partial results |

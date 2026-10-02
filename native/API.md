@@ -169,8 +169,6 @@ is atomic and scans the complete source rather than the viewport sample.
 Color mode, point size, eye-dome settings, point budget and auto-index changes
 made through this API also update the native `settings.json` defaults after a
 short debounce, so they remain in effect when the app restarts.
-The View ribbon's broad Ground, Vegetation, Buildings and Other groups also
-apply; a point must pass both its group and individual class switch.
 The server binds only to loopback, limits request bodies to 64 KiB, and has
 no permissive browser CORS headers. After an unclean shutdown, an old
 discovery file may remain until the next native launch; clients should check

@@ -306,6 +306,17 @@ fn format_count(value: impl ToString) -> String {
     grouped
 }
 
+/// A count short enough for a list row: 10.0M, 544k, 812.
+fn compact_count(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{:.1}M", value as f64 / 1_000_000.0)
+    } else if value >= 10_000 {
+        format!("{:.0}k", value as f64 / 1_000.0)
+    } else {
+        value.to_string()
+    }
+}
+
 fn format_zoom_level(zoom: f32) -> String {
     let magnification = 1.0 / f64::from(zoom);
     if magnification >= 100.0 {
@@ -936,7 +947,15 @@ fn main() -> iced::Result {
         .default_font(Font::with_name("Inter"))
         .theme(|studio: &Studio| studio.ui_theme.iced())
         .antialiasing(true)
-        .window_size((1440.0, 900.0))
+        .window(iced::window::Settings {
+            size: Size::new(1440.0, 900.0),
+            icon: iced::window::icon::from_file_data(
+                include_bytes!("../../assets/icons/icon-64.png"),
+                None,
+            )
+            .ok(),
+            ..iced::window::Settings::default()
+        })
         .run_with(move || {
             let mut studio = Studio::default();
             if let Some((receiver, handle)) = api {
@@ -1453,10 +1472,6 @@ enum Message {
     WalkStop,
     PanoramaReady(PathBuf, usize, Result<Arc<PhotoSet>, String>),
     Budget(u32),
-    FilterGround(bool),
-    FilterVegetation(bool),
-    FilterBuildings(bool),
-    FilterOther(bool),
     FilterClass(u8, bool),
     SetSectionEnabled(bool),
     SectionMin(usize, f32),
@@ -1577,6 +1592,9 @@ struct Studio {
     filter_buildings: bool,
     filter_other: bool,
     class_visibility: ClassVisibility,
+    /// Classification codes found in the open previews, with the clouds they
+    /// were collected from so the scan is repeated only when those change.
+    class_codes: std::cell::RefCell<(Vec<usize>, Vec<u8>)>,
     section_enabled: bool,
     section_export_pending: bool,
     mesh_export_pending: bool,
@@ -1897,11 +1915,14 @@ impl Default for Studio {
             walk_fast: false,
             walk_tick: None,
             budget: settings.budget,
-            filter_ground: settings.filter_ground,
-            filter_vegetation: settings.filter_vegetation,
-            filter_buildings: settings.filter_buildings,
-            filter_other: settings.filter_other,
+            // The four class groups no longer have switches; classes are
+            // shown or hidden one by one in the project panel.
+            filter_ground: true,
+            filter_vegetation: true,
+            filter_buildings: true,
+            filter_other: true,
             class_visibility: ClassVisibility::default(),
+            class_codes: std::cell::RefCell::new((Vec::new(), Vec::new())),
             section_enabled: false,
             section_export_pending: false,
             mesh_export_pending: false,
@@ -2311,6 +2332,37 @@ impl Studio {
     fn walk_speed(&self) -> f64 {
         let extent = combined_bounds(&self.clouds).map_or(10.0, Bounds::extent);
         (extent * 0.08).clamp(0.8, 400.0) * if self.walk_fast { 4.0 } else { 1.0 }
+    }
+
+    /// Classification codes that occur in the open clouds, ascending.
+    fn class_codes(&self) -> Vec<u8> {
+        let key: Vec<usize> = self
+            .clouds
+            .iter()
+            .map(|entry| Arc::as_ptr(&entry.cloud) as usize)
+            .collect();
+        let mut cache = self.class_codes.borrow_mut();
+        if cache.0 != key {
+            let mut present = [false; 256];
+            for entry in self
+                .clouds
+                .iter()
+                .filter(|entry| entry.cloud.has_classification)
+            {
+                for point in &entry.cloud.points {
+                    if let Some(code) = point.classification {
+                        present[usize::from(code)] = true;
+                    }
+                }
+            }
+            *cache = (
+                key,
+                (0..=u8::MAX)
+                    .filter(|code| present[usize::from(*code)])
+                    .collect(),
+            );
+        }
+        cache.1.clone()
     }
 
     fn queue_preferences_save(&mut self) -> Task<Message> {
@@ -3900,7 +3952,11 @@ impl Studio {
                     let preview_task = Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
-                                pointcloud_core::open_las_preview(path, LOAD_SAMPLE_LIMIT)
+                                // Spaced sampling needs to seek; files whose
+                                // compressed chunks vary in size cannot, so
+                                // those are sampled from a full pass instead.
+                                pointcloud_core::open_las_preview(&path, LOAD_SAMPLE_LIMIT)
+                                    .or_else(|_| pointcloud_core::open(&path, LOAD_SAMPLE_LIMIT))
                             })
                             .await
                             .map_err(|error| error.to_string())?
@@ -6555,26 +6611,6 @@ impl Studio {
                 self.revision += 1;
                 return Task::batch([self.schedule_detail(), self.queue_preferences_save()]);
             }
-            Message::FilterGround(value) => {
-                self.filter_ground = value;
-                self.revision += 1;
-                return self.queue_preferences_save();
-            }
-            Message::FilterVegetation(value) => {
-                self.filter_vegetation = value;
-                self.revision += 1;
-                return self.queue_preferences_save();
-            }
-            Message::FilterBuildings(value) => {
-                self.filter_buildings = value;
-                self.revision += 1;
-                return self.queue_preferences_save();
-            }
-            Message::FilterOther(value) => {
-                self.filter_other = value;
-                self.revision += 1;
-                return self.queue_preferences_save();
-            }
             Message::FilterClass(code, visible) => {
                 self.class_visibility.set(code, visible);
                 self.revision += 1;
@@ -7524,8 +7560,13 @@ impl Studio {
             ),
         ]
         .spacing(4);
+        let logo = svg(svg::Handle::from_memory(
+            include_bytes!("../../assets/icons/logo.svg").as_slice(),
+        ))
+        .width(20)
+        .height(20);
         let tab_bar = container(
-            row![quick_access, tabs, iced::widget::horizontal_space()]
+            row![logo, tabs, iced::widget::horizontal_space(), quick_access]
                 .width(Fill)
                 .align_y(iced::Alignment::Center)
                 .padding([0, 8]),
@@ -7901,39 +7942,6 @@ impl Studio {
                     .spacing(5)
                     .into()
                 ),
-                ribbon_group(
-                    "CLASSIFICATION",
-                    column![
-                        row![
-                            checkbox("Ground", self.filter_ground)
-                                .on_toggle(Message::FilterGround)
-                                .style(muted_checkbox_style)
-                                .text_size(11)
-                                .size(12),
-                            checkbox("Vegetation", self.filter_vegetation)
-                                .on_toggle(Message::FilterVegetation)
-                                .style(muted_checkbox_style)
-                                .text_size(11)
-                                .size(12),
-                        ]
-                        .spacing(9),
-                        row![
-                            checkbox("Buildings", self.filter_buildings)
-                                .on_toggle(Message::FilterBuildings)
-                                .style(muted_checkbox_style)
-                                .text_size(11)
-                                .size(12),
-                            checkbox("Other", self.filter_other)
-                                .on_toggle(Message::FilterOther)
-                                .style(muted_checkbox_style)
-                                .text_size(11)
-                                .size(12),
-                        ]
-                        .spacing(9),
-                    ]
-                    .spacing(10)
-                    .into()
-                ),
             ]
             .spacing(6)
             .into(),
@@ -8218,9 +8226,21 @@ impl Studio {
                 .width(Fill),
         ]
         .spacing(9);
-        for (index, entry) in self.clouds.iter().enumerate() {
+        // Layers read in name order, whatever order their imports finished in.
+        let mut order: Vec<usize> = (0..self.clouds.len()).collect();
+        order.sort_by(|a, b| {
+            project_open::natural_cmp(
+                display_name(&self.clouds[*a].cloud.path),
+                display_name(&self.clouds[*b].cloud.path),
+            )
+            .then(a.cmp(b))
+        });
+        let mut layers = column![].spacing(2);
+        for index in order {
+            let entry = &self.clouds[index];
             let name = display_name(&entry.cloud.path);
             let readable_name = name.replace('_', "_\u{200b}");
+            let remaining = entry.remaining_count();
             let file_button = tooltip(
                 button(
                     text(readable_name)
@@ -8231,54 +8251,73 @@ impl Studio {
                 .on_press(Message::Select(index))
                 .style(flat_tool_style)
                 .width(Fill)
-                .padding([4, 2]),
-                container(text(entry.cloud.path.display().to_string()).size(11))
-                    .padding([4, 7])
-                    .style(|theme| {
-                        let colors = ui_theme::colors(theme);
-                        container::Style::default()
-                            .background(colors.panel_alt)
-                            .color(colors.text)
-                    }),
+                .padding([2, 2]),
+                container(
+                    text(format!(
+                        "{}\n{} points",
+                        entry.cloud.path.display(),
+                        format_count(remaining)
+                    ))
+                    .size(11),
+                )
+                .padding([4, 7])
+                .style(|theme| {
+                    let colors = ui_theme::colors(theme);
+                    container::Style::default()
+                        .background(colors.panel_alt)
+                        .color(colors.text)
+                }),
                 tooltip::Position::FollowCursor,
             )
             .gap(5);
-            let selected = entry.selection.as_ref().map_or(0, |mask| mask.count);
-            let deleted = entry.deleted_count();
-            let mut summary = format!("{} points", format_count(entry.remaining_count()));
-            if selected > 0 {
-                summary.push_str(&format!("  ·  {} selected", format_count(selected)));
-            }
-            if deleted > 0 {
-                summary.push_str(&format!("  ·  {} deleted", format_count(deleted)));
-            }
-            let index_state = if entry.index.is_some() {
-                "LOD ready"
-            } else if entry.index_building {
-                "Indexing"
-            } else if entry.auto_index_queued {
-                "LOD queued"
-            } else {
-                "Not indexed"
-            };
-            let mut item = column![
-                row![
-                    checkbox("", entry.visible)
-                        .on_toggle(move |value| Message::SetVisible(index, value))
-                        .style(muted_checkbox_style),
-                    file_button,
-                    button("×")
-                        .on_press(Message::Remove(index))
-                        .style(flat_tool_style),
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center),
-                text(summary).size(10).color(self.ui_theme.colors().muted),
-                text(index_state)
+            let mut item = column![row![
+                checkbox("", entry.visible)
+                    .on_toggle(move |value| Message::SetVisible(index, value))
+                    .style(muted_checkbox_style)
+                    .size(14),
+                file_button,
+                text(compact_count(remaining))
                     .size(10)
                     .color(self.ui_theme.colors().muted),
+                button(text("×").size(12))
+                    .on_press(Message::Remove(index))
+                    .style(flat_tool_style)
+                    .padding([1, 5]),
             ]
-            .spacing(3);
+            .spacing(3)
+            .align_y(iced::Alignment::Center)]
+            .spacing(1);
+            // Only what needs attention gets a second line.
+            let mut notes = Vec::new();
+            if entry.cloud.points.is_empty() && entry.cloud.total_points > 0 && entry.mesh.is_none()
+            {
+                notes.push("loading points…".to_owned());
+            } else if entry.index_building {
+                notes.push("indexing…".to_owned());
+            } else if entry.auto_index_queued {
+                notes.push("index queued".to_owned());
+            }
+            let selected = entry.selection.as_ref().map_or(0, |mask| mask.count);
+            if selected > 0 {
+                notes.push(format!("{} selected", format_count(selected)));
+            }
+            let deleted = entry.deleted_count();
+            if deleted > 0 {
+                notes.push(format!("{} deleted", format_count(deleted)));
+            }
+            if !notes.is_empty() {
+                item = item.push(
+                    container(
+                        text(notes.join("  ·  "))
+                            .size(10)
+                            .color(self.ui_theme.colors().muted),
+                    )
+                    .padding(iced::Padding {
+                        left: 20.0,
+                        ..iced::Padding::ZERO
+                    }),
+                );
+            }
             if entry.mesh.is_some() {
                 item = item.push(
                     checkbox("Surface", entry.mesh_visible)
@@ -8289,9 +8328,9 @@ impl Studio {
                 );
             }
             let active = self.active == Some(index);
-            files = files.push(
+            layers = layers.push(
                 container(item)
-                    .padding([6, 5])
+                    .padding([1, 4])
                     .width(Fill)
                     .style(move |theme| {
                         let colors = ui_theme::colors(theme);
@@ -8302,12 +8341,40 @@ impl Studio {
                                 colors.panel
                             })
                             .border(iced::Border {
-                                color: if active { colors.accent } else { colors.border },
+                                color: if active {
+                                    colors.accent
+                                } else {
+                                    Color::TRANSPARENT
+                                },
                                 width: 1.0,
                                 radius: 2.0.into(),
                             })
                     }),
             );
+        }
+        files = files.push(layers);
+        // Classes that occur in the open clouds, each shown or hidden like a layer.
+        let classes = self.class_codes();
+        if !classes.is_empty() {
+            let mut list =
+                column![text("CLASSES").size(11).color(self.ui_theme.colors().muted)].spacing(3);
+            for code in classes {
+                let label = ASPRS_CLASSIFICATIONS
+                    .iter()
+                    .find(|(known, _)| *known == code)
+                    .map_or_else(
+                        || format!("{code:02}  Class {code}"),
+                        |(_, label)| format!("{code:02}  {label}"),
+                    );
+                list = list.push(
+                    checkbox(label, self.class_visibility.allows(Some(code)))
+                        .on_toggle(move |visible| Message::FilterClass(code, visible))
+                        .style(muted_checkbox_style)
+                        .text_size(11)
+                        .size(13),
+                );
+            }
+            files = files.push(list);
         }
         container(scrollable(files.padding(14)).height(Fill))
             .width(255)
@@ -9384,26 +9451,6 @@ impl Studio {
                 )
                 .padding([3, 8]),
             );
-        }
-        if self.color_mode == ColorMode::Classification
-            && active_cloud.is_some_and(|entry| entry.cloud.has_classification)
-        {
-            properties = properties
-                .push(opencad_properties::section_header("Class visibility"))
-                .push(container(text("View groups also apply").size(10)).padding([4, 8]));
-            for &(code, label) in ASPRS_CLASSIFICATIONS {
-                properties = properties.push(
-                    container(
-                        checkbox(
-                            format!("{code:02}  {label}"),
-                            self.class_visibility.allows(Some(code)),
-                        )
-                        .on_toggle(move |visible| Message::FilterClass(code, visible))
-                        .style(muted_checkbox_style),
-                    )
-                    .padding([2, 8]),
-                );
-            }
         }
         let properties: Element<'_, Message> = if self.bag_panel {
             self.bag_panel_view()
