@@ -2929,7 +2929,7 @@ dependencies = [
 
 [[package]]
 name = "open-pointcloud-studio-native"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "bytemuck",
  "iced",
@@ -3178,7 +3178,7 @@ dependencies = [
 
 [[package]]
 name = "pointcloud-core"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "delaunator",
  "e57",

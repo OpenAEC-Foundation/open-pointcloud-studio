@@ -1,6 +1,6 @@
 # Native Rust rebuild
 
-This workspace is the active all-Rust replacement for the Tauri, React and Three.js application. The existing application stays available as a separate [Classic desktop tool](../classic/README.md) so each workflow can be checked against it.
+This workspace is the active all-Rust replacement for the Tauri, React and Three.js application. The earlier application is archived: its source stays under [classic/](../classic/README.md) for reference, and the former main branch is tagged `archive/classic-tauri-main`.
 
 The design follows [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio): a Rust document and I/O core, a native `iced` user interface, and a viewport. The reference was cloned beside this repository and inspected at commit `1fec34d`. The native desktop ribbon now contains adapted source from `src/ui/ribbon/mod.rs`, `widgets.rs` and `draw_panel.rs`: its three-row panel packing, large/small tool columns, active-tab treatment, and tool button styling. The properties panel adopts the two-column rows from `src/ui/properties.rs`. See [`desktop/src/opencad_ribbon.rs`](desktop/src/opencad_ribbon.rs) and [`desktop/src/opencad_properties.rs`](desktop/src/opencad_properties.rs) for source attribution and adaptation notes. OpenCADStudio is GPL-3.0, so the native desktop crate is GPL-3.0-only; its license text is at [`desktop/LICENSE-GPL-3.0`](desktop/LICENSE-GPL-3.0). The separate pointcloud core remains LGPL-3.0-or-later.
 
@@ -225,4 +225,4 @@ Mesh export writes all vertices and faces from the mesh currently held by the vi
 3. Improve the bounded 3D surface mesher toward watertight output and richer source attributes. Broaden the native settings UI as remaining workflows migrate.
 4. Expand the documented native command API to remaining editing and selection actions, then retire the old frontend and Tauri packaging after feature parity checks.
 
-The earlier application source remains available under `classic/` while the native workflow reaches parity.
+The earlier application source remains under `classic/` for reference and is tagged `archive/classic-tauri-main`.

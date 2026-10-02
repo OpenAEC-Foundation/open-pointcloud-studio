@@ -42,3 +42,10 @@ ROADMAP.md
 
 # Sample data
 samples/
+
+# Local data and notes, never part of the repository
+dev-fixtures/
+dist-debug/
+sessions/
+website-screenshots/
+PROMPTS.md
