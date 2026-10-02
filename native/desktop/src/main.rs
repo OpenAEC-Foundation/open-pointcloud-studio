@@ -19,6 +19,7 @@ mod opencad_properties;
 mod opencad_ribbon;
 mod preferences;
 mod selection;
+mod station_photos;
 mod ui_theme;
 mod view_cube;
 
@@ -48,6 +49,7 @@ use selection::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use station_photos::{PhotoAtlas, PhotoSet, WalkView};
 use ui_theme::UiTheme;
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
@@ -109,6 +111,51 @@ fn open_for_export(source: &Path) -> Result<PointCloud, pointcloud_core::LoadErr
     } else {
         pointcloud_core::open(source, 1)
     }
+}
+
+/// Save every station photo of a scan file in its stored encoding and report
+/// where each one looks, without decoding any point.
+fn export_station_photos(
+    source: &Path,
+    directory: &Path,
+) -> Result<Vec<String>, pointcloud_core::LoadError> {
+    let (poses, images) = pointcloud_core::scan_stations(source)?;
+    let encoded = pointcloud_core::read_scan_images(source, &images)?;
+    std::fs::create_dir_all(directory)?;
+    let mut lines = Vec::with_capacity(images.len());
+    for (index, (image, bytes)) in images.iter().zip(encoded).enumerate() {
+        let station = image
+            .station
+            .and_then(|station| poses.get(station))
+            .map_or("photo", |pose| pose.label.as_str());
+        let name: String = station
+            .chars()
+            .map(|character| {
+                if character.is_alphanumeric() || matches!(character, '-' | '_' | ' ') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let extension = match image.format {
+            pointcloud_core::ScanImageFormat::Jpeg => "jpg",
+            pointcloud_core::ScanImageFormat::Png => "png",
+        };
+        let file = directory.join(format!("{name} photo {}.{extension}", index + 1));
+        std::fs::write(&file, bytes)?;
+        let view = image.view_direction();
+        lines.push(format!(
+            "{}: {}x{}, looks {:+.3}, {:+.3}, {:+.3}",
+            file.display(),
+            image.width,
+            image.height,
+            view[0],
+            view[1],
+            view[2]
+        ));
+    }
+    Ok(lines)
 }
 
 fn export_edited_where(
@@ -288,6 +335,30 @@ fn is_bag3d_obj(path: &std::path::Path) -> bool {
     })
 }
 
+/// Started from the file manager, Windows opens a console window for this
+/// program. Close it when the application window is about to open; a console
+/// shared with a terminal or script stays attached so command-line output
+/// keeps working.
+#[cfg(windows)]
+fn release_own_console() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleProcessList(processes: *mut u32, count: u32) -> u32;
+        fn FreeConsole() -> i32;
+    }
+    let mut processes = [0u32; 2];
+    // SAFETY: the buffer holds the two entries asked for, and both calls only
+    // affect the console attachment of this process.
+    unsafe {
+        if GetConsoleProcessList(processes.as_mut_ptr(), 2) == 1 {
+            FreeConsole();
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn release_own_console() {}
+
 fn main() -> iced::Result {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
@@ -372,6 +443,25 @@ fn main() -> iced::Result {
             }
             Err(error) => {
                 eprintln!("Scan positions failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if first.as_deref() == Some(OsStr::new("--photos")) {
+        let (Some(source), Some(directory), None) = (args.next(), args.next(), args.next()) else {
+            eprintln!("Usage: open-pointcloud-studio --photos INPUT OUTPUT_DIRECTORY");
+            std::process::exit(2);
+        };
+        match export_station_photos(&PathBuf::from(source), &PathBuf::from(directory)) {
+            Ok(lines) => {
+                println!("{} station photo(s)", lines.len());
+                for line in lines {
+                    println!("{line}");
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Station photos failed: {error}");
                 std::process::exit(1);
             }
         }
@@ -707,7 +797,13 @@ fn main() -> iced::Result {
             None
         }
     };
+    release_own_console();
     iced::application("Open Pointcloud Studio", Studio::update, Studio::view)
+        // Controls without an explicit size match the compact property rows.
+        .settings(iced::Settings {
+            default_text_size: iced::Pixels(12.0),
+            ..iced::Settings::default()
+        })
         .subscription(|studio| {
             let keyboard = iced::event::listen_with(|event, status, _| match event {
                 iced::Event::Window(iced::window::Event::Resized(_)) => Some(Message::RibbonReset),
@@ -748,8 +844,36 @@ fn main() -> iced::Result {
                         None
                     }
                 }
+                // W A S D walk, Q and E move down and up.
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Character(value),
+                    modifiers,
+                    ..
+                }) if status == iced::event::Status::Ignored
+                    && !modifiers.control()
+                    && !modifiers.alt()
+                    && !modifiers.logo() =>
+                {
+                    WalkKey::from_character(value.as_str()).map(|key| Message::WalkKey(key, true))
+                }
+                iced::Event::Keyboard(iced::keyboard::Event::KeyReleased {
+                    key: iced::keyboard::Key::Character(value),
+                    ..
+                }) => {
+                    WalkKey::from_character(value.as_str()).map(|key| Message::WalkKey(key, false))
+                }
+                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
+                    Some(Message::WalkFast(modifiers.shift()))
+                }
+                // A key released while another window has focus never arrives.
+                iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WalkStop),
                 _ => None,
             });
+            let walking = if studio.walk.is_some() && studio.walk_keys.contains(&true) {
+                iced::time::every(Duration::from_millis(16)).map(Message::WalkTick)
+            } else {
+                iced::Subscription::none()
+            };
             let api = if let Some(receiver) = &studio.api_receiver {
                 let receiver = Arc::clone(receiver);
                 let stream = iced::stream::channel(32, move |mut output| async move {
@@ -765,7 +889,7 @@ fn main() -> iced::Result {
             } else {
                 iced::Subscription::none()
             };
-            iced::Subscription::batch([keyboard, api])
+            iced::Subscription::batch([keyboard, api, walking])
         })
         .font(include_bytes!("../../assets/fonts/Inter.ttf").as_slice())
         .font(include_bytes!("../../assets/fonts/SpaceGrotesk.ttf").as_slice())
@@ -1102,6 +1226,31 @@ impl CameraPreset {
     }
 }
 
+/// Keys that move the walking camera.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WalkKey {
+    Forward,
+    Back,
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl WalkKey {
+    fn from_character(character: &str) -> Option<Self> {
+        match character.to_ascii_lowercase().as_str() {
+            "w" => Some(Self::Forward),
+            "s" => Some(Self::Back),
+            "a" => Some(Self::Left),
+            "d" => Some(Self::Right),
+            "e" => Some(Self::Up),
+            "q" => Some(Self::Down),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Message {
     SyncWindowChrome(u8),
@@ -1247,6 +1396,16 @@ enum Message {
     ExpandScanPoses(bool),
     FitScanPoses,
     CenterScanPose(usize, usize),
+    StationPhotosReady(PathBuf, Result<Vec<Arc<PhotoSet>>, String>),
+    EnterPanorama(usize, usize),
+    LeaveWalk,
+    WalkLook(f32, f32),
+    WalkZoom(f32),
+    WalkKey(WalkKey, bool),
+    WalkFast(bool),
+    WalkTick(Instant),
+    WalkStop,
+    PanoramaReady(PathBuf, usize, Result<Arc<PhotoSet>, String>),
     Budget(u32),
     FilterGround(bool),
     FilterVegetation(bool),
@@ -1344,6 +1503,20 @@ struct Studio {
     eye_dome_strength: f32,
     show_scan_poses: bool,
     expand_scan_poses: bool,
+    /// Small station photos in arrival order; the atlas is rebuilt from them.
+    station_photos: Vec<Arc<PhotoSet>>,
+    photo_atlas: Option<Arc<PhotoAtlas>>,
+    photo_loading: HashSet<PathBuf>,
+    /// First-person camera, while walking or standing inside a station.
+    walk: Option<WalkView>,
+    /// The photo station the walking camera stands in, with its full-size
+    /// photos once decoded.
+    walk_station: Option<(usize, usize)>,
+    panorama_photos: Option<Arc<PhotoSet>>,
+    /// Movement keys held down, indexed by `WalkKey`, and the faster pace.
+    walk_keys: [bool; 6],
+    walk_fast: bool,
+    walk_tick: Option<Instant>,
     budget: u32,
     filter_ground: bool,
     filter_vegetation: bool,
@@ -1656,6 +1829,15 @@ impl Default for Studio {
             eye_dome_strength: settings.eye_dome_strength,
             show_scan_poses: settings.show_scan_poses,
             expand_scan_poses: false,
+            station_photos: Vec::new(),
+            photo_atlas: None,
+            photo_loading: HashSet::new(),
+            walk: None,
+            walk_station: None,
+            panorama_photos: None,
+            walk_keys: [false; 6],
+            walk_fast: false,
+            walk_tick: None,
             budget: settings.budget,
             filter_ground: settings.filter_ground,
             filter_vegetation: settings.filter_vegetation,
@@ -1743,6 +1925,220 @@ impl Studio {
         }
     }
 
+    /// Decode the small ball photos of a newly opened source in the background.
+    fn station_photos_task(&mut self, cloud: &Arc<PointCloud>) -> Task<Message> {
+        if cloud.scan_images.is_empty()
+            || self.photo_loading.contains(&cloud.path)
+            || self
+                .station_photos
+                .iter()
+                .any(|set| set.source == cloud.path)
+        {
+            return Task::none();
+        }
+        self.photo_loading.insert(cloud.path.clone());
+        let source = cloud.path.clone();
+        let images = cloud.scan_images.clone();
+        let key = source.clone();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    station_photos::load_ball_photos(&source, &images)
+                        .map(|sets| sets.into_iter().map(Arc::new).collect())
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result)
+            },
+            move |result| Message::StationPhotosReady(key.clone(), result),
+        )
+    }
+
+    /// Keep ball photos for open sources only and publish them to the viewport.
+    fn rebuild_photo_atlas(&mut self) {
+        self.station_photos.retain(|set| {
+            self.clouds
+                .iter()
+                .any(|entry| entry.cloud.path == set.source)
+        });
+        if self.station_photos.is_empty() {
+            self.photo_atlas = None;
+            return;
+        }
+        let (atlas, dropped) = PhotoAtlas::build(self.station_photos.iter().cloned());
+        if dropped > 0 {
+            self.status = format!(
+                "Station photos shown for {} stations; {dropped} more do not fit",
+                atlas.sets.len()
+            );
+        }
+        self.photo_atlas = Some(Arc::new(atlas));
+    }
+
+    fn leave_walk(&mut self) -> bool {
+        self.panorama_photos = None;
+        self.walk_station = None;
+        self.walk_keys = [false; 6];
+        self.walk_tick = None;
+        self.walk.take().is_some()
+    }
+
+    fn walk_value(&self) -> Value {
+        self.walk.map_or(Value::Null, |view| {
+            json!({
+                "eye": view.eye,
+                "yaw": view.yaw,
+                "pitch": view.pitch,
+                "field_of_view": view.field_of_view,
+                "station": self.walk_station.map(|(cloud, station)| json!({
+                    "index": cloud,
+                    "station": station,
+                    "label": self.clouds.get(cloud)
+                        .and_then(|entry| entry.cloud.scan_poses.get(station))
+                        .map(|pose| pose.label.clone()),
+                    "full_resolution": self.panorama_photos.is_some(),
+                })),
+            })
+        })
+    }
+
+    /// The camera in use: the walking camera when active, the orbit camera otherwise.
+    fn projection(&self, scene: Bounds, width: f32, height: f32) -> Projection {
+        self.point_viewport().projection(scene, width, height)
+    }
+
+    /// Station with photos whose ball contains a position.
+    fn photo_station_at(&self, position: [f64; 3]) -> Option<(usize, usize)> {
+        let atlas = self.photo_atlas.as_deref()?;
+        let mut nearest: Option<(usize, usize, f64)> = None;
+        for (cloud, entry) in self
+            .clouds
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.visible)
+        {
+            for (station, pose) in entry.cloud.scan_poses.iter().enumerate() {
+                if atlas.slot(&entry.cloud.path, station).is_none() {
+                    continue;
+                }
+                let centre = entry.transform.xyz(pose.position);
+                let distance = (0..3)
+                    .map(|axis| (centre[axis] - position[axis]).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                if distance <= station_photos::BALL_RADIUS
+                    && nearest.is_none_or(|(_, _, best)| distance < best)
+                {
+                    nearest = Some((cloud, station, distance));
+                }
+            }
+        }
+        nearest.map(|(cloud, station, _)| (cloud, station))
+    }
+
+    /// Decode the full-size photos of the station the walking camera stands in.
+    fn panorama_task(&self, cloud: usize, station: usize) -> Task<Message> {
+        let Some(entry) = self.clouds.get(cloud) else {
+            return Task::none();
+        };
+        let source = entry.cloud.path.clone();
+        let images = entry.cloud.scan_images.clone();
+        let key = source.clone();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    station_photos::load_panorama(&source, station, &images).map(Arc::new)
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result)
+            },
+            move |result| Message::PanoramaReady(key.clone(), station, result),
+        )
+    }
+
+    /// Note which photo station the walking camera stands in after it moved,
+    /// and fetch that station's photos when it stepped into one.
+    fn sync_walk_station(&mut self) -> Task<Message> {
+        let station = self.walk.and_then(|view| self.photo_station_at(view.eye));
+        if station == self.walk_station {
+            return Task::none();
+        }
+        self.walk_station = station;
+        self.panorama_photos = None;
+        match station {
+            Some((cloud, station)) => {
+                if let Some(pose) = self
+                    .clouds
+                    .get(cloud)
+                    .and_then(|entry| entry.cloud.scan_poses.get(station))
+                {
+                    self.status = format!("Station photo: {}", pose.label);
+                }
+                self.panorama_task(cloud, station)
+            }
+            None => {
+                self.status =
+                    "Walking · W A S D to move, Q E down and up, Shift faster, Esc to leave".into();
+                Task::none()
+            }
+        }
+    }
+
+    /// Start walking from where the orbit camera looks: same viewing
+    /// direction, and what lies in the middle of the scene keeps its size.
+    fn start_walk(&mut self) -> bool {
+        let Some(scene) = combined_bounds(&self.clouds) else {
+            return false;
+        };
+        let size = self.viewport_size;
+        if size.width <= 0.0 || size.height <= 0.0 {
+            return false;
+        }
+        let orbit = Projection::new(
+            scene,
+            self.yaw,
+            self.pitch,
+            self.zoom,
+            self.pan,
+            size.width,
+            size.height,
+        );
+        let centre = scene.center();
+        // Direction through the middle of the viewport, which a panned orbit
+        // view does not share with its camera axis.
+        let ray: [f64; 3] = std::array::from_fn(|axis| {
+            orbit.right[axis] * -f64::from(self.pan[0]) + orbit.up[axis] * f64::from(self.pan[1])
+                - orbit.toward_camera[axis] * orbit.scale
+        });
+        let length = ray.iter().map(|value| value * value).sum::<f64>().sqrt();
+        if !length.is_finite() || length <= f64::EPSILON {
+            return false;
+        }
+        let forward = ray.map(|value| value / length);
+        let orbit_eye: [f64; 3] =
+            std::array::from_fn(|axis| centre[axis] + orbit.toward_camera[axis] * orbit.eye[2]);
+        let mut view = WalkView::new(orbit_eye, forward[1].atan2(forward[0]) as f32);
+        view.pitch = (forward[2].clamp(-1.0, 1.0).asin() as f32).clamp(-1.55, 1.55);
+        let depth = orbit.eye[2] * f64::from(view.focal(size)) / orbit.scale;
+        view.eye =
+            std::array::from_fn(|axis| orbit_eye[axis] + forward[axis] * (orbit.eye[2] - depth));
+        self.walk = Some(view);
+        self.walk_station = None;
+        self.panorama_photos = None;
+        self.context_menu = None;
+        self.box_select = false;
+        self.pick_mode = false;
+        self.drag_rectangle = None;
+        true
+    }
+
+    /// Walking pace in scene units per second.
+    fn walk_speed(&self) -> f64 {
+        let extent = combined_bounds(&self.clouds).map_or(10.0, Bounds::extent);
+        (extent * 0.08).clamp(0.8, 400.0) * if self.walk_fast { 4.0 } else { 1.0 }
+    }
+
     fn queue_preferences_save(&mut self) -> Task<Message> {
         self.settings_revision = self.settings_revision.wrapping_add(1);
         let revision = self.settings_revision;
@@ -1804,6 +2200,8 @@ impl Studio {
                             "deleted": entry.deleted.as_ref().map_or(0, |mask| mask.count),
                             "visible": entry.visible,
                             "indexed": entry.index.is_some(),
+                            "stations": entry.cloud.scan_poses.len(),
+                            "station_photos": entry.cloud.scan_images.len(),
                             "view_sample": entry.view_len(),
                             "bounds": {"min": entry.bounds().min, "max": entry.bounds().max},
                             "transform": {"scale": entry.transform.scale, "offset": entry.transform.offset},
@@ -1832,6 +2230,9 @@ impl Studio {
                         "status": self.status,
                         "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label},
                         "viewport_size": [self.viewport_size.width, self.viewport_size.height],
+                        "walk": self.walk_value(),
+                        "photo_stations": self.photo_atlas.as_ref().map_or(0, |atlas| atlas.sets.len()),
+                        "photos_loading": self.photo_loading.len(),
                         "camera_views": camera_views,
                         "section": section,
                         "selected_points": self.selected_total(),
@@ -2008,6 +2409,81 @@ impl Studio {
                         task,
                     )
                 }
+            }
+            ApiCommand::OpenPanorama { index, station } => {
+                let has_photos = self.clouds.get(index).is_some_and(|entry| {
+                    station < entry.cloud.scan_poses.len()
+                        && entry
+                            .cloud
+                            .scan_images
+                            .iter()
+                            .any(|image| image.station == Some(station))
+                });
+                if has_photos {
+                    let task = self.update(Message::EnterPanorama(index, station));
+                    (json!({"ok": true, "walk": self.walk_value()}), task)
+                } else {
+                    (
+                        json!({"ok": false, "error": "that cloud and station have no station photos"}),
+                        Task::none(),
+                    )
+                }
+            }
+            ApiCommand::SetPanorama {
+                yaw,
+                pitch,
+                field_of_view,
+            } => {
+                let valid = (-std::f32::consts::PI..=std::f32::consts::PI).contains(&yaw)
+                    && (-1.55..=1.55).contains(&pitch)
+                    && (station_photos::MIN_FIELD_OF_VIEW..=station_photos::MAX_FIELD_OF_VIEW)
+                        .contains(&field_of_view);
+                match (&mut self.walk, valid) {
+                    (Some(view), true) => {
+                        view.yaw = yaw;
+                        view.pitch = pitch;
+                        view.field_of_view = field_of_view;
+                        (json!({"ok": true, "walk": self.walk_value()}), Task::none())
+                    }
+                    (None, _) => (
+                        json!({"ok": false, "error": "the walking camera is not active"}),
+                        Task::none(),
+                    ),
+                    (Some(_), false) => (
+                        json!({"ok": false, "error": "set_panorama requires yaw within ±π, pitch within ±1.55 and field_of_view from 0.35 to 2.1 radians"}),
+                        Task::none(),
+                    ),
+                }
+            }
+            ApiCommand::Walk { eye, yaw, pitch } => {
+                if !eye.iter().all(|value| value.is_finite())
+                    || !(-std::f32::consts::PI..=std::f32::consts::PI).contains(&yaw)
+                    || !(-1.55..=1.55).contains(&pitch)
+                    || combined_bounds(&self.clouds).is_none()
+                {
+                    (
+                        json!({"ok": false, "error": "walk requires an open scene, a finite eye position, yaw within ±π and pitch within ±1.55"}),
+                        Task::none(),
+                    )
+                } else {
+                    let mut view = self.walk.unwrap_or_else(|| WalkView::new(eye, yaw));
+                    view.eye = eye;
+                    view.yaw = yaw;
+                    view.pitch = pitch;
+                    self.walk = Some(view);
+                    self.revision += 1;
+                    let station = self.sync_walk_station();
+                    let detail = self.schedule_detail();
+                    (
+                        json!({"ok": true, "walk": self.walk_value()}),
+                        Task::batch([station, detail]),
+                    )
+                }
+            }
+            ApiCommand::ClosePanorama => {
+                let was_open = self.walk.is_some();
+                let task = self.update(Message::LeaveWalk);
+                (json!({"ok": true, "closed": was_open}), task)
             }
             ApiCommand::ZoomAll => {
                 let task = self.update(Message::ResetCamera);
@@ -3374,15 +3850,7 @@ impl Studio {
             })
             .collect();
         let display_budget = self.budget as usize;
-        let projection = Projection::new(
-            bounds,
-            self.yaw,
-            self.pitch,
-            self.zoom,
-            self.pan,
-            size.width,
-            size.height,
-        );
+        let projection = self.projection(bounds, size.width, size.height);
         let sphere_radius = gpu_viewport::display_point_radius(self.point_size, self.zoom);
         let filter = ClassFilter {
             ground: self.filter_ground,
@@ -3893,12 +4361,15 @@ impl Studio {
                         self.section_reference_bounds = combined_bounds(&self.clouds);
                         self.sync_section_coordinate_inputs();
                     }
-                    self.yaw = -0.8;
-                    self.pitch = 0.6;
-                    self.zoom = 1.0;
-                    self.pan = [0.0, 0.0];
-                    self.view_label = "ISOMETRIC";
-                    let cache_task = cached_index_task(cache_source);
+                    if self.clouds.len() == 1 {
+                        self.yaw = -0.8;
+                        self.pitch = 0.6;
+                        self.zoom = 1.0;
+                        self.pan = [0.0, 0.0];
+                        self.view_label = "ISOMETRIC";
+                    }
+                    let photos_task = self.station_photos_task(&cache_source);
+                    let cache_task = Task::batch([cached_index_task(cache_source), photos_task]);
                     if matches!(
                         mesh_format.as_deref(),
                         Some("obj" | "ply" | "off" | "stl" | "dxf")
@@ -5297,15 +5768,8 @@ impl Studio {
                     return Task::none();
                 };
                 let section = self.section_bounds();
-                let projection = Projection::new(
-                    bounds,
-                    self.yaw,
-                    self.pitch,
-                    self.zoom,
-                    self.pan,
-                    self.viewport_size.width,
-                    self.viewport_size.height,
-                );
+                let projection =
+                    self.projection(bounds, self.viewport_size.width, self.viewport_size.height);
                 let indexed_sources: Vec<_> = self
                     .clouds
                     .iter()
@@ -5377,7 +5841,7 @@ impl Studio {
                     projection,
                     cancel,
                     budget,
-                    deep_zoom: self.zoom <= EXACT_VISIBLE_LOD_ZOOM,
+                    deep_zoom: self.walk.is_some() || self.zoom <= EXACT_VISIBLE_LOD_ZOOM,
                 };
                 let stream =
                     iced::futures::stream::unfold(Some((refinement, 0u8)), |state| async move {
@@ -5511,6 +5975,8 @@ impl Studio {
                     }
                     self.cancel_selection_for_scene_change();
                     self.clouds.remove(index);
+                    self.leave_walk();
+                    self.rebuild_photo_atlas();
                     self.undo_deletions.clear();
                     self.redo_deletions.clear();
                     self.pending_delete = false;
@@ -5598,6 +6064,141 @@ impl Studio {
                 self.status = format!("Centered on {}", pose.label);
                 self.revision += 1;
                 return self.schedule_detail();
+            }
+            Message::StationPhotosReady(source, result) => {
+                self.photo_loading.remove(&source);
+                match result {
+                    Ok(sets) => {
+                        self.station_photos.extend(sets);
+                        self.rebuild_photo_atlas();
+                    }
+                    Err(error) => {
+                        self.status = format!(
+                            "Station photos unavailable for {}: {error}",
+                            display_name(&source)
+                        );
+                    }
+                }
+            }
+            Message::EnterPanorama(cloud_index, station) => {
+                let Some((entry, pose)) = self.clouds.get(cloud_index).and_then(|entry| {
+                    entry
+                        .cloud
+                        .scan_poses
+                        .get(station)
+                        .map(|pose| (entry, pose))
+                }) else {
+                    return Task::none();
+                };
+                if !entry
+                    .cloud
+                    .scan_images
+                    .iter()
+                    .any(|image| image.station == Some(station))
+                {
+                    self.status = format!("{} has no station photos", pose.label);
+                    return Task::none();
+                }
+                let position = entry.transform.xyz(pose.position);
+                let view = match self.walk {
+                    // Keep looking the same way when stepping to another station.
+                    Some(previous) => WalkView {
+                        eye: position,
+                        ..previous
+                    },
+                    None => WalkView::from_orbit(position, self.yaw, 0.0),
+                };
+                self.status = format!(
+                    "Station photo: {} · drag to look around, scroll to zoom, W A S D to walk out, Esc to leave",
+                    pose.label
+                );
+                self.walk = Some(view);
+                self.walk_station = Some((cloud_index, station));
+                self.panorama_photos = None;
+                self.context_menu = None;
+                self.box_select = false;
+                self.pick_mode = false;
+                self.drag_rectangle = None;
+                return self.panorama_task(cloud_index, station);
+            }
+            Message::PanoramaReady(source, station, result) => {
+                let current = self.walk_station.is_some_and(|(cloud, current)| {
+                    current == station
+                        && self
+                            .clouds
+                            .get(cloud)
+                            .is_some_and(|entry| entry.cloud.path == source)
+                });
+                if current {
+                    match result {
+                        Ok(set) => self.panorama_photos = Some(set),
+                        Err(error) => self.status = format!("Station photo failed: {error}"),
+                    }
+                }
+            }
+            Message::LeaveWalk => {
+                if self.leave_walk() {
+                    self.status = "Back in the 3D view".into();
+                    self.revision += 1;
+                    return self.schedule_detail();
+                }
+            }
+            Message::WalkLook(dx, dy) => {
+                let size = self.viewport_size;
+                if let Some(view) = &mut self.walk {
+                    view.look(dx, dy, size);
+                    self.revision += 1;
+                    return self.schedule_detail();
+                }
+            }
+            Message::WalkZoom(steps) => {
+                if let Some(view) = &mut self.walk {
+                    view.zoom(steps);
+                    self.revision += 1;
+                    return self.schedule_detail();
+                }
+            }
+            Message::WalkFast(fast) => self.walk_fast = fast,
+            Message::WalkStop => {
+                self.walk_keys = [false; 6];
+                self.walk_tick = None;
+            }
+            Message::WalkKey(key, pressed) => {
+                if pressed && self.file_open {
+                    return Task::none();
+                }
+                if pressed && self.walk.is_none() && !self.start_walk() {
+                    return Task::none();
+                }
+                if self.walk_keys[key as usize] != pressed {
+                    self.walk_keys[key as usize] = pressed;
+                    if !self.walk_keys.contains(&true) {
+                        self.walk_tick = None;
+                    }
+                }
+            }
+            Message::WalkTick(now) => {
+                let seconds = self
+                    .walk_tick
+                    .replace(now)
+                    .map_or(0.016, |previous| {
+                        now.saturating_duration_since(previous).as_secs_f64()
+                    })
+                    .min(0.1);
+                let held = |key: WalkKey| f64::from(u8::from(self.walk_keys[key as usize]));
+                let forward = held(WalkKey::Forward) - held(WalkKey::Back);
+                let right = held(WalkKey::Right) - held(WalkKey::Left);
+                let up = held(WalkKey::Up) - held(WalkKey::Down);
+                let step = self.walk_speed() * seconds;
+                let Some(view) = &mut self.walk else {
+                    return Task::none();
+                };
+                if forward == 0.0 && right == 0.0 && up == 0.0 {
+                    return Task::none();
+                }
+                view.advance(forward * step, right * step, up * step);
+                self.revision += 1;
+                return Task::batch([self.sync_walk_station(), self.schedule_detail()]);
             }
             Message::Budget(budget) => {
                 self.budget = budget;
@@ -5957,6 +6558,7 @@ impl Studio {
                 }
             }
             Message::ResetCamera => {
+                self.leave_walk();
                 let (yaw, pitch, label) = CameraPreset::Isometric.orientation();
                 self.yaw = yaw;
                 self.pitch = pitch;
@@ -5967,6 +6569,7 @@ impl Studio {
                 return self.schedule_detail();
             }
             Message::CameraPreset(preset) => {
+                self.leave_walk();
                 let (yaw, pitch, label) = preset.orientation();
                 self.yaw = yaw;
                 self.pitch = pitch;
@@ -6100,14 +6703,27 @@ impl Studio {
                     self.file_open = false;
                     return Task::none();
                 }
+                if self.walk.is_some() {
+                    return self.update(Message::LeaveWalk);
+                }
                 let cancelling = self.cancel_selection();
                 self.context_menu = None;
                 self.box_select = false;
                 self.pick_mode = false;
                 self.bag_map_drawing = false;
                 self.drag_rectangle = None;
+                let deselected = self.selected_total() > 0;
+                if deselected {
+                    self.pending_delete = false;
+                    self.revision += 1;
+                    for entry in &mut self.clouds {
+                        entry.selection = None;
+                    }
+                }
                 self.status = if cancelling {
                     "Cancelling selection; orbit and right-click menu available".into()
+                } else if deselected {
+                    "Selection cleared; orbit and right-click menu available".into()
                 } else {
                     "Selection tool closed; orbit and right-click menu available".into()
                 };
@@ -6455,6 +7071,10 @@ impl Studio {
         let (Some(old_scene), Some(new_scene)) = (old_scene, combined_bounds(&self.clouds)) else {
             return;
         };
+        if self.walk.is_some() {
+            // The walking camera has its own position; nothing to compensate.
+            return;
+        }
         let size = self.viewport_size;
         if size.width <= 0.0 || size.height <= 0.0 {
             return;
@@ -7111,10 +7731,6 @@ impl Studio {
                     .into()
                 ),
                 opencad_ribbon::render_group_items("SURFACE", surface_tools),
-                ribbon_group(
-                    "CITY DATA",
-                    tool_button("3D BAG", Message::ToggleBagPanel, self.bag_panel),
-                ),
                 opencad_ribbon::render_group_items("DETAIL LOD", detail_tools),
                 opencad_ribbon::render_group_items(
                     "AUTO INDEX",
@@ -7489,6 +8105,16 @@ impl Studio {
             drag_rectangle: self.drag_rectangle,
             context_menu: self.context_menu,
             viewport_size: self.viewport_size,
+            photo_atlas: self.photo_atlas.as_ref(),
+            walk: self.walk,
+            walk_station: self.walk_station.filter(|(cloud, station)| {
+                self.walk.is_some()
+                    && self
+                        .clouds
+                        .get(*cloud)
+                        .is_some_and(|entry| *station < entry.cloud.scan_poses.len())
+            }),
+            panorama_photos: self.panorama_photos.as_ref(),
         }
     }
 
@@ -7742,6 +8368,18 @@ impl Studio {
         ]
         .width(Fill)
         .height(Fill);
+        let canvas = if self.walk.is_some() {
+            canvas.push(
+                container(
+                    button(text("Back to 3D view (Esc)").size(12))
+                        .on_press(Message::LeaveWalk)
+                        .style(|theme, status| opencad_ribbon::tool_btn_style(theme, true, status)),
+                )
+                .padding(10),
+            )
+        } else {
+            canvas
+        };
 
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
         let export_button = if active_cloud.is_some() {
@@ -8046,6 +8684,10 @@ impl Studio {
                         "Stations",
                         entry.cloud.scan_poses.len().to_string(),
                     ))
+                    .push(opencad_properties::property_row(
+                        "Station photos",
+                        entry.cloud.scan_images.len().to_string(),
+                    ))
                     .push(
                         container(
                             row![
@@ -8072,6 +8714,24 @@ impl Studio {
                                 column![
                                     row![
                                         text(pose.label.as_str()).size(11).width(Fill),
+                                        button("Photo")
+                                            .on_press_maybe(
+                                                self.active
+                                                    .filter(|_| {
+                                                        entry.cloud.scan_images.iter().any(
+                                                            |image| {
+                                                                image.station == Some(pose_index)
+                                                            },
+                                                        )
+                                                    })
+                                                    .map(|cloud_index| {
+                                                        Message::EnterPanorama(
+                                                            cloud_index,
+                                                            pose_index,
+                                                        )
+                                                    }),
+                                            )
+                                            .style(flat_tool_style),
                                         button("Center")
                                             .on_press_maybe(self.active.map(|cloud_index| {
                                                 Message::CenterScanPose(cloud_index, pose_index)
@@ -9195,6 +9855,10 @@ struct PointViewport<'a> {
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     viewport_size: Size,
+    photo_atlas: Option<&'a Arc<PhotoAtlas>>,
+    walk: Option<WalkView>,
+    walk_station: Option<(usize, usize)>,
+    panorama_photos: Option<&'a Arc<PhotoSet>>,
 }
 
 struct ScanMarker {
@@ -9296,6 +9960,8 @@ fn push_scan_marker(
 #[derive(Debug, Clone, Copy)]
 enum DragMode {
     Orbit,
+    /// Orbit whose horizontal sense is reversed: the view turns with the pointer.
+    Turn,
     Pan,
     Select,
     RightPending,
@@ -9317,7 +9983,7 @@ struct ViewportState {
 
 fn middle_drag_mode(modifiers: iced::keyboard::Modifiers) -> DragMode {
     if modifiers.shift() {
-        DragMode::Orbit
+        DragMode::Turn
     } else {
         DragMode::Pan
     }
@@ -9343,8 +10009,9 @@ fn finish_viewport_drag(
         (mouse::Button::Middle | mouse::Button::Right, DragMode::Pan) if total > 0.5 => {
             Some(Message::FinishPan(dx, dy))
         }
-        (mouse::Button::Left | mouse::Button::Middle, DragMode::Orbit) if total > 0.5 => {
-            Some(Message::FinishOrbit(dx, dy))
+        (mouse::Button::Left, DragMode::Orbit) if total > 0.5 => Some(Message::FinishOrbit(dx, dy)),
+        (mouse::Button::Middle, DragMode::Turn) if total > 0.5 => {
+            Some(Message::FinishOrbit(-dx, dy))
         }
         (mouse::Button::Left, DragMode::Select) => Some(Message::BoxSelect {
             start: [drag.start.x, drag.start.y],
@@ -9521,15 +10188,22 @@ fn scan_pose_at(
     clouds: &[CloudEntry],
     projection: Projection,
     pointer: UiPoint,
+    photos: Option<&PhotoAtlas>,
 ) -> Option<(usize, usize)> {
     let mut nearest: Option<(usize, usize, f32)> = None;
     for (cloud_index, entry) in clouds.iter().enumerate().filter(|(_, entry)| entry.visible) {
         for (pose_index, pose) in entry.cloud.scan_poses.iter().enumerate() {
-            let Some((x, y, _)) = projection.project(entry.transform.xyz(pose.position)) else {
+            let Some((x, y, depth)) = projection.project(entry.transform.xyz(pose.position)) else {
                 continue;
             };
+            // A station drawn as a photo ball can be clicked anywhere on the ball.
+            let reach = photos
+                .and_then(|atlas| atlas.slot(&entry.cloud.path, pose_index))
+                .map_or(12.0, |_| {
+                    station_photos::ball_pixel_radius(projection.scale, depth).max(12.0)
+                });
             let distance = (pointer.x - x).hypot(pointer.y - y);
-            if distance <= 12.0
+            if distance <= reach
                 && nearest.is_none_or(|(_, _, previous_distance)| distance < previous_distance)
             {
                 nearest = Some((cloud_index, pose_index, distance));
@@ -9555,6 +10229,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
         }
         let modifiers = state.modifiers;
         let state = &mut state.drag;
+        if let Some(view) = self.walk {
+            return self.update_walk(view, state, event, bounds, cursor);
+        }
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(menu) = self.context_menu {
@@ -9618,12 +10295,16 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             bounds.height,
                         );
                         if let Some((cloud_index, pose_index)) =
-                            scan_pose_at(self.clouds, projection, position)
+                            scan_pose_at(self.clouds, projection, position, self.photos())
                         {
                             *state = None;
                             return (
                                 event::Status::Captured,
-                                Some(Message::CenterScanPose(cloud_index, pose_index)),
+                                Some(if self.station_has_photos(cloud_index, pose_index) {
+                                    Message::EnterPanorama(cloud_index, pose_index)
+                                } else {
+                                    Message::CenterScanPose(cloud_index, pose_index)
+                                }),
                             );
                         }
                     }
@@ -9701,6 +10382,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         event::Status::Captured,
                         Some(match previous.mode {
                             DragMode::Orbit => Message::Orbit(dx, dy),
+                            DragMode::Turn => Message::Orbit(-dx, dy),
                             DragMode::Pan => Message::Pan(dx, dy),
                             DragMode::RightPending => unreachable!(),
                             DragMode::Section(axis, is_min) => {
@@ -9785,6 +10467,10 @@ impl canvas::Program<Message> for PointViewport<'_> {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        if let Some(view) = self.walk {
+            self.draw_walk_overlay(&mut frame, view, bounds.size());
+            return vec![frame.into_geometry()];
+        }
         let Some(overall_bounds) = combined_bounds(self.clouds) else {
             frame.fill_text(canvas::Text {
                 content: if self.loading_status.is_some() {
@@ -9952,14 +10638,17 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 .filter(|entry| entry.visible)
                 .map(|entry| entry.cloud.scan_poses.len())
                 .sum();
-            let show_labels = pose_count <= 24;
+            let show_labels = pose_count <= MAX_LABELLED_STATIONS;
             let mut markers = Vec::with_capacity(pose_count);
+            // Parallel to `markers`: the station is drawn as a photo ball.
+            let mut photo_markers = Vec::with_capacity(pose_count);
             for entry in self.clouds.iter().filter(|entry| entry.visible) {
-                for pose in &entry.cloud.scan_poses {
+                for (station, pose) in entry.cloud.scan_poses.iter().enumerate() {
                     let Some((x, y, _)) = projection.project(entry.transform.xyz(pose.position))
                     else {
                         continue;
                     };
+                    let known = markers.len();
                     push_scan_marker(
                         &mut markers,
                         x,
@@ -9968,6 +10657,13 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         entry.transform.axes(pose.axes),
                         show_labels,
                     );
+                    if markers.len() > known {
+                        photo_markers.push(
+                            self.photos().is_some_and(|atlas| {
+                                atlas.slot(&entry.cloud.path, station).is_some()
+                            }),
+                        );
+                    }
                 }
             }
             let label_positions = if show_labels {
@@ -9977,7 +10673,8 @@ impl canvas::Program<Message> for PointViewport<'_> {
             };
             for (marker_index, marker) in markers.into_iter().enumerate() {
                 let center = UiPoint::new(marker.x, marker.y);
-                if show_labels {
+                let ball = photo_markers[marker_index] && marker.labels.len() <= 1;
+                if show_labels && !ball {
                     if let Some(axes) = marker.axes {
                         for (axis, label, color) in [
                             (axes[0], "X", Color::from_rgb8(190, 104, 98)),
@@ -10015,30 +10712,32 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         }
                     }
                 }
-                let ring = canvas::Path::circle(center, 6.0);
-                frame.fill(&ring, Color::from_rgb8(42, 42, 50));
-                frame.stroke(
-                    &ring,
-                    canvas::Stroke::default()
-                        .with_color(Color::from_rgb8(245, 158, 11))
-                        .with_width(2.0),
-                );
-                for (start, end) in [
-                    (
-                        UiPoint::new(marker.x - 10.0, marker.y),
-                        UiPoint::new(marker.x + 10.0, marker.y),
-                    ),
-                    (
-                        UiPoint::new(marker.x, marker.y - 10.0),
-                        UiPoint::new(marker.x, marker.y + 10.0),
-                    ),
-                ] {
+                if !ball {
+                    let ring = canvas::Path::circle(center, 6.0);
+                    frame.fill(&ring, Color::from_rgb8(42, 42, 50));
                     frame.stroke(
-                        &canvas::Path::line(start, end),
+                        &ring,
                         canvas::Stroke::default()
                             .with_color(Color::from_rgb8(245, 158, 11))
-                            .with_width(1.0),
+                            .with_width(2.0),
                     );
+                    for (start, end) in [
+                        (
+                            UiPoint::new(marker.x - 10.0, marker.y),
+                            UiPoint::new(marker.x + 10.0, marker.y),
+                        ),
+                        (
+                            UiPoint::new(marker.x, marker.y - 10.0),
+                            UiPoint::new(marker.x, marker.y + 10.0),
+                        ),
+                    ] {
+                        frame.stroke(
+                            &canvas::Path::line(start, end),
+                            canvas::Stroke::default()
+                                .with_color(Color::from_rgb8(245, 158, 11))
+                                .with_width(1.0),
+                        );
+                    }
                 }
                 if let Some(position) = label_positions.get(marker_index).copied().flatten() {
                     let content = scan_marker_label(&marker);
@@ -10101,6 +10800,15 @@ impl canvas::Program<Message> for PointViewport<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if let Some(view) = self.walk {
+            return match cursor.position_in(bounds) {
+                Some(point) if self.walk_station_at(view, point, bounds.size()).is_some() => {
+                    mouse::Interaction::Pointer
+                }
+                Some(_) => mouse::Interaction::Grab,
+                None => mouse::Interaction::default(),
+            };
+        }
         if cursor.is_over(bounds) {
             if self.context_menu.is_some_and(|menu| {
                 cursor
@@ -10142,6 +10850,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                                     bounds.height,
                                 ),
                                 point,
+                                self.photos(),
                             )
                             .is_some()
                         })
@@ -10159,7 +10868,229 @@ impl canvas::Program<Message> for PointViewport<'_> {
     }
 }
 
+/// Above this many visible stations the overview shows markers without labels.
+const MAX_LABELLED_STATIONS: usize = 64;
+/// A station with photos as it appears from the walking camera.
+struct WalkStation<'a> {
+    cloud: usize,
+    station: usize,
+    x: f32,
+    y: f32,
+    /// Pointer reach in pixels: the ball as drawn, or a marker.
+    reach: f32,
+    label: &'a str,
+}
+
 impl PointViewport<'_> {
+    fn photos(&self) -> Option<&PhotoAtlas> {
+        self.photo_atlas.map(|atlas| atlas.as_ref())
+    }
+
+    fn station_has_photos(&self, cloud_index: usize, station: usize) -> bool {
+        self.clouds.get(cloud_index).is_some_and(|entry| {
+            self.photos()
+                .is_some_and(|atlas| atlas.slot(&entry.cloud.path, station).is_some())
+        })
+    }
+
+    /// The camera in use: the walking camera when active, the orbit camera otherwise.
+    fn projection(&self, scene: Bounds, width: f32, height: f32) -> Projection {
+        match self.walk {
+            Some(view) => Projection::from_eye(
+                scene,
+                view.eye,
+                view.basis(),
+                view.focal(Size::new(width, height)),
+                width,
+                height,
+            ),
+            None => Projection::new(
+                scene, self.yaw, self.pitch, self.zoom, self.pan, width, height,
+            ),
+        }
+    }
+
+    /// Other stations with photos, placed where the walking camera sees them.
+    fn walk_stations(&self, view: WalkView, size: Size) -> Vec<WalkStation<'_>> {
+        let focal = f64::from(view.focal(size));
+        let mut stations = Vec::new();
+        for (cloud, entry) in self
+            .clouds
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.visible)
+        {
+            for (station, pose) in entry.cloud.scan_poses.iter().enumerate() {
+                if self.walk_station == Some((cloud, station))
+                    || !self.station_has_photos(cloud, station)
+                {
+                    continue;
+                }
+                let position = entry.transform.xyz(pose.position);
+                let Some((x, y)) = view.project(position, size) else {
+                    continue;
+                };
+                if x < 0.0 || y < 0.0 || x > size.width || y > size.height {
+                    continue;
+                }
+                stations.push(WalkStation {
+                    cloud,
+                    station,
+                    x,
+                    y,
+                    reach: station_photos::ball_pixel_radius(focal, view.distance_to(position)),
+                    label: &pose.label,
+                });
+            }
+        }
+        stations
+    }
+
+    fn walk_station_at(
+        &self,
+        view: WalkView,
+        pointer: UiPoint,
+        size: Size,
+    ) -> Option<(usize, usize)> {
+        self.walk_stations(view, size)
+            .into_iter()
+            .map(|station| {
+                let distance = (pointer.x - station.x).hypot(pointer.y - station.y);
+                (station, distance)
+            })
+            .filter(|(station, distance)| *distance <= station.reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(station, _)| (station.cloud, station.station))
+    }
+
+    /// While walking every drag looks around and a click on a station steps
+    /// into its photo.
+    fn update_walk(
+        &self,
+        view: WalkView,
+        drag: &mut Option<DragState>,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> (event::Status, Option<Message>) {
+        match event {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(button))
+                if matches!(
+                    button,
+                    mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle
+                ) =>
+            {
+                let Some(position) = cursor.position_in(bounds) else {
+                    return (event::Status::Ignored, None);
+                };
+                if button == mouse::Button::Left {
+                    if let Some((cloud, station)) =
+                        self.walk_station_at(view, position, bounds.size())
+                    {
+                        *drag = None;
+                        return (
+                            event::Status::Captured,
+                            Some(Message::EnterPanorama(cloud, station)),
+                        );
+                    }
+                }
+                *drag = Some(DragState {
+                    start: position,
+                    position,
+                    mode: DragMode::Orbit,
+                });
+                (event::Status::Captured, None)
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(
+                mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle,
+            )) => {
+                *drag = None;
+                (event::Status::Captured, None)
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if let Some(previous) = drag.as_mut() {
+                    let Some(position) = cursor.position_from(bounds.position()) else {
+                        return (event::Status::Captured, None);
+                    };
+                    let dx = position.x - previous.position.x;
+                    let dy = position.y - previous.position.y;
+                    previous.position = position;
+                    (event::Status::Captured, Some(Message::WalkLook(dx, dy)))
+                } else {
+                    let size = bounds.size();
+                    if (size.width - self.viewport_size.width).abs() > 1.0
+                        || (size.height - self.viewport_size.height).abs() > 1.0
+                    {
+                        (event::Status::Ignored, Some(Message::ViewportSize(size)))
+                    } else {
+                        (event::Status::Ignored, None)
+                    }
+                }
+            }
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta })
+                if cursor.is_over(bounds) =>
+            {
+                let amount = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 40.0,
+                };
+                (event::Status::Captured, Some(Message::WalkZoom(amount)))
+            }
+            _ => (event::Status::Ignored, None),
+        }
+    }
+
+    /// Labels over the walking view: the other stations, and inside a station
+    /// its name.
+    fn draw_walk_overlay(&self, frame: &mut Frame, view: WalkView, size: Size) {
+        let amber = Color::from_rgb8(245, 158, 11);
+        let badge = |frame: &mut Frame, content: String, position: UiPoint| {
+            let width = content.chars().count() as f32 * 6.0 + 2.0;
+            frame.fill_rectangle(
+                UiPoint::new(position.x - 3.0, position.y - 2.0),
+                Size::new(width + 6.0, 17.0),
+                Color::from_rgba8(42, 42, 50, 0.85),
+            );
+            frame.fill_text(canvas::Text {
+                content,
+                position,
+                size: iced::Pixels(10.0),
+                color: Color::from_rgb8(245, 188, 100),
+                ..canvas::Text::default()
+            });
+        };
+        let inside = self.walk_station.is_some();
+        for station in self.walk_stations(view, size) {
+            if inside {
+                // From inside a photo the neighbours are not drawn as balls.
+                let ring = canvas::Path::circle(UiPoint::new(station.x, station.y), 7.0);
+                frame.fill(&ring, Color::from_rgba8(42, 42, 50, 0.7));
+                frame.stroke(
+                    &ring,
+                    canvas::Stroke::default().with_color(amber).with_width(2.0),
+                );
+            }
+            badge(
+                frame,
+                station.label.to_owned(),
+                UiPoint::new(
+                    station.x + if inside { 13.0 } else { station.reach + 5.0 },
+                    station.y - 7.0,
+                ),
+            );
+        }
+        let title = match self.walk_station.and_then(|(cloud, station)| {
+            self.clouds
+                .get(cloud)
+                .and_then(|entry| entry.cloud.scan_poses.get(station))
+        }) {
+            Some(pose) if self.panorama_photos.is_some() => pose.label.clone(),
+            Some(pose) => format!("{} · loading full resolution…", pose.label),
+            None => "Walking · W A S D to move, Q E down and up, Shift faster".into(),
+        };
+        badge(frame, title, UiPoint::new(14.0, size.height - 24.0));
+    }
+
     fn accepts(&self, point: &Point) -> bool {
         if let Some(section) = self.section {
             if (0..3).any(|axis| {
@@ -11116,7 +12047,7 @@ mod viewport_drag_tests {
     fn shift_middle_drag_orbits_while_plain_middle_drag_pans() {
         assert!(matches!(
             middle_drag_mode(iced::keyboard::Modifiers::SHIFT),
-            DragMode::Orbit
+            DragMode::Turn
         ));
         assert!(matches!(
             middle_drag_mode(iced::keyboard::Modifiers::default()),
@@ -11141,11 +12072,13 @@ mod viewport_drag_tests {
             Size::new(800.0, 600.0),
         )
         .unwrap();
-        assert!(matches!(message, Message::FinishOrbit(10.0, 5.0)));
+        // The Shift + middle drag turns sideways the opposite way to the
+        // left-button orbit and tilts the same way.
+        assert!(matches!(message, Message::FinishOrbit(-10.0, 5.0)));
         let yaw = studio.yaw;
         let pitch = studio.pitch;
         let _ = studio.update(message);
-        assert!((studio.yaw - yaw - 0.1).abs() < 0.0001);
+        assert!((studio.yaw - yaw + 0.1).abs() < 0.0001);
         assert!((studio.pitch - pitch - 0.05).abs() < 0.0001);
         assert_eq!(studio.pan, [0.0, 0.0]);
     }

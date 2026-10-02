@@ -229,9 +229,5 @@ pub fn colors(theme: &Theme) -> UiColors {
 }
 
 fn theme_path() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .map(|directory| directory.join("open-pointcloud-studio-native/theme"))
+    crate::preferences::config_directory().map(|directory| directory.join("theme"))
 }

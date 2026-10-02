@@ -47,6 +47,21 @@ pub enum ApiCommand {
         zoom: f32,
         pan: [f32; 2],
     },
+    OpenPanorama {
+        index: usize,
+        station: usize,
+    },
+    SetPanorama {
+        yaw: f32,
+        pitch: f32,
+        field_of_view: f32,
+    },
+    Walk {
+        eye: [f64; 3],
+        yaw: f32,
+        pitch: f32,
+    },
+    ClosePanorama,
     ZoomAll,
     ListCameraViews,
     SaveCameraView {
@@ -161,13 +176,9 @@ impl Drop for ApiHandle {
 }
 
 fn discovery_directory() -> PathBuf {
-    if let Some(root) = std::env::var_os("XDG_CONFIG_HOME") {
-        return PathBuf::from(root).join("open-pointcloud-studio-native/instances");
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".config/open-pointcloud-studio-native/instances");
-    }
-    std::env::temp_dir().join("open-pointcloud-studio-native/instances")
+    crate::preferences::config_directory()
+        .unwrap_or_else(|| std::env::temp_dir().join("open-pointcloud-studio-native"))
+        .join("instances")
 }
 
 fn remove_stale_instances(directory: &Path) {

@@ -3,7 +3,7 @@
 //! face/corner snap concept with a compact OpenAEC palette.
 
 use iced::widget::canvas::{self, Frame, Path};
-use iced::{alignment, Color, Point, Rectangle, Size};
+use iced::{alignment, Color, Point, Rectangle, Size, Vector};
 
 use crate::CameraPreset;
 
@@ -137,6 +137,26 @@ fn face_points(face: Face, basis: Basis, center: Point) -> [Point; 4] {
     face.corners.map(|vertex| basis.project(vertex, center))
 }
 
+/// Rotation, stretch and rotation that together place flat text on a face
+/// whose bottom edge and left edge project to the given screen vectors.
+/// The frame can only rotate and stretch, so the skew of the face is
+/// expressed as a rotation, a stretch along the axes and a second rotation.
+fn face_text_transform(along: Vector, down: Vector) -> (f32, [f32; 2], f32) {
+    let sum = (along.x + down.y) * 0.5;
+    let difference = (along.x - down.y) * 0.5;
+    let skew = (along.y + down.x) * 0.5;
+    let turn = (along.y - down.x) * 0.5;
+    let rotation = sum.hypot(turn);
+    let stretch = difference.hypot(skew);
+    let first = skew.atan2(difference);
+    let second = turn.atan2(sum);
+    (
+        (second + first) * 0.5,
+        [rotation + stretch, rotation - stretch],
+        (second - first) * 0.5,
+    )
+}
+
 fn polygon(points: [Point; 4]) -> Path {
     Path::new(|path| {
         path.move_to(points[0]);
@@ -238,14 +258,30 @@ pub fn draw(frame: &mut Frame, bounds: Rectangle, yaw: f32, pitch: f32, hovered:
                 .with_color(Color::from_rgb8(177, 177, 183))
                 .with_width(1.0),
         );
+        // Each face lists its corners from bottom left, anticlockwise as seen
+        // from outside: the first edge runs along the text, the last one up.
+        let along = (points[1] - points[0]) * (0.5 / CUBE_SCALE);
+        let down = (points[0] - points[3]) * (0.5 / CUBE_SCALE);
+        let (outer, stretch, inner) = face_text_transform(along, down);
+        if stretch[1] < 0.12 {
+            // Seen almost edge-on the label would collapse into a line.
+            continue;
+        }
         let label_position = basis.project(face.normal, center);
-        frame.fill_text(canvas::Text {
-            content: face.label.into(),
-            position: Point::new(label_position.x, label_position.y + 3.0),
-            horizontal_alignment: alignment::Horizontal::Center,
-            size: iced::Pixels(10.0),
-            color: Color::from_rgb8(241, 241, 240),
-            ..canvas::Text::default()
+        frame.with_save(|frame| {
+            frame.translate(Vector::new(label_position.x, label_position.y));
+            frame.rotate(outer);
+            frame.scale_nonuniform(Vector::new(stretch[0], stretch[1]));
+            frame.rotate(inner);
+            frame.fill_text(canvas::Text {
+                content: face.label.into(),
+                position: Point::ORIGIN,
+                horizontal_alignment: alignment::Horizontal::Center,
+                vertical_alignment: alignment::Vertical::Center,
+                size: iced::Pixels(10.0),
+                color: Color::from_rgb8(241, 241, 240),
+                ..canvas::Text::default()
+            });
         });
     }
     if let Some(CubeTarget::Corner(corner)) = hovered_target {
@@ -303,6 +339,31 @@ mod tests {
             ));
         }
         let (yaw, pitch, _) = CameraPreset::Isometric.orientation();
+        // The label of every visible face follows its two projected edges.
+        let basis = Basis::new(yaw, pitch);
+        for face in FACES
+            .iter()
+            .filter(|face| dot(face.normal, basis.toward) > 0.03)
+        {
+            let points = face_points(*face, basis, middle);
+            let along = (points[1] - points[0]) * (0.5 / CUBE_SCALE);
+            let down = (points[0] - points[3]) * (0.5 / CUBE_SCALE);
+            let (outer, stretch, inner) = face_text_transform(along, down);
+            let apply = |x: f32, y: f32| {
+                let (sin, cos) = inner.sin_cos();
+                let (x, y) = (
+                    (x * cos - y * sin) * stretch[0],
+                    (x * sin + y * cos) * stretch[1],
+                );
+                let (sin, cos) = outer.sin_cos();
+                (x * cos - y * sin, x * sin + y * cos)
+            };
+            let right = apply(1.0, 0.0);
+            let below = apply(0.0, 1.0);
+            assert!((right.0 - along.x).abs() < 1e-4 && (right.1 - along.y).abs() < 1e-4);
+            assert!((below.0 - down.x).abs() < 1e-4 && (below.1 - down.y).abs() < 1e-4);
+            assert!(stretch[1] > 0.0, "{} is mirrored", face.label);
+        }
         let corner = Basis::new(yaw, pitch).project([1.0, -1.0, 1.0], middle);
         assert!(matches!(
             hit(corner, bounds, yaw, pitch),

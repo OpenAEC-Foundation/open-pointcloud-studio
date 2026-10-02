@@ -5,7 +5,7 @@ named Rust operations in the running GUI; it does not evaluate JavaScript or
 use a webview. The port and a per-process token are written to
 `$XDG_CONFIG_HOME/open-pointcloud-studio-native/instances/instance-<pid>.json`
 (or `~/.config/open-pointcloud-studio-native/instances/` when XDG_CONFIG_HOME
-is unset). The directory is mode 0700 and the discovery file mode 0600 on
+is unset; on Windows `%APPDATA%\open-pointcloud-studio-native\instances\`). The directory is mode 0700 and the discovery file mode 0600 on
 Unix. A fixed port can be requested with `--api-port PORT [INPUT ...]`.
 
 `GET /health` returns `{"status":"ok"}`. `GET /info` returns the process ID,
@@ -102,6 +102,10 @@ pick is discarded when cancelled.
 | `camera` | `preset` | Chooses `top`, `bottom`, `front`, `back`, `left`, `right` or `isometric` |
 | `set_camera` | `yaw`, `pitch`, `zoom`, `pan` | Sets an exact camera view; angles are radians, zoom is 0.000001–10000, and pan is a two-number screen-pixel array. Rejects non-finite or out-of-range values without changing the view |
 | `zoom_all` | — | Fits the complete model at the default isometric orientation, matching the ribbon button and `F` shortcut |
+| `open_panorama` | `index`, `station` | Stands in a scanner station of a layer and shows its photos; `status.result.walk` reports the view and whether full-resolution photos are loaded |
+| `set_panorama` | `yaw`, `pitch`, `field_of_view` | Turns the walking camera; yaw within ±π, pitch within ±1.55 and a horizontal field of view from 0.35 to 2.1 radians |
+| `walk` | `eye`, `yaw`, `pitch` | Places the walking camera at a position in scene coordinates, looking along the heading `yaw` and elevation `pitch`; inside a station ball it shows that station's photos |
+| `close_panorama` | — | Leaves the walking camera and returns to the orbit view |
 | `list_camera_views` | — | Lists saved views for the active scan, including each view's yaw, pitch, zoom and pan |
 | `save_camera_view` | `name` | Saves the current camera for the active scan; the name must be unique within that scan and 1–64 characters long (maximum 32 views per scan) |
 | `restore_camera_view` | `name` | Restores a named view for the active scan, ignoring name case |

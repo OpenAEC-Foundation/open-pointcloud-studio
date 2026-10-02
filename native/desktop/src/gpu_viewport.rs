@@ -5,8 +5,9 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::selection::{ClassVisibility, DeletionMask};
+use crate::station_photos::{self, PhotoAtlas, PhotoSet};
 use crate::CloudTransform;
-use crate::{combined_bounds, CloudEntry, ColorMode, Message, PointViewport, Projection};
+use crate::{combined_bounds, CloudEntry, ColorMode, Message, PointViewport};
 use bytemuck::{Pod, Zeroable};
 use iced::mouse;
 use iced::widget::shader::{self, Shader};
@@ -308,31 +309,43 @@ impl shader::Program<Message> for GpuViewport<'_> {
 
         let mut camera = CameraUniform::zeroed();
         if let Some(overall_bounds) = overall_bounds {
-            let projection = Projection::new(
-                overall_bounds,
-                self.overlay.yaw,
-                self.overlay.pitch,
-                self.overlay.zoom,
-                self.overlay.pan,
-                bounds.width,
-                bounds.height,
-            );
+            let projection = self
+                .overlay
+                .projection(overall_bounds, bounds.width, bounds.height);
             let center = overall_bounds.center();
-            camera.right = vec4(projection.right);
-            camera.up = vec4(projection.up);
-            camera.toward = vec4(projection.toward_camera);
+            // The eye position rides along in the spare components.
+            let axis = |direction: [f64; 3], eye: f64| {
+                [
+                    direction[0] as f32,
+                    direction[1] as f32,
+                    direction[2] as f32,
+                    eye as f32,
+                ]
+            };
+            camera.right = axis(projection.right, projection.eye[0]);
+            camera.up = axis(projection.up, projection.eye[1]);
+            camera.toward = axis(projection.toward_camera, projection.eye[2]);
             camera.projection = [
                 bounds.width,
                 bounds.height,
                 projection.scale as f32,
                 projection.distance as f32,
             ];
-            camera.view = [
-                self.overlay.pan[0],
-                self.overlay.pan[1],
-                display_point_radius(self.overlay.point_size, self.overlay.zoom),
-                1.0,
-            ];
+            camera.view = match self.overlay.walk {
+                // Walking is always close to the points: use the close-up size.
+                Some(_) => [
+                    0.0,
+                    0.0,
+                    display_point_radius(self.overlay.point_size, 0.05),
+                    1.0,
+                ],
+                None => [
+                    self.overlay.pan[0],
+                    self.overlay.pan[1],
+                    display_point_radius(self.overlay.point_size, self.overlay.zoom),
+                    1.0,
+                ],
+            };
             camera.clip_enabled[1] = if self.overlay.eye_dome { 1.0 } else { 0.0 };
             camera.clip_enabled[2] = self.overlay.eye_dome_strength;
             if let Some(section) = self.overlay.section {
@@ -351,7 +364,77 @@ impl shader::Program<Message> for GpuViewport<'_> {
                 camera.clip_enabled[0] = 1.0;
             }
         }
-        CloudPrimitive { geometry, camera }
+        let mut photos = PhotoFrame {
+            atlas: self.overlay.photo_atlas.cloned(),
+            ..PhotoFrame::default()
+        };
+        if let (Some(view), Some((cloud, station))) = (self.overlay.walk, self.overlay.walk_station)
+        {
+            // Standing in a station: only its photos are drawn.
+            let [right, up, forward] = view.basis();
+            camera = CameraUniform::zeroed();
+            camera.right = vec4(right);
+            camera.up = vec4(up);
+            camera.toward = vec4(forward.map(|value| -value));
+            camera.projection = [bounds.width, bounds.height, view.focal(bounds.size()), 1.0];
+            camera.view = [0.0, 0.0, 0.0, 1.0];
+            let full = self
+                .overlay
+                .panorama_photos
+                .filter(|set| !set.faces.is_empty())
+                .cloned();
+            let slot = match &full {
+                Some(set) => Some((0, set.faces.len() as u32)),
+                None => self
+                    .overlay
+                    .clouds
+                    .get(cloud)
+                    .zip(photos.atlas.as_deref())
+                    .and_then(|(entry, atlas)| atlas.slot(&entry.cloud.path, station)),
+            };
+            if let Some((first, count)) = slot {
+                camera.clip_min[3] = first as f32;
+                camera.clip_max[3] = count as f32;
+            }
+            photos.panorama = Some(PanoramaFrame {
+                full,
+                visible: slot.is_some(),
+            });
+        } else if let (true, Some(overall_bounds), Some(atlas)) = (
+            self.overlay.show_scan_poses,
+            overall_bounds,
+            photos.atlas.as_deref(),
+        ) {
+            let center = overall_bounds.center();
+            for entry in self.overlay.clouds.iter().filter(|entry| entry.visible) {
+                for (station, pose) in entry.cloud.scan_poses.iter().enumerate() {
+                    let Some((first, count)) = atlas.slot(&entry.cloud.path, station) else {
+                        continue;
+                    };
+                    let xyz = entry.transform.xyz(pose.position);
+                    photos.balls.push(GpuBall {
+                        placement: [
+                            (xyz[0] - center[0]) as f32,
+                            (xyz[1] - center[1]) as f32,
+                            (xyz[2] - center[2]) as f32,
+                            station_photos::BALL_RADIUS as f32,
+                        ],
+                        photos: [
+                            first as f32,
+                            count as f32,
+                            station_photos::BALL_MIN_PIXELS,
+                            station_photos::BALL_MAX_PIXELS,
+                        ],
+                    });
+                }
+            }
+            photos.balls.truncate(MAX_BALLS);
+        }
+        CloudPrimitive {
+            geometry,
+            camera,
+            photos,
+        }
     }
 }
 
@@ -401,16 +484,154 @@ struct PointBufferChunk {
     count: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct GpuBall {
+    /// Centre relative to the scene centre, and the ball radius in scene units.
+    placement: [f32; 4],
+    /// First photo, photo count, smallest and largest radius in pixels.
+    photos: [f32; 4],
+}
+
+/// Placement of one photo for the shader, one entry per texture layer.
+type GpuFace = [[f32; 4]; 3];
+
+const MAX_BALLS: usize = station_photos::MAX_BALL_PHOTOS;
+const FACE_TABLE_LENGTH: usize = 256;
+
+#[derive(Debug, Default)]
+struct PhotoFrame {
+    atlas: Option<Arc<PhotoAtlas>>,
+    balls: Vec<GpuBall>,
+    panorama: Option<PanoramaFrame>,
+}
+
+#[derive(Debug)]
+struct PanoramaFrame {
+    /// Full-size photos of the station; the ball photos stand in until loaded.
+    full: Option<Arc<PhotoSet>>,
+    visible: bool,
+}
+
 #[derive(Debug)]
 pub struct CloudPrimitive {
     geometry: Arc<RenderGeometry>,
     camera: CameraUniform,
+    photos: PhotoFrame,
+}
+
+struct PhotoTexture {
+    texture: wgpu::Texture,
+    group: wgpu::BindGroup,
+    faces: wgpu::Buffer,
+    size: u32,
+    layers: u32,
+}
+
+impl PhotoTexture {
+    fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        size: u32,
+        layers: u32,
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("station photos"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..wgpu::TextureViewDescriptor::default()
+        });
+        let faces = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("station photo placement"),
+            size: (FACE_TABLE_LENGTH * std::mem::size_of::<GpuFace>()) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("station photo group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: faces.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
+        Self {
+            texture,
+            group,
+            faces,
+            size,
+            layers,
+        }
+    }
+
+    fn write_layer(&self, queue: &wgpu::Queue, layer: u32, pixels: &[u8]) {
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(self.size * 4),
+                rows_per_image: Some(self.size),
+            },
+            wgpu::Extent3d {
+                width: self.size,
+                height: self.size,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    fn write_faces(&self, queue: &wgpu::Queue, faces: &[GpuFace]) {
+        let count = faces.len().min(FACE_TABLE_LENGTH);
+        queue.write_buffer(&self.faces, 0, bytemuck::cast_slice(&faces[..count]));
+    }
 }
 
 struct GpuState {
     pipeline: wgpu::RenderPipeline,
     mesh_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
+    ball_pipeline: wgpu::RenderPipeline,
+    sky_pipeline: wgpu::RenderPipeline,
+    photo_layout: wgpu::BindGroupLayout,
+    photo_sampler: wgpu::Sampler,
+    ball_photos: Option<PhotoTexture>,
+    uploaded_ball_sets: Vec<Arc<PhotoSet>>,
+    panorama_photos: Option<PhotoTexture>,
+    uploaded_panorama: Option<Arc<PhotoSet>>,
+    ball_buffer: wgpu::Buffer,
     scene_layout: wgpu::BindGroupLayout,
     scene_group: Option<wgpu::BindGroup>,
     camera_buffer: wgpu::Buffer,
@@ -595,6 +816,121 @@ impl GpuState {
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
+        let photo_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("station photos"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("photos.wgsl").into()),
+        });
+        let photo_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("station photo layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let photo_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("station photo sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
+        let photo_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("station photo pipeline layout"),
+                bind_group_layouts: &[&camera_layout, &photo_layout],
+                push_constant_ranges: &[],
+            });
+        let ball_attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+        let ball_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("station ball pipeline"),
+            layout: Some(&photo_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &photo_shader,
+                entry_point: "vs_ball",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<GpuBall>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &ball_attributes,
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &photo_shader,
+                entry_point: "fs_ball",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: scene_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..wgpu::PrimitiveState::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("station panorama pipeline"),
+            layout: Some(&photo_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &photo_shader,
+                entry_point: "vs_sky",
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &photo_shader,
+                entry_point: "fs_sky",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let ball_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("station balls"),
+            size: (MAX_BALLS * std::mem::size_of::<GpuBall>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let mesh_vertex_capacity = std::mem::size_of::<GpuMeshVertex>() as u64;
         let mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("terrain mesh vertices"),
@@ -613,6 +949,15 @@ impl GpuState {
             pipeline,
             mesh_pipeline,
             composite_pipeline,
+            ball_pipeline,
+            sky_pipeline,
+            photo_layout,
+            photo_sampler,
+            ball_photos: None,
+            uploaded_ball_sets: Vec::new(),
+            panorama_photos: None,
+            uploaded_panorama: None,
+            ball_buffer,
             scene_layout,
             scene_group: None,
             camera_buffer,
@@ -630,6 +975,92 @@ impl GpuState {
             color_view: None,
             depth_size: (0, 0),
         }
+    }
+
+    /// Upload ball photos that are not on the GPU yet. Sets keep their order,
+    /// so everything before the first difference stays in place.
+    fn upload_ball_photos(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas: &PhotoAtlas,
+    ) {
+        let mut kept = self
+            .uploaded_ball_sets
+            .iter()
+            .zip(&atlas.sets)
+            .take_while(|(uploaded, wanted)| Arc::ptr_eq(uploaded, wanted))
+            .count();
+        if kept == atlas.sets.len() && kept == self.uploaded_ball_sets.len() {
+            return;
+        }
+        let layers: usize = atlas.sets.iter().map(|set| set.faces.len()).sum();
+        if self
+            .ball_photos
+            .as_ref()
+            .is_none_or(|photos| (photos.layers as usize) < layers)
+        {
+            // Grow in steps so a project that opens scan by scan re-uploads rarely.
+            let capacity = layers.max(48).next_power_of_two().min(FACE_TABLE_LENGTH);
+            self.ball_photos = Some(PhotoTexture::new(
+                device,
+                &self.photo_layout,
+                &self.photo_sampler,
+                station_photos::BALL_PHOTO_SIZE,
+                capacity as u32,
+            ));
+            kept = 0;
+        }
+        let photos = self.ball_photos.as_ref().expect("ball photo texture");
+        let mut table = Vec::with_capacity(layers);
+        for (index, set) in atlas.sets.iter().enumerate() {
+            let first = atlas.first_face(index);
+            for (face, image) in set.faces.iter().enumerate() {
+                let layer = first + face as u32;
+                if index >= kept {
+                    photos.write_layer(queue, layer, set.layer(face));
+                }
+                table.push(station_photos::face_uniform(image, layer));
+            }
+        }
+        photos.write_faces(queue, &table);
+        self.uploaded_ball_sets = atlas.sets.clone();
+    }
+
+    fn upload_panorama(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, set: &Arc<PhotoSet>) {
+        if self
+            .uploaded_panorama
+            .as_ref()
+            .is_some_and(|uploaded| Arc::ptr_eq(uploaded, set))
+        {
+            return;
+        }
+        let layers = set.faces.len() as u32;
+        if self
+            .panorama_photos
+            .as_ref()
+            .is_none_or(|photos| photos.size != set.size || photos.layers != layers)
+        {
+            self.panorama_photos = Some(PhotoTexture::new(
+                device,
+                &self.photo_layout,
+                &self.photo_sampler,
+                set.size,
+                layers,
+            ));
+        }
+        let photos = self.panorama_photos.as_ref().expect("panorama texture");
+        let table: Vec<GpuFace> = set
+            .faces
+            .iter()
+            .enumerate()
+            .map(|(face, image)| {
+                photos.write_layer(queue, face as u32, set.layer(face));
+                station_photos::face_uniform(image, face as u32)
+            })
+            .collect();
+        photos.write_faces(queue, &table);
+        self.uploaded_panorama = Some(Arc::clone(set));
     }
 
     fn resize_depth(&mut self, device: &wgpu::Device, size: (u32, u32)) {
@@ -778,11 +1209,31 @@ impl Primitive for CloudPrimitive {
             state.mesh_index_count = geometry.mesh_indices.len() as u32;
             state.uploaded_geometry = Some(Arc::clone(&self.geometry));
         }
+        if let Some(atlas) = &self.photos.atlas {
+            state.upload_ball_photos(device, queue, atlas);
+        }
+        match self.photos.panorama.as_ref().map(|frame| &frame.full) {
+            Some(Some(set)) => state.upload_panorama(device, queue, set),
+            // Release the large photos once the station view is left.
+            None => {
+                state.panorama_photos = None;
+                state.uploaded_panorama = None;
+            }
+            Some(None) => {}
+        }
+        if !self.photos.balls.is_empty() {
+            queue.write_buffer(
+                &state.ball_buffer,
+                0,
+                bytemuck::cast_slice(&self.photos.balls),
+            );
+        }
         let size = viewport.physical_size();
         state.resize_depth(device, (size.width, size.height));
         let mut camera = self.camera;
         camera.view[3] = viewport.scale_factor() as f32;
         camera.target = [bounds.x, bounds.y, size.width as f32, size.height as f32];
+        camera.clip_enabled[3] = if format.is_srgb() { 1.0 } else { 0.0 };
         queue.write_buffer(&state.camera_buffer, 0, bytemuck::bytes_of(&camera));
     }
 
@@ -794,10 +1245,56 @@ impl Primitive for CloudPrimitive {
         clip_bounds: &Rectangle<u32>,
     ) {
         let state = storage.get::<GpuState>().expect("pointcloud GPU state");
-        if (state.point_buffers.is_empty() && state.mesh_index_count == 0)
-            || clip_bounds.width == 0
-            || clip_bounds.height == 0
-        {
+        if clip_bounds.width == 0 || clip_bounds.height == 0 {
+            return;
+        }
+        if let Some(panorama) = &self.photos.panorama {
+            let photos = match &panorama.full {
+                Some(set)
+                    if state
+                        .uploaded_panorama
+                        .as_ref()
+                        .is_some_and(|uploaded| Arc::ptr_eq(uploaded, set)) =>
+                {
+                    state.panorama_photos.as_ref()
+                }
+                Some(_) => None,
+                None => state.ball_photos.as_ref(),
+            };
+            let (true, Some(photos)) = (panorama.visible, photos) else {
+                return;
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("station panorama pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_scissor_rect(
+                clip_bounds.x,
+                clip_bounds.y,
+                clip_bounds.width,
+                clip_bounds.height,
+            );
+            pass.set_pipeline(&state.sky_pipeline);
+            pass.set_bind_group(0, &state.camera_group, &[]);
+            pass.set_bind_group(1, &photos.group, &[]);
+            pass.draw(0..3, 0..1);
+            return;
+        }
+        let balls = state
+            .ball_photos
+            .as_ref()
+            .filter(|_| !self.photos.balls.is_empty());
+        if state.point_buffers.is_empty() && state.mesh_index_count == 0 && balls.is_none() {
             return;
         }
         {
@@ -841,6 +1338,12 @@ impl Primitive for CloudPrimitive {
                     pass.set_vertex_buffer(0, chunk.buffer.slice(..));
                     pass.draw(0..6, 0..chunk.count);
                 }
+            }
+            if let Some(photos) = balls {
+                pass.set_pipeline(&state.ball_pipeline);
+                pass.set_bind_group(1, &photos.group, &[]);
+                pass.set_vertex_buffer(0, state.ball_buffer.slice(..));
+                pass.draw(0..6, 0..self.photos.balls.len() as u32);
             }
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

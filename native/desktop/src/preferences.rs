@@ -70,12 +70,23 @@ pub(crate) fn save(preferences: &Preferences) -> io::Result<()> {
     save_to(&path, preferences)
 }
 
+/// Directory for the settings of this application: `XDG_CONFIG_HOME` when
+/// set, otherwise the roaming application data folder on Windows and
+/// `~/.config` elsewhere.
+pub(crate) fn config_directory() -> Option<PathBuf> {
+    let set = |name: &str| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let base = set("XDG_CONFIG_HOME")
+        .or_else(|| if cfg!(windows) { set("APPDATA") } else { None })
+        .or_else(|| set("HOME").map(|home| home.join(".config")))?;
+    Some(base.join("open-pointcloud-studio-native"))
+}
+
 fn config_path() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .map(|directory| directory.join("open-pointcloud-studio-native/settings.json"))
+    config_directory().map(|directory| directory.join("settings.json"))
 }
 
 fn load_from(path: &Path) -> Preferences {

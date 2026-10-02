@@ -1,13 +1,15 @@
 struct Camera {
+    // The w components hold the eye position relative to the scene centre,
+    // measured along each axis.
     right: vec4<f32>,
     up: vec4<f32>,
     toward: vec4<f32>,
-    projection: vec4<f32>, // local width, height, scale, camera distance
+    projection: vec4<f32>, // local width, height, scale, quarter of the depth range
     view: vec4<f32>,       // pan x, pan y, point size, display scale
     surface: vec4<f32>,     // widget x, y, target physical width, height
     clip_min: vec4<f32>,
     clip_max: vec4<f32>,
-    clip_enabled: vec4<f32>,
+    clip_enabled: vec4<f32>, // section on, eye-dome on, eye-dome strength, sRGB target
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -32,7 +34,7 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
-    let depth = camera.projection.w - dot(input.relative.xyz, camera.toward.xyz);
+    let depth = camera.toward.w - dot(input.relative.xyz, camera.toward.xyz);
     var output: VertexOutput;
     output.color = input.color;
     output.local = vec2<f32>(0.0, 0.0);
@@ -46,9 +48,9 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     }
 
     let local_x = camera.projection.x * 0.5 + camera.view.x
-        + dot(input.relative.xyz, camera.right.xyz) * camera.projection.z / depth;
+        + (dot(input.relative.xyz, camera.right.xyz) - camera.right.w) * camera.projection.z / depth;
     let local_y = camera.projection.y * 0.5 + camera.view.y
-        - dot(input.relative.xyz, camera.up.xyz) * camera.projection.z / depth;
+        - (dot(input.relative.xyz, camera.up.xyz) - camera.up.w) * camera.projection.z / depth;
     let physical = (camera.surface.xy + vec2<f32>(local_x, local_y)) * camera.view.w;
     let center = vec2<f32>(
         physical.x / camera.surface.z * 2.0 - 1.0,
@@ -81,7 +83,7 @@ struct MeshInput {
 
 @vertex
 fn vs_mesh(input: MeshInput) -> VertexOutput {
-    let depth = camera.projection.w - dot(input.relative.xyz, camera.toward.xyz);
+    let depth = camera.toward.w - dot(input.relative.xyz, camera.toward.xyz);
     var output: VertexOutput;
     output.color = input.color;
     output.local = vec2<f32>(0.0, 0.0);
@@ -94,9 +96,9 @@ fn vs_mesh(input: MeshInput) -> VertexOutput {
         return output;
     }
     let local_x = camera.projection.x * 0.5 + camera.view.x
-        + dot(input.relative.xyz, camera.right.xyz) * camera.projection.z / depth;
+        + (dot(input.relative.xyz, camera.right.xyz) - camera.right.w) * camera.projection.z / depth;
     let local_y = camera.projection.y * 0.5 + camera.view.y
-        - dot(input.relative.xyz, camera.up.xyz) * camera.projection.z / depth;
+        - (dot(input.relative.xyz, camera.up.xyz) - camera.up.w) * camera.projection.z / depth;
     let physical = (camera.surface.xy + vec2<f32>(local_x, local_y)) * camera.view.w;
     output.position = vec4<f32>(
         physical.x / camera.surface.z * 2.0 - 1.0,
@@ -162,6 +164,15 @@ fn vs_composite(@builtin(vertex_index) vertex: u32) -> @builtin(position) vec4<f
     return vec4<f32>(corner, 0.0, 1.0);
 }
 
+// Scene colours are stored as their encoded bytes. A frame target that
+// encodes to sRGB on write would brighten them a second time, so decode first.
+fn display(color: vec3<f32>) -> vec3<f32> {
+    if camera.clip_enabled.w > 0.5 {
+        return pow(color, vec3<f32>(2.2));
+    }
+    return color;
+}
+
 @fragment
 fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let xy = vec2<i32>(position.xy);
@@ -174,7 +185,7 @@ fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32
         discard;
     }
     if camera.clip_enabled.y < 0.5 {
-        return color;
+        return vec4<f32>(display(color.rgb), color.a);
     }
     let depth = textureLoad(scene_depth, xy, 0);
     var edge = 0.0;
@@ -195,5 +206,5 @@ fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32
         }
     }
     let shade = max(exp(-edge * 0.42 * camera.clip_enabled.z), 0.50);
-    return vec4<f32>(color.rgb * shade, color.a);
+    return vec4<f32>(display(color.rgb * shade), color.a);
 }

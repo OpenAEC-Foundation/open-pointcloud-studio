@@ -351,6 +351,10 @@ pub struct Projection {
     pub(crate) right: [f64; 3],
     pub(crate) up: [f64; 3],
     pub(crate) toward_camera: [f64; 3],
+    /// Eye position relative to the centre, measured along `right`, `up` and
+    /// `toward_camera`. An orbit camera sits `distance` along the last axis.
+    pub(crate) eye: [f64; 3],
+    /// A quarter of the depth range the renderer resolves.
     pub(crate) distance: f64,
     pub(crate) scale: f64,
     width: f64,
@@ -370,16 +374,57 @@ impl Projection {
     ) -> Self {
         let (sy, cy) = (yaw as f64).sin_cos();
         let (sp, cp) = (pitch as f64).sin_cos();
+        let distance = bounds.extent().max(0.001) * 1.8;
         Self {
             center: bounds.center(),
             right: [-sy, cy, 0.0],
             up: [-sp * cy, -sp * sy, cp],
             toward_camera: [cp * cy, cp * sy, sp],
-            distance: bounds.extent().max(0.001) * 1.8,
+            eye: [0.0, 0.0, distance],
+            distance,
             scale: height.min(width) as f64 * 1.25 / zoom as f64,
             width: width as f64,
             height: height as f64,
             pan,
+        }
+    }
+
+    /// A camera at a free eye position: `basis` holds its right, up and
+    /// forward directions and `focal` its focal length in pixels.
+    pub fn from_eye(
+        bounds: Bounds,
+        eye: [f64; 3],
+        basis: [[f64; 3]; 3],
+        focal: f32,
+        width: f32,
+        height: f32,
+    ) -> Self {
+        let center = bounds.center();
+        let [right, up, forward] = basis;
+        let toward_camera = forward.map(|value| -value);
+        let offset: [f64; 3] = std::array::from_fn(|axis| eye[axis] - center[axis]);
+        // Everything in the scene must fit in the resolved depth range,
+        // wherever the eye stands.
+        let reach = (0..3)
+            .map(|axis| (bounds.max[axis] - bounds.min[axis]).powi(2))
+            .sum::<f64>()
+            .sqrt()
+            + dot(offset, offset).sqrt();
+        Self {
+            center,
+            right,
+            up,
+            toward_camera,
+            eye: [
+                dot(offset, right),
+                dot(offset, up),
+                dot(offset, toward_camera),
+            ],
+            distance: reach.max(0.004) * 0.25,
+            scale: f64::from(focal),
+            width: f64::from(width),
+            height: f64::from(height),
+            pan: [0.0, 0.0],
         }
     }
 
@@ -393,14 +438,15 @@ impl Projection {
 
     pub fn project_unclipped(self, xyz: [f64; 3]) -> Option<(f32, f32, f64)> {
         let relative = std::array::from_fn(|axis| xyz[axis] - self.center[axis]);
-        let depth = self.distance - dot(relative, self.toward_camera);
+        let depth = self.eye[2] - dot(relative, self.toward_camera);
         if depth <= 0.01 {
             return None;
         }
-        let x =
-            self.width * 0.5 + self.pan[0] as f64 + dot(relative, self.right) * self.scale / depth;
-        let y =
-            self.height * 0.5 + self.pan[1] as f64 - dot(relative, self.up) * self.scale / depth;
+        let x = self.width * 0.5
+            + self.pan[0] as f64
+            + (dot(relative, self.right) - self.eye[0]) * self.scale / depth;
+        let y = self.height * 0.5 + self.pan[1] as f64
+            - (dot(relative, self.up) - self.eye[1]) * self.scale / depth;
         Some((x as f32, y as f32, depth))
     }
 
