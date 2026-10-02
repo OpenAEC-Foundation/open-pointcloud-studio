@@ -55,11 +55,16 @@ impl Snapshots {
         stamp: SourceStamp,
         show: Show,
     ) -> Result<Option<Self>, LoadError> {
-        let claimed = SHOWN.fetch_update(Ordering::AcqRel, Ordering::Acquire, |shown| {
-            (shown < MAX_SHOWN).then_some(shown + 1)
-        });
-        if claimed.is_err() {
-            return Ok(None);
+        let mut shown = SHOWN.load(Ordering::Acquire);
+        loop {
+            if shown >= MAX_SHOWN {
+                return Ok(None);
+            }
+            match SHOWN.compare_exchange_weak(shown, shown + 1, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break,
+                Err(current) => shown = current,
+            }
         }
         // From here on dropping the value gives the place back.
         let mut snapshots = Self {
