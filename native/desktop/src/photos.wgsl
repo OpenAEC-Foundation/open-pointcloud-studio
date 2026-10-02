@@ -14,6 +14,7 @@ struct Camera {
     clip_min: vec4<f32>,   // w: first photo of the station being viewed
     clip_max: vec4<f32>,   // w: number of photos of that station
     clip_enabled: vec4<f32>,
+    splat: vec4<f32>,
 };
 
 struct Face {

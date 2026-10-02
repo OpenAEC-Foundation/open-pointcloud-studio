@@ -914,7 +914,7 @@ fn main() -> iced::Result {
                     WalkKey::from_character(value.as_str()).map(|key| Message::WalkKey(key, false))
                 }
                 iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
-                    Some(Message::WalkFast(modifiers.shift()))
+                    Some(Message::Modifiers(modifiers))
                 }
                 // A key released while another window has focus never arrives.
                 iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WalkStop),
@@ -1451,6 +1451,13 @@ enum Message {
     SaveCompleted(Option<Result<PathBuf, String>>),
     Select(usize),
     SetVisible(usize, bool),
+    /// A click on a row of the project list; Shift extends the selection to
+    /// that row and Ctrl toggles it.
+    LayerClick(usize),
+    /// The visibility and remove controls of a row, which act on every
+    /// selected row when their own row is selected.
+    LayerVisible(usize, bool),
+    LayerRemove(usize),
     SetMeshVisible(usize, bool),
     Remove(usize),
     ColorMode(ColorMode),
@@ -1467,7 +1474,7 @@ enum Message {
     WalkLook(f32, f32),
     WalkZoom(f32),
     WalkKey(WalkKey, bool),
-    WalkFast(bool),
+    Modifiers(iced::keyboard::Modifiers),
     WalkTick(Instant),
     WalkStop,
     PanoramaReady(PathBuf, usize, Result<Arc<PhotoSet>, String>),
@@ -1586,6 +1593,8 @@ struct Studio {
     walk_keys: [bool; 6],
     walk_fast: bool,
     walk_tick: Option<Instant>,
+    /// Modifier keys held down, for range and toggle clicks in the project list.
+    modifiers: iced::keyboard::Modifiers,
     budget: u32,
     filter_ground: bool,
     filter_vegetation: bool,
@@ -1664,6 +1673,9 @@ struct CloudEntry {
     auto_index_queued: bool,
     index_building: bool,
     detail_points: Option<Arc<[IndexedPoint]>>,
+    /// Part of the selection in the project list, which the list's
+    /// visibility and remove controls act on together.
+    picked: bool,
 }
 
 struct LodRefinement {
@@ -1914,6 +1926,7 @@ impl Default for Studio {
             walk_keys: [false; 6],
             walk_fast: false,
             walk_tick: None,
+            modifiers: iced::keyboard::Modifiers::default(),
             budget: settings.budget,
             // The four class groups no longer have switches; classes are
             // shown or hidden one by one in the project panel.
@@ -2332,6 +2345,72 @@ impl Studio {
     fn walk_speed(&self) -> f64 {
         let extent = combined_bounds(&self.clouds).map_or(10.0, Bounds::extent);
         (extent * 0.08).clamp(0.8, 400.0) * if self.walk_fast { 4.0 } else { 1.0 }
+    }
+
+    /// Cloud indices in the order the project list shows them: by name,
+    /// whatever order their imports finished in.
+    fn layer_order(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.clouds.len()).collect();
+        order.sort_by(|a, b| {
+            project_open::natural_cmp(
+                display_name(&self.clouds[*a].cloud.path),
+                display_name(&self.clouds[*b].cloud.path),
+            )
+            .then(a.cmp(b))
+        });
+        order
+    }
+
+    /// The clouds a control on the row of `index` acts on: all selected rows
+    /// when that row is one of them, otherwise the row alone.
+    fn layer_group(&self, index: usize) -> Vec<usize> {
+        match self.clouds.get(index) {
+            Some(entry) if entry.picked => (0..self.clouds.len())
+                .filter(|cloud| self.clouds[*cloud].picked)
+                .collect(),
+            Some(_) => vec![index],
+            None => Vec::new(),
+        }
+    }
+
+    fn remove_clouds(&mut self, mut indices: Vec<usize>) -> Task<Message> {
+        indices.retain(|index| *index < self.clouds.len());
+        indices.sort_unstable();
+        indices.dedup();
+        let Some(&first) = indices.first() else {
+            return Task::none();
+        };
+        self.cancel_selection_for_scene_change();
+        for &index in indices.iter().rev() {
+            if self.clouds[index].index_import_id.is_some() {
+                self.index_cancel.store(true, Ordering::Relaxed);
+            }
+            let importing = self
+                .import_headers
+                .iter()
+                .find(|(_, header)| self.clouds[index].matches_source(header))
+                .map(|(id, _)| *id);
+            if let Some(id) = importing {
+                // Shown from metadata only: stop reading its points.
+                self.import_headers.remove(&id);
+                if let Some(job) = self.imports.get(&id) {
+                    job.cancel.store(true, Ordering::Relaxed);
+                }
+            }
+            self.clouds.remove(index);
+        }
+        self.leave_walk();
+        self.rebuild_photo_atlas();
+        self.undo_deletions.clear();
+        self.redo_deletions.clear();
+        self.pending_delete = false;
+        self.revision += 1;
+        self.active = if self.clouds.is_empty() {
+            None
+        } else {
+            Some(first.min(self.clouds.len() - 1))
+        };
+        self.schedule_detail()
     }
 
     /// Classification codes that occur in the open clouds, ascending.
@@ -3939,6 +4018,7 @@ impl Studio {
                         deleted: None,
                         index: None,
                         auto_index_queued: false,
+                        picked: false,
                         index_building: false,
                         detail_points: None,
                     });
@@ -4576,6 +4656,7 @@ impl Studio {
                     deleted: None,
                     index: None,
                     auto_index_queued: false,
+                    picked: false,
                     index_building: false,
                     detail_points: None,
                 });
@@ -4752,6 +4833,7 @@ impl Studio {
                         deleted: None,
                         index: None,
                         auto_index_queued: false,
+                        picked: false,
                         index_building: false,
                         detail_points: None,
                     });
@@ -6347,6 +6429,61 @@ impl Studio {
                     self.active = Some(index);
                 }
             }
+            Message::LayerClick(index) => {
+                if index >= self.clouds.len() {
+                    return Task::none();
+                }
+                let extend = self.modifiers.shift();
+                let toggle = self.modifiers.command();
+                if extend {
+                    // Every row from the active one to the clicked one, as listed.
+                    let order = self.layer_order();
+                    let place = |cloud: usize| {
+                        order
+                            .iter()
+                            .position(|listed| *listed == cloud)
+                            .unwrap_or_default()
+                    };
+                    let (from, to) = (place(self.active.unwrap_or(index)), place(index));
+                    let range = from.min(to)..=from.max(to);
+                    for (row, cloud) in order.into_iter().enumerate() {
+                        let entry = &mut self.clouds[cloud];
+                        entry.picked = range.contains(&row) || (toggle && entry.picked);
+                    }
+                } else if toggle {
+                    if let Some(active) = self.active {
+                        if !self.clouds.iter().any(|entry| entry.picked) {
+                            self.clouds[active].picked = true;
+                        }
+                    }
+                    let entry = &mut self.clouds[index];
+                    entry.picked = !entry.picked;
+                    if entry.picked {
+                        self.active = Some(index);
+                    }
+                } else {
+                    for (cloud, entry) in self.clouds.iter_mut().enumerate() {
+                        entry.picked = cloud == index;
+                    }
+                    self.active = Some(index);
+                }
+            }
+            Message::LayerVisible(index, visible) => {
+                let group = self.layer_group(index);
+                if group.is_empty() {
+                    return Task::none();
+                }
+                self.cancel_selection_for_scene_change();
+                for cloud in group {
+                    self.clouds[cloud].visible = visible;
+                }
+                self.revision += 1;
+                return self.schedule_detail();
+            }
+            Message::LayerRemove(index) => {
+                let group = self.layer_group(index);
+                return self.remove_clouds(group);
+            }
             Message::SetVisible(index, visible) => {
                 if index < self.clouds.len() {
                     self.cancel_selection_for_scene_change();
@@ -6362,39 +6499,7 @@ impl Studio {
                     entry.mesh_visible = visible;
                 }
             }
-            Message::Remove(index) => {
-                if index < self.clouds.len() {
-                    if self.clouds[index].index_import_id.is_some() {
-                        self.index_cancel.store(true, Ordering::Relaxed);
-                    }
-                    self.cancel_selection_for_scene_change();
-                    let importing = self
-                        .import_headers
-                        .iter()
-                        .find(|(_, header)| self.clouds[index].matches_source(header))
-                        .map(|(id, _)| *id);
-                    if let Some(id) = importing {
-                        // Shown from metadata only: stop reading its points.
-                        self.import_headers.remove(&id);
-                        if let Some(job) = self.imports.get(&id) {
-                            job.cancel.store(true, Ordering::Relaxed);
-                        }
-                    }
-                    self.clouds.remove(index);
-                    self.leave_walk();
-                    self.rebuild_photo_atlas();
-                    self.undo_deletions.clear();
-                    self.redo_deletions.clear();
-                    self.pending_delete = false;
-                    self.revision += 1;
-                    self.active = if self.clouds.is_empty() {
-                        None
-                    } else {
-                        Some(index.min(self.clouds.len() - 1))
-                    };
-                    return self.schedule_detail();
-                }
-            }
+            Message::Remove(index) => return self.remove_clouds(vec![index]),
             Message::ColorMode(mode) => {
                 self.color_mode = mode;
                 return self.queue_preferences_save();
@@ -6564,10 +6669,16 @@ impl Studio {
                     return self.schedule_detail();
                 }
             }
-            Message::WalkFast(fast) => self.walk_fast = fast,
+            Message::Modifiers(modifiers) => {
+                self.walk_fast = modifiers.shift();
+                self.modifiers = modifiers;
+            }
             Message::WalkStop => {
                 self.walk_keys = [false; 6];
                 self.walk_tick = None;
+                // A modifier released while another window has focus never arrives.
+                self.walk_fast = false;
+                self.modifiers = iced::keyboard::Modifiers::default();
             }
             Message::WalkKey(key, pressed) => {
                 if pressed && self.file_open {
@@ -8205,10 +8316,14 @@ impl Studio {
     }
 
     fn project_panel(&self) -> Element<'_, Message> {
-        let cloud_count = match self.clouds.len() {
+        let mut cloud_count = match self.clouds.len() {
             1 => "1 point cloud".to_owned(),
             count => format!("{count} point clouds"),
         };
+        let picked = self.clouds.iter().filter(|entry| entry.picked).count();
+        if picked > 1 {
+            cloud_count.push_str(&format!("  ·  {picked} selected"));
+        }
         let mut files = column![
             text("PROJECT")
                 .size(14)
@@ -8226,17 +8341,8 @@ impl Studio {
                 .width(Fill),
         ]
         .spacing(9);
-        // Layers read in name order, whatever order their imports finished in.
-        let mut order: Vec<usize> = (0..self.clouds.len()).collect();
-        order.sort_by(|a, b| {
-            project_open::natural_cmp(
-                display_name(&self.clouds[*a].cloud.path),
-                display_name(&self.clouds[*b].cloud.path),
-            )
-            .then(a.cmp(b))
-        });
         let mut layers = column![].spacing(2);
-        for index in order {
+        for index in self.layer_order() {
             let entry = &self.clouds[index];
             let name = display_name(&entry.cloud.path);
             let readable_name = name.replace('_', "_\u{200b}");
@@ -8248,7 +8354,7 @@ impl Studio {
                         .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
                         .width(Fill),
                 )
-                .on_press(Message::Select(index))
+                .on_press(Message::LayerClick(index))
                 .style(flat_tool_style)
                 .width(Fill)
                 .padding([2, 2]),
@@ -8272,7 +8378,7 @@ impl Studio {
             .gap(5);
             let mut item = column![row![
                 checkbox("", entry.visible)
-                    .on_toggle(move |value| Message::SetVisible(index, value))
+                    .on_toggle(move |value| Message::LayerVisible(index, value))
                     .style(muted_checkbox_style)
                     .size(14),
                 file_button,
@@ -8280,7 +8386,7 @@ impl Studio {
                     .size(10)
                     .color(self.ui_theme.colors().muted),
                 button(text("×").size(12))
-                    .on_press(Message::Remove(index))
+                    .on_press(Message::LayerRemove(index))
                     .style(flat_tool_style)
                     .padding([1, 5]),
             ]
@@ -8328,6 +8434,7 @@ impl Studio {
                 );
             }
             let active = self.active == Some(index);
+            let picked = entry.picked;
             layers = layers.push(
                 container(item)
                     .padding([1, 4])
@@ -8335,7 +8442,7 @@ impl Studio {
                     .style(move |theme| {
                         let colors = ui_theme::colors(theme);
                         container::Style::default()
-                            .background(if active {
+                            .background(if active || picked {
                                 colors.panel_alt
                             } else {
                                 colors.panel
@@ -12914,6 +13021,69 @@ mod camera_api_tests {
         assert_eq!(studio.zoom, 1.0);
         assert_eq!(studio.pan, [0.0, 0.0]);
         assert_eq!(studio.view_label, "ISOMETRIC");
+    }
+
+    #[test]
+    fn project_list_selects_a_range_with_shift_and_acts_on_it() {
+        use iced::keyboard::Modifiers;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = Studio::default();
+        // Opened out of name order; the list shows scan 1, 2, 3 and 10.
+        for name in ["scan 10.xyz", "scan 2.xyz", "scan 1.xyz", "scan 3.xyz"] {
+            let path = directory.path().join(name);
+            std::fs::write(&path, "0 0 0\n1 0 0\n").unwrap();
+            let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+            let _ = studio.update(Message::Loaded(Ok(cloud)));
+        }
+        assert_eq!(studio.layer_order(), [2, 1, 3, 0]);
+        let picked = |studio: &Studio| -> Vec<usize> {
+            (0..studio.clouds.len())
+                .filter(|cloud| studio.clouds[*cloud].picked)
+                .collect()
+        };
+
+        let _ = studio.update(Message::LayerClick(1));
+        assert_eq!(picked(&studio), [1]);
+        assert_eq!(studio.active, Some(1));
+
+        // Shift extends from the active row to the clicked one, as listed.
+        let _ = studio.update(Message::Modifiers(Modifiers::SHIFT));
+        let _ = studio.update(Message::LayerClick(0));
+        assert_eq!(picked(&studio), [0, 1, 3]);
+        assert_eq!(studio.active, Some(1));
+        let _ = studio.update(Message::LayerClick(2));
+        assert_eq!(picked(&studio), [1, 2]);
+
+        // Ctrl adds or drops a single row.
+        let _ = studio.update(Message::Modifiers(Modifiers::COMMAND));
+        let _ = studio.update(Message::LayerClick(0));
+        assert_eq!(picked(&studio), [0, 1, 2]);
+        let _ = studio.update(Message::LayerClick(0));
+        assert_eq!(picked(&studio), [1, 2]);
+        let _ = studio.update(Message::LayerClick(0));
+
+        // A control on a selected row acts on the selection, on another row
+        // only on that row; the single-cloud messages stay single.
+        let _ = studio.update(Message::Modifiers(Modifiers::default()));
+        let _ = studio.update(Message::LayerVisible(2, false));
+        let visible = |studio: &Studio| -> Vec<bool> {
+            studio.clouds.iter().map(|entry| entry.visible).collect()
+        };
+        assert_eq!(visible(&studio), [false, false, false, true]);
+        let _ = studio.update(Message::LayerVisible(3, false));
+        let _ = studio.update(Message::SetVisible(1, true));
+        assert_eq!(visible(&studio), [false, true, false, false]);
+
+        let _ = studio.update(Message::LayerRemove(1));
+        assert_eq!(studio.clouds.len(), 1);
+        assert_eq!(display_name(&studio.clouds[0].cloud.path), "scan 3.xyz");
+        assert_eq!(studio.active, Some(0));
+
+        // Keys released while another window has focus are forgotten.
+        let _ = studio.update(Message::Modifiers(Modifiers::SHIFT));
+        let _ = studio.update(Message::WalkStop);
+        assert!(studio.modifiers.is_empty() && !studio.walk_fast);
     }
 
     #[test]

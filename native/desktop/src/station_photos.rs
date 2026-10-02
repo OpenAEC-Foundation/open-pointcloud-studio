@@ -312,12 +312,14 @@ impl WalkView {
             (self.field_of_view * (-steps * 0.1).exp()).clamp(MIN_FIELD_OF_VIEW, MAX_FIELD_OF_VIEW);
     }
 
-    /// Walk over level ground: forward follows the heading whatever the tilt
-    /// of the view, sideways is to the right of it and up is vertical.
+    /// Move through the scene: forward follows the viewing direction, tilt
+    /// included, so looking down walks down. Sideways stays level, to the
+    /// right of the heading, and up is the vertical.
     pub fn advance(&mut self, forward: f64, right: f64, up: f64) {
-        let (sin_yaw, cos_yaw) = f64::from(self.yaw).sin_cos();
-        self.eye[0] += cos_yaw * forward + sin_yaw * right;
-        self.eye[1] += sin_yaw * forward - cos_yaw * right;
+        let [sideways, _, ahead] = self.basis();
+        for axis in 0..3 {
+            self.eye[axis] += ahead[axis] * forward + sideways[axis] * right;
+        }
         self.eye[2] += up;
     }
 }
@@ -458,18 +460,30 @@ mod tests {
     }
 
     #[test]
-    fn walking_stays_level_and_follows_the_heading() {
+    fn walking_follows_the_viewing_direction() {
         let mut view = WalkView::new([0.0, 0.0, 1.6], std::f32::consts::FRAC_PI_2);
-        view.pitch = 1.0;
-        // Forward follows the heading (+Y here) however far the view tilts.
+        // A level view walks along the heading (+Y here) and keeps its height.
         view.advance(2.0, 0.0, 0.0);
         assert!(view.eye[0].abs() < 1e-6 && (view.eye[1] - 2.0).abs() < 1e-6);
-        assert_eq!(view.eye[2], 1.6);
-        // To the right of a +Y heading lies +X; up is the vertical.
+        assert!((view.eye[2] - 1.6).abs() < 1e-9);
+        assert!((view.distance_to([0.0, 2.0, 0.1]) - 1.5).abs() < 1e-6);
+
+        // Looking down, forward goes down as well; looking up, it climbs.
+        view.pitch = -0.5;
+        view.advance(2.0, 0.0, 0.0);
+        let (sin, cos) = 0.5f64.sin_cos();
+        assert!(view.eye[0].abs() < 1e-6);
+        assert!((view.eye[1] - (2.0 + 2.0 * cos)).abs() < 1e-6);
+        assert!((view.eye[2] - (1.6 - 2.0 * sin)).abs() < 1e-6);
+        view.advance(-2.0, 0.0, 0.0);
+        assert!((view.eye[1] - 2.0).abs() < 1e-6 && (view.eye[2] - 1.6).abs() < 1e-6);
+
+        // Sideways stays level, to the right of the heading (+X here), and up
+        // is the vertical, however far the view tilts.
+        view.pitch = 1.0;
         view.advance(0.0, 1.0, 0.5);
         assert!((view.eye[0] - 1.0).abs() < 1e-6 && (view.eye[1] - 2.0).abs() < 1e-6);
-        assert!((view.eye[2] - 2.1).abs() < 1e-9);
-        assert!((view.distance_to([1.0, 2.0, 0.1]) - 2.0).abs() < 1e-9);
+        assert!((view.eye[2] - 2.1).abs() < 1e-6);
     }
 
     #[test]

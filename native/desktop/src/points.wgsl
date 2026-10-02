@@ -10,6 +10,7 @@ struct Camera {
     clip_min: vec4<f32>,
     clip_max: vec4<f32>,
     clip_enabled: vec4<f32>, // section on, eye-dome on, eye-dome strength, sRGB target
+    splat: vec4<f32>,        // walking: point radius in the scene, largest radius in pixels
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -56,11 +57,18 @@ fn vs_main(input: VertexInput) -> VertexOutput {
         physical.x / camera.surface.z * 2.0 - 1.0,
         1.0 - physical.y / camera.surface.w * 2.0
     );
-    let radius = vec2<f32>(
-        camera.view.z * camera.view.w / camera.surface.z,
-        camera.view.z * camera.view.w / camera.surface.w
+    // While walking a point keeps a size in the scene, so the surfaces close
+    // by fill in; elsewhere it has the chosen size on screen.
+    let pixel_radius = clamp(
+        camera.splat.x * camera.projection.z / depth,
+        camera.view.z,
+        max(camera.view.z, camera.splat.y)
     );
-    output.point_world_radius = camera.view.z * depth / camera.projection.z;
+    let radius = vec2<f32>(
+        pixel_radius * camera.view.w / camera.surface.z,
+        pixel_radius * camera.view.w / camera.surface.w
+    );
+    output.point_world_radius = pixel_radius * depth / camera.projection.z;
     let corner = vec2<f32>(
         select(-1.0, 1.0, input.vertex == 1u || input.vertex >= 4u),
         select(-1.0, 1.0, input.vertex == 2u || input.vertex == 3u || input.vertex == 5u)

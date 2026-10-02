@@ -28,6 +28,25 @@ pub(crate) fn display_point_radius(point_size: f32, zoom: f32) -> f32 {
     point_size + close_up
 }
 
+// Walking is always close to the points, where a fixed size on screen leaves
+// the nearest surfaces thin. Points are drawn thicker there and keep a size
+// in the scene, per unit of the chosen point size, up to a few times their
+// distant size.
+const WALK_POINT_SCALE: f32 = 1.3;
+const WALK_POINT_SCENE_RADIUS: f32 = 0.0075;
+const WALK_POINT_GROWTH: f32 = 3.5;
+
+/// Smallest radius on screen, radius in the scene and largest radius on
+/// screen of a point in the walking view.
+pub(crate) fn walk_point_radii(point_size: f32) -> [f32; 3] {
+    let smallest = display_point_radius(point_size, 0.05) * WALK_POINT_SCALE;
+    [
+        smallest,
+        WALK_POINT_SCENE_RADIUS * point_size,
+        smallest * WALK_POINT_GROWTH,
+    ]
+}
+
 fn derived_mesh_normals(mesh: &MeshGeometry) -> Vec<[f32; 3]> {
     let mut normals = vec![[0.0_f64; 3]; mesh.vertices.len()];
     for &[a, b, c] in &mesh.triangles {
@@ -332,13 +351,11 @@ impl shader::Program<Message> for GpuViewport<'_> {
                 projection.distance as f32,
             ];
             camera.view = match self.overlay.walk {
-                // Walking is always close to the points: use the close-up size.
-                Some(_) => [
-                    0.0,
-                    0.0,
-                    display_point_radius(self.overlay.point_size, 0.05),
-                    1.0,
-                ],
+                Some(_) => {
+                    let [smallest, scene, largest] = walk_point_radii(self.overlay.point_size);
+                    camera.splat = [scene, largest, 0.0, 0.0];
+                    [0.0, 0.0, smallest, 1.0]
+                }
                 None => [
                     self.overlay.pan[0],
                     self.overlay.pan[1],
@@ -469,6 +486,7 @@ struct CameraUniform {
     clip_min: [f32; 4],
     clip_max: [f32; 4],
     clip_enabled: [f32; 4],
+    splat: [f32; 4],
 }
 
 #[derive(Debug)]
@@ -1412,6 +1430,7 @@ mod tests {
             deleted: None,
             index: None,
             auto_index_queued: false,
+            picked: false,
             index_building: false,
             detail_points: None,
         });

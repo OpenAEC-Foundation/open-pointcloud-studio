@@ -53,7 +53,10 @@ E57 scan transforms, valid PCD `VIEWPOINT` headers and PTX scanner positions app
 The project panel lists the open clouds in name order, one compact row each
 with a visibility switch, the point count and a remove button; a second line
 appears only while a cloud is loading or indexing, or when it has selected or
-deleted points. The top strip starts with the application logo and the File
+deleted points. Click a row to select it, Shift-click to select every row up
+to it and Ctrl-click to add or drop one; the visibility switch and the remove
+button of a selected row then act on the whole selection, so a set of scans
+can be hidden, shown or closed at once. The top strip starts with the application logo and the File
 tab, with the quick-access actions at its right end. The same logo is the
 window icon and, on Windows, the icon of the executable.
 
@@ -96,7 +99,10 @@ a pose works, not only complete cubes. Spherical and cylindrical photos are not
 shown yet.
 
 `W`, `A`, `S` and `D` walk through the scene, `Q` and `E` move down and up, and
-Shift walks faster. Walking starts from the current orbit view, or from inside
+Shift walks faster. Forward and back follow the viewing direction, so looking
+down a stairwell and pressing `W` goes down it; sideways stays level. While
+walking, points are drawn thicker and keep a size in the scene, so that
+surfaces close by fill in. Walking starts from the current orbit view, or from inside
 a station: walking out of a station leaves its photo and continues through the
 point cloud with the station behind you; walking into another ball enters its
 photo. Escape, **Back to 3D view**, Zoom all or a camera preset return to the
