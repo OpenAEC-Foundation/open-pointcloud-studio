@@ -42,9 +42,9 @@ use rayon::prelude::*;
 #[cfg(test)]
 use selection::select_world;
 use selection::{
-    pick_full_transformed, pick_indexed_transformed, select_full_cancellable,
-    select_world_cancellable, ClassFilter, ClassVisibility, DeletionMask, PickTarget, Projection,
-    ScreenRect, SelectionMask, SelectionSource,
+    pick_displayed, pick_full_transformed, pick_indexed_transformed, select_full_cancellable,
+    select_world_cancellable, ClassFilter, ClassVisibility, DeletionMask, PickTarget, PickView,
+    Projection, ScreenRect, SelectionMask, SelectionSource,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -3362,6 +3362,18 @@ impl Studio {
         let cloud = Arc::clone(&entry.cloud);
         let deleted = entry.deleted.as_ref().map(Arc::clone);
         let transform = entry.transform;
+        let display_views: Vec<_> = self
+            .clouds
+            .iter()
+            .map(|entry| PickView {
+                cloud: Arc::clone(&entry.cloud),
+                detail: entry.detail_points.as_ref().map(Arc::clone),
+                deleted: entry.deleted.as_ref().map(Arc::clone),
+                transform: entry.transform,
+                visible: entry.visible,
+            })
+            .collect();
+        let display_budget = self.budget as usize;
         let projection = Projection::new(
             bounds,
             self.yaw,
@@ -3385,11 +3397,7 @@ impl Studio {
         self.selection_pending = true;
         self.selection_cancel = Arc::new(AtomicBool::new(false));
         let cancel = Arc::clone(&self.selection_cancel);
-        self.status = if tree.is_some() {
-            "Finding nearest point through the octree…".into()
-        } else {
-            "Scanning the full source for the nearest point…".into()
-        };
+        self.status = "Finding the visible point…".into();
         Ok(Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || {
@@ -3399,7 +3407,17 @@ impl Studio {
                         radius,
                         sphere_radius,
                     };
-                    let result = if let Some(tree) = tree {
+                    let result = if let Some(record) = pick_displayed(
+                        &display_views,
+                        index,
+                        display_budget,
+                        projection,
+                        target,
+                        filter,
+                        &cancel,
+                    )? {
+                        Some(record)
+                    } else if let Some(tree) = tree {
                         pick_indexed_transformed(
                             &tree,
                             projection,

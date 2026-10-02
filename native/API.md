@@ -67,9 +67,10 @@ selections the viewport draws a representative highlight sample rather than
 uploading every selected point again; the native status line reports how many
 highlights are shown.
 `pick_screen` uses viewport-local pixel coordinates from the top-left corner;
-`status.result.viewport_size` gives the current width and height. It searches
-the active visible layer's exact source through its octree when available, or
-streams the source otherwise. The optional `radius` defaults to 8 pixels and
+`status.result.viewport_size` gives the current width and height. It first
+checks the point records actually drawn in the active layer's current LOD;
+when none covers the pointer, it searches the exact source through its octree
+when available, or streams the source otherwise. The optional `radius` defaults to 8 pixels and
 may be 1–64. The returned job contains the zero-based source ordinal, world
 XYZ, RGB, intensity and classification for a hit; a miss completes with zero
 points. It honors the section box, class filters and deleted-point mask.
@@ -115,7 +116,7 @@ pick is discarded when cancelled.
 | `set_section` | `min`, `max` | Enables an XYZ section box using two three-number arrays inside the visible model bounds |
 | `clear_section` | — | Disables the section box |
 | `select_world` | `min`, `max` | Selects all exact source points in an inclusive XYZ box, returning a job ID |
-| `pick_screen` | `pointer`, optional `radius` | Picks the frontmost exact point near a viewport-local pixel `[x, y]`, returning a job ID |
+| `pick_screen` | `pointer`, optional `radius` | Picks a drawn source point near viewport pixel `[x, y]` when possible, then falls back to the full source; returns a job ID |
 | `cancel_selection` | — | Stops a running full-resolution box selection or point-pick source scan |
 | `clear_selection` | — | Clears the current point selection |
 | `zoom_selection` | — | Frames the exact selected source points in the 3D view without changing the section box; poll `selection_bounds_pending` in status until the camera updates |

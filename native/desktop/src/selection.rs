@@ -19,6 +19,51 @@ pub(crate) struct PickTarget {
 
 type PickHit = (IndexedPoint, bool, f64, f32);
 
+/// A read-only snapshot of one layer's current viewport sample. The renderer
+/// and point picker must use the same sample order and deletion mask.
+pub(crate) struct PickView {
+    pub cloud: Arc<PointCloud>,
+    pub detail: Option<Arc<[IndexedPoint]>>,
+    pub deleted: Option<Arc<DeletionMask>>,
+    pub transform: CloudTransform,
+    pub visible: bool,
+}
+
+impl PickView {
+    fn len(&self) -> usize {
+        self.detail
+            .as_ref()
+            .map_or(self.cloud.points.len(), |points| points.len())
+    }
+
+    fn records(&self) -> Box<dyn Iterator<Item = IndexedPoint> + '_> {
+        let transform = self.transform;
+        if let Some(detail) = &self.detail {
+            Box::new(
+                detail
+                    .iter()
+                    .copied()
+                    .map(move |record| transform.record(record)),
+            )
+        } else {
+            Box::new(
+                self.cloud
+                    .points
+                    .iter()
+                    .copied()
+                    .zip(self.cloud.point_ordinals.iter().copied())
+                    .map(move |(point, ordinal)| transform.record(IndexedPoint { point, ordinal })),
+            )
+        }
+    }
+
+    fn record_visible(&self, record: IndexedPoint) -> bool {
+        self.deleted
+            .as_ref()
+            .is_none_or(|mask| record.ordinal != u64::MAX && !mask.contains(record.ordinal))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SelectionMask {
     pub bits: Vec<u64>,
@@ -566,6 +611,50 @@ fn validate_pick(pointer: [f32; 2], radius: f32) -> Result<(), String> {
     Ok(())
 }
 
+/// Prefer the point actually drawn under the cursor. The renderer strides the
+/// flattened visible-layer stream before class and section filtering, so the
+/// same stride and ordering are applied here before any full-source fallback.
+pub(crate) fn pick_displayed(
+    views: &[PickView],
+    active: usize,
+    budget: usize,
+    projection: Projection,
+    target: PickTarget,
+    filter: ClassFilter,
+    cancel: &AtomicBool,
+) -> Result<Option<IndexedPoint>, String> {
+    validate_pick(target.pointer, target.radius)?;
+    let sampled: usize = views
+        .iter()
+        .filter(|view| view.visible)
+        .map(PickView::len)
+        .sum();
+    let stride = sampled.div_ceil(budget.max(1)).max(1);
+    let mut position = 0usize;
+    let mut best = None;
+    for (index, view) in views.iter().enumerate() {
+        if !view.visible {
+            continue;
+        }
+        for record in view.records().filter(|record| view.record_visible(*record)) {
+            if position & 0xfff == 0 && cancel.load(Ordering::Relaxed) {
+                return Err(LoadError::Cancelled.to_string());
+            }
+            if index == active && position.is_multiple_of(stride) {
+                consider_pick(record, projection, target, filter, None, &mut best);
+            }
+            position += 1;
+        }
+        if index == active {
+            break;
+        }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(LoadError::Cancelled.to_string());
+    }
+    Ok(best.map(|(record, _, _, _)| record))
+}
+
 fn consider_pick(
     record: IndexedPoint,
     projection: Projection,
@@ -997,6 +1086,93 @@ mod tests {
             &mut edge,
         );
         assert_eq!(edge.unwrap().0.ordinal, far.ordinal);
+    }
+
+    #[test]
+    fn picks_only_the_viewport_lod_records_after_global_stride() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("two-points.xyz");
+        fs::write(&source, "0 0 0\n1 0.1 0\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 2).unwrap());
+        let far = IndexedPoint {
+            point: cloud.points[0],
+            ordinal: cloud.point_ordinals[0],
+        };
+        let near = IndexedPoint {
+            point: cloud.points[1],
+            ordinal: cloud.point_ordinals[1],
+        };
+        let view = PickView {
+            cloud: Arc::clone(&cloud),
+            detail: Some(vec![far, near].into()),
+            deleted: None,
+            transform: CloudTransform::default(),
+            visible: true,
+        };
+        let projection = Projection::new(
+            Bounds {
+                min: [-2.0; 3],
+                max: [2.0; 3],
+            },
+            0.0,
+            0.0,
+            1.0,
+            [0.0; 2],
+            800.0,
+            600.0,
+        );
+        let (x, y, _) = projection.project(far.point.xyz).unwrap();
+        let target = PickTarget {
+            pointer: [x, y],
+            radius: 8.0,
+            sphere_radius: 20.0,
+        };
+        let filter = ClassFilter {
+            ground: true,
+            vegetation: true,
+            buildings: true,
+            other: true,
+            classes: ClassVisibility::default(),
+            section: None,
+        };
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            pick_displayed(&[view], 0, 1, projection, target, filter, &cancel)
+                .unwrap()
+                .unwrap()
+                .ordinal,
+            far.ordinal
+        );
+        let prior = PickView {
+            cloud: Arc::clone(&cloud),
+            detail: Some(
+                vec![IndexedPoint {
+                    point: Point {
+                        xyz: [0.0, 100.0, 0.0],
+                        ..far.point
+                    },
+                    ordinal: far.ordinal,
+                }]
+                .into(),
+            ),
+            deleted: None,
+            transform: CloudTransform::default(),
+            visible: true,
+        };
+        let active = PickView {
+            cloud,
+            detail: Some(vec![far, near].into()),
+            deleted: None,
+            transform: CloudTransform::default(),
+            visible: true,
+        };
+        assert_eq!(
+            pick_displayed(&[prior, active], 1, 2, projection, target, filter, &cancel)
+                .unwrap()
+                .unwrap()
+                .ordinal,
+            near.ordinal
+        );
     }
 
     #[test]

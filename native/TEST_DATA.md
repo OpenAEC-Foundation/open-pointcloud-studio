@@ -346,6 +346,10 @@ pixel `[545,343]` with an 8-pixel tolerance missed in the older picker, then
 selected source ordinal 93,730 (XYZ 1.01844, 0.220011, -1.863; RGB
 `[173,144,115]`) after picking began using the visible sphere radius and
 surface depth; see [the selected sphere](../screenshots/native-wgpu-sphere-depth-pick.png).
+After the picker was made to prefer the same 3,000 source records drawn by
+the GPU, the identical click selected ordinal 77,645 (XYZ 1.026347,
+0.326400, -1.904; RGB `[190,155,116]`); see the
+[visible-LOD selection](../screenshots/native-wgpu-visible-lod-pick.png).
 The same dev build reopened the 46,589,344-point public E57 scan,
 attached its disk octree, and drew a 758,104-point LOD at the normal 2-pixel
 point size without a WGPU validation error.
