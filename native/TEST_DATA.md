@@ -339,6 +339,16 @@ An indexed screen pick selected zero-based ordinal 61,937 at X 0.353, Y 0.537,
 Z -2.409 with RGB `[173, 138, 124]`; the
 [pick screenshot](../screenshots/native-pcl-pcd-cached-pick.png) shows its exact
 source attributes after the fast reopen.
+On 2 October, the WGPU point shader was updated to write curved sphere depth
+instead of one flat depth per sprite. The official region-growing RGB scan was
+rendered at a 3,000-point LOD with 20-pixel spheres. An API click at viewport
+pixel `[545,343]` with an 8-pixel tolerance missed in the older picker, then
+selected source ordinal 93,730 (XYZ 1.01844, 0.220011, -1.863; RGB
+`[173,144,115]`) after picking began using the visible sphere radius and
+surface depth; see [the selected sphere](../screenshots/native-wgpu-sphere-depth-pick.png).
+The same dev build reopened the 46,589,344-point public E57 scan,
+attached its disk octree, and drew a 758,104-point LOD at the normal 2-pixel
+point size without a WGPU validation error.
 
 On 1 October 2026, the Rust reader visited all 968,520 finite points in the
 PCL couch file, all 112,586 in the room scan, and 259,847 finite points in the

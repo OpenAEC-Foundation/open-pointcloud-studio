@@ -14,7 +14,10 @@ const HIGHLIGHT_LIMIT: usize = 8_000;
 pub(crate) struct PickTarget {
     pub pointer: [f32; 2],
     pub radius: f32,
+    pub sphere_radius: f32,
 }
+
+type PickHit = (IndexedPoint, bool, f64, f32);
 
 #[derive(Debug, Clone)]
 pub struct SelectionMask {
@@ -420,7 +423,11 @@ pub fn pick_indexed(
     pick_indexed_transformed(
         tree,
         projection,
-        PickTarget { pointer, radius },
+        PickTarget {
+            pointer,
+            radius,
+            sphere_radius: 0.0,
+        },
         filter,
         deleted,
         CloudTransform::default(),
@@ -437,17 +444,27 @@ pub fn pick_indexed_transformed(
     transform: CloudTransform,
     cancel: &AtomicBool,
 ) -> Result<Option<IndexedPoint>, String> {
-    let PickTarget { pointer, radius } = target;
+    let PickTarget {
+        pointer,
+        radius,
+        sphere_radius,
+    } = target;
     validate_pick(pointer, radius)?;
     if cancel.load(Ordering::Relaxed) {
         return Err(LoadError::Cancelled.to_string());
     }
-    let mut best: Option<(IndexedPoint, f32, f64)> = None;
+    let mut best: Option<PickHit> = None;
+    let search_radius = radius.max(sphere_radius);
     let mut visited = 0u64;
     tree.visit_intersecting(
         |bounds| {
             !cancel.load(Ordering::Relaxed)
-                && node_overlaps_pointer(transform.bounds(bounds), projection, pointer, radius)
+                && node_overlaps_pointer(
+                    transform.bounds(bounds),
+                    projection,
+                    pointer,
+                    search_radius,
+                )
         },
         |record| {
             visited += 1;
@@ -457,8 +474,7 @@ pub fn pick_indexed_transformed(
             consider_pick(
                 transform.record(record),
                 projection,
-                pointer,
-                radius,
+                target,
                 filter,
                 deleted,
                 &mut best,
@@ -470,7 +486,7 @@ pub fn pick_indexed_transformed(
     if cancel.load(Ordering::Relaxed) {
         return Err(LoadError::Cancelled.to_string());
     }
-    Ok(best.map(|(record, _, _)| record))
+    Ok(best.map(|(record, _, _, _)| record))
 }
 
 /// Pick directly from the source when no disk octree has been built yet.
@@ -486,7 +502,11 @@ pub fn pick_full(
     pick_full_transformed(
         cloud,
         projection,
-        PickTarget { pointer, radius },
+        PickTarget {
+            pointer,
+            radius,
+            sphere_radius: 0.0,
+        },
         filter,
         deleted,
         CloudTransform::default(),
@@ -503,7 +523,9 @@ pub fn pick_full_transformed(
     transform: CloudTransform,
     cancel: &AtomicBool,
 ) -> Result<Option<IndexedPoint>, String> {
-    let PickTarget { pointer, radius } = target;
+    let PickTarget {
+        pointer, radius, ..
+    } = target;
     validate_pick(pointer, radius)?;
     if cancel.load(Ordering::Relaxed) {
         return Err(LoadError::Cancelled.to_string());
@@ -518,8 +540,7 @@ pub fn pick_full_transformed(
         consider_pick(
             transform.record(IndexedPoint { point, ordinal }),
             projection,
-            pointer,
-            radius,
+            target,
             filter,
             deleted,
             &mut best,
@@ -535,7 +556,7 @@ pub fn pick_full_transformed(
         return Err(format!("{} changed while picking", cloud.path.display()));
     }
     cloud.validate_source().map_err(|error| error.to_string())?;
-    Ok(best.map(|(record, _, _)| record))
+    Ok(best.map(|(record, _, _, _)| record))
 }
 
 fn validate_pick(pointer: [f32; 2], radius: f32) -> Result<(), String> {
@@ -548,26 +569,50 @@ fn validate_pick(pointer: [f32; 2], radius: f32) -> Result<(), String> {
 fn consider_pick(
     record: IndexedPoint,
     projection: Projection,
-    pointer: [f32; 2],
-    radius: f32,
+    target: PickTarget,
     filter: ClassFilter,
     deleted: Option<&DeletionMask>,
-    best: &mut Option<(IndexedPoint, f32, f64)>,
+    best: &mut Option<PickHit>,
 ) {
+    let PickTarget {
+        pointer,
+        radius,
+        sphere_radius,
+    } = target;
     if deleted.is_some_and(|mask| mask.contains(record.ordinal)) || !filter.accepts(&record.point) {
         return;
     }
-    if let Some((x, y, depth)) = projection.project(record.point.xyz) {
+    if let Some((x, y, depth)) = projection.project_unclipped(record.point.xyz) {
         let dx = x - pointer[0];
         let dy = y - pointer[1];
         let distance_squared = dx * dx + dy * dy;
-        if distance_squared <= radius * radius
-            && best.as_ref().is_none_or(|(_, best_distance, best_depth)| {
-                distance_squared < *best_distance
-                    || (distance_squared == *best_distance && depth < *best_depth)
-            })
-        {
-            *best = Some((record, distance_squared, depth));
+        let sphere_hit = sphere_radius > 0.0 && distance_squared <= sphere_radius * sphere_radius;
+        if distance_squared > radius.max(sphere_radius).powi(2) {
+            return;
+        }
+        let surface_depth = if sphere_hit {
+            let hemisphere = (1.0 - distance_squared / sphere_radius.powi(2))
+                .max(0.0)
+                .sqrt() as f64;
+            (depth - f64::from(sphere_radius) * depth / projection.scale * hemisphere).max(0.01)
+        } else {
+            depth
+        };
+        let better = best
+            .as_ref()
+            .is_none_or(|(_, best_sphere, best_depth, best_distance)| {
+                if sphere_hit != *best_sphere {
+                    sphere_hit
+                } else if sphere_hit {
+                    surface_depth < *best_depth
+                        || (surface_depth == *best_depth && distance_squared < *best_distance)
+                } else {
+                    distance_squared < *best_distance
+                        || (distance_squared == *best_distance && depth < *best_depth)
+                }
+            });
+        if better {
+            *best = Some((record, sphere_hit, surface_depth, distance_squared));
         }
     }
 }
@@ -880,6 +925,79 @@ fn select_one(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn picks_visible_sphere_surface_before_hidden_center_and_accepts_sphere_edge() {
+        let projection = Projection::new(
+            Bounds {
+                min: [-2.0; 3],
+                max: [2.0; 3],
+            },
+            0.0,
+            0.0,
+            1.0,
+            [0.0; 2],
+            800.0,
+            600.0,
+        );
+        let far = IndexedPoint {
+            point: Point {
+                xyz: [0.0, 0.0, 0.0],
+                rgb: None,
+                intensity: None,
+                classification: None,
+            },
+            ordinal: 0,
+        };
+        let near = IndexedPoint {
+            point: Point {
+                xyz: [1.0, 0.1, 0.0],
+                ..far.point
+            },
+            ordinal: 1,
+        };
+        let (x, y, _) = projection.project(far.point.xyz).unwrap();
+        let filter = ClassFilter {
+            ground: true,
+            vegetation: true,
+            buildings: true,
+            other: true,
+            classes: ClassVisibility::default(),
+            section: None,
+        };
+        for records in [[far, near], [near, far]] {
+            let mut best = None;
+            for record in records {
+                consider_pick(
+                    record,
+                    projection,
+                    PickTarget {
+                        pointer: [x, y],
+                        radius: 8.0,
+                        sphere_radius: 20.0,
+                    },
+                    filter,
+                    None,
+                    &mut best,
+                );
+            }
+            assert_eq!(best.unwrap().0.ordinal, near.ordinal);
+        }
+        let mut edge = None;
+        consider_pick(
+            far,
+            projection,
+            PickTarget {
+                pointer: [x + 15.0, y],
+                radius: 8.0,
+                sphere_radius: 20.0,
+            },
+            filter,
+            None,
+            &mut edge,
+        );
+        assert_eq!(edge.unwrap().0.ordinal, far.ordinal);
+    }
 
     #[test]
     fn deleted_and_selected_masks_detect_only_shared_source_ordinals() {
@@ -1425,6 +1543,7 @@ mod tests {
                 PickTarget {
                     pointer: [400.0, 300.0],
                     radius: 8.0,
+                    sphere_radius: 0.0,
                 },
                 filter,
                 None,
@@ -1441,6 +1560,7 @@ mod tests {
                 PickTarget {
                     pointer: [400.0, 300.0],
                     radius: 8.0,
+                    sphere_radius: 0.0,
                 },
                 filter,
                 None,

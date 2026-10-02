@@ -73,6 +73,10 @@ streams the source otherwise. The optional `radius` defaults to 8 pixels and
 may be 1–64. The returned job contains the zero-based source ordinal, world
 XYZ, RGB, intensity and classification for a hit; a miss completes with zero
 points. It honors the section box, class filters and deleted-point mask.
+When the displayed point spheres are larger than the requested tolerance,
+picking also accepts their visible discs and chooses the frontmost curved
+sphere surface where discs overlap. The source search remains exact even when
+the viewport shows only a bounded LOD sample.
 Selections retain their exact source-coordinate bounds. `zoom_selection` uses
 those bounds to frame the points quickly even after a live transform; the
 selection highlight follows the current transform. The command leaves the

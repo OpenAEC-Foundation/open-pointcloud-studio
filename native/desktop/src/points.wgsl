@@ -26,6 +26,8 @@ struct VertexOutput {
     @location(1) local: vec2<f32>,
     @location(2) relative: vec3<f32>,
     @location(3) normal: vec3<f32>,
+    @location(4) point_depth: f32,
+    @location(5) point_world_radius: f32,
 };
 
 @vertex
@@ -36,6 +38,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.local = vec2<f32>(0.0, 0.0);
     output.relative = input.relative.xyz;
     output.normal = vec3<f32>(0.0, 0.0, 0.0);
+    output.point_depth = depth;
+    output.point_world_radius = 0.0;
     if depth <= 0.01 {
         output.position = vec4<f32>(2.0, 2.0, 1.0, 1.0);
         return output;
@@ -54,6 +58,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
         camera.view.z * camera.view.w / camera.surface.z,
         camera.view.z * camera.view.w / camera.surface.w
     );
+    output.point_world_radius = camera.view.z * depth / camera.projection.z;
     let corner = vec2<f32>(
         select(-1.0, 1.0, input.vertex == 1u || input.vertex >= 4u),
         select(-1.0, 1.0, input.vertex == 2u || input.vertex == 3u || input.vertex == 5u)
@@ -82,6 +87,8 @@ fn vs_mesh(input: MeshInput) -> VertexOutput {
     output.local = vec2<f32>(0.0, 0.0);
     output.relative = input.relative.xyz;
     output.normal = input.normal.xyz;
+    output.point_depth = depth;
+    output.point_world_radius = 0.0;
     if depth <= 0.01 {
         output.position = vec4<f32>(2.0, 2.0, 1.0, 1.0);
         return output;
@@ -114,8 +121,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(input.color.rgb * shade, input.color.a);
 }
 
+struct PointFragment {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
 @fragment
-fn fs_point(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_point(input: VertexOutput) -> PointFragment {
     if camera.clip_enabled.x > 0.5 &&
        (any(input.relative < camera.clip_min.xyz) || any(input.relative > camera.clip_max.xyz)) {
         discard;
@@ -132,7 +144,11 @@ fn fs_point(input: VertexOutput) -> @location(0) vec4<f32> {
     let light = normalize(vec3<f32>(-0.45, 0.65, 0.85));
     let shade = 0.72 + 0.28 * max(dot(normal, light), 0.0);
     let glint = pow(max(dot(normal, normalize(vec3<f32>(-0.25, 0.45, 1.0))), 0.0), 24.0) * 0.12;
-    return vec4<f32>(input.color.rgb * shade + vec3<f32>(glint), input.color.a);
+    let front_depth = max(0.01, input.point_depth - input.point_world_radius * normal.z);
+    var output: PointFragment;
+    output.color = vec4<f32>(input.color.rgb * shade + vec3<f32>(glint), input.color.a);
+    output.depth = clamp(front_depth / (camera.projection.w * 4.0), 0.0, 1.0);
+    return output;
 }
 
 @vertex

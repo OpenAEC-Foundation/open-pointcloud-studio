@@ -22,7 +22,7 @@ const POINTS_PER_BUFFER: usize = 2_000_000;
 // At close range the fixed-size sprites become single-pixel specks even when
 // the octree supplies exact points. Grow their screen radius gently so the
 // hemisphere lighting remains legible, without making large user sizes explode.
-fn display_point_radius(point_size: f32, zoom: f32) -> f32 {
+pub(crate) fn display_point_radius(point_size: f32, zoom: f32) -> f32 {
     let close_up = (-zoom.max(0.000_001).log10() * 1.2).clamp(0.0, 4.0);
     point_size + close_up
 }

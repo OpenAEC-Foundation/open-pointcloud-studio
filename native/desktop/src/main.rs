@@ -3371,6 +3371,7 @@ impl Studio {
             size.width,
             size.height,
         );
+        let sphere_radius = gpu_viewport::display_point_radius(self.point_size, self.zoom);
         let filter = ClassFilter {
             ground: self.filter_ground,
             vegetation: self.filter_vegetation,
@@ -3393,7 +3394,11 @@ impl Studio {
             async move {
                 tokio::task::spawn_blocking(move || {
                     cloud.validate_source().map_err(|error| error.to_string())?;
-                    let target = PickTarget { pointer, radius };
+                    let target = PickTarget {
+                        pointer,
+                        radius,
+                        sphere_radius,
+                    };
                     let result = if let Some(tree) = tree {
                         pick_indexed_transformed(
                             &tree,
