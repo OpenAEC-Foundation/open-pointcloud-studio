@@ -2,14 +2,20 @@
 //! evenly spaced data packets, read on several threads, while everything in
 //! between stays unread.
 //!
-//! This works for scans whose record fields all fill whole bytes, because
-//! such a packet can be decoded without the packets before it. The sampled
-//! records are packed into a small E57 image in memory and decoded by the
-//! same reader as a full pass, so both give the same values.
+//! This works for scans whose record fields all fill whole bytes and whose
+//! packets all hold the same number of records, because such a packet can be
+//! decoded without the packets before it. The sampled records are packed
+//! into a small E57 image in memory and decoded by the same reader as a full
+//! pass, so both give the same values.
+//!
+//! Only the packets that are read can be checked. A file whose unread
+//! packets break that layout shows a wrong preview, which is why the result
+//! is marked provisional and gives way to the checked cloud of the full pass.
 
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use e57::{E57Reader, Record, RecordDataType};
 use rayon::prelude::*;
@@ -32,19 +38,26 @@ const IMAGE_PAGE_BYTES: usize = 1024;
 const RECORDS_PER_PACKET: u64 = 256;
 /// Most source bytes one preview reads.
 const MAX_READ_BYTES: u64 = 512 * 1024 * 1024;
+/// Time after which a preview makes do with the packets read so far. A
+/// source that seeks slowly, such as disks behind a network share, would
+/// otherwise take as long over the preview as over reading the whole file.
+const SAMPLING_TIME: Duration = Duration::from_secs(6);
 
 /// A source file read by logical offset, which skips the checksum that ends
 /// every page and verifies it on the way.
 struct Source {
     file: File,
     page: u64,
+    length: u64,
     raw: Vec<u8>,
 }
 
 impl Source {
     fn open(path: &Path, page: u64) -> Result<Self, LoadError> {
+        let file = File::open(path)?;
         Ok(Self {
-            file: File::open(path)?,
+            length: file.metadata()?.len(),
+            file,
             page,
             raw: Vec::new(),
         })
@@ -180,14 +193,17 @@ fn thinned_packet(bytes: &[u8], widths: &[usize], records: usize, take: usize) -
 }
 
 /// Where the packets of one scan lie and how the preview samples them.
+/// Every packet but the last has the length and record count of the first,
+/// and together they hold the stated number of records: field streams that
+/// run in step like that can be decoded from any packet on.
 struct ScanPlan {
     widths: Vec<usize>,
     /// Logical offsets of the first packet and of the end of the section.
     start: u64,
     end: u64,
-    /// Length of the first packet; most writers give every packet this length.
+    /// Length and record count of every packet but the last.
     stride: u64,
-    /// Packets in the section if all have that length.
+    records: usize,
     packets: u64,
     picks: u64,
     take: usize,
@@ -209,19 +225,35 @@ impl ScanPlan {
         let field = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
         let (length, data) = (field(8), field(16));
         let start = logical_offset(data, source.page);
-        let Some(end) = section.checked_add(length).filter(|end| *end > start) else {
+        let end = section
+            .checked_add(length)
+            .filter(|end| *end > start && *end <= logical_offset(source.length, source.page));
+        let Some(end) = end else {
             return Ok(None);
         };
         if bytes[0] != 1 || start < section + SECTION_HEADER_BYTES as u64 {
             return Ok(None);
         }
-        let first = (end - start).min((MAX_PACKET_BYTES + PACKET_HEADER_BYTES) as u64);
+        let first = (end - start).min(MAX_PACKET_BYTES as u64);
         source.read(start, first as usize, &mut bytes)?;
         let Some((stride, records)) = data_packet(&bytes, &widths) else {
             return Ok(None);
         };
         let stride = stride as u64;
         let packets = (end - start).div_ceil(stride);
+        let last = start + (packets - 1) * stride;
+        source.read(last, (end - last) as usize, &mut bytes)?;
+        let closes =
+            data_packet(&bytes, &widths).filter(|(length, _)| last + *length as u64 == end);
+        let Some((_, last_records)) = closes else {
+            return Ok(None);
+        };
+        let stated = (packets - 1)
+            .checked_mul(records as u64)
+            .and_then(|before| before.checked_add(last_records as u64));
+        if stated != Some(scan.records) {
+            return Ok(None);
+        }
         let quota = ((limit as f64 * share).ceil() as u64).max(1);
         let affordable = ((MAX_READ_BYTES as f64 * share) as u64 / stride).max(1);
         let picks = quota
@@ -232,95 +264,57 @@ impl ScanPlan {
             start,
             end,
             stride,
+            records,
             packets,
             picks,
             take: (quota.div_ceil(picks) as usize).min(records),
         }))
     }
 
-    /// Every packet in turn, for a scan small enough to sample all of them.
-    fn walk(&self, source: &mut Source) -> Result<Option<Vec<Thinned>>, LoadError> {
-        let header = PACKET_HEADER_BYTES + 2 * self.widths.len();
-        let mut thinned = Vec::new();
-        let mut bytes = Vec::new();
-        // Logical offset of `bytes` and of the packet being read.
-        let (mut loaded, mut at) = (self.start, self.start);
-        while at < self.end {
-            let position = (at - loaded) as usize;
-            if bytes.len() < position + MAX_PACKET_BYTES.min((self.end - at) as usize) {
-                let amount = (self.end - at).min(4 * 1024 * 1024);
-                source.read(at, amount as usize, &mut bytes)?;
-                loaded = at;
-                continue;
-            }
-            let packet = &bytes[position..];
-            if packet.len() < 4 {
-                break;
-            }
-            let length = packet_length(packet);
-            // Index and ignored packets are stepped over; anything else is
-            // not a packet boundary.
-            if packet[0] > 2 || !length.is_multiple_of(4) {
-                return Ok(None);
-            }
-            if packet[0] == DATA_PACKET {
-                if packet.len() < header.max(length) {
-                    return Ok(None);
-                }
-                let Some((_, records)) = data_packet(packet, &self.widths) else {
-                    return Ok(None);
-                };
-                let take = self.take.min(records);
-                thinned.push((thinned_packet(packet, &self.widths, records, take), take));
-            }
-            at += length as u64;
+    /// The packet at one of the evenly spaced places in the section, or
+    /// `None` when the packet there is not laid out like the first.
+    fn pick(
+        &self,
+        source: &mut Source,
+        pick: u64,
+        bytes: &mut Vec<u8>,
+    ) -> Result<Option<Thinned>, LoadError> {
+        let index = (u128::from(pick) * u128::from(self.packets) / u128::from(self.picks)) as u64;
+        let at = self.start + index * self.stride;
+        source.read(at, (self.end - at).min(self.stride) as usize, bytes)?;
+        let Some((length, records)) = data_packet(bytes, &self.widths) else {
+            return Ok(None);
+        };
+        let expected = if index + 1 < self.packets {
+            length as u64 == self.stride && records == self.records
+        } else {
+            at + length as u64 == self.end
+        };
+        if !expected || bytes.len() < length {
+            return Ok(None);
         }
-        Ok(Some(thinned))
-    }
-
-    /// The packet at one of the evenly spaced places in the section.
-    fn pick(&self, source: &mut Source, pick: u64, bytes: &mut Vec<u8>) -> Option<Thinned> {
-        let header = PACKET_HEADER_BYTES + 2 * self.widths.len();
-        let guess = self.start + pick * self.packets / self.picks * self.stride;
-        if guess >= self.end {
-            return None;
-        }
-        // Expect a packet exactly here, followed by another one.
-        let wanted = (self.end - guess).min(self.stride + header as u64);
-        source.read(guess, wanted as usize, bytes).ok()?;
-        if let Some((length, records)) = data_packet(bytes, &self.widths) {
-            let follows = guess + length as u64 >= self.end
-                || (length as u64 <= self.stride
-                    && data_packet(&bytes[length..], &self.widths).is_some());
-            if follows && bytes.len() >= length {
-                return Some(self.thin(bytes, records));
-            }
-        }
-        // Packets of other lengths came before: look for the next packet
-        // that is followed by another one.
-        let base = guess.next_multiple_of(4);
-        if base >= self.end {
-            return None;
-        }
-        let window = (self.end - base).min((2 * MAX_PACKET_BYTES + header) as u64);
-        source.read(base, window as usize, bytes).ok()?;
-        (0..bytes.len().saturating_sub(header))
-            .step_by(4)
-            .find_map(|at| {
-                let (length, records) = data_packet(&bytes[at..], &self.widths)?;
-                let next = at + length;
-                let follows = base + next as u64 >= self.end
-                    || bytes
-                        .get(next..)
-                        .is_some_and(|rest| data_packet(rest, &self.widths).is_some());
-                (follows && next <= bytes.len()).then(|| self.thin(&bytes[at..], records))
-            })
-    }
-
-    fn thin(&self, packet: &[u8], records: usize) -> Thinned {
         let take = self.take.min(records);
-        (thinned_packet(packet, &self.widths, records, take), take)
+        Ok(Some((
+            thinned_packet(bytes, &self.widths, records, take),
+            take,
+        )))
     }
+}
+
+/// A step that visits every pick once and puts consecutive turns far apart,
+/// so that the picks read before time runs out are spread through the file.
+fn spread_step(picks: u64) -> u64 {
+    let gcd = |mut a: u64, mut b: u64| {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    };
+    let mut step = ((picks as f64 * 0.618) as u64).max(1);
+    while gcd(step, picks) != 1 {
+        step -= 1;
+    }
+    step
 }
 
 /// Lay logical bytes out in pages that each end with their checksum.
@@ -348,6 +342,14 @@ fn image_physical(logical: usize) -> u64 {
 /// only, so the caller replaces this cloud with the checked result of a full
 /// pass and must not index or export it.
 pub(crate) fn preview(path: &Path, limit: usize) -> Result<Option<PointCloud>, LoadError> {
+    preview_within(path, limit, SAMPLING_TIME)
+}
+
+fn preview_within(
+    path: &Path,
+    limit: usize,
+    time: Duration,
+) -> Result<Option<PointCloud>, LoadError> {
     let stamp = SourceStamp::read(path)?;
     let mut header = [0u8; FILE_HEADER_BYTES];
     File::open(path)?.read_exact(&mut header)?;
@@ -371,36 +373,40 @@ pub(crate) fn preview(path: &Path, limit: usize) -> Result<Option<PointCloud>, L
         let Some(plan) = ScanPlan::new(&mut source, scan, share, limit)? else {
             return Ok(None);
         };
-        plans.push((index, plan));
+        plans.push((index, time.mul_f64(share), plan));
     }
 
     // The image: a file header, one section per scan and the source's XML.
     let mut logical = vec![0u8; FILE_HEADER_BYTES];
     let mut sections = Vec::new();
-    for (index, plan) in &plans {
-        let thinned = if plan.picks >= plan.packets {
-            let Some(thinned) = plan.walk(&mut source)? else {
-                return Ok(None);
-            };
-            thinned
-        } else {
-            let thinned: Vec<_> = (0..plan.picks)
-                .into_par_iter()
-                .map_init(
-                    || (Source::open(path, page).ok(), Vec::new()),
-                    |(source, bytes), pick| plan.pick(source.as_mut()?, pick, bytes),
-                )
-                .collect::<Vec<_>>()
-                .into_iter()
-                .flatten()
-                .collect();
-            // Too few packets found where they were expected: the file is
-            // not laid out the way this preview assumes.
-            if (thinned.len() as u64) < plan.picks.div_ceil(2) {
-                return Ok(None);
-            }
-            thinned
+    for (index, time, plan) in &plans {
+        let step = spread_step(plan.picks);
+        let deadline = Instant::now() + *time;
+        let read = (0..plan.picks)
+            .into_par_iter()
+            .map_init(
+                || (Source::open(path, page), Vec::new()),
+                |(source, bytes), turn| {
+                    if turn > 0 && Instant::now() >= deadline {
+                        return Ok(Some(None));
+                    }
+                    let pick = turn * step % plan.picks;
+                    match source {
+                        Ok(source) => Ok(plan
+                            .pick(source, pick, bytes)?
+                            .map(|thinned| Some((pick, thinned)))),
+                        Err(error) => Err(LoadError::InvalidData(error.to_string())),
+                    }
+                },
+            )
+            .collect::<Result<Option<Vec<_>>, LoadError>>()?;
+        let Some(read) = read else {
+            return Ok(None);
         };
+        // Back in file order, whatever order the turns were read in.
+        let mut read: Vec<(u64, Thinned)> = read.into_iter().flatten().collect();
+        read.sort_unstable_by_key(|(pick, _)| *pick);
+        let thinned: Vec<Thinned> = read.into_iter().map(|(_, thinned)| thinned).collect();
         let records: u64 = thinned.iter().map(|(_, records)| *records as u64).sum();
         if records == 0 {
             continue;
@@ -470,13 +476,10 @@ pub(crate) fn preview(path: &Path, limit: usize) -> Result<Option<PointCloud>, L
         has_intensity: points.iter().any(|point| point.intensity.is_some()),
         has_classification: false,
         points,
-        scan_poses: scans
-            .iter()
-            .enumerate()
-            .filter_map(|(index, scan)| e57_points::scan_pose(index, scan))
-            .collect(),
+        scan_poses: e57_points::stations(&scans).into_iter().flatten().collect(),
         scan_images: super::scan_images(path),
         source_stamp: Some(stamp),
+        provisional: true,
     }))
 }
 
@@ -627,36 +630,64 @@ mod tests {
         assert_eq!(runs, 8);
     }
 
-    #[test]
-    fn packets_of_other_lengths_are_found_by_looking_for_them() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("uneven.e57");
-        write_scan(&source, 100_000, false);
-        let scan = e57_points::open_reader(&source).unwrap().pointclouds()[0].clone();
-        let mut file = Source::open(&source, 1024).unwrap();
-        let mut plan = ScanPlan::new(&mut file, &scan, 1.0, 4_000)
-            .unwrap()
-            .unwrap();
-        // Pretend the first packet was shorter than the rest.
-        plan.stride = plan.stride / 2 + 4;
-        plan.packets = (plan.end - plan.start).div_ceil(plan.stride);
-        let mut bytes = Vec::new();
-        let mut found = 0;
-        for pick in 0..plan.picks {
-            let Some((packet, records)) = plan.pick(&mut file, pick, &mut bytes) else {
-                continue;
-            };
-            assert_eq!(
-                data_packet(&packet, &plan.widths),
-                Some((packet.len(), records))
-            );
-            // The first value is a local X coordinate of the scan written above.
-            let at = PACKET_HEADER_BYTES + 2 * plan.widths.len();
-            let x = f64::from_le_bytes(packet[at..at + 8].try_into().unwrap()) * 100.0;
-            assert!((x - x.round()).abs() < 1e-6 && (0.0..100_000.0).contains(&x));
-            found += 1;
+    /// Overwrite bytes at a logical offset, keeping the page checksums right.
+    fn patch(path: &Path, at: u64, bytes: &[u8]) {
+        let mut file = fs::read(path).unwrap();
+        for (offset, byte) in (at..).zip(bytes) {
+            file[(offset / 1020 * 1024 + offset % 1020) as usize] = *byte;
         }
-        assert!(found >= plan.picks - 1);
+        for page in file.as_chunks_mut::<1024>().0 {
+            let checksum = crc32c::crc32c(&page[..1020]).to_be_bytes();
+            page[1020..].copy_from_slice(&checksum);
+        }
+        fs::write(path, file).unwrap();
+    }
+
+    fn plan(path: &Path, limit: usize) -> ScanPlan {
+        let scan = e57_points::open_reader(path).unwrap().pointclouds()[0].clone();
+        let mut source = Source::open(path, 1024).unwrap();
+        ScanPlan::new(&mut source, &scan, 1.0, limit)
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_packet_unlike_the_first_gives_no_preview() {
+        let directory = tempfile::tempdir().unwrap();
+
+        // The fourth packet is one to step over, so the packets after it no
+        // longer continue the records of the first three.
+        let skipped = directory.path().join("skipped.e57");
+        write_scan(&skipped, 100_000, false);
+        let layout = plan(&skipped, 1_000);
+        assert!(layout.packets > 10);
+        patch(&skipped, layout.start + 3 * layout.stride, &[2]);
+        assert!(preview(&skipped, 10_000_000).unwrap().is_none());
+
+        // The sixth packet holds one more X and one fewer Z value: the same
+        // length, but its streams are out of step.
+        let shifted = directory.path().join("shifted.e57");
+        write_scan(&shifted, 100_000, false);
+        let stream = (layout.records * 8) as u16;
+        let header = layout.start + 5 * layout.stride + PACKET_HEADER_BYTES as u64;
+        patch(&shifted, header, &(stream + 8).to_le_bytes());
+        patch(&shifted, header + 4, &(stream - 8).to_le_bytes());
+        assert!(preview(&shifted, 10_000_000).unwrap().is_none());
+
+        // The last packet ends before the section does.
+        let short = directory.path().join("short.e57");
+        write_scan(&short, 100_000, false);
+        let last = layout.start + (layout.packets - 1) * layout.stride;
+        let length = ((layout.end - last - 4 - 1) as u16).to_le_bytes();
+        patch(&short, last + 2, &length);
+        assert!(ScanPlan::new(
+            &mut Source::open(&short, 1024).unwrap(),
+            &e57_points::open_reader(&short).unwrap().pointclouds()[0],
+            1.0,
+            1_000,
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
@@ -668,12 +699,100 @@ mod tests {
         // Its row index is part of a scanner sweep, so the pose is a station.
         assert_eq!(e57_points::scan_poses(&packed).unwrap().len(), 1);
 
+        // A page with the section header fails its checksum.
         let damaged = directory.path().join("damaged.e57");
-        write_scan(&damaged, 20_000, false);
+        write_scan(&damaged, 200_000, false);
+        let layout = plan(&damaged, 2_000);
         let mut bytes = fs::read(&damaged).unwrap();
         bytes[600] ^= 0x40;
-        fs::write(&damaged, bytes).unwrap();
-        assert!(preview(&damaged, 1_000).is_err());
+        fs::write(&damaged, &bytes).unwrap();
+        assert!(preview(&damaged, 2_000).is_err());
+
+        // So does a page of a packet that only a later pick reads.
+        bytes[600] ^= 0x40;
+        assert_eq!(layout.picks, 8);
+        let inside = layout.start + layout.packets / 8 * layout.stride + 100;
+        bytes[(inside / 1020 * 1024 + inside % 1020) as usize] ^= 0x40;
+        fs::write(&damaged, &bytes).unwrap();
+        assert!(matches!(
+            preview(&damaged, 2_000),
+            Err(LoadError::InvalidData(_))
+        ));
+    }
+
+    #[test]
+    fn a_slow_source_shows_the_packets_read_in_time() {
+        for picks in [1, 2, 3, 8, 90, 7_813, 10_000] {
+            let step = spread_step(picks);
+            let mut seen = vec![false; picks as usize];
+            for turn in 0..picks {
+                seen[(turn * step % picks) as usize] = true;
+            }
+            assert!(seen.iter().all(|seen| *seen), "{picks} picks");
+        }
+        // Consecutive turns land far apart.
+        assert_eq!(spread_step(1_000), 617);
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("slow.e57");
+        write_scan(&source, 200_000, false);
+        let expected = full_pass(&source);
+        // No time at all still reads the first packet.
+        let cloud = preview_within(&source, 2_000, Duration::ZERO)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cloud.points.len(), 250);
+        assert!(same(&cloud.points[0], &expected[0]));
+        assert_eq!(cloud.total_points, 200_000);
+        assert!(cloud.provisional);
+    }
+
+    #[test]
+    fn only_a_lone_nameless_scan_without_a_sweep_has_no_station() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("setups.e57");
+        let mut writer =
+            E57Writer::from_file(&source, "{00000000-0000-4000-8000-000000000031}").unwrap();
+        for (guid, x) in [
+            ("{00000000-0000-4000-8000-000000000032}", 1.0),
+            ("{00000000-0000-4000-8000-000000000033}", 5.0),
+        ] {
+            let mut scan = writer
+                .add_pointcloud(
+                    guid,
+                    vec![
+                        Record::CARTESIAN_X_F64,
+                        Record::CARTESIAN_Y_F64,
+                        Record::CARTESIAN_Z_F64,
+                    ],
+                )
+                .unwrap();
+            scan.set_transform(Some(Transform {
+                rotation: Quaternion {
+                    w: 1.0,
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                translation: Translation { x, y: 0.0, z: 0.0 },
+            }));
+            scan.add_point(vec![
+                RecordValue::Double(0.0),
+                RecordValue::Double(1.0),
+                RecordValue::Double(2.0),
+            ])
+            .unwrap();
+            scan.finalize().unwrap();
+        }
+        writer.finalize().unwrap();
+        // Two nameless scans are two setups, each at its own place.
+        let poses = e57_points::scan_poses(&source).unwrap();
+        assert_eq!(poses.len(), 2);
+        assert_eq!(poses[1].position, [5.0, 0.0, 0.0]);
+
+        let merged = directory.path().join("merged.e57");
+        write_scan(&merged, 1_000, false);
+        assert!(e57_points::scan_poses(&merged).unwrap().is_empty());
     }
 
     #[test]

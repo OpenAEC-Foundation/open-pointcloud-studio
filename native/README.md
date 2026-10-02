@@ -121,12 +121,18 @@ a network share sets the pace. From 512 MiB such a file first shows a preview
 of two million points taken from data packets spread evenly through the file,
 read on several threads while everything in between stays unread; an 8.7 GB
 cloud of 455 million points on a share that reads 100 MB/s shows up in about
-ten seconds. The sampled records are decoded by the same reader as a full
+ten seconds. Sampling stops after six seconds on a source that seeks slowly
+and shows the packets read by then, which are spread through the file as
+well. The sampled records are decoded by the same reader as a full
 pass and are replaced by the checked cloud and its octree once the whole file
-has been read. This needs record fields that all fill whole bytes, which
-merged clouds usually have; station scans with a packed row and column index
-open as before. A scan with neither a scanner sweep nor a name is treated as
-a merged cloud: its pose places the points but shows no station marker.
+has been read. This needs record fields that all fill whole bytes and
+packets that all hold the same number of records, which merged clouds
+usually have; station scans with a packed row and column index open as
+before. Only the packets that are read can be checked, so the preview is
+provisional: it cannot be indexed, and it is closed again when the full pass
+fails or is cancelled. The only scan of a file, when it has neither a scanner
+sweep nor a name, is treated as a merged cloud: its pose places the points
+but shows no station marker.
 Without stations, a scene whose bounds are stretched by a few stray far
 points is framed around the bulk of its points.
 

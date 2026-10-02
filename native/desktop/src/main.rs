@@ -4772,9 +4772,7 @@ impl Studio {
                             entry.index_building = false;
                             // A preview sampled before the full pass has
                             // loose bounds: the checked cloud takes its place.
-                            if entry.cloud.bounds != cloud.bounds
-                                || entry.cloud.total_points != cloud.total_points
-                            {
+                            if entry.cloud.provisional {
                                 entry.cloud = Arc::clone(&cloud);
                                 replaced = true;
                             }
@@ -4788,16 +4786,12 @@ impl Studio {
                             ready = true;
                         }
                         if replaced {
-                            let camera = (self.yaw, self.pitch, self.zoom, self.pan);
-                            if self.auto_camera == Some(camera) {
-                                self.frame_new_scene();
-                            } else {
-                                self.preserve_camera_for_scene_change(scene);
-                            }
+                            self.reframe_after_replacement(scene);
                         }
                     }
                     Err(error) => {
                         let mut preview_remains = false;
+                        let mut unchecked = None;
                         if let Some(entry) = self
                             .clouds
                             .iter_mut()
@@ -4805,7 +4799,16 @@ impl Studio {
                         {
                             entry.index_import_id = None;
                             entry.index_building = false;
-                            preview_remains = true;
+                            if entry.cloud.provisional {
+                                unchecked = Some(Arc::clone(&entry.cloud));
+                            } else {
+                                preview_remains = true;
+                            }
+                        }
+                        if let Some(preview) = unchecked {
+                            // Its points were never checked against the
+                            // source, so the layer cannot stay.
+                            self.remove_header_layer(&preview);
                         }
                         self.status = if cancelled {
                             if import.is_some() {
@@ -4819,8 +4822,10 @@ impl Studio {
                             format!("Import or octree failed: {error}")
                         };
                     }
-                    Ok(_) => {
+                    Ok((cloud, _)) => {
+                        let scene = combined_bounds(&self.clouds);
                         let mut preview_remains = false;
+                        let mut replaced = false;
                         if let Some(entry) = self
                             .clouds
                             .iter_mut()
@@ -4828,7 +4833,17 @@ impl Studio {
                         {
                             entry.index_import_id = None;
                             entry.index_building = false;
+                            if entry.cloud.provisional {
+                                // The full pass did finish: its checked cloud
+                                // takes the place of the sampled preview.
+                                entry.cloud = cloud;
+                                replaced = true;
+                            }
                             preview_remains = true;
+                        }
+                        if replaced {
+                            self.revision += 1;
+                            self.reframe_after_replacement(scene);
                         }
                         self.status = if import.is_some() {
                             "Import cancelled".into()
@@ -7625,6 +7640,16 @@ impl Studio {
             },
             Message::RefreshDetail,
         )
+    }
+
+    /// Keep the view after a preview gave way to its checked cloud: framed
+    /// anew when the user left the camera alone, otherwise where they put it.
+    fn reframe_after_replacement(&mut self, old_scene: Option<Bounds>) {
+        if self.auto_camera == Some((self.yaw, self.pitch, self.zoom, self.pan)) {
+            self.frame_new_scene();
+        } else {
+            self.preserve_camera_for_scene_change(old_scene);
+        }
     }
 
     fn preserve_camera_for_scene_change(&mut self, old_scene: Option<Bounds>) {
@@ -12906,32 +12931,71 @@ mod import_api_tests {
         // Sampled before the full pass: the bounds miss the farthest point.
         let mut loose = (*cloud).clone();
         loose.bounds.max = [2.0, 3.0, 4.0];
-        let mut studio = Studio {
-            index_pending: true,
-            ..Studio::default()
+        loose.provisional = true;
+        let loose = Arc::new(loose);
+        let preview = |studio: &mut Studio, id: u64| {
+            studio.index_pending = true;
+            studio.index_cancel = Arc::new(AtomicBool::new(false));
+            studio.imports.insert(
+                id,
+                ImportJob {
+                    path: path.clone(),
+                    decoded: Arc::new(AtomicU64::new(0)),
+                    cancel: Arc::clone(&studio.index_cancel),
+                },
+            );
+            let _ = studio.update(Message::IndexedImportPreview(id, Arc::clone(&loose)));
+            assert!(studio.clouds[0].cloud.provisional);
         };
-        studio.imports.insert(
-            23,
-            ImportJob {
-                path,
-                decoded: Arc::new(AtomicU64::new(0)),
-                cancel: Arc::clone(&studio.index_cancel),
-            },
-        );
-        let _ = studio.update(Message::IndexedImportPreview(23, Arc::new(loose)));
-        assert_eq!(studio.clouds[0].cloud.bounds.max, [2.0, 3.0, 4.0]);
+
+        let mut studio = Studio::default();
+        preview(&mut studio, 23);
         // The user moved the camera while the scan was still being read.
         studio.yaw = 1.0;
         studio.zoom = 0.4;
-
         let _ = studio.update(Message::IndexedImportReady(
             23,
-            Ok((Arc::clone(&cloud), index)),
+            Ok((Arc::clone(&cloud), Arc::clone(&index))),
         ));
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
         assert!(studio.clouds[0].index.is_some());
         assert_eq!(studio.clouds.len(), 1);
         assert_eq!(studio.yaw, 1.0);
+
+        // A full pass that fails leaves no layer of unchecked points behind.
+        let mut studio = Studio::default();
+        preview(&mut studio, 24);
+        let _ = studio.update(Message::IndexedImportReady(24, Err("damaged".into())));
+        assert!(studio.clouds.is_empty());
+        assert_eq!(studio.status, "Import or octree failed: damaged");
+
+        // Cancelled while reading: the same.
+        let mut studio = Studio::default();
+        preview(&mut studio, 25);
+        let _ = studio.update(Message::CancelIndex);
+        let _ = studio.update(Message::IndexedImportReady(25, Err("cancelled".into())));
+        assert!(studio.clouds.is_empty());
+
+        // Cancelled as the pass finished: its checked cloud stays, unindexed.
+        let mut studio = Studio::default();
+        preview(&mut studio, 26);
+        let _ = studio.update(Message::CancelIndex);
+        let _ = studio.update(Message::IndexedImportReady(
+            26,
+            Ok((Arc::clone(&cloud), index)),
+        ));
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
+        assert!(studio.clouds[0].index.is_none());
+
+        // The core refuses to index a cloud that was not checked.
+        assert!(OctreeIndex::build_cached(
+            &loose,
+            IndexConfig {
+                scratch_dir: Some(dir.path().join("cache")),
+                ..IndexConfig::default()
+            },
+        )
+        .is_err());
     }
 
     #[test]

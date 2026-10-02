@@ -156,6 +156,10 @@ pub struct PointCloud {
     pub scan_poses: Vec<ScanPose>,
     /// Photos stored with the scanner stations, listed without decoding them.
     pub scan_images: Vec<ScanImage>,
+    /// Shown ahead of a full pass over the source: the count is the stated
+    /// one and the bounds are loose. Such a cloud is replaced by the checked
+    /// result and cannot be indexed.
+    pub provisional: bool,
     source_stamp: Option<SourceStamp>,
 }
 
@@ -357,6 +361,7 @@ pub fn open_e57_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         has_classification: false,
         scan_poses: summary.poses,
         scan_images: scan_images(path),
+        provisional: true,
         source_stamp: Some(stamp),
     })
 }
@@ -462,6 +467,7 @@ pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         has_classification: true,
         scan_poses: Vec::new(),
         scan_images: Vec::new(),
+        provisional: false,
         source_stamp: Some(stamp),
     })
 }
@@ -631,6 +637,7 @@ impl Collector {
             has_classification: self.has_classification,
             scan_poses: Vec::new(),
             scan_images: Vec::new(),
+            provisional: false,
             source_stamp: None,
         })
     }

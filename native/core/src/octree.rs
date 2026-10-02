@@ -168,6 +168,11 @@ impl OctreeIndex {
                 "octree limits must be positive".into(),
             ));
         }
+        if cloud.provisional {
+            return Err(LoadError::InvalidData(
+                "the cloud is a preview that was not checked against its source".into(),
+            ));
+        }
         let expected_stamp = cloud
             .source_stamp
             .ok_or_else(|| LoadError::InvalidData("source identity is unavailable".into()))?;
@@ -249,6 +254,11 @@ impl OctreeIndex {
         mut config: IndexConfig,
         mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
     ) -> Result<Self, LoadError> {
+        if cloud.provisional {
+            return Err(LoadError::InvalidData(
+                "the cloud is a preview that was not checked against its source".into(),
+            ));
+        }
         let stamp = cloud
             .source_stamp
             .ok_or_else(|| LoadError::InvalidData("source identity is unavailable".into()))?;
@@ -930,6 +940,7 @@ pub(crate) fn open_cached_preview(
         },
         scan_images: Vec::new(),
         source_stamp: Some(stamp),
+        provisional: false,
     };
     let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint)?;
     if path
@@ -1108,7 +1119,12 @@ fn open_preview_cache_in(
         scan_poses: header.scan_poses,
         scan_images: super::scan_images(path),
         source_stamp: Some(stamp),
+        provisional: false,
     };
+    // E57 stations come from the file itself, like its photos.
+    if super::is_e57(path) {
+        cloud.scan_poses = e57_points::scan_poses(path)?;
+    }
     read_records(&points_path, |record| {
         if cloud.points.len() < sample_limit {
             cloud.points.push(record.point);

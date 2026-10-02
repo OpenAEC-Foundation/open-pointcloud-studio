@@ -19,12 +19,22 @@ pub(crate) fn open_reader(path: &Path) -> Result<E57Reader<WindowReader>, LoadEr
     Ok(E57Reader::new(WindowReader::open(path)?)?)
 }
 
-/// The scanner station of a scan. A merged cloud is stored as a scan too,
-/// but its pose only places its coordinates: a scan with neither the grid or
-/// angles of a scanner sweep nor a name has no station.
-pub(crate) fn scan_pose(index: usize, scan: &PointCloud) -> Option<ScanPose> {
+/// The scanner station of every scan in a file that has one. A merged cloud
+/// is stored as a scan too, but its pose only places its coordinates: the
+/// only scan of a file has no station when it has neither the grid or angles
+/// of a scanner sweep nor a name.
+pub(crate) fn stations(scans: &[PointCloud]) -> Vec<Option<ScanPose>> {
+    scans
+        .iter()
+        .enumerate()
+        .map(|(index, scan)| scan_pose(index, scan, scans.len() == 1))
+        .collect()
+}
+
+fn scan_pose(index: usize, scan: &PointCloud, alone: bool) -> Option<ScanPose> {
     let transform = scan.transform.as_ref()?;
-    let swept = scan.index_bounds.is_some()
+    let swept = !alone
+        || scan.index_bounds.is_some()
         || scan.spherical_bounds.is_some()
         || scan.prototype.iter().any(|record| {
             matches!(
@@ -66,11 +76,9 @@ pub(crate) fn scan_pose(index: usize, scan: &PointCloud) -> Option<ScanPose> {
 /// Read scanner stations from E57 metadata without decoding point records.
 pub(crate) fn scan_poses(path: &Path) -> Result<Vec<ScanPose>, LoadError> {
     let file = open_reader(path)?;
-    Ok(file
-        .pointclouds()
-        .iter()
-        .enumerate()
-        .filter_map(|(index, scan)| scan_pose(index, scan))
+    Ok(stations(&file.pointclouds())
+        .into_iter()
+        .flatten()
         .collect())
 }
 
@@ -95,11 +103,11 @@ pub(crate) fn summary(path: &Path) -> Result<Summary, LoadError> {
         has_intensity: false,
         poses: Vec::new(),
     };
-    for (index, scan) in file.pointclouds().iter().enumerate() {
+    let scans = file.pointclouds();
+    for (scan, pose) in scans.iter().zip(stations(&scans)) {
         summary.records += scan.records;
         summary.has_rgb |= scan.has_color();
         summary.has_intensity |= scan.has_intensity();
-        let pose = scan_pose(index, scan);
         if let Some(local) = scan.get_cartesian_bounds() {
             let (Some(x0), Some(x1), Some(y0), Some(y1), Some(z0), Some(z1)) = (
                 local.x_min,
@@ -167,12 +175,12 @@ pub(crate) fn summary(path: &Path) -> Result<Summary, LoadError> {
 pub(crate) fn scan_images(path: &Path) -> Result<Vec<ScanImage>, LoadError> {
     let file = open_reader(path)?;
     // Stations are numbered like `scan_poses`: scans without a pose are skipped.
-    let mut stations = Vec::new();
-    for (index, scan) in file.pointclouds().iter().enumerate() {
-        if let Some(pose) = scan_pose(index, scan) {
-            stations.push((scan.guid.clone(), pose.position));
-        }
-    }
+    let scans = file.pointclouds();
+    let stations: Vec<_> = scans
+        .iter()
+        .zip(stations(&scans))
+        .filter_map(|(scan, pose)| Some((scan.guid.clone(), pose?.position)))
+        .collect();
     let mut images = Vec::new();
     for image in file.images() {
         let (Some(Projection::Pinhole(pinhole)), Some(transform)) =
@@ -280,11 +288,12 @@ pub fn read(
     pose_push: &mut impl FnMut(ScanPose),
 ) -> Result<(), LoadError> {
     let mut file = open_reader(path)?;
-    for (index, scan) in file.pointclouds().into_iter().enumerate() {
-        if let Some(pose) = scan_pose(index, &scan) {
+    let scans = file.pointclouds();
+    for (scan, pose) in scans.iter().zip(stations(&scans)) {
+        if let Some(pose) = pose {
             pose_push(pose);
         }
-        read_scan(&mut file, &scan, push)?;
+        read_scan(&mut file, scan, push)?;
     }
     Ok(())
 }
