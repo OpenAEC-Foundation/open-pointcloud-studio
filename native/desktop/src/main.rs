@@ -4398,6 +4398,17 @@ impl Studio {
         ))
     }
 
+    /// Give the system title bar the colours of the strip below it.
+    fn sync_window_chrome(&self) -> bool {
+        let colors = self.ui_theme.colors();
+        let bytes = |color: Color| [color.r, color.g, color.b].map(|c| (c * 255.0).round() as u8);
+        native_chrome::apply(
+            self.ui_theme != UiTheme::Light,
+            bytes(colors.tabs),
+            bytes(colors.text),
+        )
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
         self.track_progress();
@@ -4407,7 +4418,7 @@ impl Studio {
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SyncWindowChrome(retries) => {
-                if !native_chrome::apply(self.ui_theme != UiTheme::Light) && retries > 0 {
+                if !self.sync_window_chrome() && retries > 0 {
                     return Task::perform(
                         async move {
                             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -4632,7 +4643,7 @@ impl Studio {
             Message::Theme(theme) => {
                 self.ui_theme = theme;
                 theme.save();
-                let _ = native_chrome::apply(theme != UiTheme::Light);
+                let _ = self.sync_window_chrome();
             }
             Message::PersistSettings(revision) => {
                 if revision == self.settings_revision {

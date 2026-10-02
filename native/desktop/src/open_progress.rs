@@ -169,6 +169,11 @@ impl Studio {
                 .filter(|entry| entry.auto_index_queued)
                 .count();
             let (phase, mut detail, fraction) = match progress.stage {
+                // Nothing read yet: the source is being opened, or an octree
+                // kept from an earlier session is being attached.
+                IndexStage::ReadingSource if progress.completed == 0 => {
+                    (Phase::Reading, "Preparing…".to_owned(), None)
+                }
                 IndexStage::ReadingSource => (
                     Phase::Reading,
                     format!(
