@@ -797,6 +797,9 @@ mod tests {
 
     #[test]
     fn indexing_shows_the_spread_preview_before_the_checked_cloud() {
+        let _places = crate::snapshots::TEST_PLACES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("indexed.e57");
         write_scan(&source, 60_000, false);
@@ -819,24 +822,26 @@ mod tests {
             |_| Ok(()),
         )
         .unwrap();
-        // The spread preview comes first and then, added to it, what the
-        // pass has read; the checked cloud is returned.
+        // The spread preview comes first; the checked cloud follows when the
+        // pass ends, before the tree is built, and is the one returned. It
+        // keeps more points than asked for, like the snapshots before it.
         assert_eq!(previews.len(), 2);
-        assert!(previews.iter().all(|preview| preview.provisional));
+        assert!(previews[0].provisional);
         assert_eq!(previews[0].points.len(), 60_000);
         assert!(previews[0]
             .point_ordinals
             .iter()
             .all(|ordinal| *ordinal == u64::MAX));
-        assert_eq!(previews[1].points.len(), 120_000);
-        assert!(previews[1].point_ordinals[60_000..]
+        assert!(!previews[1].provisional);
+        assert_eq!(previews[1].bounds, cloud.bounds);
+        assert!(previews[1]
+            .point_ordinals
             .iter()
             .zip(0..)
             .all(|(ordinal, expected)| *ordinal == expected));
-        assert_eq!(previews[1].bounds, cloud.bounds);
         assert!(!cloud.provisional);
         assert_eq!(cloud.total_points, 60_000);
-        assert_eq!(cloud.points.len(), 500);
+        assert_eq!(cloud.points.len(), 60_000);
         assert!(cloud.point_ordinals.iter().all(|ordinal| *ordinal < 60_000));
         assert_eq!(index.root.total_points, 60_000);
         assert!((0..3).all(|axis| {

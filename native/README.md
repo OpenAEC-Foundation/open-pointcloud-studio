@@ -148,21 +148,25 @@ but shows no station marker.
 Without stations, a scene whose bounds are stretched by a few stray far
 points is framed around the bulk of its points.
 
-Any source of 512 MiB or more, in whatever format, is shown while it is being
-read: every three seconds the scene gets the points known so far, the spread
-preview together with an even sample of up to two million points of what the
-pass has read. The scene can be turned, sectioned and measured in the
-meantime, and the camera stays where it was put. These clouds are
-provisional; the checked cloud takes their place when the pass ends, with
-its octree when the import builds one.
+A source of 512 MiB or more that is read in full (PLY, E57, PCD, PTX and the
+text formats; LAS and LAZ open from their header instead) is shown while it
+is being read: every few seconds the scene gets the points known so far, the
+spread preview together with an even sample of up to two million points of
+what the pass has read. The scene can be turned, sectioned and measured in
+the meantime, and the camera stays where it was put. These clouds are
+provisional; the checked cloud takes their place when the pass ends, before
+its octree is built, and keeps that sample so the scene does not thin out.
+At most two sources are shown this way at once, which bounds the memory
+snapshots need; further ones appear when they have been read.
 
 ### Progress while opening
 
-A strip above the scene has a line for every task that is opening or indexing
-scans: the name of the scan, the step it is in, the points done of the total,
-a bar with the percentage, the time left at the pace so far and a button to
-cancel. An import that also builds an octree reports two steps, reading and
-building. Scans opened together share a line that says how many are ready.
+A strip above the scene has a line for every import that reads its source
+and for the octree being built: the name of the scan, the step it is in, the
+points done of the total, a bar with the percentage, the time left at the
+pace so far and a button to cancel. An import that also builds an octree
+reports two steps, reading and building. Scans opened together share a line
+that says how many are done, with one button that cancels the rest.
 The percentage needs a known total: an E57 file states its record count, and
 a tree build knows the points of its cloud; other formats show the points
 read so far without a bar. Each row of the project list shows the percentage

@@ -268,7 +268,10 @@ pub const LARGE_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 /// points known so far every few seconds, first those spread through an E57
 /// scan that allows it and then, added to them, the ones the pass has read.
 /// These clouds are provisional: each replaces the one before, and the
-/// returned cloud replaces the last.
+/// returned cloud replaces the last. For a source that was shown, the
+/// returned cloud keeps up to two million points instead of `sample_limit`,
+/// so that it is as dense as the last snapshot. At most two sources are
+/// shown at a time; further ones are read without snapshots.
 pub fn open_with_snapshots(
     path: impl AsRef<Path>,
     sample_limit: usize,
@@ -314,29 +317,33 @@ fn open_showing(
     let before = SourceStamp::read(path)?;
     let mut snapshots = match &mut snapshot {
         Some(show) if before.length >= LARGE_SOURCE_BYTES => {
-            Some(snapshots::Snapshots::begin(path, before, &mut **show)?)
+            snapshots::Snapshots::begin(path, before, &mut **show)?
         }
         _ => None,
     };
-    let mut collector = Collector::new(sample_limit);
+    // A source that is shown keeps enough points for its snapshots, and its
+    // checked cloud is as dense as the last of them.
+    let mut collector = Collector::new(if snapshots.is_some() {
+        snapshots::Snapshots::sample_limit(sample_limit)
+    } else {
+        sample_limit
+    });
     let mut scan_poses = Vec::new();
     visit_points_with_poses(
         path,
         &mut |point| {
             collector.push(point)?;
-            if let Some(snapshots) = &mut snapshots {
-                snapshots.push(point)?;
-            }
             if collector.total.is_multiple_of(65_536) {
                 progress(collector.total)?;
                 if let (Some(snapshots), Some(show)) = (&mut snapshots, &mut snapshot) {
-                    snapshots.tick(&mut **show)?;
+                    snapshots.tick(&collector, &mut **show)?;
                 }
             }
             Ok(())
         },
         &mut |pose| scan_poses.push(pose),
     )?;
+    drop(snapshots);
     progress(collector.total)?;
     let after = SourceStamp::read(path)?;
     if before != after {

@@ -1328,6 +1328,8 @@ enum Message {
     ImportSnapshot(u64, Arc<PointCloud>),
     IndexedImportReady(u64, Result<(Arc<PointCloud>, Arc<OctreeIndex>), String>),
     CancelImport(u64),
+    /// Cancel every import that reads its source without building an octree.
+    CancelOpening,
     Loaded(Result<Arc<PointCloud>, String>),
     MeshLoaded(Arc<PointCloud>, Result<Option<Arc<MeshGeometry>>, String>),
     Refined(Arc<PointCloud>, Result<Arc<PointCloud>, String>),
@@ -1794,6 +1796,17 @@ struct EditBatch {
 }
 
 impl CloudEntry {
+    /// Put another cloud of the same source in the layer. A selection or
+    /// deletion made on a provisional cloud is sized for its stated count
+    /// and does not carry over to a cloud with another count.
+    fn replace_cloud(&mut self, cloud: Arc<PointCloud>) {
+        if self.cloud.provisional && self.cloud.total_points != cloud.total_points {
+            self.selection = None;
+            self.deleted = None;
+        }
+        self.cloud = cloud;
+    }
+
     fn matches_source(&self, source: &Arc<PointCloud>) -> bool {
         Arc::ptr_eq(&self.cloud, source) || Arc::ptr_eq(&self.load_identity, source)
     }
@@ -2076,11 +2089,20 @@ impl Studio {
             header.filter(|header| self.clouds.iter().any(|entry| entry.matches_source(header)));
         match (shown, result) {
             (Some(header), Ok(cloud)) => {
+                let scene = combined_bounds(&self.clouds);
                 let photos = self.station_photos_task(&cloud);
-                let refined = self.update(Message::Refined(header, Ok(cloud)));
+                let refined = self.update(Message::Refined(header, Ok(Arc::clone(&cloud))));
+                if let Some(entry) = self
+                    .clouds
+                    .iter_mut()
+                    .find(|entry| Arc::ptr_eq(&entry.cloud, &cloud))
+                {
+                    entry.bag_source = is_bag3d_obj(&cloud.path);
+                }
                 self.revision += 1;
-                self.frame_new_scene();
-                Task::batch([refined, photos, self.schedule_detail()])
+                self.reframe_after_replacement(scene);
+                let detail = Self::mesh_task(&cloud).unwrap_or_else(|| self.schedule_detail());
+                Task::batch([refined, photos, detail])
             }
             (Some(header), Err(error)) => {
                 self.remove_header_layer(&header);
@@ -2089,6 +2111,37 @@ impl Studio {
             }
             (None, result) => self.update(Message::Loaded(result)),
         }
+    }
+
+    /// Read the faces of a source that can hold a mesh, for the layer that
+    /// shows `cloud`.
+    fn mesh_task(cloud: &Arc<PointCloud>) -> Option<Task<Message>> {
+        let format = cloud
+            .path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase);
+        if !matches!(
+            format.as_deref(),
+            Some("obj" | "ply" | "off" | "stl" | "dxf")
+        ) {
+            return None;
+        }
+        let path = cloud.path.clone();
+        let source = Arc::clone(cloud);
+        Some(Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    pointcloud_core::read_mesh_geometry(path)
+                        .map(|mesh| mesh.map(Arc::new))
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result)
+            },
+            move |result| Message::MeshLoaded(Arc::clone(&source), result),
+        ))
     }
 
     fn remove_header_layer(&mut self, header: &Arc<PointCloud>) {
@@ -4210,7 +4263,6 @@ impl Studio {
             leaves: 0,
             settled: 0,
         }));
-        self.opening_total += 1;
         self.imports.insert(
             id,
             ImportJob {
@@ -4706,6 +4758,18 @@ impl Studio {
                     };
                 }
             }
+            Message::CancelOpening => {
+                let indexing = self.index_pending.then(|| Arc::clone(&self.index_cancel));
+                for job in self.imports.values() {
+                    if !indexing
+                        .as_ref()
+                        .is_some_and(|cancel| Arc::ptr_eq(cancel, &job.cancel))
+                    {
+                        job.cancel.store(true, Ordering::Relaxed);
+                    }
+                }
+                self.status = "Cancelling imports…".into();
+            }
             Message::CancelImport(id) => {
                 if let Some(job) = self.imports.get(&id) {
                     job.cancel.store(true, Ordering::Relaxed);
@@ -4746,6 +4810,11 @@ impl Studio {
                 if job.cancel.load(Ordering::Relaxed) {
                     return Task::none();
                 }
+                if self.selection_pending {
+                    // A snapshot changes the scene, which would discard the
+                    // selection being computed; the next one is shown.
+                    return Task::none();
+                }
                 let Some(header) = self.import_headers.get(&id).map(Arc::clone) else {
                     return self.show_import_layer(id, cloud);
                 };
@@ -4755,7 +4824,7 @@ impl Studio {
                     .iter_mut()
                     .find(|entry| entry.matches_source(&header))
                 {
-                    entry.cloud = cloud;
+                    entry.replace_cloud(cloud);
                     self.revision += 1;
                     self.reframe_after_replacement(scene);
                     return self.schedule_detail();
@@ -4763,14 +4832,19 @@ impl Studio {
             }
             Message::IndexedImportPreview(id, cloud) => {
                 if !self.imports.contains_key(&id) {
-                    // A later look at a scan whose layer is already shown.
+                    // A later look at a scan whose layer is already shown. A
+                    // provisional one waits for a selection being computed;
+                    // the checked cloud does not.
+                    if self.selection_pending && cloud.provisional {
+                        return Task::none();
+                    }
                     let scene = combined_bounds(&self.clouds);
                     if let Some(entry) = self
                         .clouds
                         .iter_mut()
                         .find(|entry| entry.index_import_id == Some(id) && entry.cloud.provisional)
                     {
-                        entry.cloud = cloud;
+                        entry.replace_cloud(cloud);
                         self.revision += 1;
                         self.reframe_after_replacement(scene);
                         return self.schedule_detail();
@@ -4844,7 +4918,7 @@ impl Studio {
                             // A preview sampled before the full pass has
                             // loose bounds: the checked cloud takes its place.
                             if entry.cloud.provisional {
-                                entry.cloud = Arc::clone(&cloud);
+                                entry.replace_cloud(Arc::clone(&cloud));
                                 replaced = true;
                             }
                             entry.index = Some(index);
@@ -4907,7 +4981,7 @@ impl Studio {
                             if entry.cloud.provisional {
                                 // The full pass did finish: its checked cloud
                                 // takes the place of the sampled preview.
-                                entry.cloud = cloud;
+                                entry.replace_cloud(cloud);
                                 replaced = true;
                             }
                             preview_remains = true;
@@ -4942,11 +5016,6 @@ impl Studio {
                 Ok(cloud) => {
                     self.cancel_selection_for_scene_change();
                     let cache_source = Arc::clone(&cloud);
-                    let mesh_path = cloud.path.clone();
-                    let mesh_format = mesh_path
-                        .extension()
-                        .and_then(|value| value.to_str())
-                        .map(str::to_ascii_lowercase);
                     let name = cloud
                         .path
                         .file_name()
@@ -4985,24 +5054,7 @@ impl Studio {
                     self.frame_new_scene();
                     let photos_task = self.station_photos_task(&cache_source);
                     let cache_task = Task::batch([cached_index_task(cache_source), photos_task]);
-                    if matches!(
-                        mesh_format.as_deref(),
-                        Some("obj" | "ply" | "off" | "stl" | "dxf")
-                    ) {
-                        let mesh_source = Arc::clone(&self.clouds.last().unwrap().cloud);
-                        let mesh_task = Task::perform(
-                            async move {
-                                tokio::task::spawn_blocking(move || {
-                                    pointcloud_core::read_mesh_geometry(mesh_path)
-                                        .map(|mesh| mesh.map(Arc::new))
-                                        .map_err(|error| error.to_string())
-                                })
-                                .await
-                                .map_err(|error| error.to_string())
-                                .and_then(|result| result)
-                            },
-                            move |result| Message::MeshLoaded(Arc::clone(&mesh_source), result),
-                        );
+                    if let Some(mesh_task) = Self::mesh_task(&self.clouds.last().unwrap().cloud) {
                         return Task::batch([cache_task, mesh_task]);
                     }
                     return Task::batch([cache_task, self.schedule_detail()]);
@@ -5039,7 +5091,7 @@ impl Studio {
                         Ok(cloud) => {
                             let count = cloud.total_points;
                             let indexed = entry.index.is_some();
-                            entry.cloud = Arc::clone(&cloud);
+                            entry.replace_cloud(Arc::clone(&cloud));
                             self.status = format!(
                                 "Ready: {} points from {}",
                                 format_count(count),

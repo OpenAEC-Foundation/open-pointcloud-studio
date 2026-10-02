@@ -41,6 +41,8 @@ pub struct Line {
     pub detail: String,
     /// How far the task is, when its size is known.
     pub fraction: Option<f32>,
+    /// Whether the pace so far says how long the rest takes.
+    pub timed: bool,
     pub cancel: Option<Message>,
 }
 
@@ -97,8 +99,8 @@ impl Studio {
             .filter(|(id, _)| Some(**id) != indexed)
             .collect();
         if !plain.is_empty() {
-            let files = self.opening_total.max(self.imports.len());
-            let ready = files - self.imports.len();
+            let files = self.opening_total.max(plain.len());
+            let done = files - plain.len();
             let read: u64 = plain
                 .iter()
                 .map(|(_, job)| job.decoded.load(Ordering::Relaxed))
@@ -107,7 +109,7 @@ impl Studio {
                 .iter()
                 .map(|(id, _)| self.import_expected.get(*id).copied())
                 .sum();
-            // Scans that are ready count in full, the others as far as they are.
+            // Scans that are done count in full, the others as far as they are.
             let reading: f32 = plain
                 .iter()
                 .filter_map(|(id, job)| {
@@ -124,7 +126,7 @@ impl Studio {
             let title = if cancelling {
                 "Cancelling…".to_owned()
             } else if files > 1 {
-                detail = format!("{ready} of {files} ready  ·  {detail}");
+                detail = format!("{done} of {files} done  ·  {detail}");
                 format!("Opening {files} scans")
             } else {
                 format!("Opening {}", display_name(&plain[0].1.path))
@@ -134,13 +136,11 @@ impl Studio {
                 title,
                 detail,
                 fraction: (expected.is_some() || files > 1)
-                    .then(|| ((ready as f32 + reading) / files as f32).min(1.0)),
-                cancel: plain
-                    .iter()
-                    .filter(|(_, job)| !job.cancel.load(Ordering::Relaxed))
-                    .map(|(id, _)| **id)
-                    .max()
-                    .map(Message::CancelImport),
+                    .then(|| ((done as f32 + reading) / files as f32).min(1.0)),
+                // Scans of different sizes count alike in the bar of a
+                // batch, so its pace says little about the time left.
+                timed: files == 1,
+                cancel: (!cancelling).then_some(Message::CancelOpening),
             });
         }
 
@@ -207,6 +207,7 @@ impl Studio {
                 },
                 detail,
                 fraction,
+                timed: true,
                 cancel: (!cancelling).then(|| match indexed {
                     Some(id) => Message::CancelImport(id),
                     None => Message::CancelIndex,
@@ -232,11 +233,19 @@ impl Studio {
         self.progress_marks
             .retain(|phase, _| lines.iter().any(|line| line.phase == *phase));
         for line in &lines {
-            if let Some(fraction) = line.fraction {
-                self.progress_marks.entry(line.phase).or_insert(Mark {
+            let Some(fraction) = line.fraction.filter(|fraction| *fraction > 0.0) else {
+                continue;
+            };
+            let mark = self.progress_marks.entry(line.phase).or_insert(Mark {
+                since: now,
+                fraction,
+            });
+            // A bar that went back belongs to the next task of its kind.
+            if fraction < mark.fraction {
+                *mark = Mark {
                     since: now,
                     fraction,
-                });
+                };
             }
         }
     }
@@ -305,6 +314,7 @@ impl Studio {
                 let left = self
                     .progress_marks
                     .get(&line.phase)
+                    .filter(|_| line.timed)
                     .and_then(|mark| time_left(*mark, fraction, now));
                 if let Some(left) = left {
                     pace.push_str("  ·  ");
@@ -427,7 +437,7 @@ mod tests {
         assert_eq!(lines[0].title, "Opening first.e57");
         assert_eq!(lines[0].detail, "2.5M points read");
         assert_eq!(lines[0].fraction, None);
-        assert!(matches!(lines[0].cancel, Some(Message::CancelImport(1))));
+        assert!(matches!(lines[0].cancel, Some(Message::CancelOpening)));
 
         // Its metadata states ten million points.
         studio.import_expected.insert(1, 10_000_000);
@@ -447,9 +457,20 @@ mod tests {
         studio.opening_total = 4;
         let lines = studio.progress_lines();
         assert_eq!(lines[0].title, "Opening 4 scans");
-        assert_eq!(lines[0].detail, "2 of 4 ready  ·  5.0M points read");
+        assert_eq!(lines[0].detail, "2 of 4 done  ·  5.0M points read");
         assert_eq!(lines[0].fraction, Some(0.625));
-        assert!(matches!(lines[0].cancel, Some(Message::CancelImport(2))));
+        assert!(!lines[0].timed);
+
+        // Cancelling stops both scans that are still being read.
+        let _ = studio.update(Message::CancelOpening);
+        assert!(studio
+            .imports
+            .values()
+            .all(|job| job.cancel.load(Ordering::Relaxed)));
+        assert_eq!(studio.progress_lines()[0].title, "Cancelling…");
+        for job in studio.imports.values() {
+            job.cancel.store(false, Ordering::Relaxed);
+        }
 
         // Tracking starts the clock and forgets it when the imports end.
         studio.track_progress();
@@ -468,7 +489,6 @@ mod tests {
         let mut import = job("merged.e57", 0);
         import.cancel = Arc::clone(&studio.index_cancel);
         studio.imports.insert(7, import);
-        studio.opening_total = 1;
         studio.index_pending = true;
         let progress = Arc::new(Mutex::new(IndexProgress {
             stage: IndexStage::ReadingSource,
@@ -512,6 +532,20 @@ mod tests {
         // The root has been split and three quarters of the points placed.
         assert_eq!(lines[0].fraction, Some(0.8));
         assert!(matches!(lines[0].cancel, Some(Message::CancelIndex)));
+
+        // The next octree in the queue starts its own clock.
+        studio.track_progress();
+        let first = studio.progress_marks[&Phase::Building];
+        *progress.lock().unwrap() = IndexProgress {
+            stage: IndexStage::BuildingTree,
+            completed: 40_000_000,
+            total: 400_000_000,
+            depth: 0,
+            leaves: 0,
+            settled: 0,
+        };
+        studio.track_progress();
+        assert!(studio.progress_marks[&Phase::Building] != first);
 
         studio.index_cancel.store(true, Ordering::Relaxed);
         let lines = studio.progress_lines();

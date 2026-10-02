@@ -276,7 +276,7 @@ impl OctreeIndex {
         }
         let mut handled_records = 0u64;
         let mut ready_leaves = 0u64;
-        progress(IndexProgress::building(0, 0, 0))?;
+        progress(IndexProgress::building(0, 0, 0).with_settled(0, root_count))?;
         let mut context = BuildContext {
             directory: storage.path(),
             config: &config,
@@ -377,8 +377,7 @@ impl OctreeIndex {
     /// open. A source of at least `LARGE_SOURCE_BYTES` without either is
     /// shown while it is read, as `open_with_snapshots` does: `preview` is
     /// then called every few seconds with a provisional cloud that replaces
-    /// the one before, and the caller replaces the last with the returned
-    /// cloud.
+    /// the one before, and with the checked cloud when the pass ends.
     pub fn open_and_build_cached_with_preview(
         path: &Path,
         sample_limit: usize,
@@ -428,7 +427,7 @@ impl OctreeIndex {
         }
 
         // A preview kept from an earlier open is shown before the source pass.
-        let mut previewed = match open_preview_cache(path, sample_limit) {
+        let previewed = match open_preview_cache(path, sample_limit) {
             Ok(Some(cached)) => {
                 preview(&cached)?;
                 true
@@ -438,13 +437,18 @@ impl OctreeIndex {
         // A large source otherwise shows nothing until all of it has been read.
         let mut snapshots = None;
         if !previewed && spread_from.is_some_and(|minimum| stamp.length >= minimum) {
-            snapshots = Some(Snapshots::begin(path, stamp, &mut preview)?);
+            snapshots = Snapshots::begin(path, stamp, &mut preview)?;
         }
+        let shown = snapshots.is_some();
         let storage = tempfile::Builder::new()
             .prefix("open-pointcloud-index-")
             .tempdir_in(&cache_root)?;
         let root_path = storage.path().join("r.bin");
-        let mut collector = Collector::new(sample_limit);
+        let mut collector = Collector::new(if shown {
+            Snapshots::sample_limit(sample_limit)
+        } else {
+            sample_limit
+        });
         let mut poses = Vec::new();
         // An E57 file states how many records it holds, which tells the pass
         // how far it is. Records that hold no valid point make the count of
@@ -463,9 +467,6 @@ impl OctreeIndex {
                 &mut |point| {
                     let ordinal = collector.total;
                     collector.push(point)?;
-                    if let Some(snapshots) = &mut snapshots {
-                        snapshots.push(point)?;
-                    }
                     write_record(&mut writer, IndexedPoint { point, ordinal })?;
                     if collector.total.is_multiple_of(65_536) {
                         let total = if stated == 0 {
@@ -475,7 +476,7 @@ impl OctreeIndex {
                         };
                         progress(IndexProgress::reading(collector.total, total))?;
                         if let Some(snapshots) = &mut snapshots {
-                            snapshots.tick(&mut preview)?;
+                            snapshots.tick(&collector, &mut preview)?;
                         }
                     }
                     Ok(())
@@ -484,6 +485,7 @@ impl OctreeIndex {
             )?;
             writer.flush()?;
         }
+        drop(snapshots);
         progress(IndexProgress::reading(collector.total, collector.total))?;
         if SourceStamp::read(path)? != stamp {
             return Err(LoadError::InvalidData(
@@ -495,18 +497,15 @@ impl OctreeIndex {
         cloud.scan_images = super::scan_images(path);
         cloud.source_stamp = Some(stamp);
         write_preview_cache(&cloud);
-        if let Some(snapshots) = &mut snapshots {
-            // Everything that was read stays in view while the octree is built.
-            snapshots.show(&mut preview)?;
-            previewed = true;
-        }
-        if !previewed {
+        // The checked cloud takes the place of the snapshots before the tree
+        // is built, so that it remains when the build fails or is cancelled.
+        if shown || !previewed {
             preview(&cloud)?;
         }
 
         let mut handled_records = 0u64;
         let mut ready_leaves = 0u64;
-        progress(IndexProgress::building(0, 0, 0))?;
+        progress(IndexProgress::building(0, 0, 0).with_settled(0, cloud.total_points))?;
         let mut context = BuildContext {
             directory: storage.path(),
             config: &config,
