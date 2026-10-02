@@ -2472,10 +2472,10 @@ impl Studio {
                         json!({"ok": false, "error": "an octree build is already running"}),
                         Task::none(),
                     )
-                } else if !self
+                } else if self
                     .active
                     .and_then(|index| self.clouds.get(index))
-                    .is_some_and(|entry| entry.index.is_none())
+                    .is_none_or(|entry| entry.index.is_some())
                 {
                     (
                         json!({"ok": false, "error": "choose an unindexed active cloud"}),
@@ -9309,6 +9309,20 @@ struct DragState {
     mode: DragMode,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct ViewportState {
+    drag: Option<DragState>,
+    modifiers: iced::keyboard::Modifiers,
+}
+
+fn middle_drag_mode(modifiers: iced::keyboard::Modifiers) -> DragMode {
+    if modifiers.shift() {
+        DragMode::Orbit
+    } else {
+        DragMode::Pan
+    }
+}
+
 fn finish_viewport_drag(
     button: mouse::Button,
     drag: DragState,
@@ -9329,7 +9343,9 @@ fn finish_viewport_drag(
         (mouse::Button::Middle | mouse::Button::Right, DragMode::Pan) if total > 0.5 => {
             Some(Message::FinishPan(dx, dy))
         }
-        (mouse::Button::Left, DragMode::Orbit) if total > 0.5 => Some(Message::FinishOrbit(dx, dy)),
+        (mouse::Button::Left | mouse::Button::Middle, DragMode::Orbit) if total > 0.5 => {
+            Some(Message::FinishOrbit(dx, dy))
+        }
         (mouse::Button::Left, DragMode::Select) => Some(Message::BoxSelect {
             start: [drag.start.x, drag.start.y],
             end: [position.x, position.y],
@@ -9524,7 +9540,7 @@ fn scan_pose_at(
 }
 
 impl canvas::Program<Message> for PointViewport<'_> {
-    type State = Option<DragState>;
+    type State = ViewportState;
 
     fn update(
         &self,
@@ -9533,6 +9549,12 @@ impl canvas::Program<Message> for PointViewport<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (event::Status, Option<Message>) {
+        if let canvas::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) = event {
+            state.modifiers = modifiers;
+            return (event::Status::Ignored, None);
+        }
+        let modifiers = state.modifiers;
+        let state = &mut state.drag;
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(menu) = self.context_menu {
@@ -9639,7 +9661,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 *state = cursor.position_in(bounds).map(|position| DragState {
                     start: position,
                     position,
-                    mode: DragMode::Pan,
+                    mode: middle_drag_mode(modifiers),
                 });
                 (event::Status::Captured, None)
             }
@@ -11088,6 +11110,44 @@ mod viewport_drag_tests {
             message,
             Some(Message::ShowContextMenu([12.0, 23.0]))
         ));
+    }
+
+    #[test]
+    fn shift_middle_drag_orbits_while_plain_middle_drag_pans() {
+        assert!(matches!(
+            middle_drag_mode(iced::keyboard::Modifiers::SHIFT),
+            DragMode::Orbit
+        ));
+        assert!(matches!(
+            middle_drag_mode(iced::keyboard::Modifiers::default()),
+            DragMode::Pan
+        ));
+        assert!(matches!(
+            middle_drag_mode(iced::keyboard::Modifiers::CTRL),
+            DragMode::Pan
+        ));
+
+        let start = UiPoint::new(10.0, 20.0);
+        let mut studio = Studio::default();
+        let orbit = DragState {
+            start,
+            position: UiPoint::new(25.0, 25.0),
+            mode: middle_drag_mode(iced::keyboard::Modifiers::SHIFT),
+        };
+        let message = finish_viewport_drag(
+            mouse::Button::Middle,
+            orbit,
+            UiPoint::new(35.0, 30.0),
+            Size::new(800.0, 600.0),
+        )
+        .unwrap();
+        assert!(matches!(message, Message::FinishOrbit(10.0, 5.0)));
+        let yaw = studio.yaw;
+        let pitch = studio.pitch;
+        let _ = studio.update(message);
+        assert!((studio.yaw - yaw - 0.1).abs() < 0.0001);
+        assert!((studio.pitch - pitch - 0.05).abs() < 0.0001);
+        assert_eq!(studio.pan, [0.0, 0.0]);
     }
 
     #[test]
