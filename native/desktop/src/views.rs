@@ -312,7 +312,10 @@ pub fn encode_snapshot(
     let mut pixels = Vec::with_capacity(crop_width as usize * crop_height as usize * 3);
     for y in top..bottom {
         let start = (y as usize * width as usize + left as usize) * 4;
-        for pixel in rgba[start..start + crop_width as usize * 4].chunks_exact(4) {
+        for pixel in rgba[start..start + crop_width as usize * 4]
+            .as_chunks::<4>()
+            .0
+        {
             pixels.extend_from_slice(&pixel[..3]);
         }
     }
