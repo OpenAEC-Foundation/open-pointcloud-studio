@@ -21,6 +21,7 @@ mod ply;
 mod ply_mesh;
 mod ptx;
 mod scan_image;
+mod snapshots;
 mod surface_mesh;
 mod window_reader;
 
@@ -254,14 +255,40 @@ pub fn open(path: impl AsRef<Path>, sample_limit: usize) -> Result<PointCloud, L
 pub fn open_with_progress(
     path: impl AsRef<Path>,
     sample_limit: usize,
+    progress: impl FnMut(u64) -> Result<(), LoadError>,
+) -> Result<PointCloud, LoadError> {
+    open_showing(path.as_ref(), sample_limit, progress, None)
+}
+
+/// Source size from which a file is shown while it is still being read.
+pub const LARGE_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Open a point cloud like `open_with_progress`, and show a source of at
+/// least `LARGE_SOURCE_BYTES` while it is being read: `snapshot` receives the
+/// points known so far every few seconds, first those spread through an E57
+/// scan that allows it and then, added to them, the ones the pass has read.
+/// These clouds are provisional: each replaces the one before, and the
+/// returned cloud replaces the last.
+pub fn open_with_snapshots(
+    path: impl AsRef<Path>,
+    sample_limit: usize,
+    progress: impl FnMut(u64) -> Result<(), LoadError>,
+    mut snapshot: impl FnMut(&PointCloud) -> Result<(), LoadError>,
+) -> Result<PointCloud, LoadError> {
+    open_showing(path.as_ref(), sample_limit, progress, Some(&mut snapshot))
+}
+
+fn open_showing(
+    path: &Path,
+    sample_limit: usize,
     mut progress: impl FnMut(u64) -> Result<(), LoadError>,
+    mut snapshot: Option<snapshots::Show>,
 ) -> Result<PointCloud, LoadError> {
     if sample_limit == 0 {
         return Err(LoadError::InvalidData(
             "sample limit must be greater than zero".into(),
         ));
     }
-    let path = path.as_ref();
     if path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -285,14 +312,26 @@ pub fn open_with_progress(
         }
     }
     let before = SourceStamp::read(path)?;
+    let mut snapshots = match &mut snapshot {
+        Some(show) if before.length >= LARGE_SOURCE_BYTES => {
+            Some(snapshots::Snapshots::begin(path, before, &mut **show)?)
+        }
+        _ => None,
+    };
     let mut collector = Collector::new(sample_limit);
     let mut scan_poses = Vec::new();
     visit_points_with_poses(
         path,
         &mut |point| {
             collector.push(point)?;
+            if let Some(snapshots) = &mut snapshots {
+                snapshots.push(point)?;
+            }
             if collector.total.is_multiple_of(65_536) {
                 progress(collector.total)?;
+                if let (Some(snapshots), Some(show)) = (&mut snapshots, &mut snapshot) {
+                    snapshots.tick(&mut **show)?;
+                }
             }
             Ok(())
         },
@@ -365,11 +404,6 @@ pub fn open_e57_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         source_stamp: Some(stamp),
     })
 }
-
-/// Source size from which `open_e57_quick_preview` is worth trying ahead of
-/// a full pass, and the number of points to ask it for.
-pub const E57_QUICK_PREVIEW_MIN_BYTES: u64 = 512 * 1024 * 1024;
-pub const E57_QUICK_PREVIEW_POINTS: usize = 2_000_000;
 
 /// Open a bounded preview of a large E57 scan by reading point records
 /// spread through the file, on several threads, instead of all of it. `None`

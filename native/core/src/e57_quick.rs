@@ -819,13 +819,22 @@ mod tests {
             |_| Ok(()),
         )
         .unwrap();
-        // Only the spread preview was published; the checked cloud is returned.
-        assert_eq!(previews.len(), 1);
-        assert!(previews[0].points.len() > 500);
+        // The spread preview comes first and then, added to it, what the
+        // pass has read; the checked cloud is returned.
+        assert_eq!(previews.len(), 2);
+        assert!(previews.iter().all(|preview| preview.provisional));
+        assert_eq!(previews[0].points.len(), 60_000);
         assert!(previews[0]
             .point_ordinals
             .iter()
             .all(|ordinal| *ordinal == u64::MAX));
+        assert_eq!(previews[1].points.len(), 120_000);
+        assert!(previews[1].point_ordinals[60_000..]
+            .iter()
+            .zip(0..)
+            .all(|(ordinal, expected)| *ordinal == expected));
+        assert_eq!(previews[1].bounds, cloud.bounds);
+        assert!(!cloud.provisional);
         assert_eq!(cloud.total_points, 60_000);
         assert_eq!(cloud.points.len(), 500);
         assert!(cloud.point_ordinals.iter().all(|ordinal| *ordinal < 60_000));

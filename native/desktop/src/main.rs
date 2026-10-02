@@ -1345,9 +1345,9 @@ enum Message {
     ImportLoaded(u64, Result<Arc<PointCloud>, String>),
     HeaderLoaded(u64, Result<Arc<PointCloud>, String>),
     IndexedImportPreview(u64, Arc<PointCloud>),
-    /// Points spread through a large scan, read while its import is still
-    /// reading all of it.
-    SpreadPreview(u64, Option<Arc<PointCloud>>),
+    /// The points of a large source known so far, while its import is still
+    /// reading it.
+    ImportSnapshot(u64, Arc<PointCloud>),
     IndexedImportReady(u64, Result<(Arc<PointCloud>, Arc<OctreeIndex>), String>),
     CancelImport(u64),
     Loaded(Result<Arc<PointCloud>, String>),
@@ -2044,6 +2044,39 @@ impl Studio {
             },
             move |result| Message::HeaderLoaded(id, result),
         )
+    }
+
+    /// Add the layer of an import that is still reading its source, showing
+    /// what is known of it: its metadata, or the points read so far.
+    fn show_import_layer(&mut self, id: u64, header: Arc<PointCloud>) -> Task<Message> {
+        self.cancel_selection_for_scene_change();
+        self.clouds.push(CloudEntry {
+            cloud: Arc::clone(&header),
+            load_identity: Arc::clone(&header),
+            index_import_id: None,
+            transform: CloudTransform::default(),
+            centroid_cache: None,
+            mesh: None,
+            mesh_visible: true,
+            bag_source: false,
+            visible: true,
+            selection: None,
+            deleted: None,
+            index: None,
+            auto_index_queued: false,
+            picked: false,
+            index_building: false,
+            detail_points: None,
+        });
+        self.import_headers.insert(id, Arc::clone(&header));
+        self.revision += 1;
+        self.active = Some(self.clouds.len() - 1);
+        if self.section_enabled && self.section_reference_bounds.is_none() {
+            self.section_reference_bounds = combined_bounds(&self.clouds);
+            self.sync_section_coordinate_inputs();
+        }
+        self.frame_new_scene();
+        self.station_photos_task(&header)
     }
 
     /// Put the checked result of an import in place: it replaces the layer
@@ -4122,44 +4155,28 @@ impl Studio {
                 cancel: Arc::clone(&cancel),
             },
         );
-        // A large scan shows points spread through the file long before all
-        // of it has been read.
-        let spread = if std::fs::metadata(&path)
-            .is_ok_and(|metadata| metadata.len() >= pointcloud_core::E57_QUICK_PREVIEW_MIN_BYTES)
-        {
-            let path = path.clone();
-            Task::perform(
-                async move {
-                    tokio::task::spawn_blocking(move || {
-                        pointcloud_core::open_e57_quick_preview(
-                            &path,
-                            pointcloud_core::E57_QUICK_PREVIEW_POINTS,
-                        )
-                        .ok()
-                        .flatten()
-                        .map(Arc::new)
-                    })
-                    .await
-                    .ok()
-                    .flatten()
-                },
-                move |cloud| Message::SpreadPreview(id, cloud),
-            )
-        } else {
-            Task::none()
-        };
         let done = Arc::new(AtomicBool::new(false));
         let worker_done = Arc::clone(&done);
+        let (snapshot_tx, snapshot_rx) = tokio::sync::mpsc::unbounded_channel();
         let worker = Task::perform(
             async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    pointcloud_core::open_with_progress(path, LOAD_SAMPLE_LIMIT, |processed| {
-                        if cancel.load(Ordering::Relaxed) {
-                            return Err(pointcloud_core::LoadError::Cancelled);
-                        }
-                        decoded.store(processed, Ordering::Relaxed);
-                        Ok(())
-                    })
+                    pointcloud_core::open_with_snapshots(
+                        path,
+                        LOAD_SAMPLE_LIMIT,
+                        |processed| {
+                            if cancel.load(Ordering::Relaxed) {
+                                return Err(pointcloud_core::LoadError::Cancelled);
+                            }
+                            decoded.store(processed, Ordering::Relaxed);
+                            Ok(())
+                        },
+                        |cloud| {
+                            snapshot_tx
+                                .send(Arc::new(cloud.clone()))
+                                .map_err(|_| pointcloud_core::LoadError::Cancelled)
+                        },
+                    )
                 })
                 .await
                 .map_err(|error| error.to_string())
@@ -4177,11 +4194,14 @@ impl Studio {
             }
             Some((Message::OpenProgress(id), Some(done)))
         });
+        let snapshots = iced::futures::stream::unfold(snapshot_rx, |mut receiver| async move {
+            receiver.recv().await.map(|cloud| (cloud, receiver))
+        });
         Task::batch([
             worker,
             Task::run(progress, |message| message),
             header,
-            spread,
+            Task::run(snapshots, move |cloud| Message::ImportSnapshot(id, cloud)),
         ])
     }
 
@@ -4710,47 +4730,21 @@ impl Studio {
                 if job.cancel.load(Ordering::Relaxed) || self.import_headers.contains_key(&id) {
                     return Task::none();
                 }
-                self.cancel_selection_for_scene_change();
-                self.clouds.push(CloudEntry {
-                    cloud: Arc::clone(&header),
-                    load_identity: Arc::clone(&header),
-                    index_import_id: None,
-                    transform: CloudTransform::default(),
-                    centroid_cache: None,
-                    mesh: None,
-                    mesh_visible: true,
-                    bag_source: false,
-                    visible: true,
-                    selection: None,
-                    deleted: None,
-                    index: None,
-                    auto_index_queued: false,
-                    picked: false,
-                    index_building: false,
-                    detail_points: None,
-                });
-                self.import_headers.insert(id, Arc::clone(&header));
-                self.revision += 1;
-                self.active = Some(self.clouds.len() - 1);
-                if self.section_enabled && self.section_reference_bounds.is_none() {
-                    self.section_reference_bounds = combined_bounds(&self.clouds);
-                    self.sync_section_coordinate_inputs();
-                }
-                self.frame_new_scene();
-                return self.station_photos_task(&header);
+                return self.show_import_layer(id, header);
             }
-            Message::SpreadPreview(id, cloud) => {
-                // Only while the import is still reading and its layer shows
-                // the metadata alone; the checked cloud replaces both.
-                let (Some(cloud), Some(job), Some(header)) =
-                    (cloud, self.imports.get(&id), self.import_headers.get(&id))
-                else {
+            Message::ImportSnapshot(id, cloud) => {
+                // Only while the import is still reading; the checked cloud
+                // replaces whatever its layer shows.
+                let Some(job) = self.imports.get(&id) else {
                     return Task::none();
                 };
                 if job.cancel.load(Ordering::Relaxed) {
                     return Task::none();
                 }
-                let header = Arc::clone(header);
+                let Some(header) = self.import_headers.get(&id).map(Arc::clone) else {
+                    return self.show_import_layer(id, cloud);
+                };
+                let scene = combined_bounds(&self.clouds);
                 if let Some(entry) = self
                     .clouds
                     .iter_mut()
@@ -4758,11 +4752,26 @@ impl Studio {
                 {
                     entry.cloud = cloud;
                     self.revision += 1;
-                    self.frame_new_scene();
+                    self.reframe_after_replacement(scene);
                     return self.schedule_detail();
                 }
             }
             Message::IndexedImportPreview(id, cloud) => {
+                if !self.imports.contains_key(&id) {
+                    // A later look at a scan whose layer is already shown.
+                    let scene = combined_bounds(&self.clouds);
+                    if let Some(entry) = self
+                        .clouds
+                        .iter_mut()
+                        .find(|entry| entry.index_import_id == Some(id) && entry.cloud.provisional)
+                    {
+                        entry.cloud = cloud;
+                        self.revision += 1;
+                        self.reframe_after_replacement(scene);
+                        return self.schedule_detail();
+                    }
+                    return Task::none();
+                }
                 let Some(job) = self.imports.get(&id) else {
                     return Task::none();
                 };
@@ -12993,31 +13002,41 @@ mod import_api_tests {
             decoded: Arc::new(AtomicU64::new(0)),
             cancel: Arc::new(AtomicBool::new(false)),
         };
-        // Without the layer of metadata there is nothing to stand in for.
+        // A snapshot takes the place of the layer of metadata.
         studio.imports.insert(31, job());
-        let _ = studio.update(Message::SpreadPreview(31, Some(Arc::clone(&spread))));
-        assert!(studio.clouds.is_empty());
-
         let _ = studio.update(Message::HeaderLoaded(31, Ok(Arc::clone(&header))));
-        let _ = studio.update(Message::SpreadPreview(31, None));
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &header));
-        let _ = studio.update(Message::SpreadPreview(31, Some(Arc::clone(&spread))));
+        let _ = studio.update(Message::ImportSnapshot(31, Arc::clone(&spread)));
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &spread));
         assert_eq!(studio.clouds.len(), 1);
 
         let _ = studio.update(Message::ImportLoaded(31, Ok(Arc::clone(&cloud))));
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
         assert_eq!(studio.clouds.len(), 1);
-        // A preview that arrives after the checked cloud is dropped.
-        let _ = studio.update(Message::SpreadPreview(31, Some(Arc::clone(&spread))));
+        // A snapshot that arrives after the checked cloud is dropped.
+        let _ = studio.update(Message::ImportSnapshot(31, Arc::clone(&spread)));
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
+
+        // A source without metadata gets its layer from the first snapshot,
+        // and each later one replaces it.
+        let mut studio = Studio::default();
+        studio.imports.insert(32, job());
+        let _ = studio.update(Message::ImportSnapshot(32, Arc::clone(&spread)));
+        assert_eq!(studio.clouds.len(), 1);
+        let later = Arc::new((*spread).clone());
+        let _ = studio.update(Message::ImportSnapshot(32, Arc::clone(&later)));
+        assert_eq!(studio.clouds.len(), 1);
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &later));
+        let _ = studio.update(Message::ImportLoaded(32, Ok(Arc::clone(&cloud))));
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
+        assert_eq!(studio.clouds.len(), 1);
 
         // A failed import closes the layer, whichever of the two it showed.
         let mut studio = Studio::default();
-        studio.imports.insert(32, job());
-        let _ = studio.update(Message::HeaderLoaded(32, Ok(header)));
-        let _ = studio.update(Message::SpreadPreview(32, Some(spread)));
-        let _ = studio.update(Message::ImportLoaded(32, Err("damaged".into())));
+        studio.imports.insert(33, job());
+        let _ = studio.update(Message::HeaderLoaded(33, Ok(header)));
+        let _ = studio.update(Message::ImportSnapshot(33, spread));
+        let _ = studio.update(Message::ImportLoaded(33, Err("damaged".into())));
         assert!(studio.clouds.is_empty());
     }
 
@@ -13070,6 +13089,15 @@ mod import_api_tests {
         assert!(studio.clouds[0].index.is_some());
         assert_eq!(studio.clouds.len(), 1);
         assert_eq!(studio.yaw, 1.0);
+
+        // While the scan is read, each later look replaces the one before.
+        let mut studio = Studio::default();
+        preview(&mut studio, 27);
+        let later = Arc::new((*loose).clone());
+        let _ = studio.update(Message::IndexedImportPreview(27, Arc::clone(&later)));
+        assert_eq!(studio.clouds.len(), 1);
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &later));
+        assert!(studio.clouds[0].index_building);
 
         // A full pass that fails leaves no layer of unchecked points behind.
         let mut studio = Studio::default();

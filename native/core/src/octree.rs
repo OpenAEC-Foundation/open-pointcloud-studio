@@ -9,6 +9,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
+use super::snapshots::Snapshots;
 use super::{
     e57_points, pcd, visit_points, visit_points_with_poses, Bounds, Collector, LoadError, Point,
     PointCloud, ScanPose, SourceStamp,
@@ -318,10 +319,12 @@ impl OctreeIndex {
 
     /// Publish a preview while the single source pass and the partitioning of
     /// the octree on disk continue on the same worker. The preview is the
-    /// checked cloud once the pass finishes, unless one could be shown
-    /// earlier: a preview kept from an earlier open, or for a large scan that
-    /// allows it, points spread through the file. The latter has loose
-    /// bounds, so the caller replaces it with the returned cloud.
+    /// checked cloud once the pass finishes, or one kept from an earlier
+    /// open. A source of at least `LARGE_SOURCE_BYTES` without either is
+    /// shown while it is read, as `open_with_snapshots` does: `preview` is
+    /// then called every few seconds with a provisional cloud that replaces
+    /// the one before, and the caller replaces the last with the returned
+    /// cloud.
     pub fn open_and_build_cached_with_preview(
         path: &Path,
         sample_limit: usize,
@@ -333,13 +336,14 @@ impl OctreeIndex {
             path,
             sample_limit,
             config,
-            Some(super::E57_QUICK_PREVIEW_MIN_BYTES),
+            Some(super::LARGE_SOURCE_BYTES),
             preview,
             progress,
         )
     }
 
-    /// `spread_from` is the source size from which a spread preview is tried.
+    /// `spread_from` is the source size from which the source is shown while
+    /// it is read.
     pub(crate) fn open_and_build(
         path: &Path,
         sample_limit: usize,
@@ -377,13 +381,10 @@ impl OctreeIndex {
             }
             _ => false,
         };
-        // A large scan otherwise shows nothing until all of it has been read.
+        // A large source otherwise shows nothing until all of it has been read.
+        let mut snapshots = None;
         if !previewed && spread_from.is_some_and(|minimum| stamp.length >= minimum) {
-            let points = super::E57_QUICK_PREVIEW_POINTS.max(sample_limit);
-            if let Ok(Some(spread)) = super::open_e57_quick_preview(path, points) {
-                preview(&spread)?;
-                previewed = true;
-            }
+            snapshots = Some(Snapshots::begin(path, stamp, &mut preview)?);
         }
         let storage = tempfile::Builder::new()
             .prefix("open-pointcloud-index-")
@@ -399,9 +400,15 @@ impl OctreeIndex {
                 &mut |point| {
                     let ordinal = collector.total;
                     collector.push(point)?;
+                    if let Some(snapshots) = &mut snapshots {
+                        snapshots.push(point)?;
+                    }
                     write_record(&mut writer, IndexedPoint { point, ordinal })?;
                     if collector.total.is_multiple_of(65_536) {
                         progress(IndexProgress::reading(collector.total, 0))?;
+                        if let Some(snapshots) = &mut snapshots {
+                            snapshots.tick(&mut preview)?;
+                        }
                     }
                     Ok(())
                 },
@@ -420,6 +427,11 @@ impl OctreeIndex {
         cloud.scan_images = super::scan_images(path);
         cloud.source_stamp = Some(stamp);
         write_preview_cache(&cloud);
+        if let Some(snapshots) = &mut snapshots {
+            // Everything that was read stays in view while the octree is built.
+            snapshots.show(&mut preview)?;
+            previewed = true;
+        }
         if !previewed {
             preview(&cloud)?;
         }
