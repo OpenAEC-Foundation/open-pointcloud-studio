@@ -38,7 +38,7 @@ pub fn quick_access_btn<'a>(
             }),
         tooltip::Position::Bottom,
     )
-    .gap(6)
+    .gap(98)
     .into()
 }
 
@@ -158,7 +158,8 @@ pub fn render_group_items<'a>(
     .into()
 }
 
-/// Compact document tabs, with the active tab joined visually to the ribbon.
+/// OpenAEC tabs use an accent underline across the strip, while the active tab
+/// itself blends into the ribbon panel without an outline.
 pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button::Style {
     let colors = ui_theme::colors(theme);
     button::Style {
@@ -177,12 +178,8 @@ pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button:
             colors.text
         },
         border: Border {
-            color: if active {
-                colors.accent
-            } else {
-                Color::TRANSPARENT
-            },
-            width: 1.0,
+            color: Color::TRANSPARENT,
+            width: 0.0,
             radius: iced::border::Radius::default().top(4),
         },
         ..button::Style::default()
