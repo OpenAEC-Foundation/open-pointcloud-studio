@@ -13,9 +13,7 @@ use pointcloud_core::IndexedPoint;
 use serde_json::{json, Value};
 
 use crate::selection::Projection;
-use crate::{
-    opencad_properties, opencad_ribbon, Message, PointViewport, RibbonTab, Studio, ToolIcon,
-};
+use crate::{opencad_properties, opencad_ribbon, Message, PointViewport, Studio, ToolIcon};
 
 /// Pixel reach of a measuring click, the same as the point-pick tool.
 pub const PICK_RADIUS: f32 = 8.0;
@@ -465,10 +463,10 @@ impl MeasureTool {
             .map_or(Value::Null, Measurement::value)
     }
 
-    /// Distance, Area and Clear measurement for the Select ribbon.
+    /// Distance, Area and Clear for the ribbon's measure group.
     pub fn ribbon(&self) -> Element<'static, Message> {
         let mode_button = |mode: MeasureMode| {
-            opencad_ribbon::RibbonItem::Large(crate::tool_button(
+            opencad_ribbon::RibbonItem::Small(crate::small_tool_button(
                 mode.label(),
                 Message::Measure(MeasureAction::Toggle(mode)),
                 self.mode == Some(mode),
@@ -480,7 +478,7 @@ impl MeasureTool {
                 mode_button(MeasureMode::Distance),
                 mode_button(MeasureMode::Area),
                 opencad_ribbon::RibbonItem::Small(crate::small_tool_button_when(
-                    "Clear measurement",
+                    "Clear",
                     Message::Measure(MeasureAction::Clear),
                     false,
                     self.current.is_some(),
@@ -569,7 +567,6 @@ impl Studio {
             MeasureAction::Toggle(mode) => {
                 let stop = self.measure.mode == Some(mode);
                 self.measure.leave(true);
-                self.ribbon_tab = RibbonTab::Select;
                 if stop {
                     self.status = "Measuring stopped".into();
                 } else {
@@ -1175,7 +1172,6 @@ mod tests {
         apply(&mut studio, MeasureAction::Toggle(MeasureMode::Distance));
         assert_eq!(studio.measure.mode, Some(MeasureMode::Distance));
         assert!(!studio.box_select && !studio.pick_mode);
-        assert_eq!(studio.ribbon_tab, RibbonTab::Select);
 
         let _ = studio.update(Message::TogglePickSelect);
         assert!(studio.pick_mode);

@@ -153,37 +153,9 @@ pub fn render_group_items<'a>(
                     .background(ui_theme::colors(theme).ribbon_group_separator)
             }),
     ]
-    .spacing(5)
+    .spacing(2)
     .width(Length::Shrink)
     .into()
-}
-
-/// OpenAEC tabs use an accent underline across the strip, while the active tab
-/// itself blends into the ribbon panel without an outline.
-pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    button::Style {
-        background: Some(Background::Color(if active {
-            colors.shell
-        } else if matches!(status, button::Status::Hovered) {
-            colors.ribbon_hover
-        } else {
-            colors.tabs
-        })),
-        text_color: if active {
-            colors.ribbon_active_text
-        } else if matches!(status, button::Status::Hovered) {
-            colors.accent
-        } else {
-            colors.text
-        },
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: iced::border::Radius::default().top(4),
-        },
-        ..button::Style::default()
-    }
 }
 
 /// OpenAEC's File entry stays at the start of the native ribbon and opens the

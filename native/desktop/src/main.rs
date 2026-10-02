@@ -984,15 +984,6 @@ enum ColorMode {
     Classification,
 }
 
-impl ColorMode {
-    const ALL: [Self; 4] = [
-        Self::Rgb,
-        Self::Elevation,
-        Self::Intensity,
-        Self::Classification,
-    ];
-}
-
 impl fmt::Display for ColorMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -1004,14 +995,6 @@ impl fmt::Display for ColorMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RibbonTab {
-    Home,
-    View,
-    Select,
-    Tools,
-}
-
 #[derive(Debug, Clone, Copy)]
 enum FileAction {
     Import,
@@ -1019,21 +1002,16 @@ enum FileAction {
     Activate(usize),
     ExportFull,
     ExportSelection,
+    ExportWithoutSelection,
     ExportSection,
+    ExportDecimated,
     ExportMesh,
     MergeVisible,
     CancelMerge,
 }
 
-impl RibbonTab {
-    fn scroll_id(self) -> scrollable::Id {
-        scrollable::Id::new(match self {
-            Self::Home => "ops-ribbon-home",
-            Self::View => "ops-ribbon-view",
-            Self::Select => "ops-ribbon-select",
-            Self::Tools => "ops-ribbon-tools",
-        })
-    }
+fn ribbon_scroll_id() -> scrollable::Id {
+    scrollable::Id::new("ops-ribbon")
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1323,11 +1301,10 @@ enum Message {
         Result<Vec<(usize, Arc<SelectionMask>)>, String>,
     ),
     ApiPickReady(String, u64, usize, Result<Option<IndexedPoint>, String>),
-    Tab(RibbonTab),
     ToggleFile,
     FileAction(FileAction),
     RibbonScroll(f32),
-    RibbonViewport(RibbonTab, f32, f32, f32),
+    RibbonViewport(f32, f32, f32),
     RibbonReset,
     Theme(UiTheme),
     PersistSettings(u64),
@@ -1510,6 +1487,7 @@ enum Message {
     ResetCamera,
     CameraPreset(CameraPreset),
     CubeCorner([i8; 3]),
+    CubeEdge([i8; 3]),
     ViewName(String),
     SaveView,
     RestoreView(usize),
@@ -1634,7 +1612,6 @@ struct Studio {
     saved_views: Vec<SavedView>,
     view_name: String,
     viewport_size: Size,
-    ribbon_tab: RibbonTab,
     ribbon_viewport: Option<(f32, f32, f32)>,
     file_open: bool,
     ui_theme: UiTheme,
@@ -1971,7 +1948,6 @@ impl Default for Studio {
             saved_views: camera_views::load(),
             view_name: String::new(),
             viewport_size: Size::new(915.0, 743.0),
-            ribbon_tab: RibbonTab::Home,
             ribbon_viewport: None,
             file_open: false,
             ui_theme: UiTheme::load(),
@@ -4602,11 +4578,6 @@ impl Studio {
                 }
                 return self.update(Message::PickReady(revision, index, result));
             }
-            Message::Tab(tab) => {
-                self.ribbon_tab = tab;
-                self.ribbon_viewport = None;
-                self.file_open = false;
-            }
             Message::ToggleFile => {
                 self.file_open = !self.file_open;
                 self.ribbon_viewport = None;
@@ -4619,7 +4590,9 @@ impl Studio {
                     FileAction::Activate(index) => Message::Select(index),
                     FileAction::ExportFull => Message::Export,
                     FileAction::ExportSelection => Message::ExportSelection,
+                    FileAction::ExportWithoutSelection => Message::RemoveSelection,
                     FileAction::ExportSection => Message::ExportSection,
+                    FileAction::ExportDecimated => Message::Decimate,
                     FileAction::ExportMesh => Message::ExportMesh,
                     FileAction::MergeVisible => Message::MergeVisible,
                     FileAction::CancelMerge => Message::CancelMerge,
@@ -4627,17 +4600,15 @@ impl Studio {
             }
             Message::RibbonScroll(direction) => {
                 return scrollable::scroll_by(
-                    self.ribbon_tab.scroll_id(),
+                    ribbon_scroll_id(),
                     scrollable::AbsoluteOffset {
                         x: direction * 320.0,
                         y: 0.0,
                     },
                 );
             }
-            Message::RibbonViewport(tab, offset, width, content_width) => {
-                if tab == self.ribbon_tab {
-                    self.ribbon_viewport = Some((offset, width, content_width));
-                }
+            Message::RibbonViewport(offset, width, content_width) => {
+                self.ribbon_viewport = Some((offset, width, content_width));
             }
             Message::RibbonReset => self.ribbon_viewport = None,
             Message::Theme(theme) => {
@@ -7243,9 +7214,14 @@ impl Studio {
                 return self.schedule_detail();
             }
             Message::CubeCorner(corner) => {
-                self.yaw = f32::from(corner[1]).atan2(f32::from(corner[0]));
-                self.pitch = f32::from(corner[2]).atan2(std::f32::consts::SQRT_2);
+                (self.yaw, self.pitch) = view_cube::view_from(corner);
                 self.view_label = "ISO CORNER";
+                self.revision += 1;
+                return self.schedule_detail();
+            }
+            Message::CubeEdge(edge) => {
+                (self.yaw, self.pitch) = view_cube::view_from(edge);
+                self.view_label = view_cube::edge_label(edge);
                 self.revision += 1;
                 return self.schedule_detail();
             }
@@ -7349,14 +7325,12 @@ impl Studio {
                         self.box_select = true;
                         self.pick_mode = false;
                         self.measure.leave(true);
-                        self.ribbon_tab = RibbonTab::Select;
                         self.status = "Box selection active; Escape exits".into();
                     }
                     ContextAction::PickPoint => {
                         self.pick_mode = true;
                         self.box_select = false;
                         self.measure.leave(true);
-                        self.ribbon_tab = RibbonTab::Select;
                         self.status = "Point picking active; Escape exits".into();
                     }
                     ContextAction::SectionBox => {
@@ -7409,14 +7383,12 @@ impl Studio {
                 self.box_select = !self.box_select;
                 self.pick_mode = false;
                 self.measure.leave(true);
-                self.ribbon_tab = RibbonTab::Select;
                 self.drag_rectangle = None;
             }
             Message::TogglePickSelect => {
                 self.pick_mode = !self.pick_mode;
                 self.box_select = false;
                 self.measure.leave(true);
-                self.ribbon_tab = RibbonTab::Select;
                 self.drag_rectangle = None;
             }
             Message::Measure(action) => return self.update_measure(action),
@@ -7799,38 +7771,27 @@ impl Studio {
     }
 
     fn ribbon(&self) -> Element<'_, Message> {
-        let tab = |label, value| {
-            button(text(label).size(12))
-                .on_press(Message::Tab(value))
-                .style(move |theme, status| {
-                    opencad_ribbon::tab_style(
-                        theme,
-                        !self.file_open && self.ribbon_tab == value,
-                        status,
-                    )
-                })
-                .padding([5, 13])
-        };
-        let tabs = row![
+        use opencad_ribbon::RibbonItem;
+
+        let file_button = container(
             button(text("File").size(12))
                 .on_press(Message::ToggleFile)
                 .style(|theme, status| {
                     opencad_ribbon::file_tab_style(theme, self.file_open, status)
                 })
                 .padding([5, 13]),
-            tab("Home", RibbonTab::Home),
-            tab("View", RibbonTab::View),
-            tab("Select", RibbonTab::Select),
-            tab("Tools", RibbonTab::Tools),
-        ]
-        .spacing(2)
-        .align_y(iced::Alignment::Center)
+        )
         .padding([1, 8]);
         let quick_access = row![
             opencad_ribbon::quick_access_btn(
                 icon_svg(ToolIcon::Open, 20.0),
                 "Import point cloud",
                 Some(Message::Open),
+            ),
+            opencad_ribbon::quick_access_btn(
+                icon_svg(ToolIcon::OpenFolder, 20.0),
+                "Open scan folder",
+                Some(Message::OpenFolder),
             ),
             opencad_ribbon::quick_access_btn(
                 icon_svg(ToolIcon::Export, 20.0),
@@ -7854,589 +7815,287 @@ impl Studio {
         ))
         .width(20)
         .height(20);
-        let tab_bar = container(
-            row![logo, tabs, iced::widget::horizontal_space(), quick_access]
-                .width(Fill)
-                .align_y(iced::Alignment::Center)
-                .padding([0, 8]),
+        let top_strip = container(
+            row![
+                logo,
+                file_button,
+                iced::widget::horizontal_space(),
+                quick_access
+            ]
+            .width(Fill)
+            .align_y(iced::Alignment::Center)
+            .padding([0, 8]),
         )
         .width(Fill)
         .height(29)
         .style(|theme| container::Style::default().background(ui_theme::colors(theme).tabs));
         if self.file_open {
-            return container(tab_bar).width(Fill).style(ribbon_style).into();
+            return container(top_strip).width(Fill).style(ribbon_style).into();
         }
 
-        let mesh_available = self
-            .active
-            .and_then(|index| self.clouds.get(index))
-            .is_some_and(|entry| entry.mesh.is_some());
+        let has_active = self.active.is_some();
+        let selected = self.selected_total();
+        let preset = |label: &'static str, preset: CameraPreset, name: &'static str| {
+            RibbonItem::Small(small_tool_button(
+                label,
+                Message::CameraPreset(preset),
+                self.view_label == name,
+            ))
+        };
+        let view = opencad_ribbon::render_group_items(
+            "VIEW",
+            vec![
+                RibbonItem::Small(small_tool_button("Zoom all", Message::ResetCamera, false)),
+                RibbonItem::Small(small_tool_button_when(
+                    "Fit stations",
+                    Message::FitScanPoses,
+                    false,
+                    self.clouds
+                        .iter()
+                        .any(|entry| entry.visible && !entry.cloud.scan_poses.is_empty()),
+                )),
+                preset("Isometric", CameraPreset::Isometric, "ISOMETRIC"),
+                preset("Top", CameraPreset::Top, "TOP"),
+                preset("Front", CameraPreset::Front, "FRONT"),
+                preset("Right", CameraPreset::Right, "RIGHT"),
+                preset("Bottom", CameraPreset::Bottom, "BOTTOM"),
+                preset("Back", CameraPreset::Back, "BACK"),
+                preset("Left", CameraPreset::Left, "LEFT"),
+            ],
+        );
+        let display = ribbon_group(
+            "DISPLAY",
+            column![
+                row![
+                    small_color_button("RGB", ColorMode::Rgb, self.color_mode),
+                    small_color_button("Elevation", ColorMode::Elevation, self.color_mode),
+                    small_color_button("Intensity", ColorMode::Intensity, self.color_mode),
+                    small_color_button(
+                        "Classification",
+                        ColorMode::Classification,
+                        self.color_mode
+                    ),
+                ]
+                .spacing(2),
+                row![
+                    small_tool_button(
+                        "Eye-dome",
+                        Message::SetEyeDome(!self.eye_dome),
+                        self.eye_dome,
+                    ),
+                    small_tool_button(
+                        "Stations",
+                        Message::ShowScanPoses(!self.show_scan_poses),
+                        self.show_scan_poses,
+                    ),
+                    iced::widget::Space::with_width(4),
+                    text("Size").size(11),
+                    slider(0.1..=20.0, self.point_size, Message::PointSize)
+                        .step(0.1_f32)
+                        .width(88),
+                    text(format!("{:.1}", self.point_size)).size(11).width(26),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center)
+                .height(opencad_ribbon::ROW_H),
+                row![
+                    text("Budget").size(11),
+                    slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
+                        .step(100_000_u32)
+                        .width(230),
+                    text(if self.budget >= 1_000_000 {
+                        format!("{:.1}M", self.budget as f64 / 1_000_000.0)
+                    } else {
+                        format!("{}k", self.budget / 1_000)
+                    })
+                    .size(11)
+                    .width(34),
+                ]
+                .spacing(5)
+                .align_y(iced::Alignment::Center)
+                .height(opencad_ribbon::ROW_H),
+            ]
+            .spacing(1)
+            .into(),
+        );
+        let section = opencad_ribbon::render_group_items(
+            "SECTION BOX",
+            vec![
+                RibbonItem::Small(small_tool_button(
+                    "Section box",
+                    Message::SetSectionEnabled(!self.section_enabled),
+                    self.section_enabled,
+                )),
+                RibbonItem::Small(small_tool_button_when(
+                    "Fit selection",
+                    Message::FitSectionToSelection,
+                    false,
+                    selected > 0 && !self.selection_bounds_pending,
+                )),
+                RibbonItem::Small(small_tool_button(
+                    "Reset box",
+                    Message::ResetSectionBox,
+                    false,
+                )),
+            ],
+        );
+        // A running selection scan offers its cancel action instead of the zoom.
+        let zoom_selection = if self.selection_pending {
+            small_tool_button("Cancel selection", Message::CancelSelection, false)
+        } else {
+            small_tool_button_when(
+                "Zoom selection",
+                Message::ZoomToSelection,
+                false,
+                selected > 0 && !self.selection_bounds_pending,
+            )
+        };
+        let selection = ribbon_group(
+            "SELECTION",
+            column![
+                row![
+                    small_tool_button("Box select", Message::ToggleBoxSelect, self.box_select),
+                    small_tool_button("Pick point", Message::TogglePickSelect, self.pick_mode),
+                ]
+                .spacing(2),
+                row![
+                    small_tool_button("Clear", Message::ClearSelection, false),
+                    small_tool_button_when("Delete", Message::DeleteSelection, false, selected > 0),
+                ]
+                .spacing(2),
+                zoom_selection,
+            ]
+            .spacing(1)
+            .into(),
+        );
+        let edit_action = |tool: Element<'static, Message>| container(tool).width(66);
+        let scale_action = if self.scale_job.is_some() {
+            small_tool_button("Cancel", Message::CancelScale, false)
+        } else {
+            small_tool_button_when("Scale", Message::ApplyScale, false, has_active)
+        };
+        let edit = ribbon_group(
+            "EDIT",
+            column![
+                row![
+                    axis_input("X", "0", &self.translate_x, Message::TranslateX),
+                    axis_input("Y", "0", &self.translate_y, Message::TranslateY),
+                    axis_input("Z", "0", &self.translate_z, Message::TranslateZ),
+                    edit_action(small_tool_button_when(
+                        "Move",
+                        Message::ApplyTranslation,
+                        false,
+                        has_active,
+                    )),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center)
+                .height(opencad_ribbon::ROW_H),
+                row![
+                    axis_input("X", "1", &self.scale_inputs[0], |value| {
+                        Message::ScaleAxis(0, value)
+                    }),
+                    axis_input("Y", "1", &self.scale_inputs[1], |value| {
+                        Message::ScaleAxis(1, value)
+                    }),
+                    axis_input("Z", "1", &self.scale_inputs[2], |value| {
+                        Message::ScaleAxis(2, value)
+                    }),
+                    edit_action(scale_action),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center)
+                .height(opencad_ribbon::ROW_H),
+                row![
+                    text("Keep").size(11).width(28),
+                    slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
+                    text(format!("{}%", self.thin_percent)).size(11).width(30),
+                    edit_action(small_tool_button_when(
+                        "Thin",
+                        Message::Thin,
+                        false,
+                        has_active && !self.thin_pending,
+                    )),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center)
+                .height(opencad_ribbon::ROW_H),
+            ]
+            .spacing(1)
+            .into(),
+        );
+        let mesh_idle = has_active && self.mesh_job.is_none() && !self.mesh_dialog_pending;
         let mut surface_tools = vec![
-            opencad_ribbon::RibbonItem::Large(ribbon_button_when(
+            RibbonItem::Small(small_tool_button_when(
                 "Terrain mesh",
                 Message::MeshRequest(MeshMode::Terrain),
-                self.active.is_some() && self.mesh_job.is_none() && !self.mesh_dialog_pending,
+                false,
+                mesh_idle,
             )),
-            opencad_ribbon::RibbonItem::Large(ribbon_button_when(
+            RibbonItem::Small(small_tool_button_when(
                 "3D surface",
                 Message::MeshRequest(MeshMode::Surface),
-                self.active.is_some() && self.mesh_job.is_none() && !self.mesh_dialog_pending,
+                false,
+                mesh_idle,
             )),
         ];
         if self.mesh_job.is_some() {
-            surface_tools.push(opencad_ribbon::RibbonItem::Small(small_tool_button(
+            surface_tools.push(RibbonItem::Small(small_tool_button(
                 "Cancel mesh",
                 Message::CancelMesh,
                 false,
             )));
         }
-        surface_tools.push(opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-            "Export mesh",
-            Message::ExportMesh,
-            false,
-            mesh_available && !self.mesh_export_pending,
-        )));
-        let mut scale_tools = row![
-            column![
-                row![
-                    text("X").size(10).width(12),
-                    text_input("1", &self.scale_inputs[0])
-                        .on_input(|value| Message::ScaleAxis(0, value))
-                        .size(11)
-                        .padding([2, 4])
-                        .width(76)
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center),
-                row![
-                    text("Y").size(10).width(12),
-                    text_input("1", &self.scale_inputs[1])
-                        .on_input(|value| Message::ScaleAxis(1, value))
-                        .size(11)
-                        .padding([2, 4])
-                        .width(76)
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center),
-                row![
-                    text("Z").size(10).width(12),
-                    text_input("1", &self.scale_inputs[2])
-                        .on_input(|value| Message::ScaleAxis(2, value))
-                        .size(11)
-                        .padding([2, 4])
-                        .width(76)
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center),
-            ]
-            .spacing(1),
-            ribbon_button_when(
-                if self.scale_job.is_some() {
-                    "Working…"
-                } else {
-                    "Apply"
-                },
-                Message::ApplyScale,
-                self.active.is_some() && self.scale_job.is_none()
-            ),
-        ]
-        .spacing(6)
-        .align_y(iced::Alignment::Center);
-        if self.scale_job.is_some() {
-            scale_tools = scale_tools.push(ribbon_button("Cancel", Message::CancelScale));
-        }
-        let mut detail_tools = vec![
-            opencad_ribbon::RibbonItem::Small(small_tool_button_when(
+        // A running manual build offers its cancel action instead of the start.
+        let build_index = if self.index_pending && !self.indexing_during_import() {
+            small_tool_button("Cancel index", Message::CancelIndex, false)
+        } else {
+            small_tool_button_when(
                 "Build index",
                 Message::BuildIndex,
                 false,
-                self.active.is_some() && !self.index_pending,
-            )),
-            opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                "Refresh LOD",
-                Message::LoadDetail,
-                false,
-                self.active
-                    .and_then(|index| self.clouds.get(index))
-                    .is_some_and(|entry| entry.index.is_some()),
-            )),
-        ];
-        if self.index_pending && !self.indexing_during_import() {
-            detail_tools.push(opencad_ribbon::RibbonItem::Small(small_tool_button(
-                "Cancel index",
-                Message::CancelIndex,
-                false,
-            )));
-        }
-        let groups: Element<'_, Message> = match self.ribbon_tab {
-            RibbonTab::Home => row![
-                opencad_ribbon::render_group_items(
-                    "FILE",
-                    vec![
-                        opencad_ribbon::RibbonItem::Large(ribbon_button("Import", Message::Open)),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Export full",
-                            Message::Export,
-                            false,
-                            self.active.is_some(),
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Export selected",
-                            Message::ExportSelection,
-                            false,
-                            self.selected_total() > 0,
-                        )),
-                    ],
-                ),
-                opencad_ribbon::render_group_items(
-                    "COLOR",
-                    vec![
-                        opencad_ribbon::RibbonItem::Small(small_color_button(
-                            "RGB",
-                            ColorMode::Rgb,
-                            self.color_mode
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_color_button(
-                            "Elevation",
-                            ColorMode::Elevation,
-                            self.color_mode
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_color_button(
-                            "Intensity",
-                            ColorMode::Intensity,
-                            self.color_mode
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_color_button(
-                            "Classification",
-                            ColorMode::Classification,
-                            self.color_mode
-                        )),
-                    ],
-                ),
-                ribbon_group(
-                    "DISPLAY",
-                    column![
-                        row![
-                            text("Size").size(11).width(43),
-                            slider(0.1..=20.0, self.point_size, Message::PointSize)
-                                .step(0.1_f32)
-                                .width(102),
-                            text(format!("{:.1}", self.point_size)).size(11).width(32),
-                        ]
-                        .spacing(6)
-                        .align_y(iced::Alignment::Center),
-                        row![
-                            text("Budget").size(11).width(43),
-                            slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
-                                .step(100_000_u32)
-                                .width(102),
-                            text(if self.budget >= 1_000_000 {
-                                format!("{:.1}M", self.budget as f64 / 1_000_000.0)
-                            } else {
-                                format!("{}k", self.budget / 1_000)
-                            })
-                            .size(11)
-                            .width(32),
-                        ]
-                        .spacing(6)
-                        .align_y(iced::Alignment::Center),
-                    ]
-                    .spacing(9)
-                    .into()
-                ),
-                opencad_ribbon::render_group_items(
-                    "VIEW",
-                    vec![
-                        opencad_ribbon::RibbonItem::Large(ribbon_button(
-                            "Zoom all",
-                            Message::ResetCamera
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Top",
-                            Message::CameraPreset(CameraPreset::Top),
-                            self.view_label == "TOP"
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Front",
-                            Message::CameraPreset(CameraPreset::Front),
-                            self.view_label == "FRONT"
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Isometric",
-                            Message::CameraPreset(CameraPreset::Isometric),
-                            self.view_label == "ISOMETRIC"
-                        )),
-                    ],
-                ),
-                opencad_ribbon::render_group_items(
-                    "RENDER",
-                    vec![opencad_ribbon::RibbonItem::Large(tool_button(
-                        "Eye-dome",
-                        Message::SetEyeDome(!self.eye_dome),
-                        self.eye_dome,
-                    ))],
-                ),
-                ribbon_group(
-                    "THEME",
-                    column![
-                        text("Appearance").size(11),
-                        pick_list(UiTheme::ALL, Some(self.ui_theme), Message::Theme)
-                            .style(themed_pick_list_style)
-                            .width(142),
-                    ]
-                    .spacing(5)
-                    .into(),
-                ),
-            ]
-            .spacing(6)
-            .into(),
-            RibbonTab::View => row![
-                opencad_ribbon::render_group_items(
-                    "CAMERA VIEWS",
-                    vec![
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Top",
-                            Message::CameraPreset(CameraPreset::Top),
-                            self.view_label == "TOP"
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Front",
-                            Message::CameraPreset(CameraPreset::Front),
-                            self.view_label == "FRONT"
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Right",
-                            Message::CameraPreset(CameraPreset::Right),
-                            self.view_label == "RIGHT"
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Bottom",
-                            Message::CameraPreset(CameraPreset::Bottom),
-                            self.view_label == "BOTTOM"
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Back",
-                            Message::CameraPreset(CameraPreset::Back),
-                            self.view_label == "BACK"
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Left",
-                            Message::CameraPreset(CameraPreset::Left),
-                            self.view_label == "LEFT"
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Isometric",
-                            Message::CameraPreset(CameraPreset::Isometric),
-                            self.view_label == "ISOMETRIC"
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Save view",
-                            Message::SaveView,
-                            false,
-                            self.active.is_some(),
-                        )),
-                    ],
-                ),
-                opencad_ribbon::render_group_items(
-                    "SCANNERS",
-                    vec![
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Stations",
-                            Message::ShowScanPoses(!self.show_scan_poses),
-                            self.show_scan_poses,
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Fit stations",
-                            Message::FitScanPoses,
-                            false,
-                            self.clouds.iter().any(|entry| {
-                                entry.visible && !entry.cloud.scan_poses.is_empty()
-                            }),
-                        )),
-                    ],
-                ),
-                ribbon_group(
-                    "POINT DISPLAY",
-                    column![
-                        text(format!("Point size  {:.1}", self.point_size)).size(12),
-                        slider(0.1..=20.0, self.point_size, Message::PointSize)
-                            .step(0.1_f32)
-                            .width(140),
-                    ]
-                    .spacing(5)
-                    .into()
-                ),
-                ribbon_group(
-                    "DEPTH",
-                    row![
-                        tool_button(
-                            "Eye-dome",
-                            Message::SetEyeDome(!self.eye_dome),
-                            self.eye_dome,
-                        ),
-                        column![
-                            text("Strength").size(11),
-                            row![
-                                slider(0.0..=5.0, self.eye_dome_strength, Message::EyeDomeStrength)
-                                    .step(0.1_f32)
-                                    .width(85),
-                                text(format!("{:.1}", self.eye_dome_strength))
-                                    .size(11)
-                                    .width(24),
-                            ]
-                            .spacing(4)
-                            .align_y(iced::Alignment::Center),
-                        ]
-                        .spacing(5),
-                    ]
-                    .spacing(7)
-                    .align_y(iced::Alignment::Center)
-                    .into()
-                ),
-                opencad_ribbon::render_group_items(
-                    "SECTION BOX",
-                    vec![
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Section box",
-                            Message::SetSectionEnabled(!self.section_enabled),
-                            self.section_enabled,
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Reset box",
-                            Message::ResetSectionBox,
-                            false,
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Zoom box",
-                            Message::ZoomToSection,
-                            false,
-                            self.section_bounds().is_some(),
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Fit selection",
-                            Message::FitSectionToSelection,
-                            false,
-                            self.selected_total() > 0 && !self.selection_bounds_pending,
-                        )),
-                    ],
-                ),
-                ribbon_group(
-                    "POINT BUDGET",
-                    column![
-                        text(format!("{} preview points", format_count(self.budget))).size(12),
-                        slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
-                            .step(100_000_u32)
-                            .width(140),
-                    ]
-                    .spacing(5)
-                    .into()
-                ),
-            ]
-            .spacing(6)
-            .into(),
-            RibbonTab::Select => row![
-                opencad_ribbon::render_group_items(
-                    "SELECTION",
-                    vec![
-                        opencad_ribbon::RibbonItem::Large(tool_button(
-                            "Box select",
-                            Message::ToggleBoxSelect,
-                            self.box_select
-                        )),
-                        opencad_ribbon::RibbonItem::Large(tool_button(
-                            "Pick point",
-                            Message::TogglePickSelect,
-                            self.pick_mode
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Clear",
-                            Message::ClearSelection,
-                            false
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Zoom selection",
-                            Message::ZoomToSelection,
-                            false,
-                            self.selected_total() > 0 && !self.selection_bounds_pending,
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Crop",
-                            Message::ExportSelection,
-                            false
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Delete",
-                            Message::DeleteSelection,
-                            false,
-                            self.selected_total() > 0,
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Undo",
-                            Message::UndoDelete,
-                            false,
-                            !self.undo_deletions.is_empty(),
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button_when(
-                            "Redo",
-                            Message::RedoDelete,
-                            false,
-                            !self.redo_deletions.is_empty(),
-                        )),
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Save minus",
-                            Message::RemoveSelection,
-                            false
-                        )),
-                    ]
-                    .into_iter()
-                    .chain(self.selection_pending.then(|| {
-                        opencad_ribbon::RibbonItem::Small(small_tool_button(
-                            "Cancel selection",
-                            Message::CancelSelection,
-                            false,
-                        ))
-                    }))
-                    .collect(),
-                ),
-                self.measure.ribbon(),
-                ribbon_group(
-                    "RESULT",
-                    column![
-                        text(format!(
-                            "{} point{} selected",
-                            format_count(self.selected_total()),
-                            if self.selected_total() == 1 { "" } else { "s" }
-                        ))
-                        .size(15),
-                        text("Box: octree or full scan  ·  Pick: active cloud index")
-                            .size(11)
-                            .color(self.ui_theme.colors().muted),
-                    ]
-                    .spacing(6)
-                    .into()
-                ),
-            ]
-            .spacing(6)
-            .into(),
-            RibbonTab::Tools => row![
-                ribbon_group(
-                    "TRANSLATE",
-                    row![
-                        column![
-                            row![
-                                text("X").size(10).width(12),
-                                text_input("0", &self.translate_x)
-                                    .on_input(Message::TranslateX)
-                                    .size(11)
-                                    .padding([2, 4])
-                                    .width(76)
-                            ]
-                            .spacing(4)
-                            .align_y(iced::Alignment::Center),
-                            row![
-                                text("Y").size(10).width(12),
-                                text_input("0", &self.translate_y)
-                                    .on_input(Message::TranslateY)
-                                    .size(11)
-                                    .padding([2, 4])
-                                    .width(76)
-                            ]
-                            .spacing(4)
-                            .align_y(iced::Alignment::Center),
-                            row![
-                                text("Z").size(10).width(12),
-                                text_input("0", &self.translate_z)
-                                    .on_input(Message::TranslateZ)
-                                    .size(11)
-                                    .padding([2, 4])
-                                    .width(76)
-                            ]
-                            .spacing(4)
-                            .align_y(iced::Alignment::Center),
-                        ]
-                        .spacing(1),
-                        ribbon_button_when(
-                            "Apply",
-                            Message::ApplyTranslation,
-                            self.active.is_some()
-                        ),
-                    ]
-                    .spacing(6)
-                    .align_y(iced::Alignment::Center)
-                    .into()
-                ),
-                ribbon_group("SCALE", scale_tools.into()),
-                ribbon_group(
-                    "THIN",
-                    row![
-                        column![
-                            text(format!("Keep {}%", self.thin_percent)).size(11),
-                            slider(1..=100, self.thin_percent, Message::ThinPercent).width(110),
-                        ]
-                        .spacing(7),
-                        ribbon_button_when(
-                            if self.thin_pending {
-                                "Working…"
-                            } else {
-                                "Apply"
-                            },
-                            Message::Thin,
-                            self.active.is_some() && !self.thin_pending,
-                        ),
-                    ]
-                    .spacing(6)
-                    .align_y(iced::Alignment::Center)
-                    .into()
-                ),
-                opencad_ribbon::render_group_items("SURFACE", surface_tools),
-                opencad_ribbon::render_group_items("DETAIL LOD", detail_tools),
-                opencad_ribbon::render_group_items(
-                    "AUTO INDEX",
-                    vec![opencad_ribbon::RibbonItem::Small(small_tool_button(
-                        "Auto-index scans",
-                        Message::SetAutoIndex(!self.auto_index),
-                        self.auto_index,
-                    ))],
-                ),
-                ribbon_group(
-                    "DECIMATE",
-                    column![
-                        row![
-                            text("Keep 1 in").size(11),
-                            pick_list(
-                                [2u64, 5, 10, 20, 50, 100],
-                                Some(self.decimation_stride),
-                                Message::DecimationStride
-                            )
-                            .style(themed_pick_list_style)
-                            .width(66),
-                        ]
-                        .spacing(5)
-                        .align_y(iced::Alignment::Center),
-                        small_tool_button_when(
-                            "Apply decimation",
-                            Message::Decimate,
-                            false,
-                            self.active.is_some(),
-                        ),
-                    ]
-                    .spacing(4)
-                    .into()
-                ),
-            ]
-            .spacing(2)
-            .into(),
+                has_active && !self.index_pending,
+            )
         };
+        let index = opencad_ribbon::render_group_items(
+            "INDEX",
+            vec![
+                RibbonItem::Small(build_index),
+                RibbonItem::Small(small_tool_button_when(
+                    "Refresh LOD",
+                    Message::LoadDetail,
+                    false,
+                    self.active
+                        .and_then(|index| self.clouds.get(index))
+                        .is_some_and(|entry| entry.index.is_some()),
+                )),
+                RibbonItem::Small(small_tool_button(
+                    "Auto-index",
+                    Message::SetAutoIndex(!self.auto_index),
+                    self.auto_index,
+                )),
+            ],
+        );
+        let groups = row![
+            view,
+            display,
+            section,
+            selection,
+            self.measure.ribbon(),
+            edit,
+            opencad_ribbon::render_group_items("SURFACE", surface_tools),
+            index,
+        ]
+        .spacing(2);
         let group_strip = scrollable(
             container(groups)
                 .padding([0, 4])
                 .width(iced::Length::Shrink)
                 .height(opencad_ribbon::TOOL_BAR_H),
         )
-        .id(self.ribbon_tab.scroll_id())
-        .on_scroll(move |viewport| {
+        .id(ribbon_scroll_id())
+        .on_scroll(|viewport| {
             Message::RibbonViewport(
-                self.ribbon_tab,
                 viewport.absolute_offset().x,
                 viewport.bounds().width,
                 viewport.content_bounds().width,
@@ -8478,7 +8137,7 @@ impl Studio {
         };
         container(
             column![
-                tab_bar,
+                top_strip,
                 container(text(""))
                     .width(Fill)
                     .height(1)
@@ -8886,9 +8545,19 @@ impl Studio {
                 active_selected > 0
             ),
             action(
+                "Without selected points…",
+                FileAction::ExportWithoutSelection,
+                active_selected > 0
+            ),
+            action(
                 "Section box…",
                 FileAction::ExportSection,
                 active_cloud.is_some() && self.section_enabled && !self.section_export_pending,
+            ),
+            action(
+                "Every Nth point…",
+                FileAction::ExportDecimated,
+                active_cloud.is_some()
             ),
             action(
                 "Merge visible LAS/LAZ scans…",
@@ -8997,6 +8666,28 @@ impl Studio {
             )
             .style(themed_pick_list_style)
             .width(240),
+            container(
+                text("EVERY NTH POINT")
+                    .size(10)
+                    .color(self.ui_theme.colors().muted)
+            )
+            .padding(iced::Padding {
+                top: 28.0,
+                bottom: 4.0,
+                ..iced::Padding::ZERO
+            }),
+            row![
+                text("Keep 1 in").size(13),
+                pick_list(
+                    [2u64, 5, 10, 20, 50, 100],
+                    Some(self.decimation_stride),
+                    Message::DecimationStride
+                )
+                .style(themed_pick_list_style)
+                .width(90),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
             container(
                 text("APPEARANCE")
                     .size(10)
@@ -9135,19 +8826,6 @@ impl Studio {
         };
 
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
-        let export_button = if active_cloud.is_some() {
-            button("Export full resolution")
-                .on_press(Message::Export)
-                .style(flat_tool_style)
-        } else {
-            button("Export full resolution").style(flat_tool_style)
-        };
-        let section_export_button = button("Export section")
-            .on_press_maybe(
-                (self.section_enabled && active_cloud.is_some() && !self.section_export_pending)
-                    .then_some(Message::ExportSection),
-            )
-            .style(flat_tool_style);
         let source_points = active_cloud.map_or(0, |entry| entry.cloud.total_points);
         let view_points = active_cloud.map_or(0, CloudEntry::view_len);
         let selected_points = active_cloud
@@ -9185,7 +8863,7 @@ impl Studio {
         ]
         .spacing(0)
         .width(270);
-        if self.ribbon_tab == RibbonTab::Tools {
+        if active_cloud.is_some() {
             properties = properties
                 .push(opencad_properties::section_header("3D surface settings"))
                 .push(opencad_properties::property_input(
@@ -9392,20 +9070,13 @@ impl Studio {
                     ))
                     .push(
                         container(
-                            row![
-                                checkbox("Markers", self.show_scan_poses)
-                                    .on_toggle(Message::ShowScanPoses)
-                                    .style(muted_checkbox_style),
-                                button(if self.expand_scan_poses {
-                                    "Hide list"
-                                } else {
-                                    "Show list"
-                                })
-                                .on_press(Message::ExpandScanPoses(!self.expand_scan_poses))
-                                .style(flat_tool_style),
-                            ]
-                            .spacing(8)
-                            .align_y(iced::Alignment::Center),
+                            button(if self.expand_scan_poses {
+                                "Hide list"
+                            } else {
+                                "Show list"
+                            })
+                            .on_press(Message::ExpandScanPoses(!self.expand_scan_poses))
+                            .style(flat_tool_style),
                         )
                         .padding([4, 8]),
                     );
@@ -9522,17 +9193,8 @@ impl Studio {
                 .padding([2, 8]),
             );
         }
-        properties = properties
-            .push(opencad_properties::section_header("Section box"))
-            .push(
-                container(
-                    checkbox("Enabled", self.section_enabled)
-                        .on_toggle(Message::SetSectionEnabled)
-                        .style(muted_checkbox_style),
-                )
-                .padding([6, 8]),
-            );
         if self.section_enabled {
+            properties = properties.push(opencad_properties::section_header("Section box"));
             for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
                 properties = properties
                     .push(
@@ -9606,45 +9268,19 @@ impl Studio {
             }
             properties = properties.push(
                 container(
-                    button("Apply XYZ limits")
-                        .on_press(Message::ApplySectionCoordinates)
-                        .style(flat_tool_style),
+                    row![
+                        button("Apply XYZ limits")
+                            .on_press(Message::ApplySectionCoordinates)
+                            .style(flat_tool_style),
+                        button("Zoom box")
+                            .on_press(Message::ZoomToSection)
+                            .style(flat_tool_style),
+                    ]
+                    .spacing(3),
                 )
                 .padding([3, 8]),
             );
         }
-        properties = properties.push(
-            container(
-                row![
-                    button("Fit to selection")
-                        .on_press_maybe(
-                            (self.selected_total() > 0 && !self.selection_bounds_pending)
-                                .then_some(Message::FitSectionToSelection),
-                        )
-                        .style(flat_tool_style),
-                    button("Zoom box")
-                        .on_press_maybe(self.section_enabled.then_some(Message::ZoomToSection))
-                        .style(flat_tool_style),
-                ]
-                .spacing(3),
-            )
-            .padding([3, 8]),
-        );
-        properties = properties
-            .push(opencad_properties::section_header("Export"))
-            .push(
-                container(
-                    pick_list(
-                        ExportFormat::ALL,
-                        Some(self.export_format),
-                        Message::ExportFormat,
-                    )
-                    .style(themed_pick_list_style),
-                )
-                .padding([6, 8]),
-            )
-            .push(container(export_button).padding([0, 8]))
-            .push(container(section_export_button).padding([4, 8]));
         if let Some(mesh) = active_cloud.and_then(|entry| entry.mesh.as_ref()) {
             properties = properties
                 .push(opencad_properties::section_header("Surface mesh"))
@@ -9667,38 +9303,24 @@ impl Studio {
                     .padding([4, 8]),
                 );
         }
-        let mut properties = properties
-            .push(opencad_properties::section_header("Display"))
-            .push(
-                container(
-                    pick_list(ColorMode::ALL, Some(self.color_mode), Message::ColorMode)
-                        .style(themed_pick_list_style),
-                )
-                .padding([6, 8]),
-            )
-            .push(
-                container(
-                    checkbox("Eye-dome", self.eye_dome)
-                        .on_toggle(Message::SetEyeDome)
-                        .style(muted_checkbox_style),
-                )
-                .padding([2, 8]),
-            );
+        // The ribbon switches eye-dome lighting; its strength is set here.
         if self.eye_dome {
-            properties = properties.push(
-                container(
-                    row![
-                        text("Strength").size(11).width(52),
-                        slider(0.0..=5.0, self.eye_dome_strength, Message::EyeDomeStrength,)
-                            .step(0.1_f32)
-                            .width(155),
-                        text(format!("{:.1}", self.eye_dome_strength)).size(11),
-                    ]
-                    .spacing(5)
-                    .align_y(iced::Alignment::Center),
-                )
-                .padding([3, 8]),
-            );
+            properties = properties
+                .push(opencad_properties::section_header("Eye-dome lighting"))
+                .push(
+                    container(
+                        row![
+                            text("Strength").size(11).width(52),
+                            slider(0.0..=5.0, self.eye_dome_strength, Message::EyeDomeStrength,)
+                                .step(0.1_f32)
+                                .width(155),
+                            text(format!("{:.1}", self.eye_dome_strength)).size(11),
+                        ]
+                        .spacing(5)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .padding([3, 8]),
+                );
         }
         let properties: Element<'_, Message> = if self.bag_panel {
             self.bag_panel_view()
@@ -9834,39 +9456,23 @@ fn save_task(
     )
 }
 
-fn ribbon_button(label: &'static str, message: Message) -> Element<'static, Message> {
-    tool_button(label, message, false)
-}
-
-fn ribbon_button_when(
-    label: &'static str,
-    message: Message,
-    enabled: bool,
-) -> Element<'static, Message> {
-    tool_button_when(label, message, false, enabled)
-}
-
-fn tool_button(label: &'static str, message: Message, active: bool) -> Element<'static, Message> {
-    tool_button_when(label, message, active, true)
-}
-
-fn tool_button_when(
-    label: &'static str,
-    message: Message,
-    active: bool,
-    enabled: bool,
-) -> Element<'static, Message> {
-    let icon = tool_icon(&message);
-    button(
-        column![icon_svg(icon, 30.0), text(label).size(10),]
-            .spacing(3)
-            .align_x(iced::Alignment::Center),
-    )
-    .on_press_maybe(enabled.then_some(message))
-    .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
-    .width(72)
-    .height(64)
-    .padding([5, 4])
+/// One labelled axis field in a ribbon row of X, Y and Z values.
+fn axis_input<'a>(
+    axis: &'static str,
+    placeholder: &'static str,
+    value: &'a str,
+    on_input: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message> {
+    row![
+        text(axis).size(10).width(8),
+        text_input(placeholder, value)
+            .on_input(on_input)
+            .size(11)
+            .padding([2, 4])
+            .width(44),
+    ]
+    .spacing(2)
+    .align_y(iced::Alignment::Center)
     .into()
 }
 
@@ -9910,6 +9516,12 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::BuildIndex => ToolIcon::Cloud,
         Message::LoadDetail => ToolIcon::Fit,
         Message::RemoveSelection | Message::DeleteSelection => ToolIcon::Clear,
+        Message::CancelSelection
+        | Message::CancelScale
+        | Message::CancelMesh
+        | Message::CancelIndex => ToolIcon::Clear,
+        Message::SetSectionEnabled(_) | Message::ResetSectionBox => ToolIcon::SectionBox,
+        Message::ZoomToSelection => ToolIcon::Fit,
         Message::UndoDelete => ToolIcon::Undo,
         Message::RedoDelete => ToolIcon::Redo,
         Message::ResetCamera => ToolIcon::Fit,
@@ -9925,10 +9537,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::SetEyeDome(_) => ToolIcon::Shading,
         Message::ShowScanPoses(_) => ToolIcon::Pick,
         Message::FitScanPoses => ToolIcon::Fit,
-        Message::SetSectionEnabled(_)
-        | Message::ResetSectionBox
-        | Message::FitSectionToSelection
-        | Message::ZoomToSelection => ToolIcon::Select,
+        Message::FitSectionToSelection => ToolIcon::Select,
         _ => ToolIcon::Cloud,
     }
 }
@@ -10069,6 +9678,75 @@ fn ribbon_style(theme: &Theme) -> container::Style {
     container::Style::default().background(ui_theme::colors(theme).shell)
 }
 
+#[cfg(test)]
+mod ribbon_tests {
+    use super::*;
+
+    #[test]
+    fn file_button_opens_the_file_view_and_escape_closes_it() {
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::ToggleFile);
+        assert!(studio.file_open);
+        let _ = studio.view();
+
+        let _ = studio.update(Message::Escape);
+        assert!(!studio.file_open);
+        let _ = studio.view();
+    }
+
+    #[test]
+    fn file_view_exports_close_the_view_and_need_a_scan() {
+        for action in [
+            FileAction::ExportWithoutSelection,
+            FileAction::ExportDecimated,
+        ] {
+            let mut studio = Studio::default();
+            let _ = studio.update(Message::ToggleFile);
+            let _ = studio.update(Message::FileAction(action));
+            assert!(!studio.file_open);
+            assert!(studio.api_jobs.is_empty());
+        }
+    }
+
+    #[test]
+    fn ribbon_overflow_is_measured_again_after_a_resize() {
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::RibbonViewport(0.0, 900.0, 1400.0));
+        assert_eq!(studio.ribbon_viewport, Some((0.0, 900.0, 1400.0)));
+        let _ = studio.view();
+
+        let _ = studio.update(Message::RibbonReset);
+        assert_eq!(studio.ribbon_viewport, None);
+    }
+
+    #[test]
+    fn ribbon_builds_with_a_scan_in_every_tool_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scan.xyz");
+        std::fs::write(&path, "0 0 0\n4 0 0\n4 3 0\n0 3 2\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+
+        for message in [
+            Message::ToggleBoxSelect,
+            Message::TogglePickSelect,
+            Message::Measure(measure::MeasureAction::Toggle(
+                measure::MeasureMode::Distance,
+            )),
+            Message::SetSectionEnabled(true),
+            Message::CameraPreset(CameraPreset::Top),
+        ] {
+            let _ = studio.update(message);
+            assert!(!studio.file_open);
+            let _ = studio.view();
+        }
+        assert_eq!(studio.measure.mode, Some(measure::MeasureMode::Distance));
+        assert!(studio.section_enabled);
+        assert_eq!(studio.view_label, "TOP");
+    }
+}
+
 fn sidebar_style(theme: &Theme) -> container::Style {
     let colors = ui_theme::colors(theme);
     container::Style::default()
@@ -10150,10 +9828,12 @@ fn muted_checkbox_style(theme: &Theme, status: checkbox::Status) -> checkbox::St
 #[derive(Debug, Clone, Copy)]
 enum ToolIcon {
     Open,
+    OpenFolder,
     Export,
     Fit,
     Cloud,
     Select,
+    SectionBox,
     Pick,
     MeasureDistance,
     MeasureArea,
@@ -10174,10 +9854,14 @@ enum ToolIcon {
 fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
     let bytes: &'static [u8] = match icon {
         ToolIcon::Open => include_bytes!("../../assets/opencad-icons/folder_open.svg"),
+        // The scan-folder and section-box icons are drawn for this app in the
+        // same palette.
+        ToolIcon::OpenFolder => include_bytes!("../../assets/opencad-icons/folder_scans.svg"),
         ToolIcon::Export => include_bytes!("../../assets/opencad-icons/file_export.svg"),
         ToolIcon::Fit => include_bytes!("../../assets/opencad-icons/zoom_ext.svg"),
         ToolIcon::Cloud => include_bytes!("../../assets/opencad-icons/revcloud.svg"),
         ToolIcon::Select => include_bytes!("../../assets/opencad-icons/select_objects.svg"),
+        ToolIcon::SectionBox => include_bytes!("../../assets/opencad-icons/section_box.svg"),
         ToolIcon::Pick => include_bytes!("../../assets/opencad-icons/pick_point.svg"),
         // The two measure icons are drawn for this app in the same palette.
         ToolIcon::MeasureDistance => {
@@ -10981,6 +10665,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     *state = None;
                     let message = match target {
                         view_cube::CubeTarget::Face(preset) => Message::CameraPreset(preset),
+                        view_cube::CubeTarget::Edge(edge) => Message::CubeEdge(edge),
                         view_cube::CubeTarget::Corner(corner) => Message::CubeCorner(corner),
                         view_cube::CubeTarget::Home => {
                             Message::CameraPreset(CameraPreset::Isometric)

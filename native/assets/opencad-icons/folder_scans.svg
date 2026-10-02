@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Open scan folder" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 7a2 2 0 0 1 2 -2h4l3 3h7a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z" stroke="#A1A1AA" stroke-width="2"/>
+  <circle cx="8" cy="13.5" r="1.6" fill="#D97706" stroke="none"/>
+  <circle cx="12" cy="13.5" r="1.6" fill="#D97706" stroke="none"/>
+  <circle cx="16" cy="13.5" r="1.6" fill="#D97706" stroke="none"/>
+</svg>
