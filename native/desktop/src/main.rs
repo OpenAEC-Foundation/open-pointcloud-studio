@@ -16,6 +16,7 @@ mod gpu_viewport;
 mod measure;
 mod native_api;
 mod native_chrome;
+mod open_progress;
 mod opencad_properties;
 mod opencad_ribbon;
 mod preferences;
@@ -1542,6 +1543,12 @@ struct Studio {
     imports: HashMap<u64, ImportJob>,
     /// Layers shown from scan metadata while their import still reads points.
     import_headers: HashMap<u64, Arc<PointCloud>>,
+    /// Points each import expects to read, for those whose source states it.
+    import_expected: HashMap<u64, u64>,
+    /// Imports started since the window last had none under way.
+    opening_total: usize,
+    /// When each task that reports progress was first seen.
+    progress_marks: HashMap<open_progress::Phase, open_progress::Mark>,
     /// The camera as the application last framed it; a view the user changed
     /// is left alone when further scans arrive.
     auto_camera: Option<(f32, f32, f32, [f32; 2])>,
@@ -1871,6 +1878,9 @@ impl Default for Studio {
             api_job_order: VecDeque::new(),
             imports: HashMap::new(),
             import_headers: HashMap::new(),
+            import_expected: HashMap::new(),
+            opening_total: 0,
+            progress_marks: HashMap::new(),
             auto_camera: None,
             next_import_id: 0,
             dropped_paths: Vec::new(),
@@ -3857,6 +3867,7 @@ impl Studio {
             total: source.total_points,
             depth: 0,
             leaves: 0,
+            settled: 0,
         }));
         let cancel = Arc::new(AtomicBool::new(false));
         self.index_pending = true;
@@ -4147,6 +4158,7 @@ impl Studio {
         let header = Self::header_task(id, path.clone());
         let decoded = Arc::new(AtomicU64::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
+        self.opening_total += 1;
         self.imports.insert(
             id,
             ImportJob {
@@ -4218,7 +4230,9 @@ impl Studio {
             total: 0,
             depth: 0,
             leaves: 0,
+            settled: 0,
         }));
+        self.opening_total += 1;
         self.imports.insert(
             id,
             ImportJob {
@@ -4383,6 +4397,12 @@ impl Studio {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        self.track_progress();
+        task
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SyncWindowChrome(retries) => {
                 if !native_chrome::apply(self.ui_theme != UiTheme::Light) && retries > 0 {
@@ -4727,6 +4747,7 @@ impl Studio {
                     // The points arrived first, or the file has no usable metadata.
                     return Task::none();
                 };
+                self.import_expected.insert(id, header.total_points);
                 if job.cancel.load(Ordering::Relaxed) || self.import_headers.contains_key(&id) {
                     return Task::none();
                 }
@@ -8538,15 +8559,8 @@ impl Studio {
             .align_y(iced::Alignment::Center)]
             .spacing(1);
             // Only what needs attention gets a second line.
-            let mut notes = Vec::new();
-            if entry.cloud.points.is_empty() && entry.cloud.total_points > 0 && entry.mesh.is_none()
-            {
-                notes.push("loading points…".to_owned());
-            } else if entry.index_building {
-                notes.push("indexing…".to_owned());
-            } else if entry.auto_index_queued {
-                notes.push("index queued".to_owned());
-            }
+            let progress = self.layer_progress(entry);
+            let mut notes: Vec<String> = progress.iter().map(|(note, _)| note.clone()).collect();
             let selected = entry.selection.as_ref().map_or(0, |mask| mask.count);
             if selected > 0 {
                 notes.push(format!("{} selected", format_count(selected)));
@@ -8564,6 +8578,27 @@ impl Studio {
                     )
                     .padding(iced::Padding {
                         left: 20.0,
+                        ..iced::Padding::ZERO
+                    }),
+                );
+            }
+            if let Some(fraction) = progress.and_then(|(_, fraction)| fraction) {
+                item = item.push(
+                    container(
+                        iced::widget::progress_bar(0.0..=1.0, fraction)
+                            .height(2)
+                            .style(|theme| {
+                                let colors = ui_theme::colors(theme);
+                                iced::widget::progress_bar::Style {
+                                    background: colors.border.into(),
+                                    bar: colors.accent.into(),
+                                    border: iced::Border::default(),
+                                }
+                            }),
+                    )
+                    .padding(iced::Padding {
+                        left: 20.0,
+                        right: 4.0,
                         ..iced::Padding::ZERO
                     }),
                 );
@@ -9160,57 +9195,6 @@ impl Studio {
                 ));
         }
         properties = properties.push(opencad_properties::section_header("Geometry"));
-        if let Some(progress) = self
-            .index_progress
-            .as_ref()
-            .and_then(|value| value.lock().ok().map(|value| *value))
-        {
-            let cancelling = self.index_cancel.load(Ordering::Relaxed);
-            properties = properties
-                .push(opencad_properties::section_header("Octree index"))
-                .push(
-                    container(
-                        text(if cancelling {
-                            "Cancelling octree build…".into()
-                        } else {
-                            Self::index_progress_text(progress)
-                        })
-                        .size(11),
-                    )
-                    .padding([6, 8]),
-                );
-            if progress.stage == IndexStage::ReadingSource && progress.total > 0 {
-                properties = properties.push(
-                    container(
-                        iced::widget::progress_bar(
-                            0.0..=1.0,
-                            if progress.total == 0 {
-                                0.0
-                            } else {
-                                progress.completed as f32 / progress.total as f32
-                            },
-                        )
-                        .height(8)
-                        .style(|theme| {
-                            let colors = ui_theme::colors(theme);
-                            iced::widget::progress_bar::Style {
-                                background: colors.panel_alt.into(),
-                                bar: colors.accent.into(),
-                                border: iced::Border::default(),
-                            }
-                        }),
-                    )
-                    .padding([2, 8])
-                    .width(Fill),
-                );
-            }
-            if !cancelling && !self.indexing_during_import() {
-                properties = properties.push(
-                    container(button("Cancel index").on_press(Message::CancelIndex))
-                        .padding([5, 8]),
-                );
-            }
-        }
         if let Some(job) = &self.mesh_job {
             let progress = job.control.snapshot();
             properties = properties
@@ -9724,9 +9708,11 @@ impl Studio {
         ]
         .spacing(16)
         .padding([8, 14]);
-        let mut viewport = column![viewport_header, container(canvas).width(Fill).height(Fill)]
-            .height(Fill)
-            .width(Fill);
+        let mut viewport = column![viewport_header].height(Fill).width(Fill);
+        if let Some(progress) = self.progress_strip() {
+            viewport = viewport.push(progress);
+        }
+        viewport = viewport.push(container(canvas).width(Fill).height(Fill));
         if self
             .clouds
             .iter()

@@ -76,13 +76,40 @@ pub struct IndexProgress {
     pub stage: IndexStage,
     /// Source points read, or cumulative point records handled by tree nodes.
     pub completed: u64,
-    /// Known only while reading the original source.
+    /// Points in the source: zero while reading a source that does not state
+    /// its count, and the points of the cloud while building the tree.
     pub total: u64,
     pub depth: u8,
     pub leaves: u64,
+    /// Points that have reached their leaf while building the tree. Against
+    /// `total` this tells how far the build is; `completed` counts a point
+    /// once for every level it passes.
+    pub settled: u64,
 }
 
+/// Share of a tree build that splitting the root takes. No point reaches a
+/// leaf before the root is split, so the build is measured by that pass
+/// first and by the points in finished leaves after it.
+const ROOT_SPLIT_SHARE: f64 = 0.2;
+
 impl IndexProgress {
+    /// How far the current stage is, from 0 to 1, when the size of the
+    /// source is known.
+    pub fn fraction(&self) -> Option<f32> {
+        if self.total == 0 {
+            return None;
+        }
+        let of_total = |count: u64| (count as f64 / self.total as f64).min(1.0);
+        Some(match self.stage {
+            IndexStage::ReadingSource => of_total(self.completed),
+            IndexStage::BuildingTree => {
+                ROOT_SPLIT_SHARE * of_total(self.completed)
+                    + (1.0 - ROOT_SPLIT_SHARE) * of_total(self.settled)
+            }
+            IndexStage::Ready => 1.0,
+        } as f32)
+    }
+
     fn reading(completed: u64, total: u64) -> Self {
         Self {
             stage: IndexStage::ReadingSource,
@@ -90,6 +117,7 @@ impl IndexProgress {
             total,
             depth: 0,
             leaves: 0,
+            settled: 0,
         }
     }
 
@@ -100,7 +128,15 @@ impl IndexProgress {
             total: 0,
             depth,
             leaves,
+            settled: 0,
         }
+    }
+
+    /// With the points that have reached their leaf, of all in the cloud.
+    fn with_settled(mut self, settled: u64, total: u64) -> Self {
+        self.settled = settled;
+        self.total = total;
+        self
     }
 
     fn ready(total: u64, leaves: u64) -> Self {
@@ -110,6 +146,7 @@ impl IndexProgress {
             total,
             depth: 0,
             leaves,
+            settled: total,
         }
     }
 }
@@ -409,7 +446,15 @@ impl OctreeIndex {
         let root_path = storage.path().join("r.bin");
         let mut collector = Collector::new(sample_limit);
         let mut poses = Vec::new();
-        progress(IndexProgress::reading(0, 0))?;
+        // An E57 file states how many records it holds, which tells the pass
+        // how far it is. Records that hold no valid point make the count of
+        // points smaller, never larger.
+        let stated = if super::is_e57(path) {
+            e57_points::summary(path).map_or(0, |summary| summary.records)
+        } else {
+            0
+        };
+        progress(IndexProgress::reading(0, stated))?;
         {
             let mut writer =
                 BufWriter::with_capacity(ROOT_WRITE_BUFFER_BYTES, File::create(&root_path)?);
@@ -423,7 +468,12 @@ impl OctreeIndex {
                     }
                     write_record(&mut writer, IndexedPoint { point, ordinal })?;
                     if collector.total.is_multiple_of(65_536) {
-                        progress(IndexProgress::reading(collector.total, 0))?;
+                        let total = if stated == 0 {
+                            0
+                        } else {
+                            stated.max(collector.total)
+                        };
+                        progress(IndexProgress::reading(collector.total, total))?;
                         if let Some(snapshots) = &mut snapshots {
                             snapshots.tick(&mut preview)?;
                         }
@@ -1551,6 +1601,8 @@ struct TreeBuild<'a> {
     tuning: PartitionTuning,
     handled_records: AtomicU64,
     ready_leaves: AtomicU64,
+    /// Points in finished leaves.
+    settled: AtomicU64,
     aborted: AtomicBool,
     failure: Mutex<Option<LoadError>>,
     nodes: Mutex<HashMap<String, BuiltNode>>,
@@ -1668,6 +1720,7 @@ impl TreeBuild<'_> {
             }
             self.handled_records.fetch_add(job.count, Ordering::AcqRel);
             self.ready_leaves.fetch_add(1, Ordering::AcqRel);
+            self.settled.fetch_add(job.count, Ordering::AcqRel);
             job.count
         } else {
             let (child_counts, stored_points) = self.partition(&job, wide, events)?;
@@ -1958,6 +2011,7 @@ fn build_tree<F: FnMut(IndexProgress) -> Result<(), LoadError>>(
         tuning,
         handled_records: AtomicU64::new(*context.handled_records),
         ready_leaves: AtomicU64::new(*context.ready_leaves),
+        settled: AtomicU64::new(0),
         aborted: AtomicBool::new(false),
         failure: Mutex::new(None),
         nodes: Mutex::new(HashMap::new()),
@@ -1965,6 +2019,7 @@ fn build_tree<F: FnMut(IndexProgress) -> Result<(), LoadError>>(
         backlog_changed: Condvar::new(),
     };
     let root_id = job.id.clone();
+    let total = job.count;
     let (events, updates) = mpsc::channel();
     std::thread::scope(|threads| {
         let build = &build;
@@ -1987,7 +2042,8 @@ fn build_tree<F: FnMut(IndexProgress) -> Result<(), LoadError>>(
                 build.handled_records.load(Ordering::Acquire),
                 depth,
                 build.ready_leaves.load(Ordering::Acquire),
-            );
+            )
+            .with_settled(build.settled.load(Ordering::Acquire), total);
             if let Err(error) = (context.progress)(update) {
                 build.fail(error);
             }
@@ -2504,6 +2560,7 @@ mod tests {
             tuning: PartitionTuning::default(),
             handled_records: AtomicU64::new(0),
             ready_leaves: AtomicU64::new(0),
+            settled: AtomicU64::new(0),
             aborted: AtomicBool::new(false),
             failure: Mutex::new(None),
             nodes: Mutex::new(HashMap::new()),
@@ -2585,6 +2642,25 @@ mod tests {
             read_records(&path, |_| Ok(())),
             Err(LoadError::Io(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof
         ));
+    }
+
+    #[test]
+    fn progress_fraction_follows_the_root_split_and_then_the_leaves() {
+        assert_eq!(IndexProgress::reading(5, 0).fraction(), None);
+        assert_eq!(IndexProgress::reading(25, 100).fraction(), Some(0.25));
+        assert_eq!(IndexProgress::reading(250, 100).fraction(), Some(1.0));
+        let building = |completed, settled| {
+            IndexProgress::building(completed, 1, 0)
+                .with_settled(settled, 100)
+                .fraction()
+                .unwrap()
+        };
+        assert_eq!(IndexProgress::building(0, 0, 0).fraction(), None);
+        assert!((building(50, 0) - 0.1).abs() < 1e-6);
+        assert!((building(100, 0) - 0.2).abs() < 1e-6);
+        assert!((building(340, 50) - 0.6).abs() < 1e-6);
+        assert!((building(700, 100) - 1.0).abs() < 1e-6);
+        assert_eq!(IndexProgress::ready(100, 4).fraction(), Some(1.0));
     }
 
     #[test]
