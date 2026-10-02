@@ -589,7 +589,8 @@ same source before triangular-gap repair produced 172,820 triangles. A separate
 OBJ edge audit counted 104,352 open edges before and 103,953 after repair;
 both had zero duplicate faces and zero edges shared by more than two faces.
 The remaining open edges show that this local repair does not make the mesh
-watertight.
+watertight. The OBJ reopened in the native viewer as 172,953 GPU-rendered
+triangles; see [the screenshot](../screenshots/native-e57-triangular-gap-repair.png).
 The native E57 writer was checked with a full copy of the public pye57
 `test.e57` fixture: the 14 MB copy has the same SHA-256 as its source, including
 all scan poses and metadata. A separate section export streamed all 160,838
