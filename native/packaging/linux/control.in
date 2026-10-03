@@ -1,0 +1,20 @@
+Package: open-pointcloud-studio
+Version: @DEBVERSION@
+Architecture: @ARCH@
+Maintainer: OpenAEC Foundation <info@open-aec.com>
+Section: science
+Priority: optional
+Installed-Size: @SIZE@
+Depends: libc6 (>= 2.35), libgcc-s1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libvulkan1 | libegl1
+Recommends: mesa-vulkan-drivers, shared-mime-info, xdg-desktop-portal, xdg-desktop-portal-gtk | xdg-desktop-portal-backend, xdg-utils
+Suggests: zenity
+Homepage: https://github.com/OpenAEC-Foundation/open-pointcloud-studio
+Description: viewer and editor for laser scans and point clouds
+ Open Pointcloud Studio opens laser scans and other point clouds in the LAS,
+ LAZ, E57, PLY, PCD, PTX and text formats, also when a survey is many
+ gigabytes large. It shows scanner stations with their photos, lets you walk
+ through a scene, select, delete, thin, move and scale points, measure
+ distances and areas, save views with notes, and export the result as a
+ point cloud or a mesh.
+ .
+ The application needs a Vulkan driver, or OpenGL ES 3 through EGL.

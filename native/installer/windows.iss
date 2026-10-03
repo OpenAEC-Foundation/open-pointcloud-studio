@@ -2,7 +2,11 @@
 ;
 ; Compile with the version and the folder that holds the application and
 ; its licence texts, for example:
-;   ISCC /DAppVersion=0.6.0 /DSourceDir=..\open-pointcloud-studio-v0.6.0-windows windows.iss
+;   ISCC /DAppVersion=0.8.0 /DSourceDir=..\target\packages\open-pointcloud-studio_0.8.0_windows-x64 windows.iss
+;
+; SourceDir is the folder that native/packaging/build-archive.sh leaves
+; behind. A pre-release such as 0.8.0-rc1 also needs /DAppNumericVersion=0.8.0,
+; because the version details of the installer file take numbers only.
 
 #ifndef AppVersion
   #error AppVersion is not set
@@ -12,6 +16,9 @@
 #endif
 #ifndef OutputDir
   #define OutputDir "..\target\installer"
+#endif
+#ifndef AppNumericVersion
+  #define AppNumericVersion AppVersion
 #endif
 
 #define AppName "Open Pointcloud Studio"
@@ -40,13 +47,15 @@ SetupIconFile=..\assets\icons\icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 OutputDir={#OutputDir}
-OutputBaseFilename=open-pointcloud-studio-v{#AppVersion}-windows-setup
+; The ending _x64-setup.exe is what the download buttons of the foundation's
+; website look for; native/packaging/expected-assets.sh lists all names.
+OutputBaseFilename=open-pointcloud-studio_{#AppVersion}_x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ChangesAssociations=yes
 CloseApplications=yes
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#AppNumericVersion}
 VersionInfoProductName={#AppName}
 
 [Languages]
@@ -77,6 +86,9 @@ Root: HKA; Subkey: "Software\Classes\.pcd\OpenWithProgids"; ValueType: string; V
 Root: HKA; Subkey: "Software\Classes\.ptx\OpenWithProgids"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.pts\OpenWithProgids"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.xyz\OpenWithProgids"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
+; A scan project file lists the scans of a project; the application opens
+; those it finds beside it.
+Root: HKA; Subkey: "Software\Classes\.rcp\OpenWithProgids"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- @VERSION@ is filled in when the bundle is built: three numbers, no suffix. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Open Pointcloud Studio</string>
+	<key>CFBundleDisplayName</key>
+	<string>Open Pointcloud Studio</string>
+	<key>CFBundleIdentifier</key>
+	<string>org.openaec.OpenPointcloudStudio</string>
+	<key>CFBundleExecutable</key>
+	<string>open-pointcloud-studio</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.graphics-design</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>OpenAEC Foundation and contributors. GPL-3.0-only; point-cloud core LGPL-3.0-or-later.</string>
+
+	<!-- The point-cloud formats have no type the system knows, so they are
+	     declared here; PLY is a system type and is only referred to. -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.openaec.pointcloud.e57</string>
+			<key>UTTypeDescription</key>
+			<string>E57 point cloud</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>e57</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>model/e57</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.openaec.pointcloud.las</string>
+			<key>UTTypeDescription</key>
+			<string>LAS point cloud</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>las</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.las</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.openaec.pointcloud.laz</string>
+			<key>UTTypeDescription</key>
+			<string>LAZ point cloud</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>laz</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.laszip</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.openaec.pointcloud.pcd</string>
+			<key>UTTypeDescription</key>
+			<string>PCD point cloud</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>pcd</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.openaec.pointcloud.ptx</string>
+			<key>UTTypeDescription</key>
+			<string>PTX point cloud</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.text</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ptx</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.openaec.pointcloud.pts</string>
+			<key>UTTypeDescription</key>
+			<string>PTS point cloud</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.text</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>pts</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.openaec.pointcloud.rcp</string>
+			<key>UTTypeDescription</key>
+			<string>Scan project</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>rcp</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<!-- Offered under "Open With", never as the default program. -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Point cloud</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>org.openaec.pointcloud.e57</string>
+				<string>org.openaec.pointcloud.las</string>
+				<string>org.openaec.pointcloud.laz</string>
+				<string>org.openaec.pointcloud.pcd</string>
+				<string>org.openaec.pointcloud.ptx</string>
+				<string>org.openaec.pointcloud.pts</string>
+				<string>org.openaec.pointcloud.rcp</string>
+				<string>public.polygon-file-format</string>
+			</array>
+		</dict>
+		<!-- Lets a folder of scans be dropped on the Dock icon without the
+		     application being offered for folders anywhere else. -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Scan folder</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>None</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.folder</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

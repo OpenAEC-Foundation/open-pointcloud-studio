@@ -1,0 +1,3 @@
+# These files are read by bash, python, dpkg and the desktop on Linux and
+# macOS, also from a checkout made on Windows: keep their line ends as they are.
+* text=auto eol=lf

@@ -1,5 +1,11 @@
 name: Build and Release Native Rust App
 
+# A release is published only when everything before it succeeded: the tag
+# equals the version in native/Cargo.toml, CHANGELOG.md has a section for it,
+# the tests pass on all three systems, and every package was built, installed
+# and started. Nothing is created on the release page until then, so a failed
+# run leaves no draft with half the files.
+
 on:
   push:
     tags:
@@ -7,184 +13,110 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (for example v1.0.0)'
+        description: 'Version tag (for example v1.0.0); must equal the version in native/Cargo.toml'
         required: true
+      draft_only:
+        description: 'Leave the release as a draft to look at before publishing'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
-  contents: write
+  contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  create-release:
+  prepare:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.value }}
-    steps:
-      - name: Resolve version
-        id: version
-        shell: bash
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            version="$INPUT_VERSION"
-          else
-            version="$GITHUB_REF_NAME"
-          fi
-          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || exit 1
-          echo "value=$version" >> "$GITHUB_OUTPUT"
-      - name: Create draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          if ! gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --draft \
-              --title "Open Pointcloud Studio $VERSION" \
-              --notes "Native Rust desktop application for Windows, Linux and macOS. For Windows there is an installer (the file ending in windows-setup.exe) besides the archive; each archive holds the application binary and the licence texts. No web frontend or webview is involved. The desktop application is GPL-3.0-only, the point-cloud core LGPL-3.0-or-later."
-          fi
-
-  build-native:
-    needs: create-release
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: ubuntu-22.04
-            artifact: linux
-            binary: open-pointcloud-studio
-          - platform: windows-latest
-            artifact: windows
-            binary: open-pointcloud-studio.exe
-          - platform: macos-latest
-            artifact: macos
-            binary: open-pointcloud-studio
-    runs-on: ${{ matrix.platform }}
-    defaults:
-      run:
-        working-directory: native
+      tag: ${{ steps.version.outputs.tag }}
+      number: ${{ steps.version.outputs.number }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install Linux desktop dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Check the version against the tag
+        id: version
+        env:
+          REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libgtk-3-dev
-      - name: Build native binary
-        run: cargo build --release --locked -p open-pointcloud-studio-native
-      # An unsigned binary still works; signing only spares users a warning.
-      - name: Sign Windows binary
-        if: matrix.artifact == 'windows'
-        continue-on-error: true
-        uses: azure/trusted-signing-action@v0.5.0
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.AZURE_ENDPOINT }}
-          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
-          files-folder: ${{ github.workspace }}/native/target/release
-          files-folder-filter: exe
-          files-folder-depth: 1
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-      - name: Package and upload native binary
-        shell: bash
+          [[ "$REQUESTED" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] \
+            || { echo "::error::'$REQUESTED' is not a version tag like v1.2.3 or v1.2.3-rc1"; exit 1; }
+          bash native/packaging/version.sh "$REQUESTED" | tee -a "$GITHUB_OUTPUT"
+      - name: Check that the changelog describes this version
+        run: bash native/packaging/release-notes.sh --check "${{ steps.version.outputs.number }}"
+      # A published release is not replaced; a draft left by an earlier run is.
+      - name: Check that this version is not published yet
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.create-release.outputs.version }}
-          PLATFORM: ${{ matrix.artifact }}
-          BINARY: ${{ matrix.binary }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          package="open-pointcloud-studio-${VERSION}-${PLATFORM}"
-          mkdir "$package"
-          cp "target/release/$BINARY" "$package/"
-          # The licences travel with every copy of the binary.
-          cp ../LICENSE.md "$package/LICENSE-LGPL-3.0.md"
-          cp desktop/LICENSE-GPL-3.0 "$package/LICENSE-GPL-3.0.txt"
-          cp assets/fonts/*-OFL.txt "$package/"
-          cat > "$package/NOTICE.txt" <<'NOTICE'
-          Open Pointcloud Studio
-
-          The desktop application is licensed GPL-3.0-only (LICENSE-GPL-3.0.txt).
-          It contains ribbon and properties-panel code and icons adapted from a
-          GPL-3.0 project that is credited in the source headers and in
-          native/README.md of the source repository. The point-cloud core is
-          licensed LGPL-3.0-or-later (LICENSE-LGPL-3.0.md).
-
-          The embedded fonts Inter and Space Grotesk are licensed under the SIL
-          Open Font License (the *-OFL.txt files).
-
-          Source code: https://github.com/OpenAEC-Foundation/open-pointcloud-studio
-          NOTICE
-          if [[ "$PLATFORM" == "windows" ]]; then
-            archive="$package.zip"
-            7z a -bso0 "$archive" "$package"
-          else
-            archive="$package.tar.gz"
-            tar -czf "$archive" "$package"
+          if state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null) \
+            && [[ "$state" != "true" ]]; then
+            echo "::error::release $TAG is already published"
+            exit 1
           fi
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$archive" > "$archive.sha256"
-          else
-            shasum -a 256 "$archive" > "$archive.sha256"
-          fi
-          gh release upload "$VERSION" "$archive" "$archive.sha256" --clobber --repo "$GITHUB_REPOSITORY"
-      # The installer packs the same folder as the archive: the signed
-      # application with its licence texts.
-      - name: Build Windows installer
-        if: matrix.artifact == 'windows'
-        shell: pwsh
-        env:
-          VERSION: ${{ needs.create-release.outputs.version }}
-        run: |
-          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $compiler)) {
-            choco install innosetup --no-progress -y
-          }
-          $number = $env:VERSION.TrimStart('v')
-          & $compiler "/DAppVersion=$number" "/DSourceDir=..\open-pointcloud-studio-$($env:VERSION)-windows" installer\windows.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Sign Windows installer
-        if: matrix.artifact == 'windows'
-        continue-on-error: true
-        uses: azure/trusted-signing-action@v0.5.0
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.AZURE_ENDPOINT }}
-          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
-          files-folder: ${{ github.workspace }}/native/target/installer
-          files-folder-filter: exe
-          files-folder-depth: 1
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-      - name: Upload Windows installer
-        if: matrix.artifact == 'windows'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.create-release.outputs.version }}
-        run: |
-          cd target/installer
-          setup="open-pointcloud-studio-${VERSION}-windows-setup.exe"
-          test -f "$setup"
-          sha256sum "$setup" > "$setup.sha256"
-          gh release upload "$VERSION" "$setup" "$setup.sha256" --clobber --repo "$GITHUB_REPOSITORY"
 
-  publish-release:
-    needs: [create-release, build-native]
+  checks:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+
+  packages:
+    needs: prepare
+    uses: ./.github/workflows/packages.yml
+    with:
+      version: ${{ needs.prepare.outputs.number }}
+    # The Windows signing steps read their keys from the secrets.
+    secrets: inherit
+
+  publish:
+    needs: [prepare, checks, packages]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      NUMBER: ${{ needs.prepare.outputs.number }}
     steps:
-      # A draft cannot be looked up by its tag through the API, so publish it
-      # with the command-line client, which finds drafts by name.
-      - name: Publish completed release
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: assets
+          merge-multiple: true
+      - name: Check that the release is complete
+        working-directory: assets
+        run: |
+          missing=0
+          for name in $(bash ../native/packaging/expected-assets.sh "$NUMBER"); do
+            for file in "$name" "$name.sha256"; do
+              if [[ ! -s "$file" ]]; then
+                echo "::error::$file is missing"
+                missing=1
+              fi
+            done
+          done
+          [[ "$missing" -eq 0 ]]
+          for sum in *.sha256; do sha256sum -c "$sum"; done
+          ls -l
+      - name: Write the release notes
         env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.create-release.outputs.version }}
-        run: gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false
+          WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}
+        run: bash native/packaging/release-notes.sh "$NUMBER" > notes.md
+      # A draft left by an earlier run is taken over and moved to this commit.
+      - name: Create the draft release
+        env:
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: bash native/packaging/draft-release.sh "$TAG" notes.md "$PRERELEASE"
+      - name: Upload the packages
+        working-directory: assets
+        run: |
+          for name in $(bash ../native/packaging/expected-assets.sh "$NUMBER"); do
+            gh release upload "$TAG" "$name" "$name.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+          done
+      - name: Publish the release
+        if: ${{ !inputs.draft_only }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

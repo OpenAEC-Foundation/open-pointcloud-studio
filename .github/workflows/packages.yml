@@ -1,0 +1,523 @@
+name: Packages
+
+# Builds every package of the application, installs each one on a fresh
+# machine and starts it there. Nothing is published: the packages are kept as
+# artifacts of the run. The release workflow calls this workflow and publishes
+# what it built; started by hand it tries the packaging before any tag exists.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version that native/Cargo.toml must have (empty: whatever it has)'
+        type: string
+        required: false
+        default: ''
+      skip_cli_flags:
+        description: 'Skip the --version and --help checks (for a build from before those flags existed)'
+        type: boolean
+        required: false
+        default: false
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version that native/Cargo.toml must have (empty: whatever it has)'
+        type: string
+        required: false
+        default: ''
+      skip_cli_flags:
+        description: 'Skip the --version and --help checks'
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      windows_signed:
+        description: 'true when the Windows executable and installer carry a valid signature'
+        value: ${{ jobs.windows.outputs.signed }}
+  pull_request:
+    paths:
+      - 'native/packaging/**'
+      - 'native/installer/**'
+      - '.github/workflows/packages.yml'
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Read by native/packaging/smoke-test.sh.
+  SMOKE_CLI_FLAGS: ${{ inputs.skip_cli_flags && '0' || '1' }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.version.outputs.number }}
+      numeric: ${{ steps.version.outputs.numeric }}
+      deb: ${{ steps.version.outputs.deb }}
+      date: ${{ steps.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the version
+        id: version
+        env:
+          EXPECTED: ${{ inputs.version }}
+        run: bash native/packaging/version.sh "$EXPECTED" | tee -a "$GITHUB_OUTPUT"
+      - name: Test the package scripts
+        run: bash native/packaging/test-scripts.sh
+
+  icons:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin
+      - name: Render the icons from the logo
+        run: bash native/packaging/make-icons.sh icons
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-icons
+          path: icons
+          if-no-files-found: error
+
+  windows:
+    needs: prepare
+    runs-on: windows-latest
+    # A step that hangs must not hold a machine for hours.
+    timeout-minutes: 60
+    outputs:
+      signed: ${{ steps.signature.outputs.signed }}
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      NUMERIC: ${{ needs.prepare.outputs.numeric }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the application
+        working-directory: native
+        run: cargo build --release --locked -p open-pointcloud-studio-native
+      - name: Smoke-test the built application
+        run: bash native/packaging/smoke-test.sh native/target/release/open-pointcloud-studio.exe "$NUMBER"
+      # An unsigned binary still works; signing only spares users a warning.
+      - name: Sign the application
+        continue-on-error: true
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}/native/target/release
+          files-folder-filter: exe
+          files-folder-depth: 1
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Pack the archive
+        run: |
+          bash native/packaging/build-archive.sh native/target/release/open-pointcloud-studio.exe \
+            "$NUMBER" windows-x64 native/target/packages
+      # The installer packs the same folder as the archive: the signed
+      # application with its licence texts.
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --no-progress -y
+          }
+          & $compiler "/DAppVersion=$env:NUMBER" "/DAppNumericVersion=$env:NUMERIC" `
+            "/DSourceDir=..\target\packages\open-pointcloud-studio_$($env:NUMBER)_windows-x64" `
+            native\installer\windows.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Sign the installer
+        continue-on-error: true
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}/native/target/installer
+          files-folder-filter: exe
+          files-folder-depth: 1
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      # The signing steps may fail without failing the job, so their green
+      # tick says nothing. This step says what the files really carry, and the
+      # release notes repeat it.
+      - name: Report the signatures
+        id: signature
+        shell: pwsh
+        run: |
+          $files = @(
+            "native\target\release\open-pointcloud-studio.exe",
+            "native\target\installer\open-pointcloud-studio_$($env:NUMBER)_x64-setup.exe"
+          )
+          $signed = $true
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file
+            Write-Host ("{0}: {1} {2}" -f $file, $signature.Status, $signature.SignerCertificate.Subject)
+            if ($signature.Status -ne 'Valid') { $signed = $false }
+          }
+          "signed=$($signed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+      - name: Collect the installer
+        run: |
+          setup="open-pointcloud-studio_${NUMBER}_x64-setup.exe"
+          mv "native/target/installer/$setup" native/target/packages/
+          cd native/target/packages
+          sha256sum "$setup" > "$setup.sha256"
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'ops-install'
+          $setup = "native\target\packages\open-pointcloud-studio_$($env:NUMBER)_x64-setup.exe"
+          $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER',
+            "/DIR=$target", "/LOG=$env:RUNNER_TEMP\ops-install.log")
+          $process = Start-Process -FilePath $setup -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            Get-Content "$env:RUNNER_TEMP\ops-install.log" -ErrorAction SilentlyContinue
+            throw "the installer ended with code $($process.ExitCode)"
+          }
+          if (-not (Test-Path "$target\open-pointcloud-studio.exe")) { throw "the application was not installed" }
+          if (-not (Test-Path "$target\LICENSE-GPL-3.0.txt")) { throw "the licence text was not installed" }
+          foreach ($extension in 'e57', 'las', 'laz', 'ply', 'pcd', 'ptx', 'pts', 'xyz', 'rcp') {
+            $key = "HKCU:\Software\Classes\.$extension\OpenWithProgids"
+            if ($null -eq (Get-ItemProperty -Path $key -Name 'OpenPointcloudStudio.Scan' -ErrorAction SilentlyContinue)) {
+              throw "'Open with' is not registered for .$extension"
+            }
+          }
+      - name: Smoke-test the installed application
+        run: |
+          bash native/packaging/smoke-test.sh \
+            "$(cygpath -u "$RUNNER_TEMP")/ops-install/open-pointcloud-studio.exe" "$NUMBER"
+      - name: Uninstall silently
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'ops-install'
+          Start-Process -FilePath "$target\unins000.exe" `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          # The uninstaller finishes in a copy of itself, which may outlive
+          # the process that was waited for.
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path $target) -and ((Get-Date) -lt $deadline)) { Start-Sleep -Seconds 1 }
+          if (Test-Path $target) { throw "the uninstaller left $target behind" }
+          if (Test-Path 'HKCU:\Software\Classes\OpenPointcloudStudio.Scan') {
+            throw "the uninstaller left the 'Open with' registration behind"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-windows
+          path: |
+            native/target/packages/*.zip
+            native/target/packages/*.exe
+            native/target/packages/*.sha256
+          if-no-files-found: error
+
+  linux:
+    needs: [prepare, icons]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest hosted system sets the oldest C library the binary
+          # runs with; check-binary.sh holds the build to it.
+          - runner: ubuntu-22.04
+            arch: amd64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      DEB_VERSION: ${{ needs.prepare.outputs.deb }}
+      DATE: ${{ needs.prepare.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install build and packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev \
+            squashfs-tools desktop-file-utils
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-icons
+          path: native/target/icons
+      - name: Build the application
+        working-directory: native
+        run: cargo build --release --locked -p open-pointcloud-studio-native
+      - name: Check what the binary needs from the system
+        run: bash native/packaging/linux/check-binary.sh native/target/release/open-pointcloud-studio
+      - name: Smoke-test the built application
+        run: bash native/packaging/smoke-test.sh native/target/release/open-pointcloud-studio "$NUMBER"
+      - name: Pack the archive
+        run: |
+          bash native/packaging/build-archive.sh native/target/release/open-pointcloud-studio \
+            "$NUMBER" "linux-${{ matrix.arch }}" native/target/packages
+      - name: Build the .deb
+        run: |
+          bash native/packaging/linux/build-deb.sh native/target/release/open-pointcloud-studio \
+            native/target/icons "$NUMBER" "$DEB_VERSION" "$DATE" native/target/packages
+      - name: Build the AppImage
+        run: |
+          bash native/packaging/linux/build-appimage.sh native/target/release/open-pointcloud-studio \
+            native/target/icons "$NUMBER" "$DATE" native/target/packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-linux-${{ matrix.arch }}
+          path: |
+            native/target/packages/*.tar.gz
+            native/target/packages/*.deb
+            native/target/packages/*.AppImage
+            native/target/packages/*.sha256
+          if-no-files-found: error
+
+  macos:
+    needs: [prepare, icons]
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      NUMERIC: ${{ needs.prepare.outputs.numeric }}
+      # The oldest macOS both halves of the binary start on.
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-icons
+          path: native/target/icons
+      - name: Build the application for both processor types
+        working-directory: native
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked -p open-pointcloud-studio-native --target "$target"
+          done
+      - name: Join them into one universal binary
+        working-directory: native
+        run: |
+          mkdir -p target/universal
+          lipo -create -output target/universal/open-pointcloud-studio \
+            target/aarch64-apple-darwin/release/open-pointcloud-studio \
+            target/x86_64-apple-darwin/release/open-pointcloud-studio
+          lipo -archs target/universal/open-pointcloud-studio
+          # Joining keeps the signatures the linker gave each half; sign the
+          # whole once more so the archive holds a binary signed as one file.
+          codesign --force --sign - --timestamp=none target/universal/open-pointcloud-studio
+          codesign --verify --strict target/universal/open-pointcloud-studio
+      - name: Smoke-test the built application
+        run: bash native/packaging/smoke-test.sh native/target/universal/open-pointcloud-studio "$NUMBER"
+      - name: Smoke-test the x86-64 half through translation
+        run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            SMOKE_RUN_PREFIX="arch -x86_64" \
+              bash native/packaging/smoke-test.sh native/target/universal/open-pointcloud-studio "$NUMBER"
+          else
+            echo "::notice::this machine cannot run x86-64 programs; that half is tested in verify-macos"
+          fi
+      - name: Pack the archive
+        run: |
+          bash native/packaging/build-archive.sh native/target/universal/open-pointcloud-studio \
+            "$NUMBER" macos-universal native/target/packages
+      - name: Build the application bundle and the disk image
+        run: |
+          bash native/packaging/macos/build-app.sh native/target/universal/open-pointcloud-studio \
+            native/target/icons/AppIcon.iconset "$NUMBER" "$NUMERIC" native/target/packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-macos
+          path: |
+            native/target/packages/*.tar.gz
+            native/target/packages/*.dmg
+            native/target/packages/*.sha256
+          if-no-files-found: error
+
+  verify-linux:
+    needs: [prepare, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # A newer system than the one that built the packages.
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-linux-${{ matrix.arch }}
+          path: packages
+      - name: Check the checksums
+        working-directory: packages
+        run: |
+          for sum in *.sha256; do sha256sum -c "$sum"; done
+      - name: Install what the tests need
+        run: |
+          sudo apt-get update
+          # The MIME database first, so that installing the package triggers it.
+          sudo apt-get install -y shared-mime-info libglib2.0-bin desktop-file-utils appstream \
+            xvfb mesa-vulkan-drivers libegl1 libgl1-mesa-dri fuse3
+      - name: Install the .deb
+        run: sudo apt-get install -y "./packages/open-pointcloud-studio_${NUMBER}_${ARCH}.deb"
+      - name: Smoke-test the installed application
+        run: |
+          SMOKE_KEEP_DIR="$RUNNER_TEMP/smoke" \
+            bash native/packaging/smoke-test.sh /usr/bin/open-pointcloud-studio "$NUMBER"
+      - name: Check that the system knows the file types
+        run: bash native/packaging/linux/check-file-types.sh "$RUNNER_TEMP/smoke"
+      - name: Check the installed desktop entry
+        run: desktop-file-validate /usr/share/applications/org.openaec.OpenPointcloudStudio.desktop
+      # Advisory until it has passed once: the validator differs between
+      # versions in what it calls an error.
+      - name: Validate the AppStream metadata
+        continue-on-error: true
+        run: appstreamcli validate --no-net /usr/share/metainfo/org.openaec.OpenPointcloudStudio.metainfo.xml
+      # Software rendering: this proves that the window starts, imports and
+      # draws, not that it works with any particular graphics driver.
+      - name: Window test of the installed application
+        run: |
+          mkdir -p screenshots
+          xvfb-run -a -s '-screen 0 1440x900x24' python3 native/packaging/gui-smoke.py \
+            /usr/bin/open-pointcloud-studio --version "$NUMBER" --screenshot "screenshots/deb-$ARCH.png"
+      - name: Remove the .deb
+        run: |
+          sudo apt-get remove -y open-pointcloud-studio
+          test ! -e /usr/bin/open-pointcloud-studio
+          test ! -e /usr/share/applications/org.openaec.OpenPointcloudStudio.desktop
+          test ! -e /usr/share/mime/packages/org.openaec.OpenPointcloudStudio.xml
+      - name: Start the AppImage without mounting it
+        run: |
+          appimage="packages/open-pointcloud-studio_${NUMBER}_${ARCH}.AppImage"
+          # Artifacts do not keep the executable bit.
+          chmod +x "$appimage"
+          APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --list-scans "$RUNNER_TEMP/smoke/scans" | grep 'grid\.ply'
+      - name: Smoke-test the mounted AppImage
+        run: bash native/packaging/smoke-test.sh "packages/open-pointcloud-studio_${NUMBER}_${ARCH}.AppImage" "$NUMBER"
+      - name: Window test of the AppImage
+        run: |
+          xvfb-run -a -s '-screen 0 1440x900x24' python3 native/packaging/gui-smoke.py \
+            "packages/open-pointcloud-studio_${NUMBER}_${ARCH}.AppImage" --version "$NUMBER" \
+            --screenshot "screenshots/appimage-$ARCH.png"
+      - name: Start the archive binary
+        run: |
+          tar -xzf "packages/open-pointcloud-studio_${NUMBER}_linux-${ARCH}.tar.gz"
+          folder="open-pointcloud-studio_${NUMBER}_linux-${ARCH}"
+          test -f "$folder/LICENSE-GPL-3.0.txt"
+          bash native/packaging/smoke-test.sh "$folder/open-pointcloud-studio" "$NUMBER"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-linux-${{ matrix.arch }}
+          path: screenshots
+          if-no-files-found: ignore
+
+  verify-macos:
+    needs: [prepare, macos]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each half of the universal binary on a machine of its own kind.
+          - runner: macos-15-intel
+            half: x86_64
+            window: false
+          - runner: macos-26
+            half: arm64
+            window: true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-macos
+          path: packages
+      - name: Check the checksums
+        working-directory: packages
+        run: |
+          for sum in *.sha256; do shasum -a 256 -c "$sum"; done
+      - name: Check that this machine tests the intended half
+        run: test "$(uname -m)" = "${{ matrix.half }}"
+      - name: Mount the disk image
+        run: |
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/ops-image" \
+            "packages/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
+          ls -la "$RUNNER_TEMP/ops-image"
+          test -L "$RUNNER_TEMP/ops-image/Applications"
+          test -f "$RUNNER_TEMP/ops-image/First start.txt"
+      - name: Smoke-test the application on the image
+        run: |
+          bash native/packaging/smoke-test.sh \
+            "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app/Contents/MacOS/open-pointcloud-studio" "$NUMBER"
+      - name: Install by copying, as a user would
+        run: |
+          mkdir -p "$RUNNER_TEMP/Applications"
+          ditto "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app" \
+            "$RUNNER_TEMP/Applications/Open Pointcloud Studio.app"
+          hdiutil detach "$RUNNER_TEMP/ops-image"
+          app="$RUNNER_TEMP/Applications/Open Pointcloud Studio.app"
+          codesign --verify --strict --verbose=2 "$app"
+          plutil -lint "$app/Contents/Info.plist"
+          test -f "$app/Contents/Resources/AppIcon.icns"
+          test -f "$app/Contents/Resources/LICENSE-GPL-3.0.txt"
+          archs=$(lipo -archs "$app/Contents/MacOS/open-pointcloud-studio")
+          [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
+          bash native/packaging/smoke-test.sh "$app/Contents/MacOS/open-pointcloud-studio" "$NUMBER"
+      - name: Start the archive binary
+        run: |
+          tar -xzf "packages/open-pointcloud-studio_${NUMBER}_macos-universal.tar.gz"
+          folder="open-pointcloud-studio_${NUMBER}_macos-universal"
+          test -f "$folder/LICENSE-GPL-3.0.txt"
+          bash native/packaging/smoke-test.sh "$folder/open-pointcloud-studio" "$NUMBER"
+      # Whether a hosted machine offers the graphics interface the window
+      # needs is not promised, so these two may fail without failing the run
+      # until they have been seen to work.
+      - name: Window test
+        if: matrix.window
+        continue-on-error: true
+        run: |
+          mkdir -p screenshots
+          python3 native/packaging/gui-smoke.py \
+            "$RUNNER_TEMP/Applications/Open Pointcloud Studio.app/Contents/MacOS/open-pointcloud-studio" \
+            --version "$NUMBER" --screenshot screenshots/macos.png
+      # The only test of a file handed over by the system instead of on the
+      # command line, as a double click or "Open With" does.
+      - name: Window test of opening a document
+        if: matrix.window
+        continue-on-error: true
+        run: |
+          mkdir -p screenshots
+          python3 native/packaging/gui-smoke.py \
+            "$RUNNER_TEMP/Applications/Open Pointcloud Studio.app/Contents/MacOS/open-pointcloud-studio" \
+            --version "$NUMBER" --screenshot screenshots/macos-open-document.png \
+            --open-with "$RUNNER_TEMP/Applications/Open Pointcloud Studio.app"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-macos-${{ matrix.half }}
+          path: screenshots
+          if-no-files-found: ignore

@@ -1,0 +1,22 @@
+Open Pointcloud Studio
+
+The desktop application is licensed GPL-3.0-only (LICENSE-GPL-3.0.txt).
+It contains ribbon and properties-panel code and icons adapted from a
+GPL-3.0 project that is credited in the source headers and in
+native/README.md of the source repository. The point-cloud core is
+licensed LGPL-3.0-or-later (LICENSE-LGPL-3.0.md).
+
+The embedded fonts Inter and Space Grotesk are licensed under the SIL
+Open Font License (the *-OFL.txt files).
+
+A package for a Debian-based system refers to the licence texts that the
+system keeps in /usr/share/common-licenses instead of carrying the two
+LICENSE files.
+
+The AppImage package starts with the AppImage type 2 runtime, release
+20251108 of https://github.com/AppImage/type2-runtime, which is licensed
+under the MIT licence; its text and the libraries it links are listed in
+AppImage-runtime-LICENSE.txt inside that package. No other package
+contains it.
+
+Source code: https://github.com/OpenAEC-Foundation/open-pointcloud-studio

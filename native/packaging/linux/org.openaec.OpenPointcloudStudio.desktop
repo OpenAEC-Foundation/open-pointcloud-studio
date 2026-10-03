@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Open Pointcloud Studio
+GenericName=Point Cloud Viewer and Editor
+GenericName[nl]=Puntenwolkviewer en -editor
+Comment=Open, view, measure, edit and export laser scans and point clouds
+Comment[nl]=Laserscans en puntenwolken openen, bekijken, meten, bewerken en exporteren
+Exec=open-pointcloud-studio %F
+Icon=org.openaec.OpenPointcloudStudio
+Terminal=false
+Categories=Graphics;3DGraphics;Engineering;
+Keywords=point cloud;laser scan;lidar;LAS;LAZ;E57;PLY;
+Keywords[nl]=puntenwolk;laserscan;lidar;LAS;LAZ;E57;PLY;
+MimeType=model/e57;application/vnd.las;application/vnd.laszip;application/x-ply;application/x-pcd;application/x-ptx;application/x-pts;application/x-rcp;
+StartupNotify=true
+StartupWMClass=org.openaec.OpenPointcloudStudio
