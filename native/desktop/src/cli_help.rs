@@ -100,8 +100,10 @@ pub const MODES: &[Mode] = &[
     Mode {
         flag: "--mesh-export",
         short: None,
-        arguments: "INPUT OUTPUT.obj",
-        description: key("Writes the faces of a mesh file as OBJ."),
+        arguments: "INPUT OUTPUT",
+        description: key(
+            "Writes the faces of a mesh file as OBJ, PLY or STL; the extension of OUTPUT chooses the format.",
+        ),
     },
     Mode {
         flag: "--bag3d",

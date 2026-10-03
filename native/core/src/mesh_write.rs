@@ -78,7 +78,7 @@ pub struct MeshWriteReport {
 /// is written relative to a whole-metre origin, which the file header names
 /// and the report returns. The STL readers of this crate add that origin
 /// again; another program shows such a file near zero. `comments` go into
-/// the OBJ and PLY headers.
+/// the OBJ and PLY headers; those of a PLY file must be ASCII.
 pub fn write_mesh(
     mesh: &MeshGeometry,
     destination: impl AsRef<Path>,
@@ -93,7 +93,11 @@ pub fn write_mesh(
         }
         MeshFormat::Ply => {
             validate(mesh, comments, format)?;
-            if comments.len() > MAX_PLY_COMMENTS {
+            // The header of a PLY file is ASCII text by definition, and a
+            // reader that holds to it stops at any other character.
+            if comments.len() > MAX_PLY_COMMENTS
+                || comments.iter().any(|comment| !comment.is_ascii())
+            {
                 return Err(LoadError::InvalidData("invalid PLY mesh export".into()));
             }
             write_atomically(destination, |writer| write_ply(mesh, comments, writer))?;
@@ -654,6 +658,9 @@ mod tests {
             assert!(write_mesh(&good, &destination, format, &["two\nlines"]).is_err());
             if format == MeshFormat::Ply {
                 assert!(write_mesh(&good, &destination, format, &too_many).is_err());
+                // A PLY header is ASCII; other characters would stop a
+                // reader that holds to the format.
+                assert!(write_mesh(&good, &destination, format, &["© source"]).is_err());
             }
             assert_eq!(std::fs::read(&destination).unwrap(), saved);
         }

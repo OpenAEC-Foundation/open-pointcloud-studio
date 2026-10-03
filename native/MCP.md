@@ -83,8 +83,8 @@ command of the same name with the same arguments, and return the window's
 JSON answer as text (and as `structuredContent` from protocol version
 `2025-06-18`).
 
-Exports, selections, picks, meshes, merges and 3D BAG downloads answer at
-once with a `job_id`.
+Exports, selections, picks, meshes, mesh exports, merges and 3D BAG downloads
+answer at once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
@@ -160,8 +160,9 @@ follows when that view is restored.
 | `cancel_index` | — | Cancels the octree build |
 | `set_auto_index` | `enabled` | Automatic indexing of large clouds |
 | `set_surface_settings` | `max_vertices`, `neighbors`, `edge_factor` | Limits of 3D surface reconstruction |
-| `mesh` | `mode` (`terrain` or `surface`), `path` (`.obj`), optional `wait_seconds` | Meshes the active layer; job |
+| `mesh` | `mode` (`terrain` or `surface`), `path` (`.obj`), optional `wait_seconds` | Meshes the active layer; the job reports vertices, triangles, open edges and connected parts |
 | `cancel_mesh` | — | Cancels the mesh job |
+| `export_mesh` | `path` (`.obj`, `.ply` or `.stl`), optional `wait_seconds` | Saves the mesh of the active layer in the format of the extension; job |
 | `export` | `path`, optional `wait_seconds` | Exports the active layer; job |
 | `export_section` | `path`, optional `wait_seconds` | Exports the section box; job |
 | `export_selection` | `path`, optional `wait_seconds` | Exports the selected points; job |

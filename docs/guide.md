@@ -32,7 +32,7 @@ The interface is in English or Dutch. The guide uses the English names.
 - The **ribbon** holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE and INDEX. At the default window width of 1440 pixels the whole ribbon is visible. In a narrower window the groups scroll sideways, with the wheel, the scrollbar or the arrow buttons that appear at both ends.
 - The **project panel** at the left lists the open clouds in name order, one row each with a visibility switch, the point count and a button to close the cloud. A second line appears only while a cloud is loading or indexing, or when it has selected or deleted points. Below the clouds, the classes that occur in them are listed.
 - The **scene** in the middle is the 3D view, with the view cube in a corner.
-- The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the saved views and the annotations of the active view, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the strength of eye-dome lighting while that is on, the 3D surface settings, and the progress of mesh, merge and scale jobs with their cancel buttons.
+- The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the saved views and the annotations of the active view, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the strength of eye-dome lighting while that is on, the 3D surface settings, the size of the mesh of the active scan with its open edges and connected parts, and the progress of mesh, merge and scale jobs with their cancel buttons.
 - The **status bar** at the bottom says what is going on, how many files and points are open and how many points are selected, and ends with the version.
 - The **File view** opens with the File button and covers the ribbon and the scene. Its menu has the import entries, **3D BAG buildings…**, the exports and the merge, above the pages Workspace, Extensions and About and the entries **Settings…**, **Return to model** and **Exit**. The Workspace page lists the open scans (click one to make it the active scan, the same as a click on its row in the project panel) and has the export format and the "every Nth point" setting. Escape or Return to model closes the File view.
 
@@ -169,7 +169,7 @@ Selections honour the section box, the hidden classes and the points deleted bef
 ### Editing
 
 - **Delete**, or the Delete key, hides the selected points. **Undo** and **Redo** (the Undo delete and Redo delete icons in the top strip, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z; Command on macOS) restore and repeat up to eight deletions.
-- **Thin** keeps the percentage set with the **Keep** slider, from 1 to 100, of the points that remain. It counts as a deletion and can be undone.
+- **Thin** reduces the number of points: it keeps the percentage set with the **Keep** slider, from 1 to 100, of the points that remain, taken at even steps through the file, so every part of the scan thins by the same share. Keep 25 % removes three points in four. It counts as a deletion and can be undone. To write a reduced copy without thinning the open scan, use **Every Nth point…** among the exports.
 - **Move** shifts the active scan by the X, Y and Z values typed beside it.
 - **Scale** scales the active scan by the X, Y and Z factors typed beside it, around the centre of gravity of the points that remain. For a large cloud that centre is calculated in the background, with progress in Properties and a **Cancel** button in place of Scale.
 - **Reset transform**, under **Live transform** in Properties, puts the cloud back at its source coordinates.
@@ -248,7 +248,7 @@ The exports are in the File view under **EXPORT**. Each asks where to save and t
 | **Without selected points…** | The active scan without the selected and the deleted points |
 | **Section box…** | The points of the active scan inside the section box; available while the box is on |
 | **Every Nth point…** | One point of the active scan in 2, 5, 10, 20, 50 or 100, as set under **EVERY NTH POINT** on the Workspace page |
-| **Surface mesh…** | The mesh of the active scan as OBJ; see [Meshing](#meshing) |
+| **Surface mesh…** | The mesh of the active scan as OBJ, PLY or STL; see [Saving a mesh](#saving-a-mesh) |
 | **Views as BCF…** | The saved views of the active scan; see [BCF export](#bcf-export) |
 
 Every export reads the source again from start to end, so points that are not on screen are written too. The file appears under its name only when it is complete.
@@ -266,7 +266,7 @@ The command line does the same without a window: `--export`, `--section` and `--
 
 ## Meshing
 
-The SURFACE group has two meshers. Both use the points that remain inside the section box and whose class is visible, ask for an `.obj` file, run in the background and then show the result in the scene as faces. Properties shows the progress; **Cancel mesh** stops the job and leaves an existing file as it was. One mesh job runs at a time.
+A point cloud becomes a mesh of triangles with one of the two meshers of the SURFACE group. Both use the points that remain inside the section box and whose class is visible, ask for an `.obj` file, run in the background and then show the result in the scene as faces. Properties shows the progress; **Cancel mesh** stops the job and leaves an existing file as it was. One mesh job runs at a time.
 
 - **Terrain mesh** passes every source point through a grid seen from above, keeps the lowest point in each cell and connects those to a 2.5D surface of at most 100,000 vertices. Long edges across gaps are left out. It suits ground and other surfaces seen from above.
 - **3D surface** takes a sample of the source, thins it evenly to the number of vertices asked for, estimates a normal at each and connects neighbours in their tangent planes. It can follow vertical walls and overhangs. Sparse parts leave holes, and neighbouring patches can disagree, so the result is not watertight. While a scan is active, Properties has its settings: **Max vertices** (3 to 1,000,000; 50,000 by default), **Neighbors** (3 to 32; 12 by default) and a positive **Edge factor** (4 by default).
@@ -275,9 +275,37 @@ The OBJ file has the colours of the source where it has them and a normal per ve
 
 A scan holds one mesh: a new mesh takes the place of the previous one, and Undo does not apply to meshes. The project panel has a separate **Surface** switch per layer, so the points can be hidden while the faces stay.
 
-OBJ, PLY, OFF and STL files open as meshes and are drawn as faces too, several at once. Of a DXF file, which must be an ASCII DXF, the POINT entities open as points and the 3DFACE entities as faces; other entities are skipped. Colours per vertex of OBJ and PLY are shown; OBJ files also get the diffuse colours of their material file. Texture images are not drawn. A mesh shown in the scene has at most one million vertices and two million triangles per file. **Surface mesh…** in the File view, or **Export mesh as OBJ** under **Surface mesh** in Properties, saves the mesh of the active scan as OBJ.
+OBJ, PLY, OFF and STL files open as meshes and are drawn as faces too, several at once. Of a DXF file, which must be an ASCII DXF, the POINT entities open as points and the 3DFACE entities as faces; other entities are skipped. Colours per vertex of OBJ and PLY are shown; OBJ files also get the diffuse colours of their material file. Texture images are not drawn. A mesh shown in the scene has at most one million vertices and two million triangles per file.
 
-Without a window: `--mesh`, `--surface` and `--mesh-export`.
+### What Properties says about a mesh
+
+While the active scan holds a mesh, Properties has a **Surface mesh** section. The status bar gives the same figures when a mesh job ends.
+
+- **Vertices** and **Triangles**: the size of the mesh.
+- **Open edges**: the edges that belong to one triangle only. They are the outer rim of the surface and the rims of its holes. A closed surface has none. A terrain mesh always has its outer rim, and a 3D surface usually has many open edges, because it leaves holes where the points are sparse.
+- **Connected parts**: the number of pieces that share no vertex with each other. One part is one continuous surface; a high number means loose patches.
+
+A mesh file can hold the same corner more than once: one vertex per face, or one per material colour of an OBJ file. For a mesh that was opened from a file, vertices at exactly the same position therefore count as one for these two figures, so a closed surface shows no open edges however the file numbers its vertices, and the same mesh gives the same figures in every format. Parts that touch in such a position are one part, as buildings from 3D BAG that share a corner are. **Vertices** stays the number the mesh holds.
+
+These figures say how the triangles hang together. They do not say how far the mesh lies from the points; that distance is not measured.
+
+### Saving a mesh
+
+**Surface mesh…** in the File view, or **Export mesh…** under **Surface mesh** in Properties, saves the mesh of the active scan: a terrain mesh, a 3D surface, the faces of an opened mesh file or downloaded 3D BAG buildings. The save dialog offers three formats, and the extension of the file name decides which one is written:
+
+| Format | What the file holds |
+| --- | --- |
+| OBJ (`.obj`) | Text. Positions, and colours and normals per vertex where the mesh has them |
+| PLY (`.ply`) | Binary. Positions as double-precision numbers, so survey coordinates keep all their digits, and colours and normals where the mesh has them |
+| STL (`.stl`) | Binary. Triangles only: no colours, and 32-bit numbers |
+
+The mesh is written as the scene shows it, with the move and scale of its scan applied. A scan that is mirrored by a negative scale factor keeps its outside in the file: the corners of the triangles are written in reverse order and the normals point outward. The file appears under its name only when it is complete. The source file of the scan cannot be chosen as the destination.
+
+An STL file stores 32-bit numbers, which hold about seven digits. Up to 2,048 m from zero that is a quarter of a millimetre or better. A mesh that lies farther away on an axis, as a scan in RD New does, is therefore written relative to an origin in whole metres on that axis. The status bar names the origin, and the file states it in its 80-byte header as `origin X Y Z m`. Open Pointcloud Studio adds it again when it opens the file, so the mesh returns to its place. Another program does not read the header and shows the mesh near zero: add the origin there, or choose OBJ or PLY when the coordinates have to stay as they are.
+
+An OBJ or PLY file of 3D BAG buildings carries the credit of the register in its first lines, in plain ASCII in a PLY file. Open Pointcloud Studio reads it there when the file is opened again, so the scene shows the credit and a further export keeps it. An STL file has no room for the credit; name the source yourself when you pass such a file on.
+
+Without a window: `--mesh` and `--surface` make a mesh, and `--mesh-export INPUT OUTPUT` writes the faces of any mesh file as OBJ, PLY or STL by the extension of `OUTPUT`.
 
 ## 3D BAG buildings
 

@@ -264,7 +264,7 @@ fn status_reports_a_mesh_export_and_a_wait_counts_it_as_work() {
     let status = send(&mut studio, ApiCommand::Status);
     assert_eq!(status["result"]["mesh_export_pending"], true);
     assert_eq!(crate::mcp::busy(&status["result"]), ["mesh_export"]);
-    let _ = studio.update(Message::MeshExported(Err("disk full".into())));
+    let _ = studio.update(Message::MeshExported(None, Err("disk full".into())));
     let status = send(&mut studio, ApiCommand::Status);
     assert!(crate::mcp::busy(&status["result"]).is_empty());
 }

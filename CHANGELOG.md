@@ -14,6 +14,11 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- A mesh can be saved as OBJ, as binary PLY or as binary STL: **Surface mesh…** in the File view and **Export mesh…** in Properties offer the three formats, and the extension of the file name chooses. This holds for a terrain mesh, a 3D surface, an opened mesh file and downloaded 3D BAG buildings. PLY keeps survey coordinates in double precision with colours and normals; an STL file of a mesh far from zero is written relative to a whole-metre origin that the status bar and the file header name.
+- Properties shows the open edges and the number of connected parts of a mesh, next to its vertices and triangles; the status bar gives them when a terrain mesh or 3D surface is finished. For a mesh that was opened from a file, vertices at the same position count as one, so a closed surface shows no open edges however the file numbers its vertices.
+- A scan that is mirrored by a negative scale factor keeps its outside in a saved mesh: the triangles and normals of the file face outward, also in the OBJ file that a mesh job writes.
+- Buildings from 3D BAG that were saved as OBJ or PLY keep their credit when that file is opened and saved again; a PLY file carries it in plain ASCII.
+- The command API and the MCP server have an `export_mesh` command, `status` lists the mesh of each layer, the result of a mesh job reports open edges and connected parts, and `--mesh-export` on the command line writes OBJ, PLY or STL by the extension of the output.
 - Packages for macOS: a disk image with the application for arm64 and x86-64 processors in one file, for macOS 11 and later. It is signed ad hoc, not with a developer certificate, so the first start has to be allowed once; the image and the release notes say how.
 - Packages for Linux: a `.deb` for Debian, Ubuntu and their relatives and an AppImage for any distribution, both for x86-64 and, as an experiment, for 64-bit ARM. They add a menu entry with the application icon and offer the application for E57, LAS, LAZ, PLY, PCD, PTX and PTS files and scan project files.
 - The installer for Windows now offers the application under "Open with" for scan project files (`.rcp`) too.

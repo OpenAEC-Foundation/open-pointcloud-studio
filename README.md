@@ -169,7 +169,7 @@ Each heading has a section in the [user guide](docs/guide.md).
 
 - **Box select** selects every source point inside a rectangle drawn on screen; **Pick point** selects the one point of the active scan under the pointer and shows its coordinates and attributes.
 - **Delete** hides the selected points. Undo and Redo go back and forward through up to eight deletions.
-- **Thin** keeps an exact percentage of the points; **Move** and **Scale** shift and scale a cloud; **Reset transform** in Properties puts it back.
+- **Thin** reduces a cloud to an exact percentage of its points; **Move** and **Scale** shift and scale a cloud; **Reset transform** in Properties puts it back.
 - None of this changes the source file. Exports write the edited result.
 
 ### Measure
@@ -197,7 +197,8 @@ Each heading has a section in the [user guide](docs/guide.md).
 - **Terrain mesh** builds a 2.5D surface from the lowest points of a grid, suited to ground and other surfaces seen from above.
 - **3D surface** builds a surface from a sample of the points, including walls and overhangs. It leaves holes and is not watertight.
 - Both save an OBJ file with colours and normals and show the result in the scene. A new mesh takes the place of the previous mesh of that scan, and Undo does not apply to meshes.
-- Any mesh that is open can be saved as OBJ.
+- Properties shows the vertices and triangles of a mesh, its open edges (the rims of the surface and of its holes) and the number of connected parts.
+- Any mesh that is open, whether made here, opened from a file or downloaded from the 3D BAG, can be saved as OBJ, as binary PLY or as binary STL.
 
 <!-- New tools add their bullet list here, as a "###" heading of their own, and a section in docs/guide.md. -->
 
@@ -218,9 +219,11 @@ Each heading has a section in the [user guide](docs/guide.md).
 | PTX | yes | no | With the scanner position of each scan |
 | PTS | yes | yes | |
 | XYZ, ASC, TXT, CSV | yes | XYZ, CSV | Text with one point per line |
-| OBJ | yes | yes | Mesh with colours; material colours are read, texture images are not |
-| PLY, OFF, STL as mesh | yes | no | Shown as faces; can be saved as OBJ |
-| DXF | yes | no | ASCII DXF only. POINT entities open as points, 3DFACE entities as faces that can be saved as OBJ; other entities are skipped |
+| OBJ | yes | yes | Mesh with colours and normals; material colours are read, texture images are not |
+| PLY as mesh | yes | yes | Shown as faces. Written as binary PLY with double coordinates, and with colours and normals where the mesh has them |
+| STL | yes | yes | Shown as faces. Written as binary STL: triangles only, without colours. A mesh more than 2,048 m from zero is written relative to a whole-metre origin that the file header names |
+| OFF | yes | no | Shown as faces; can be saved as OBJ, PLY or STL |
+| DXF | yes | no | ASCII DXF only. POINT entities open as points, 3DFACE entities as faces that can be saved as OBJ, PLY or STL; other entities are skipped |
 | Scan project file (`.rcp`) | yes | no | Only the list of scans is read. The indexed scan copies (`.rcs`) of a project are a closed format and are not read |
 | BCF 2.1 (`.bcf`) | no | yes | Saved views with notes and pictures |
 | PNG | no | yes | Picture of the 3D view, through the command API |
@@ -277,7 +280,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--merge OUTPUT.laz INPUT1.las INPUT2.laz [...]` | Merges LAS and LAZ scans into one file |
 | `--mesh INPUT OUTPUT.obj` | Writes a terrain mesh of a scan |
 | `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N]` | Writes a 3D surface mesh of a scan |
-| `--mesh-export INPUT OUTPUT.obj` | Writes the faces of a mesh file as OBJ |
+| `--mesh-export INPUT OUTPUT` | Writes the faces of a mesh file as OBJ, PLY or STL; the extension of `OUTPUT` chooses the format (`.obj`, `.ply`, `.stl`) |
 | `--bag3d XMIN,YMIN,XMAX,YMAX 1.2\|1.3\|2.2 OUTPUT.obj` | Downloads the 3D BAG buildings inside an RD New box as OBJ |
 | `--version`, `-V` | Prints the version |
 | `--help`, `-h` | Prints the modes |

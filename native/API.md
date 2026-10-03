@@ -49,6 +49,12 @@ adds a partial layer. LAS/LAZ header previews open immediately and have a null
 Mesh jobs report `reading`, `reconstructing`, or `writing` with completed and
 total units. `cancel_mesh` requests cancellation; a cancelled mesh leaves an
 existing destination untouched. Only one mesh job runs at a time.
+The complete job has `path`, `mode`, `source_points`, `vertices` and
+`triangles`, and what was measured of the mesh: `open_edges`, the edges that
+belong to one triangle only (the rims of the surface and of its holes), and
+`components`, the parts of the mesh that share no vertex with each other. A
+closed surface has no open edges. The distance between the points and the
+mesh is not measured.
 `merge_visible` joins all visible LAS/LAZ layers into one `.las` or `.laz` file
 in a background task. It preserves original point attributes and applies each
 layer's current deletions and affine transform. Sources must have matching LAS
@@ -56,6 +62,35 @@ version, point layout, coordinate grid and metadata; incompatible CRS metadata
 is rejected instead of silently choosing one. Poll its job or
 `status.result.merge` for processed and written point counts. `cancel_merge`
 stops the task and leaves an existing destination unchanged.
+
+## Mesh export
+
+`export_mesh` saves the mesh the active layer holds: a terrain mesh, a 3D
+surface, the faces of an opened mesh file or downloaded 3D BAG buildings.
+`path` is an absolute destination whose extension chooses the format:
+
+- `.obj`: text, with colours and normals per vertex where the mesh has them.
+- `.ply`: binary little-endian, with double coordinates, colours as `uchar`
+  and normals as `float` where the mesh has them.
+- `.stl`: binary, triangles only, with 32-bit float coordinates.
+
+The mesh is written as the scene shows it, with the move and scale of its
+layer applied. The command answers with a `job_id`; the complete job has
+`operation` (`export_mesh`), `path`, `format` (`obj`, `ply` or `stl`),
+`vertices`, `triangles` and `origin`. `origin` is `null` except for an STL
+file of a mesh that lies more than 2,048 m from zero on an axis: such an axis
+is written relative to a whole-metre origin, so that the floats keep their
+precision. `origin` is that point `[x, y, z]`, and the 80-byte header of the
+file names it as `origin X Y Z m`. This application adds it again when it
+opens the file; another program shows the mesh near zero.
+
+The file is written to a temporary file first and appears under its name
+when it is complete; a failed job leaves an existing destination as it was.
+The command is refused for a path that is not absolute or has another
+extension, for a layer without a mesh (`status.result.clouds[].mesh` is
+`null` there), for the source file of the layer as destination, and while
+another mesh export is open or running. `status.result.mesh_export_pending`
+is true while the file is written.
 
 ## 3D BAG download
 
@@ -107,8 +142,8 @@ A `page` with `open: false`, an unknown page, and opening while the Settings
 dialog is open are refused. The Settings dialog is not opened or closed
 through this API.
 `status.result.mesh_export_pending` is true from the moment the window asks
-where to save a mesh from the File view or Properties until that file has
-been written.
+where to save a mesh from the File view or Properties, or from the moment
+`export_mesh` is accepted, until that file has been written.
 
 ## Editing
 
@@ -245,8 +280,8 @@ when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
-| `job` | `id` | Reads an export, selection, mesh, merge or 3D BAG download task's state and result |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
+| `job` | `id` | Reads an export, selection, mesh, mesh export, merge or 3D BAG download task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |
@@ -301,8 +336,9 @@ when the view is restored.
 | `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
 | `set_surface_settings` | `max_vertices`, `neighbors`, `edge_factor` | Sets the native GUI's 3D surface reconstruction limits atomically: 3–1,000,000 vertices, 3–32 neighbors and a finite positive edge factor |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
-| `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings and returns a job ID |
+| `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings and returns a job ID. The complete job reports the open edges and the connected parts of the mesh |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task |
+| `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply` or `.stl` path; the extension chooses the format. Returns a job ID |
 | `merge_visible` | `path` | Merges the visible LAS/LAZ layers to an absolute `.las` or `.laz` path; returns a job ID |
 | `cancel_merge` | — | Requests cancellation of the running merge task |
 | `bag3d` | `bbox`, `lod`, `path` | Downloads the 3D BAG buildings inside an RD New box `[xmin, ymin, xmax, ymax]` of at most 2 by 2 km at level of detail `1.2`, `1.3` or `2.2` to an absolute `.obj` path in an existing folder and opens them as a layer; returns a job ID |

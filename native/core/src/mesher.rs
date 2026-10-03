@@ -58,7 +58,7 @@ impl MeshProgress {
 }
 
 /// Stream the complete source, reconstruct a terrain TIN, and atomically save
-/// Wavefront OBJ. Vertical walls and overhangs require a 3D reconstruction mode.
+/// OBJ. Vertical walls and overhangs require a 3D reconstruction mode.
 pub fn mesh_terrain_obj(
     cloud: &PointCloud,
     destination: impl AsRef<Path>,

@@ -1,6 +1,8 @@
 //! Measured quality of a triangle mesh: how far points lie from its surface
 //! and whether the surface is closed.
 
+use std::collections::HashMap;
+
 use rayon::prelude::*;
 
 use super::obj_mesh::MeshGeometry;
@@ -72,7 +74,38 @@ pub fn mesh_deviation(mesh: &MeshGeometry, points: &[[f64; 3]]) -> MeshDeviation
 /// do not share vertices reports every edge as open. Triangles that repeat a
 /// vertex or point outside the vertex list are not counted.
 pub fn mesh_topology(mesh: &MeshGeometry) -> MeshTopology {
-    let edges = sorted_edges(mesh);
+    topology(mesh.vertices.len(), &mesh.triangles)
+}
+
+/// The same figures with the vertices that lie at the same position counted
+/// as one. A file can hold a vertex more than once, one per face corner or
+/// one per material colour, and by index every such seam would count as a
+/// rim. Positions are compared exactly, as the STL and DXF readers do when
+/// they join the corners of their faces.
+pub fn mesh_topology_by_position(mesh: &MeshGeometry) -> MeshTopology {
+    let mut places = HashMap::<[u64; 3], u32>::with_capacity(mesh.vertices.len());
+    let place = mesh
+        .vertices
+        .iter()
+        .map(|xyz| {
+            let next = places.len() as u32;
+            // Adding zero makes minus zero and zero the same place.
+            *places
+                .entry(xyz.map(|value| (value + 0.0).to_bits()))
+                .or_insert(next)
+        })
+        .collect::<Vec<u32>>();
+    let triangles = mesh
+        .triangles
+        .iter()
+        .filter(|triangle| triangle.iter().all(|index| (*index as usize) < place.len()))
+        .map(|triangle| triangle.map(|index| place[index as usize]))
+        .collect::<Vec<_>>();
+    topology(places.len(), &triangles)
+}
+
+fn topology(vertex_count: usize, triangles: &[[u32; 3]]) -> MeshTopology {
+    let edges = sorted_edges(vertex_count, triangles);
     let mut topology = MeshTopology::default();
     let mut distinct_edges = 0_i64;
     for run in edges.chunk_by(|a, b| a == b) {
@@ -85,10 +118,10 @@ pub fn mesh_topology(mesh: &MeshGeometry) -> MeshTopology {
     }
 
     // Union-find over the vertices, joined by every triangle.
-    let mut parent = (0..mesh.vertices.len() as u32).collect::<Vec<_>>();
-    let mut used = vec![false; mesh.vertices.len()];
+    let mut parent = (0..vertex_count as u32).collect::<Vec<_>>();
+    let mut used = vec![false; vertex_count];
     let mut faces = 0_i64;
-    for [a, b, c] in valid_triangles(mesh) {
+    for [a, b, c] in valid_triangles(vertex_count, triangles) {
         faces += 1;
         for vertex in [a, b, c] {
             used[vertex as usize] = true;
@@ -100,7 +133,7 @@ pub fn mesh_topology(mesh: &MeshGeometry) -> MeshTopology {
         }
     }
     let mut vertices = 0_i64;
-    for vertex in 0..mesh.vertices.len() as u32 {
+    for vertex in 0..vertex_count as u32 {
         if used[vertex as usize] {
             vertices += 1;
             if find(&mut parent, vertex) == vertex {
@@ -116,7 +149,7 @@ pub fn mesh_topology(mesh: &MeshGeometry) -> MeshTopology {
 /// the rim of the surface. Simplification locks these to keep the outline.
 pub fn open_boundary_vertices(mesh: &MeshGeometry) -> Vec<bool> {
     let mut boundary = vec![false; mesh.vertices.len()];
-    for run in sorted_edges(mesh).chunk_by(|a, b| a == b) {
+    for run in sorted_edges(mesh.vertices.len(), &mesh.triangles).chunk_by(|a, b| a == b) {
         if run.len() != 2 {
             boundary[(run[0] >> 32) as usize] = true;
             boundary[(run[0] & 0xffff_ffff) as usize] = true;
@@ -125,19 +158,26 @@ pub fn open_boundary_vertices(mesh: &MeshGeometry) -> Vec<bool> {
     boundary
 }
 
-fn valid_triangles(mesh: &MeshGeometry) -> impl Iterator<Item = [u32; 3]> + '_ {
-    let count = mesh.vertices.len();
-    mesh.triangles.iter().copied().filter(move |[a, b, c]| {
-        a != b && b != c && a != c && [a, b, c].iter().all(|index| (**index as usize) < count)
+fn valid_triangles(
+    vertex_count: usize,
+    triangles: &[[u32; 3]],
+) -> impl Iterator<Item = [u32; 3]> + '_ {
+    triangles.iter().copied().filter(move |[a, b, c]| {
+        a != b
+            && b != c
+            && a != c
+            && [a, b, c]
+                .iter()
+                .all(|index| (**index as usize) < vertex_count)
     })
 }
 
 /// One key per triangle side, lower index in the high half, sorted so equal
 /// edges are neighbours. Sorting keeps this in one allocation where a hash
 /// map would need several times the memory on a large mesh.
-fn sorted_edges(mesh: &MeshGeometry) -> Vec<u64> {
-    let mut edges = Vec::with_capacity(mesh.triangles.len() * 3);
-    for [a, b, c] in valid_triangles(mesh) {
+fn sorted_edges(vertex_count: usize, triangles: &[[u32; 3]]) -> Vec<u64> {
+    let mut edges = Vec::with_capacity(triangles.len() * 3);
+    for [a, b, c] in valid_triangles(vertex_count, triangles) {
         for (from, to) in [(a, b), (b, c), (c, a)] {
             edges.push((u64::from(from.min(to)) << 32) | u64::from(from.max(to)));
         }
@@ -912,5 +952,69 @@ mod tests {
         assert_eq!(topology.components, 1);
         assert_eq!(topology.euler, 5 - 7 + 3);
         assert!(open_boundary_vertices(&fins).iter().all(|on_rim| *on_rim));
+    }
+
+    #[test]
+    fn vertices_at_one_position_count_as_one_when_asked() {
+        let closed = MeshTopology {
+            open_edges: 0,
+            non_manifold_edges: 0,
+            components: 1,
+            euler: 2,
+        };
+        // A mesh that shares its vertices gives the same figures both ways.
+        let shared = cube([0.0; 3], 1.0, 2);
+        assert_eq!(mesh_topology(&shared), closed);
+        assert_eq!(mesh_topology_by_position(&shared), closed);
+
+        // The upper face gets vertices of its own, as a file reader does for
+        // a face with another material colour: by index it is a loose lid
+        // over an open box.
+        let mut lid = cube([0.0; 3], 1.0, 1);
+        let top = lid.triangles.len() - 2;
+        let mut copies = std::collections::BTreeMap::new();
+        for corner in 0..6 {
+            let original = lid.triangles[top + corner / 3][corner % 3];
+            assert_eq!(lid.vertices[original as usize][2], 1.0);
+            let copy = *copies.entry(original).or_insert_with(|| {
+                lid.vertices.push(lid.vertices[original as usize]);
+                lid.vertices.len() as u32 - 1
+            });
+            lid.triangles[top + corner / 3][corner % 3] = copy;
+        }
+        assert_eq!(lid.vertices.len(), 12);
+        let by_index = mesh_topology(&lid);
+        assert_eq!((by_index.open_edges, by_index.components), (8, 2));
+        assert_eq!(mesh_topology_by_position(&lid), closed);
+
+        // One vertex per face corner: by index every triangle stands alone.
+        let whole = tetrahedron();
+        let mut loose = MeshGeometry::default();
+        for triangle in &whole.triangles {
+            let base = loose.vertices.len() as u32;
+            loose
+                .vertices
+                .extend(triangle.map(|index| whole.vertices[index as usize]));
+            loose.triangles.push([base, base + 1, base + 2]);
+        }
+        // Minus zero is the same place as zero.
+        loose.vertices[0][0] = -0.0;
+        let by_index = mesh_topology(&loose);
+        assert_eq!((by_index.open_edges, by_index.components), (12, 4));
+        assert_eq!(mesh_topology_by_position(&loose), closed);
+
+        // What is open stays open: a box without its lid has four open edges
+        // however its vertices are numbered. A triangle that points outside
+        // the vertex list, and one whose corners fall together, do not count.
+        let (&original, &copy) = copies.iter().next().unwrap();
+        let mut opened = lid;
+        opened.triangles.truncate(top);
+        opened.triangles.extend([[0, 1, 99], [original, copy, 0]]);
+        let topology = mesh_topology_by_position(&opened);
+        assert_eq!((topology.open_edges, topology.components), (4, 1));
+        assert_eq!(
+            mesh_topology_by_position(&MeshGeometry::default()),
+            MeshTopology::default()
+        );
     }
 }

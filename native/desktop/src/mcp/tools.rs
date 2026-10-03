@@ -153,6 +153,7 @@ fn view_name() -> Value {
 const POINT_FILE: &str = "Absolute destination path; its extension (.ply, .xyz, .pts, .csv, .las, .laz or .e57) selects the format. The file is replaced atomically";
 const LAS_FILE: &str = "Absolute destination path ending in .las or .laz";
 const OBJ_FILE: &str = "Absolute destination path ending in .obj";
+const MESH_FILE: &str = "Absolute destination path; its extension selects the format: .obj (colours and normals), .ply (binary, double coordinates, colours and normals) or .stl (binary, triangles only). The file is replaced atomically";
 const BCF_FILE: &str = "Absolute destination path ending in .bcf";
 const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (EPSG:28992, metres): each side longer than 0 and at most 2000";
 
@@ -163,7 +164,7 @@ fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
         tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view) and the status line.", vec![]),
-        tool("job", Command, "Reads a background job by the job_id that an export, select_world, pick_screen, mesh, merge_visible or bag3d returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
+        tool("job", Command, "Reads a background job by the job_id that an export, select_world, pick_screen, mesh, export_mesh, merge_visible or bag3d returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
         tool("wait_for_job", WaitForJob, "Waits until a background job is no longer running and returns it, polling it four times a second. Answers with timed_out: true and the running job when the time is up.", vec![
@@ -328,11 +329,14 @@ fn table() -> Vec<Tool> {
             required("neighbors", integer_in("Neighbours per vertex, from 3 to 32", 3, 32)),
             required("edge_factor", positive("Longest edge relative to the typical point spacing")),
         ]),
-        tool("mesh", Job, "Reconstructs a terrain (2.5D) or surface (3D) mesh from the remaining points of the active layer inside the section box and class filters, and writes it as OBJ. Answers with a job_id.", vec![
+        tool("mesh", Job, "Reconstructs a terrain (2.5D) or surface (3D) mesh from the remaining points of the active layer inside the section box and class filters, and writes it as OBJ. Answers with a job_id; the complete job reports the vertices and triangles and, as a measure of quality, the open edges (edges with one triangle: rims and holes) and the connected parts (components) of the mesh.", vec![
             required("mode", choice("terrain or surface", &["terrain", "surface"])),
             required("path", path(OBJ_FILE)),
         ]),
         tool("cancel_mesh", Command, "Cancels the running mesh job.", vec![]),
+        tool("export_mesh", Job, "Saves the mesh the active layer holds (a terrain mesh, a 3D surface, an opened mesh file or downloaded 3D BAG buildings; status.result.clouds[].mesh is null for a layer without one) as OBJ, PLY or STL, moved and scaled as in the scene. Answers with a job_id; the complete job reports the format, vertices and triangles. An STL file holds 32-bit floats: a mesh farther than 2,048 m from zero on an axis is written relative to a whole-metre origin, which the job reports as origin and the file header names; other programs show such a file near zero.", vec![
+            required("path", path(MESH_FILE)),
+        ]),
         tool("export", Job, "Exports the full active layer from its source, without deleted points. Answers with a job_id; the job reports the point count.", vec![
             required("path", path(POINT_FILE)),
         ]),

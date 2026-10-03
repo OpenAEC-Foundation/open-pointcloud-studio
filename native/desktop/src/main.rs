@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,6 +24,7 @@ mod lod_pace;
 mod macos_open;
 mod mcp;
 mod measure;
+mod mesh_export;
 mod native_api;
 mod native_chrome;
 mod open_progress;
@@ -124,6 +125,13 @@ const ASPRS_CLASSIFICATIONS: &[(u8, &str)] = &[
 ];
 const BAG3D_MESH_COMMENTS: &[&str] = &[
     "© 3DBAG door tudelft3d en 3DGI · CC BY 4.0",
+    "https://docs.3dbag.nl/nl/copyright/",
+    "EPSG:7415 RD New + NAP",
+];
+/// The same credit for a PLY file. The header of that format is ASCII text
+/// by definition, and a reader that holds to it stops at any other character.
+const BAG3D_PLY_COMMENTS: &[&str] = &[
+    "(c) 3DBAG by tudelft3d and 3DGI, CC BY 4.0",
     "https://docs.3dbag.nl/nl/copyright/",
     "EPSG:7415 RD New + NAP",
 ];
@@ -375,22 +383,55 @@ fn format_zoom_level(zoom: f32) -> String {
     }
 }
 
-fn is_bag3d_obj(path: &std::path::Path) -> bool {
-    if !path
+/// Whether a mesh file names 3D BAG as its source: in the comment lines that
+/// open an OBJ file, where the download puts the credit first and an export
+/// puts it after a line of its own, or in the comment lines of a PLY header,
+/// where an export puts it. A mesh that is saved and opened again keeps its
+/// credit this way.
+fn is_bag3d_mesh(path: &Path) -> bool {
+    /// How the credit begins in a downloaded or exported OBJ file, in an
+    /// OBJ file with the English wording, and in an exported PLY file.
+    const CREDITS: [&str; 3] = [
+        "© 3DBAG door tudelft3d en 3DGI",
+        "3DBAG by tudelft3d and 3DGI",
+        "(c) 3DBAG by tudelft3d and 3DGI",
+    ];
+    /// The credit stands in the first lines. The limit keeps a file without
+    /// line ends from being read whole.
+    const HEAD_BYTES: u64 = 4096;
+    let ply = match path
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("obj"))
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("obj") => false,
+        Some("ply") => true,
+        _ => return false,
+    };
+    let mut head = Vec::new();
+    if File::open(path)
+        .and_then(|file| file.take(HEAD_BYTES).read_to_end(&mut head))
+        .is_err()
     {
         return false;
     }
-    let Ok(file) = File::open(path) else {
-        return false;
-    };
-    let mut first = String::new();
-    BufReader::new(file).read_line(&mut first).is_ok_and(|_| {
-        first.starts_with("# © 3DBAG door tudelft3d en 3DGI")
-            || first.starts_with("# 3DBAG by tudelft3d and 3DGI")
-    })
+    // Bytes, not text: the header of a binary PLY is followed by its data.
+    String::from_utf8_lossy(&head)
+        .lines()
+        .map(str::trim)
+        .take_while(|line| {
+            if ply {
+                *line != "end_header"
+            } else {
+                line.is_empty() || line.starts_with('#')
+            }
+        })
+        .filter_map(|line| line.strip_prefix(if ply { "comment" } else { "#" }))
+        .any(|comment| {
+            let comment = comment.trim_start();
+            CREDITS.iter().any(|credit| comment.starts_with(credit))
+        })
 }
 
 /// Started from the file manager, Windows opens a console window for this
@@ -691,42 +732,17 @@ fn main() -> iced::Result {
     if first.as_deref() == Some(OsStr::new("--mesh-export")) {
         let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
         else {
-            eprintln!("Usage: open-pointcloud-studio --mesh-export INPUT OUTPUT.obj");
+            eprintln!("Usage: open-pointcloud-studio --mesh-export INPUT OUTPUT");
             std::process::exit(2);
         };
-        let source = PathBuf::from(source);
-        let destination = PathBuf::from(destination);
-        if !destination
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("obj"))
-            || camera_views::source_key(&source) == camera_views::source_key(&destination)
-        {
-            eprintln!("Choose a distinct .obj output path");
-            std::process::exit(2);
-        }
-        let comments: &[&str] = if is_bag3d_obj(&source) {
-            BAG3D_MESH_COMMENTS
-        } else {
-            &[]
-        };
-        match pointcloud_core::read_mesh_geometry(&source).and_then(|mesh| {
-            let mesh = mesh.ok_or_else(|| {
-                pointcloud_core::LoadError::InvalidData("source contains no mesh faces".into())
-            })?;
-            pointcloud_core::write_obj_mesh(&mesh, &destination, comments)?;
-            Ok((mesh.vertices.len(), mesh.triangles.len()))
-        }) {
-            Ok((vertices, triangles)) => {
-                println!(
-                    "Mesh exported: {vertices} vertices, {triangles} triangles -> {}",
-                    destination.display()
-                );
+        match mesh_export::convert_file(Path::new(&source), Path::new(&destination)) {
+            Ok(lines) => {
+                println!("{lines}");
                 return Ok(());
             }
-            Err(error) => {
-                eprintln!("Mesh export failed: {error}");
-                std::process::exit(1);
+            Err((code, line)) => {
+                eprintln!("{line}");
+                std::process::exit(code);
             }
         }
     }
@@ -1448,7 +1464,10 @@ enum Message {
     /// Cancel every import that reads its source without building an octree.
     CancelOpening,
     Loaded(Result<Arc<PointCloud>, String>),
-    MeshLoaded(Arc<PointCloud>, Result<Option<Arc<MeshGeometry>>, String>),
+    MeshLoaded(
+        Arc<PointCloud>,
+        Result<Option<mesh_export::MeasuredMesh>, String>,
+    ),
     Refined(Arc<PointCloud>, Result<Arc<PointCloud>, String>),
     Export,
     ExportSection,
@@ -1492,7 +1511,7 @@ enum Message {
                 Arc<PointCloud>,
                 PathBuf,
                 pointcloud_core::MeshStats,
-                Arc<MeshGeometry>,
+                mesh_export::MeasuredMesh,
             ),
             String,
         >,
@@ -1500,14 +1519,10 @@ enum Message {
     MeshPoll,
     CancelMesh,
     ExportMesh,
-    MeshExportPathChosen(
-        Arc<MeshGeometry>,
-        PathBuf,
-        bool,
-        CloudTransform,
-        Option<PathBuf>,
-    ),
-    MeshExported(Result<(PathBuf, usize, usize), String>),
+    MeshExportPathChosen(mesh_export::MeshExportRequest, Option<PathBuf>),
+    /// A mesh file was written or could not be, with the job of the local
+    /// API that asked for it.
+    MeshExported(Option<String>, Result<mesh_export::MeshExportDone, String>),
     ToggleBagPanel,
     /// Open the 3D BAG panel when it is closed.
     ShowBagPanel,
@@ -1789,6 +1804,9 @@ struct CloudEntry {
     transform: CloudTransform,
     centroid_cache: Option<CentroidCache>,
     mesh: Option<Arc<MeshGeometry>>,
+    /// The open edges and connected parts of `mesh`, counted when it was
+    /// made or read.
+    mesh_topology: Option<pointcloud_core::MeshTopology>,
     mesh_visible: bool,
     bag_source: bool,
     visible: bool,
@@ -2265,6 +2283,7 @@ impl Studio {
             transform: CloudTransform::default(),
             centroid_cache: None,
             mesh: None,
+            mesh_topology: None,
             mesh_visible: true,
             bag_source: false,
             visible: true,
@@ -2306,7 +2325,7 @@ impl Studio {
                     .iter_mut()
                     .find(|entry| Arc::ptr_eq(&entry.cloud, &cloud))
                 {
-                    entry.bag_source = is_bag3d_obj(&cloud.path);
+                    entry.bag_source = is_bag3d_mesh(&cloud.path);
                 }
                 self.revision += 1;
                 self.reframe_after_replacement(scene);
@@ -2340,14 +2359,10 @@ impl Studio {
         let source = Arc::clone(cloud);
         Some(Task::perform(
             async move {
-                tokio::task::spawn_blocking(move || {
-                    pointcloud_core::read_mesh_geometry(path)
-                        .map(|mesh| mesh.map(Arc::new))
-                        .map_err(|error| error.to_string())
-                })
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|result| result)
+                tokio::task::spawn_blocking(move || mesh_export::read_measured(&path))
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result)
             },
             move |result| Message::MeshLoaded(Arc::clone(&source), result),
         ))
@@ -2829,6 +2844,7 @@ impl Studio {
                             "view_sample": entry.view_len(),
                             "bounds": {"min": entry.bounds().min, "max": entry.bounds().max},
                             "transform": {"scale": entry.transform.scale, "offset": entry.transform.offset},
+                            "mesh": mesh_export::mesh_value(entry),
                         })
                     })
                     .collect();
@@ -3671,6 +3687,7 @@ impl Studio {
                     (json!({"ok": true, "cancel_requested": true}), task)
                 }
             }
+            ApiCommand::ExportMesh { path } => self.api_export_mesh(path),
             ApiCommand::Export { path } => self.api_export(path, ApiExportMode::Full),
             ApiCommand::ExportSection { path } => self.api_export(path, ApiExportMode::Section),
             ApiCommand::ExportSelection { path } => self.api_export(path, ApiExportMode::Selected),
@@ -4208,21 +4225,11 @@ impl Studio {
                         .and_then(|stats| {
                             let mesh = pointcloud_core::read_obj_mesh(&path)?;
                             if !transform.is_identity() {
-                                let edited = MeshGeometry {
-                                    vertices: mesh
-                                        .vertices
-                                        .iter()
-                                        .map(|xyz| transform.xyz(*xyz))
-                                        .collect(),
-                                    triangles: mesh.triangles.clone(),
-                                    colors: mesh.colors.clone(),
-                                    normals: mesh.normals.as_deref().and_then(|normals| {
-                                        transformed_mesh_normals(normals, transform.scale)
-                                    }),
-                                };
+                                let edited = mesh_export::in_scene(&mesh, transform);
                                 pointcloud_core::write_obj_mesh(&edited, &path, &[])?;
                             }
-                            Ok((source, path, stats, Arc::new(mesh)))
+                            let measured = mesh_export::MeasuredMesh::measure(mesh);
+                            Ok((source, path, stats, measured))
                         })
                         .map_err(|error| error.to_string())
                 })
@@ -4310,6 +4317,7 @@ impl Studio {
                         transform: CloudTransform::default(),
                         centroid_cache: None,
                         mesh: None,
+                        mesh_topology: None,
                         mesh_visible: true,
                         bag_source: false,
                         visible: true,
@@ -5221,13 +5229,14 @@ impl Studio {
                         format_count(cloud.points.len())
                     );
                     self.clouds.push(CloudEntry {
-                        bag_source: is_bag3d_obj(&cloud.path),
+                        bag_source: is_bag3d_mesh(&cloud.path),
                         load_identity: Arc::clone(&cloud),
                         index_import_id: None,
                         cloud,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
                         mesh: None,
+                        mesh_topology: None,
                         mesh_visible: true,
                         visible: true,
                         selection: None,
@@ -5261,13 +5270,14 @@ impl Studio {
                     .find(|entry| Arc::ptr_eq(&entry.cloud, &source))
                 {
                     match result {
-                        Ok(Some(mesh)) => {
+                        Ok(Some(measured)) => {
                             self.status = format!(
                                 "Mesh displayed: {} vertices, {} triangles",
-                                mesh.vertices.len(),
-                                mesh.triangles.len()
+                                measured.mesh.vertices.len(),
+                                measured.mesh.triangles.len()
                             );
-                            entry.mesh = Some(mesh);
+                            entry.mesh = Some(measured.mesh);
+                            entry.mesh_topology = Some(measured.topology);
                         }
                         Ok(None) => {}
                         Err(error) => self.status = format!("Mesh display failed: {error}"),
@@ -5464,7 +5474,7 @@ impl Studio {
                     return Task::perform(
                         async move {
                             rfd::AsyncFileDialog::new()
-                                .add_filter("Wavefront OBJ", &["obj"])
+                                .add_filter("OBJ mesh", &["obj"])
                                 .set_file_name(suggested)
                                 .save_file()
                                 .await
@@ -5532,13 +5542,15 @@ impl Studio {
                 if let Some(job) = self.mesh_job.take() {
                     if let Some(id) = job.api_job_id {
                         let state = match &result {
-                            Ok((_, path, stats, _)) => json!({
+                            Ok((_, path, stats, measured)) => json!({
                                 "state": "complete",
                                 "path": path,
                                 "mode": mode.label(),
                                 "source_points": stats.source_points,
                                 "vertices": stats.vertices,
                                 "triangles": stats.triangles,
+                                "open_edges": measured.topology.open_edges,
+                                "components": measured.topology.components,
                             }),
                             Err(error) if error == "Operation cancelled" => {
                                 json!({"state": "cancelled", "path": job.path})
@@ -5551,18 +5563,20 @@ impl Studio {
                     }
                 }
                 match result {
-                    Ok((source, path, stats, mesh)) => {
+                    Ok((source, path, stats, measured)) => {
                         if let Some(entry) = self
                             .clouds
                             .iter_mut()
                             .find(|entry| entry.matches_source(&source))
                         {
-                            entry.mesh = Some(mesh);
+                            entry.mesh = Some(measured.mesh);
+                            entry.mesh_topology = Some(measured.topology);
                             self.status = format!(
-                                "{} mesh displayed: {} vertices, {} triangles from {} points → {}",
+                                "{} mesh displayed: {} vertices, {} triangles, {} from {} points → {}",
                                 mode.label(),
                                 stats.vertices,
                                 stats.triangles,
+                                mesh_export::topology_text(measured.topology),
                                 stats.source_points,
                                 path.display()
                             );
@@ -5575,110 +5589,11 @@ impl Studio {
                     Err(error) => self.status = format!("Meshing failed: {error}"),
                 }
             }
-            Message::ExportMesh => {
-                if self.mesh_export_pending {
-                    return Task::none();
-                }
-                let Some(entry) = self
-                    .active
-                    .and_then(|index| self.clouds.get(index))
-                    .filter(|entry| entry.mesh.is_some())
-                else {
-                    self.status = "Select a cloud with a surface mesh first".into();
-                    return Task::none();
-                };
-                let mesh = Arc::clone(entry.mesh.as_ref().unwrap());
-                let source = entry.cloud.path.clone();
-                let bag_source = entry.bag_source;
-                let transform = entry.transform;
-                let stem = source
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("surface");
-                let suggestion = format!("{stem}-mesh.obj");
-                self.mesh_export_pending = true;
-                self.status = "Choose where to save the visible surface as OBJ…".into();
-                return Task::perform(
-                    async move {
-                        rfd::AsyncFileDialog::new()
-                            .add_filter("Wavefront OBJ", &["obj"])
-                            .set_file_name(suggestion)
-                            .save_file()
-                            .await
-                            .map(|selection| selection.path().to_path_buf())
-                    },
-                    move |path| {
-                        Message::MeshExportPathChosen(
-                            Arc::clone(&mesh),
-                            source.clone(),
-                            bag_source,
-                            transform,
-                            path,
-                        )
-                    },
-                );
+            Message::ExportMesh => return self.export_mesh(),
+            Message::MeshExportPathChosen(request, path) => {
+                return self.mesh_export_path_chosen(request, path);
             }
-            Message::MeshExportPathChosen(mesh, source, bag_source, transform, Some(path)) => {
-                if !path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("obj"))
-                {
-                    self.mesh_export_pending = false;
-                    self.status = "Choose an .obj output file for the surface mesh".into();
-                    return Task::none();
-                }
-                if camera_views::source_key(&source) == camera_views::source_key(&path) {
-                    self.mesh_export_pending = false;
-                    self.status = "Choose an OBJ path different from the source file".into();
-                    return Task::none();
-                }
-                self.status = format!(
-                    "Writing {} vertices and {} triangles…",
-                    mesh.vertices.len(),
-                    mesh.triangles.len()
-                );
-                return Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            let comments: &[&str] =
-                                if bag_source { BAG3D_MESH_COMMENTS } else { &[] };
-                            let edited = MeshGeometry {
-                                vertices: mesh
-                                    .vertices
-                                    .iter()
-                                    .map(|xyz| transform.xyz(*xyz))
-                                    .collect(),
-                                triangles: mesh.triangles.clone(),
-                                colors: mesh.colors.clone(),
-                                normals: mesh.normals.as_deref().and_then(|normals| {
-                                    transformed_mesh_normals(normals, transform.scale)
-                                }),
-                            };
-                            pointcloud_core::write_obj_mesh(&edited, &path, comments)
-                                .map(|()| (path, mesh.vertices.len(), mesh.triangles.len()))
-                                .map_err(|error| error.to_string())
-                        })
-                        .await
-                        .map_err(|error| error.to_string())?
-                    },
-                    Message::MeshExported,
-                );
-            }
-            Message::MeshExportPathChosen(_, _, _, _, None) => {
-                self.mesh_export_pending = false;
-                self.status = "Mesh export cancelled".into();
-            }
-            Message::MeshExported(result) => {
-                self.mesh_export_pending = false;
-                self.status = match result {
-                    Ok((path, vertices, triangles)) => format!(
-                        "Exported mesh: {vertices} vertices and {triangles} triangles to {}",
-                        path.display()
-                    ),
-                    Err(error) => format!("Mesh export failed: {error}"),
-                };
-            }
+            Message::MeshExported(api_job_id, result) => self.mesh_exported(api_job_id, result),
             Message::ToggleBagPanel => return self.set_bag_panel(!self.bag_panel),
             Message::ShowBagPanel => return self.set_bag_panel(true),
             Message::BagField(index, value) => {
@@ -9165,27 +9080,8 @@ impl Studio {
                 .padding([3, 8]),
             );
         }
-        if let Some(mesh) = active_cloud.and_then(|entry| entry.mesh.as_ref()) {
-            properties = properties
-                .push(opencad_properties::section_header("Surface mesh"))
-                .push(opencad_properties::property_row(
-                    "Vertices",
-                    format_count(mesh.vertices.len()),
-                ))
-                .push(opencad_properties::property_row(
-                    "Triangles",
-                    format_count(mesh.triangles.len()),
-                ))
-                .push(
-                    container(
-                        button(i18n::tr("Export mesh as OBJ"))
-                            .on_press_maybe(
-                                (!self.mesh_export_pending).then_some(Message::ExportMesh),
-                            )
-                            .style(flat_tool_style),
-                    )
-                    .padding([4, 8]),
-                );
+        if let Some(mesh) = self.mesh_properties() {
+            properties = properties.push(mesh);
         }
         // The ribbon switches eye-dome lighting; its strength is set here.
         if self.eye_dome {

@@ -744,6 +744,77 @@ fn building_download_is_a_job_with_a_box_a_detail_level_and_a_destination() {
 }
 
 #[test]
+fn mesh_export_is_a_job_whose_destination_names_the_format() {
+    let tool = tools::find("export_mesh").unwrap();
+    assert_eq!(tool.kind, Kind::Job);
+    assert!(!tool.read_only());
+    assert_eq!(tool.schema["required"], json!(["path"]));
+    assert!(tool.schema["properties"]["wait_seconds"].is_object());
+    // The argument names every format the core writes.
+    let destination = tool.schema["properties"]["path"]["description"]
+        .as_str()
+        .unwrap();
+    for format in [
+        pointcloud_core::MeshFormat::Obj,
+        pointcloud_core::MeshFormat::Ply,
+        pointcloud_core::MeshFormat::Stl,
+    ] {
+        assert!(
+            destination.contains(&format!(".{}", format.extension())),
+            "{format:?}"
+        );
+    }
+    for refused in [
+        json!({}),
+        json!({"path": ""}),
+        json!({"path": "/m.ply", "format": "ply"}),
+    ] {
+        assert!(
+            schema::validate_arguments(&tool.schema, &refused).is_err(),
+            "{refused}"
+        );
+    }
+    // The job tool tells a caller that this command answers with a job.
+    assert!(tools::find("job")
+        .unwrap()
+        .description
+        .contains("export_mesh"));
+
+    let link = FakeLink::new(|command| {
+        Ok(match command["command"].as_str().unwrap() {
+            "export_mesh" => json!({"ok": true, "accepted": true, "job_id": "x-1"}),
+            "job" => json!({"ok": true, "job": {
+                "state": "complete", "format": "stl", "triangles": 12, "origin": [207000, 474000, 0],
+            }}),
+            _ => json!({"ok": true}),
+        })
+    });
+    let commands = Arc::clone(&link.commands);
+    let answers = session(
+        &[
+            initialize(1, "2025-06-18"),
+            call(
+                2,
+                "export_mesh",
+                json!({"path": "/m.stl", "wait_seconds": 5}),
+            ),
+        ],
+        link,
+    );
+    let export = text_of(&by_id(&answers, 2)["result"], 0);
+    assert_eq!(export["job"]["format"], "stl");
+    assert_eq!(export["job"]["origin"], json!([207000, 474000, 0]));
+    assert_eq!(export["timed_out"], false);
+    assert_eq!(
+        *commands.lock().unwrap(),
+        [
+            json!({"command": "export_mesh", "path": "/m.stl"}),
+            json!({"command": "job", "id": "x-1"}),
+        ]
+    );
+}
+
+#[test]
 fn extension_and_file_view_tools_offer_what_the_window_knows() {
     let list = tools::find("list_extensions").unwrap();
     assert_eq!(list.kind, Kind::Command);

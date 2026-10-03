@@ -303,7 +303,7 @@ impl Studio {
         Task::perform(
             async {
                 rfd::AsyncFileDialog::new()
-                    .add_filter("Wavefront OBJ", &["obj"])
+                    .add_filter("OBJ mesh", &["obj"])
                     .set_file_name("3dbag-buildings.obj")
                     .save_file()
                     .await

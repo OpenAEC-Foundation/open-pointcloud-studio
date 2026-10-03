@@ -1434,6 +1434,7 @@ mod tests {
             transform: CloudTransform::default(),
             centroid_cache: None,
             mesh: None,
+            mesh_topology: None,
             mesh_visible: false,
             bag_source: false,
             visible: true,

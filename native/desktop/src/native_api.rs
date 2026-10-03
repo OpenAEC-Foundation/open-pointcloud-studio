@@ -183,6 +183,11 @@ pub enum ApiCommand {
         path: PathBuf,
     },
     CancelMesh,
+    ExportMesh {
+        /// Absolute destination; its extension (`.obj`, `.ply` or `.stl`)
+        /// chooses the format.
+        path: PathBuf,
+    },
     Export {
         path: PathBuf,
     },

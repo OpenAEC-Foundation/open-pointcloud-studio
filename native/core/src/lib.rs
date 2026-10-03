@@ -58,7 +58,8 @@ pub use export::{
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
 pub use mesh_quality::{
-    mesh_deviation, mesh_topology, open_boundary_vertices, MeshDeviation, MeshTopology,
+    mesh_deviation, mesh_topology, mesh_topology_by_position, open_boundary_vertices,
+    MeshDeviation, MeshTopology,
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
 pub use mesh_write::{read_stl_origin, write_mesh, MeshFormat, MeshWriteReport};
