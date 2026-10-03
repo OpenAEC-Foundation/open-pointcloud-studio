@@ -58,6 +58,7 @@ impl Tool {
             "status"
                 | "job"
                 | "list_camera_views"
+                | "list_faces"
                 | "list_extensions"
                 | "list_instances"
                 | "wait_for_job"
@@ -180,6 +181,24 @@ fn closed_mesh_settings() -> Vec<Argument> {
     ]
 }
 
+/// The settings of a face detection, which `detect_faces` and
+/// `set_face_settings` share. Each one that is left out keeps what the
+/// Detect faces block in Properties has. The limits are those the block
+/// states; the core asks for values above zero only.
+fn face_settings() -> Vec<Argument> {
+    use crate::faces::{
+        MAX_ANGLE, MAX_FACE_AREA, MAX_TOLERANCE, MIN_ANGLE, MIN_FACE_AREA, MIN_TOLERANCE,
+    };
+    vec![
+        optional("distance_tolerance", number_in("How far a point may lie from the plane of its face, in metres, from 0.001 to 0.5; about three times the noise of the scan or more. The block starts at 0.02 (20 mm) and shows millimetres", MIN_TOLERANCE, MAX_TOLERANCE)),
+        optional("angle_tolerance", number_in("How far the surface at a point may be turned from its face, in degrees, from 1 to 45. The block starts at 10", MIN_ANGLE, MAX_ANGLE)),
+        optional("min_area", number_in("Smaller faces are not reported, in square metres, from 0.01 to 10000. The block starts at 0.25", MIN_FACE_AREA, MAX_FACE_AREA)),
+        optional("cylinders", boolean("Whether round columns and pipes are looked for among the points no flat face took. The block starts with true")),
+        optional("layers", choice("Which layers give their points: active (the active layer, as the block starts) or visible (every layer whose points are shown and that reaches the section box when it is on, without layers of 3D BAG buildings; the active layer has to be one of them). The faces are kept with the active layer either way", &["active", "visible"])),
+        optional("color", choice("How the faces are coloured in the scene: face (one colour per face, by its class, as the block starts) or deviation (the distance of the scan to each face: blue behind it, near white on it, red in front of it, full colour at the distance tolerance)", &["face", "deviation"])),
+    ]
+}
+
 fn view_name() -> Value {
     text(
         "Name of a saved view of the active scan; letter case is ignored",
@@ -193,6 +212,7 @@ const LAS_FILE: &str = "Absolute destination path ending in .las or .laz";
 const OBJ_FILE: &str = "Absolute destination path ending in .obj";
 const MESH_JOB_FILE: &str = "Absolute destination path. Required for terrain and surface, where it ends in .obj. For closed it may be left out: the mesh then only becomes the mesh of the active layer; with a path ending in .obj, .ply or .stl in a folder that exists it is also written there, as the scene shows it";
 const MESH_FILE: &str = "Absolute destination path; its extension selects the format: .obj (colours and normals), .ply (binary, double coordinates, colours and normals) or .stl (binary, triangles only). The file is replaced atomically";
+const FACES_FILE: &str = "Absolute destination path in a folder that exists; its extension selects the format: .json (every plane and cylinder with its parameters, outline, residuals and the edges between faces) or .obj (the faces as triangles, one group per face). The file is replaced atomically";
 const DRAWING_FILE: &str = "Absolute destination path; its extension selects the format: .dxf or .dwg. The file is replaced atomically";
 const BCF_FILE: &str = "Absolute destination path ending in .bcf";
 const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (EPSG:28992, metres): each side longer than 0 and at most 2000";
@@ -203,15 +223,15 @@ const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (E
 fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
-        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view) and the status line.", vec![]),
-        tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, merge_visible or bag3d returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
+        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), the Detect faces tool (faces: its settings, a running job, the last job, export_pending and result, the faces of the active layer in figures; clouds[].faces has those figures per layer, or null), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view) and the status line.", vec![]),
+        tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, detect_faces, export_faces, merge_visible or bag3d returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
         tool("wait_for_job", WaitForJob, "Waits until a background job is no longer running and returns it, polling it four times a second. Answers with timed_out: true and the running job when the time is up.", vec![
             required("id", text("The job_id", 1, 64)),
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, section drawing or its preview, merging, 3D BAG download, station photos, view snapshots or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
+        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, merging, 3D BAG download, station photos, view snapshots or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
         tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load. The text part gives the width and height in pixels. Fails while the window is minimised, and while the File view or Settings covers the viewport; file_view with open false returns to the model.", vec![
@@ -382,6 +402,19 @@ fn table() -> Vec<Tool> {
         tool("export_mesh", Job, "Saves the mesh the active layer holds (a terrain mesh, a 3D surface, a closed mesh, an opened mesh file or downloaded 3D BAG buildings; status.result.clouds[].mesh is null for a layer without one) as OBJ, PLY or STL, moved and scaled as in the scene. Answers with a job_id; the complete job reports the format, vertices and triangles. An STL file holds 32-bit floats: a mesh farther than 2,048 m from zero on an axis is written relative to a whole-metre origin, which the job reports as origin and the file header names; other programs show such a file near zero.", vec![
             required("path", path(MESH_FILE)),
         ]),
+        tool("set_face_settings", Command, "Sets the settings of the Detect faces block in Properties, which detect_faces and the Start button of the block use, and the colouring of the faces that are shown. The fields given are checked together: when one is refused, none changes. Answers with the settings as status.result.faces.settings reports them.", face_settings()),
+        tool("detect_faces", Job, "Finds the flat faces (floors, ceilings, walls and sloped planes) and the round columns and pipes in the remaining points inside the section box and class filters, of the active layer or of every visible one, and keeps them with the active layer as a layer of its own beside its mesh; faces that layer had are replaced. Put the section box around one room or a few: a region too large for 1,500,000 working voxels of 30 mm is searched with larger voxels, and narrow faces and faces close together are lost. Answers with a job_id; the running job reports its stage (stations, loading, reading, segmenting, measuring, outlining, meshing), the complete job the faces per type (floors, ceilings, walls, sloped, cylinders), the edges, the voxel used and whether it was coarse, the points read and on a face, and the seconds. The faces follow a later translate or scale of the layer; they are marked stale (status.result.clouds[].faces.stale: points, index, scan or moved) when points of a layer that took part are deleted, restored or thinned, when the index such a layer was read through is replaced, when one is removed, or when one of several layers that took part is translated or scaled.", face_settings()),
+        tool("cancel_detect_faces", Command, "Cancels the running face detection; the step under way ends first, and faces the layer had are left as they were.", vec![]),
+        tool("list_faces", Command, "Lists the faces detected in the active layer, in scene coordinates and metres, planes first and then cylinders, each largest first: for a plane its id, class (floor, ceiling, wall or sloped, by the direction of its normal alone), normal, a point, the offset d of normal . x = d, area, covered_area and coverage, and residual (points, inliers, rms, mean, mean_abs, p95, max); for a cylinder its axis_start, axis_end, radius, diameter, length, arc_degrees and residual. Also the settings and voxel of the detection, the selected face and whether the faces are stale.", vec![
+            optional("boundaries", boolean("Whether every plane comes with its outline (boundary: per connected part an outer ring and the rings of its openings, as [x, y, z] corners) and the answer with the edges between faces; default false")),
+        ]),
+        tool("select_face", Command, "Highlights one face of the active layer in the viewport and in the list of the block, by its id from list_faces, or takes the highlight off. Answers with that face, outline included.", vec![
+            optional("id", json!({"type": ["integer", "null"], "minimum": 1, "description": "Number of the face; null or absent for none"})),
+        ]),
+        tool("export_faces", Job, "Saves the faces detected in the active layer in scene coordinates, as they stand after a move or scale of the layer: as JSON with the parameters of every plane and cylinder, the outlines, the residuals, the edges and the settings (the file names only the file name of the scan, not its folder), or as OBJ with one group per face. Answers with a job_id; the complete job reports the format, the planes, cylinders and edges written, the file size and whether the faces were stale.", vec![
+            required("path", path(FACES_FILE)),
+        ]),
+        tool("clear_faces", Command, "Removes the faces detected in the active layer; answers with cleared false when it had none.", vec![]),
         tool("export", Job, "Exports the full active layer from its source, without deleted points. Answers with a job_id; the job reports the point count.", vec![
             required("path", path(POINT_FILE)),
         ]),
@@ -685,6 +718,12 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
     }
     if result["closed_mesh"]["job"].is_object() {
         busy.push("closed_mesh");
+    }
+    if result["faces"]["job"].is_object() {
+        busy.push("faces");
+    }
+    if result["faces"]["export_pending"] == true {
+        busy.push("faces_export");
     }
     busy
 }

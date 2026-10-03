@@ -1835,7 +1835,7 @@ fn result_rows(
 /// the viewport as the whole region would. Without this a vertex behind a
 /// walking camera has no place on screen, and one close to the eye or far
 /// outside a zoomed-in view lands millions of pixels away.
-fn screen_ring(projection: Projection, ring: &[[f64; 3]], size: Size) -> Vec<UiPoint> {
+pub(crate) fn screen_ring(projection: Projection, ring: &[[f64; 3]], size: Size) -> Vec<UiPoint> {
     // The limits `measure::project_edge` cuts the edges of the outline at.
     const NEAR: f64 = 0.02;
     const MARGIN: f64 = 16.0;

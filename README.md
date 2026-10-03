@@ -161,7 +161,7 @@ Each heading has a section in the [user guide](docs/guide.md).
 
 ### Section box
 
-- A box with six draggable faces limits what is shown, selected and meshed, and its content can be exported on its own or drawn as a [2D drawing](#section-drawing).
+- A box with six draggable faces limits what is shown, selected, meshed and searched for faces, and its content can be exported on its own or drawn as a [2D drawing](#section-drawing).
 - Its limits can be typed as X, Y and Z coordinates in the Properties panel, fitted to the selection, or reset.
 - The box is aligned to the X, Y and Z axes of the scan and cannot be rotated. A building that stands at an angle to those axes is cut at that angle.
 
@@ -218,6 +218,17 @@ Each heading has a section in the [user guide](docs/guide.md).
 - The job measures its result: Properties and the status bar give the vertices and triangles, the mean, the 95% and the largest distance between the points and the mesh, the open edges and connected parts, and how much of the surface had no station to take its side from, with advice when that matters.
 - It has limits: corners are rounded by about a quarter of a voxel, objects thinner than two or three voxels merge or get holes, some gaps beside another surface stay open, and without stations a surface that the centre of the region sees edge on can come out torn. The [user guide](docs/guide.md#limits) lists them, with what was measured on generated rooms; nothing was measured on a scan of a real building yet.
 
+### Detected faces
+
+- **Detect faces** in the SURFACE group finds the flat faces of a region (floors, ceilings, walls and sloped planes) and its round columns and pipes, in the active scan or in every visible scan that reaches the section box: put the box around a room and choose **Start** in the block that opens in Properties. A face is one plane or one cylinder with its outline, in which a window is a hole and a door a notch. It is not a mesh of the surface; the [user guide](docs/guide.md#detected-faces) says how the two differ.
+- The settings are the distance tolerance (20 mm), the angle tolerance (10°), the smallest face (0.25 m²), whether cylinders are looked for and which scans take part. The block says beforehand which region will be searched and which voxel size the working budget gives for it, and warns when the region is so large that narrow faces and faces close together will be lost.
+- The strip above the scene shows the stages of the job with a button to cancel. The faces are kept with the active scan as a layer of their own beside its mesh, with a **Faces** switch in the project panel, and stay with the scan when it is moved or scaled.
+- The block lists the faces with their type, their area and the residual of their points (RMS). A click on a row highlights that face in the scene and shows its normal, the 95th percentile and the largest deviation of its points and its coverage, and for a cylinder its diameter, its length and the arc that was scanned.
+- The faces are drawn in one colour per face, or coloured by the deviation of the points with a legend in millimetres.
+- **Export faces…** in the block and **Detected faces…** in the File view save them as a JSON file with the parameters of every plane and cylinder, or as an OBJ mesh with a group per face, in the coordinates of the scene.
+- Faces are marked out of date when points of a scan that took part are deleted, restored or thinned, when the index such a scan was read through is replaced, when one is closed, and when one of several scans that took part is moved or scaled. **Clear faces** removes them. They are not saved with the scan: export them to keep them.
+- It has limits: strips narrower than 0.15 m such as door reveals are no faces, a region too large for the working budget is searched with larger voxels, thin scans give fewer faces or none, round columns wider than about 0.7 m come out as strips of wall, and the side a face looks at is a guess where the scan knows no stations. The [user guide](docs/guide.md#limits-of-detected-faces) lists them, with what was found on generated rooms; nothing was measured on a scan of a real building yet.
+
 <!-- New tools add their bullet list here, as a "###" heading of their own, and a section in docs/guide.md. -->
 
 ### Other
@@ -237,7 +248,7 @@ Each heading has a section in the [user guide](docs/guide.md).
 | PTX | yes | no | With the scanner position of each scan |
 | PTS | yes | yes | |
 | XYZ, ASC, TXT, CSV | yes | XYZ, CSV | Text with one point per line |
-| OBJ | yes | yes | Mesh with colours and normals; material colours are read, texture images are not |
+| OBJ | yes | yes | Mesh with colours and normals; material colours are read, texture images are not. Detected faces are written as OBJ too, with one group per face |
 | PLY as mesh | yes | yes | Shown as faces. Written as binary PLY with double coordinates, and with colours and normals where the mesh has them |
 | STL | yes | yes | Shown as faces. Written as binary STL: triangles only, without colours. A mesh more than 2,048 m from zero is written relative to a whole-metre origin that the file header names |
 | OFF | yes | no | Shown as faces; can be saved as OBJ, PLY or STL |
@@ -246,6 +257,7 @@ Each heading has a section in the [user guide](docs/guide.md).
 | Scan project file (`.rcp`) | yes | no | Only the list of scans is read. The indexed scan copies (`.rcs`) of a project are a closed format and are not read |
 | BCF 2.1 (`.bcf`) | no | yes | Saved views with notes and pictures |
 | PNG | no | yes | Picture of the 3D view, through the command API |
+| Faces as JSON (`.json`) | no | yes | The detected faces of a scan: every plane and cylinder with its parameters, its outline and the residuals of its points, and the edges between faces. The [user guide](docs/guide.md#the-json-file) describes every field |
 
 <!-- New formats of new tools add their row here. -->
 
@@ -276,6 +288,7 @@ Limits in the application:
 | Mesh | 4,000,000 vertices and 8,000,000 triangles, for a mesh file and for a mesh job alike. Such a mesh takes about 0.25 GB of memory, as much again while it is shown, and up to 0.9 GB for a moment while a file of that size is opened |
 | Meshes shown together | About 5.5 million vertices, the 256 MiB the graphics card takes in one buffer. One mesh always fits; one that does not fit beside the others is held, and can be saved, but is not drawn |
 | Closed mesh | Voxels of 0.005 to 0.5 m; gaps closed up to 3.2 m and at most 32 voxels; a scan without an index up to 5,000,000 points. About 2 GB of memory for the blocks in work |
+| Detected faces | Distance tolerance 1 to 500 mm, angle tolerance 1 to 45°, smallest face 0.01 to 10,000 m². A working set of 1,500,000 voxels of 30 mm, beyond which the voxels double; at most 4,096 faces per job, of which the block lists the 200 largest flat faces and the 200 largest cylinders; cylinders with a radius of 0.01 to 1 m |
 | 3D surface | 3 to 1,000,000 vertices (50,000 by default) |
 | 3D BAG download | 2 by 2 km and about 5,000 buildings |
 | Section drawing | 150,000 points by default and at most 400,000; when the slab holds more after thinning to 5 mm, the point spacing doubles. Writing takes about 2.8 kB of memory per point: about 1.1 GB at 400,000 |
@@ -305,6 +318,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--mesh INPUT OUTPUT.obj` | Writes a terrain mesh of a scan |
 | `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N]` | Writes a 3D surface mesh of a scan |
 | `--closed-mesh INPUT OUTPUT.obj\|.ply\|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic\|centre\|upward]` | Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY or STL: with an automatic voxel, gaps closed up to 0.25 m and the sides from the scanner stations unless the options say otherwise |
+| `--faces INPUT OUTPUT.json\|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on\|off]` | Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON or OBJ: with a distance tolerance of 0.02 m, an angle tolerance of 10 degrees, faces from 0.25 m² and cylinders on unless the options say otherwise |
 | `--mesh-export INPUT OUTPUT` | Writes the faces of a mesh file as OBJ, PLY or STL; the extension of `OUTPUT` chooses the format (`.obj`, `.ply`, `.stl`) |
 | `--bag3d XMIN,YMIN,XMAX,YMAX 1.2\|1.3\|2.2 OUTPUT.obj` | Downloads the 3D BAG buildings inside an RD New box as OBJ |
 | `--version`, `-V` | Prints the version |
@@ -317,6 +331,7 @@ open-pointcloud-studio --export scan.laz scan.e57
 open-pointcloud-studio --section scan.laz 207440,474000,-100,208000,475000,1000 crop.laz
 open-pointcloud-studio --drawing scan.laz 0,0,0,20,15,1.1 plan.dxf
 open-pointcloud-studio --closed-mesh scan.e57 room.ply --box 0,0,-0.1,5.1,4.1,2.7
+open-pointcloud-studio --faces scan.e57 room-faces.json --box -0.1,-0.1,-0.1,5.1,4.1,2.7
 open-pointcloud-studio --drawing scan.laz 0,6,-1,20,15,8 section.dwg --view front --units m
 open-pointcloud-studio --merge merged.laz north.laz south.laz
 ```
@@ -330,7 +345,7 @@ curl -H 'Content-Type: application/json' -H 'X-OPS-Token: TOKEN' \
   -d '{"command":"status"}' http://127.0.0.1:PORT/exec
 ```
 
-The commands open and close scans, set the camera, the section box and the display, select, delete, measure, save views, export, draw sections, mesh and take pictures of the 3D view. The server listens on the loopback address only and refuses a command without the token. [native/API.md](native/API.md) lists every command.
+The commands open and close scans, set the camera, the section box and the display, select, delete, measure, save views, export, draw sections, mesh, detect faces and take pictures of the 3D view. The server listens on the loopback address only and refuses a command without the token. [native/API.md](native/API.md) lists every command.
 
 ### MCP server
 

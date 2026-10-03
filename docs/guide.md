@@ -20,6 +20,7 @@ The interface is in English or Dutch. The guide uses the English names.
 - [Section drawings](#section-drawings)
 - [Meshing](#meshing)
 - [Closed mesh](#closed-mesh)
+- [Detected faces](#detected-faces)
 - [3D BAG buildings](#3d-bag-buildings)
 - [Index and level of detail](#index-and-level-of-detail)
 - [Settings, language and extensions](#settings-language-and-extensions)
@@ -34,7 +35,7 @@ The interface is in English or Dutch. The guide uses the English names.
 - The **ribbon** holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE and INDEX. The ribbon is wider than the default window of 1440 pixels. The groups that do not fit scroll sideways, with the wheel, the scrollbar or the arrow buttons that appear at both ends; in a window wide enough for all groups the arrows go away.
 - The **project panel** at the left lists the open clouds in name order, one row each with a visibility switch, the point count and a button to close the cloud. A second line appears only while a cloud is loading or indexing, or when it has selected or deleted points. Below the clouds, the classes that occur in them are listed.
 - The **scene** in the middle is the 3D view, with the view cube in a corner.
-- The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the saved views and the annotations of the active view, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the Section drawing block while that tool is open, the strength of eye-dome lighting while that is on, the 3D surface settings, the size of the mesh of the active scan with its open edges and connected parts, and the progress of mesh, merge and scale jobs with their cancel buttons.
+- The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the saved views and the annotations of the active view, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the Section drawing, Closed mesh and Detect faces blocks while those tools are open, the strength of eye-dome lighting while that is on, the 3D surface settings, the size of the mesh of the active scan with its open edges and connected parts, and the progress of mesh, merge and scale jobs with their cancel buttons.
 - The **status bar** at the bottom says what is going on, how many files and points are open and how many points are selected, and ends with the version.
 - The **File view** opens with the File button and covers the ribbon and the scene. Its menu has the import entries, **3D BAG buildings…**, the exports and the merge, above the pages Workspace, Extensions and About and the entries **Settings…**, **Return to model** and **Exit**. The Workspace page lists the open scans (click one to make it the active scan, the same as a click on its row in the project panel) and has the export format and the "every Nth point" setting. Escape or Return to model closes the File view.
 
@@ -83,7 +84,7 @@ Any source of that size that is read in full (PLY, E57, PCD, PTX and the text fo
 
 ### Progress
 
-A strip above the scene has a line for every import that reads its source, for every index being built and for a section drawing that is being made: the name of the scan, the step it is in, the points done of the total, a bar with the percentage, the time left at the pace so far and a button to cancel. An import that also builds an index reports two steps, reading and building. Scans opened together share a line that says how many are done, with one button that cancels the rest.
+A strip above the scene has a line for every import that reads its source, for every index being built, and for a section drawing, a closed mesh or a face detection that is being made: the name of the scan, the step it is in, the points done of the total, a bar with the percentage, the time left at the pace so far and a button to cancel. An import that also builds an index reports two steps, reading and building. Scans opened together share a line that says how many are done, with one button that cancels the rest.
 
 The percentage needs a known total: an E57 file states its record count, and an index build knows the points of its cloud. Other formats show the points read so far without a bar. Each row of the project panel shows the percentage of its own scan with a thin bar underneath. The status bar has a **Cancel import** button while an import runs.
 
@@ -153,7 +154,7 @@ Walking starts from the current orbit view, or from inside a station. Walking ou
 
 The limits are coordinates in the model. They stay where they are when another layer is shown or hidden.
 
-The box also limits box selection, point picking and the three meshers. **Section box…** among the exports of the File view writes every source point of the active scan inside the box; see [Exporting and merging](#exporting-and-merging). **Section drawing** makes a 2D drawing of what the box cuts; see [Section drawings](#section-drawings).
+The box also limits box selection, point picking, the three meshers and **Detect faces**. **Section box…** among the exports of the File view writes every source point of the active scan inside the box; see [Exporting and merging](#exporting-and-merging). **Section drawing** makes a 2D drawing of what the box cuts; see [Section drawings](#section-drawings).
 
 The box is aligned to the X, Y and Z axes of the model and cannot be rotated. A vertical cut through a building that stands at an angle to those axes is therefore a cut at that angle, not one along its walls.
 
@@ -252,6 +253,7 @@ The exports are in the File view under **EXPORT**. Each asks where to save and t
 | **Section drawing…** | What the section box cuts as a 2D drawing in DXF or DWG, from every visible scan; available while the box is on. See [Section drawings](#section-drawings) |
 | **Every Nth point…** | One point of the active scan in 2, 5, 10, 20, 50 or 100, as set under **EVERY NTH POINT** on the Workspace page |
 | **Surface mesh…** | The mesh of the active scan as OBJ, PLY or STL; see [Saving a mesh](#saving-a-mesh) |
+| **Detected faces…** | The faces detected in the active scan as JSON or OBJ; see [Saving the faces](#saving-the-faces) |
 | **Views as BCF…** | The saved views of the active scan; see [BCF export](#bcf-export) |
 
 Every export reads the source again from start to end, so points that are not on screen are written too. The file appears under its name only when it is complete. A section drawing has its own formats and reads only the slab it draws.
@@ -392,7 +394,7 @@ The six numbers are the section box: X, Y and Z min, then X, Y and Z max. `--vie
 
 ## Meshing
 
-A point cloud becomes a mesh of triangles with one of the three meshers of the SURFACE group. All three use the points that remain inside the section box and whose class is visible, run in the background and then show the result in the scene as faces. One mesh job runs at a time.
+A point cloud becomes a mesh of triangles with one of the three meshers of the SURFACE group. The fourth tool of that group, **Detect faces**, does not make a mesh: it finds the planes and cylinders of a building; see [Detected faces](#detected-faces). All three use the points that remain inside the section box and whose class is visible, run in the background and then show the result in the scene as faces. One mesh job runs at a time.
 
 | Mesher | Use it for | What it gives |
 | --- | --- | --- |
@@ -525,6 +527,190 @@ open-pointcloud-studio --closed-mesh merged.laz room.obj --box 0,0,-0.1,5.1,4.1,
 ```
 
 The extension of the output chooses OBJ, PLY or STL. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
+
+## Detected faces
+
+**Detect faces** in the SURFACE group finds the flat faces in a region of a scan and the round columns and pipes in it. A flat face is a floor, a ceiling, a wall or a sloped plane: one plane with an outline, in which a window is a hole and a door a notch. A cylinder is an axis with a radius, as far along it and around it as it was scanned. Every face comes with the number of scan points that belong to it and with how far those points lie from it. The button opens the **Detect faces** block in Properties, and closes it again.
+
+A detected face is not a mesh. A mesh follows the scanned surface with many small triangles and keeps every bump of it. A face replaces a wall by the one plane that fits it, and says where that plane lies, how large it is and how well the points agree with it. Faces are what you measure and draw from: the area of a floor, the height between a floor and a ceiling, whether a wall is plumb, where an opening begins and ends. Use **Closed mesh** for a surface to look at or to pass on as a model of what is there, and **Detect faces** for the planes of a building. A scan keeps its faces beside its mesh; neither takes the place of the other.
+
+### How faces are found, in short
+
+The job reads the points of the region twice. The first pass reduces them to one mean position per voxel of 3 cm, and at most 1,500,000 voxels. A region that holds more gets voxels of 6 cm, 12 cm and so on, and a scan whose points lie further apart than a voxel is wide gets voxels of up to four times the size. On these voxels the direction of the surface is estimated, and flat regions grow from voxel to voxel for as long as the points stay within the distance tolerance of one plane and the surface within the angle tolerance of it. A plane is fitted to every region. Round columns and pipes are then looked for among the points that no plane took.
+
+The second pass measures every point of the region against the plane or the cylinder of its voxel, which gives the residuals, and counts the points of every face in a grid of 5 cm in its plane. The outline of a face is traced from that grid and moved in to the outermost scan points. Where two faces meet at more than 20 degrees, the line they share is an edge, and the corners of both outlines are put on that line, so that a wall ends on the line of the floor.
+
+### The faces of one room, step by step
+
+1. Open the scan or the scans of the room and wait until they are indexed; the strip above the scene shows that. A scan with an index is read through it, and only the parts of it that touch the section box are read. A scan without an index is read into memory for the job when it has at most 5,000,000 points; a larger one is read from its file twice, which the block says, and **Build index** in the INDEX group makes the job faster.
+2. Switch on **Section box** and put it around the room: choose **Top** in the VIEW group and bring the four sides to the middle of the walls around the room, so that the faces of those walls on the room side lie inside the box and those of the rooms next door do not. Put the top face just above the ceiling and the bottom face just under the floor. Only what lies inside the box is searched.
+3. Choose **Detect faces**. Under the settings the block says what a job would search: the active scan or the visible scans, inside the section box or as a whole, and the size of that region in metres, which is the box cut back to where the scans have points. Below that it gives the voxel size the working budget allows. It is 30 mm as long as the six faces of the region fit in 1,500,000 voxels, which holds up to about 1,350 m² of faces: a box of 20 by 20 by 6.8 m. For a larger region the block warns, in the accent colour, with the voxel size the job will at least need. Walls and objects inside the region take voxels too, so the job can end with larger voxels than the block expects.
+4. When the room was scanned from several stations that are separate files, set **Scans** to **All visible scans** and hide the layers that should stay out. With the section box on, only the visible layers that reach the box take part. Layers of 3D BAG buildings are left out. The faces are kept with the active scan, which has to be one of the scans that take part: the block says so when it is hidden or lies outside the box.
+5. Choose **Start**. The strip above the scene shows the job step by step, with a **Cancel** button: finding the station of every point (only for a scan whose index does not say), reading a scan without an index, reading the points, finding flat regions, measuring the points against the faces, tracing the outlines and building the faces for the viewer. A cancelled job, and a job that finds nothing, leave the faces the scan had as they were.
+6. When the job is done the status bar gives the number of faces per type, the time and the voxel size, for example `Detected 7 faces in room.e57: 1 floor, 1 ceiling, 4 walls, 1 cylinder; 0.4 s; voxels of 30 mm`, and the faces are drawn over the points. Hide the points of the layer in the project panel to look at the faces alone; the **Faces** switch of the layer hides the faces.
+7. Look through the list in the block and click a face to see it highlighted in the scene with its figures.
+8. The faces exist in this session only. **Export faces…** saves them; see [Saving the faces](#saving-the-faces).
+
+A scan holds one set of faces: a new detection takes the place of the previous one, and Undo does not bring that one back. The faces are kept in the frame of their scan, so **Move** and **Scale** afterwards take them along with the points, and the list and the exports give them where the scan stands.
+
+### The settings of a detection
+
+| Setting | What it does | Starts at |
+| --- | --- | --- |
+| **Distance tolerance (mm)** | How far a point may lie from the plane of its face, from 1 to 500 mm. Take about three times the noise of the scan or more: with a smaller value a wall falls apart into pieces, with a larger one a step in a wall or a face close behind another is taken into the same face | 20 |
+| **Angle tolerance (°)** | How far the surface at a point may be turned from the plane of its face, from 1 to 45 degrees | 10 |
+| **Smallest face (m²)** | Smaller faces are not reported, from 0.01 to 10,000 m². A value above the faces that are there finds nothing and makes the job slow | 0.25 |
+| **Cylinders** | Whether round columns and pipes are looked for among the points that no flat face took | On |
+| **Scans** | **Active scan**, or **All visible scans**: every layer whose points are shown and that reaches the section box when the box is on, without layers of 3D BAG buildings | Active scan |
+
+A comma or a point is read as the decimal mark. The settings hold for the session and are not kept between sessions. Deleted points and hidden classes are left out, as with the meshers; the selection plays no part.
+
+The other values of a detection are fixed in this version: voxels of 30 mm to start with and a working set of 1,500,000 voxels, faces at least 0.15 m wide, a grid of 5 cm for the outlines, gaps in a face closed up to 10 cm and holes filled below 0.05 m², and cylinders with a radius of 0.01 to 1 m that are at least 0.30 m long and of which at least 90 degrees of the round was scanned.
+
+The front of a face is the side it was scanned from. The job takes it from the scanner stations where the scan knows which station measured which point, as E57, PTX and PCD scans do. An index that was built by an earlier version does not say that: the first job on such a scan reads its file once more to find out, and keeps the answer with the index and with the layer. A merged cloud, a LAS or LAZ file and a text file have no stations; there a face looks to the side that lies open in front of it, which is right for the faces of the room a scan was made in.
+
+### The list and the colours
+
+While the active scan has faces, the block shows them under **Detected faces**.
+
+- **Last detection**: the time the job took and the voxel size it ended with.
+- **Floors and ceilings**, **Walls and sloped planes**, **Columns and pipes**: the number of faces of each type. What a flat face is called follows from the direction of its normal alone: within 10 degrees of level it is a floor when it looks up and a ceiling when it looks down, within 10 degrees of upright it is a wall, and anything between is a sloped plane. The top of a table is therefore a floor and the front of a cabinet a wall.
+- **Points on a face**: how many of the points of the region belong to one of the faces.
+
+The list has one row per face, the flat faces first and then the cylinders, each largest first: a swatch in the colour the face has with **One colour per face**, its number, its type, its area in square metres (for a cylinder its diameter and length), and the residual of its points as a root mean square in millimetres. The list shows the 200 largest flat faces and the 200 largest cylinders; an export holds them all.
+
+Click a row to highlight that face: its outline is drawn over the scene in the accent colour, with its openings left open, and for a cylinder the lines along its scanned part. The highlight is drawn on top of the points and is not hidden by what stands in front of the face. Click the row again to take it off. Under the list the block then shows:
+
+- **Normal**: the direction the face looks in, as X, Y and Z of a vector of length one.
+- **Area**: the area inside the outline, openings left out.
+- **Coverage**: the part of that area that holds scan points. It is below 100% where the face was closed over a gap or seen through clutter.
+- **Points**: the scan points that belong to the face: those within three times the distance tolerance whose surface runs along the face.
+- **Residual (RMS)**, **95th percentile** and **Largest deviation**: how far those points lie from the plane or the cylinder. For a clean wall the residual is the noise of the scanner. The largest deviation is never more than three times the distance tolerance, because farther points do not belong to the face.
+- For a cylinder: **Diameter**, **Length** (as far as it was scanned), **Arc** (how much of the round was scanned, in degrees), **Area** of the scanned part, and **Scanned from**: the outside for a column, the inside for a round shaft. Without stations a cylinder is taken as seen from outside.
+
+**Colour by** chooses how the faces are drawn, for all scans at once:
+
+- **One colour per face**: the outline of each face filled in the colour of its type (floors green, ceilings blue, walls sand, sloped planes rose, cylinders violet) in one of four shades, so that neighbours can be told apart.
+- **Deviation of the points**: every cell of 5 cm of a face that holds points gets a colour for the mean distance of its points to the face. The legend in the block gives the three colours with their values: blue where the scan lies the distance tolerance or more behind the face, near white where it lies on the face, and red where it lies the distance tolerance or more in front of it; in between the colours blend. A wall that bulges shows as a red or a blue patch. The faces are drawn with the light of the scene, which makes the colours somewhat darker on faces turned away from it, so read a colour as an indication and the figures in the list as the measurement. Cells without points are not drawn, so the gaps in a face show.
+
+The faces are drawn through the same buffer of the graphics card as the meshes; see [Meshing](#meshing). Faces that no longer fit beside the meshes that are shown are held, listed and exported, but not drawn, which the block says.
+
+**Clear faces** removes the faces of the active scan.
+
+### When faces are out of date
+
+Faces belong to the points they were found in. They are marked out of date, in the block and as **Faces (out of date)** in the project panel, when:
+
+- points of a scan that took part were deleted, restored with Undo, or thinned;
+- the index that a scan that took part was read through was replaced by another. The first index of a scan that was searched without one leaves the faces as they are: it holds the same points;
+- a scan that took part, other than the one that keeps the faces, was closed;
+- the faces were made from several scans with **All visible scans**, and one of those scans was moved, scaled or reset afterwards. The faces follow the scan that keeps them and the points of the other scans do not, so the scans no longer stand together as they did. Moving the scan back does not take the mark away.
+
+Faces that are out of date stay in the scene and in the list and can still be exported; an OBJ file and the result of an export job say that they are. Detect again to bring them up to date. Restoring the points does not do that, because the application does not compare the points with those the faces were made from.
+
+Moving or scaling a scan does not make faces that were made from that scan alone out of date: they follow the scan. A scan that is scaled by different factors along its axes loses its cylinders from the list and the scene for as long as it is, because they are no longer round. Changing the section box, the classes shown or the colours leaves the faces as they are. Closing the scan that keeps the faces removes them with it.
+
+### Saving the faces
+
+**Export faces…** in the block, or **Detected faces…** in the File view, saves the faces of the active scan. The save dialog offers two formats, and the extension of the file name decides which one is written:
+
+| Format | What the file holds |
+| --- | --- |
+| JSON (`.json`) | Every plane and cylinder with its parameters, its outline, the residuals of its points, the edges between faces and the settings of the detection |
+| OBJ (`.obj`) | The faces as triangles: one group per face, named `face_0001_wall` after its number and type, with the outline and its openings as triangles and a normal at every corner; a cylinder as the scanned part of its surface. It opens again as a mesh |
+
+Both are written in the coordinates of the scene, with the move and scale of the scan applied, and in metres. The file appears under its name only when it is complete. An open scan cannot be chosen as the destination.
+
+#### The JSON file
+
+| Field | Meaning |
+| --- | --- |
+| `format`, `version` | `open-pointcloud-studio-faces` and `1` |
+| `source` | The file name of the scan that keeps the faces, without its folder |
+| `units` | `metres` |
+| `region` | `min` and `max` of the box around the points that took part, or `null` |
+| `settings.distance_tolerance`, `settings.angle_tolerance_deg`, `settings.min_area`, `settings.cylinders` | The settings of the block: metres, degrees, square metres, and whether cylinders were looked for |
+| `settings.min_plane_width`, `settings.max_gap`, `settings.min_hole_area` | The fixed values: narrowest face, widest gap that is closed, smallest hole that is kept |
+| `settings.voxel_size`, `settings.voxel_size_asked` | The voxel size the job ended with, and the one it started with |
+| `settings.boundary_cell`, `settings.boundary_cell_asked` | The cell of the outline grid as used and as asked |
+| `settings.coarse` | `true` when the voxels had to grow: narrow faces and faces close together are lost |
+| `settings.density_doublings` | How often the voxels were doubled because the points lie far apart |
+| `points.read`, `points.source`, `points.working`, `points.assigned` | Points read in one pass, points of the region that took part, voxels of the working set, and points that belong to a face of the file |
+| `faces` | The flat faces, largest first, and then the cylinders, largest first |
+| `edges` | The stretches of line that two flat faces share |
+
+A flat face (`"type": "plane"`):
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Its number, from 1, largest face first |
+| `class` | `floor`, `ceiling`, `wall` or `sloped`, by the direction of the normal alone |
+| `normal` | Unit vector on the side the face was scanned from |
+| `normal_from` | What decided that side: `stations` (the stations that measured its points), `nearest_station`, `open_side` (no station is known: the side that lies open) or `centre` (the middle of the points: a guess) |
+| `point`, `offset` | A point of the plane, and `d` in `normal . x = d` |
+| `area`, `covered_area`, `coverage` | The area inside the outline, the part of it that holds scan points, and that part as a share from 0 to 1 |
+| `coplanar_group` | The same number for faces that lie in one plane, such as the parts of a wall on either side of an opening |
+| `boundary` | One entry per connected part of the face: `outer`, a closed ring of `[x, y, z]` corners that runs counter-clockwise seen from the side of the normal, and `holes`, the rings of its openings, clockwise. The first corner is not repeated |
+| `residual` | `points` and `inliers` (those within one tolerance), and in metres `rms`, `mean` (with its sign: positive in front of the face), `mean_abs`, `p95` and `max` |
+
+A cylinder (`"type": "cylinder"`):
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Its number; the numbers go on after those of the flat faces |
+| `axis_start`, `axis_end` | The axis, as far as the surface was scanned |
+| `radius`, `diameter`, `length` | In metres |
+| `arc_degrees`, `arc_start`, `arc_side` | How much of the round was scanned, the unit direction from the axis to where that arc begins, and the unit direction it runs towards from there |
+| `seen_from_inside` | `true` for the inside of a round shaft |
+| `area` | Of the scanned part |
+| `residual` | As for a flat face; positive is outside the cylinder |
+
+An edge has `faces` (the numbers of its two faces), `start` and `end`, `length`, and `angle_deg`: the angle between the two faces on the side their normals point to, 90 in the corner of a room and 270 around the corner of a pillar.
+
+### Found on generated rooms
+
+None of these numbers comes from a scan of a real building. They come from one generated scan, in a development build, which is slower than a release: two rooms of 5 by 4 m and 4 by 4 m, 2.6 m high, with a wall of 0.20 m between them, a door opening of 0.9 by 2.1 m in that wall, a window of 2.0 by 1.2 m, an outer door and a round column of 0.20 m radius; 5.8 million points with a noise of 2 mm, one station per room.
+
+- **The first room in its section box**: seven faces. Floor and ceiling 20.000 m² each (true 20). Walls of 13.000 and 10.400 m² (true 13 and 10.4), a wall of 10.625 m² with the window as a hole from 1.503 to 3.497 m and from 0.904 to 2.095 m high (true 1.5 to 3.5 and 0.9 to 2.1; true area 10.6), and a wall of 8.546 m² with the door as a notch from 1.508 to 2.393 m, 2.096 m high (true 1.5 to 2.4 and 2.1; true area 8.51). The column is a cylinder of 0.400 m diameter and 2.607 m long. Thirteen edges, all at 90 degrees.
+- **Residuals**: 2.0 mm for every face, which is the noise, with a 95th percentile of 3.9 to 4.0 mm. The wall with the door reads 2.6 mm in the box: the box cuts the wall between the rooms in the middle, and the points of the door reveals that lie within the tolerance of the wall count as its points. In the whole file that wall reads 2.0 mm.
+- **The whole file**: fifteen faces, with every point on a face. Both floors and both ceilings at 20.000 and 16.000 m², ten walls, and the column. The two reveals of the door between the rooms are faces of their own of 0.42 m² (true 0.2 by 2.1 m), and the walls beside them end on them: the door runs from 1.500 to 2.400 m. Edges of an opening that end on no other face lie 3 to 8 mm inside the true opening, at the outermost points. 31 edges, four of them at 270 degrees: the outward corners of the door.
+- **With and without stations** the same faces come out with the same areas. From the merged file without stations every face took its side from the open side in front of it, and all of them look into their room.
+- **The column** was generated with points all around it, which one station could not have seen. With stations it is therefore reported as seen from inside: half of its points look away from the station.
+- **Time**: with an index 0.3 s for the room in its box and 0.6 s for the whole file. Without an index, where the file is read twice: 1.3 to 1.5 s and 2.0 s for the binary LAS file, and about 8 s for the text file, after 7 s to open it.
+
+The part that finds the faces was also run on generated rooms of up to 57 million points, with an index: a section box around one room of such a file took as long as a file with that room alone (0.4 to 0.7 s), and a job at the full budget, 1.49 million voxels from 50 million points, took 7.5 to 7.8 s and 155 MB of memory.
+
+### Limits of detected faces
+
+- **Noise and tolerance.** The settings suit scans from a tripod with a noise of a few millimetres. The distance tolerance has to be about three times the noise or more; a scan with 1 to 2 cm of noise needs a larger tolerance, or its walls fall apart into pieces.
+- **Narrow strips are no faces.** A face has to be at least 0.15 m wide and as large as **Smallest face**. Door and window reveals in a wall thinner than that, the sides of a beam and skirting boards are not reported.
+- **Reveals and skirting count for the wall.** Points of a reveal, a skirting board or anything else that lies within the distance tolerance of a wall cannot be told from the points of the wall: they count for it and raise its residual. A wall with a skirting board of 7 cm read 3.0 mm at a noise of 2 mm. Points farther off than the tolerance count only where their surface runs along the face.
+- **Faces close together.** Two faces in parallel have to lie further apart than a voxel to stay two faces: 5 cm apart is found at voxels of 3 cm.
+- **A large region gets larger voxels.** The working set holds 1,500,000 voxels. A region with more gets voxels of 6, 12, 24 cm and so on, and with every doubling narrow faces are lost, faces close together become one, and the faces on either side of a thin wall can join: at voxels of 6 cm the floors and the ceilings of two rooms with a wall of 10 cm between them came out as one face each, and one false edge was reported. The status bar and the block say when the voxels grew. A smaller section box brings the detail back.
+- **Thin scans.** Where the points lie further apart than a voxel, the voxels are doubled, at most twice, so up to 12 cm. A scan with points more than about 10 cm apart gives no faces. The voxel size is chosen for the region as a whole: a region that is dense for the most part keeps 3 cm, and its thin far end gives no faces. A very small room that was scanned thinly can be taken for loose points and keep 3 cm too. Larger voxels for this reason are not taken back by a smaller section box.
+- **Free edges of an outline** lie at the outermost scan points. An opening is therefore found up to half a point spacing too large where the points stop short of its edge, and a few millimetres too small where noise carries points into it; a wall that ends in the open is as much shorter or longer. Only an edge that a face shares with a neighbour lies on an exact line.
+- **Outlines are moved onto their neighbours.** A corner of an outline within 12 cm of the line its face shares with a neighbour is put on that line, so a face that stops that far short of its neighbour is drawn up to it. A strip of wall about as narrow as one cell of the outline grid (5 cm) between an opening and a corner is lost: a door 6 cm from the corner came out 6 cm wider.
+- **Gaps and holes.** Gaps in a face up to 10 cm are closed and holes below 0.05 m² are filled; **Coverage** tells how much of a face holds points. The outlines do not form a closed model: faces meet on their edges where they share one, and nowhere else.
+- **Faces at a small angle.** Two faces that meet at less than 20 degrees have no edge between them, and their outlines overlap in a strip along the line where they meet. Two faces one degree apart are one face within the tolerance.
+- **Sides without usable stations.** Without stations the side a face looks at is the side that lies open in front of it. That is wrong for a face whose room was cut away by the section box and for the outside of a thin wall that was scanned from the open: those look into the wall, and their edges read 270 degrees. With larger voxels than a partition is thick, both of its faces can be turned wrong. A wrong side changes the direction of the normal, floor against ceiling, and the sign of the deviation, not the place or the size of the face.
+- **Types say nothing about what a face is part of.** Furniture is listed as floors and walls. Tell the building from its contents by the height, the area and the edges of a face.
+- **Round columns.** A column with a radius up to about 0.35 m is found; a wider one comes out as strips of wall. A pipe needs a radius of about two voxels: 5 cm at voxels of 3 cm. A cylinder of which a narrow arc was scanned has an uncertain radius: 1 cm off at 45 degrees of a radius of 0.4 m, which is why at least 90 degrees is asked. Round things among clutter that pass these tests, such as a bin, are reported as cylinders.
+- **Cylinders have no outline.** A cylinder is an axis, a radius, a scanned length and an arc: openings in it are not traced, and there are no edges between a cylinder and a flat face.
+- **Smallest face above what is there.** With a smallest face larger than the faces in the region the job finds nothing and takes many times longer (8 s instead of 0.6 s on the generated rooms), and its progress stands still meanwhile.
+- **At most 4,096 faces** come out of one job, the largest. The grids of the outlines hold 8 million cells together; beyond that the cells are doubled.
+- **The deviation colours** are merged two by two cells above 400,000 cells, and at the corner of an opening a merged cell covers a little of the opening. Residuals are those of the points within three tolerances, so an object that stands that close to a wall shows in its colours.
+- **Reading order.** The same scans give the same faces on every run. When the voxels had to grow, a scan read through its index and the same scan read from its file can differ slightly.
+- **The faces are not saved by themselves**, are not part of a saved view, and Undo does not apply to them. Export them to keep them.
+- **Nothing was tried on a scan of a real building.** Clutter, uneven density and the mixed points at edges of a real scan are not in the generated rooms.
+
+Without a window, `--faces` detects the faces of one scan file and writes them:
+
+```bash
+open-pointcloud-studio --faces scan.e57 room-faces.json --box -0.1,-0.1,-0.1,5.1,4.1,2.7
+open-pointcloud-studio --faces merged.laz faces.obj --distance 0.03 --angle 12 --min-area 0.5 --cylinders off
+```
+
+The extension of the output chooses JSON or OBJ. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is searched. `--distance` is the distance tolerance in metres, `--angle` the angle tolerance in degrees, `--min-area` the smallest face in square metres and `--cylinders` `on` or `off`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory and a larger one is read from start to end twice. The mode prints the number of faces per type, the time and the voxel size, and one line per face with its type, area, normal, openings, coverage and residuals; when no face is found it writes nothing and ends with an error.
 
 ## 3D BAG buildings
 

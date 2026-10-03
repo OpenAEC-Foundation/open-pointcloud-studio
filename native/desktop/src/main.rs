@@ -18,6 +18,7 @@ mod cloud_centroid;
 mod cloud_transform;
 mod drawing;
 mod extensions;
+mod faces;
 mod file_view;
 mod gpu_viewport;
 mod i18n;
@@ -761,6 +762,25 @@ fn main() -> iced::Result {
                 if line.is_empty() {
                     eprintln!(
                         "Usage: open-pointcloud-studio --closed-mesh INPUT OUTPUT.obj|.ply|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]"
+                    );
+                } else {
+                    eprintln!("{line}");
+                }
+                std::process::exit(code);
+            }
+        }
+    }
+    if first.as_deref() == Some(OsStr::new("--faces")) {
+        let arguments: Vec<_> = args.collect();
+        match faces::command_line(&arguments) {
+            Ok(lines) => {
+                println!("{lines}");
+                return Ok(());
+            }
+            Err((code, line)) => {
+                if line.is_empty() {
+                    eprintln!(
+                        "Usage: open-pointcloud-studio --faces INPUT OUTPUT.json|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]"
                     );
                 } else {
                     eprintln!("{line}");
@@ -1680,6 +1700,7 @@ enum Message {
     Measure(measure::MeasureAction),
     Drawing(drawing::DrawingAction),
     ClosedMesh(closed_mesh::ClosedMeshAction),
+    Faces(faces::FaceAction),
     ClearSelection,
     SelectionDrag([f32; 2], [f32; 2]),
     BoxSelect {
@@ -1815,6 +1836,9 @@ struct Studio {
     drawing: drawing::DrawingTool,
     /// The Closed mesh tool: its settings, its job and its last result.
     closed_mesh: closed_mesh::ClosedMeshTool,
+    /// The Detect faces tool: its settings and its job. The faces it finds
+    /// are kept with their scan.
+    faces: faces::FaceTool,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     selection_pending: bool,
@@ -1854,6 +1878,8 @@ struct CloudEntry {
     /// made or read.
     mesh_topology: Option<pointcloud_core::MeshTopology>,
     mesh_visible: bool,
+    /// The faces detected in this scan, a layer of its own beside the mesh.
+    faces: Option<faces::FaceLayer>,
     bag_source: bool,
     visible: bool,
     selection: Option<Arc<SelectionMask>>,
@@ -2241,6 +2267,7 @@ impl Default for Studio {
             measure: measure::MeasureTool::default(),
             drawing: drawing::DrawingTool::default(),
             closed_mesh: closed_mesh::ClosedMeshTool::default(),
+            faces: faces::FaceTool::default(),
             drag_rectangle: None,
             context_menu: None,
             selection_pending: false,
@@ -2333,6 +2360,7 @@ impl Studio {
             mesh: None,
             mesh_topology: None,
             mesh_visible: true,
+            faces: None,
             bag_source: false,
             visible: true,
             selection: None,
@@ -2893,6 +2921,7 @@ impl Studio {
                             "bounds": {"min": entry.bounds().min, "max": entry.bounds().max},
                             "transform": {"scale": entry.transform.scale, "offset": entry.transform.offset},
                             "mesh": mesh_export::mesh_value(entry),
+                            "faces": faces::layer_value(&self.clouds, index),
                         })
                     })
                     .collect();
@@ -2981,6 +3010,7 @@ impl Studio {
                 answer.0["result"]["file_view"] = self.file_view_value();
                 answer.0["result"]["drawing"] = self.drawing.value();
                 answer.0["result"]["closed_mesh"] = self.closed_mesh.value();
+                answer.0["result"]["faces"] = self.faces_value();
                 answer
             }
             ApiCommand::Job { id } => {
@@ -3761,6 +3791,15 @@ impl Studio {
                 }
             }
             ApiCommand::ExportMesh { path } => self.api_export_mesh(path),
+            ApiCommand::SetFaceSettings { options } => {
+                (self.api_set_face_settings(&options), Task::none())
+            }
+            ApiCommand::DetectFaces { options } => self.api_detect_faces(&options),
+            ApiCommand::CancelDetectFaces => (self.api_cancel_detect_faces(), Task::none()),
+            ApiCommand::ListFaces { boundaries } => (self.api_list_faces(boundaries), Task::none()),
+            ApiCommand::SelectFace { id } => (self.api_select_face(id), Task::none()),
+            ApiCommand::ExportFaces { path } => self.api_export_faces(path),
+            ApiCommand::ClearFaces => (self.api_clear_faces(), Task::none()),
             ApiCommand::Export { path } => self.api_export(path, ApiExportMode::Full),
             ApiCommand::ExportSection { path } => self.api_export(path, ApiExportMode::Section),
             ApiCommand::ExportSelection { path } => self.api_export(path, ApiExportMode::Selected),
@@ -4052,6 +4091,7 @@ impl Studio {
         self.cancel_bag();
         self.cancel_drawing();
         self.cancel_closed_mesh();
+        self.cancel_faces();
         if let Some(job) = &self.merge_job {
             job.control.cancelled.store(true, Ordering::Relaxed);
         }
@@ -4398,6 +4438,7 @@ impl Studio {
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
+                        faces: None,
                         bag_source: false,
                         visible: true,
                         selection: None,
@@ -4715,6 +4756,7 @@ impl Studio {
         self.track_progress();
         self.settle_views();
         self.settle_drawing();
+        self.settle_faces();
         task
     }
 
@@ -5318,6 +5360,7 @@ impl Studio {
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
+                        faces: None,
                         visible: true,
                         selection: None,
                         deleted: None,
@@ -7503,6 +7546,7 @@ impl Studio {
             Message::Measure(action) => return self.update_measure(action),
             Message::Drawing(action) => return self.update_drawing(action),
             Message::ClosedMesh(action) => return self.update_closed_mesh(action),
+            Message::Faces(action) => return self.update_faces(action),
             Message::ClearSelection => {
                 self.pending_delete = false;
                 if self.selection_pending {
@@ -8288,6 +8332,7 @@ impl Studio {
                 mesh_idle,
             )),
             self.closed_mesh_ribbon_item(),
+            self.faces_ribbon_item(),
         ];
         if self.mesh_job.is_some() {
             surface_tools.push(RibbonItem::Small(small_tool_button(
@@ -8534,6 +8579,9 @@ impl Studio {
                         .text_size(11)
                         .size(12),
                 );
+            }
+            if let Some(switch) = faces::layer_switch(index, entry) {
+                item = item.push(switch);
             }
             let active = self.active == Some(index);
             let picked = entry.picked;
@@ -8788,6 +8836,10 @@ impl Studio {
         // So does the block of the Closed mesh tool.
         if let Some(closed_mesh) = self.closed_mesh_properties() {
             properties = properties.push(closed_mesh);
+        }
+        // And the block of the Detect faces tool, with the faces it found.
+        if let Some(faces) = self.faces_properties() {
+            properties = properties.push(faces);
         }
         for row in [
             opencad_properties::section_header("General"),
@@ -9396,6 +9448,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::Measure(action) => action.icon(),
         Message::Drawing(_) => ToolIcon::Drawing,
         Message::ClosedMesh(_) => ToolIcon::ClosedMesh,
+        Message::Faces(_) => ToolIcon::Faces,
         Message::ClearSelection => ToolIcon::Clear,
         Message::SetEyeDome(_) => ToolIcon::Shading,
         Message::ShowScanPoses(_) => ToolIcon::Pick,
@@ -9717,6 +9770,7 @@ enum ToolIcon {
     Shading,
     Drawing,
     ClosedMesh,
+    Faces,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -9766,6 +9820,8 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Drawing => include_bytes!("../../assets/opencad-icons/section_drawing.svg"),
         // So is the closed mesh icon.
         ToolIcon::ClosedMesh => include_bytes!("../../assets/opencad-icons/closed_mesh.svg"),
+        // And so is the icon of the Detect faces tool.
+        ToolIcon::Faces => include_bytes!("../../assets/opencad-icons/detect_faces.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)
@@ -9775,13 +9831,15 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
 
 fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
     let mut overall: Option<Bounds> = None;
-    // Keep a loaded mesh framed when its source points are hidden for inspection.
-    let any_visible = clouds
-        .iter()
-        .any(|entry| entry.visible || (entry.mesh_visible && entry.mesh.is_some()));
-    for entry in clouds.iter().filter(|entry| {
-        entry.visible || (entry.mesh_visible && entry.mesh.is_some()) || !any_visible
-    }) {
+    // Keep a loaded mesh, and detected faces, framed when the source points
+    // are hidden for inspection.
+    let shown = |entry: &CloudEntry| {
+        entry.visible
+            || (entry.mesh_visible && entry.mesh.is_some())
+            || entry.faces.as_ref().is_some_and(faces::FaceLayer::visible)
+    };
+    let any_visible = clouds.iter().any(shown);
+    for entry in clouds.iter().filter(|entry| shown(entry) || !any_visible) {
         match &mut overall {
             Some(bounds) => {
                 for axis in 0..3 {
@@ -11129,6 +11187,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
             }
         }
         self.draw_drawing(&mut frame, bounds.size());
+        self.draw_faces(&mut frame, bounds.size());
         self.draw_measure(&mut frame, bounds.size());
         self.draw_annotations(&mut frame, bounds.size());
         view_cube::draw(
@@ -11448,6 +11507,7 @@ impl PointViewport<'_> {
             });
         };
         self.draw_drawing(frame, size);
+        self.draw_faces(frame, size);
         self.draw_measure(frame, size);
         self.draw_annotations(frame, size);
         let inside = self.walk_station.is_some();

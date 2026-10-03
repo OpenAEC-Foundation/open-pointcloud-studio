@@ -1779,6 +1779,39 @@ fn a_column_is_a_cylinder_with_its_axis_radius_length_and_arc() {
     assert!(detect(&column, &thin).cylinders.is_empty());
 }
 
+#[test]
+fn the_deviation_colours_of_a_cylinder_follow_the_side_it_was_scanned_from() {
+    let (_, column) = half_column([1.0, 1.0, 0.0], 21);
+    let mut found = detect(&column, &SurfaceDetectConfig::default());
+    assert_eq!(found.cylinders.len(), 1);
+    assert!(!found.cylinders[0].seen_from_inside);
+    // Every cell with points lies the full scale outside the cylinder.
+    let scale = 0.02;
+    let grid = &mut found.cylinders[0].deviation;
+    for (mean, count) in grid.means.iter_mut().zip(&grid.counts) {
+        *mean = if *count > 0 { scale as f32 } else { 0.0 };
+    }
+    let [behind, _, front] = deviation_legend(scale);
+    let colors = |surfaces: &DetectedSurfaces| {
+        let mesh = deviation_mesh(surfaces, scale, DEFAULT_DEVIATION_CELLS).unwrap();
+        let colors = mesh.colors.unwrap();
+        assert!(!colors.is_empty());
+        colors
+    };
+    // A column is scanned from outside: points outside it lie in front of
+    // its surface.
+    assert!(colors(&found).iter().all(|color| *color == front.color));
+    // A shaft is scanned from inside: the same points lie behind its
+    // surface. The figures of the grid stay positive outside.
+    found.cylinders[0].seen_from_inside = true;
+    assert!(colors(&found).iter().all(|color| *color == behind.color));
+    assert!(found.cylinders[0]
+        .deviation
+        .means
+        .iter()
+        .all(|mean| *mean >= 0.0));
+}
+
 fn room_with_column() -> Shape {
     noisy_room().merged(half_column([2.5, 1.8, 0.0], 22).1)
 }

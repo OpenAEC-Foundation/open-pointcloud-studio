@@ -669,13 +669,16 @@ struct Colored {
 impl Colored {
     /// Two triangles for every cell of a grid that holds points, with at
     /// every corner the colour for the mean deviation of the cells round it.
-    /// `corner` gives the scene position and normal of a corner of the
+    /// `front` is 1 when the means of the grid are positive on the side the
+    /// face was scanned from and -1 when they are positive on the other
+    /// side. `corner` gives the scene position and normal of a corner of the
     /// merged grid.
     fn add_cells(
         &mut self,
         to_source: &ToSource,
         grid: &Merged,
         scale: f64,
+        front: f64,
         corner: &dyn Fn(u32, u32) -> ([f64; 3], [f64; 3]),
     ) -> Result<(), LoadError> {
         let stride = grid.width as usize + 1;
@@ -710,7 +713,8 @@ impl Colored {
                         let (position, normal) = corner(cx, cy);
                         vertex_of[place] = self.mesh.vertices.len() as u32;
                         self.mesh.vertices.push(to_source.position(position));
-                        self.colors.push(deviation_color(sum / known, scale));
+                        self.colors
+                            .push(deviation_color(front * sum / known, scale));
                         self.normals.push(to_source.normal(normal));
                         scene.push((position, normal));
                     }
@@ -782,7 +786,9 @@ pub fn deviation_mesh(
     };
     for (face, merged) in surfaces.planes.iter().zip(&planes) {
         let grid = &face.deviation;
-        colored.add_cells(&to_source, merged, scale, &|x, y| {
+        // The normal of a flat face points to the side it was scanned from,
+        // and its means are positive on that side.
+        colored.add_cells(&to_source, merged, scale, 1.0, &|x, y| {
             let position = grid.corner((x * merge).min(grid.width), (y * merge).min(grid.height));
             (within_outline(face, position), face.normal)
         })?;
@@ -790,8 +796,12 @@ pub fn deviation_mesh(
     for (face, merged) in surfaces.cylinders.iter().zip(&cylinders) {
         let grid = &face.deviation;
         let length = face.length();
+        // The means of a cylinder are positive outside it, whatever side it
+        // was scanned from. The front of a face is the side it was scanned
+        // from, so a shaft seen from inside turns its colours with its
+        // normals.
         let facing = if face.seen_from_inside { -1.0 } else { 1.0 };
-        colored.add_cells(&to_source, merged, scale, &|x, y| {
+        colored.add_cells(&to_source, merged, scale, facing, &|x, y| {
             let angle = grid.first_angle
                 + f64::from((x * merge).min(grid.columns)) * 360.0 / f64::from(grid.columns);
             let angle = angle.clamp(0.0, face.arc_deg);

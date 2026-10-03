@@ -114,6 +114,14 @@ pub const MODES: &[Mode] = &[
         ),
     },
     Mode {
+        flag: "--faces",
+        short: None,
+        arguments: "INPUT OUTPUT.json|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]",
+        description: key(
+            "Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON or OBJ.",
+        ),
+    },
+    Mode {
         flag: "--mesh-export",
         short: None,
         arguments: "INPUT OUTPUT",

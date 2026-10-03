@@ -41,7 +41,7 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
 
-const INSTRUCTIONS: &str = "These tools drive a running Open Pointcloud Studio window, a point-cloud viewer and editor, through its local command API. The first tool call uses the most recently started window, or starts one when none runs; list_instances and select_instance choose another. Positions are scene coordinates in the units of the scans (normally metres), angles are radians and screen positions are viewport pixels from the top-left corner. Call wait_until_idle after open and before screenshot or export_bcf. Exports, selections, picks, meshes and merges answer with a job_id: pass wait_seconds or call wait_for_job. screenshot returns the 3D viewport as an image.";
+const INSTRUCTIONS: &str = "These tools drive a running Open Pointcloud Studio window, a point-cloud viewer and editor, through its local command API. The first tool call uses the most recently started window, or starts one when none runs; list_instances and select_instance choose another. Positions are scene coordinates in the units of the scans (normally metres), angles are radians and screen positions are viewport pixels from the top-left corner. Call wait_until_idle after open and before screenshot or export_bcf. Exports, selections, picks, meshes, face detections and merges answer with a job_id: pass wait_seconds or call wait_for_job. screenshot returns the 3D viewport as an image.";
 
 type Failure = (i64, String);
 

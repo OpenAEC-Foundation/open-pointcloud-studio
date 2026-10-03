@@ -41,7 +41,7 @@ use crate::{
 
 /// A layer without an index is read into memory for the job. Above this many
 /// points that takes too much of it, and the index has to be built first.
-const UNINDEXED_LIMIT: u64 = 5_000_000;
+pub(crate) const UNINDEXED_LIMIT: u64 = 5_000_000;
 /// The share of its triangles a surface is taken to keep at the least when
 /// it is simplified. Flat faces collapse furthest: of generated rooms without
 /// furniture the finished mesh kept one triangle in forty-seven with a noise
@@ -111,16 +111,16 @@ pub enum Layers {
 }
 
 impl Layers {
-    const ALL: [Self; 2] = [Self::Active, Self::Visible];
+    pub(crate) const ALL: [Self; 2] = [Self::Active, Self::Visible];
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Active => "active",
             Self::Visible => "visible",
         }
     }
 
-    fn from_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
             "active" => Some(Self::Active),
             "visible" => Some(Self::Visible),
@@ -128,7 +128,7 @@ impl Layers {
         }
     }
 
-    fn text(self) -> &'static str {
+    pub(crate) fn text(self) -> &'static str {
         match self {
             Self::Active => key("Active scan"),
             Self::Visible => key("All visible scans"),
@@ -137,7 +137,7 @@ impl Layers {
 }
 
 /// A line of the status bar as an answer of the local API, which starts small.
-fn uncapitalised(reason: &str) -> String {
+pub(crate) fn uncapitalised(reason: &str) -> String {
     let mut letters = reason.chars();
     match letters.next() {
         Some(first) => first.to_lowercase().chain(letters).collect(),
@@ -146,7 +146,7 @@ fn uncapitalised(reason: &str) -> String {
 }
 
 /// A number as it was typed, with a comma or a point.
-fn number(input: &str) -> Option<f64> {
+pub(crate) fn number(input: &str) -> Option<f64> {
     input
         .trim()
         .replace(',', ".")
@@ -165,28 +165,28 @@ fn automatic(input: &str) -> bool {
 /// line and the local API say it in English, the Properties block in the
 /// language in use.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Sentence {
+pub(crate) struct Sentence {
     /// The English sentence, with a `{name}` where a value goes.
     text: &'static str,
     values: Vec<(&'static str, String)>,
 }
 
 impl Sentence {
-    fn plain(text: &'static str) -> Self {
+    pub(crate) fn plain(text: &'static str) -> Self {
         Self {
             text,
             values: Vec::new(),
         }
     }
 
-    fn with(text: &'static str, values: &[(&'static str, String)]) -> Self {
+    pub(crate) fn with(text: &'static str, values: &[(&'static str, String)]) -> Self {
         Self {
             text,
             values: values.to_vec(),
         }
     }
 
-    fn english(&self) -> String {
+    pub(crate) fn english(&self) -> String {
         let mut filled = self.text.to_owned();
         for (name, value) in &self.values {
             filled = filled.replace(&format!("{{{name}}}"), value);
@@ -194,7 +194,7 @@ impl Sentence {
         filled
     }
 
-    fn translated(&self) -> String {
+    pub(crate) fn translated(&self) -> String {
         let values: Vec<(&str, &dyn fmt::Display)> = self
             .values
             .iter()
@@ -525,7 +525,7 @@ pub(crate) struct Control {
 }
 
 /// The cloud of a layer, and the same cloud with the station of every point.
-type Learned = (Arc<PointCloud>, Arc<PointCloud>);
+pub(crate) type Learned = (Arc<PointCloud>, Arc<PointCloud>);
 
 impl Control {
     /// Keep how far the job is, and stop it when that was asked.
@@ -563,6 +563,35 @@ impl Control {
             total: self.total.load(Ordering::Relaxed),
         }
     }
+}
+
+/// Whether a job has to read the source of a cloud once to learn which
+/// station measured each point: the cloud has stations and does not know.
+pub(crate) fn lacks_scan_ranges(cloud: &PointCloud) -> bool {
+    !cloud.scan_ranges_known() && !cloud.scan_poses.is_empty()
+}
+
+/// The cloud of a layer with the station of every point, read from its
+/// source in one pass; nothing for a cloud that knows them already or has
+/// no stations. `progress` gets the points read and their total, and stops
+/// the pass by returning an error. For a layer with an index the answer is
+/// written to the index cache as well.
+pub(crate) fn with_scan_ranges(
+    cloud: &Arc<PointCloud>,
+    indexed: bool,
+    progress: &mut dyn FnMut(u64, u64) -> Result<(), LoadError>,
+) -> Result<Option<Arc<PointCloud>>, LoadError> {
+    if !lacks_scan_ranges(cloud) {
+        return Ok(None);
+    }
+    let total = cloud.total_points;
+    let mut found = PointCloud::clone(cloud);
+    found.read_scan_ranges(|read| progress(read, total))?;
+    if indexed {
+        // Failing to keep the answer costs the same pass next time.
+        let _ = OctreeIndex::open_cached_if_present(&found, IndexConfig::default());
+    }
+    Ok(Some(Arc::new(found)))
 }
 
 /// The mesh in the frame of its scan: the inverse of
@@ -637,20 +666,19 @@ fn run(input: &JobInput, control: &Control) -> Result<Finished, LoadError> {
     let mut clouds: Vec<Arc<PointCloud>> = Vec::with_capacity(scene.layers.len());
     for layer in &scene.layers {
         let cloud = &layer.cloud;
-        if !input.config.use_stations || cloud.scan_ranges_known() || cloud.scan_poses.is_empty() {
-            clouds.push(Arc::clone(cloud));
-            continue;
-        }
-        let total = cloud.total_points;
-        let mut found = PointCloud::clone(cloud);
-        found.read_scan_ranges(|read| control.report(Stage::Stations, read, total))?;
-        if layer.index.is_some() {
-            // Failing to keep the answer costs the same pass next time.
-            let _ = OctreeIndex::open_cached_if_present(&found, IndexConfig::default());
-        }
-        let found = Arc::new(found);
-        control.learn(cloud, &found);
-        clouds.push(found);
+        let found = match input.config.use_stations {
+            true => with_scan_ranges(cloud, layer.index.is_some(), &mut |read, total| {
+                control.report(Stage::Stations, read, total)
+            })?,
+            false => None,
+        };
+        clouds.push(match found {
+            Some(found) => {
+                control.learn(cloud, &found);
+                found
+            }
+            None => Arc::clone(cloud),
+        });
     }
     let mut resident: Vec<Option<Vec<IndexedPoint>>> = Vec::with_capacity(scene.layers.len());
     for layer in &scene.layers {
@@ -758,9 +786,7 @@ impl ClosedMeshJob {
             .filter(|stage| match stage {
                 Stage::Stations => {
                     input.config.use_stations
-                        && layers.iter().any(|layer| {
-                            !layer.cloud.scan_ranges_known() && !layer.cloud.scan_poses.is_empty()
-                        })
+                        && layers.iter().any(|layer| lacks_scan_ranges(&layer.cloud))
                 }
                 Stage::Reading => layers.iter().any(|layer| layer.index.is_none()),
                 Stage::Simplifying => input.config.simplify_tolerance != Some(0.0),
@@ -1066,12 +1092,22 @@ impl ClosedMeshTool {
         }
     }
 
-    /// The cloud a job reads the stations of a layer from.
-    fn stationed(&self, cloud: &Arc<PointCloud>) -> Arc<PointCloud> {
+    /// The cloud a job reads the stations of a layer from. The Detect faces
+    /// tool asks here too, and keeps what its jobs find with `keep_stations`.
+    pub(crate) fn stationed(&self, cloud: &Arc<PointCloud>) -> Arc<PointCloud> {
         self.stations
             .iter()
             .find(|(of, _)| of.upgrade().is_some_and(|of| Arc::ptr_eq(&of, cloud)))
             .map_or_else(|| Arc::clone(cloud), |(_, found)| Arc::clone(found))
+    }
+
+    /// Keep the clouds whose stations per point a job found out, and forget
+    /// those of layers that were closed.
+    pub(crate) fn keep_stations(&mut self, learned: Vec<Learned>) {
+        self.stations.retain(|(of, _)| of.strong_count() > 0);
+        for (of, found) in learned {
+            self.stations.push((Arc::downgrade(&of), found));
+        }
     }
 
     /// The line of the strip above the scene while a job runs.
@@ -1344,7 +1380,7 @@ fn stage_line(step: Step) -> String {
 /// A value of a choice list with the English text that names it; the list
 /// shows the text in the language in use.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Choice<T> {
+pub(crate) struct Choice<T> {
     value: T,
     text: &'static str,
 }
@@ -1356,11 +1392,11 @@ impl<T> fmt::Display for Choice<T> {
 }
 
 /// A list that chooses one of the values of a setting.
-fn choice_list<'a, T, const N: usize>(
+pub(crate) fn choice_list<'a, T, const N: usize>(
     all: [T; N],
     current: T,
     name: fn(T) -> &'static str,
-    action: fn(T) -> ClosedMeshAction,
+    message: fn(T) -> Message,
 ) -> Element<'a, Message>
 where
     T: Copy + PartialEq + 'static,
@@ -1370,7 +1406,7 @@ where
         text: name(value),
     };
     pick_list(all.map(choice), Some(choice(current)), move |chosen| {
-        Message::ClosedMesh(action(chosen.value))
+        message(chosen.value)
     })
     .text_size(11)
     .padding([2, 4])
@@ -1649,11 +1685,7 @@ impl Studio {
     fn closed_mesh_finished(&mut self, job: ClosedMeshJob, end: ClosedMeshEnd) {
         // The stations a job found are kept however it ended: a cancel or a
         // failure after the pass over the source must not cost it again.
-        let tool = &mut self.closed_mesh;
-        tool.stations.retain(|(of, _)| of.strong_count() > 0);
-        for (of, found) in job.control.take_learned() {
-            tool.stations.push((Arc::downgrade(&of), found));
-        }
+        self.closed_mesh.keep_stations(job.control.take_learned());
         let last = match end {
             ClosedMeshEnd::Done(finished) => {
                 let target = &job.input.scene.target;
@@ -1832,21 +1864,15 @@ impl Studio {
             ),
             opencad_properties::property_control(
                 "Sides",
-                choice_list(
-                    Sides::ALL,
-                    settings.sides,
-                    Sides::text,
-                    ClosedMeshAction::Sides
-                ),
+                choice_list(Sides::ALL, settings.sides, Sides::text, |sides| {
+                    Message::ClosedMesh(ClosedMeshAction::Sides(sides))
+                }),
             ),
             opencad_properties::property_control(
                 "Scans",
-                choice_list(
-                    Layers::ALL,
-                    settings.layers,
-                    Layers::text,
-                    ClosedMeshAction::Layers
-                ),
+                choice_list(Layers::ALL, settings.layers, Layers::text, |layers| {
+                    Message::ClosedMesh(ClosedMeshAction::Layers(layers))
+                }),
             ),
         ]
         .spacing(0)
@@ -2005,12 +2031,12 @@ fn result_rows(report: &ClosedMeshReport, sides: Sides) -> Vec<Element<'static, 
 }
 
 /// The value that follows an option of the command line, by its position.
-fn option_value(arguments: &[OsString], at: usize) -> Option<&str> {
+pub(crate) fn option_value(arguments: &[OsString], at: usize) -> Option<&str> {
     arguments.get(at).and_then(|value| value.to_str())
 }
 
 /// The six limits of a box as the command line gives them.
-fn box_limits(limits: &str) -> Result<Bounds, &'static str> {
+pub(crate) fn box_limits(limits: &str) -> Result<Bounds, &'static str> {
     let values: Vec<f64> = limits
         .split(',')
         .map(|value| value.trim().parse().ok())

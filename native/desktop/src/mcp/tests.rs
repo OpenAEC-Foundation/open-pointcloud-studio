@@ -1112,6 +1112,169 @@ fn section_drawing_is_a_job_with_a_preview_and_a_cancel() {
 }
 
 #[test]
+fn face_detection_is_a_job_with_a_list_a_highlight_an_export_and_a_clear() {
+    let detect = tools::find("detect_faces").unwrap();
+    let set = tools::find("set_face_settings").unwrap();
+    let export = tools::find("export_faces").unwrap();
+    assert_eq!((detect.kind, export.kind), (Kind::Job, Kind::Job));
+    assert_eq!(set.kind, Kind::Command);
+    for tool in [detect, export] {
+        assert!(tool.schema["properties"]["wait_seconds"].is_object());
+        assert!(!tool.read_only());
+    }
+    // Every setting may be left out, and has the limits the block states.
+    assert!(detect.schema.get("required").is_none());
+    let settings = &set.schema["properties"];
+    use crate::faces::{
+        MAX_ANGLE, MAX_FACE_AREA, MAX_TOLERANCE, MIN_ANGLE, MIN_FACE_AREA, MIN_TOLERANCE,
+    };
+    for (name, minimum, maximum) in [
+        ("distance_tolerance", MIN_TOLERANCE, MAX_TOLERANCE),
+        ("angle_tolerance", MIN_ANGLE, MAX_ANGLE),
+        ("min_area", MIN_FACE_AREA, MAX_FACE_AREA),
+    ] {
+        assert_eq!(settings[name]["minimum"], minimum, "{name}");
+        assert_eq!(settings[name]["maximum"], maximum, "{name}");
+    }
+    assert_eq!(settings["layers"]["enum"], json!(["active", "visible"]));
+    assert_eq!(settings["color"]["enum"], json!(["face", "deviation"]));
+    assert_eq!(settings["cylinders"]["type"], "boolean");
+    // A detection takes the settings, and a wait.
+    let mut with_wait = settings.as_object().unwrap().clone();
+    with_wait.insert(
+        "wait_seconds".into(),
+        detect.schema["properties"]["wait_seconds"].clone(),
+    );
+    assert_eq!(detect.schema["properties"], Value::Object(with_wait));
+    // The angle the core takes is the angle the tool takes.
+    let core = |angle: f64| {
+        pointcloud_core::surfaces::SurfaceDetectConfig {
+            angle_tolerance_deg: angle,
+            ..Default::default()
+        }
+        .validate()
+        .is_ok()
+    };
+    assert!(core(MIN_ANGLE) && core(MAX_ANGLE));
+    assert!(!core(MIN_ANGLE - 0.1) && !core(MAX_ANGLE + 0.1));
+
+    let arguments = json!({
+        "distance_tolerance": 0.015, "angle_tolerance": 8, "min_area": 0.5,
+        "cylinders": false, "layers": "visible", "color": "deviation",
+    });
+    schema::validate_arguments(&detect.schema, &arguments).unwrap();
+    schema::validate_arguments(&detect.schema, &json!({})).unwrap();
+    for refused in [
+        json!({"distance_tolerance": 0}),
+        json!({"distance_tolerance": 20}),
+        json!({"angle_tolerance": 60}),
+        json!({"min_area": 0.001}),
+        json!({"layers": "all"}),
+        json!({"color": "residual"}),
+        json!({"voxel": 0.01}),
+    ] {
+        assert!(
+            schema::validate_arguments(&set.schema, &refused).is_err(),
+            "{refused}"
+        );
+    }
+    // The destination names both formats; the list only reads.
+    assert_eq!(export.schema["required"], json!(["path"]));
+    let destination = export.schema["properties"]["path"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(destination.contains(".json") && destination.contains(".obj"));
+    let list = tools::find("list_faces").unwrap();
+    assert!(list.read_only());
+    schema::validate_arguments(&list.schema, &json!({})).unwrap();
+    schema::validate_arguments(&list.schema, &json!({"boundaries": true})).unwrap();
+    let select = tools::find("select_face").unwrap();
+    for accepted in [json!({}), json!({"id": 3}), json!({"id": null})] {
+        schema::validate_arguments(&select.schema, &accepted).unwrap();
+    }
+    for refused in [json!({"id": 0}), json!({"id": "wall"}), json!({"id": 1.5})] {
+        assert!(
+            schema::validate_arguments(&select.schema, &refused).is_err(),
+            "{refused}"
+        );
+    }
+    for name in ["cancel_detect_faces", "clear_faces"] {
+        let tool = tools::find(name).unwrap();
+        assert_eq!(tool.kind, Kind::Command);
+        assert!(tool.schema["properties"].as_object().unwrap().is_empty());
+    }
+    // The job tool tells a caller that these commands answer with a job.
+    let job = tools::find("job").unwrap().description;
+    assert!(job.contains("detect_faces") && job.contains("export_faces"));
+
+    // A detection under way and a faces file being written are work; the
+    // last result and the faces a layer keeps are not.
+    assert_eq!(
+        tools::busy(&json!({"faces": {"job": {"stage": "reading"}, "export_pending": false}})),
+        ["faces"]
+    );
+    assert_eq!(
+        tools::busy(&json!({"faces": {"job": null, "export_pending": true}})),
+        ["faces_export"]
+    );
+    assert!(tools::busy(&json!({"faces": {
+        "job": null, "last": {"state": "complete"}, "export_pending": false,
+        "result": {"count": 7},
+    }}))
+    .is_empty());
+
+    let link = FakeLink::new(|command| {
+        Ok(match command["command"].as_str().unwrap() {
+            "detect_faces" => json!({"ok": true, "accepted": true, "job_id": "f-1"}),
+            "export_faces" => json!({"ok": true, "accepted": true, "job_id": "f-2"}),
+            "job" => json!({"ok": true, "job": {"state": "complete", "count": 7}}),
+            _ => json!({"ok": true}),
+        })
+    });
+    let commands = Arc::clone(&link.commands);
+    let mut waiting = arguments.clone();
+    waiting["wait_seconds"] = json!(5);
+    let answers = session(
+        &[
+            initialize(1, "2025-06-18"),
+            call(2, "set_face_settings", json!({"min_area": 1})),
+            call(3, "detect_faces", waiting),
+            call(4, "list_faces", json!({"boundaries": true})),
+            call(5, "select_face", json!({"id": 2.0})),
+            call(6, "export_faces", json!({"path": "/f/faces.json"})),
+            call(7, "cancel_detect_faces", json!({})),
+            call(8, "clear_faces", json!({})),
+        ],
+        link,
+    );
+    let detected = text_of(&by_id(&answers, 3)["result"], 0);
+    assert_eq!(detected["job"]["count"], 7);
+    assert_eq!(detected["timed_out"], false);
+    assert_eq!(
+        text_of(&by_id(&answers, 6)["result"], 0)["job_id"],
+        "f-2",
+        "without wait_seconds the answer comes at once"
+    );
+    // The number of a face goes out as an integer, as the command reads it.
+    assert_eq!(
+        *commands.lock().unwrap(),
+        [
+            json!({"command": "set_face_settings", "min_area": 1}),
+            json!({
+                "command": "detect_faces", "distance_tolerance": 0.015, "angle_tolerance": 8,
+                "min_area": 0.5, "cylinders": false, "layers": "visible", "color": "deviation",
+            }),
+            json!({"command": "job", "id": "f-1"}),
+            json!({"command": "list_faces", "boundaries": true}),
+            json!({"command": "select_face", "id": 2}),
+            json!({"command": "export_faces", "path": "/f/faces.json"}),
+            json!({"command": "cancel_detect_faces"}),
+            json!({"command": "clear_faces"}),
+        ]
+    );
+}
+
+#[test]
 fn extension_and_file_view_tools_offer_what_the_window_knows() {
     let list = tools::find("list_extensions").unwrap();
     assert_eq!(list.kind, Kind::Command);

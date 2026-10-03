@@ -84,11 +84,12 @@ JSON answer as text (and as `structuredContent` from protocol version
 `2025-06-18`).
 
 Exports, section drawings and their previews, selections, picks, meshes, mesh
-exports, merges and 3D BAG downloads answer at once with a `job_id`.
+exports, face detections, faces exports, merges and 3D BAG downloads answer
+at once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
-edits, meshing (a closed mesh included), mesh export, a section drawing or its preview, merging, a 3D
+edits, meshing (a closed mesh included), mesh export, a face detection, a faces export, a section drawing or its preview, merging, a 3D
 BAG download, point loading for the camera and view snapshots have finished; call it
 after `open`, before `screenshot` when the camera changed, and before
 `export_bcf`. `screenshot` returns MCP image content (`type: "image"`,
@@ -101,7 +102,7 @@ follows when that view is restored.
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `status` | — | State of the window: layers, imports and tasks, camera, viewport size, section box, the Section drawing tool, selection, measurement, views, settings |
+| `status` | — | State of the window: layers (each with its mesh and its detected faces), imports and tasks, camera, viewport size, section box, the Section drawing, Closed mesh and Detect faces tools, selection, measurement, views, settings |
 | `job` | `id` | Reads a background job once |
 | `wait_for_job` | `id`, optional `timeout_seconds` (default 60) | Waits until the job no longer runs |
 | `wait_until_idle` | optional `timeout_seconds` (default 60) | Waits until no work is under way; reports what is still busy |
@@ -164,6 +165,13 @@ follows when that view is restored.
 | `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers`, as for `mesh` | Sets the settings of the Closed mesh block; refused as a whole when one value is |
 | `cancel_mesh` | — | Cancels the mesh job |
 | `export_mesh` | `path` (`.obj`, `.ply` or `.stl`), optional `wait_seconds` | Saves the mesh of the active layer in the format of the extension; job |
+| `set_face_settings` | optional `distance_tolerance` (0.001–0.5 m), `angle_tolerance` (1–45 degrees), `min_area` (0.01–10000 m²), `cylinders`, `layers` (`active` or `visible`), `color` (`face` or `deviation`) | Sets the settings of the Detect faces block and the colouring of the faces that are shown; refused as a whole when one value is |
+| `detect_faces` | the settings of `set_face_settings`, all optional, and `wait_seconds` | Finds the flat faces (floors, ceilings, walls, sloped planes) and the round columns and pipes of the active layer, or of every visible layer that reaches the section box, inside the section box, and keeps them with the active layer beside its mesh; job. The job reports the faces per type, the edges, the voxel used and the points on a face. Settings left out keep what the block has |
+| `cancel_detect_faces` | — | Cancels the running face detection |
+| `list_faces` | optional `boundaries` | The faces of the active layer in scene coordinates: class, plane or axis, area, residuals; with `boundaries` also the outlines and the edges |
+| `select_face` | optional `id` (a number from `list_faces`, or null) | Highlights a face in the viewport and the block, or takes the highlight off |
+| `export_faces` | `path` (`.json` or `.obj`), optional `wait_seconds` | Saves the faces of the active layer in the format of the extension; job |
+| `clear_faces` | — | Removes the faces of the active layer |
 | `export` | `path`, optional `wait_seconds` | Exports the active layer; job |
 | `export_section` | `path`, optional `wait_seconds` | Exports the section box; job |
 | `export_selection` | `path`, optional `wait_seconds` | Exports the selected points; job |

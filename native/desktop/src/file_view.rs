@@ -79,6 +79,8 @@ pub enum FileAction {
     ExportDrawing,
     ExportDecimated,
     ExportMesh,
+    /// Ask where to save the faces detected in the active scan.
+    ExportFaces,
     ExportBcf,
     MergeVisible,
     CancelMerge,
@@ -103,6 +105,7 @@ impl Studio {
             FileAction::ExportDrawing => Message::Drawing(crate::drawing::DrawingAction::Export),
             FileAction::ExportDecimated => Message::Decimate,
             FileAction::ExportMesh => Message::ExportMesh,
+            FileAction::ExportFaces => Message::Faces(crate::faces::FaceAction::Export),
             FileAction::ExportBcf => Message::Views(views::ViewAction::ExportBcf),
             FileAction::MergeVisible => Message::MergeVisible,
             FileAction::CancelMerge => Message::CancelMerge,
@@ -251,6 +254,11 @@ impl Studio {
                 "Surface mesh…",
                 FileAction::ExportMesh,
                 active_cloud.is_some_and(|entry| entry.mesh.is_some()) && !self.mesh_export_pending,
+            ),
+            entry(
+                "Detected faces…",
+                FileAction::ExportFaces,
+                self.faces_entry_enabled(),
             ),
             entry(
                 "Views as BCF…",

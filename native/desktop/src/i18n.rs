@@ -417,6 +417,7 @@ mod tests {
         ("closed_mesh.rs", include_str!("closed_mesh.rs")),
         ("drawing.rs", include_str!("drawing.rs")),
         ("extensions.rs", include_str!("extensions.rs")),
+        ("faces.rs", include_str!("faces.rs")),
         ("file_view.rs", include_str!("file_view.rs")),
         ("i18n.rs", include_str!("i18n.rs")),
         ("measure.rs", include_str!("measure.rs")),

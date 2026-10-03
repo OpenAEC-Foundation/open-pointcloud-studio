@@ -200,6 +200,34 @@ pub enum ApiCommand {
         /// chooses the format.
         path: PathBuf,
     },
+    SetFaceSettings {
+        #[serde(flatten)]
+        options: crate::faces::FaceOptions,
+    },
+    DetectFaces {
+        /// Settings of the Detect faces block; those left out keep what the
+        /// block has.
+        #[serde(flatten)]
+        options: crate::faces::FaceOptions,
+    },
+    CancelDetectFaces,
+    ListFaces {
+        /// Whether every face comes with its outline and the answer with the
+        /// edges between the faces.
+        #[serde(default)]
+        boundaries: bool,
+    },
+    SelectFace {
+        /// The number of the face to highlight; null or absent for none.
+        #[serde(default)]
+        id: Option<u32>,
+    },
+    ExportFaces {
+        /// Absolute destination; its extension (`.json` or `.obj`) chooses
+        /// the format.
+        path: PathBuf,
+    },
+    ClearFaces,
     Export {
         path: PathBuf,
     },

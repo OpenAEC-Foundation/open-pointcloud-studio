@@ -34,8 +34,8 @@ Commands use absolute file paths. They return JSON with `ok: true` or
 `ok: false` and an `error`. File opening returns `accepted: true` as soon as
 the GUI starts loading; poll `status` for the new layer. `open` answers after
 a folder or scan project file has been read on a worker thread, with the list
-of files it started loading. Exports and section drawings return
-`accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
+of files it started loading. Exports, section drawings and face detections
+return `accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
 for a durable `running`, `complete` (with point count), or `failed` result.
 The newest 32 jobs remain queryable even if the GUI status line changes.
 Non-LAS/LAZ imports return an `import_id`; `status.result.imports` lists active
@@ -198,6 +198,209 @@ extension, for a layer without a mesh (`status.result.clouds[].mesh` is
 `null` there), for the source file of the layer as destination, and while
 another mesh export is open or running. `status.result.mesh_export_pending`
 is true while the file is written.
+
+## Detected faces
+
+`detect_faces` finds the flat faces (floors, ceilings, walls and sloped
+planes) and the round columns and pipes in the points inside the section box,
+or in the whole layers when the box is off, as the Detect faces block of
+Properties does. Deleted points and hidden classes are left out. The faces
+are kept with the active layer as a layer of their own beside its mesh, in
+the frame of that layer, so a later `translate` or `scale` takes them along;
+faces the layer had are replaced. The command answers with a `job_id`.
+
+Its fields are the settings of the block. A field that is left out keeps what
+the block has, and a field that is given is put in the block as well.
+`set_face_settings` takes the same fields without starting a job and answers
+with `settings`. Both check the fields together: when one is refused, none is
+taken.
+
+- `distance_tolerance`: how far a point may lie from the plane of its face,
+  in metres, 0.001 to 0.5; 0.02 at the start. The block shows it in
+  millimetres. About three times the noise of the scan or more.
+- `angle_tolerance`: how far the surface at a point may be turned from its
+  face, in degrees, 1 to 45; 10 at the start.
+- `min_area`: smaller faces are not reported, in square metres, 0.01 to
+  10000; 0.25 at the start.
+- `cylinders`: whether round columns and pipes are looked for; true at the
+  start.
+- `layers`: `active` (the start) takes the points of the active layer,
+  `visible` those of every layer whose points are shown and that reaches the
+  section box when the box is on, without layers of 3D BAG buildings. The
+  active layer has to be one of them: it keeps the faces.
+- `color`: how the faces are drawn, for every layer: `face` (the start), one
+  colour per face by its class, or `deviation`, the mean distance of the scan
+  to the face per cell of 5 cm: blue where the scan lies `distance_tolerance`
+  or more behind the face, near white on it, red in front of it.
+
+The other values of a detection are fixed: voxels of 0.03 m to start with, a
+working set of 1,500,000 voxels (a region with more gets voxels of 0.06,
+0.12 m and so on), faces at least 0.15 m wide, an outline grid of 0.05 m,
+gaps closed up to 0.10 m, holes filled below 0.05 m2, and cylinders with a
+radius of 0.01 to 1 m, at least 0.30 m long and scanned over at least 90
+degrees.
+
+The running job, which `status.result.faces.job` holds as well, has
+`operation` (`detect_faces`), `stage`, `completed`, `total`, `fraction` (or
+`null` where the stage has no total), `cancel_requested` and
+`elapsed_seconds`. The stages are `stations` (reading a source once to learn
+which station measured each point, for a layer whose index does not say),
+`loading` (reading a layer without an index of at most 5,000,000 points into
+memory; a larger one is read from its file twice), `reading`, `segmenting`,
+`measuring`, `outlining` and `meshing` (the two meshes of the viewer).
+
+The complete job has, with lengths in metres:
+
+- `count`, `planes`, `cylinders`, and per type `floors`, `ceilings`, `walls`
+  and `sloped`; `edges`, the stretches of line two flat faces share.
+- `voxel_size` as the job ended with it, `coarse` (true when it had to grow,
+  which loses narrow faces and faces close together), `density_doublings`
+  (how often it grew because the points lie far apart) and `note`, a line of
+  text about that or `null`.
+- `points`: `read` (in one pass), `source` (of the region, after the
+  filters), `working` (voxels) and `assigned` (on a face of the result).
+- `region` (`min` and `max` of the box around the points that took part, or
+  `null`), `seconds`, `source` (the file name of the layer that keeps the
+  faces, `null` when it was closed while the job ran) and `kept` (false when
+  nothing was found or that layer was closed: the faces a layer had then stay
+  as they were).
+
+`cancel_detect_faces` stops the job after the step under way; the job becomes
+`cancelled` and the faces of the layer stay as they were.
+
+`status.result.faces` holds `settings` (the fields above; a number that
+cannot be read is `null`), `job` (the running job, or `null`), `last` (how
+the last job ended, as its job reports it, or `null`), `export_pending` (true
+while a faces file is written or its save dialog is open) and `result`, the
+faces of the active layer in figures, or `null`. `status.result.clouds[].faces`
+has those figures for every layer: the fields of a complete job from `count`
+to `seconds` without `note`, and `selected` (the number of the highlighted face or `null`),
+`visible` (the Faces switch of the project list), `drawn` (false when the
+faces are hidden, or do not fit the buffers of the graphics device beside
+the meshes that are shown), `color` and `stale`.
+
+`stale` is `null` for faces that belong to the points as they are, and
+otherwise says why they are out of date: `points` (points of a layer that
+took part were deleted, restored or thinned), `index` (the index such a layer
+was read through was replaced; the first index of a layer that was read
+without one does not count), `scan` (such a layer was removed) or `moved`
+(the faces were made from several layers, and one of them was translated or
+scaled afterwards, so the layers no longer stand together as they did). A
+`translate` or `scale` of a layer does not make faces stale that were made
+from that layer alone: they follow it. Stale faces stay listed, drawn and
+exportable until `detect_faces` or `clear_faces`.
+
+`list_faces` answers with the faces of the active layer in scene coordinates,
+as they stand after a move or scale of the layer: `source`, `count`,
+`selected`, `stale`, `region`, `settings`, `points`, `edge_count` and
+`faces`, each as in the JSON file below. Without `boundaries: true` the faces
+come without their `boundary` and the answer without `edges`. A layer that is
+scaled unequally along its axes lists no cylinders.
+
+`select_face` highlights the face with the number `id` in the viewport and in
+the list of the block, and answers with `selected` and that `face`, outline
+included; without `id`, or with `null`, it takes the highlight off.
+
+`export_faces` saves the faces of the active layer; `path` is an absolute
+destination in a folder that exists, and its extension chooses the format:
+
+- `.json`: the document below.
+- `.obj`: the faces as triangles in one group per face, named
+  `face_0001_wall` after its number and class, with the normal of the face at
+  every corner, and a cylinder as the scanned part of its surface in a group
+  `face_0007_cylinder`.
+
+The complete job has `operation` (`export_faces`), `path`, `format` (`json`
+or `obj`), `planes`, `cylinders`, `edges`, `bytes` and `stale`. The file is
+written to a temporary file first and appears under its name when it is
+complete. The command is refused for a path that is not absolute or has
+another extension, for a folder that does not exist, for the source file of
+an open layer as destination, for a layer without faces and while another
+faces export is open or running.
+
+`clear_faces` removes the faces of the active layer and answers with
+`cleared`, false when it had none.
+
+The JSON file, in scene coordinates and metres:
+
+```text
+{
+  "format": "open-pointcloud-studio-faces",
+  "version": 1,
+  "source": "scan.e57",            file name of the layer, no folder
+  "units": "metres",
+  "region": {"min": [x, y, z], "max": [x, y, z]} or null,
+                                   box round the points that took part
+  "settings": {
+    "distance_tolerance", "angle_tolerance_deg", "min_area",
+    "min_plane_width", "max_gap", "min_hole_area", "cylinders",
+    "voxel_size",                  as used: the size asked for or a doubling
+    "voxel_size_asked",
+    "boundary_cell",               as used
+    "boundary_cell_asked",
+    "coarse": false,               true when the voxels had to grow: narrow
+                                   faces and faces close together are lost
+    "density_doublings": 0         how often they were doubled because the
+                                   points lie far apart
+  },
+  "points": {"read", "source", "working", "assigned"},
+  "faces": [{
+    "id": 1,                       from 1, largest face first
+    "type": "plane",
+    "class": "floor" | "ceiling" | "wall" | "sloped",
+                                   by the direction of the normal alone: a
+                                   table top is a floor, a cabinet front a wall
+    "normal": [x, y, z],           unit, on the side the face was scanned from
+    "normal_from": "stations" | "nearest_station" | "open_side" | "centre",
+    "point": [x, y, z],            a point of the plane
+    "offset": d,                   the plane is normal . x = offset
+    "area", "covered_area", "coverage",
+    "coplanar_group": n,           equal for faces in one plane
+    "boundary": [{                 one entry per connected part
+      "outer": [[x, y, z], ...],   counter-clockwise seen from the normal's
+                                   side; closed, first corner not repeated
+      "holes": [[[x, y, z], ...]]  clockwise
+    }],
+    "residual": {"points", "inliers", "rms", "mean", "mean_abs", "p95", "max"}
+  }, {
+    "id": 7,                       the numbers go on after the planes
+    "type": "cylinder",
+    "axis_start": [x, y, z],       the axis, as far as the surface was scanned
+    "axis_end": [x, y, z],
+    "radius", "diameter", "length",
+    "arc_degrees": a,              how much of the round was scanned
+    "arc_start": [x, y, z],        unit direction from the axis to where that
+                                   arc begins
+    "arc_side": [x, y, z],         unit direction the arc runs towards
+    "seen_from_inside": false,     true for the inside of a round shaft
+    "area",                        of the scanned part
+    "residual": {...}              as for a plane; positive is outside
+  }],
+  "edges": [{"faces": [a, b], "start": [x, y, z], "end": [x, y, z],
+             "length", "angle_deg"}]
+}
+```
+
+The planes come first and then the cylinders, each largest first. Residuals
+are distances of scan points to their face, over the points within three
+distance tolerances of it whose surface runs along the face, and those within
+one tolerance of what stands against it: `points` of them, `inliers` within
+one tolerance; `mean` keeps its sign (positive on the side of the normal),
+the others do not. `angle_deg` of an edge is the angle between its two faces
+on the side their normals point to: 90 in the corner of a room, 270 around
+the corner of a pillar.
+
+`detect_faces` is refused without an active layer (`no active cloud`), for
+an active layer with a scale of zero on an axis (`the scan that keeps the
+faces has a scale of zero`), for a layer that takes part and is still being
+imported or has no points, for a section box that none of the layers reaches, for a value
+outside the limits above and while another detection runs. With
+`layers: "visible"` it is also refused without a visible layer of scan
+points, for an active layer of 3D BAG buildings, and for an active layer
+that is hidden or lies outside the section box. A refused command changes
+nothing in the block. One detection runs at a time; it can run beside a mesh
+job or a section drawing. A job that finds no face is `complete` with
+`count` 0 and `kept` false.
 
 ## Section drawings
 
@@ -509,8 +712,8 @@ when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
-| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, merge or 3D BAG download task's state and result |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
+| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge or 3D BAG download task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |
@@ -569,6 +772,13 @@ when the view is restored.
 | `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers` | Sets the settings of the Closed mesh block atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task, of whatever mode |
 | `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply` or `.stl` path; the extension chooses the format. Returns a job ID |
+| `set_face_settings` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Sets the settings of the Detect faces block atomically: a distance tolerance of 0.001–0.5 m, an angle tolerance of 1–45 degrees, a smallest face of 0.01–10000 m², cylinders on or off, layers `active` or `visible`, and the colouring `face` or `deviation` of the faces that are shown. Returns the `settings` |
+| `detect_faces` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Finds the flat faces and the cylinders in the undeleted points inside the active section box and visible classification filters, with the Detect faces settings and the fields given, and keeps them with the active layer beside its mesh. Returns a job ID; the complete job reports the faces per type, the edges, the voxel used and the points on a face |
+| `cancel_detect_faces` | — | Requests cancellation of the running face detection |
+| `list_faces` | optional `boundaries` | Lists the faces of the active layer in scene coordinates with their class, plane or axis, area and residuals; with `boundaries: true` also their outlines and the edges between them |
+| `select_face` | optional `id` | Highlights the face with that number in the viewport and the block and returns it; without `id` or with `null` takes the highlight off |
+| `export_faces` | `path` | Saves the faces of the active layer in scene coordinates to an absolute `.json` or `.obj` path; the extension chooses the format. Returns a job ID |
+| `clear_faces` | — | Removes the faces of the active layer; `cleared` is false when it had none |
 | `merge_visible` | `path` | Merges the visible LAS/LAZ layers to an absolute `.las` or `.laz` path; returns a job ID |
 | `cancel_merge` | — | Requests cancellation of the running merge task |
 | `bag3d` | `bbox`, `lod`, `path` | Downloads the 3D BAG buildings inside an RD New box `[xmin, ymin, xmax, ymax]` of at most 2 by 2 km at level of detail `1.2`, `1.3` or `2.2` to an absolute `.obj` path in an existing folder and opens them as a layer; returns a job ID |

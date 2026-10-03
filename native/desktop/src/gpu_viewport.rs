@@ -105,16 +105,14 @@ struct MeshKey {
     /// The centre of the scene, which the vertices are relative to.
     center: Option<[f64; 3]>,
     /// Every mesh that is switched on, in the order of the layers, with
-    /// where its layer stands.
+    /// where its layer stands: the mesh of a layer and then its detected
+    /// faces.
     shown: Vec<(Arc<MeshGeometry>, CloudTransform)>,
 }
 
 impl MeshKey {
     fn shown(clouds: &[CloudEntry]) -> impl Iterator<Item = (&Arc<MeshGeometry>, CloudTransform)> {
-        clouds.iter().filter_map(|entry| {
-            let mesh = entry.mesh.as_ref().filter(|_| entry.mesh_visible)?;
-            Some((mesh, entry.transform))
-        })
+        shown_meshes(clouds).map(|(index, _, mesh)| (mesh, clouds[index].transform))
     }
 
     fn capture(clouds: &[CloudEntry], bounds: Option<Bounds>) -> Self {
@@ -155,6 +153,9 @@ struct CloudKey {
     detail: Option<Arc<[IndexedPoint]>>,
     deleted: Option<Arc<DeletionMask>>,
     mesh: Option<Arc<MeshGeometry>>,
+    /// The mesh of the detected faces as it is shown: nothing while the
+    /// faces are switched off.
+    faces: Option<Arc<MeshGeometry>>,
     visible: bool,
     mesh_visible: bool,
 }
@@ -179,6 +180,7 @@ impl SceneKey {
                     detail: entry.detail_points.clone(),
                     deleted: entry.deleted.clone(),
                     mesh: entry.mesh.clone(),
+                    faces: shown_faces(entry).cloned(),
                     visible: entry.visible,
                     mesh_visible: entry.mesh_visible,
                 })
@@ -226,6 +228,11 @@ impl CloudKey {
             && same_arc(&self.detail, &entry.detail_points)
             && same_arc(&self.deleted, &entry.deleted)
             && same_arc(&self.mesh, &entry.mesh)
+            && match (&self.faces, shown_faces(entry)) {
+                (Some(kept), Some(shown)) => Arc::ptr_eq(kept, shown),
+                (None, None) => true,
+                _ => false,
+            }
             && self.visible == entry.visible
             && self.mesh_visible == entry.mesh_visible
     }
@@ -266,13 +273,70 @@ fn meshes_that_fit(sizes: impl IntoIterator<Item = (usize, usize, usize)>) -> Ve
     taken
 }
 
+/// What a mesh of a layer is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeshPart {
+    /// The mesh the layer holds: from a mesh job or from its file.
+    Surface,
+    /// The faces detected in the layer, in the colouring that was chosen.
+    Faces,
+}
+
+/// The mesh of the detected faces of a layer, when they are switched on.
+fn shown_faces(entry: &CloudEntry) -> Option<&Arc<MeshGeometry>> {
+    entry
+        .faces
+        .as_ref()
+        .and_then(crate::faces::FaceLayer::shown)
+}
+
+/// Every mesh that is switched on, with the place of its layer: per layer
+/// its own mesh and then its detected faces.
+fn shown_meshes(
+    clouds: &[CloudEntry],
+) -> impl Iterator<Item = (usize, MeshPart, &Arc<MeshGeometry>)> {
+    clouds.iter().enumerate().flat_map(|(index, entry)| {
+        let surface = entry.mesh.as_ref().filter(|_| entry.mesh_visible);
+        [
+            surface.map(|mesh| (index, MeshPart::Surface, mesh)),
+            shown_faces(entry).map(|mesh| (index, MeshPart::Faces, mesh)),
+        ]
+        .into_iter()
+        .flatten()
+    })
+}
+
+/// The meshes that are drawn: every one that is switched on, in the order
+/// of `shown_meshes`, as long as it fits the buffers beside those before it.
+fn drawn(clouds: &[CloudEntry]) -> Vec<(usize, MeshPart, &Arc<MeshGeometry>)> {
+    let shown: Vec<_> = shown_meshes(clouds).collect();
+    let fit = meshes_that_fit(
+        shown
+            .iter()
+            .enumerate()
+            .map(|(place, (_, _, mesh))| (place, mesh.vertices.len(), mesh.triangles.len())),
+    );
+    fit.into_iter().map(|place| shown[place]).collect()
+}
+
+fn drawn_part(clouds: &[CloudEntry], part: MeshPart) -> Vec<usize> {
+    drawn(clouds)
+        .into_iter()
+        .filter(|(_, drawn, _)| *drawn == part)
+        .map(|(index, _, _)| index)
+        .collect()
+}
+
 /// The layers whose mesh is drawn: every mesh that is switched on, in the
 /// order of the layers, as long as it fits the buffers.
 pub(crate) fn drawn_meshes(clouds: &[CloudEntry]) -> Vec<usize> {
-    meshes_that_fit(clouds.iter().enumerate().filter_map(|(index, entry)| {
-        let mesh = entry.mesh.as_deref().filter(|_| entry.mesh_visible)?;
-        Some((index, mesh.vertices.len(), mesh.triangles.len()))
-    }))
+    drawn_part(clouds, MeshPart::Surface)
+}
+
+/// The layers whose detected faces are drawn. They share the buffers with
+/// the meshes, so they are counted with them.
+pub(crate) fn drawn_faces(clouds: &[CloudEntry]) -> Vec<usize> {
+    drawn_part(clouds, MeshPart::Faces)
 }
 
 impl<'a> GpuViewport<'a> {
@@ -341,13 +405,11 @@ impl<'a> GpuViewport<'a> {
         let mut mesh_indices = Vec::new();
         if let Some(overall_bounds) = overall_bounds {
             let center = overall_bounds.center();
-            for index in drawn_meshes(self.overlay.clouds) {
+            for (index, _, mesh) in drawn(self.overlay.clouds) {
                 let entry = &self.overlay.clouds[index];
-                let Some(mesh) = entry.mesh.as_deref() else {
-                    continue;
-                };
-                // What `drawn_meshes` lets through stays far below the range
-                // of a 32-bit index.
+                let mesh: &MeshGeometry = mesh;
+                // What `drawn` lets through stays far below the range of a
+                // 32-bit index.
                 let Ok(base) = u32::try_from(mesh_vertices.len()) else {
                     break;
                 };
@@ -1598,6 +1660,47 @@ mod tests {
         studio.clouds[0].mesh_visible = false;
         studio.clouds[2].mesh_visible = true;
         assert_eq!(drawn_meshes(&studio.clouds), [2]);
+
+        // The detected faces of a layer are one more mesh in the same
+        // buffers: after the mesh of their layer, and counted with the
+        // meshes. Faces that are switched off take no room.
+        let faces = |vertices: usize, visible: bool| {
+            let mesh = MeshGeometry {
+                vertices: vec![[0.0; 3]; vertices],
+                triangles: vec![[0, 1, 2]],
+                colors: None,
+                normals: None,
+            };
+            Some(crate::faces::FaceLayer::showing(Arc::new(mesh), visible))
+        };
+        assert!(drawn_faces(&studio.clouds).is_empty());
+        studio.clouds[1].faces = faces(3, true);
+        studio.clouds[2].faces = faces(3, true);
+        studio.clouds[0].faces = faces(3, false);
+        let order: Vec<(usize, MeshPart)> = drawn(&studio.clouds)
+            .into_iter()
+            .map(|(index, part, _)| (index, part))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                (1, MeshPart::Faces),
+                (2, MeshPart::Surface),
+                (2, MeshPart::Faces)
+            ]
+        );
+        assert_eq!(drawn_meshes(&studio.clouds), [2]);
+        assert_eq!(drawn_faces(&studio.clouds), [1, 2]);
+        // Faces that fill the buffer leave no room for what comes after
+        // them, and faces that do not fit are left out themselves while the
+        // smaller meshes after them are still drawn.
+        studio.clouds[1].faces = faces(MAX_DRAWN_MESH_VERTICES, true);
+        assert_eq!(drawn_faces(&studio.clouds), [1]);
+        assert!(drawn_meshes(&studio.clouds).is_empty());
+        studio.clouds[1].faces = None;
+        studio.clouds[1].faces = faces(MAX_DRAWN_MESH_VERTICES + 1, true);
+        assert_eq!(drawn_faces(&studio.clouds), [2]);
+        assert_eq!(drawn_meshes(&studio.clouds), [2]);
     }
 
     #[test]
@@ -1625,6 +1728,7 @@ mod tests {
             mesh: None,
             mesh_topology: None,
             mesh_visible: false,
+            faces: None,
             bag_source: false,
             visible: true,
             selection: None,
@@ -1783,6 +1887,40 @@ mod tests {
         let hidden = draw(&studio);
         assert!(!Arc::ptr_eq(&replaced.geometry.mesh, &hidden.geometry.mesh));
         assert!(hidden.geometry.mesh.indices.is_empty());
+
+        // Detected faces are drawn as one more mesh, placed with their
+        // layer, and go when they are switched off.
+        let square = Arc::new(MeshGeometry {
+            vertices: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            triangles: vec![[0, 1, 2], [0, 2, 3]],
+            colors: Some(vec![[0, 255, 0]; 4]),
+            normals: Some(vec![[0.0, 0.0, 1.0]; 4]),
+        });
+        studio.clouds[0].faces = Some(crate::faces::FaceLayer::showing(square, true));
+        let with_faces = draw(&studio);
+        assert!(!Arc::ptr_eq(&hidden.geometry, &with_faces.geometry));
+        assert_eq!(with_faces.geometry.mesh.indices, [0, 1, 2, 0, 2, 3]);
+        assert_eq!(
+            with_faces.geometry.mesh.vertices[0].color,
+            [0.0, 1.0, 0.0, 0.82]
+        );
+        // The layer is scaled by two along Y: so are its faces.
+        let corner = with_faces.geometry.mesh.vertices[2].relative;
+        let origin = with_faces.geometry.mesh.vertices[0].relative;
+        assert_eq!([corner[0] - origin[0], corner[1] - origin[1]], [1.0, 2.0]);
+        // Beside the mesh of the layer they come second.
+        studio.clouds[0].mesh_visible = true;
+        let both = draw(&studio);
+        assert_eq!(both.geometry.mesh.indices, [0, 1, 2, 3, 4, 5, 3, 5, 6]);
+        studio.clouds[0].mesh_visible = false;
+        studio.clouds[0].faces = None;
+        let without = draw(&studio);
+        assert!(without.geometry.mesh.indices.is_empty());
     }
 
     #[test]
