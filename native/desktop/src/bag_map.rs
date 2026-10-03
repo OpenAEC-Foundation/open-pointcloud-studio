@@ -146,12 +146,14 @@ impl MapView {
     }
 }
 
+/// The map service is told the same name and version as the building
+/// service, so both see which release asks.
+const TILE_USER_AGENT: &str = pointcloud_core::BAG3D_USER_AGENT;
+
 pub fn fetch_tiles(keys: Vec<TileKey>) -> TileBatch {
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(12))
-        .user_agent(
-            "OpenPointcloudStudio/0.1 (native Rust; https://github.com/OpenAEC-Foundation/open-pointcloud-studio)",
-        )
+        .user_agent(TILE_USER_AGENT)
         .build()
     {
         Ok(client) => client,
@@ -399,5 +401,41 @@ mod tests {
         let bounds = map.rectangle(Point::new(80.0, 60.0), Point::new(180.0, 150.0));
         assert!((bounds.max_x - bounds.min_x - 168.0).abs() < 0.001);
         assert!((bounds.max_y - bounds.min_y - 151.2).abs() < 0.001);
+    }
+
+    #[test]
+    fn map_service_is_told_the_version_of_the_application() {
+        // The name `fetch_tiles` gives its client.
+        let agent = TILE_USER_AGENT;
+        assert!(
+            agent.starts_with(concat!(
+                "OpenPointcloudStudio/",
+                env!("CARGO_PKG_VERSION"),
+                " "
+            )),
+            "{agent}"
+        );
+    }
+
+    /// Asks the real map service, so it is not part of the normal run. Run it
+    /// by hand before a release, together with the check of the building
+    /// service: `cargo test --workspace -- --ignored live_services`
+    #[test]
+    #[ignore = "needs the network and the public PDOK map service"]
+    fn live_services_serve_a_map_tile_as_a_png() {
+        let map = MapView {
+            center: [121_000.0, 487_000.0],
+            zoom: 11,
+            width: WIDTH,
+            height: HEIGHT,
+        };
+        let key = map.visible_tiles()[0];
+        let batch = fetch_tiles(vec![key]);
+        assert_eq!(batch.len(), 1);
+        let (answered, bytes) = &batch[0];
+        assert_eq!(*answered, key);
+        let bytes = bytes.as_ref().expect("the tile is served");
+        let tile = ::image::load_from_memory_with_format(bytes, ::image::ImageFormat::Png).unwrap();
+        assert_eq!((tile.width(), tile.height()), (256, 256));
     }
 }

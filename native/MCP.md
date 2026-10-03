@@ -83,15 +83,19 @@ command of the same name with the same arguments, and return the window's
 JSON answer as text (and as `structuredContent` from protocol version
 `2025-06-18`).
 
-Exports, selections, picks, meshes and merges answer at once with a `job_id`.
+Exports, selections, picks, meshes, merges and 3D BAG downloads answer at
+once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
-edits, point loading for the camera and view snapshots have finished; call it
+edits, meshing, mesh export, merging, a 3D BAG download, point loading for the
+camera and view snapshots have finished; call it
 after `open`, before `screenshot` when the camera changed, and before
 `export_bcf`. `screenshot` returns MCP image content (`type: "image"`,
 `mimeType: "image/png"`, base64 data) followed by a text part with the image
-size. While the window is minimised there is no picture to take: `screenshot`
+size. While the File view or Settings covers the model, `screenshot` answers
+with an error; `file_view` with `open: false` returns to the model. While the
+window is minimised there is no picture to take: `screenshot`
 then answers with an error, and the snapshot of a view saved meanwhile
 follows when that view is restored.
 
@@ -164,6 +168,11 @@ follows when that view is restored.
 | `export_minus_selection` | `path`, optional `wait_seconds` | Exports all but the selected points; job |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |
 | `cancel_merge` | — | Cancels the merge |
+| `bag3d` | `bbox` (`[xmin, ymin, xmax, ymax]` in RD New, at most 2 by 2 km), `lod` (`1.2`, `1.3` or `2.2`), `path` (`.obj`), optional `wait_seconds` | Downloads the 3D BAG buildings of an area and opens them as a layer; job |
+| `cancel_bag3d` | — | Cancels the 3D BAG download |
+| `list_extensions` | — | Built-in optional features and whether each is enabled |
+| `set_extension_enabled` | `id` (`bag3d`), `enabled` | Switches a built-in optional feature on or off; kept for later sessions, unless the answer has `saved: false` with `save_error` |
+| `file_view` | `open`, optional `page` (`workspace`, `extensions` or `about`) | Opens the File view, on a page, or returns to the model |
 | `list_instances` | — | Running windows and the one in use |
 | `select_instance` | `pid` or `port`, at least one | Chooses the window to drive |
 | `start_instance` | optional `files` | Starts a new window and chooses it |

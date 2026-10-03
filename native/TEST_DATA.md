@@ -468,6 +468,12 @@ The saved OBJ reopened in the final dev build beside the native map, with
 the building extent fitted in RD and both PDOK and 3DBAG credits visible:
 [`native-3dbag-native-map-final.png`](../screenshots/native-3dbag-native-map-final.png).
 
+The scan project tests of `desktop/src/project_open.rs` build their project
+containers in memory: a ZIP with an XML document that lists scan names and
+relative paths, beside empty files named like scans (`Hall 2.e57`) and like
+the indexed copies a project keeps (`Office Support/Hall 1.rcs`). No project
+of a real survey is needed for them.
+
 The three AHN6 tiles were also opened together in the native desktop: the
 status bar reported 129,398,587 source points. A viewport box selection
 scanned all three original LAZ files and selected exactly 59,914,918 points
@@ -1084,3 +1090,40 @@ also uses a light neutral color when the source has no RGB field.
 The rebuilt dev GUI also reopened the public 160,838-point
 [pye57 test scan](../screenshots/native-current-e57-neutral-rgb.png) in RGB mode
 with its four scanner positions visible.
+
+## Checking the 3D BAG and map services before a release
+
+The tests of the building client and of the map are offline: they serve
+hand-written CityJSONFeatures pages and never ask a service. Both services
+belong to others and can change, so the steps below are repeated by hand
+before each release. Write the date and the outcome under them.
+
+1. `curl -s https://api.3dbag.nl/` and follow the link with rel
+   `service-desc` (`https://api.3dbag.nl/api`). The parameters of
+   `/collections/pand/items` are `bbox` (4 or 6 numbers), `bbox-crs` (only
+   EPSG:7415), `limit` (default 10, maximum 100) and `offset` (minimum 1).
+2. `curl -sD - "https://api.3dbag.nl/collections/pand/items?bbox=121000,487000,121100,487100&limit=2"`
+   answers 200 `application/json` with `Content-Crs` EPSG:7415 and the keys
+   `features`, `links`, `metadata`, `numberMatched`, `numberReturned` and
+   `type`; `metadata.transform` has `scale` and `translate`, and the `next`
+   link is an absolute address on `api.3dbag.nl` with `offset` and `limit`.
+3. `curl -s https://service.pdok.nl/kadaster/brt-achtergrondkaart/wmts/v2_0/WMTSCapabilities.xml`
+   lists the layer `grijs` with the TileMatrixSet `EPSG:28992`, levels 00 to
+   14, top-left corner `-285401.92 903401.92` and scale denominator 12288000
+   at level 00 (3440.64 m per pixel), which are the constants of
+   `desktop/src/bag_map.rs`.
+4. `cargo test --workspace -- --ignored live_services` runs the two tests
+   that ask the real services and are skipped otherwise:
+   `live_services_answer_in_the_expected_shape` in `core/src/bag3d.rs` (the
+   keys and the transform of a page, the page plan from `numberMatched`, and
+   that `limit=1000` still returns 100 city objects with a link to the rest)
+   and `live_services_serve_a_map_tile_as_a_png` in
+   `desktop/src/bag_map.rs` (one level-11 tile is a 256 by 256 PNG).
+5. End to end: `open-pointcloud-studio --bag3d 91440,398430,91460,398450 2.2 out.obj`
+   writes one building, and in the built application File > 3D BAG
+   buildings…, a drawn area of about 235 by 218 m in central Amsterdam,
+   Download at LoD 2.2 and a second download cancelled midway. Screenshots
+   show public data only: the map and the buildings.
+
+Last run: _date and outcome, to be filled in by the person who runs the
+steps_.

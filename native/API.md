@@ -49,6 +49,50 @@ version, point layout, coordinate grid and metadata; incompatible CRS metadata
 is rejected instead of silently choosing one. Poll its job or
 `status.result.merge` for processed and written point counts. `cancel_merge`
 stops the task and leaves an existing destination unchanged.
+`bag3d` downloads the buildings of the Dutch 3D BAG register inside a box and
+opens them as a mesh layer, as the 3D BAG panel does, which File > 3D BAG
+buildings… opens. `bbox` is `[xmin, ymin, xmax, ymax]` in RD New (EPSG:28992)
+with sides longer than 0 and at most 2,000 m, `lod` is `1.2`, `1.3` or `2.2`,
+and `path` is an absolute `.obj` destination in a folder that exists; the
+file is georeferenced in RD New + NAP and carries the attribution of the
+register. The command needs an internet connection and answers with a
+`job_id`. While the download runs, its job and
+`status.result.bag3d` hold `page` (the pages read), `pages` (the pages the
+area needs, or `null` while the service has not said), `buildings`, `lod`,
+`path`, `cancel_requested` and `elapsed_seconds`; `status.result.bag3d` is
+`null` when no download runs. The complete job has `buildings`, `vertices`,
+`triangles`, `pages` and `path`. A page holds about fifty buildings and a
+download takes at most a hundred pages, so an area with more than about 5,000
+buildings fails after the first page with the number of buildings it holds;
+an area whose buildings are too detailed for a mesh of one million vertices
+fails after a few pages. A box outside the area of RD New and a destination
+whose folder does not exist are refused before anything is asked.
+`cancel_bag3d` stops the download once the request under
+way has ended; the job becomes `cancelled` and an existing destination stays
+as it was. Only one download runs at a time. While the extension is switched
+off the command answers `extension bag3d is disabled`.
+`list_extensions` lists the optional features built into the application in
+`extensions`: for each its `id`, `name`, `version` (the version of the
+application), `description`, `author`, `category`, `builtin` (always true: no
+code from another source is loaded), `uses_network` and `enabled`.
+`set_extension_enabled` switches one on or off and keeps that in
+`extensions.json` in the configuration directory; an unknown `id` is refused.
+The answer holds `id`, `enabled` and `saved`. When `saved` is false the file
+could not be written: the switch holds for this session only and `save_error`
+says why. Switching `bag3d` off closes its panel, stops a running download
+and disables its entry in the File view.
+`file_view` opens the File view over the model or closes it. With
+`open: true` an optional `page` (`workspace`, `extensions` or `about`) chooses
+the page; without it the view opens on `workspace`, or keeps the page it
+shows. The answer holds `file_view` with `open` and `page`, as
+`status.result.file_view` does; `page` is `null` while the view is closed. The
+3D BAG panel is not part of the File view and is not opened by this command.
+A `page` with `open: false`, an unknown page, and opening while the Settings
+dialog is open are refused. The Settings dialog is not opened or closed
+through this API.
+`status.result.mesh_export_pending` is true from the moment the window asks
+where to save a mesh from the File view or Properties until that file has
+been written.
 For large clouds, `scale` returns `running: true`. Poll `status.result.scale`
 for processed and total source points; it becomes `null` when the transform
 finishes or is cancelled. `cancel_scale` stops the scan without applying the
@@ -158,15 +202,16 @@ is true. Without a `path` the image is returned as base64; with a `path` only
 when `base64` is true as well. An image whose longer edge exceeds `max_edge`
 (16–8192, default 1920 pixels) is scaled down. A file that exists at `path`
 is replaced. The command fails while the File view or Settings covers the
-viewport, and while the window is minimised (`"the window is minimised;
+viewport (`file_view` with `open: false` returns to the model), and while the
+window is minimised (`"the window is minimised;
 restore it to take a screenshot"`); a view snapshot due meanwhile is taken
 when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, `detail_pending` while the viewport reads points for its camera, and current status text |
-| `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
-| `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found), `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
+| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
+| `job` | `id` | Reads an export, selection, mesh, merge or 3D BAG download task's state and result |
+| `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |
 | `set_active` | `index` | Chooses the active layer |
@@ -224,6 +269,11 @@ when the view is restored.
 | `cancel_mesh` | — | Requests cancellation of the running mesh task |
 | `merge_visible` | `path` | Merges the visible LAS/LAZ layers to an absolute `.las` or `.laz` path; returns a job ID |
 | `cancel_merge` | — | Requests cancellation of the running merge task |
+| `bag3d` | `bbox`, `lod`, `path` | Downloads the 3D BAG buildings inside an RD New box `[xmin, ymin, xmax, ymax]` of at most 2 by 2 km at level of detail `1.2`, `1.3` or `2.2` to an absolute `.obj` path in an existing folder and opens them as a layer; returns a job ID |
+| `cancel_bag3d` | — | Requests cancellation of the running 3D BAG download |
+| `list_extensions` | — | Lists the built-in optional features and whether each is enabled |
+| `set_extension_enabled` | `id`, `enabled` | Switches a built-in optional feature (`bag3d`) on or off and persists that; `saved` in the answer is false, with `save_error`, when it could not be persisted |
+| `file_view` | `open`, optional `page` | Opens the File view, on the page `workspace`, `extensions` or `about` when one is named, or closes it and returns to the model |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |

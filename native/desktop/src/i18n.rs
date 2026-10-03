@@ -190,6 +190,25 @@ pub fn tr(text: &str) -> &str {
         .map_or(text, String::as_str)
 }
 
+/// A text in the language in use, with every `{name}` in it replaced by the
+/// value given for that name. A text with numbers in it is translated as one
+/// sentence, so each language puts the numbers where it needs them.
+pub fn tr_args(text: &str, values: &[(&str, &dyn fmt::Display)]) -> String {
+    let mut filled = tr(text).to_owned();
+    for (name, value) in values {
+        filled = filled.replace(&format!("{{{name}}}"), &value.to_string());
+    }
+    filled
+}
+
+/// Whether every table has an entry for a text, for tests of texts that
+/// reach `tr` through a constant rather than as a literal. `tr` itself falls
+/// back to English, so its answer does not show a missing entry.
+#[cfg(test)]
+pub(crate) fn has_entry(text: &str) -> bool {
+    tables().iter().all(|table| table.contains_key(text))
+}
+
 /// Marks an English text that is translated where it is shown rather than
 /// here, such as a label in a table of rows. It returns the text unchanged;
 /// the mark lets the test of the tables find the text.
@@ -393,7 +412,9 @@ mod tests {
     /// texts is one line here.
     const SOURCES: &[(&str, &str)] = &[
         ("main.rs", include_str!("main.rs")),
+        ("bag_panel.rs", include_str!("bag_panel.rs")),
         ("cli_help.rs", include_str!("cli_help.rs")),
+        ("extensions.rs", include_str!("extensions.rs")),
         ("file_view.rs", include_str!("file_view.rs")),
         ("i18n.rs", include_str!("i18n.rs")),
         ("measure.rs", include_str!("measure.rs")),
@@ -415,6 +436,7 @@ mod tests {
     /// `key` marks a text that is translated where it is shown.
     const TRANSLATING: &[(&str, usize)] = &[
         ("tr", 0),
+        ("tr_args", 0),
         ("key", 0),
         // main.rs
         ("small_tool_button", 0),
@@ -528,6 +550,43 @@ mod tests {
         assert_eq!(table_for_locale("en-US"), None);
         assert_eq!(table_for_locale("nln"), None);
         assert_eq!(table_for_locale(""), None);
+    }
+
+    /// The `{name}` marks of a text, which `tr_args` fills in.
+    fn placeholders(text: &str) -> BTreeSet<&str> {
+        text.split('{')
+            .skip(1)
+            .filter_map(|rest| rest.split_once('}'))
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    #[test]
+    fn values_are_filled_into_a_translated_sentence() {
+        let _language = TestLanguage::hold(Language::Table(0));
+        let (page, pages) = (3, 12);
+        let filled = tr_args(
+            "Page {page} of {pages} · {buildings} buildings",
+            &[("page", &page), ("pages", &pages), ("buildings", &140)],
+        );
+        assert_eq!(filled, "Pagina 3 van 12 · 140 gebouwen");
+        set(Language::English);
+        assert_eq!(
+            tr_args("Page {page} · {buildings} buildings", &[("page", &page)]),
+            "Page 3 · {buildings} buildings",
+            "a name without a value stays visible"
+        );
+        // A translation that drops or renames a mark would show it unfilled.
+        for (table, texts) in TABLES.iter().zip(tables()) {
+            for (english, translated) in texts {
+                assert_eq!(
+                    placeholders(english),
+                    placeholders(translated),
+                    "{}: {english}",
+                    table.code
+                );
+            }
+        }
     }
 
     /// The texts of `literals` that a table has no entry for, with their file.

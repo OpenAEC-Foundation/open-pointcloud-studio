@@ -199,6 +199,26 @@ pub enum ApiCommand {
         path: PathBuf,
     },
     CancelMerge,
+    Bag3d {
+        /// The area as `[xmin, ymin, xmax, ymax]` in RD New (EPSG:28992).
+        bbox: [f64; 4],
+        /// `1.2`, `1.3` or `2.2`.
+        lod: String,
+        path: PathBuf,
+    },
+    CancelBag3d,
+    ListExtensions,
+    SetExtensionEnabled {
+        id: String,
+        enabled: bool,
+    },
+    FileView {
+        open: bool,
+        /// The page to show, with `open: true`; without it the File view
+        /// opens on its first page or keeps the page it shows.
+        #[serde(default)]
+        page: Option<String>,
+    },
     Screenshot {
         /// Absolute `.png` path to write the image to.
         path: Option<PathBuf>,

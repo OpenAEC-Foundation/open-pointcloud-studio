@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Map, Value};
 
 use super::schema::{
-    boolean, choice, integer_in, list, number_in, object, optional, ordinal, path, pixel, positive,
-    required, text, validate_arguments, whole_numbers_as_integers, xyz, Argument,
+    boolean, choice, integer_in, list, number_in, numbers, object, optional, ordinal, path, pixel,
+    positive, required, text, validate_arguments, whole_numbers_as_integers, xyz, Argument,
 };
 
 /// Where tool calls go: the command API of a running window, and the
@@ -57,6 +57,7 @@ impl Tool {
             "status"
                 | "job"
                 | "list_camera_views"
+                | "list_extensions"
                 | "list_instances"
                 | "wait_for_job"
                 | "wait_until_idle"
@@ -153,6 +154,7 @@ const POINT_FILE: &str = "Absolute destination path; its extension (.ply, .xyz, 
 const LAS_FILE: &str = "Absolute destination path ending in .las or .laz";
 const OBJ_FILE: &str = "Absolute destination path ending in .obj";
 const BCF_FILE: &str = "Absolute destination path ending in .bcf";
+const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (EPSG:28992, metres): each side longer than 0 and at most 2000";
 
 /// Every tool, in the order `tools/list` gives them. A new command API
 /// command needs one entry here; `Kind::Command` and `Kind::Job` tools send
@@ -160,18 +162,18 @@ const BCF_FILE: &str = "Absolute destination path ending in .bcf";
 fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
-        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, selection and measurement, saved views and annotations, display settings and the status line.", vec![]),
-        tool("job", Command, "Reads a background job by the job_id that an export, select_world, pick_screen, mesh or merge_visible returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
+        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view) and the status line.", vec![]),
+        tool("job", Command, "Reads a background job by the job_id that an export, select_world, pick_screen, mesh, merge_visible or bag3d returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
         tool("wait_for_job", WaitForJob, "Waits until a background job is no longer running and returns it, polling it four times a second. Answers with timed_out: true and the running job when the time is up.", vec![
             required("id", text("The job_id", 1, 64)),
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, merging, station photos, view snapshots or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
+        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, merging, 3D BAG download, station photos, view snapshots or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load. The text part gives the width and height in pixels. Fails while the window is minimised.", vec![
+        tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load. The text part gives the width and height in pixels. Fails while the window is minimised, and while the File view or Settings covers the viewport; file_view with open false returns to the model.", vec![
             optional("path", path("Absolute path ending in .png where the image is also written")),
             optional("max_edge", integer_in("Longest edge of the image in pixels, from 16 to 8192; default 1920. A larger viewport is scaled down", 16, 8192)),
         ]),
@@ -347,6 +349,21 @@ fn table() -> Vec<Tool> {
             required("path", path(LAS_FILE)),
         ]),
         tool("cancel_merge", Command, "Cancels the running merge.", vec![]),
+        tool("bag3d", Job, "Downloads the buildings of the Dutch 3D BAG register inside a box in RD New coordinates of at most 2 by 2 km and about 5,000 buildings, writes them as a georeferenced OBJ mesh and opens that as a layer. Needs an internet connection. Answers with a job_id; the running job reports the page it is at, the complete job the buildings, vertices, triangles and pages. A denser area fails after the first page with the number of buildings it holds.", vec![
+            required("bbox", numbers(RD_BOX, 4)),
+            required("lod", choice("Level of detail of the building models", &["1.2", "1.3", "2.2"])),
+            required("path", path(OBJ_FILE)),
+        ]),
+        tool("cancel_bag3d", Command, "Cancels the running 3D BAG download; the request under way ends first, and an existing file at the destination is left as it is.", vec![]),
+        tool("list_extensions", Command, "Lists the optional features built into the application (id, name, version, description, author, category, whether it uses the internet) and whether each is enabled.", vec![]),
+        tool("set_extension_enabled", Command, "Switches a built-in optional feature on or off and keeps that for later sessions. When the answer has saved false the choice could not be written and holds for this session only; save_error says why. Switching bag3d off closes its panel, stops a running download and makes the bag3d tool fail.", vec![
+            required("id", choice("Id of the extension, as list_extensions gives it", &crate::extensions::ids())),
+            required("enabled", boolean("Whether the extension is switched on")),
+        ]),
+        tool("file_view", Command, "Opens the File view over the model, on a page when one is named, or closes it and returns to the model. A screenshot needs it closed. Opening is refused while the Settings dialog is open.", vec![
+            required("open", boolean("true to show the File view, false to return to the model")),
+            optional("page", choice("Page to show, only with open true; without it the view opens on workspace, or keeps the page it shows", &crate::file_view::FilePage::ids())),
+        ]),
         tool("list_instances", ListInstances, "Lists the running Open Pointcloud Studio windows (process ID, port, version, start time) and which one the tools drive.", vec![]),
         at_least_one(tool("select_instance", SelectInstance, "Chooses the running window that the other tools drive, by process ID or port (at least one of them) as list_instances gives them.", vec![
             optional("pid", integer_in("Process ID", 1, u64::from(u32::MAX))),
@@ -574,6 +591,7 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
         ("scale", "scale"),
         ("mesh", "mesh"),
         ("merge", "merge"),
+        ("bag3d", "bag3d"),
     ] {
         if result[key].is_object() {
             busy.push(name);
@@ -583,6 +601,7 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
         ("selection_pending", "selection"),
         ("selection_bounds_pending", "selection_bounds"),
         ("thin_pending", "thin"),
+        ("mesh_export_pending", "mesh_export"),
         ("detail_pending", "points"),
     ] {
         if result[key] == true {

@@ -9,11 +9,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod bag_map;
+mod bag_panel;
 mod bcf;
 mod camera_views;
 mod cli_help;
 mod cloud_centroid;
 mod cloud_transform;
+mod extensions;
 mod file_view;
 mod gpu_viewport;
 mod i18n;
@@ -39,15 +41,15 @@ mod ui_theme;
 mod view_cube;
 mod views;
 
-use bag_map::{BagMap, MapView, TileKey};
+use bag_map::{MapView, TileKey};
 use cloud_transform::CloudTransform;
 use file_view::{FileAction, FilePage};
 use iced::futures::SinkExt;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
 use iced::widget::{
-    button, checkbox, column, container, image, pick_list, row, scrollable, slider, stack, svg,
-    text, text_input, tooltip,
+    button, checkbox, column, container, row, scrollable, slider, stack, svg, text, text_input,
+    tooltip,
 };
 use iced::{Color, Element, Fill, Font, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 use lod_pace::{
@@ -532,6 +534,9 @@ fn main() -> iced::Result {
         eprintln!("{} scan file(s)", expansion.files.len());
         if expansion.missing > 0 {
             eprintln!("{} listed scan(s) not found", expansion.missing);
+            for name in &expansion.missing_names {
+                eprintln!("  {name}");
+            }
         }
         for error in &expansion.errors {
             eprintln!("{error}");
@@ -901,6 +906,9 @@ fn main() -> iced::Result {
         .subscription(|studio| {
             let keyboard = iced::event::listen_with(|event, status, _| match event {
                 iced::Event::Window(iced::window::Event::Resized(_)) => Some(Message::RibbonReset),
+                // The window is closed by the application itself, so work
+                // that is under way is asked to stop first.
+                iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::Exit),
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                     Some(Message::FileDropped(path))
                 }
@@ -1041,6 +1049,8 @@ fn main() -> iced::Result {
                 application_id: APPLICATION_ID.into(),
                 ..Default::default()
             },
+            // Closing arrives as `Message::Exit`, like Exit in the File view.
+            exit_on_close_request: false,
             ..iced::window::Settings::default()
         })
         .run_with(move || {
@@ -1499,6 +1509,8 @@ enum Message {
     ),
     MeshExported(Result<(PathBuf, usize, usize), String>),
     ToggleBagPanel,
+    /// Open the 3D BAG panel when it is closed.
+    ShowBagPanel,
     BagField(usize, String),
     BagLod(BagLod),
     BagFromSection,
@@ -1513,8 +1525,12 @@ enum Message {
     OpenPdokLicense,
     BagDownload,
     BagPathChosen(BagBounds, BagLod, Option<PathBuf>),
+    BagPoll,
+    CancelBag,
     BagReady(Result<(PathBuf, pointcloud_core::BagStats), String>),
     OpenBagLicense,
+    /// Switch a built-in extension, named by its id, on or off.
+    ExtensionEnabled(&'static str, bool),
     TranslateX(String),
     TranslateY(String),
     TranslateZ(String),
@@ -1664,8 +1680,12 @@ struct Studio {
     bag_panel: bool,
     bag_fields: [String; 4],
     bag_lod: BagLod,
-    bag_pending: bool,
+    /// The save dialog of a download is open.
+    bag_dialog_pending: bool,
+    bag_job: Option<bag_panel::BagJob>,
     bag_last_stats: Option<pointcloud_core::BagStats>,
+    /// Why the last download failed, until the next one starts.
+    bag_last_error: Option<String>,
     bag_map_center: [f64; 2],
     bag_map_zoom: u8,
     bag_map_drawing: bool,
@@ -1727,6 +1747,8 @@ struct Studio {
     file_open: bool,
     /// The page the File view shows.
     file_page: FilePage,
+    /// Which built-in optional features are switched on.
+    extensions: extensions::Extensions,
     ui_theme: UiTheme,
     settings_revision: u64,
     box_select: bool,
@@ -2079,8 +2101,10 @@ impl Default for Studio {
             bag_panel: false,
             bag_fields: std::array::from_fn(|_| String::new()),
             bag_lod: BagLod::Lod22,
-            bag_pending: false,
+            bag_dialog_pending: false,
+            bag_job: None,
             bag_last_stats: None,
+            bag_last_error: None,
             bag_map_center: [121_000.0, 487_000.0],
             bag_map_zoom: 11,
             bag_map_drawing: false,
@@ -2145,6 +2169,7 @@ impl Default for Studio {
             ribbon_viewport: None,
             file_open: false,
             file_page: FilePage::default(),
+            extensions: extensions::Extensions::load(),
             ui_theme: UiTheme::load(),
             settings_revision: 0,
             box_select: false,
@@ -2886,6 +2911,10 @@ impl Studio {
                 // fields are added to the answer here.
                 answer.0["result"]["detail_pending"] = Value::Bool(self.detail_pending);
                 answer.0["result"]["language"] = Value::from(i18n::choice().key());
+                answer.0["result"]["bag3d"] =
+                    json!(self.bag_job.as_ref().map(bag_panel::BagJob::progress_value));
+                answer.0["result"]["mesh_export_pending"] = Value::Bool(self.mesh_export_pending);
+                answer.0["result"]["file_view"] = self.file_view_value();
                 answer
             }
             ApiCommand::Job { id } => {
@@ -2896,6 +2925,15 @@ impl Studio {
                 {
                     (
                         json!({"ok": true, "job": merge.progress_value()}),
+                        Task::none(),
+                    )
+                } else if let Some(download) = self
+                    .bag_job
+                    .as_ref()
+                    .filter(|job| job.api_job_id() == Some(id.as_str()))
+                {
+                    (
+                        json!({"ok": true, "job": download.progress_value()}),
                         Task::none(),
                     )
                 } else if let Some(job) = self.api_jobs.get(&id) {
@@ -3681,6 +3719,18 @@ impl Studio {
                     (json!({"ok": true, "cancel_requested": true}), task)
                 }
             }
+            ApiCommand::Bag3d { bbox, lod, path } => self.api_bag3d(bbox, &lod, path),
+            ApiCommand::CancelBag3d => (self.api_cancel_bag3d(), Task::none()),
+            ApiCommand::ListExtensions => (
+                json!({"ok": true, "extensions": self.extensions.list()}),
+                Task::none(),
+            ),
+            ApiCommand::SetExtensionEnabled { id, enabled } => {
+                (self.api_set_extension_enabled(&id, enabled), Task::none())
+            }
+            ApiCommand::FileView { open, page } => {
+                (self.api_file_view(open, page.as_deref()), Task::none())
+            }
             ApiCommand::Screenshot {
                 path,
                 base64,
@@ -3898,6 +3948,23 @@ impl Studio {
             return Err("all visible layers must be LAS or LAZ scans".into());
         }
         Ok(sources)
+    }
+
+    /// Ask every job on a worker thread to stop. Leaving the application
+    /// waits for those threads, so without this the process would outlive
+    /// its window until a download, a merge, a mesh or an import has ended.
+    /// Each of them leaves an existing destination as it was.
+    fn stop_background_work(&mut self) {
+        self.cancel_bag();
+        if let Some(job) = &self.merge_job {
+            job.control.cancelled.store(true, Ordering::Relaxed);
+        }
+        if let Some(job) = &self.mesh_job {
+            job.control.cancelled.store(true, Ordering::Relaxed);
+        }
+        for job in self.imports.values() {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
     }
 
     fn start_merge_job(
@@ -4763,7 +4830,10 @@ impl Studio {
                     self.status = format!("Could not open {url}: {error}");
                 }
             }
-            Message::Exit => return iced::exit(),
+            Message::Exit => {
+                self.stop_background_work();
+                return iced::exit();
+            }
             Message::RibbonScroll(direction) => {
                 return scrollable::scroll_by(
                     ribbon_scroll_id(),
@@ -4857,6 +4927,7 @@ impl Studio {
                         "path": path,
                         "files": expansion.files,
                         "missing": expansion.missing,
+                        "missing_names": expansion.missing_names,
                         "already_open": expansion.already_open,
                         "errors": expansion.errors,
                         "import_id": import_ids.last(),
@@ -5608,51 +5679,15 @@ impl Studio {
                     Err(error) => format!("Mesh export failed: {error}"),
                 };
             }
-            Message::ToggleBagPanel => {
-                self.bag_panel = !self.bag_panel;
-                if self.bag_panel {
-                    let prefill = if self.bag_fields.iter().all(String::is_empty) {
-                        self.update(Message::BagFromSection)
-                    } else {
-                        Task::none()
-                    };
-                    return Task::batch([prefill, self.schedule_bag_map()]);
-                }
-            }
+            Message::ToggleBagPanel => return self.set_bag_panel(!self.bag_panel),
+            Message::ShowBagPanel => return self.set_bag_panel(true),
             Message::BagField(index, value) => {
                 if let Some(field) = self.bag_fields.get_mut(index) {
                     *field = value;
                 }
             }
             Message::BagLod(lod) => self.bag_lod = lod,
-            Message::BagFromSection => {
-                let bounds = self.section_bounds().or_else(|| {
-                    self.active
-                        .and_then(|index| self.clouds.get(index))
-                        .map(CloudEntry::bounds)
-                });
-                if let Some(bounds) = bounds {
-                    self.bag_fields = [
-                        format!("{:.2}", bounds.min[0]),
-                        format!("{:.2}", bounds.min[1]),
-                        format!("{:.2}", bounds.max[0]),
-                        format!("{:.2}", bounds.max[1]),
-                    ];
-                    self.status = "3DBAG area copied from scan / section box".into();
-                    let mut view = self.bag_map_view();
-                    view.fit(BagBounds {
-                        min_x: bounds.min[0],
-                        min_y: bounds.min[1],
-                        max_x: bounds.max[0],
-                        max_y: bounds.max[1],
-                    });
-                    self.bag_map_center = view.center;
-                    self.bag_map_zoom = view.zoom;
-                    return self.schedule_bag_map();
-                } else {
-                    self.status = "Draw an area on the map or enter RD coordinates".into();
-                }
-            }
+            Message::BagFromSection => return self.bag_from_section(),
             Message::BagMapDraw(enabled) => {
                 self.bag_map_drawing = enabled;
                 self.status = if enabled {
@@ -5675,7 +5710,10 @@ impl Studio {
                         bounds.max_x - bounds.min_x,
                         bounds.max_y - bounds.min_y
                     ),
-                    Err(error) => format!("Selected area: {error}"),
+                    Err(error) => format!(
+                        "Selected area: {}",
+                        bag_panel::plain_reason(&error.to_string())
+                    ),
                 };
             }
             Message::BagMapPan(delta) => {
@@ -5693,16 +5731,7 @@ impl Studio {
                     return self.schedule_bag_map();
                 }
             }
-            Message::BagMapFitFields => match BagBounds::parse(&self.bag_fields.join(",")) {
-                Ok(bounds) => {
-                    let mut view = self.bag_map_view();
-                    view.fit(bounds);
-                    self.bag_map_center = view.center;
-                    self.bag_map_zoom = view.zoom;
-                    return self.schedule_bag_map();
-                }
-                Err(error) => self.status = format!("Map area: {error}"),
-            },
+            Message::BagMapFitFields => return self.bag_fit_fields(),
             Message::BagMapHome => {
                 self.bag_map_center = [121_000.0, 487_000.0];
                 self.bag_map_zoom = 11;
@@ -5777,65 +5806,16 @@ impl Studio {
                     self.status = format!("Could not open PDOK license: {error}");
                 }
             }
-            Message::BagDownload => {
-                if self.bag_pending {
-                    return Task::none();
-                }
-                let bbox = self.bag_fields.join(",");
-                let bounds = match BagBounds::parse(&bbox) {
-                    Ok(bounds) => bounds,
-                    Err(error) => {
-                        self.status = format!("3DBAG area: {error}");
-                        return Task::none();
-                    }
-                };
-                let lod = self.bag_lod;
-                self.status = "Choose where to save the 3DBAG OBJ…".into();
-                return Task::perform(
-                    async {
-                        rfd::AsyncFileDialog::new()
-                            .add_filter("Wavefront OBJ", &["obj"])
-                            .set_file_name("3dbag-buildings.obj")
-                            .save_file()
-                            .await
-                            .map(|selection| selection.path().to_path_buf())
-                    },
-                    move |path| Message::BagPathChosen(bounds, lod, path),
-                );
+            Message::BagDownload => return self.bag_download(),
+            Message::BagPathChosen(bounds, lod, path) => {
+                return self.bag_path_chosen(bounds, lod, path)
             }
-            Message::BagPathChosen(bounds, lod, Some(path)) => {
-                self.bag_pending = true;
-                self.status = format!("Downloading 3DBAG LoD {lod} buildings…");
-                return Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            pointcloud_core::fetch_bag3d_obj(bounds, lod, &path)
-                                .map(|stats| (path, stats))
-                                .map_err(|error| error.to_string())
-                        })
-                        .await
-                        .map_err(|error| error.to_string())
-                        .and_then(|result| result)
-                    },
-                    Message::BagReady,
-                );
-            }
-            Message::BagPathChosen(_, _, None) => {
-                self.status = "3DBAG save cancelled".into();
-            }
-            Message::BagReady(result) => {
-                self.bag_pending = false;
-                match result {
-                    Ok((path, stats)) => {
-                        self.bag_last_stats = Some(stats);
-                        let task = self.load(path);
-                        self.status = format!(
-                            "3DBAG downloaded: {} buildings, {} triangles from {} page(s)",
-                            stats.buildings, stats.triangles, stats.pages
-                        );
-                        return task;
-                    }
-                    Err(error) => self.status = format!("3DBAG failed: {error}"),
+            Message::BagPoll => return self.bag_poll(),
+            Message::CancelBag => self.cancel_bag(),
+            Message::BagReady(result) => return self.bag_ready(result),
+            Message::ExtensionEnabled(id, enabled) => {
+                if let Err(error) = self.set_extension_enabled(id, enabled) {
+                    self.status = error;
                 }
             }
             Message::OpenBagLicense => {
@@ -7764,7 +7744,7 @@ impl Studio {
         let numbers = self
             .bag_fields
             .each_ref()
-            .map(|field| field.parse::<f64>().ok());
+            .map(|field| field.trim().parse::<f64>().ok());
         let [Some(min_x), Some(min_y), Some(max_x), Some(max_y)] = numbers else {
             return None;
         };
@@ -8606,143 +8586,6 @@ impl Studio {
             .width(255)
             .height(Fill)
             .style(sidebar_style)
-            .into()
-    }
-
-    fn bag_panel_view(&self) -> Element<'_, Message> {
-        let map = stack![
-            image(self.bag_map_raster.clone())
-                .width(Fill)
-                .height(bag_map::HEIGHT)
-                .content_fit(iced::ContentFit::Fill),
-            Canvas::new(BagMap {
-                center: self.bag_map_center,
-                zoom: self.bag_map_zoom,
-                drawing: self.bag_map_drawing,
-                selected: self.bag_fields_bounds(),
-            })
-            .width(Fill)
-            .height(bag_map::HEIGHT),
-        ]
-        .width(Fill)
-        .height(bag_map::HEIGHT);
-        let mut panel = column![
-            row![
-                text(i18n::tr("3D BAG"))
-                    .size(15)
-                    .font(Font::with_name("Space Grotesk"))
-                    .width(Fill),
-                button("×")
-                    .on_press(Message::ToggleBagPanel)
-                    .style(flat_tool_style),
-            ]
-            .align_y(iced::Alignment::Center),
-            text(i18n::tr("Download buildings in RD New + NAP (EPSG:7415)."))
-                .size(11)
-                .color(self.ui_theme.colors().muted),
-            container(map)
-                .width(Fill)
-                .height(bag_map::HEIGHT)
-                .clip(true),
-            row![
-                button(if self.bag_map_drawing {
-                    i18n::tr("Cancel draw")
-                } else {
-                    i18n::tr("Draw area")
-                })
-                .on_press(Message::BagMapDraw(!self.bag_map_drawing))
-                .style(flat_tool_style),
-                button(i18n::tr("Fit area"))
-                    .on_press(Message::BagMapFitFields)
-                    .style(flat_tool_style),
-                button(i18n::tr("Amsterdam"))
-                    .on_press(Message::BagMapHome)
-                    .style(flat_tool_style),
-            ]
-            .spacing(6),
-            row![
-                button("−")
-                    .on_press(Message::BagMapZoom(
-                        -1.0,
-                        UiPoint::new(bag_map::WIDTH * 0.5, bag_map::HEIGHT * 0.5),
-                    ))
-                    .style(flat_tool_style),
-                button("+")
-                    .on_press(Message::BagMapZoom(
-                        1.0,
-                        UiPoint::new(bag_map::WIDTH * 0.5, bag_map::HEIGHT * 0.5),
-                    ))
-                    .style(flat_tool_style),
-                text(i18n::tr("Drag to pan · scroll to zoom")).size(10),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
-            row![
-                text(i18n::tr("© Kadaster (BRT) via PDOK · CC BY 4.0")).size(10),
-                button(i18n::tr("License ↗"))
-                    .on_press(Message::OpenPdokLicense)
-                    .style(flat_tool_style),
-            ]
-            .spacing(5)
-            .align_y(iced::Alignment::Center),
-            button(i18n::tr("Use scan / section box"))
-                .on_press(Message::BagFromSection)
-                .style(flat_tool_style),
-        ]
-        .spacing(10)
-        .padding(12)
-        .width(Fill);
-        for (index, label) in [
-            i18n::key("X min"),
-            i18n::key("Y min"),
-            i18n::key("X max"),
-            i18n::key("Y max"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let label = i18n::tr(label);
-            panel = panel.push(
-                column![
-                    text(label).size(11),
-                    text_input(label, &self.bag_fields[index])
-                        .on_input(move |value| Message::BagField(index, value))
-                        .width(Fill),
-                ]
-                .spacing(3),
-            );
-        }
-        panel = panel
-            .push(text(i18n::tr("Level of detail")).size(11))
-            .push(
-                pick_list(BagLod::ALL, Some(self.bag_lod), Message::BagLod)
-                    .style(themed_pick_list_style),
-            )
-            .push(
-                button(if self.bag_pending {
-                    i18n::tr("Downloading…")
-                } else {
-                    i18n::tr("Download OBJ")
-                })
-                .on_press_maybe((!self.bag_pending).then_some(Message::BagDownload))
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status)),
-            );
-        if let Some(stats) = self.bag_last_stats {
-            panel = panel.push(
-                text(format!(
-                    "{} buildings · {} triangles · {} pages",
-                    stats.buildings, stats.triangles, stats.pages
-                ))
-                .size(11),
-            );
-        }
-        panel
-            .push(text(i18n::tr("© 3DBAG by tudelft3d and 3DGI")).size(10))
-            .push(
-                button(i18n::tr("CC BY 4.0 · source and license ↗"))
-                    .on_press(Message::OpenBagLicense)
-                    .style(flat_tool_style),
-            )
             .into()
     }
 

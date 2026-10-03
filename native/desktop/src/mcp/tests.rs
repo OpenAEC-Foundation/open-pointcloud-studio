@@ -231,13 +231,16 @@ fn tools_list_gives_every_tool_a_closed_object_schema() {
         .unwrap()
         .clone();
     assert_eq!(by_id(&answers, 2)["error"]["code"], INVALID_PARAMS);
-    assert!(listed.len() >= 69, "{} tools", listed.len());
+    assert!(listed.len() >= 75, "{} tools", listed.len());
     let mut names = std::collections::HashSet::new();
     for tool in &listed {
         let name = tool["name"].as_str().unwrap();
         assert!(names.insert(name), "{name} is listed once");
         assert!(
-            name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            name.starts_with(|c: char| c.is_ascii_lowercase())
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
             "{name} is snake_case"
         );
         assert!(tool["description"].as_str().unwrap().len() > 20, "{name}");
@@ -675,6 +678,132 @@ fn wait_until_idle_follows_the_status() {
         ),
         ["imports", "mesh", "thin", "photos", "snapshots"]
     );
+    // A download of buildings and the writing of a mesh file are work too.
+    assert_eq!(
+        tools::busy(&json!({"bag3d": {"page": 1}, "mesh_export_pending": true})),
+        ["bag3d", "mesh_export"]
+    );
+    assert!(tools::busy(&json!({"bag3d": null, "mesh_export_pending": false})).is_empty());
+}
+
+#[test]
+fn building_download_is_a_job_with_a_box_a_detail_level_and_a_destination() {
+    let tool = tools::find("bag3d").unwrap();
+    assert_eq!(tool.kind, Kind::Job);
+    assert!(!tool.read_only());
+    assert_eq!(tool.schema["required"], json!(["bbox", "lod", "path"]));
+    assert!(tool.schema["properties"]["wait_seconds"].is_object());
+    assert_eq!(
+        tool.schema["properties"]["lod"]["enum"],
+        json!(["1.2", "1.3", "2.2"])
+    );
+    let area = json!([121000, 487000, 121100, 487100]);
+    let arguments = json!({"bbox": area, "lod": "2.2", "path": "/b.obj"});
+    schema::validate_arguments(&tool.schema, &arguments).unwrap();
+    for refused in [
+        json!({"bbox": [121000, 487000, 121100], "lod": "2.2", "path": "/b.obj"}),
+        json!({"bbox": area, "lod": "3", "path": "/b.obj"}),
+        json!({"bbox": area, "lod": "2.2"}),
+    ] {
+        assert!(
+            schema::validate_arguments(&tool.schema, &refused).is_err(),
+            "{refused}"
+        );
+    }
+    assert_eq!(tools::find("cancel_bag3d").unwrap().kind, Kind::Command);
+
+    let link = FakeLink::new(|command| {
+        Ok(match command["command"].as_str().unwrap() {
+            "bag3d" => json!({"ok": true, "accepted": true, "job_id": "b-1"}),
+            "job" => json!({"ok": true, "job": {"state": "complete", "buildings": 44}}),
+            _ => json!({"ok": true}),
+        })
+    });
+    let commands = Arc::clone(&link.commands);
+    let mut waiting = arguments.clone();
+    waiting["wait_seconds"] = json!(5);
+    let answers = session(
+        &[
+            initialize(1, "2025-06-18"),
+            call(2, "bag3d", waiting),
+            call(3, "cancel_bag3d", json!({})),
+        ],
+        link,
+    );
+    let download = text_of(&by_id(&answers, 2)["result"], 0);
+    assert_eq!(download["job"]["buildings"], 44);
+    assert_eq!(download["timed_out"], false);
+    assert_eq!(
+        *commands.lock().unwrap(),
+        [
+            json!({"command": "bag3d", "bbox": area, "lod": "2.2", "path": "/b.obj"}),
+            json!({"command": "job", "id": "b-1"}),
+            json!({"command": "cancel_bag3d"}),
+        ]
+    );
+}
+
+#[test]
+fn extension_and_file_view_tools_offer_what_the_window_knows() {
+    let list = tools::find("list_extensions").unwrap();
+    assert_eq!(list.kind, Kind::Command);
+    assert!(list.read_only());
+    let switch = tools::find("set_extension_enabled").unwrap();
+    assert!(!switch.read_only());
+    assert_eq!(switch.schema["required"], json!(["id", "enabled"]));
+    assert_eq!(
+        switch.schema["properties"]["id"]["enum"],
+        json!(crate::extensions::ids())
+    );
+    schema::validate_arguments(&switch.schema, &json!({"id": "bag3d", "enabled": false})).unwrap();
+    assert!(
+        schema::validate_arguments(&switch.schema, &json!({"id": "other", "enabled": false}))
+            .is_err()
+    );
+
+    let view = tools::find("file_view").unwrap();
+    assert_eq!(view.kind, Kind::Command);
+    assert_eq!(view.schema["required"], json!(["open"]));
+    assert_eq!(
+        view.schema["properties"]["page"]["enum"],
+        json!(crate::file_view::FilePage::ids())
+    );
+    schema::validate_arguments(&view.schema, &json!({"open": false})).unwrap();
+    schema::validate_arguments(&view.schema, &json!({"open": true, "page": "extensions"})).unwrap();
+    assert!(schema::validate_arguments(&view.schema, &json!({"page": "about"})).is_err());
+    assert!(
+        schema::validate_arguments(&view.schema, &json!({"open": true, "page": "settings"}))
+            .is_err()
+    );
+
+    let link = FakeLink::ok();
+    let commands = Arc::clone(&link.commands);
+    let answers = session(
+        &[
+            initialize(1, "2025-06-18"),
+            call(2, "file_view", json!({"open": true, "page": "extensions"})),
+            call(
+                3,
+                "set_extension_enabled",
+                json!({"id": "bag3d", "enabled": false}),
+            ),
+            call(4, "list_extensions", json!({})),
+            call(5, "file_view", json!({"open": false})),
+        ],
+        link,
+    );
+    for id in 2..=5 {
+        assert_eq!(by_id(&answers, id)["result"]["isError"], false, "{id}");
+    }
+    assert_eq!(
+        *commands.lock().unwrap(),
+        [
+            json!({"command": "file_view", "open": true, "page": "extensions"}),
+            json!({"command": "set_extension_enabled", "id": "bag3d", "enabled": false}),
+            json!({"command": "list_extensions"}),
+            json!({"command": "file_view", "open": false}),
+        ]
+    );
 }
 
 #[test]
@@ -811,7 +940,7 @@ fn table_names(document: &str) -> Vec<&str> {
 #[test]
 fn every_api_command_has_a_tool_and_every_tool_is_documented() {
     let commands = table_names(include_str!("../../../API.md"));
-    assert!(commands.len() >= 60);
+    assert!(commands.len() >= 70);
     for command in commands {
         let tool = tools::find(command).unwrap_or_else(|| panic!("no tool for {command}"));
         assert!(matches!(

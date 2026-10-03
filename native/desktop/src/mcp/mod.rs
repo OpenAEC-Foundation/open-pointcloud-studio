@@ -19,6 +19,9 @@ use std::thread;
 
 use serde_json::{json, Value};
 
+// The tests of the window hold what it reports against what a wait looks at.
+#[cfg(test)]
+pub(crate) use tools::busy;
 use tools::{CallError, Link, Outcome};
 
 /// Protocol versions this server speaks, newest first.

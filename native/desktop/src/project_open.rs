@@ -23,6 +23,14 @@ pub const SCAN_EXTENSIONS: [&str; 15] = [
 /// the scans of one project.
 pub const PROJECT_EXTENSION: &str = "rcp";
 
+/// Extension of the indexed copy a project keeps of each scan. Its format is
+/// closed and has no public specification, so these files are recognised by
+/// name and never read.
+const INDEXED_COPY_EXTENSION: &str = "rcs";
+
+/// How many missing scans the status line names before it counts the rest.
+const NAMED_MISSING_SCANS: usize = 3;
+
 /// The project document is about 100 KB in practice; anything far beyond that
 /// is not a project document and is refused instead of being read into memory.
 const MAX_PROJECT_XML_BYTES: u64 = 16 * 1024 * 1024;
@@ -37,6 +45,8 @@ pub struct Expansion {
     pub files: Vec<PathBuf>,
     /// Scans listed by a project file that were not found on disk.
     pub missing: usize,
+    /// The names of those scans, in the order the project lists them.
+    pub missing_names: Vec<String>,
     /// Scans left out because they are already open.
     pub already_open: usize,
     /// Chosen paths that could not be used, each with its reason.
@@ -65,8 +75,9 @@ impl Expansion {
         let mut notes = Vec::new();
         if self.missing > 0 {
             notes.push(format!(
-                "{} not found",
-                counted(self.missing, "listed scan")
+                "{} not found{}",
+                counted(self.missing, "listed scan"),
+                self.named_missing()
             ));
         }
         if self.already_open > 0 {
@@ -81,6 +92,30 @@ impl Expansion {
                 format!("Opening {}; {}", counted(count, "scan"), notes.join("; "))
             }
         }
+    }
+}
+
+impl Expansion {
+    /// The first missing scans by name, in brackets, so the user knows which
+    /// files to put beside the project; empty when no name is known.
+    fn named_missing(&self) -> String {
+        let named: Vec<&str> = self
+            .missing_names
+            .iter()
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .collect();
+        if named.is_empty() {
+            return String::new();
+        }
+        let shown = named.len().min(NAMED_MISSING_SCANS);
+        let mut text = named[..shown].join(", ");
+        // Scans without a name are among the rest.
+        let rest = self.missing.max(named.len()) - shown;
+        if rest > 0 {
+            text.push_str(&format!(" and {rest} more"));
+        }
+        format!(" ({text})")
     }
 }
 
@@ -107,7 +142,8 @@ pub fn expand(paths: &[PathBuf], already_open: &[PathBuf]) -> Expansion {
                 .map_err(|error| format!("Cannot list folder {}: {error}", path.display())),
             Ok(_) if has_extension(path, &[PROJECT_EXTENSION]) => {
                 scans_in_project(path, &mut listings).map(|(files, missing)| {
-                    expansion.missing += missing;
+                    expansion.missing += missing.len();
+                    expansion.missing_names.extend(missing);
                     files
                 })
             }
@@ -232,15 +268,19 @@ fn read_listing(directory: &Path) -> io::Result<Vec<Listed>> {
 struct Listings(HashMap<PathBuf, Vec<Listed>>);
 
 impl Listings {
-    /// The entry of `directory` with this name, preferring an exact match
-    /// over one that differs in letter case. A folder that cannot be listed
-    /// has no entries.
-    fn find(&mut self, directory: &Path, name: &str) -> Option<&Listed> {
+    /// The entries of `directory`. A folder that cannot be listed has none.
+    fn entries(&mut self, directory: &Path) -> &[Listed] {
         if !self.0.contains_key(directory) {
             let listing = read_listing(directory).unwrap_or_default();
             self.0.insert(directory.to_path_buf(), listing);
         }
-        let listing = &self.0[directory];
+        &self.0[directory]
+    }
+
+    /// The entry of `directory` with this name, preferring an exact match
+    /// over one that differs in letter case.
+    fn find(&mut self, directory: &Path, name: &str) -> Option<&Listed> {
+        let listing = self.entries(directory);
         let folded = name.to_lowercase();
         listing
             .iter()
@@ -269,12 +309,12 @@ struct ListedScan {
     relative: Option<String>,
 }
 
-/// The existing scan files a project file lists, and how many of its scans
-/// were not found.
+/// The existing scan files a project file lists, and the names of its scans
+/// that were not found.
 fn scans_in_project(
     project: &Path,
     listings: &mut Listings,
-) -> Result<(Vec<PathBuf>, usize), String> {
+) -> Result<(Vec<PathBuf>, Vec<String>), String> {
     let scans = File::open(project)
         .map_err(|error| error.to_string())
         .and_then(|file| read_listed_scans(&mut BufReader::new(file)))
@@ -295,7 +335,7 @@ fn scans_in_project(
         _ => Path::new("."),
     };
     let mut files = Vec::new();
-    let mut missing = 0;
+    let mut missing = Vec::new();
     for scan in &scans {
         let resolved = scan
             .relative
@@ -303,10 +343,63 @@ fn scans_in_project(
             .and_then(|relative| resolve_relative(directory, relative, listings));
         match resolved.or_else(|| resolve_by_name(directory, &scan.name, listings)) {
             Some(file) => files.push(file),
-            None => missing += 1,
+            None => missing.push(scan.name.clone()),
         }
     }
+    // "N listed scans not found" would send the user looking for files that
+    // are there: the project has its scans, only in a form that is not read.
+    if files.is_empty() && indexed_copies_present(directory, project, &scans, listings) {
+        return Err(format!(
+            "Scan project file {} lists {}, present only as indexed copies \
+             (.{INDEXED_COPY_EXTENSION}). That format cannot be read; put the scans as E57, \
+             LAS or LAZ files named after the scans beside the project file",
+            project.display(),
+            counted(scans.len(), "scan")
+        ));
+    }
     Ok((files, missing))
+}
+
+/// Whether the project keeps indexed copies of its scans: files with that
+/// extension named after a listed scan, beside the project file or in the
+/// folder such a project conventionally has for them, `<project name>
+/// Support`. Only these two listings are looked at; a project laid out
+/// differently is not searched.
+fn indexed_copies_present(
+    directory: &Path,
+    project: &Path,
+    scans: &[ListedScan],
+    listings: &mut Listings,
+) -> bool {
+    // A copy counts only when it is named after a scan of this project:
+    // another project in the same folder may keep its copies there too.
+    let names: HashSet<String> = scans
+        .iter()
+        .map(|scan| scan.name.trim().to_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect();
+    let holds_copies = |entries: &[Listed]| {
+        entries.iter().any(|entry| {
+            let name = Path::new(&entry.folded);
+            entry.is_file
+                && has_extension(name, &[INDEXED_COPY_EXTENSION])
+                && name
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| names.contains(stem))
+        })
+    };
+    if holds_copies(listings.entries(directory)) {
+        return true;
+    }
+    let support = project
+        .file_stem()
+        .map(|stem| format!("{} Support", stem.to_string_lossy()))
+        .and_then(|name| {
+            let entry = listings.find(directory, &name)?;
+            entry.is_dir.then(|| directory.join(&entry.name))
+        });
+    support.is_some_and(|folder| holds_copies(listings.entries(&folder)))
 }
 
 /// Follow a stored relative path from the project folder, matching every
@@ -748,9 +841,10 @@ mod tests {
                 ]
             );
             assert_eq!(expansion.missing, 1);
+            assert_eq!(expansion.missing_names, ["Garden"]);
             assert_eq!(
                 expansion.summary(),
-                "Opening 4 scans; 1 listed scan not found"
+                "Opening 4 scans; 1 listed scan not found (Garden)"
             );
         }
     }
@@ -773,7 +867,134 @@ mod tests {
         assert_eq!(expansion.missing, 2);
         assert_eq!(
             expansion.summary(),
-            "No scans opened: 2 listed scans not found"
+            format!(
+                "No scans opened: 2 listed scans not found (Remote, {})",
+                far.display()
+            )
+        );
+    }
+
+    /// A project document that lists these scans by name and relative path.
+    fn project_listing(scans: &[&str]) -> String {
+        let stations: String = scans
+            .iter()
+            .map(|name| format!(r#"<station name="{name}" relativeRawScanPath=".\{name}.e57"/>"#))
+            .collect();
+        format!("<project>{stations}</project>")
+    }
+
+    #[test]
+    fn project_with_only_indexed_copies_says_what_is_missing() {
+        let xml = project_listing(&["Hall 1", "Hall 2"]);
+        // The copies lie in the support folder of the project, or beside it.
+        for copy in ["Office Support/Hall 1.rcs", "hall 1.RCS"] {
+            let folder = tempfile::tempdir().unwrap();
+            touch(folder.path(), &[copy, "Office Support/notes.txt"]);
+            let project = folder.path().join("Office.rcp");
+            fs::write(&project, container(&[("list.xml", xml.as_bytes(), true)])).unwrap();
+            let expansion = expand(std::slice::from_ref(&project), &[]);
+            assert!(expansion.files.is_empty(), "{copy}");
+            // The scans are there, so they are not counted as missing.
+            assert_eq!(expansion.missing, 0, "{copy}");
+            assert_eq!(expansion.errors.len(), 1, "{copy}");
+            let error = &expansion.errors[0];
+            assert_eq!(
+                *error,
+                format!(
+                    "Scan project file {} lists 2 scans, present only as indexed copies \
+                     (.rcs). That format cannot be read; put the scans as E57, LAS or LAZ \
+                     files named after the scans beside the project file",
+                    project.display()
+                )
+            );
+            assert_eq!(expansion.summary(), format!("No scans opened: {error}"));
+        }
+
+        // Without indexed copies of its own scans they are simply not there.
+        // The support folder of another project says nothing about this one,
+        // and neither do the copies another project keeps in the same folder.
+        for other in [
+            &["Other Support/Hall 1.rcs"][..],
+            &["Yard 1.rcs", "Yard 2.rcs", "Office Support/Yard 1.rcs"][..],
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            touch(folder.path(), other);
+            let project = folder.path().join("Office.rcp");
+            fs::write(&project, container(&[("list.xml", xml.as_bytes(), true)])).unwrap();
+            let expansion = expand(&[project], &[]);
+            assert_eq!(expansion.errors, Vec::<String>::new(), "{other:?}");
+            assert_eq!(expansion.missing, 2, "{other:?}");
+            assert_eq!(
+                expansion.summary(),
+                "No scans opened: 2 listed scans not found (Hall 1, Hall 2)",
+                "{other:?}"
+            );
+        }
+
+        // The sentence reads for a project of one scan as well.
+        let folder = tempfile::tempdir().unwrap();
+        touch(folder.path(), &["Office Support/Hall 1.rcs"]);
+        let project = folder.path().join("Office.rcp");
+        let xml = project_listing(&["Hall 1"]);
+        fs::write(&project, container(&[("list.xml", xml.as_bytes(), true)])).unwrap();
+        let expansion = expand(std::slice::from_ref(&project), &[]);
+        assert_eq!(
+            expansion.errors,
+            [format!(
+                "Scan project file {} lists 1 scan, present only as indexed copies (.rcs). \
+                 That format cannot be read; put the scans as E57, LAS or LAZ files named \
+                 after the scans beside the project file",
+                project.display()
+            )]
+        );
+    }
+
+    #[test]
+    fn scans_that_are_present_open_and_the_others_are_named() {
+        let listed = ["Hall 1", "Hall 2", "Attic", "Cellar", "Roof", "Garden"];
+        let xml = project_listing(&listed);
+        let folder = tempfile::tempdir().unwrap();
+        // One scan was exported; the indexed copies of all are still there.
+        touch(
+            folder.path(),
+            &[
+                "Hall 2.e57",
+                "Office Support/Hall 1.rcs",
+                "Office Support/Hall 2.rcs",
+            ],
+        );
+        let project = folder.path().join("Office.rcp");
+        fs::write(&project, container(&[("list.xml", xml.as_bytes(), true)])).unwrap();
+        let expansion = expand(&[project], &[]);
+        assert_eq!(expansion.errors, Vec::<String>::new());
+        assert_eq!(names(&expansion.files), ["Hall 2.e57"]);
+        assert_eq!(expansion.missing, 5);
+        assert_eq!(
+            expansion.missing_names,
+            ["Hall 1", "Attic", "Cellar", "Roof", "Garden"]
+        );
+        assert_eq!(
+            expansion.summary(),
+            "Opening 1 scan; 5 listed scans not found (Hall 1, Attic, Cellar and 2 more)"
+        );
+
+        // A scan without a name is counted among the rest.
+        let few = Expansion {
+            missing: 2,
+            missing_names: vec!["Hall 1".into(), " ".into()],
+            ..Expansion::default()
+        };
+        assert_eq!(
+            few.summary(),
+            "No scans opened: 2 listed scans not found (Hall 1 and 1 more)"
+        );
+        let unnamed = Expansion {
+            missing: 1,
+            ..Expansion::default()
+        };
+        assert_eq!(
+            unnamed.summary(),
+            "No scans opened: 1 listed scan not found"
         );
     }
 

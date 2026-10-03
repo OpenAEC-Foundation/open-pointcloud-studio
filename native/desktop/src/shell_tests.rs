@@ -1,6 +1,6 @@
 //! Tests of the shell of the window: its title, its status bar, the header
-//! of the model space, the keys while the File view is open and the language
-//! command of the local API.
+//! of the model space, the keys while the File view is open, the language
+//! command of the local API and what its status says is under way.
 
 use std::sync::Arc;
 
@@ -250,6 +250,23 @@ fn api_refuses_an_unknown_language_and_keeps_the_one_in_use() {
         assert_eq!(answer["error"], "unknown language");
     }
     assert_eq!(i18n::choice().key(), "nl");
+}
+
+#[test]
+fn status_reports_a_mesh_export_and_a_wait_counts_it_as_work() {
+    let mut studio = Studio::default();
+    let status = send(&mut studio, ApiCommand::Status);
+    assert_eq!(status["result"]["mesh_export_pending"], false);
+    assert!(crate::mcp::busy(&status["result"]).is_empty());
+
+    // From the choice of the destination until the file is written.
+    studio.mesh_export_pending = true;
+    let status = send(&mut studio, ApiCommand::Status);
+    assert_eq!(status["result"]["mesh_export_pending"], true);
+    assert_eq!(crate::mcp::busy(&status["result"]), ["mesh_export"]);
+    let _ = studio.update(Message::MeshExported(Err("disk full".into())));
+    let status = send(&mut studio, ApiCommand::Status);
+    assert!(crate::mcp::busy(&status["result"]).is_empty());
 }
 
 #[test]
