@@ -2994,7 +2994,7 @@ dependencies = [
 
 [[package]]
 name = "open-pointcloud-studio-native"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bytemuck",
  "flate2",
@@ -3248,7 +3248,7 @@ dependencies = [
 
 [[package]]
 name = "pointcloud-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "acadrust",
  "crc32c",
