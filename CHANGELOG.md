@@ -14,6 +14,8 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+## 0.8.0 - 2026-10-03
+
 - **Section drawing** in the SECTION BOX group makes a 2D drawing at scale 1:1 of what the section box cuts and saves it as DXF or DWG: a plan from the slab under the top face of the box, or a vertical section from the slab behind one of its sides (#9, #11). The drawing holds the points of the slab from every visible scan, thinned to one per 5 mm, on layers per scan or per class, in millimetres or metres.
 - A section drawing can fill what the slab cuts: walls, columns and floors become filled regions with outlines, and door and window openings stay open. **Preview** shows these regions over the points before a file is saved. A wall that was scanned from one side is drawn as a thin strip, and gaps under about half a metre are closed; the user guide lists the limits.
 - **Section drawing…** in the File view saves the drawing directly, and the status bar and Properties report the points in the slab and in the drawing, the point spacing, the regions, the grid cell, the main direction and the file size.
