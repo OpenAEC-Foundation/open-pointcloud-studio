@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 mod bag3d;
+mod drawing;
 mod dxf;
 mod e57_points;
 mod e57_quick;
@@ -32,6 +33,16 @@ mod window_reader;
 pub use bag3d::{
     fetch_bag3d_obj, fetch_bag3d_obj_with, BagBounds, BagLod, BagProgress, BagStats,
     BAG3D_USER_AGENT,
+};
+pub use drawing::{
+    class_point_layer, drawing_info_text, layer_name, source_point_layer, write_drawing,
+    write_drawing_progress, Drawing2d, DrawingEntity, DrawingFormat, DrawingFrame, DrawingLayer,
+    DrawingOrigin, DrawingRequest, DrawingStats, DrawingUnits, DrawingVersion, DrawingView,
+    PointColor, PointLayers, DEFAULT_CUT_GRID, DEFAULT_DRAWING_POINTS, DEFAULT_MAX_WALL_THICKNESS,
+    DEFAULT_MIN_WALL_THICKNESS, DEFAULT_POINT_SPACING, DEFAULT_SLAB_THICKNESS, LAYER_CUT_FILL,
+    LAYER_CUT_OUTLINE, LAYER_FRAME, LAYER_INFO, LAYER_POINTS, LAYER_RGB_CONTRAST,
+    LAYER_RGB_CUT_FILL, LAYER_RGB_FRAME, MAX_DRAWING_POINTS, MAX_SLAB_THICKNESS,
+    MIN_SLAB_THICKNESS,
 };
 pub use dxf::read_mesh as read_dxf_mesh;
 pub use export::{

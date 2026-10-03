@@ -1,0 +1,23 @@
+Third-party notices for Open Pointcloud Studio (native)
+
+Open Pointcloud Studio is licensed as stated in LICENSE.md at the root of the
+repository. It links the Rust crates recorded in Cargo.lock, each one
+unmodified and under its own licence. This file names the crates that were
+added for the 2D drawing export (DXF and DWG) and the licence each is used
+under.
+
+Crate             Version   Licence
+acadrust          0.5.5     MPL-2.0
+anyhow            1.0.104   MIT OR Apache-2.0
+encoding_rs       0.8.35    (Apache-2.0 OR MIT) AND BSD-3-Clause
+minimal-lexical   0.2.1     MIT OR Apache-2.0
+nom               7.1.3     MIT
+
+acadrust is declared in core/Cargo.toml under the dependency key "cadcodec".
+It is covered by the Mozilla Public License, version 2.0. No file of that
+crate was changed. Its source code, in the version listed, is available from
+crates.io under the crate name; the licence text is at
+https://mozilla.org/MPL/2.0/.
+
+The source code and the licence text of every other crate listed are
+available from crates.io under the crate name and version.
