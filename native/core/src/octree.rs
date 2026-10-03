@@ -3,6 +3,7 @@
 //! temporary files.
 
 use std::array;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -16,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use super::snapshots::Snapshots;
 use super::{
-    e57_points, pcd, visit_points, visit_points_with_poses, Bounds, Collector, LoadError, Point,
-    PointCloud, ScanPose, SourceStamp,
+    e57_points, pcd, visit_points_with_poses, Bounds, Collector, LoadError, Point, PointCloud,
+    ScanLog, ScanPose, ScanRange, SourceStamp,
 };
 
 const RECORD_BYTES: usize = 40;
@@ -48,6 +49,66 @@ struct CachedCloudHeader {
     has_classification: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scan_poses: Option<Vec<ScanPose>>,
+    /// Absent in a cache written before scan ranges were recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scan_ranges: Option<Vec<ScanRange>>,
+}
+
+/// Scan ranges to keep in a cache, under the same limit as the poses they
+/// refer to.
+fn cached_scan_ranges(poses: &[ScanPose], ranges: &[ScanRange]) -> Option<Vec<ScanRange>> {
+    (poses.len() <= MAX_CACHED_SCAN_POSES && ranges.len() <= MAX_CACHED_SCAN_POSES)
+        .then(|| ranges.to_vec())
+}
+
+/// Whether cached scan ranges can be searched: within the limit, in ordinal
+/// order from the first point on, and inside the cloud.
+fn valid_scan_ranges(ranges: &[ScanRange], total_points: u64) -> bool {
+    ranges.len() <= MAX_CACHED_SCAN_POSES
+        && ranges.first().is_none_or(|range| range.first_ordinal == 0)
+        && ranges
+            .windows(2)
+            .all(|pair| pair[0].first_ordinal <= pair[1].first_ordinal)
+        && ranges
+            .last()
+            .is_none_or(|range| range.first_ordinal <= total_points)
+}
+
+/// Give a cloud opened from a cache, with its stations in place, its scan
+/// ranges. A cache written before ranges were recorded has none. They are
+/// then taken from what is certain without reading the points: the record
+/// counts an E57 file states when they add up, and nothing to tell apart in
+/// a source with at most one station. Otherwise they stay unknown, and are
+/// not written back to the cache, until a pass over the source records them.
+fn restore_scan_ranges(
+    cloud: &mut PointCloud,
+    cached: Option<Vec<ScanRange>>,
+) -> Result<(), LoadError> {
+    let certain = match cached {
+        Some(ranges) => Some(ranges),
+        None if super::is_e57(&cloud.path) => {
+            e57_points::ranges_for_count(&cloud.path, cloud.total_points)?
+        }
+        // Every block of a PTX file can have a station of its own.
+        None if cloud.scan_poses.len() > 1 => None,
+        None => Some(Vec::new()),
+    };
+    cloud.scan_ranges_known = certain.is_some();
+    cloud.scan_ranges = certain.unwrap_or_default();
+    Ok(())
+}
+
+/// The scan ranges an index cache holds already, for a header that is
+/// written again from a cloud that does not know them.
+fn kept_scan_ranges(directory: &Path, total_points: u64) -> Option<Vec<ScanRange>> {
+    let metadata_path = directory.join("cloud.json");
+    if fs::metadata(&metadata_path).ok()?.len() > MAX_CLOUD_METADATA_BYTES {
+        return None;
+    }
+    serde_json::from_slice::<CachedCloudHeader>(&fs::read(metadata_path).ok()?)
+        .ok()?
+        .scan_ranges
+        .filter(|ranges| valid_scan_ranges(ranges, total_points))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -215,8 +276,18 @@ impl OctreeIndex {
     pub fn build_with_progress(
         cloud: &PointCloud,
         config: IndexConfig,
-        mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
+        progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
     ) -> Result<Self, LoadError> {
+        Self::build_recording_scans(cloud, config, progress).map(|(index, _)| index)
+    }
+
+    /// Build the index, and return the scans its pass over the source met:
+    /// a cloud that came from a cache may not know where they begin.
+    fn build_recording_scans(
+        cloud: &PointCloud,
+        config: IndexConfig,
+        mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
+    ) -> Result<(Self, ScanLog), LoadError> {
         if config.leaf_points == 0 || config.preview_points == 0 || config.max_depth == 0 {
             return Err(LoadError::InvalidData(
                 "octree limits must be positive".into(),
@@ -245,27 +316,36 @@ impl OctreeIndex {
         };
         let root_path = storage.path().join("r.bin");
         let mut root_count = 0u64;
+        let mut scans = ScanLog::default();
+        // The scan callback cannot see the count the point callback holds,
+        // so the count of points read is kept beside it.
+        let read = Cell::new(0u64);
         progress(IndexProgress::reading(0, cloud.total_points))?;
         {
             let mut writer =
                 BufWriter::with_capacity(ROOT_WRITE_BUFFER_BYTES, File::create(&root_path)?);
-            visit_points(&cloud.path, &mut |point| {
-                if root_count.is_multiple_of(65_536) {
-                    progress(IndexProgress::reading(root_count, cloud.total_points))?;
-                }
-                if !point.xyz.iter().all(|value| value.is_finite()) {
-                    return Err(LoadError::InvalidData("non-finite coordinate".into()));
-                }
-                write_record(
-                    &mut writer,
-                    IndexedPoint {
-                        point,
-                        ordinal: root_count,
-                    },
-                )?;
-                root_count += 1;
-                Ok(())
-            })?;
+            visit_points_with_poses(
+                &cloud.path,
+                &mut |point| {
+                    if root_count.is_multiple_of(65_536) {
+                        progress(IndexProgress::reading(root_count, cloud.total_points))?;
+                    }
+                    if !point.xyz.iter().all(|value| value.is_finite()) {
+                        return Err(LoadError::InvalidData("non-finite coordinate".into()));
+                    }
+                    write_record(
+                        &mut writer,
+                        IndexedPoint {
+                            point,
+                            ordinal: root_count,
+                        },
+                    )?;
+                    root_count += 1;
+                    read.set(root_count);
+                    Ok(())
+                },
+                &mut |pose| scans.begin(read.get(), pose),
+            )?;
             writer.flush()?;
         }
         progress(IndexProgress::reading(root_count, cloud.total_points))?;
@@ -293,10 +373,13 @@ impl OctreeIndex {
             &mut context,
         )?;
         progress(IndexProgress::ready(root_count, ready_leaves))?;
-        Ok(Self {
-            root,
-            storage: IndexStorage::Temporary(storage),
-        })
+        Ok((
+            Self {
+                root,
+                storage: IndexStorage::Temporary(storage),
+            },
+            scans,
+        ))
     }
 
     /// Reuse a completed index for the same source revision and configuration.
@@ -328,7 +411,7 @@ impl OctreeIndex {
         let cache_path = cache_directory(&cache_root, &fingerprint);
         if cache_path.exists() {
             if let Ok(index) = Self::open_cached(cloud, &cache_path, &fingerprint) {
-                let _ = write_cached_cloud_header(&cache_path, cloud);
+                let _ = write_cached_cloud_header(&cache_path, cloud, None);
                 progress(IndexProgress::ready(
                     cloud.total_points,
                     count_leaves(&index.root),
@@ -338,13 +421,13 @@ impl OctreeIndex {
             fs::remove_dir_all(&cache_path)?;
         }
         config.scratch_dir = Some(cache_root);
-        let index = Self::build_with_progress(cloud, config, &mut progress)?;
+        let (index, scans) = Self::build_recording_scans(cloud, config, &mut progress)?;
         let Self { root, storage } = index;
         let IndexStorage::Temporary(storage) = storage else {
             unreachable!("fresh octree build uses temporary storage")
         };
         fs::write(storage.path().join("source.meta"), &fingerprint)?;
-        write_cached_cloud_header(storage.path(), cloud)?;
+        write_cached_cloud_header(storage.path(), cloud, Some(&scans))?;
         let temporary_path = storage.keep();
         if let Err(error) = fs::rename(&temporary_path, &cache_path) {
             let _ = fs::remove_dir_all(&temporary_path);
@@ -449,7 +532,10 @@ impl OctreeIndex {
         } else {
             sample_limit
         });
-        let mut poses = Vec::new();
+        let mut scans = ScanLog::default();
+        // The scan callback cannot look into the collector while the point
+        // callback holds it, so the count of points read is kept beside it.
+        let read = Cell::new(0u64);
         // An E57 file states how many records it holds, which tells the pass
         // how far it is. Records that hold no valid point make the count of
         // points smaller, never larger.
@@ -467,6 +553,7 @@ impl OctreeIndex {
                 &mut |point| {
                     let ordinal = collector.total;
                     collector.push(point)?;
+                    read.set(collector.total);
                     write_record(&mut writer, IndexedPoint { point, ordinal })?;
                     if collector.total.is_multiple_of(65_536) {
                         let total = if stated == 0 {
@@ -481,7 +568,7 @@ impl OctreeIndex {
                     }
                     Ok(())
                 },
-                &mut |pose| poses.push(pose),
+                &mut |pose| scans.begin(read.get(), pose),
             )?;
             writer.flush()?;
         }
@@ -493,7 +580,8 @@ impl OctreeIndex {
             ));
         }
         let mut cloud = collector.finish(path.to_path_buf())?;
-        cloud.scan_poses = poses;
+        cloud.scan_poses = scans.poses;
+        cloud.scan_ranges = scans.ranges;
         cloud.scan_images = super::scan_images(path);
         cloud.source_stamp = Some(stamp);
         write_preview_cache(&cloud);
@@ -523,7 +611,7 @@ impl OctreeIndex {
         )?;
         progress(IndexProgress::ready(cloud.total_points, ready_leaves))?;
         fs::write(storage.path().join("source.meta"), &fingerprint)?;
-        write_cached_cloud_header(storage.path(), &cloud)?;
+        write_cached_cloud_header(storage.path(), &cloud, None)?;
         let temporary_path = storage.keep();
         if let Err(error) = fs::rename(&temporary_path, &cache_path) {
             let _ = fs::remove_dir_all(&temporary_path);
@@ -562,7 +650,7 @@ impl OctreeIndex {
             return Ok(None);
         }
         let index = Self::open_cached(cloud, &directory, &fingerprint)?;
-        let _ = write_cached_cloud_header(&directory, cloud);
+        let _ = write_cached_cloud_header(&directory, cloud, None);
         Ok(Some(index))
     }
 
@@ -1000,6 +1088,13 @@ pub(crate) fn open_cached_preview(
             ));
         }
     }
+    if header
+        .scan_ranges
+        .as_ref()
+        .is_some_and(|ranges| !valid_scan_ranges(ranges, header.total_points))
+    {
+        return Err(LoadError::InvalidData("invalid cached scan ranges".into()));
+    }
     let mut cloud = PointCloud {
         path: path.to_path_buf(),
         total_points: header.total_points,
@@ -1017,9 +1112,11 @@ pub(crate) fn open_cached_preview(
         } else {
             Vec::new()
         },
+        scan_ranges: Vec::new(),
         scan_images: Vec::new(),
         source_stamp: Some(stamp),
         provisional: false,
+        scan_ranges_known: false,
     };
     let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint)?;
     if path
@@ -1036,6 +1133,7 @@ pub(crate) fn open_cached_preview(
     {
         cloud.scan_poses = pcd::scan_poses(path)?;
     }
+    restore_scan_ranges(&mut cloud, header.scan_ranges)?;
     for record in index.read_node_indexed("r", sample_limit)? {
         cloud.points.push(record.point);
         cloud.point_ordinals.push(record.ordinal);
@@ -1062,6 +1160,9 @@ struct CachedPreviewHeader {
     has_classification: bool,
     points: u64,
     scan_poses: Vec<ScanPose>,
+    /// Absent in a cache written before scan ranges were recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scan_ranges: Option<Vec<ScanRange>>,
 }
 
 fn preview_cache_directory(root: &Path, fingerprint: &[u8]) -> PathBuf {
@@ -1114,6 +1215,10 @@ fn write_preview_cache_in(root: &Path, cloud: &PointCloud) -> Result<(), LoadErr
         } else {
             Vec::new()
         },
+        scan_ranges: cloud
+            .scan_ranges_known()
+            .then(|| cached_scan_ranges(&cloud.scan_poses, &cloud.scan_ranges))
+            .flatten(),
     };
     let serialized = serde_json::to_vec(&header).map_err(|error| {
         LoadError::InvalidData(format!("cannot serialize preview metadata: {error}"))
@@ -1175,6 +1280,10 @@ fn open_preview_cache_in(
                     .axes
                     .is_some_and(|axes| !axes.iter().flatten().all(|value| value.is_finite()))
         })
+        || header
+            .scan_ranges
+            .as_ref()
+            .is_some_and(|ranges| !valid_scan_ranges(ranges, header.total_points))
         || count_records(&points_path).ok() != Some(header.points)
     {
         return Ok(None);
@@ -1192,14 +1301,24 @@ fn open_preview_cache_in(
         has_intensity: header.has_intensity,
         has_classification: header.has_classification,
         scan_poses: header.scan_poses,
+        scan_ranges: Vec::new(),
         scan_images: super::scan_images(path),
         source_stamp: Some(stamp),
         provisional: false,
+        scan_ranges_known: false,
     };
-    // E57 stations come from the file itself, like its photos.
+    // E57 stations come from the file itself, like its photos, and so does
+    // the viewpoint of a PCD file, whose header is short.
     if super::is_e57(path) {
         cloud.scan_poses = e57_points::scan_poses(path)?;
+    } else if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pcd"))
+    {
+        cloud.scan_poses = pcd::scan_poses(path)?;
     }
+    restore_scan_ranges(&mut cloud, header.scan_ranges)?;
     read_records(&points_path, |record| {
         if cloud.points.len() < sample_limit {
             cloud.points.push(record.point);
@@ -1215,12 +1334,34 @@ fn open_preview_cache_in(
     Ok(Some(cloud))
 }
 
-fn write_cached_cloud_header(directory: &Path, cloud: &PointCloud) -> Result<(), LoadError> {
+/// Write the cloud metadata of an index cache. `pass` holds the scans that
+/// the build of this index met in the source. Without it the scans are those
+/// of the cloud, or what the cache holds already when the cloud came from a
+/// cache that did not record them: unknown ranges are never stored as fact.
+fn write_cached_cloud_header(
+    directory: &Path,
+    cloud: &PointCloud,
+    pass: Option<&ScanLog>,
+) -> Result<(), LoadError> {
     let is_ptx = cloud
         .path
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("ptx"));
+    let (poses, ranges) = match pass {
+        Some(scans) => (
+            &scans.poses,
+            cached_scan_ranges(&scans.poses, &scans.ranges),
+        ),
+        None if cloud.scan_ranges_known() => (
+            &cloud.scan_poses,
+            cached_scan_ranges(&cloud.scan_poses, &cloud.scan_ranges),
+        ),
+        None => (
+            &cloud.scan_poses,
+            kept_scan_ranges(directory, cloud.total_points),
+        ),
+    };
     let mut header = CachedCloudHeader {
         version: 1,
         total_points: cloud.total_points,
@@ -1229,14 +1370,15 @@ fn write_cached_cloud_header(directory: &Path, cloud: &PointCloud) -> Result<(),
         has_rgb: cloud.has_rgb,
         has_intensity: cloud.has_intensity,
         has_classification: cloud.has_classification,
-        scan_poses: (is_ptx && cloud.scan_poses.len() <= MAX_CACHED_SCAN_POSES)
-            .then(|| cloud.scan_poses.clone()),
+        scan_poses: (is_ptx && poses.len() <= MAX_CACHED_SCAN_POSES).then(|| poses.clone()),
+        scan_ranges: ranges,
     };
     let mut serialized = serde_json::to_vec(&header).map_err(|error| {
         LoadError::InvalidData(format!("cannot serialize octree metadata: {error}"))
     })?;
     if serialized.len() as u64 > MAX_CLOUD_METADATA_BYTES {
         header.scan_poses = None;
+        header.scan_ranges = None;
         serialized = serde_json::to_vec(&header).map_err(|error| {
             LoadError::InvalidData(format!("cannot serialize octree metadata: {error}"))
         })?;
@@ -3297,6 +3439,409 @@ mod tests {
         let cached = open_cached_preview(&source, 2, config).unwrap().unwrap();
         assert_eq!(cached.scan_poses, expected.scan_poses);
         assert_eq!(cached.total_points, 4);
+    }
+
+    /// Remove the scan ranges from cache metadata, as a cache written before
+    /// they were recorded has it.
+    fn forget_scan_ranges(metadata_path: &Path) {
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&fs::read(metadata_path).unwrap()).unwrap();
+        assert!(legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("scan_ranges")
+            .is_some());
+        fs::write(metadata_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    }
+
+    /// The scan ranges cache metadata holds, if it has the field.
+    fn stored_scan_ranges(metadata_path: &Path) -> Option<Vec<ScanRange>> {
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(metadata_path).unwrap()).unwrap();
+        metadata
+            .get("scan_ranges")
+            .map(|ranges| serde_json::from_value(ranges.clone()).unwrap())
+    }
+
+    #[test]
+    fn ptx_scan_ranges_are_cached_and_a_cache_without_them_still_opens() {
+        use crate::ptx::tests::{three_block_ranges, THREE_BLOCKS};
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("three-blocks.ptx");
+        fs::write(&source, THREE_BLOCKS).unwrap();
+        let cloud = super::super::open(&source, 10).unwrap();
+        assert_eq!(cloud.scan_ranges, three_block_ranges());
+        let config = IndexConfig {
+            leaf_points: 2,
+            preview_points: 2,
+            max_depth: 4,
+            scratch_dir: Some(directory.path().join("cache")),
+        };
+        let index = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
+        let metadata_path = index.storage.path().join("cloud.json");
+        let cached = open_cached_preview(&source, 10, config.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached.scan_ranges, cloud.scan_ranges);
+        assert_eq!(cached.scan_poses, cloud.scan_poses);
+        assert_eq!(cached.station_pose(5).unwrap().position, [40.0, 50.0, 60.0]);
+        assert!(cached.station_pose(3).is_none());
+
+        // A cache from before the ranges were recorded: it opens, and the
+        // points of its two stations cannot be told apart.
+        forget_scan_ranges(&metadata_path);
+        let legacy = open_cached_preview(&source, 10, config.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(legacy.total_points, 6);
+        assert_eq!(legacy.scan_poses, cloud.scan_poses);
+        assert!(legacy.scan_ranges.is_empty() && !legacy.scan_ranges_known());
+        assert!((0..6).all(|ordinal| legacy.station_of(ordinal).is_none()));
+        // Attaching the index writes the metadata again, and must not turn
+        // "not recorded" into "no scans".
+        OctreeIndex::open_cached_if_present(&legacy, config.clone())
+            .unwrap()
+            .unwrap();
+        OctreeIndex::build_cached(&legacy, config.clone()).unwrap();
+        assert_eq!(stored_scan_ranges(&metadata_path), None);
+        assert!(!open_cached_preview(&source, 10, config.clone())
+            .unwrap()
+            .unwrap()
+            .scan_ranges_known());
+
+        // A cloud that was read brings its ranges back into the cache, and
+        // one that does not know them leaves them there.
+        OctreeIndex::open_cached_if_present(&cloud, config.clone())
+            .unwrap()
+            .unwrap();
+        OctreeIndex::open_cached_if_present(&legacy, config.clone())
+            .unwrap()
+            .unwrap();
+        OctreeIndex::build_cached(&legacy, config.clone()).unwrap();
+        let restored = open_cached_preview(&source, 10, config.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.scan_ranges, cloud.scan_ranges);
+        assert!(restored.scan_ranges_known());
+
+        // Reading the source once more gives a cloud from the older cache
+        // its ranges, and attaching the index then keeps them.
+        forget_scan_ranges(&metadata_path);
+        let mut reread = legacy.clone();
+        let mut counts = Vec::new();
+        reread
+            .read_scan_ranges(|count| {
+                counts.push(count);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(counts, [6]);
+        assert!(reread.scan_ranges_known());
+        assert_eq!(reread.scan_ranges, cloud.scan_ranges);
+        assert_eq!(reread.scan_poses, cloud.scan_poses);
+        assert_eq!(reread.station_pose(5).unwrap().position, [40.0, 50.0, 60.0]);
+        assert_eq!(reread.points.len(), legacy.points.len());
+        OctreeIndex::open_cached_if_present(&reread, config.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored_scan_ranges(&metadata_path),
+            Some(cloud.scan_ranges.clone())
+        );
+        // A cancelled or failed pass leaves the cloud as it was.
+        let mut cancelled = legacy.clone();
+        assert!(matches!(
+            cancelled.read_scan_ranges(|_| Err(LoadError::Cancelled)),
+            Err(LoadError::Cancelled)
+        ));
+        assert!(cancelled.scan_ranges.is_empty() && !cancelled.scan_ranges_known());
+
+        // The pass that also writes the index records the same ranges.
+        let single_pass = IndexConfig {
+            leaf_points: 2,
+            preview_points: 2,
+            max_depth: 4,
+            scratch_dir: Some(directory.path().join("single-pass")),
+        };
+        let (built, _index) = OctreeIndex::open_and_build_cached_with_progress(
+            &source,
+            10,
+            single_pass.clone(),
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(built.scan_ranges, cloud.scan_ranges);
+        assert_eq!(
+            open_cached_preview(&source, 10, single_pass)
+                .unwrap()
+                .unwrap()
+                .scan_ranges,
+            cloud.scan_ranges
+        );
+
+        // The kept preview of a large source carries them as well.
+        let previews = directory.path().join("previews");
+        write_preview_cache_in(&previews, &cloud).unwrap();
+        let preview = open_preview_cache_in(&previews, &source, 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(preview.scan_ranges, cloud.scan_ranges);
+        let fingerprint = cache_fingerprint(&cloud, &IndexConfig::default()).unwrap();
+        forget_scan_ranges(&preview_cache_directory(&previews, &fingerprint).join("preview.json"));
+        let legacy = open_preview_cache_in(&previews, &source, 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(legacy.scan_poses, cloud.scan_poses);
+        assert!(legacy.scan_ranges.is_empty() && !legacy.scan_ranges_known());
+
+        // An index built from that preview reads the whole source, and
+        // records the ranges the preview could not give.
+        let two_pass = IndexConfig {
+            leaf_points: 2,
+            preview_points: 2,
+            max_depth: 4,
+            scratch_dir: Some(directory.path().join("two-pass")),
+        };
+        let index = OctreeIndex::build_cached(&legacy, two_pass.clone()).unwrap();
+        assert_eq!(
+            stored_scan_ranges(&index.storage.path().join("cloud.json")),
+            Some(cloud.scan_ranges.clone())
+        );
+        let indexed = open_cached_preview(&source, 10, two_pass).unwrap().unwrap();
+        assert!(indexed.scan_ranges_known());
+        assert_eq!(indexed.scan_ranges, cloud.scan_ranges);
+        assert_eq!(indexed.scan_poses, cloud.scan_poses);
+        assert!(indexed.station_pose(3).is_none());
+        assert_eq!(
+            indexed.station_pose(2).unwrap().position,
+            [10.0, 20.0, 30.0]
+        );
+    }
+
+    #[test]
+    fn e57_scan_ranges_are_cached_and_older_caches_use_the_stated_counts() {
+        use crate::e57_points::tests::{station_position, write_scans};
+
+        let directory = tempfile::tempdir().unwrap();
+        // Every record of the first file holds a point; one record of the
+        // second does not, so its stated counts exceed its points.
+        for (name, first_scan, stated_counts_fit) in [
+            ("valid.e57", [true; 4], true),
+            ("invalid-record.e57", [true, false, true, true], false),
+        ] {
+            let source = directory.path().join(name);
+            write_scans(
+                &source,
+                &[(true, &first_scan), (false, &[true; 4]), (true, &[true; 4])],
+            );
+            let cloud = super::super::open(&source, 10).unwrap();
+            let first = if stated_counts_fit { 4 } else { 3 };
+            assert_eq!(
+                cloud
+                    .scan_ranges
+                    .iter()
+                    .map(|range| (range.first_ordinal, range.station))
+                    .collect::<Vec<_>>(),
+                [(0, Some(0)), (first, None), (first + 4, Some(1))],
+                "{name}"
+            );
+            let config = IndexConfig {
+                leaf_points: 2,
+                preview_points: 2,
+                max_depth: 4,
+                scratch_dir: Some(directory.path().join(format!("{name}-cache"))),
+            };
+            let (built, index) = OctreeIndex::open_and_build_cached_with_progress(
+                &source,
+                10,
+                config.clone(),
+                |_| Ok(()),
+            )
+            .unwrap();
+            assert_eq!(built.scan_ranges, cloud.scan_ranges, "{name}");
+            let metadata_path = index.storage.path().join("cloud.json");
+            let cached = open_cached_preview(&source, 10, config.clone())
+                .unwrap()
+                .unwrap();
+            assert_eq!(cached.scan_ranges, cloud.scan_ranges, "{name}");
+            assert_eq!(
+                cached.station_pose(first + 4).unwrap().position,
+                station_position(2),
+                "{name}"
+            );
+
+            // A cache from before the ranges were recorded falls back on the
+            // record counts the file states, when they add up to the points.
+            forget_scan_ranges(&metadata_path);
+            let legacy = open_cached_preview(&source, 10, config.clone())
+                .unwrap()
+                .unwrap();
+            assert_eq!(legacy.total_points, cloud.total_points, "{name}");
+            assert_eq!(legacy.scan_poses, cloud.scan_poses, "{name}");
+            if stated_counts_fit {
+                assert_eq!(legacy.scan_ranges, cloud.scan_ranges, "{name}");
+                assert_eq!(
+                    legacy.station_pose(0).unwrap().position,
+                    station_position(0)
+                );
+                assert!(legacy.station_pose(4).is_none());
+                assert!(legacy.scan_ranges_known(), "{name}");
+            } else {
+                // Which scan lost a record is known after a pass only, and
+                // until then nothing about it is stored.
+                assert!(legacy.scan_ranges.is_empty(), "{name}");
+                assert!(!legacy.scan_ranges_known(), "{name}");
+                assert!((0..11).all(|ordinal| legacy.station_of(ordinal).is_none()));
+                OctreeIndex::open_cached_if_present(&legacy, config.clone())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stored_scan_ranges(&metadata_path), None, "{name}");
+                let mut reread = legacy.clone();
+                reread.read_scan_ranges(|_| Ok(())).unwrap();
+                assert_eq!(reread.scan_ranges, cloud.scan_ranges, "{name}");
+                assert_eq!(
+                    reread.station_pose(7).unwrap().position,
+                    station_position(2)
+                );
+                OctreeIndex::open_cached_if_present(&reread, config.clone())
+                    .unwrap()
+                    .unwrap();
+                let restored = open_cached_preview(&source, 10, config.clone())
+                    .unwrap()
+                    .unwrap();
+                assert!(restored.scan_ranges_known(), "{name}");
+                assert_eq!(restored.scan_ranges, cloud.scan_ranges, "{name}");
+            }
+
+            // The kept preview of a large source behaves the same.
+            let previews = directory.path().join(format!("{name}-previews"));
+            write_preview_cache_in(&previews, &cloud).unwrap();
+            let preview = open_preview_cache_in(&previews, &source, 10)
+                .unwrap()
+                .unwrap();
+            assert_eq!(preview.scan_ranges, cloud.scan_ranges, "{name}");
+            let fingerprint = cache_fingerprint(&cloud, &IndexConfig::default()).unwrap();
+            forget_scan_ranges(
+                &preview_cache_directory(&previews, &fingerprint).join("preview.json"),
+            );
+            let legacy = open_preview_cache_in(&previews, &source, 10)
+                .unwrap()
+                .unwrap();
+            if stated_counts_fit {
+                assert_eq!(legacy.scan_ranges, cloud.scan_ranges, "{name}");
+            } else {
+                assert!(legacy.scan_ranges.is_empty(), "{name}");
+            }
+            assert_eq!(legacy.scan_ranges_known(), stated_counts_fit, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_kept_pcd_preview_takes_its_station_from_the_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("merged.pcd");
+        fs::write(
+            &source,
+            "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nWIDTH 2\nHEIGHT 1\nPOINTS 2\nVIEWPOINT 0 0 0 1 0 0 0\nDATA ascii\n1 0 0\n2 0 0\n",
+        )
+        .unwrap();
+        let cloud = super::super::open(&source, 2).unwrap();
+        assert!(cloud.scan_poses.is_empty());
+        let previews = directory.path().join("previews");
+        write_preview_cache_in(&previews, &cloud).unwrap();
+
+        // A preview kept before took the viewpoint every writer puts in the
+        // header for a station, and recorded no scan ranges.
+        let fingerprint = cache_fingerprint(&cloud, &IndexConfig::default()).unwrap();
+        let metadata_path = preview_cache_directory(&previews, &fingerprint).join("preview.json");
+        forget_scan_ranges(&metadata_path);
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+        metadata["scan_poses"] = serde_json::to_value([ScanPose {
+            label: "VIEWPOINT".into(),
+            position: [0.0; 3],
+            axes: None,
+        }])
+        .unwrap();
+        fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+        let kept = open_preview_cache_in(&previews, &source, 2)
+            .unwrap()
+            .unwrap();
+        assert!(kept.scan_poses.is_empty());
+        assert!((0..2).all(|ordinal| kept.station_of(ordinal).is_none()));
+    }
+
+    #[test]
+    fn cached_scan_ranges_share_the_limit_of_the_poses() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("many-blocks.ptx");
+        let block =
+            "1\n1\n1 2 3\n1 0 0\n0 1 0\n0 0 1\n1 0 0 0\n0 1 0 0\n0 0 1 0\n1 2 3 1\n1 0 0 0.5\n";
+        fs::write(&source, block.repeat(MAX_CACHED_SCAN_POSES + 1)).unwrap();
+        let cloud = super::super::open(&source, 4).unwrap();
+        assert_eq!(cloud.scan_ranges.len(), MAX_CACHED_SCAN_POSES + 1);
+        assert_eq!(cloud.station_of(4_096), Some(4_096));
+
+        // More scans than a cache keeps: the preview is kept without them.
+        let previews = directory.path().join("previews");
+        write_preview_cache_in(&previews, &cloud).unwrap();
+        let preview = open_preview_cache_in(&previews, &source, 4)
+            .unwrap()
+            .unwrap();
+        assert_eq!(preview.total_points, cloud.total_points);
+        assert!(preview.scan_poses.is_empty() && preview.scan_ranges.is_empty());
+
+        // Metadata that holds more ranges than the limit, or ranges that
+        // cannot be searched, is not trusted.
+        let within: Vec<ScanRange> = cloud.scan_ranges[..MAX_CACHED_SCAN_POSES].to_vec();
+        assert!(valid_scan_ranges(&within, cloud.total_points));
+        assert!(valid_scan_ranges(&[], cloud.total_points));
+        assert!(!valid_scan_ranges(&cloud.scan_ranges, cloud.total_points));
+        assert!(!valid_scan_ranges(&within[1..], cloud.total_points));
+        assert!(!valid_scan_ranges(&within, 100));
+        let mut unordered = within.clone();
+        unordered.swap(1, 2);
+        assert!(!valid_scan_ranges(&unordered, cloud.total_points));
+
+        let fingerprint = cache_fingerprint(&cloud, &IndexConfig::default()).unwrap();
+        let metadata_path = preview_cache_directory(&previews, &fingerprint).join("preview.json");
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+        assert!(metadata.get("scan_ranges").is_none());
+        metadata["scan_ranges"] = serde_json::to_value(&cloud.scan_ranges).unwrap();
+        fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+        assert!(open_preview_cache_in(&previews, &source, 4)
+            .unwrap()
+            .is_none());
+
+        let text = directory.path().join("points.xyz");
+        fs::write(&text, "0 0 0\n1 0 0\n2 0 0\n3 0 0\n").unwrap();
+        let text_cloud = super::super::open(&text, 4).unwrap();
+        assert!(text_cloud.scan_ranges.is_empty());
+        let config = IndexConfig {
+            leaf_points: 2,
+            preview_points: 2,
+            max_depth: 4,
+            scratch_dir: Some(directory.path().join("cache")),
+        };
+        let index = OctreeIndex::build_cached(&text_cloud, config.clone()).unwrap();
+        let metadata_path = index.storage.path().join("cloud.json");
+        assert!(open_cached_preview(&text, 4, config.clone())
+            .unwrap()
+            .unwrap()
+            .scan_ranges
+            .is_empty());
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+        metadata["scan_ranges"] = serde_json::to_value(&unordered[..3]).unwrap();
+        fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+        assert!(open_cached_preview(&text, 4, config.clone()).is_err());
+        // A source without scans in a cache from before the ranges existed.
+        forget_scan_ranges(&metadata_path);
+        let legacy = open_cached_preview(&text, 4, config).unwrap().unwrap();
+        assert_eq!(legacy.total_points, 4);
+        assert!(legacy.scan_ranges.is_empty());
     }
 
     #[test]

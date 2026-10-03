@@ -477,9 +477,12 @@ fn preview_within(
         has_classification: false,
         points,
         scan_poses: e57_points::stations(&scans).into_iter().flatten().collect(),
+        // No point here has an ordinal for a scan range to be looked up with.
+        scan_ranges: Vec::new(),
         scan_images: super::scan_images(path),
         source_stamp: Some(stamp),
         provisional: true,
+        scan_ranges_known: false,
     }))
 }
 

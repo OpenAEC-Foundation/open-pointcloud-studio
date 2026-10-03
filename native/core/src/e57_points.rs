@@ -6,7 +6,9 @@ use std::path::Path;
 use e57::{Blob, CartesianCoordinate, E57Reader, ImageFormat, PointCloud, Projection, RecordName};
 
 use super::window_reader::WindowReader;
-use super::{quaternion_axes, Bounds, LoadError, Point, ScanImage, ScanImageFormat, ScanPose};
+use super::{
+    quaternion_axes, Bounds, LoadError, Point, ScanImage, ScanImageFormat, ScanPose, ScanRange,
+};
 
 /// A stored photo larger than this is treated as damaged metadata.
 const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
@@ -73,6 +75,53 @@ fn scan_pose(index: usize, scan: &PointCloud, alone: bool) -> Option<ScanPose> {
         })
 }
 
+/// The ordinal range of every scan as the metadata states it. A record that
+/// holds no valid point is not read as a point, so the scans after it begin
+/// earlier than stated: these ranges are exact only when the stated records
+/// add up to the points that were read.
+fn stated_ranges(scans: &[PointCloud]) -> Vec<ScanRange> {
+    let (mut first_ordinal, mut station) = (0u64, 0u32);
+    scans
+        .iter()
+        .zip(stations(scans))
+        .map(|(scan, pose)| {
+            let range = ScanRange {
+                first_ordinal,
+                station: pose.is_some().then_some(station),
+            };
+            first_ordinal = first_ordinal.saturating_add(scan.records);
+            station += u32::from(pose.is_some());
+            range
+        })
+        .collect()
+}
+
+/// Scan ranges for a cloud of `total_points` whose cache was written before
+/// ranges were recorded, without decoding point records. `None` when the
+/// metadata cannot tell them and only a pass over the points can.
+pub(crate) fn ranges_for_count(
+    path: &Path,
+    total_points: u64,
+) -> Result<Option<Vec<ScanRange>>, LoadError> {
+    let file = open_reader(path)?;
+    let scans = file.pointclouds();
+    let records = scans
+        .iter()
+        .fold(0u64, |sum, scan| sum.saturating_add(scan.records));
+    Ok(certain_ranges(stated_ranges(&scans), records, total_points))
+}
+
+/// Keep stated ranges that are certain: every stated record was read as a
+/// point, or there is only one scan to own them. Otherwise nothing tells
+/// where a scan ends.
+fn certain_ranges(
+    stated: Vec<ScanRange>,
+    records: u64,
+    total_points: u64,
+) -> Option<Vec<ScanRange>> {
+    (records == total_points || stated.len() <= 1).then_some(stated)
+}
+
 /// Read scanner stations from E57 metadata without decoding point records.
 pub(crate) fn scan_poses(path: &Path) -> Result<Vec<ScanPose>, LoadError> {
     let file = open_reader(path)?;
@@ -96,15 +145,17 @@ pub(crate) struct Summary {
 /// Summarise an E57 file from its metadata alone.
 pub(crate) fn summary(path: &Path) -> Result<Summary, LoadError> {
     let file = open_reader(path)?;
+    let scans = file.pointclouds();
     let mut summary = Summary {
         records: 0,
         bounds: None,
         has_rgb: false,
         has_intensity: false,
-        poses: Vec::new(),
+        // Stations are numbered as the pass and the photos number them,
+        // whatever a scan states about its extent below.
+        poses: stations(&scans).into_iter().flatten().collect(),
     };
-    let scans = file.pointclouds();
-    for (scan, pose) in scans.iter().zip(stations(&scans)) {
+    for scan in &scans {
         summary.records += scan.records;
         summary.has_rgb |= scan.has_color();
         summary.has_intensity |= scan.has_intensity();
@@ -162,9 +213,6 @@ pub(crate) fn summary(path: &Path) -> Result<Summary, LoadError> {
                     None => summary.bounds = Some(Bounds { min: xyz, max: xyz }),
                 }
             }
-        }
-        if let Some(pose) = pose {
-            summary.poses.push(pose);
         }
     }
     Ok(summary)
@@ -285,14 +333,14 @@ pub(crate) fn read_images(path: &Path, images: &[ScanImage]) -> Result<Vec<Vec<u
 pub fn read(
     path: &Path,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
-    pose_push: &mut impl FnMut(ScanPose),
+    scan_begin: &mut impl FnMut(Option<ScanPose>),
 ) -> Result<(), LoadError> {
     let mut file = open_reader(path)?;
     let scans = file.pointclouds();
     for (scan, pose) in scans.iter().zip(stations(&scans)) {
-        if let Some(pose) = pose {
-            pose_push(pose);
-        }
+        // A scan without a station is reported too: its points must not be
+        // taken for those of the scan before it.
+        scan_begin(pose);
         read_scan(&mut file, scan, push)?;
     }
     Ok(())
@@ -332,5 +380,209 @@ pub(crate) fn simple_point(point: e57::Point, xyz: [f64; 3]) -> Point {
             .intensity
             .map(|value| (value.clamp(0.0, 1.0) * 65535.0).round() as u16),
         classification: None,
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::fs;
+
+    use e57::{
+        CartesianBounds, E57Writer, PointCloudWriter, Record, RecordValue, Transform, Translation,
+    };
+
+    use super::*;
+
+    /// Position of the station of scan `index` in a file `write_scans` wrote.
+    pub(crate) fn station_position(index: usize) -> [f64; 3] {
+        [100.0 * (index + 1) as f64, 0.0, 0.0]
+    }
+
+    /// Write one scan per entry: whether it has a station, and for each of
+    /// its records whether it holds a valid point. Points lie along X from
+    /// the origin of their scan. A scan takes four records at a time: the
+    /// validity field is two bits wide and is only read back in whole bytes.
+    pub(crate) fn write_scans(path: &Path, scans: &[(bool, &[bool])]) {
+        write_scans_with(path, scans, |_, _| {});
+    }
+
+    /// Like `write_scans`, and let `adjust` change the metadata of every
+    /// scan after its last record, which is when the writer takes bounds.
+    fn write_scans_with(
+        path: &Path,
+        scans: &[(bool, &[bool])],
+        adjust: impl Fn(usize, &mut PointCloudWriter<fs::File>),
+    ) {
+        assert!(scans
+            .iter()
+            .all(|(_, records)| records.len().is_multiple_of(4)));
+        let mut writer = E57Writer::new(
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)
+                .unwrap(),
+            "{00000000-0000-4000-8000-000000000100}",
+        )
+        .unwrap();
+        for (index, (station, records)) in scans.iter().enumerate() {
+            let mut scan = writer
+                .add_pointcloud(
+                    &format!("{{00000000-0000-4000-8000-0000000002{index:02}}}"),
+                    vec![
+                        Record::CARTESIAN_X_F64,
+                        Record::CARTESIAN_Y_F64,
+                        Record::CARTESIAN_Z_F64,
+                        Record::CARTESIAN_INVALID_STATE,
+                    ],
+                )
+                .unwrap();
+            if *station {
+                let [x, y, z] = station_position(index);
+                scan.set_name(Some(format!("Station {index}")));
+                scan.set_transform(Some(Transform {
+                    rotation: Default::default(),
+                    translation: Translation { x, y, z },
+                }));
+            }
+            for (record, valid) in records.iter().enumerate() {
+                scan.add_point(vec![
+                    RecordValue::Double(record as f64 + 1.0),
+                    RecordValue::Double(0.0),
+                    RecordValue::Double(0.0),
+                    RecordValue::Integer(if *valid { 0 } else { 2 }),
+                ])
+                .unwrap();
+            }
+            adjust(index, &mut scan);
+            scan.finalize().unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+
+    fn range(first_ordinal: u64, station: Option<u32>) -> ScanRange {
+        ScanRange {
+            first_ordinal,
+            station,
+        }
+    }
+
+    #[test]
+    fn every_scan_begins_a_scan_range() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("three-scans.e57");
+        write_scans(
+            &source,
+            &[(true, &[true; 4]), (false, &[true; 4]), (true, &[true; 4])],
+        );
+        let cloud = crate::open(&source, 20).unwrap();
+        assert_eq!(cloud.total_points, 12);
+        assert_eq!(cloud.scan_poses.len(), 2);
+        let expected = [range(0, Some(0)), range(4, None), range(8, Some(1))];
+        assert_eq!(cloud.scan_ranges, expected);
+        assert_eq!(cloud.point_ordinals, (0..12).collect::<Vec<u64>>());
+        for (point, ordinal) in cloud.points.iter().zip(&cloud.point_ordinals) {
+            let station = cloud.station_pose(*ordinal).map(|pose| pose.position);
+            let expected = match point.xyz[0] {
+                x if x < 100.0 => None,
+                x if x < 300.0 => Some(station_position(0)),
+                _ => Some(station_position(2)),
+            };
+            assert_eq!(station, expected, "ordinal {ordinal}");
+        }
+        assert!(cloud.station_pose(12).is_none());
+
+        // The metadata states the same ranges when every record is a point.
+        assert_eq!(ranges_for_count(&source, 12).unwrap().unwrap(), expected);
+
+        // A cloud made from the metadata alone has the stations and tells
+        // none: its count is the stated one and its points are not read yet.
+        let header = crate::open_e57_header(&source).unwrap();
+        assert_eq!(header.scan_poses, cloud.scan_poses);
+        assert!(header.scan_ranges.is_empty() && !header.scan_ranges_known());
+        assert!((0..12).all(|ordinal| header.station_of(ordinal).is_none()));
+        assert!(cloud.scan_ranges_known());
+    }
+
+    #[test]
+    fn records_without_a_point_shift_the_ranges_of_later_scans() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("invalid-record.e57");
+        write_scans(
+            &source,
+            &[
+                (true, &[true, false, true, true]),
+                (false, &[true; 4]),
+                (true, &[true; 4]),
+            ],
+        );
+        let cloud = crate::open(&source, 20).unwrap();
+        assert_eq!(cloud.total_points, 11);
+        assert_eq!(
+            cloud.scan_ranges,
+            [range(0, Some(0)), range(3, None), range(7, Some(1))]
+        );
+        assert_eq!(cloud.station_pose(2).unwrap().position, station_position(0));
+        assert!(cloud.station_pose(3).is_none());
+        assert_eq!(cloud.station_pose(7).unwrap().position, station_position(2));
+
+        // The stated counts no longer add up to the points, so they cannot
+        // stand in for the ranges of the pass.
+        assert_eq!(
+            stated_ranges(&open_reader(&source).unwrap().pointclouds()),
+            [range(0, Some(0)), range(4, None), range(8, Some(1))]
+        );
+        assert!(ranges_for_count(&source, 11).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_scan_that_states_part_of_its_extent_keeps_its_station() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("partial-bounds.e57");
+        write_scans_with(
+            &source,
+            &[(true, &[true; 4]), (true, &[true; 4])],
+            |index, scan| {
+                if index == 0 {
+                    scan.set_cartesian_bounds(Some(CartesianBounds {
+                        x_min: Some(1.0),
+                        x_max: Some(4.0),
+                        y_min: Some(0.0),
+                        y_max: Some(0.0),
+                        z_min: Some(0.0),
+                        z_max: None,
+                    }));
+                }
+            },
+        );
+        // The stations are those of the pass and of the photo numbering,
+        // whatever the scans state about their extent.
+        let header = crate::open_e57_header(&source).unwrap();
+        assert_eq!(header.scan_poses, scan_poses(&source).unwrap());
+        assert_eq!(header.scan_poses.len(), 2);
+        assert_eq!(header.scan_poses[0].position, station_position(0));
+        assert_eq!(header.scan_poses[1].position, station_position(1));
+        assert_eq!(
+            crate::open(&source, 8).unwrap().scan_poses,
+            header.scan_poses
+        );
+    }
+
+    #[test]
+    fn stated_ranges_are_kept_only_when_they_are_certain() {
+        let stated = vec![range(0, Some(0)), range(40, None), range(100, Some(1))];
+        assert_eq!(
+            certain_ranges(stated.clone(), 150, 150),
+            Some(stated.clone())
+        );
+        // One record held no point: which scan lost it is not known.
+        assert_eq!(certain_ranges(stated.clone(), 150, 149), None);
+        assert_eq!(certain_ranges(stated, 150, 151), None);
+        // A single scan owns every point, however many records were valid.
+        let single = vec![range(0, Some(0))];
+        assert_eq!(certain_ranges(single.clone(), 150, 149), Some(single));
+        assert_eq!(certain_ranges(Vec::new(), 0, 0), Some(Vec::new()));
     }
 }

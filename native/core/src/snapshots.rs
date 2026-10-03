@@ -137,11 +137,16 @@ impl Snapshots {
             scan_poses: known
                 .map(|known| known.scan_poses.clone())
                 .unwrap_or_default(),
+            // The scans of the pass come with the checked cloud. What the
+            // file states counts records, not points, and so does not fit
+            // the ordinals of the points read.
+            scan_ranges: Vec::new(),
             scan_images: known
                 .map(|known| known.scan_images.clone())
                 .unwrap_or_default(),
             provisional: true,
             source_stamp: Some(self.stamp),
+            scan_ranges_known: false,
         })
     }
 }
@@ -212,6 +217,51 @@ mod tests {
             snapshots.tick(&read, &mut refuse),
             Err(LoadError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn a_snapshot_tells_no_station() {
+        let _places = TEST_PLACES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("scans.e57");
+        // The first scan states four records and holds two points, so the
+        // pass meets the second scan at ordinal 2 and not at the stated 4.
+        crate::e57_points::tests::write_scans(
+            &source,
+            &[(true, &[true, false, false, true]), (true, &[true; 4])],
+        );
+        let stamp = SourceStamp::read(&source).unwrap();
+        let mut shown: Vec<PointCloud> = Vec::new();
+        let mut show = |cloud: &PointCloud| {
+            shown.push(cloud.clone());
+            Ok(())
+        };
+        let mut snapshots = Snapshots::begin(&source, stamp, &mut show)
+            .unwrap()
+            .unwrap();
+        let mut read = Collector::new(10);
+        crate::visit_points(&source, &mut |point| read.push(point)).unwrap();
+        snapshots.due = Instant::now();
+        snapshots.tick(&read, &mut show).unwrap();
+        let cloud = shown.last().unwrap();
+        assert!(cloud.provisional);
+        assert_eq!(cloud.scan_poses.len(), 2);
+        assert_eq!(cloud.total_points, 8);
+        assert_eq!(
+            cloud.point_ordinals[cloud.points.len() - 6..],
+            [0, 1, 2, 3, 4, 5]
+        );
+        // Its count is the stated one, which is no measure for the ordinals
+        // of the pass: only the checked cloud tells a station.
+        assert_eq!(
+            (0..8)
+                .map(|ordinal| cloud.station_of(ordinal))
+                .collect::<Vec<_>>(),
+            [None; 8]
+        );
+        assert!(cloud.scan_ranges.is_empty());
     }
 
     #[test]

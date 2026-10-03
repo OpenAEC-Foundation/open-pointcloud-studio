@@ -9,7 +9,7 @@ use super::{LoadError, Point, ScanPose};
 pub fn read(
     path: &Path,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
-    pose_push: &mut impl FnMut(ScanPose),
+    scan_begin: &mut impl FnMut(Option<ScanPose>),
 ) -> Result<(), LoadError> {
     let mut lines = BufReader::new(File::open(path)?).lines();
     let mut scan = 0usize;
@@ -57,13 +57,18 @@ pub fn read(
         let scanner_position = [scanner[0], scanner[1], scanner[2]];
         let column_translation = transform[3][..3].iter().all(|value| value.abs() < 1e-12)
             && (0..3).any(|axis| transform[axis][3].abs() >= 1e-12);
-        if scanner_position.iter().all(|value| value.is_finite()) {
-            pose_push(ScanPose {
-                label: format!("Scan {scan}"),
-                position: scanner_position,
-                axes,
-            });
-        }
+        // Every block is reported, also one whose station is unusable, so
+        // that its points are not taken for those of the block before it.
+        scan_begin(
+            scanner_position
+                .iter()
+                .all(|value| value.is_finite())
+                .then(|| ScanPose {
+                    label: format!("Scan {scan}"),
+                    position: scanner_position,
+                    axes,
+                }),
+        );
         for _ in 0..count {
             let line = next_line(&mut lines)?
                 .ok_or_else(|| LoadError::InvalidData("truncated PTX point data".into()))?;
@@ -141,7 +146,57 @@ fn parse_values(line: &str, minimum: usize) -> Result<Vec<f64>, LoadError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use crate::ScanRange;
+
+    /// Three scan blocks: three points seen from (10, 20, 30) after a row
+    /// that holds no point, two points of a block whose station is not a
+    /// position, and one point seen from (40, 50, 60).
+    pub(crate) const THREE_BLOCKS: &str = concat!(
+        "2\n2\n10 20 30\n1 0 0\n0 1 0\n0 0 1\n",
+        "1 0 0 0\n0 1 0 0\n0 0 1 0\n10 20 30 1\n",
+        "0 0 0 0\n1 0 0 0.5\n2 0 0 0.5\n3 0 0 0.5\n",
+        "1\n2\nnan nan nan\n1 0 0\n0 1 0\n0 0 1\n",
+        "1 0 0 0\n0 1 0 0\n0 0 1 0\n20 20 30 1\n",
+        "1 0 0 0.5\n2 0 0 0.5\n",
+        "1\n1\n40 50 60\n1 0 0\n0 1 0\n0 0 1\n",
+        "1 0 0 0\n0 1 0 0\n0 0 1 0\n40 50 60 1\n",
+        "1 0 0 0.5\n",
+    );
+
+    /// The ranges a full pass over `THREE_BLOCKS` records.
+    pub(crate) fn three_block_ranges() -> Vec<ScanRange> {
+        [(0, Some(0)), (3, None), (5, Some(1))]
+            .map(|(first_ordinal, station)| ScanRange {
+                first_ordinal,
+                station,
+            })
+            .to_vec()
+    }
+
+    #[test]
+    fn every_scan_block_begins_a_scan_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("three-blocks.ptx");
+        std::fs::write(&path, THREE_BLOCKS).unwrap();
+        let cloud = super::super::open(&path, 10).unwrap();
+        assert_eq!(cloud.total_points, 6);
+        assert_eq!(cloud.scan_poses.len(), 2);
+        assert_eq!(cloud.scan_ranges, three_block_ranges());
+        assert_eq!(cloud.point_ordinals, [0, 1, 2, 3, 4, 5]);
+        // Every point lies along X from the origin of its own block.
+        for (point, ordinal) in cloud.points.iter().zip(&cloud.point_ordinals) {
+            let station = cloud.station_pose(*ordinal).map(|pose| pose.position);
+            let expected = match point.xyz[0] {
+                x if x < 15.0 => Some([10.0, 20.0, 30.0]),
+                x if x < 25.0 => None,
+                _ => Some([40.0, 50.0, 60.0]),
+            };
+            assert_eq!(station, expected, "ordinal {ordinal}");
+        }
+        assert!(cloud.station_pose(6).is_none());
+    }
+
     #[test]
     fn reads_multiple_transformed_scans() {
         let dir = tempfile::tempdir().unwrap();

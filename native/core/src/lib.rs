@@ -1,5 +1,6 @@
 //! File loading and bounded point sampling shared by the native UI and future clients.
 
+use std::cell::Cell;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -87,6 +88,36 @@ pub struct ScanPose {
     pub axes: Option<[[f64; 3]; 3]>,
 }
 
+/// The points of one scan in a source that holds several: scans are read one
+/// after another, so a scan owns the source ordinals from its first one up to
+/// the first one of the next scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ScanRange {
+    pub first_ordinal: u64,
+    /// Index into `PointCloud::scan_poses`; a scan without a station has none.
+    pub station: Option<u32>,
+}
+
+/// The scans a source pass has met so far: their stations in file order and
+/// the ordinal each scan began at.
+#[derive(Default)]
+struct ScanLog {
+    poses: Vec<ScanPose>,
+    ranges: Vec<ScanRange>,
+}
+
+impl ScanLog {
+    fn begin(&mut self, first_ordinal: u64, pose: Option<ScanPose>) {
+        self.ranges.push(ScanRange {
+            first_ordinal,
+            station: pose
+                .as_ref()
+                .and_then(|_| u32::try_from(self.poses.len()).ok()),
+        });
+        self.poses.extend(pose);
+    }
+}
+
 fn quaternion_axes(rotation: [f64; 4]) -> Option<[[f64; 3]; 3]> {
     if !rotation.iter().all(|value| value.is_finite()) {
         return None;
@@ -158,6 +189,10 @@ pub struct PointCloud {
     pub has_intensity: bool,
     pub has_classification: bool,
     pub scan_poses: Vec<ScanPose>,
+    /// The scans of a source that is read scan by scan, in ordinal order, as
+    /// a pass over the source met them. Empty for other sources, and while
+    /// `scan_ranges_known` is false.
+    pub scan_ranges: Vec<ScanRange>,
     /// Photos stored with the scanner stations, listed without decoding them.
     pub scan_images: Vec<ScanImage>,
     /// Shown ahead of a full pass over the source: the count is the stated
@@ -165,6 +200,10 @@ pub struct PointCloud {
     /// result and cannot be indexed.
     pub provisional: bool,
     source_stamp: Option<SourceStamp>,
+    /// Whether `scan_ranges` say for every point which scan holds it. Kept
+    /// apart from the ranges because "no scans" and "not recorded" are both
+    /// empty, and only the first may be written to a cache as a fact.
+    scan_ranges_known: bool,
 }
 
 impl PointCloud {
@@ -184,6 +223,87 @@ impl PointCloud {
             ));
         }
         Ok(())
+    }
+
+    /// Whether the scan that holds each point is known, so that `station_of`
+    /// can answer. It is not for a provisional cloud, whose count and
+    /// ordinals are not checked yet, and not for a cloud from a cache written
+    /// before scan ranges were recorded when its source holds several scans
+    /// and nothing else tells where they begin. `read_scan_ranges` finds out.
+    pub fn scan_ranges_known(&self) -> bool {
+        self.scan_ranges_known && !self.provisional
+    }
+
+    /// Read the source once more, without keeping any point, to record where
+    /// its scans begin when the cache this cloud came from did not say. Does
+    /// nothing when they are known. `progress` receives the points read so
+    /// far and may cancel, as in `open_with_progress`. Afterwards
+    /// `OctreeIndex::open_cached_if_present` or `OctreeIndex::build_cached`
+    /// with this cloud keeps the ranges in the index cache.
+    pub fn read_scan_ranges(
+        &mut self,
+        mut progress: impl FnMut(u64) -> Result<(), LoadError>,
+    ) -> Result<(), LoadError> {
+        if self.provisional {
+            return Err(LoadError::InvalidData(
+                "the cloud is a preview that was not checked against its source".into(),
+            ));
+        }
+        if self.scan_ranges_known {
+            return Ok(());
+        }
+        self.validate_source()?;
+        let mut scans = ScanLog::default();
+        let read = Cell::new(0u64);
+        visit_points_with_poses(
+            &self.path,
+            &mut |_| {
+                read.set(read.get() + 1);
+                if read.get().is_multiple_of(65_536) {
+                    progress(read.get())?;
+                }
+                Ok(())
+            },
+            &mut |pose| scans.begin(read.get(), pose),
+        )?;
+        progress(read.get())?;
+        self.validate_source()?;
+        if read.get() != self.total_points {
+            return Err(LoadError::InvalidData(
+                "source no longer holds the points of the loaded cloud".into(),
+            ));
+        }
+        self.scan_poses = scans.poses;
+        self.scan_ranges = scans.ranges;
+        self.scan_ranges_known = true;
+        Ok(())
+    }
+
+    /// Index into `scan_poses` of the station that measured the point with
+    /// this source ordinal. `None` when the point belongs to a scan without a
+    /// station, or when it is not known which scan it belongs to.
+    pub fn station_of(&self, ordinal: u64) -> Option<usize> {
+        if !self.scan_ranges_known() || ordinal >= self.total_points {
+            return None;
+        }
+        if self.scan_ranges.is_empty() {
+            // One file per station needs no ranges: all points are its own.
+            return (self.scan_poses.len() == 1).then_some(0);
+        }
+        // An empty scan begins where the next one does; the last range that
+        // begins at or before the ordinal is the scan that holds the point.
+        let after = self
+            .scan_ranges
+            .partition_point(|range| range.first_ordinal <= ordinal);
+        let station = self.scan_ranges[after.checked_sub(1)?].station? as usize;
+        (station < self.scan_poses.len()).then_some(station)
+    }
+
+    /// The pose of the station that measured the point with this source
+    /// ordinal, as `station_of` finds it.
+    pub fn station_pose(&self, ordinal: u64) -> Option<&ScanPose> {
+        self.station_of(ordinal)
+            .map(|station| &self.scan_poses[station])
     }
 }
 
@@ -331,11 +451,15 @@ fn open_showing(
     } else {
         sample_limit
     });
-    let mut scan_poses = Vec::new();
+    let mut scans = ScanLog::default();
+    // The scan callback cannot look into the collector while the point
+    // callback holds it, so the count of points read is kept beside it.
+    let read = Cell::new(0u64);
     visit_points_with_poses(
         path,
         &mut |point| {
             collector.push(point)?;
+            read.set(collector.total);
             if collector.total.is_multiple_of(65_536) {
                 progress(collector.total)?;
                 if let (Some(snapshots), Some(show)) = (&mut snapshots, &mut snapshot) {
@@ -344,7 +468,7 @@ fn open_showing(
             }
             Ok(())
         },
-        &mut |pose| scan_poses.push(pose),
+        &mut |pose| scans.begin(read.get(), pose),
     )?;
     drop(snapshots);
     progress(collector.total)?;
@@ -355,7 +479,8 @@ fn open_showing(
         ));
     }
     let mut cloud = collector.finish(path.to_path_buf())?;
-    cloud.scan_poses = scan_poses;
+    cloud.scan_poses = scans.poses;
+    cloud.scan_ranges = scans.ranges;
     cloud.scan_images = scan_images(path);
     cloud.source_stamp = Some(after);
     // The next open of an unchanged source then needs no point decoding.
@@ -409,9 +534,13 @@ pub fn open_e57_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         has_intensity: summary.has_intensity,
         has_classification: false,
         scan_poses: summary.poses,
+        // The metadata counts records, not points: where a scan begins among
+        // the points is known once they have been read.
+        scan_ranges: Vec::new(),
         scan_images: scan_images(path),
         provisional: true,
         source_stamp: Some(stamp),
+        scan_ranges_known: false,
     })
 }
 
@@ -515,9 +644,11 @@ pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         has_intensity: true,
         has_classification: true,
         scan_poses: Vec::new(),
+        scan_ranges: Vec::new(),
         scan_images: Vec::new(),
         provisional: false,
         source_stamp: Some(stamp),
+        scan_ranges_known: true,
     })
 }
 
@@ -582,10 +713,13 @@ pub fn visit_points(
     visit_points_with_poses(path, push, &mut |_| {})
 }
 
+/// Like `visit_points`, and tell when a scan begins in a format that is read
+/// scan by scan: `scan_begin` is called before the first point of every scan,
+/// with the station of the scan if it has one.
 fn visit_points_with_poses(
     path: impl AsRef<Path>,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
-    pose_push: &mut impl FnMut(ScanPose),
+    scan_begin: &mut impl FnMut(Option<ScanPose>),
 ) -> Result<(), LoadError> {
     let path = path.as_ref();
     let extension = path
@@ -599,10 +733,10 @@ fn visit_points_with_poses(
         "obj" => mesh_points::read_obj(path, push),
         "off" => mesh_points::read_off(path, push),
         "stl" => mesh_points::read_stl(path, push),
-        "ptx" => ptx::read(path, push, pose_push),
-        "pcd" => pcd::read(path, push, pose_push),
+        "ptx" => ptx::read(path, push, scan_begin),
+        "pcd" => pcd::read(path, push, scan_begin),
         "dxf" => dxf::read(path, push),
-        "e57" => e57_points::read(path, push, pose_push),
+        "e57" => e57_points::read(path, push, scan_begin),
         "xyz" | "asc" | "txt" | "csv" | "pts" => read_text(path, push, extension == "pts"),
         _ => Err(LoadError::UnsupportedFormat(extension)),
     }
@@ -685,9 +819,12 @@ impl Collector {
             has_intensity: self.has_intensity,
             has_classification: self.has_classification,
             scan_poses: Vec::new(),
+            scan_ranges: Vec::new(),
             scan_images: Vec::new(),
             provisional: false,
             source_stamp: None,
+            // The pass that fills a collector meets every scan of the source.
+            scan_ranges_known: true,
         })
     }
 }
@@ -848,6 +985,91 @@ mod tests {
         assert_eq!(cloud.points.len(), 3);
         assert_eq!(cloud.bounds.min, [0.0, 0.0, 0.0]);
         assert_eq!(cloud.bounds.max, [9_999.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn station_lookup_searches_the_scan_ranges() {
+        let mut collector = Collector::new(10);
+        for index in 0..10 {
+            collector
+                .push(Point {
+                    xyz: [f64::from(index), 0.0, 0.0],
+                    rgb: None,
+                    intensity: None,
+                    classification: None,
+                })
+                .unwrap();
+        }
+        let mut cloud = collector.finish(PathBuf::from("scans.xyz")).unwrap();
+        let pose = |x: f64| ScanPose {
+            label: format!("Scan {x}"),
+            position: [x, 0.0, 0.0],
+            axes: None,
+        };
+        assert!(cloud.scan_ranges.is_empty());
+        assert_eq!(cloud.station_of(0), None);
+
+        // One file per station: every point is its own, without ranges.
+        cloud.scan_poses = vec![pose(1.0)];
+        assert_eq!(cloud.station_of(0), Some(0));
+        assert_eq!(cloud.station_of(9), Some(0));
+        assert_eq!(cloud.station_of(10), None);
+        assert_eq!(cloud.station_of(u64::MAX), None);
+
+        // Several stations and nothing that tells their points apart.
+        cloud.scan_poses = vec![pose(1.0), pose(2.0), pose(3.0)];
+        assert!((0..10).all(|ordinal| cloud.station_of(ordinal).is_none()));
+
+        let range = |first_ordinal, station| ScanRange {
+            first_ordinal,
+            station,
+        };
+        cloud.scan_ranges = vec![
+            range(0, Some(0)),
+            // A scan without a station.
+            range(3, None),
+            // An empty scan begins where the next one does.
+            range(5, Some(1)),
+            range(5, Some(2)),
+            // A station the cloud does not have.
+            range(8, Some(9)),
+        ];
+        let stations: Vec<_> = (0..11).map(|ordinal| cloud.station_of(ordinal)).collect();
+        assert_eq!(
+            stations,
+            [
+                Some(0),
+                Some(0),
+                Some(0),
+                None,
+                None,
+                Some(2),
+                Some(2),
+                Some(2),
+                None,
+                None,
+                None
+            ]
+        );
+        assert_eq!(cloud.station_pose(2).unwrap().position, [1.0, 0.0, 0.0]);
+        assert_eq!(cloud.station_pose(7).unwrap().position, [3.0, 0.0, 0.0]);
+        assert!(cloud.station_pose(4).is_none());
+        assert!(cloud.station_pose(u64::MAX).is_none());
+
+        // A single station does not claim the points of a scan without one.
+        cloud.scan_poses = vec![pose(1.0)];
+        cloud.scan_ranges = vec![range(0, None), range(4, Some(0))];
+        assert_eq!(cloud.station_of(3), None);
+        assert_eq!(cloud.station_of(4), Some(0));
+
+        // A provisional cloud tells no station: its count is the stated one
+        // and its ordinals are not checked against it.
+        assert!(cloud.scan_ranges_known());
+        cloud.provisional = true;
+        assert!(!cloud.scan_ranges_known());
+        assert_eq!(cloud.station_of(4), None);
+        assert!(cloud.station_pose(4).is_none());
+        assert!(cloud.read_scan_ranges(|_| Ok(())).is_err());
     }
 
     #[test]

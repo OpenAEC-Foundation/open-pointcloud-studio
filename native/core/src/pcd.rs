@@ -83,8 +83,14 @@ impl Viewpoint {
         ]
     }
 
-    fn scan_pose(self, present: bool) -> Option<ScanPose> {
-        (present && self.orientation_known).then(|| ScanPose {
+    /// The station this viewpoint stands for. Writers put the identity
+    /// viewpoint at the origin in any file, also in a cloud merged from many
+    /// scans, where nothing was measured from there. It is taken for the
+    /// scanner only in an organised cloud, which is the grid of one sweep in
+    /// the scanner's own frame.
+    fn scan_pose(self, present: bool, organised: bool) -> Option<ScanPose> {
+        let unset = self.translation == [0.0; 3] && self.rotation[1..] == [0.0; 3];
+        (present && self.orientation_known && (organised || !unset)).then(|| ScanPose {
             label: "VIEWPOINT".into(),
             position: self.translation,
             axes: quaternion_axes(self.rotation),
@@ -98,6 +104,7 @@ pub(crate) fn scan_poses(path: &Path) -> Result<Vec<ScanPose>, LoadError> {
     let mut reader = BufReader::new(File::open(path)?);
     let mut viewpoint = Viewpoint::default();
     let mut has_viewpoint = false;
+    let mut height = 1u64;
     let mut header_bytes = 0usize;
     loop {
         let mut line = String::new();
@@ -108,11 +115,17 @@ pub(crate) fn scan_poses(path: &Path) -> Result<Vec<ScanPose>, LoadError> {
         }
         let mut words = line.split_whitespace();
         match words.next().map(str::to_ascii_uppercase).as_deref() {
+            Some("HEIGHT") => height = parse_u64(words.next())?,
             Some("VIEWPOINT") => {
                 viewpoint = Viewpoint::parse(words)?;
                 has_viewpoint = true;
             }
-            Some("DATA") => return Ok(viewpoint.scan_pose(has_viewpoint).into_iter().collect()),
+            Some("DATA") => {
+                return Ok(viewpoint
+                    .scan_pose(has_viewpoint, height > 1)
+                    .into_iter()
+                    .collect())
+            }
             _ => {}
         }
     }
@@ -121,7 +134,7 @@ pub(crate) fn scan_poses(path: &Path) -> Result<Vec<ScanPose>, LoadError> {
 pub fn read(
     path: &Path,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
-    pose_push: &mut impl FnMut(ScanPose),
+    scan_begin: &mut impl FnMut(Option<ScanPose>),
 ) -> Result<(), LoadError> {
     let mut reader = BufReader::new(File::open(path)?);
     let (mut names, mut sizes, mut kinds, mut counts) = (vec![], vec![], vec![], vec![]);
@@ -163,9 +176,8 @@ pub fn read(
     if names.is_empty() || points == 0 {
         return Err(invalid("PCD file has no points or fields"));
     }
-    if let Some(pose) = viewpoint.scan_pose(has_viewpoint) {
-        pose_push(pose);
-    }
+    // The file is one scan, with or without a station.
+    scan_begin(viewpoint.scan_pose(has_viewpoint, height > 1));
     let (mut record_size, mut column) = (0usize, 0usize);
     let mut fields = Vec::with_capacity(names.len());
     for (index, name) in names.into_iter().enumerate() {
@@ -504,6 +516,101 @@ fn invalid(reason: &str) -> LoadError {
 
 #[cfg(test)]
 mod tests {
+    use crate::ScanRange;
+
+    #[test]
+    fn the_file_is_one_scan_range_with_its_viewpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 3\n";
+        let data = "DATA ascii\n1 0 0\n2 0 0\n3 0 0\n";
+
+        let posed = dir.path().join("posed.pcd");
+        std::fs::write(
+            &posed,
+            format!("{fields}VIEWPOINT 10 20 30 1 0 0 0\n{data}"),
+        )
+        .unwrap();
+        let cloud = super::super::open(&posed, 3).unwrap();
+        assert_eq!(
+            cloud.scan_ranges,
+            [ScanRange {
+                first_ordinal: 0,
+                station: Some(0)
+            }]
+        );
+        for ordinal in 0..3 {
+            assert_eq!(
+                cloud.station_pose(ordinal).unwrap().position,
+                [10.0, 20.0, 30.0]
+            );
+        }
+        assert!(cloud.station_pose(3).is_none());
+
+        // Without a viewpoint the file is still one scan, with no station.
+        let bare = dir.path().join("bare.pcd");
+        std::fs::write(&bare, format!("{fields}{data}")).unwrap();
+        let cloud = super::super::open(&bare, 3).unwrap();
+        assert!(cloud.scan_poses.is_empty());
+        assert_eq!(
+            cloud.scan_ranges,
+            [ScanRange {
+                first_ordinal: 0,
+                station: None
+            }]
+        );
+        assert!((0..3).all(|ordinal| cloud.station_of(ordinal).is_none()));
+    }
+
+    #[test]
+    fn the_default_viewpoint_is_a_station_only_for_an_organised_cloud() {
+        let dir = tempfile::tempdir().unwrap();
+        let fields = "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\n";
+        let data = "VIEWPOINT 0 0 0 1 0 0 0\nDATA ascii\n1 0 0\n2 0 0\n3 0 0\n4 0 0\n";
+
+        // Writers put this viewpoint in any file, also in a merged cloud.
+        let merged = dir.path().join("merged.pcd");
+        std::fs::write(
+            &merged,
+            format!("{fields}WIDTH 4\nHEIGHT 1\nPOINTS 4\n{data}"),
+        )
+        .unwrap();
+        let cloud = super::super::open(&merged, 4).unwrap();
+        assert!(cloud.scan_poses.is_empty());
+        assert!(super::scan_poses(&merged).unwrap().is_empty());
+        assert_eq!(
+            cloud.scan_ranges,
+            [ScanRange {
+                first_ordinal: 0,
+                station: None
+            }]
+        );
+        assert!((0..4).all(|ordinal| cloud.station_of(ordinal).is_none()));
+
+        // The grid of one sweep is seen from the origin of its own frame.
+        let sweep = dir.path().join("sweep.pcd");
+        std::fs::write(
+            &sweep,
+            format!("{fields}WIDTH 2\nHEIGHT 2\nPOINTS 4\n{data}"),
+        )
+        .unwrap();
+        let cloud = super::super::open(&sweep, 4).unwrap();
+        assert_eq!(cloud.scan_poses, super::scan_poses(&sweep).unwrap());
+        assert_eq!(cloud.station_pose(3).unwrap().position, [0.0, 0.0, 0.0]);
+
+        // A viewpoint that was set is a station in any cloud.
+        for viewpoint in ["0 0 1.5 1 0 0 0", "0 0 0 0 0 0 1"] {
+            let placed = dir.path().join("placed.pcd");
+            std::fs::write(
+                &placed,
+                format!("{fields}POINTS 1\nVIEWPOINT {viewpoint}\nDATA ascii\n1 0 0\n"),
+            )
+            .unwrap();
+            let cloud = super::super::open(&placed, 1).unwrap();
+            assert_eq!(cloud.scan_poses.len(), 1, "{viewpoint}");
+            assert_eq!(cloud.station_of(0), Some(0), "{viewpoint}");
+        }
+    }
+
     #[test]
     fn viewpoint_rotates_and_translates_all_storage_modes() {
         let dir = tempfile::tempdir().unwrap();
