@@ -196,7 +196,9 @@ Each heading has a section in the [user guide](docs/guide.md).
 
 - **Terrain mesh** builds a 2.5D surface from the lowest points of a grid, suited to ground and other surfaces seen from above.
 - **3D surface** builds a surface from a sample of the points, including walls and overhangs. It leaves holes and is not watertight.
-- Both save an OBJ file with colours and normals and show the result in the scene. A new mesh takes the place of the previous mesh of that scan, and Undo does not apply to meshes.
+- Both save an OBJ file with colours and normals and show the result in the scene.
+- **Closed mesh** builds a surface without overlaps from every point of a region, closed wherever the scan has points or a gap narrower than the hole limit, with door and window openings left open; see [Closed mesh](#closed-mesh).
+- A new mesh takes the place of the previous mesh of that scan, and Undo does not apply to meshes.
 - Properties shows the vertices and triangles of a mesh, its open edges (the rims of the surface and of its holes) and the number of connected parts.
 - Any mesh that is open, whether made here, opened from a file or downloaded from the 3D BAG, can be saved as OBJ, as binary PLY or as binary STL.
 
@@ -207,6 +209,14 @@ Each heading has a section in the [user guide](docs/guide.md).
 - **Filled cut** adds the walls, columns and floors that the slab goes through as filled regions with outlines, and leaves door and window openings open. **Preview** shows these regions over the points before a file is saved.
 - Millimetres or metres, model coordinates or the corner of the box as zero, a layer per scan or per class, layer colours or the colours of the scan, and the file versions R2004 to R2018.
 - The filled cut is traced from the points and has limits: a wall scanned from one side is drawn as a thin strip, gaps under about half a metre are closed, and furniture in the slab is drawn unless its points are deleted first. The [user guide](docs/guide.md#the-filled-cut-and-its-limits) lists them.
+
+### Closed mesh
+
+- **Closed mesh** in the SURFACE group meshes the active scan, or every visible scan that reaches the section box (layers of 3D BAG buildings stay out), inside the section box: put the box around a room and choose **Start** in the block that opens in Properties. The block says beforehand which region will be meshed, how large it is and about how many triangles it gives, and warns when that is more than a mesh may hold, or comes close to it without simplification.
+- The settings are the voxel size (automatic: 2 cm for a region up to 20 m), the widest gap that is closed (0.25 m), how far simplification may move the surface (automatic: 0.15 voxel; 0 for none), and how the front of a surface is found: from the scanner stations where the scan knows them, towards the centre of the region, or upward.
+- The strip above the scene shows the stages of the job with a button to cancel. The result becomes the mesh of the active scan, stays with that scan when it is moved or scaled, and is saved through **Export mesh…** as OBJ, PLY or STL.
+- The job measures its result: Properties and the status bar give the vertices and triangles, the mean, the 95% and the largest distance between the points and the mesh, the open edges and connected parts, and how much of the surface had no station to take its side from, with advice when that matters.
+- It has limits: corners are rounded by about a quarter of a voxel, objects thinner than two or three voxels merge or get holes, some gaps beside another surface stay open, and without stations a surface that the centre of the region sees edge on can come out torn. The [user guide](docs/guide.md#limits) lists them, with what was measured on generated rooms; nothing was measured on a scan of a real building yet.
 
 <!-- New tools add their bullet list here, as a "###" heading of their own, and a section in docs/guide.md. -->
 
@@ -263,7 +273,9 @@ Limits in the application:
 | Undo | 8 deletions |
 | Saved views | 32 per scan, each with at most 64 annotations; a note has at most 240 characters |
 | Measurement | 256 points |
-| Mesh shown in the scene | 1,000,000 vertices and 2,000,000 triangles per file |
+| Mesh | 4,000,000 vertices and 8,000,000 triangles, for a mesh file and for a mesh job alike. Such a mesh takes about 0.25 GB of memory, as much again while it is shown, and up to 0.9 GB for a moment while a file of that size is opened |
+| Meshes shown together | About 5.5 million vertices, the 256 MiB the graphics card takes in one buffer. One mesh always fits; one that does not fit beside the others is held, and can be saved, but is not drawn |
+| Closed mesh | Voxels of 0.005 to 0.5 m; gaps closed up to 3.2 m and at most 32 voxels; a scan without an index up to 5,000,000 points. About 2 GB of memory for the blocks in work |
 | 3D surface | 3 to 1,000,000 vertices (50,000 by default) |
 | 3D BAG download | 2 by 2 km and about 5,000 buildings |
 | Section drawing | 150,000 points by default and at most 400,000; when the slab holds more after thinning to 5 mm, the point spacing doubles. Writing takes about 2.8 kB of memory per point: about 1.1 GB at 400,000 |
@@ -292,6 +304,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--merge OUTPUT.laz INPUT1.las INPUT2.laz [...]` | Merges LAS and LAZ scans into one file |
 | `--mesh INPUT OUTPUT.obj` | Writes a terrain mesh of a scan |
 | `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N]` | Writes a 3D surface mesh of a scan |
+| `--closed-mesh INPUT OUTPUT.obj\|.ply\|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic\|centre\|upward]` | Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY or STL: with an automatic voxel, gaps closed up to 0.25 m and the sides from the scanner stations unless the options say otherwise |
 | `--mesh-export INPUT OUTPUT` | Writes the faces of a mesh file as OBJ, PLY or STL; the extension of `OUTPUT` chooses the format (`.obj`, `.ply`, `.stl`) |
 | `--bag3d XMIN,YMIN,XMAX,YMAX 1.2\|1.3\|2.2 OUTPUT.obj` | Downloads the 3D BAG buildings inside an RD New box as OBJ |
 | `--version`, `-V` | Prints the version |
@@ -303,6 +316,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 open-pointcloud-studio --export scan.laz scan.e57
 open-pointcloud-studio --section scan.laz 207440,474000,-100,208000,475000,1000 crop.laz
 open-pointcloud-studio --drawing scan.laz 0,0,0,20,15,1.1 plan.dxf
+open-pointcloud-studio --closed-mesh scan.e57 room.ply --box 0,0,-0.1,5.1,4.1,2.7
 open-pointcloud-studio --drawing scan.laz 0,6,-1,20,15,8 section.dwg --view front --units m
 open-pointcloud-studio --merge merged.laz north.laz south.laz
 ```

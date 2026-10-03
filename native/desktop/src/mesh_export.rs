@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use iced::widget::{button, column, container};
+use iced::widget::{button, column, container, text};
 use iced::{Element, Fill, Task};
 use pointcloud_core::{LoadError, MeshFormat, MeshGeometry, MeshTopology};
 use serde_json::{json, Value};
@@ -445,7 +445,8 @@ impl Studio {
     /// The section of Properties about the mesh of the active layer: its
     /// size, what was measured of it, and the button that saves it.
     pub(crate) fn mesh_properties(&self) -> Option<Element<'_, Message>> {
-        let entry = self.active.and_then(|index| self.clouds.get(index))?;
+        let active = self.active?;
+        let entry = self.clouds.get(active)?;
         let mesh = entry.mesh.as_ref()?;
         let mut rows = column![
             opencad_properties::section_header("Surface mesh"),
@@ -463,6 +464,20 @@ impl Studio {
                     "Connected parts",
                     format_count(topology.components),
                 ));
+        }
+        // All meshes share the buffers of the graphics device. One that no
+        // longer fits beside the others is held and can be saved, but is not
+        // drawn.
+        if entry.mesh_visible && !crate::gpu_viewport::drawn_meshes(&self.clouds).contains(&active)
+        {
+            rows = rows.push(
+                container(
+                    text(tr("Not drawn: the meshes shown together hold more than the graphics device takes. Switch off the surface of another scan."))
+                        .size(10)
+                        .color(self.ui_theme.colors().accent),
+                )
+                .padding([4, 8]),
+            );
         }
         Some(
             rows.push(

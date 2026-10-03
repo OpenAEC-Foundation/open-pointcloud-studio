@@ -93,6 +93,50 @@ pub struct GpuViewport<'a> {
 pub struct RenderCache {
     key: Option<SceneKey>,
     geometry: Option<Arc<RenderGeometry>>,
+    mesh_key: Option<MeshKey>,
+    mesh: Option<Arc<MeshBuffers>>,
+}
+
+/// What the buffers of the meshes are made from. The points on screen, the
+/// section box, the class filters and the deletions are not among it: a mesh
+/// of millions of triangles is not built and sent to the graphics device
+/// again each time the points are refined.
+struct MeshKey {
+    /// The centre of the scene, which the vertices are relative to.
+    center: Option<[f64; 3]>,
+    /// Every mesh that is switched on, in the order of the layers, with
+    /// where its layer stands.
+    shown: Vec<(Arc<MeshGeometry>, CloudTransform)>,
+}
+
+impl MeshKey {
+    fn shown(clouds: &[CloudEntry]) -> impl Iterator<Item = (&Arc<MeshGeometry>, CloudTransform)> {
+        clouds.iter().filter_map(|entry| {
+            let mesh = entry.mesh.as_ref().filter(|_| entry.mesh_visible)?;
+            Some((mesh, entry.transform))
+        })
+    }
+
+    fn capture(clouds: &[CloudEntry], bounds: Option<Bounds>) -> Self {
+        Self {
+            center: bounds.map(|bounds| bounds.center()),
+            shown: Self::shown(clouds)
+                .map(|(mesh, transform)| (Arc::clone(mesh), transform))
+                .collect(),
+        }
+    }
+
+    fn matches(&self, clouds: &[CloudEntry], bounds: Option<Bounds>) -> bool {
+        let mut shown = Self::shown(clouds);
+        // Without a mesh to draw the centre of the scene does not matter.
+        (self.shown.is_empty() || self.center == bounds.map(|bounds| bounds.center()))
+            && self.shown.iter().all(|(mesh, transform)| {
+                shown
+                    .next()
+                    .is_some_and(|(other, stands)| Arc::ptr_eq(mesh, other) && *transform == stands)
+            })
+            && shown.next().is_none()
+    }
 }
 
 struct SceneKey {
@@ -187,15 +231,57 @@ impl CloudKey {
     }
 }
 
+/// The largest buffer the graphics device takes: the default limit of the
+/// device, which is what the window asks for.
+const MAX_BUFFER_BYTES: usize = 256 << 20;
+/// All meshes are drawn from one vertex buffer and one index buffer, so
+/// together they hold at most this many vertices and corners of triangles.
+/// One mesh at the limits of a mesh file always fits.
+const MAX_DRAWN_MESH_VERTICES: usize = MAX_BUFFER_BYTES / std::mem::size_of::<GpuMeshVertex>();
+const MAX_DRAWN_MESH_INDICES: usize = MAX_BUFFER_BYTES / std::mem::size_of::<u32>();
+const _: () = assert!(
+    pointcloud_core::MAX_MESH_VERTICES <= MAX_DRAWN_MESH_VERTICES
+        && pointcloud_core::MAX_MESH_TRIANGLES * 3 <= MAX_DRAWN_MESH_INDICES
+);
+
+/// Which meshes of a row fit the buffers together, each given by its place,
+/// its vertices and its triangles: every one that fits beside those taken
+/// before it. A larger buffer would be refused by the device and end the
+/// application, so a mesh that does not fit is left out and a smaller one
+/// after it is still taken.
+fn meshes_that_fit(sizes: impl IntoIterator<Item = (usize, usize, usize)>) -> Vec<usize> {
+    let mut taken = Vec::new();
+    let (mut vertices, mut indices) = (0usize, 0usize);
+    for (place, mesh_vertices, mesh_triangles) in sizes {
+        let mesh_indices = mesh_triangles.saturating_mul(3);
+        if vertices.saturating_add(mesh_vertices) > MAX_DRAWN_MESH_VERTICES
+            || indices.saturating_add(mesh_indices) > MAX_DRAWN_MESH_INDICES
+        {
+            continue;
+        }
+        vertices += mesh_vertices;
+        indices += mesh_indices;
+        taken.push(place);
+    }
+    taken
+}
+
+/// The layers whose mesh is drawn: every mesh that is switched on, in the
+/// order of the layers, as long as it fits the buffers.
+pub(crate) fn drawn_meshes(clouds: &[CloudEntry]) -> Vec<usize> {
+    meshes_that_fit(clouds.iter().enumerate().filter_map(|(index, entry)| {
+        let mesh = entry.mesh.as_deref().filter(|_| entry.mesh_visible)?;
+        Some((index, mesh.vertices.len(), mesh.triangles.len()))
+    }))
+}
+
 impl<'a> GpuViewport<'a> {
     pub fn widget(self) -> Shader<Message, Self> {
         Shader::new(self)
     }
 
-    fn build_geometry(&self, overall_bounds: Option<Bounds>) -> RenderGeometry {
+    fn build_points(&self, overall_bounds: Option<Bounds>) -> Vec<GpuPoint> {
         let mut points = Vec::new();
-        let mut mesh_vertices = Vec::new();
-        let mut mesh_indices = Vec::new();
         if let Some(overall_bounds) = overall_bounds {
             let center = overall_bounds.center();
             let sampled: usize = self
@@ -244,23 +330,27 @@ impl<'a> GpuViewport<'a> {
                     .lod_pace
                     .record_build(sampled, started.elapsed());
             }
-            for entry in self
-                .overlay
-                .clouds
-                .iter()
-                .filter(|entry| entry.mesh_visible)
-            {
+        }
+        points
+    }
+
+    /// The buffers of every mesh that is drawn, relative to the centre of
+    /// the scene.
+    fn build_mesh(&self, overall_bounds: Option<Bounds>) -> MeshBuffers {
+        let mut mesh_vertices = Vec::new();
+        let mut mesh_indices = Vec::new();
+        if let Some(overall_bounds) = overall_bounds {
+            let center = overall_bounds.center();
+            for index in drawn_meshes(self.overlay.clouds) {
+                let entry = &self.overlay.clouds[index];
                 let Some(mesh) = entry.mesh.as_deref() else {
                     continue;
                 };
+                // What `drawn_meshes` lets through stays far below the range
+                // of a 32-bit index.
                 let Ok(base) = u32::try_from(mesh_vertices.len()) else {
                     break;
                 };
-                if mesh_vertices.len() + mesh.vertices.len() > u32::MAX as usize
-                    || mesh_indices.len() + mesh.triangles.len() * 3 > u32::MAX as usize
-                {
-                    break;
-                }
                 mesh_vertices.reserve(mesh.vertices.len());
                 let derived_normals = mesh
                     .normals
@@ -305,10 +395,9 @@ impl<'a> GpuViewport<'a> {
                 }
             }
         }
-        RenderGeometry {
-            points,
-            mesh_vertices,
-            mesh_indices,
+        MeshBuffers {
+            vertices: mesh_vertices,
+            indices: mesh_indices,
         }
     }
 }
@@ -331,7 +420,27 @@ impl shader::Program<Message> for GpuViewport<'_> {
                 .as_ref()
                 .is_some_and(|key| key.matches(self.overlay, overall_bounds))
             {
-                cache.geometry = Some(Arc::new(self.build_geometry(overall_bounds)));
+                let clouds = self.overlay.clouds;
+                let kept = cache
+                    .mesh
+                    .as_ref()
+                    .filter(|_| {
+                        cache
+                            .mesh_key
+                            .as_ref()
+                            .is_some_and(|key| key.matches(clouds, overall_bounds))
+                    })
+                    .map(Arc::clone);
+                let mesh = kept.unwrap_or_else(|| {
+                    let mesh = Arc::new(self.build_mesh(overall_bounds));
+                    cache.mesh_key = Some(MeshKey::capture(clouds, overall_bounds));
+                    cache.mesh = Some(Arc::clone(&mesh));
+                    mesh
+                });
+                cache.geometry = Some(Arc::new(RenderGeometry {
+                    points: self.build_points(overall_bounds),
+                    mesh,
+                }));
                 cache.key = Some(SceneKey::capture(self.overlay, overall_bounds));
             }
             Arc::clone(cache.geometry.as_ref().expect("render geometry cached"))
@@ -503,8 +612,17 @@ struct CameraUniform {
 #[derive(Debug)]
 struct RenderGeometry {
     points: Vec<GpuPoint>,
-    mesh_vertices: Vec<GpuMeshVertex>,
-    mesh_indices: Vec<u32>,
+    /// Shared with the geometry before it when no mesh, layer transform or
+    /// scene centre changed.
+    mesh: Arc<MeshBuffers>,
+}
+
+/// The vertices and the corners of the triangles of all drawn meshes, as the
+/// graphics device takes them.
+#[derive(Debug, Default)]
+struct MeshBuffers {
+    vertices: Vec<GpuMeshVertex>,
+    indices: Vec<u32>,
 }
 
 struct PointBufferChunk {
@@ -672,6 +790,7 @@ struct GpuState {
     mesh_index_capacity: u64,
     mesh_index_count: u32,
     uploaded_geometry: Option<Arc<RenderGeometry>>,
+    uploaded_mesh: Option<Arc<MeshBuffers>>,
     depth_texture: Option<wgpu::Texture>,
     depth_view: Option<wgpu::TextureView>,
     color_texture: Option<wgpu::Texture>,
@@ -998,6 +1117,7 @@ impl GpuState {
             mesh_index_capacity,
             mesh_index_count: 0,
             uploaded_geometry: None,
+            uploaded_mesh: None,
             depth_texture: None,
             depth_view: None,
             color_texture: None,
@@ -1200,8 +1320,17 @@ impl Primitive for CloudPrimitive {
             state
                 .point_buffers
                 .truncate(geometry.points.len().div_ceil(POINTS_PER_BUFFER));
-            let vertex_bytes =
-                (geometry.mesh_vertices.len() * std::mem::size_of::<GpuMeshVertex>()) as u64;
+            state.uploaded_geometry = Some(Arc::clone(&self.geometry));
+        }
+        // The meshes are sent only when they changed: a refinement of the
+        // points keeps the buffers of a mesh of millions of triangles.
+        if state
+            .uploaded_mesh
+            .as_ref()
+            .is_none_or(|previous| !Arc::ptr_eq(previous, &self.geometry.mesh))
+        {
+            let mesh = &self.geometry.mesh;
+            let vertex_bytes = (mesh.vertices.len() * std::mem::size_of::<GpuMeshVertex>()) as u64;
             if vertex_bytes > state.mesh_vertex_capacity {
                 state.mesh_vertex_capacity = vertex_bytes.next_power_of_two();
                 state.mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1211,14 +1340,14 @@ impl Primitive for CloudPrimitive {
                     mapped_at_creation: false,
                 });
             }
-            if !geometry.mesh_vertices.is_empty() {
+            if !mesh.vertices.is_empty() {
                 queue.write_buffer(
                     &state.mesh_vertex_buffer,
                     0,
-                    bytemuck::cast_slice(&geometry.mesh_vertices),
+                    bytemuck::cast_slice(&mesh.vertices),
                 );
             }
-            let index_bytes = (geometry.mesh_indices.len() * std::mem::size_of::<u32>()) as u64;
+            let index_bytes = (mesh.indices.len() * std::mem::size_of::<u32>()) as u64;
             if index_bytes > state.mesh_index_capacity {
                 state.mesh_index_capacity = index_bytes.next_power_of_two();
                 state.mesh_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1228,15 +1357,15 @@ impl Primitive for CloudPrimitive {
                     mapped_at_creation: false,
                 });
             }
-            if !geometry.mesh_indices.is_empty() {
+            if !mesh.indices.is_empty() {
                 queue.write_buffer(
                     &state.mesh_index_buffer,
                     0,
-                    bytemuck::cast_slice(&geometry.mesh_indices),
+                    bytemuck::cast_slice(&mesh.indices),
                 );
             }
-            state.mesh_index_count = geometry.mesh_indices.len() as u32;
-            state.uploaded_geometry = Some(Arc::clone(&self.geometry));
+            state.mesh_index_count = mesh.indices.len() as u32;
+            state.uploaded_mesh = Some(Arc::clone(mesh));
         }
         if let Some(atlas) = &self.photos.atlas {
             state.upload_ball_photos(device, queue, atlas);
@@ -1412,6 +1541,66 @@ mod tests {
     use crate::Studio;
 
     #[test]
+    fn meshes_are_drawn_as_far_as_the_buffers_of_the_device_hold_them() {
+        // A vertex takes 48 bytes of a buffer of at most 256 MiB.
+        assert_eq!(std::mem::size_of::<GpuMeshVertex>(), 48);
+        assert_eq!(MAX_DRAWN_MESH_VERTICES, 5_592_405);
+        assert_eq!(MAX_DRAWN_MESH_INDICES, 67_108_864);
+        let (vertices, triangles) = (
+            pointcloud_core::MAX_MESH_VERTICES,
+            pointcloud_core::MAX_MESH_TRIANGLES,
+        );
+        // One mesh at the limits of a mesh file fits, with room to spare for
+        // smaller ones.
+        assert_eq!(meshes_that_fit([(0, vertices, triangles)]), [0]);
+        assert_eq!(
+            meshes_that_fit([(0, vertices, triangles), (3, 1_000_000, 2_000_000)]),
+            [0, 3]
+        );
+        // A second one of that size does not: it is left out, and the small
+        // mesh after it is still drawn.
+        assert_eq!(
+            meshes_that_fit([
+                (0, vertices, triangles),
+                (1, vertices, triangles),
+                (2, 500_000, 1_000_000)
+            ]),
+            [0, 2]
+        );
+        // The indices have a limit of their own.
+        assert_eq!(
+            meshes_that_fit([(0, 3, MAX_DRAWN_MESH_INDICES / 3 + 1), (1, 3, 1)]),
+            [1]
+        );
+        assert!(meshes_that_fit([(0, usize::MAX, 1)]).is_empty());
+
+        // A layer whose mesh is switched off takes no room.
+        let mut studio = Studio::default();
+        assert!(drawn_meshes(&studio.clouds).is_empty());
+        let triangle = || {
+            Some(Arc::new(MeshGeometry {
+                vertices: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                triangles: vec![[0, 1, 2]],
+                colors: None,
+                normals: None,
+            }))
+        };
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["a.xyz", "b.xyz", "c.xyz"] {
+            let source = directory.path().join(name);
+            std::fs::write(&source, "0 0 0\n1 0 0\n0 1 0\n").unwrap();
+            let cloud = Arc::new(pointcloud_core::open(&source, 3).unwrap());
+            let _ = studio.update(Message::Loaded(Ok(cloud)));
+        }
+        assert_eq!(studio.clouds.len(), 3);
+        studio.clouds[0].mesh = triangle();
+        studio.clouds[2].mesh = triangle();
+        studio.clouds[0].mesh_visible = false;
+        studio.clouds[2].mesh_visible = true;
+        assert_eq!(drawn_meshes(&studio.clouds), [2]);
+    }
+
+    #[test]
     fn close_up_spheres_grow_without_overriding_point_size() {
         assert_eq!(display_point_radius(2.0, 1.0), 2.0);
         assert_eq!(display_point_radius(8.0, 2.0), 8.0);
@@ -1523,26 +1712,77 @@ mod tests {
         }));
         studio.clouds[0].mesh_visible = true;
         let colored_mesh = draw(&studio);
-        assert_eq!(colored_mesh.geometry.mesh_vertices.len(), 3);
+        assert_eq!(colored_mesh.geometry.mesh.vertices.len(), 3);
         assert_eq!(
-            colored_mesh.geometry.mesh_vertices[0].color,
+            colored_mesh.geometry.mesh.vertices[0].color,
             [1.0, 0.0, 0.0, 0.82]
         );
         assert_eq!(
-            colored_mesh.geometry.mesh_vertices[1].color[1],
+            colored_mesh.geometry.mesh.vertices[1].color[1],
             128.0 / 255.0
         );
         assert_eq!(
-            colored_mesh.geometry.mesh_vertices[0].normal,
+            colored_mesh.geometry.mesh.vertices[0].normal,
             [0.0, 0.0, 1.0, 0.0]
         );
 
         studio.clouds[0].transform.scale = [-1.0, 2.0, 1.0];
         let reflected_mesh = draw(&studio);
         assert_eq!(
-            reflected_mesh.geometry.mesh_vertices[0].normal,
+            reflected_mesh.geometry.mesh.vertices[0].normal,
             [0.0, 0.0, -1.0, 0.0]
         );
+
+        // The buffers of a mesh are kept while only the points change: a
+        // refinement from the octree, the section box, a class filter. A
+        // mesh of millions of triangles is then not built and sent again.
+        studio.clouds[0].detail_points = Some(
+            vec![IndexedPoint {
+                point: studio.clouds[0].cloud.points[1],
+                ordinal: 1,
+            }]
+            .into(),
+        );
+        let refined = draw(&studio);
+        assert!(!Arc::ptr_eq(&reflected_mesh.geometry, &refined.geometry));
+        assert!(Arc::ptr_eq(
+            &reflected_mesh.geometry.mesh,
+            &refined.geometry.mesh
+        ));
+        studio.section_enabled = true;
+        let cut = draw(&studio);
+        assert!(!Arc::ptr_eq(&refined.geometry, &cut.geometry));
+        assert!(Arc::ptr_eq(&refined.geometry.mesh, &cut.geometry.mesh));
+        studio.filter_other = false;
+        let unfiltered = draw(&studio);
+        assert!(!Arc::ptr_eq(&cut.geometry, &unfiltered.geometry));
+        assert!(Arc::ptr_eq(&cut.geometry.mesh, &unfiltered.geometry.mesh));
+
+        // A layer that is scaled, another mesh and a mesh switched off give
+        // new buffers.
+        studio.clouds[0].transform.scale = [1.0, 2.0, 1.0];
+        let scaled = draw(&studio);
+        assert!(!Arc::ptr_eq(
+            &unfiltered.geometry.mesh,
+            &scaled.geometry.mesh
+        ));
+        assert_eq!(
+            scaled.geometry.mesh.vertices[0].normal,
+            [0.0, 0.0, 1.0, 0.0]
+        );
+        studio.clouds[0].mesh = Some(Arc::new(MeshGeometry {
+            vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            triangles: vec![[0, 1, 2]],
+            colors: None,
+            normals: None,
+        }));
+        let replaced = draw(&studio);
+        assert!(!Arc::ptr_eq(&scaled.geometry.mesh, &replaced.geometry.mesh));
+        assert_eq!(replaced.geometry.mesh.indices, [0, 1, 2]);
+        studio.clouds[0].mesh_visible = false;
+        let hidden = draw(&studio);
+        assert!(!Arc::ptr_eq(&replaced.geometry.mesh, &hidden.geometry.mesh));
+        assert!(hidden.geometry.mesh.indices.is_empty());
     }
 
     #[test]

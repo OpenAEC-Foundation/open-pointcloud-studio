@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Map, Value};
 
 use super::schema::{
-    boolean, choice, integer_in, list, number_from, number_in, numbers, object, optional, ordinal,
-    path, pixel, positive, positive_up_to, required, text, validate_arguments,
+    boolean, choice, integer_in, list, number_from, number_in, number_or_null, numbers, object,
+    optional, ordinal, path, pixel, positive, positive_up_to, required, text, validate_arguments,
     whole_numbers_as_integers, xyz, Argument,
 };
 
@@ -166,6 +166,20 @@ fn drawing_choices() -> Vec<Argument> {
     ]
 }
 
+/// The settings of a closed mesh, which `mesh` with the mode `closed` and
+/// `set_closed_mesh_settings` share. Each one that is left out keeps what
+/// the Closed mesh block in Properties has. The limits are those the core
+/// checks.
+fn closed_mesh_settings() -> Vec<Argument> {
+    vec![
+        optional("voxel", number_or_null("Edge of a voxel in metres, from 0.005 to 0.5, or null for automatic: 0.02 for a region up to 20 m long, 0.03 up to 60 m and 0.05 beyond. Detail under about two voxels is lost; choose the voxel at least twice the spacing of the points. The block starts with automatic", 0.005, 0.5)),
+        optional("max_hole", number_in("Gaps in the points up to this wide are closed, in metres, from 0 (none) to 3.2 and never more than 32 voxels; wider ones, such as door and window openings, stay open. The block starts at 0.25", 0.0, pointcloud_core::MAX_CLOSED_MESH_HOLE)),
+        optional("simplify_mm", number_or_null("How far simplification may move the surface, in millimetres, from 0 (no simplification) to 1000, or null for automatic: 0.15 voxel, 3 mm at voxels of 0.02 m. The block starts with automatic", 0.0, 1000.0)),
+        optional("sides", choice("Which side a face looks at: automatic takes the scanner station that measured it where the scan knows its stations and the centre of the region elsewhere; centre turns every face to the centre of the region (the section box cut back to the points), which suits a room in its box; upward turns every face up, for data measured from above. The block starts with automatic", &["automatic", "centre", "upward"])),
+        optional("layers", choice("Which layers give their points: active (the active layer, as the block starts) or visible (every layer whose points are shown and that reaches the section box when it is on, without layers of 3D BAG buildings). The mesh goes to the active layer either way", &["active", "visible"])),
+    ]
+}
+
 fn view_name() -> Value {
     text(
         "Name of a saved view of the active scan; letter case is ignored",
@@ -177,6 +191,7 @@ fn view_name() -> Value {
 const POINT_FILE: &str = "Absolute destination path; its extension (.ply, .xyz, .pts, .csv, .las, .laz or .e57) selects the format. The file is replaced atomically";
 const LAS_FILE: &str = "Absolute destination path ending in .las or .laz";
 const OBJ_FILE: &str = "Absolute destination path ending in .obj";
+const MESH_JOB_FILE: &str = "Absolute destination path. Required for terrain and surface, where it ends in .obj. For closed it may be left out: the mesh then only becomes the mesh of the active layer; with a path ending in .obj, .ply or .stl in a folder that exists it is also written there, as the scene shows it";
 const MESH_FILE: &str = "Absolute destination path; its extension selects the format: .obj (colours and normals), .ply (binary, double coordinates, colours and normals) or .stl (binary, triangles only). The file is replaced atomically";
 const DRAWING_FILE: &str = "Absolute destination path; its extension selects the format: .dxf or .dwg. The file is replaced atomically";
 const BCF_FILE: &str = "Absolute destination path ending in .bcf";
@@ -188,7 +203,7 @@ const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (E
 fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
-        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view) and the status line.", vec![]),
+        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view) and the status line.", vec![]),
         tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, merge_visible or bag3d returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
@@ -354,12 +369,17 @@ fn table() -> Vec<Tool> {
             required("neighbors", integer_in("Neighbours per vertex, from 3 to 32", 3, 32)),
             required("edge_factor", positive("Longest edge relative to the typical point spacing")),
         ]),
-        tool("mesh", Job, "Reconstructs a terrain (2.5D) or surface (3D) mesh from the remaining points of the active layer inside the section box and class filters, and writes it as OBJ. Answers with a job_id; the complete job reports the vertices and triangles and, as a measure of quality, the open edges (edges with one triangle: rims and holes) and the connected parts (components) of the mesh.", vec![
-            required("mode", choice("terrain or surface", &["terrain", "surface"])),
-            required("path", path(OBJ_FILE)),
-        ]),
-        tool("cancel_mesh", Command, "Cancels the running mesh job.", vec![]),
-        tool("export_mesh", Job, "Saves the mesh the active layer holds (a terrain mesh, a 3D surface, an opened mesh file or downloaded 3D BAG buildings; status.result.clouds[].mesh is null for a layer without one) as OBJ, PLY or STL, moved and scaled as in the scene. Answers with a job_id; the complete job reports the format, vertices and triangles. An STL file holds 32-bit floats: a mesh farther than 2,048 m from zero on an axis is written relative to a whole-metre origin, which the job reports as origin and the file header names; other programs show such a file near zero.", vec![
+        tool("mesh", Job, "Makes a mesh from the remaining points inside the section box and class filters and gives it to the active layer, where it takes the place of the mesh that layer had. terrain (2.5D, from the lowest points seen from above) and surface (3D, from a sample; not watertight) take the active layer and write an OBJ file. closed makes a surface without overlaps that is closed wherever the scan has points or a gap narrower than max_hole: it takes the active layer or every visible one, needs an index for a layer of more than 5,000,000 points, and stops when the result would exceed 4,000,000 vertices or 8,000,000 triangles; put the section box around one room or a few. Answers with a job_id. The complete job reports the vertices and triangles, the open edges (edges with one triangle: rims and holes) and the connected parts (components); for closed also the mean, 95th percentile and largest distance between points and mesh in metres (deviation_mean, deviation_p95, deviation_max), the voxel used, where the sides came from (sides: stations, mixed or fallback), the surface elements without a station and those whose side nothing told (surfels_without_station, surfels_undecided), and advice when those figures call for it.", {
+            let mut arguments = vec![
+                required("mode", choice("terrain, surface or closed", &["terrain", "surface", "closed"])),
+                optional("path", path(MESH_JOB_FILE)),
+            ];
+            arguments.extend(closed_mesh_settings());
+            arguments
+        }),
+        tool("set_closed_mesh_settings", Command, "Sets the settings of the Closed mesh block in Properties, which mesh with the mode closed and the Start button of the block use. The fields given are checked together: when one is refused, none changes. Answers with the settings as status.result.closed_mesh.settings reports them.", closed_mesh_settings()),
+        tool("cancel_mesh", Command, "Cancels the running mesh job; a cancelled job leaves the mesh of the layer and an existing file as they were.", vec![]),
+        tool("export_mesh", Job, "Saves the mesh the active layer holds (a terrain mesh, a 3D surface, a closed mesh, an opened mesh file or downloaded 3D BAG buildings; status.result.clouds[].mesh is null for a layer without one) as OBJ, PLY or STL, moved and scaled as in the scene. Answers with a job_id; the complete job reports the format, vertices and triangles. An STL file holds 32-bit floats: a mesh farther than 2,048 m from zero on an axis is written relative to a whole-metre origin, which the job reports as origin and the file header names; other programs show such a file near zero.", vec![
             required("path", path(MESH_FILE)),
         ]),
         tool("export", Job, "Exports the full active layer from its source, without deleted points. Answers with a job_id; the job reports the point count.", vec![
@@ -662,6 +682,9 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
     }
     if result["drawing"]["job"].is_object() {
         busy.push("drawing");
+    }
+    if result["closed_mesh"]["job"].is_object() {
+        busy.push("closed_mesh");
     }
     busy
 }

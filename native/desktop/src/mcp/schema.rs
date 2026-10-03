@@ -60,6 +60,16 @@ pub fn positive(description: &str) -> Value {
     json!({"type": "number", "exclusiveMinimum": 0, "description": description})
 }
 
+/// A number within limits, or `null` to leave the value to the window.
+pub fn number_or_null(description: &str, minimum: f64, maximum: f64) -> Value {
+    json!({
+        "type": ["number", "null"],
+        "minimum": minimum,
+        "maximum": maximum,
+        "description": description,
+    })
+}
+
 /// A number above zero with an upper limit.
 pub fn positive_up_to(description: &str, maximum: f64) -> Value {
     json!({"type": "number", "exclusiveMinimum": 0, "maximum": maximum, "description": description})

@@ -815,6 +815,151 @@ fn mesh_export_is_a_job_whose_destination_names_the_format() {
 }
 
 #[test]
+fn closed_mesh_is_a_mode_of_the_mesh_job_with_settings_of_its_own() {
+    let mesh = tools::find("mesh").unwrap();
+    let set = tools::find("set_closed_mesh_settings").unwrap();
+    assert_eq!((mesh.kind, set.kind), (Kind::Job, Kind::Command));
+    assert!(!mesh.read_only() && !set.read_only());
+    // A closed mesh needs no file, so only the mode is required.
+    assert_eq!(mesh.schema["required"], json!(["mode"]));
+    assert!(set.schema.get("required").is_none());
+    let fields = &mesh.schema["properties"];
+    assert_eq!(
+        fields["mode"]["enum"],
+        json!(["terrain", "surface", "closed"])
+    );
+    let destination = fields["path"]["description"].as_str().unwrap();
+    for extension in [".obj", ".ply", ".stl"] {
+        assert!(destination.contains(extension), "{extension}");
+    }
+    // The settings are those of the core, with its limits, and both tools
+    // take the same ones.
+    assert_eq!(
+        fields["sides"]["enum"],
+        json!(["automatic", "centre", "upward"])
+    );
+    assert_eq!(fields["layers"]["enum"], json!(["active", "visible"]));
+    assert_eq!(fields["voxel"]["type"], json!(["number", "null"]));
+    assert_eq!(fields["voxel"]["minimum"], 0.005);
+    assert_eq!(fields["voxel"]["maximum"], 0.5);
+    assert_eq!(fields["max_hole"]["minimum"], 0.0);
+    assert_eq!(
+        fields["max_hole"]["maximum"],
+        pointcloud_core::MAX_CLOSED_MESH_HOLE
+    );
+    assert_eq!(fields["simplify_mm"]["type"], json!(["number", "null"]));
+    let mut shared = fields.as_object().unwrap().clone();
+    for other in ["mode", "path", "wait_seconds"] {
+        assert!(shared.remove(other).is_some(), "{other}");
+    }
+    assert_eq!(set.schema["properties"], Value::Object(shared));
+    // The description names the limits a mesh has in the core.
+    let limits = format!(
+        "{} vertices or {} triangles",
+        pointcloud_core::MAX_MESH_VERTICES,
+        pointcloud_core::MAX_MESH_TRIANGLES
+    );
+    assert!(
+        mesh.description.replace(',', "").contains(&limits),
+        "{limits}"
+    );
+
+    let arguments = json!({
+        "mode": "closed", "voxel": null, "max_hole": 0.3, "simplify_mm": 0,
+        "sides": "centre", "layers": "visible",
+    });
+    schema::validate_arguments(&mesh.schema, &arguments).unwrap();
+    schema::validate_arguments(&set.schema, &json!({})).unwrap();
+    schema::validate_arguments(&set.schema, &json!({"simplify_mm": null})).unwrap();
+    for refused in [
+        json!({}),
+        json!({"mode": "solid"}),
+        json!({"mode": "closed", "voxel": 0.004}),
+        json!({"mode": "closed", "voxel": 0.6}),
+        json!({"mode": "closed", "voxel": "auto"}),
+        json!({"mode": "closed", "max_hole": 3.3}),
+        json!({"mode": "closed", "max_hole": null}),
+        json!({"mode": "closed", "simplify_mm": -1}),
+        json!({"mode": "closed", "sides": "inward"}),
+        json!({"mode": "closed", "layers": "all"}),
+        json!({"mode": "closed", "selection_only": true}),
+    ] {
+        assert!(
+            schema::validate_arguments(&mesh.schema, &refused).is_err(),
+            "{refused}"
+        );
+    }
+    assert!(schema::validate_arguments(&set.schema, &json!({"mode": "closed"})).is_err());
+
+    // A closed mesh that is being made is work under way; its last result
+    // is not.
+    assert_eq!(
+        tools::busy(&json!({"closed_mesh": {"job": {"stage": "planning"}, "last": null}})),
+        ["closed_mesh"]
+    );
+    assert!(tools::busy(&json!({"closed_mesh": {
+        "job": null, "last": {"state": "complete"},
+    }}))
+    .is_empty());
+
+    let link = FakeLink::new(|command| {
+        Ok(match command["command"].as_str().unwrap() {
+            "mesh" => json!({"ok": true, "accepted": true, "job_id": "c-1"}),
+            "job" => json!({"ok": true, "job": {
+                "state": "complete", "mode": "closed", "open_edges": 0, "deviation_p95": 0.004,
+            }}),
+            _ => json!({"ok": true}),
+        })
+    });
+    let commands = Arc::clone(&link.commands);
+    let mut waiting = arguments.clone();
+    waiting["wait_seconds"] = json!(5);
+    let answers = session(
+        &[
+            initialize(1, "2025-06-18"),
+            call(2, "set_closed_mesh_settings", json!({"voxel": 0.03})),
+            call(3, "mesh", waiting),
+            call(4, "cancel_mesh", json!({})),
+        ],
+        link,
+    );
+    let made = text_of(&by_id(&answers, 3)["result"], 0);
+    assert_eq!(made["job"]["open_edges"], 0);
+    assert_eq!(made["job"]["deviation_p95"], 0.004);
+    assert_eq!(made["timed_out"], false);
+    // A null goes out as a null: the window takes it for automatic.
+    assert_eq!(
+        *commands.lock().unwrap(),
+        [
+            json!({"command": "set_closed_mesh_settings", "voxel": 0.03}),
+            json!({
+                "command": "mesh", "mode": "closed", "voxel": null, "max_hole": 0.3,
+                "simplify_mm": 0, "sides": "centre", "layers": "visible",
+            }),
+            json!({"command": "job", "id": "c-1"}),
+            json!({"command": "cancel_mesh"}),
+        ]
+    );
+    // The window reads that command as the tool sent it.
+    let read: crate::native_api::ApiCommand = serde_json::from_value(json!({
+        "command": "mesh", "mode": "closed", "voxel": null, "simplify_mm": 0,
+    }))
+    .unwrap();
+    let crate::native_api::ApiCommand::Mesh {
+        mode,
+        path,
+        options,
+    } = read
+    else {
+        panic!("not a mesh command");
+    };
+    assert_eq!((mode.as_str(), path), ("closed", None));
+    assert_eq!(options.voxel, Some(None), "null is automatic");
+    assert_eq!(options.simplify_mm, Some(Some(0.0)));
+    assert_eq!(options.max_hole, None, "left out keeps the block's value");
+}
+
+#[test]
 fn section_drawing_is_a_job_with_a_preview_and_a_cancel() {
     let export = tools::find("export_drawing").unwrap();
     let preview = tools::find("preview_drawing").unwrap();

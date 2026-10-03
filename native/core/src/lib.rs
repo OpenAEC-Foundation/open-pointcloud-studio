@@ -80,7 +80,10 @@ pub use mesher::{
     mesh_terrain_obj, mesh_terrain_obj_where, mesh_terrain_obj_where_progress, MeshConfig,
     MeshProgress, MeshStage, MeshStats,
 };
-pub use obj_mesh::{read_obj_mesh, write_obj_mesh, MeshGeometry};
+pub use obj_mesh::{
+    read_obj_mesh, write_obj_mesh, MeshGeometry, MAX_TRIANGLES as MAX_MESH_TRIANGLES,
+    MAX_VERTICES as MAX_MESH_VERTICES,
+};
 pub use octree::{IndexConfig, IndexProgress, IndexStage, IndexedNode, IndexedPoint, OctreeIndex};
 pub use ply_mesh::read_ply_mesh;
 pub use scan_image::{select_scan_image, ScanImage, ScanImageFormat};
@@ -315,6 +318,16 @@ impl PointCloud {
         self.scan_ranges = scans.ranges;
         self.scan_ranges_known = true;
         Ok(())
+    }
+
+    /// Forget which scan holds each point, which leaves the cloud as one from
+    /// an index cache written before that was recorded. The application has
+    /// no use for this: it lets a test outside this crate reach the code that
+    /// asks for `read_scan_ranges`, without a cache of its own to edit.
+    #[doc(hidden)]
+    pub fn forget_scan_ranges(&mut self) {
+        self.scan_ranges.clear();
+        self.scan_ranges_known = false;
     }
 
     /// Index into `scan_poses` of the station that measured the point with

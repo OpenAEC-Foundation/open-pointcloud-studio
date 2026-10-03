@@ -414,6 +414,7 @@ mod tests {
         ("main.rs", include_str!("main.rs")),
         ("bag_panel.rs", include_str!("bag_panel.rs")),
         ("cli_help.rs", include_str!("cli_help.rs")),
+        ("closed_mesh.rs", include_str!("closed_mesh.rs")),
         ("drawing.rs", include_str!("drawing.rs")),
         ("extensions.rs", include_str!("extensions.rs")),
         ("file_view.rs", include_str!("file_view.rs")),

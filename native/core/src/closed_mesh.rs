@@ -43,9 +43,9 @@ use crate::{Bounds, IndexedPoint, LoadError};
 /// The widest hole limit a job takes, in metres.
 pub const MAX_CLOSED_MESH_HOLE: f64 = 3.2;
 /// Vertices and triangles of a mesh that every mesh writer and the viewer
-/// take today. A job may be given higher limits.
-pub const DEFAULT_CLOSED_MESH_VERTICES: usize = 1_000_000;
-pub const DEFAULT_CLOSED_MESH_TRIANGLES: usize = 2_000_000;
+/// take: a job stops above them unless it is given limits of its own.
+pub const DEFAULT_CLOSED_MESH_VERTICES: usize = crate::obj_mesh::MAX_VERTICES;
+pub const DEFAULT_CLOSED_MESH_TRIANGLES: usize = crate::obj_mesh::MAX_TRIANGLES;
 /// Above this many triangles the whole mesh is not simplified once more
 /// after the tiles are joined: that pass runs on one thread.
 const SEAM_PASS_TRIANGLES: usize = 4_000_000;

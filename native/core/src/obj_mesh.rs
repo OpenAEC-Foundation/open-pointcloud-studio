@@ -7,8 +7,21 @@ use std::path::{Path, PathBuf};
 
 use super::{LoadError, SourceStamp};
 
-pub(crate) const MAX_VERTICES: usize = 1_000_000;
-pub(crate) const MAX_TRIANGLES: usize = 2_000_000;
+/// The most vertices and triangles a mesh may hold: what the mesh readers
+/// accept, what the mesh writers write and what a mesh job may make.
+///
+/// The viewer draws every mesh from one vertex buffer and one index buffer
+/// with 32-bit indices, and the graphics device takes no buffer above
+/// 256 MiB. A vertex is 48 bytes there, so a mesh at this limit takes 192 MB
+/// of that buffer and 96 MB of indices: one such mesh always fits. In memory
+/// it takes about 250 MB as it is held here (39 bytes per vertex with its
+/// colour and normal, 12 per triangle) and about 290 MB more as the copy the
+/// viewer keeps for the device. Measured on a grid of 4,000,000 vertices
+/// and 7,992,002 triangles: reading it takes at most 0.3 GB from OBJ or PLY
+/// and 0.6 GB from STL, and counting its open edges by position 0.9 GB with
+/// the mesh.
+pub const MAX_VERTICES: usize = 4_000_000;
+pub const MAX_TRIANGLES: usize = 8_000_000;
 const MAX_MTL_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Default)]

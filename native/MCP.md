@@ -88,7 +88,7 @@ exports, merges and 3D BAG downloads answer at once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
-edits, meshing, mesh export, a section drawing or its preview, merging, a 3D
+edits, meshing (a closed mesh included), mesh export, a section drawing or its preview, merging, a 3D
 BAG download, point loading for the camera and view snapshots have finished; call it
 after `open`, before `screenshot` when the camera changed, and before
 `export_bcf`. `screenshot` returns MCP image content (`type: "image"`,
@@ -160,7 +160,8 @@ follows when that view is restored.
 | `cancel_index` | — | Cancels the octree build |
 | `set_auto_index` | `enabled` | Automatic indexing of large clouds |
 | `set_surface_settings` | `max_vertices`, `neighbors`, `edge_factor` | Limits of 3D surface reconstruction |
-| `mesh` | `mode` (`terrain` or `surface`), `path` (`.obj`), optional `wait_seconds` | Meshes the active layer; the job reports vertices, triangles, open edges and connected parts |
+| `mesh` | `mode` (`terrain`, `surface` or `closed`), `path` (`.obj`; for `closed` optional, and `.obj`, `.ply` or `.stl`), for `closed` optional `voxel` (0.005–0.5 m or null for automatic), `max_hole` (0–3.2 m), `simplify_mm` (0–1000 or null for automatic), `sides` (`automatic`, `centre` or `upward`), `layers` (`active` or `visible`), optional `wait_seconds` | Meshes the active layer, or for `closed` the active layer or every visible layer that reaches the section box (layers of 3D BAG buildings stay out), inside the section box; the job reports vertices, triangles, open edges and connected parts, and for `closed` the distance between points and mesh, where the sides came from and advice. Settings left out keep what the Closed mesh block has |
+| `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers`, as for `mesh` | Sets the settings of the Closed mesh block; refused as a whole when one value is |
 | `cancel_mesh` | — | Cancels the mesh job |
 | `export_mesh` | `path` (`.obj`, `.ply` or `.stl`), optional `wait_seconds` | Saves the mesh of the active layer in the format of the extension; job |
 | `export` | `path`, optional `wait_seconds` | Exports the active layer; job |

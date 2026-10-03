@@ -46,15 +46,21 @@ adds a partial layer. LAS/LAZ header previews open immediately and have a null
 
 ## Meshing and merging
 
-Mesh jobs report `reading`, `reconstructing`, or `writing` with completed and
+`mesh` with `mode` `terrain` or `surface` meshes the active layer and writes
+an OBJ file; `path` is required. These jobs report `reading`,
+`reconstructing`, or `writing` with completed and
 total units. `cancel_mesh` requests cancellation; a cancelled mesh leaves an
-existing destination untouched. Only one mesh job runs at a time.
+existing destination untouched. Only one mesh job runs at a time, of whatever
+mode.
 The complete job has `path`, `mode`, `source_points`, `vertices` and
 `triangles`, and what was measured of the mesh: `open_edges`, the edges that
 belong to one triangle only (the rims of the surface and of its holes), and
 `components`, the parts of the mesh that share no vertex with each other. A
 closed surface has no open edges. The distance between the points and the
-mesh is not measured.
+mesh is not measured for these two modes; the mode `closed` measures it, see
+[Closed mesh](#closed-mesh).
+A mesh holds at most 4,000,000 vertices and 8,000,000 triangles, from a job
+and from a file alike.
 `merge_visible` joins all visible LAS/LAZ layers into one `.las` or `.laz` file
 in a background task. It preserves original point attributes and applies each
 layer's current deletions and affine transform. Sources must have matching LAS
@@ -63,10 +69,111 @@ is rejected instead of silently choosing one. Poll its job or
 `status.result.merge` for processed and written point counts. `cancel_merge`
 stops the task and leaves an existing destination unchanged.
 
+## Closed mesh
+
+`mesh` with `mode: "closed"` makes a closed mesh, as the Closed mesh block of
+Properties does: a surface without overlapping faces from the points inside
+the section box, or from the whole layers when the box is off, closed
+wherever the scan has points or a gap up to `max_hole` wide. Deleted points
+and hidden classes are left out. The mesh goes to the active layer, where it
+takes the place of the mesh that layer had, and is kept in the frame of that
+layer, so a later `translate` or `scale` takes it along. `path` is optional:
+with an absolute `.obj`, `.ply` or `.stl` destination in a folder that exists
+the mesh is also written there, as the scene shows it; without it the mesh is
+shown only, and `export_mesh` saves it later.
+
+The other fields are the settings of the block. A field that is left out
+keeps what the block has, and a field that is given is put in the block as
+well. `set_closed_mesh_settings` takes the same fields without starting a job
+and answers with `settings`. Both check the fields together: when one is
+refused, none is taken.
+
+- `voxel`: edge of a voxel in metres, 0.005 to 0.5, or `null` for automatic,
+  as the block starts: 0.02 for a region up to 20 m long, 0.03 up to 60 m and
+  0.05 beyond. Detail under about two voxels is lost.
+- `max_hole`: gaps in the points up to this wide are closed, in metres, 0 to
+  3.2 and never more than 32 voxels; 0.25 at the start. Wider openings stay
+  open.
+- `simplify_mm`: how far simplification may move the surface, in millimetres,
+  0 (none) to 1000, or `null` for automatic, as the block starts: 0.15 voxel.
+- `sides`: which side of a surface is its front. `automatic` (the start)
+  takes the scanner station that measured it where the layer knows its
+  stations, and the centre of the region elsewhere. `centre` takes the centre
+  of the region for every surface and does not use stations. `upward` turns
+  every surface up, for data measured from above. The centre of the region is
+  the middle of the section box after it has been cut back to where the
+  layers have points.
+- `layers`: `active` (the start) takes the points of the active layer,
+  `visible` those of every layer whose points are shown and that reaches the
+  section box when the box is on. Layers of 3D BAG buildings are left out of
+  `visible`. A layer that is left out is not read and does not widen the
+  region.
+
+The running job, which `status.result.closed_mesh.job` holds as well, has
+`operation` (`mesh`), `mode` (`closed`), `path` (or `null`), `stage`,
+`completed`, `total`, `fraction` (or `null` where the stage has no total),
+`cancel_requested` and `elapsed_seconds`. The stages are `stations` (reading
+a source once to learn which station measured each point, for a layer whose
+index does not say), `reading` (reading a layer without an index into
+memory), `planning`, `reconstructing` (`completed` of `total` blocks),
+`simplifying`, `measuring` and `writing` (with a `path`).
+
+The complete job has, with lengths in metres:
+
+- `vertices`, `triangles`, `triangles_extracted` (the triangles before
+  simplification), `open_edges`, `components` and `non_manifold_edges` (edges
+  with more than two triangles: none, except where two surfaces lie closer
+  together than two voxels or a surface came out torn).
+- `deviation_mean`, `deviation_p95` and `deviation_max`: the distance from
+  `deviation_samples` points of the region, at most 200,000 spread evenly, to
+  the nearest triangle. The largest value counts stray points too.
+- `voxel`, `max_hole` and `simplify_tolerance` as they were used, `region`
+  (`min` and `max` of the box that was meshed: the section box cut back to
+  the points), `points` (the points in the region) and `blocks`.
+- `sides`: `stations`, `mixed` or `fallback`, with `surfels` (the pieces of
+  surface the points were reduced to), `surfels_by_station`,
+  `surfels_without_station` (those that took their side from the centre, from
+  upward or from the stationed surface beside them; with `sides` set to
+  `centre` or `upward` stations are not used and this is every piece) and
+  `surfels_undecided` (those the centre sees edge on: they face up, or one
+  fixed direction when upright, which can be the wrong side).
+- `advice`: a line of text when the figures call for it, otherwise `null`.
+  Its counts are plain numbers, as the fields are.
+- `shown` (false when the layer was closed while the job ran), `path`,
+  `format` and `origin` (as for `export_mesh`; `null` without a `path`), and
+  `seconds`.
+
+`cancel_mesh` stops the job after the block under way; the job becomes
+`cancelled`, and the mesh of the layer and an existing file stay as they
+were. A job that fails has the reason in `error`: among them a region without
+points (`the region holds no points to mesh`) and a result above 4,000,000
+vertices or 8,000,000 triangles, which asks for a larger voxel, a larger
+simplification tolerance or a smaller section box.
+
+`status.result.closed_mesh` holds `settings` (the fields above; `voxel` and
+`simplify_mm` are `null` for automatic, and any number that cannot be read is
+`null`), `job` (the running job, or `null`) and `last` (how the last job
+ended, as its job reports it, or `null`).
+
+The command is refused without an active layer (`no active cloud`), with
+`layers: "visible"` and no visible layer of scan points, or with an active
+layer of 3D BAG buildings, which does not take a mesh of the scans (make a
+scan the active layer first), for an active layer with a scale of zero on an
+axis (`the scan that gets the mesh has a scale of zero`), for a layer that
+takes part and is still being imported, for such a layer of more than
+5,000,000 points without an index (build it first), for a section box that
+none of the layers reaches, for a value
+outside the limits above, for a `path` that is not absolute, has another
+extension, lies in a folder that does not exist or is the source file of an
+open layer, and while another mesh job of any mode is open or running. The
+settings are refused with `mode` `terrain` or `surface`. A refused command
+changes nothing in the block.
+
 ## Mesh export
 
 `export_mesh` saves the mesh the active layer holds: a terrain mesh, a 3D
-surface, the faces of an opened mesh file or downloaded 3D BAG buildings.
+surface, a closed mesh, the faces of an opened mesh file or downloaded 3D BAG
+buildings.
 `path` is an absolute destination whose extension chooses the format:
 
 - `.obj`: text, with colours and normals per vertex where the mesh has them.
@@ -402,7 +509,7 @@ when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, merge or 3D BAG download task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -458,8 +565,9 @@ when the view is restored.
 | `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
 | `set_surface_settings` | `max_vertices`, `neighbors`, `edge_factor` | Sets the native GUI's 3D surface reconstruction limits atomically: 3–1,000,000 vertices, 3–32 neighbors and a finite positive edge factor |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
-| `mesh` | `mode`, `path` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings and returns a job ID. The complete job reports the open edges and the connected parts of the mesh |
-| `cancel_mesh` | — | Requests cancellation of the running mesh task |
+| `mesh` | `mode`, `path` (optional for `closed`), and for `closed` optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path, or a `closed` mesh that is shown and, with a `.obj`, `.ply` or `.stl` path, also written, using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings, closed mode the Closed mesh settings with the fields given. Returns a job ID. The complete job reports the open edges and the connected parts of the mesh, and for `closed` the distance between points and mesh |
+| `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers` | Sets the settings of the Closed mesh block atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
+| `cancel_mesh` | — | Requests cancellation of the running mesh task, of whatever mode |
 | `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply` or `.stl` path; the extension chooses the format. Returns a job ID |
 | `merge_visible` | `path` | Merges the visible LAS/LAZ layers to an absolute `.las` or `.laz` path; returns a job ID |
 | `cancel_merge` | — | Requests cancellation of the running merge task |

@@ -179,8 +179,20 @@ pub enum ApiCommand {
     },
     ResetTransform,
     Mesh {
+        /// `terrain`, `surface` or `closed`.
         mode: String,
-        path: PathBuf,
+        /// Absolute destination: `.obj` for a terrain mesh or a 3D surface.
+        /// A closed mesh needs none; with one (`.obj`, `.ply` or `.stl`) it
+        /// is also written there.
+        #[serde(default)]
+        path: Option<PathBuf>,
+        /// Settings of a closed mesh; refused with the other modes.
+        #[serde(flatten)]
+        options: crate::closed_mesh::ClosedMeshOptions,
+    },
+    SetClosedMeshSettings {
+        #[serde(flatten)]
+        options: crate::closed_mesh::ClosedMeshOptions,
     },
     CancelMesh,
     ExportMesh {

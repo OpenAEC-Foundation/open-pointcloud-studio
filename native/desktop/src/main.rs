@@ -13,6 +13,7 @@ mod bag_panel;
 mod bcf;
 mod camera_views;
 mod cli_help;
+mod closed_mesh;
 mod cloud_centroid;
 mod cloud_transform;
 mod drawing;
@@ -741,6 +742,25 @@ fn main() -> iced::Result {
                 if line.is_empty() {
                     eprintln!(
                         "Usage: open-pointcloud-studio --drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf|.dwg [--view plan|front|back|left|right] [--thickness METRES] [--units mm|m] [--fill on|off]"
+                    );
+                } else {
+                    eprintln!("{line}");
+                }
+                std::process::exit(code);
+            }
+        }
+    }
+    if first.as_deref() == Some(OsStr::new("--closed-mesh")) {
+        let arguments: Vec<_> = args.collect();
+        match closed_mesh::command_line(&arguments) {
+            Ok(lines) => {
+                println!("{lines}");
+                return Ok(());
+            }
+            Err((code, line)) => {
+                if line.is_empty() {
+                    eprintln!(
+                        "Usage: open-pointcloud-studio --closed-mesh INPUT OUTPUT.obj|.ply|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]"
                     );
                 } else {
                     eprintln!("{line}");
@@ -1659,6 +1679,7 @@ enum Message {
     TogglePickSelect,
     Measure(measure::MeasureAction),
     Drawing(drawing::DrawingAction),
+    ClosedMesh(closed_mesh::ClosedMeshAction),
     ClearSelection,
     SelectionDrag([f32; 2], [f32; 2]),
     BoxSelect {
@@ -1792,6 +1813,8 @@ struct Studio {
     measure: measure::MeasureTool,
     /// The Section drawing tool: its choices, its job and its preview.
     drawing: drawing::DrawingTool,
+    /// The Closed mesh tool: its settings, its job and its last result.
+    closed_mesh: closed_mesh::ClosedMeshTool,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     selection_pending: bool,
@@ -2217,6 +2240,7 @@ impl Default for Studio {
             pick_mode: false,
             measure: measure::MeasureTool::default(),
             drawing: drawing::DrawingTool::default(),
+            closed_mesh: closed_mesh::ClosedMeshTool::default(),
             drag_rectangle: None,
             context_menu: None,
             selection_pending: false,
@@ -2956,6 +2980,7 @@ impl Studio {
                 answer.0["result"]["mesh_export_pending"] = Value::Bool(self.mesh_export_pending);
                 answer.0["result"]["file_view"] = self.file_view_value();
                 answer.0["result"]["drawing"] = self.drawing.value();
+                answer.0["result"]["closed_mesh"] = self.closed_mesh.value();
                 answer
             }
             ApiCommand::Job { id } => {
@@ -3638,7 +3663,22 @@ impl Studio {
                     (json!({"ok": true, "status": self.status}), task)
                 }
             }
-            ApiCommand::Mesh { mode, path } => {
+            ApiCommand::Mesh {
+                mode,
+                path,
+                options,
+            } if mode.eq_ignore_ascii_case("closed") => self.api_closed_mesh(path, &options),
+            ApiCommand::Mesh { options, .. }
+                if options != closed_mesh::ClosedMeshOptions::default() =>
+            {
+                (
+                    json!({"ok": false, "error": "voxel, max_hole, simplify_mm, sides and layers go with the mesh mode closed only"}),
+                    Task::none(),
+                )
+            }
+            ApiCommand::Mesh { mode, path, .. } => {
+                // Only a closed mesh can do without a file.
+                let path = path.unwrap_or_default();
                 let mode = match mode.to_ascii_lowercase().as_str() {
                     "terrain" => Some(MeshMode::Terrain),
                     "surface" | "3d" => Some(MeshMode::Surface),
@@ -3649,7 +3689,10 @@ impl Studio {
                 } else {
                     Ok(SurfaceMeshConfig::default())
                 };
-                if self.mesh_dialog_pending || self.mesh_job.is_some() {
+                if self.mesh_dialog_pending
+                    || self.mesh_job.is_some()
+                    || self.closed_mesh.is_running()
+                {
                     (
                         json!({"ok": false, "error": "a mesh task is already open or running"}),
                         Task::none(),
@@ -3696,13 +3739,18 @@ impl Studio {
                     }
                 } else {
                     (
-                        json!({"ok": false, "error": "mesh mode must be terrain or surface"}),
+                        json!({"ok": false, "error": "mesh mode must be terrain, surface or closed"}),
                         Task::none(),
                     )
                 }
             }
+            ApiCommand::SetClosedMeshSettings { options } => {
+                (self.api_set_closed_mesh_settings(&options), Task::none())
+            }
             ApiCommand::CancelMesh => {
-                if self.mesh_job.is_none() {
+                if let Some(answer) = self.api_cancel_closed_mesh() {
+                    (answer, Task::none())
+                } else if self.mesh_job.is_none() {
                     (
                         json!({"ok": false, "error": "no mesh task is running"}),
                         Task::none(),
@@ -4003,6 +4051,7 @@ impl Studio {
     fn stop_background_work(&mut self) {
         self.cancel_bag();
         self.cancel_drawing();
+        self.cancel_closed_mesh();
         if let Some(job) = &self.merge_job {
             job.control.cancelled.store(true, Ordering::Relaxed);
         }
@@ -5465,7 +5514,10 @@ impl Studio {
                 }
             }
             Message::MeshRequest(mode) => {
-                if self.mesh_dialog_pending || self.mesh_job.is_some() {
+                if self.mesh_dialog_pending
+                    || self.mesh_job.is_some()
+                    || self.closed_mesh.is_running()
+                {
                     self.status = "A mesh task is already open or running".into();
                     return Task::none();
                 }
@@ -5525,7 +5577,7 @@ impl Studio {
             }
             Message::MeshPathChosen(mode, config, cloud, deleted, Some(path)) => {
                 self.mesh_dialog_pending = false;
-                if self.mesh_job.is_some() {
+                if self.mesh_job.is_some() || self.closed_mesh.is_running() {
                     self.status = "A mesh task is already running".into();
                     return Task::none();
                 }
@@ -7450,6 +7502,7 @@ impl Studio {
             }
             Message::Measure(action) => return self.update_measure(action),
             Message::Drawing(action) => return self.update_drawing(action),
+            Message::ClosedMesh(action) => return self.update_closed_mesh(action),
             Message::ClearSelection => {
                 self.pending_delete = false;
                 if self.selection_pending {
@@ -8217,7 +8270,10 @@ impl Studio {
             .spacing(1)
             .into(),
         );
-        let mesh_idle = has_active && self.mesh_job.is_none() && !self.mesh_dialog_pending;
+        let mesh_idle = has_active
+            && self.mesh_job.is_none()
+            && !self.mesh_dialog_pending
+            && !self.closed_mesh.is_running();
         let mut surface_tools = vec![
             RibbonItem::Small(small_tool_button_when(
                 "Terrain mesh",
@@ -8231,6 +8287,7 @@ impl Studio {
                 false,
                 mesh_idle,
             )),
+            self.closed_mesh_ribbon_item(),
         ];
         if self.mesh_job.is_some() {
             surface_tools.push(RibbonItem::Small(small_tool_button(
@@ -8727,6 +8784,10 @@ impl Studio {
         // from the ribbon and stands in view without scrolling.
         if let Some(drawing) = self.drawing_properties() {
             properties = properties.push(drawing);
+        }
+        // So does the block of the Closed mesh tool.
+        if let Some(closed_mesh) = self.closed_mesh_properties() {
+            properties = properties.push(closed_mesh);
         }
         for row in [
             opencad_properties::section_header("General"),
@@ -9334,6 +9395,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::TogglePickSelect => ToolIcon::Pick,
         Message::Measure(action) => action.icon(),
         Message::Drawing(_) => ToolIcon::Drawing,
+        Message::ClosedMesh(_) => ToolIcon::ClosedMesh,
         Message::ClearSelection => ToolIcon::Clear,
         Message::SetEyeDome(_) => ToolIcon::Shading,
         Message::ShowScanPoses(_) => ToolIcon::Pick,
@@ -9654,6 +9716,7 @@ enum ToolIcon {
     Building,
     Shading,
     Drawing,
+    ClosedMesh,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -9701,6 +9764,8 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Shading => include_bytes!("../../assets/opencad-icons/sphere.svg"),
         // The section drawing icon is drawn for this app in the same palette.
         ToolIcon::Drawing => include_bytes!("../../assets/opencad-icons/section_drawing.svg"),
+        // So is the closed mesh icon.
+        ToolIcon::ClosedMesh => include_bytes!("../../assets/opencad-icons/closed_mesh.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)

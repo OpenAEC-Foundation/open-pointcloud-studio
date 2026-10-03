@@ -106,6 +106,14 @@ pub const MODES: &[Mode] = &[
         description: key("Writes a 3D surface mesh of a scan."),
     },
     Mode {
+        flag: "--closed-mesh",
+        short: None,
+        arguments: "INPUT OUTPUT.obj|.ply|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]",
+        description: key(
+            "Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY or STL.",
+        ),
+    },
+    Mode {
         flag: "--mesh-export",
         short: None,
         arguments: "INPUT OUTPUT",

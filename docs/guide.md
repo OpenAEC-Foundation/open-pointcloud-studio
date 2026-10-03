@@ -19,6 +19,7 @@ The interface is in English or Dutch. The guide uses the English names.
 - [Exporting and merging](#exporting-and-merging)
 - [Section drawings](#section-drawings)
 - [Meshing](#meshing)
+- [Closed mesh](#closed-mesh)
 - [3D BAG buildings](#3d-bag-buildings)
 - [Index and level of detail](#index-and-level-of-detail)
 - [Settings, language and extensions](#settings-language-and-extensions)
@@ -152,7 +153,7 @@ Walking starts from the current orbit view, or from inside a station. Walking ou
 
 The limits are coordinates in the model. They stay where they are when another layer is shown or hidden.
 
-The box also limits box selection, point picking and both meshers. **Section box…** among the exports of the File view writes every source point of the active scan inside the box; see [Exporting and merging](#exporting-and-merging). **Section drawing** makes a 2D drawing of what the box cuts; see [Section drawings](#section-drawings).
+The box also limits box selection, point picking and the three meshers. **Section box…** among the exports of the File view writes every source point of the active scan inside the box; see [Exporting and merging](#exporting-and-merging). **Section drawing** makes a 2D drawing of what the box cuts; see [Section drawings](#section-drawings).
 
 The box is aligned to the X, Y and Z axes of the model and cannot be rotated. A vertical cut through a building that stands at an angle to those axes is therefore a cut at that angle, not one along its walls.
 
@@ -391,7 +392,15 @@ The six numbers are the section box: X, Y and Z min, then X, Y and Z max. `--vie
 
 ## Meshing
 
-A point cloud becomes a mesh of triangles with one of the two meshers of the SURFACE group. Both use the points that remain inside the section box and whose class is visible, ask for an `.obj` file, run in the background and then show the result in the scene as faces. Properties shows the progress; **Cancel mesh** stops the job and leaves an existing file as it was. One mesh job runs at a time.
+A point cloud becomes a mesh of triangles with one of the three meshers of the SURFACE group. All three use the points that remain inside the section box and whose class is visible, run in the background and then show the result in the scene as faces. One mesh job runs at a time.
+
+| Mesher | Use it for | What it gives |
+| --- | --- | --- |
+| **Terrain mesh** | Ground, and other surfaces seen from above | A 2.5D surface of at most 100,000 vertices from one pass over the whole scan. No walls, no overhangs |
+| **3D surface** | A quick impression of a whole scan, walls included | A surface from a sample of the points. It leaves holes, its patches can overlap and it is not watertight |
+| **Closed mesh** | A room or a part of a building of which the surface has to be right | A surface without overlaps from every point of the region, closed where the scan has points, with the measured distance between points and mesh. It takes more time and memory and works best inside a section box; see [Closed mesh](#closed-mesh) |
+
+**Terrain mesh** and **3D surface** take the active scan and ask for an `.obj` file first. Properties shows their progress; **Cancel mesh** stops the job and leaves an existing file as it was.
 
 - **Terrain mesh** passes every source point through a grid seen from above, keeps the lowest point in each cell and connects those to a 2.5D surface of at most 100,000 vertices. Long edges across gaps are left out. It suits ground and other surfaces seen from above.
 - **3D surface** takes a sample of the source, thins it evenly to the number of vertices asked for, estimates a normal at each and connects neighbours in their tangent planes. It can follow vertical walls and overhangs. Sparse parts leave holes, and neighbouring patches can disagree, so the result is not watertight. While a scan is active, Properties has its settings: **Max vertices** (3 to 1,000,000; 50,000 by default), **Neighbors** (3 to 32; 12 by default) and a positive **Edge factor** (4 by default).
@@ -400,7 +409,9 @@ The OBJ file has the colours of the source where it has them and a normal per ve
 
 A scan holds one mesh: a new mesh takes the place of the previous one, and Undo does not apply to meshes. The project panel has a separate **Surface** switch per layer, so the points can be hidden while the faces stay.
 
-OBJ, PLY, OFF and STL files open as meshes and are drawn as faces too, several at once. Of a DXF file, which must be an ASCII DXF, the POINT entities open as points and the 3DFACE entities as faces; other entities are skipped. Colours per vertex of OBJ and PLY are shown; OBJ files also get the diffuse colours of their material file. Texture images are not drawn. A mesh shown in the scene has at most one million vertices and two million triangles per file.
+OBJ, PLY, OFF and STL files open as meshes and are drawn as faces too, several at once. Of a DXF file, which must be an ASCII DXF, the POINT entities open as points and the 3DFACE entities as faces; other entities are skipped. Colours per vertex of OBJ and PLY are shown; OBJ files also get the diffuse colours of their material file. Texture images are not drawn. A mesh has at most 4,000,000 vertices and 8,000,000 triangles, whether it comes from a file or from a mesh job; a file with more is refused. A mesh file at that limit takes about 0.9 GB of memory for a moment while it is opened and about 0.55 GB while it is shown, with 0.4 GB on the graphics card. All meshes are drawn from one buffer of the graphics card that holds about 5.5 million vertices: one mesh always fits, and a mesh that no longer fits beside the others that are shown is held but not drawn, which Properties says under **Surface mesh**. Switch off the **Surface** of another layer to see it.
+
+To reduce the number of points instead of making a mesh, use **Thin** in the EDIT group; see [Editing](#editing).
 
 ### What Properties says about a mesh
 
@@ -412,11 +423,11 @@ While the active scan holds a mesh, Properties has a **Surface mesh** section. T
 
 A mesh file can hold the same corner more than once: one vertex per face, or one per material colour of an OBJ file. For a mesh that was opened from a file, vertices at exactly the same position therefore count as one for these two figures, so a closed surface shows no open edges however the file numbers its vertices, and the same mesh gives the same figures in every format. Parts that touch in such a position are one part, as buildings from 3D BAG that share a corner are. **Vertices** stays the number the mesh holds.
 
-These figures say how the triangles hang together. They do not say how far the mesh lies from the points; that distance is not measured.
+These figures say how the triangles hang together. They do not say how far the mesh lies from the points. Only a closed mesh measures that distance, and shows it in its own block.
 
 ### Saving a mesh
 
-**Surface mesh…** in the File view, or **Export mesh…** under **Surface mesh** in Properties, saves the mesh of the active scan: a terrain mesh, a 3D surface, the faces of an opened mesh file or downloaded 3D BAG buildings. The save dialog offers three formats, and the extension of the file name decides which one is written:
+**Surface mesh…** in the File view, or **Export mesh…** under **Surface mesh** in Properties, saves the mesh of the active scan: a terrain mesh, a 3D surface, a closed mesh, the faces of an opened mesh file or downloaded 3D BAG buildings. The save dialog offers three formats, and the extension of the file name decides which one is written:
 
 | Format | What the file holds |
 | --- | --- |
@@ -430,7 +441,90 @@ An STL file stores 32-bit numbers, which hold about seven digits. Up to 2,048 m 
 
 An OBJ or PLY file of 3D BAG buildings carries the credit of the register in its first lines, in plain ASCII in a PLY file. Open Pointcloud Studio reads it there when the file is opened again, so the scene shows the credit and a further export keeps it. An STL file has no room for the credit; name the source yourself when you pass such a file on.
 
-Without a window: `--mesh` and `--surface` make a mesh, and `--mesh-export INPUT OUTPUT` writes the faces of any mesh file as OBJ, PLY or STL by the extension of `OUTPUT`.
+Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, and `--mesh-export INPUT OUTPUT` writes the faces of any mesh file as OBJ, PLY or STL by the extension of `OUTPUT`.
+
+## Closed mesh
+
+**Closed mesh** in the SURFACE group makes a surface of the points in a region that has no overlapping faces and is closed wherever the scan has points or a gap narrower than the hole limit. It is the mesher for a room or a part of a building of which the result has to be right: it uses every point of the region, not a sample, tells how far the points lie from the mesh, and leaves door and window openings open. The button opens the **Closed mesh** block at the top of Properties, and closes it again.
+
+### How it works, in short
+
+The points are reduced, per cell of half a voxel, to small pieces of surface with a direction. Around them the distance to the surface is worked out at the corners of a grid of voxels: positive on the side the scanner saw, negative behind the surface. Scanner noise averages out in that distance. The surface is where the distance is zero, and it is taken out of the grid with a vertex in every voxel it passes through, which keeps the corners between walls and floors fairly sharp. Where the points end, the surface ends too, a little past the last points, and that end is a rim of open edges. A gap in the points that is narrower than the hole limit is closed with the surface the points around it predict. The region is cut into blocks of 96 voxels that are meshed side by side and join without a seam. Flat parts are then simplified to a few large triangles.
+
+### One room, step by step
+
+1. Open the scan or the scans of the room and wait until they are indexed; the strip above the scene shows that. A scan of one million points or more gets its index by itself. A scan without an index is read into memory for the job when it has at most 5,000,000 points; a larger one is refused until **Build index** in the INDEX group has run.
+2. Switch on **Section box** and put it around the room: choose **Top** in the VIEW group and bring the four sides to the middle of the walls around the room, so that the faces of the walls on the room side lie inside the box and those of the rooms next door do not. Put the top face just above the ceiling and the bottom face just under the floor. The mesh is made of what lies inside the box.
+3. Choose **Closed mesh**. Under the settings the block says what a job would mesh: the active scan or the visible scans, inside the section box or as a whole, the size of that region in metres, the voxel that will be used, and about how many triangles the faces of that box give before simplification. Furniture and inner walls add to that number. When the region is too large for the limits of a mesh, or may be, the block says so in the accent colour before anything is started. With simplification the warning comes when the faces of the box alone give more triangles than a mesh holds, and the job then fits only when simplification takes most of them away. Without simplification (**Simplify within** at 0) it comes from about two thirds of the limit, because a scanned surface has more triangles than the faces of its box: a generated room with a noise of 2 mm, a column and the reveals of a door and a window gave about 1.4 times as many.
+4. When the room was scanned from several stations that are separate files, set **Scans** to **All visible scans** and hide the layers that should stay out. With the section box on, only the visible layers that reach the box take part: a layer that lies outside it is not read and does not count for the size of the region. Layers of 3D BAG buildings are left out. The mesh goes to the active scan either way, so make one of the scans the active layer first: a layer of 3D BAG buildings does not take a mesh of the scans, and the block says so.
+5. Choose **Start**. The strip above the scene shows the job step by step, with a **Cancel** button: reading (only for a scan without an index), finding the blocks that hold points, meshing block after block, simplifying across the blocks, and measuring the result. A cancelled job leaves the mesh the scan had as it was.
+6. When the job is done the mesh is shown as the mesh of the active scan, and the status bar and the block give its figures. Hide the points of the layer in the project panel to look at the mesh alone; the **Surface** switch of the layer hides the mesh.
+7. The mesh exists in this session only. **Export mesh…** under **Surface mesh** in Properties, or **Surface mesh…** in the File view, saves it as OBJ, PLY or STL; see [Saving a mesh](#saving-a-mesh).
+
+A scan holds one mesh. The closed mesh takes the place of the mesh the active scan had, whichever mesher made it, and Undo does not bring that one back. The mesh is kept in the frame of its scan: **Move** and **Scale** afterwards take the mesh along with the points.
+
+### The settings
+
+| Setting | What it does | Starts at |
+| --- | --- | --- |
+| **Voxel size (m)** | The edge of a voxel, from 0.005 to 0.5 m. Smaller voxels follow more detail and cost more time and triangles. Empty, or `auto`, lets the job choose: 0.02 m for a region up to 20 m long, 0.03 m up to 60 m and 0.05 m beyond | Empty (automatic) |
+| **Close holes up to (m)** | Gaps in the points up to this wide are closed, from 0 (none) to 3.2 m, and never more than 32 voxels: 0.64 m at voxels of 0.02 m. Wider openings, such as doors and windows, stay open as a whole | 0.25 |
+| **Simplify within (mm)** | How far simplification may move the surface, from 0 (no simplification) to 1000 mm. Empty, or `auto`, is 0.15 voxel: 3 mm at voxels of 0.02 m | Empty (automatic) |
+| **Sides** | Which side of a surface is its front. **Automatic**: the side of the scanner station that measured it, where the scan knows its stations; elsewhere the side of the centre of the region. **Towards the centre**: every face looks at the centre of the region, and stations are not used. **Upward**: every face looks up, for data measured from above | Automatic |
+| **Scans** | **Active scan**, or **All visible scans**: every layer whose points are shown and that reaches the section box when the box is on, without layers of 3D BAG buildings | Active scan |
+
+A comma or a point is read as the decimal mark. The centre of the region is the middle of the section box after it has been cut back to where the scans have points, so a box drawn wide around a room still has its centre in the room. The settings hold for the session and are not kept between sessions. Deleted points and hidden classes are left out, as with the other meshers; the selection plays no part.
+
+Stations come with E57, PTX and PCD scans. A merged cloud, a LAS or LAZ file and a text file have none. An index that was built by an earlier version does not say which station measured which point: with **Automatic**, the first job on such a scan reads its file once more to find out (the strip says "finding the station of every point") and keeps the answer with the index. The answer also stays with the layer for as long as it is open, when the job is cancelled or fails after that pass too, so the next job does not read the file again.
+
+### What the result says
+
+When a job is done, the status bar gives its figures in one line and the block keeps them under **Last mesh**, with the time the job took and the voxel it used:
+
+- **Vertices** and **Triangles**: the size of the mesh after simplification.
+- **Mean deviation**, **95% deviation** and **Largest deviation**: the distance between the points and the mesh, measured from up to 200,000 points of the region, spread evenly, to the nearest triangle. Mean and 95% describe the surface. The largest value counts every point that took part, also a stray point far from any surface, so it can be much larger than the other two without anything being wrong with the mesh.
+- **Open edges**: edges with one triangle. A room that was scanned all around has them only at its door and window openings, at holes wider than the hole limit and where the section box cuts through a surface.
+- **Connected parts**: the pieces of the mesh that share no vertex. A room is one part; a free-standing object that the surface of the room does not reach is a part of its own.
+- **Sides**: where the sides came from. **From stations**: every piece of surface took its side from the station that measured it. **Stations and centre**: some had no station. **Towards the centre** or **Upward**: none had one, or stations were not used.
+- **Without station**: with **Automatic**, how many of the pieces of surface had no station and took their side from the centre or from the surface with a station beside them. Shown when there are any. With **Towards the centre** and **Upward** stations are not used, so the row is left out: it would count every piece, whatever the scan knows.
+- **Side undecided**: how many of the pieces of surface lie edge on to the centre, so that it cannot tell their side, or stand upright with **Upward**. They face up, or one fixed direction when they stand upright. Shown when there are any.
+
+Below the figures the block gives advice when they call for it: when a twentieth or more of the surface had an undecided side, when **Automatic** found no station for some or all of the surface, and when edges have more than two triangles. For an undecided side the advice depends on **Sides**: with **Towards the centre** it says that stations were not used and to choose **Automatic** when the scans know their stations; with **Automatic** it says to put the section box around one room or to use scans that know their stations.
+
+### Measured on generated rooms
+
+None of these numbers comes from a scan of a real building; they were taken in a development build, which is slower than a release.
+
+- A room of 4.0 by 3.0 by 2.6 m with a point every 1.5 cm, seen from inside, at voxels of 4 cm: one closed surface, mean deviation 0.4 mm, 95% 4.0 mm, largest 10.3 mm. With a noise of 2 mm: closed, mean 1.3 mm, 95% 4.0 mm, largest 12.3 mm.
+- Two rooms with a wall of 0.20 m between them, a door opening, a window and a round column of 0.20 m radius, about 2.9 million points per room with a noise of 2 mm, one station per room. The first room in a box of 5.2 by 4.2 by 2.8 m, at voxels of 2 cm: 10,036 vertices and 19,091 triangles in 3.3 s on one run and 4.6 s on another, mean deviation 1.6 mm, 95% 4.0 mm, largest 15.3 mm. The door and the window are open, each with one rim around it. The column is there with a mean radius of 0.2001 m, as a part of its own that does not join the floor and the ceiling and whose far half faces inward: the generated scan has points all around the column that the one station could never have seen. The same box of the same points without stations, with **Towards the centre**: 9,997 vertices and 19,100 triangles in 4.0 s, mean deviation 1.6 mm, 95% 4.0 mm, largest 14.6 mm, the same openings and the same column, and one edge with more than two triangles.
+- 5.4 million points of nine rooms at voxels of 2 cm on a computer with 32 logical processors: 12 to 13 s and 1.2 GB of memory at its peak.
+
+### Limits
+
+- **Corners are rounded.** Within about one and a half voxels of an edge the surface can lie a quarter of a voxel off: 10 mm at voxels of 4 cm.
+- **Thin objects.** Detail smaller than about two voxels is lost. A wall with openings needs about three voxels of thickness; at two it gets extra holes. Two faces closer together than two voxels, such as a door leaf or sheet material, are not kept apart: they merge, with holes and now and then an edge with more than two triangles. A loose piece smaller than 64 voxel faces, 16 by 16 cm at voxels of 2 cm, is taken for dust and dropped.
+- **Gaps that stay open.** A gap is closed only where a single surface runs around it. It stays open along the foot of a wall, in a surface with another surface less than about seven voxels behind it (a hole in a thin wall), in a surface that curves more tightly than a radius of about ten voxels, and at the rim of a larger opening. A long gap closes when it is at most the hole limit wide, a round hole up to about a voxel and a half more.
+- **Rims.** Where the points end, the surface runs on about three quarters of a voxel, and about two and a half voxels where the points are sparse. A plate that ends 20 to 24 cm from a wall runs on 8 to 10 cm.
+- **Point spacing.** Points have to lie closer together than about two and a half voxels to give a surface; choose the voxel at least twice the spacing of the points. Points about 0.8 voxel apart with a noise above 0.15 voxel give small holes on surfaces the scanner saw at a low angle.
+- **Surfaces seen at a very low angle.** A floor seen under about three degrees, with a noise of 0.15 voxel, can keep single defects. It is torn into patches that face up and down when the points are as far apart as the voxel and the noise is a fifth of it.
+- **Surfaces without a station can tear.** Without stations the centre of the region decides the side of every surface. A surface that the centre sees edge on has no side it can tell, and faces up, or one fixed direction when it is upright. Two cases are left in which such a surface comes out torn, in patches that face both ways: a surface that passes the centre at just the distance where the rule changes (two voxels, or 8% of the distance from the centre to the farthest corner of the region when that is more), such as a table top or a shelf near half the height of the box; and an upright surface that the centre sees edge on and whose front points within a degree or two of 118 or 298 degrees from the X axis. What helps: scans that know their stations; a section box around one room, with its centre inside the room and not at the height of a table top or in the plane of a wall; moving one face of the box a few decimetres, which moves the centre. **Side undecided** counts the surface this applies to.
+- **An object seen from around** has no single centre to face. Without stations, or with **Towards the centre**, the half of a free-standing column or cupboard that looks away from the centre comes out with its back to the front, and the object is cut into pieces along the line between the halves. With stations each surface faces the station that measured it.
+- **Upward** gives every upright surface one fixed side, the same for both faces of a wall, so the walls of a room do not close against its floor, and an upright surface in the direction named above comes out torn. It is meant for terrain and roofs measured from above.
+- **Colours.** Vertices take the colour of the points near them. Simplification does not look at colour, so a flat wall becomes a few large triangles with one colour per corner and the pattern on it is lost.
+- **Size.** A mesh holds at most 4,000,000 vertices and 8,000,000 triangles. A job that would give more stops with an error that asks for a larger voxel, a larger simplification tolerance or a smaller section box, and the block warns of it before the job starts. A mesh is sent to the graphics card when it is made, moved, scaled, switched on or off, or when the extent of the scene changes, and not again when the points on screen are refined, filtered or cut by the section box, so a large mesh does not slow down looking around in the scan. Above 4,000,000 triangles the simplification across the blocks is left out, which leaves lines of small triangles along the borders of the blocks. A region longer than about 20 km at voxels of 2 cm is refused.
+- **Memory and time.** A block in work takes about 60 to 180 MB; blocks wait for each other so that together they stay near 2 GB, and a block full of clutter can take more. A job reads more points than the region holds, because every block reads a margin around itself: about seven times as many on the generated rooms, and more with a larger hole limit. A hole limit of 0.6 m instead of 0.25 m made a job of 2.4 s take 6.5 s.
+- **A scan without an index** above 5,000,000 points is refused, and a scan that is still loading too.
+- **The mesh is not saved by itself** and is not part of a saved view. Export it to keep it.
+- The same points and settings give the same mesh on every run on one computer; between computers the last digits can differ.
+
+Without a window, `--closed-mesh` meshes one scan file and writes the result:
+
+```bash
+open-pointcloud-studio --closed-mesh scan.e57 room.ply --box 0,0,-0.1,5.1,4.1,2.7
+open-pointcloud-studio --closed-mesh merged.laz room.obj --box 0,0,-0.1,5.1,4.1,2.7 --voxel 0.03 --max-hole 0.1 --simplify 0 --sides centre
+```
+
+The extension of the output chooses OBJ, PLY or STL. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
 
 ## 3D BAG buildings
 
