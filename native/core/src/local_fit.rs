@@ -219,6 +219,27 @@ impl Moments {
         self.outer[5] += z * z;
     }
 
+    /// Add a point that stands for `weight` points at its position, such as
+    /// the mean of the points of a voxel.
+    pub fn add_weighted(&mut self, point: [f64; 3], weight: u64) {
+        if weight == 0 {
+            return;
+        }
+        let origin = *self.origin.get_or_insert(point);
+        let [x, y, z] = difference(point, origin);
+        let w = weight as f64;
+        self.count += weight;
+        self.sum[0] += w * x;
+        self.sum[1] += w * y;
+        self.sum[2] += w * z;
+        self.outer[0] += w * x * x;
+        self.outer[1] += w * x * y;
+        self.outer[2] += w * x * z;
+        self.outer[3] += w * y * y;
+        self.outer[4] += w * y * z;
+        self.outer[5] += w * z * z;
+    }
+
     /// Add the points of another set. The two may have different origins.
     pub fn merge(&mut self, other: &Self) {
         let Some(theirs) = other.origin.filter(|_| other.count > 0) else {
@@ -332,6 +353,36 @@ mod tests {
             .min(1.0)
             .acos()
             .to_degrees()
+    }
+
+    #[test]
+    fn a_weighted_point_counts_as_that_many_points() {
+        let points = [
+            [1.0, 2.0, 3.0],
+            [2.0, 2.5, 3.5],
+            [0.5, 4.0, 1.0],
+            [3.0, 1.0, 2.0],
+        ];
+        let mut repeated = Moments::around([1.0, 1.0, 1.0]);
+        let mut weighted = Moments::around([1.0, 1.0, 1.0]);
+        for (index, point) in points.iter().enumerate() {
+            for _ in 0..=index {
+                repeated.add(*point);
+            }
+            weighted.add_weighted(*point, index as u64 + 1);
+        }
+        weighted.add_weighted([9.0, 9.0, 9.0], 0);
+        assert_eq!(weighted.count(), 10);
+        let (a, b) = (repeated.plane().unwrap(), weighted.plane().unwrap());
+        for axis in 0..3 {
+            assert!((a.centroid[axis] - b.centroid[axis]).abs() < 1e-12);
+            assert!((a.normal[axis] - b.normal[axis]).abs() < 1e-9);
+            assert!((a.eigenvalues[axis] - b.eigenvalues[axis]).abs() < 1e-12);
+        }
+        // The first point given becomes the origin when none is set.
+        let mut fresh = Moments::new();
+        fresh.add_weighted([5.0, 6.0, 7.0], 3);
+        assert_eq!(fresh.centroid(), Some([5.0, 6.0, 7.0]));
     }
 
     #[test]

@@ -32,6 +32,7 @@ pub mod region_source;
 mod scan_image;
 mod snapshots;
 mod surface_mesh;
+pub mod surfaces;
 pub mod surfels;
 #[cfg(test)]
 mod test_shapes;

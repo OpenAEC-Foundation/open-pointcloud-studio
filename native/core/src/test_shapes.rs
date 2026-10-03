@@ -106,6 +106,46 @@ impl Shape {
         self
     }
 
+    /// Tip the shape about the x axis through the origin: a level plane
+    /// becomes a roof plane that rises towards +y at this slope.
+    pub(crate) fn tilted(mut self, degrees: f64) -> Self {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let turn = |v: [f64; 3]| [v[0], cos * v[1] - sin * v[2], sin * v[1] + cos * v[2]];
+        for point in self.points.iter_mut().chain(&mut self.stations) {
+            *point = turn(*point);
+        }
+        for normal in &mut self.normals {
+            *normal = turn(*normal);
+        }
+        self
+    }
+
+    /// Move every point at random within its surface, up to `amount` along
+    /// each of two directions square to its normal: a scan does not put its
+    /// points on a lattice.
+    pub(crate) fn scattered(mut self, amount: f64, seed: u64) -> Self {
+        let mut rng = Rng::new(seed);
+        for (point, normal) in self.points.iter_mut().zip(&self.normals) {
+            let helper = if normal[2].abs() < 0.9 {
+                [0.0, 0.0, 1.0]
+            } else {
+                [1.0, 0.0, 0.0]
+            };
+            let Some(first) = unit(cross(helper, *normal)) else {
+                continue;
+            };
+            let second = cross(*normal, first);
+            let (a, b) = (
+                (rng.unit() * 2.0 - 1.0) * amount,
+                (rng.unit() * 2.0 - 1.0) * amount,
+            );
+            for axis in 0..3 {
+                point[axis] += a * first[axis] + b * second[axis];
+            }
+        }
+        self
+    }
+
     /// Give every point to the station that sees its surface most squarely,
     /// and order the points station by station. A point no station can see
     /// goes to the nearest one.
@@ -555,6 +595,30 @@ pub(crate) fn plane_with_hole(
             if outside {
                 shape.push([x, y, 0.0], [0.0, 0.0, 1.0], u32::MAX);
             }
+        }
+    }
+    shape
+}
+
+/// A rectangle anywhere: from `origin`, `size[0]` along one unit direction
+/// and `size[1]` along another that is square to it. It is seen from the
+/// side that the cross product of the two points to.
+pub(crate) fn rectangle(
+    origin: [f64; 3],
+    along: [f64; 3],
+    up: [f64; 3],
+    size: [f64; 2],
+    spacing: f64,
+) -> Shape {
+    let normal = unit(cross(along, up)).expect("two directions that span a plane");
+    let mut shape = Shape::default();
+    for a in lattice(0.0, size[0], spacing) {
+        for b in lattice(0.0, size[1], spacing) {
+            shape.push(
+                std::array::from_fn(|axis| origin[axis] + a * along[axis] + b * up[axis]),
+                normal,
+                u32::MAX,
+            );
         }
     }
     shape
@@ -1110,6 +1174,38 @@ mod tests {
         let found = stray.bounds();
         assert!(found.min[0] < 1.01 && found.max[1] > 3.98);
         assert_eq!(stray_points(bounds, 1_000, 9).points, stray.points);
+    }
+
+    #[test]
+    fn a_rectangle_lies_where_it_is_put_and_scattering_keeps_it_in_its_plane() {
+        // A wall face of 2 by 1 m at x = 3 that runs towards -y, seen from
+        // the side of -x.
+        let wall = rectangle(
+            [3.0, 5.0, 0.5],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [2.0, 1.0],
+            0.1,
+        );
+        assert_eq!(wall.points.len(), 20 * 10);
+        assert!(wall
+            .normals
+            .iter()
+            .all(|normal| *normal == [-1.0, 0.0, 0.0]));
+        let bounds = wall.bounds();
+        assert_eq!((bounds.min[0], bounds.max[0]), (3.0, 3.0));
+        assert!((bounds.min[1] - 3.05).abs() < 1e-12 && (bounds.max[1] - 4.95).abs() < 1e-12);
+        assert!((bounds.min[2] - 0.55).abs() < 1e-12 && (bounds.max[2] - 1.45).abs() < 1e-12);
+        // Scattered by up to 4 cm: off the lattice, still at x = 3.
+        let scattered = wall.clone().scattered(0.04, 3);
+        let mut moved = 0;
+        for (before, after) in wall.points.iter().zip(&scattered.points) {
+            assert_eq!(after[0], 3.0);
+            assert!((after[1] - before[1]).abs() <= 0.04 && (after[2] - before[2]).abs() <= 0.04);
+            moved += usize::from(after != before);
+        }
+        assert_eq!(moved, 200);
+        assert_eq!(wall.scattered(0.04, 3).points, scattered.points);
     }
 
     #[test]
