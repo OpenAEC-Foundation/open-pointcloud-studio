@@ -414,6 +414,7 @@ mod tests {
         ("main.rs", include_str!("main.rs")),
         ("bag_panel.rs", include_str!("bag_panel.rs")),
         ("cli_help.rs", include_str!("cli_help.rs")),
+        ("drawing.rs", include_str!("drawing.rs")),
         ("extensions.rs", include_str!("extensions.rs")),
         ("file_view.rs", include_str!("file_view.rs")),
         ("i18n.rs", include_str!("i18n.rs")),
@@ -451,6 +452,7 @@ mod tests {
         ("render_group_items", 0),
         ("property_row", 0),
         ("property_input", 0),
+        ("property_control", 0),
         ("section_header", 0),
         // file_view.rs
         ("item", 0),

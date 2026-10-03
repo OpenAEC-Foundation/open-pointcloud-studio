@@ -134,7 +134,7 @@ The interface follows the language of the system, English or Dutch; **Settings >
 4. **Cut a floor plan.** Switch on **Section box** (*Snedebox*). A box appears around the whole model, with a round handle in the middle of each face. Drag the handle of the top face down to about a metre above a floor, so that the box cuts through the walls. Then choose **Top** (*Boven*) in the **VIEW** group (*AANZICHT*) to look straight down. Seen from straight above, dragging the top handle has little or no effect; to change the height there, use the **Z max** slider under **Section box** in the Properties panel, or type the height as Z **Max** and choose **Apply XYZ limits** (*XYZ-grenzen toepassen*).
 5. **Measure.** Choose **Distance** (*Afstand*) in the **MEASURE** group (*METEN*), click two points and press Enter. The length appears in the scene; the Properties panel also lists the horizontal length and the height difference.
 6. **Save the view.** Choose **Save view** (*View opslaan*) in the VIEWS group. The view is listed under **Views** in the Properties panel; a click on its name brings back the camera, the section box and the colour mode. With **Note** (*Notitie*), click a point, type a text and press Enter. **Export BCF** (*BCF exporteren*) writes the views of the scan, with their notes and a picture each, as one `.bcf` file: the BIM Collaboration Format, an open format for passing viewpoints and remarks on a building between programs.
-7. **Export what you cut.** Choose **File**, pick a format under **EXPORT FORMAT** (*EXPORTFORMAAT*) on the Workspace page, then choose **Section box…** (*Snedebox…*) under EXPORT. The file holds every point of the active scan inside the box, not only the points on screen. With several scans open, make each one active in turn and export it, or first join LAS and LAZ scans with **Merge visible LAS/LAZ scans…** (*Zichtbare LAS/LAZ-scans samenvoegen…*).
+7. **Export what you cut.** Choose **File**, pick a format under **EXPORT FORMAT** (*EXPORTFORMAAT*) on the Workspace page, then choose **Section box…** (*Snedebox…*) under EXPORT. The file holds every point of the active scan inside the box, not only the points on screen. With several scans open, make each one active in turn and export it, or first join LAS and LAZ scans with **Merge visible LAS/LAZ scans…** (*Zichtbare LAS/LAZ-scans samenvoegen…*). To get the cut as a 2D drawing for a drawing program instead, choose **Section drawing** (*Snedetekening*) in the SECTION BOX group: it draws all visible scans and saves a DXF or DWG file.
 
 The source files are never changed: deleting, thinning, moving and scaling apply to the open view and to what you export.
 
@@ -161,7 +161,7 @@ Each heading has a section in the [user guide](docs/guide.md).
 
 ### Section box
 
-- A box with six draggable faces limits what is shown, selected and meshed, and its content can be exported on its own.
+- A box with six draggable faces limits what is shown, selected and meshed, and its content can be exported on its own or drawn as a [2D drawing](#section-drawing).
 - Its limits can be typed as X, Y and Z coordinates in the Properties panel, fitted to the selection, or reset.
 - The box is aligned to the X, Y and Z axes of the scan and cannot be rotated. A building that stands at an angle to those axes is cut at that angle.
 
@@ -200,6 +200,14 @@ Each heading has a section in the [user guide](docs/guide.md).
 - Properties shows the vertices and triangles of a mesh, its open edges (the rims of the surface and of its holes) and the number of connected parts.
 - Any mesh that is open, whether made here, opened from a file or downloaded from the 3D BAG, can be saved as OBJ, as binary PLY or as binary STL.
 
+### Section drawing
+
+- **Section drawing** makes a 2D drawing at scale 1:1 of what the section box cuts and saves it as DXF or DWG: a plan from the slab under the top face of the box, or a vertical section from the slab behind one of its four sides.
+- The drawing holds the points of the slab, thinned to one per 5 mm, from every visible scan with its move and scale, without deleted points and hidden classes.
+- **Filled cut** adds the walls, columns and floors that the slab goes through as filled regions with outlines, and leaves door and window openings open. **Preview** shows these regions over the points before a file is saved.
+- Millimetres or metres, model coordinates or the corner of the box as zero, a layer per scan or per class, layer colours or the colours of the scan, and the file versions R2004 to R2018.
+- The filled cut is traced from the points and has limits: a wall scanned from one side is drawn as a thin strip, gaps under about half a metre are closed, and furniture in the slab is drawn unless its points are deleted first. The [user guide](docs/guide.md#the-filled-cut-and-its-limits) lists them.
+
 <!-- New tools add their bullet list here, as a "###" heading of their own, and a section in docs/guide.md. -->
 
 ### Other
@@ -223,7 +231,8 @@ Each heading has a section in the [user guide](docs/guide.md).
 | PLY as mesh | yes | yes | Shown as faces. Written as binary PLY with double coordinates, and with colours and normals where the mesh has them |
 | STL | yes | yes | Shown as faces. Written as binary STL: triangles only, without colours. A mesh more than 2,048 m from zero is written relative to a whole-metre origin that the file header names |
 | OFF | yes | no | Shown as faces; can be saved as OBJ, PLY or STL |
-| DXF | yes | no | ASCII DXF only. POINT entities open as points, 3DFACE entities as faces that can be saved as OBJ, PLY or STL; other entities are skipped |
+| DXF | yes | yes, as a drawing | Read: ASCII DXF only. POINT entities open as points, 3DFACE entities as faces that can be saved as OBJ, PLY or STL; other entities are skipped. Written: the 2D drawing of a section box, with points, filled regions, outlines and a line of text; not a format of the point exports |
+| DWG | no | yes, as a drawing | The 2D drawing of a section box, as for DXF, in the versions R2004 to R2018. DWG files are not opened |
 | Scan project file (`.rcp`) | yes | no | Only the list of scans is read. The indexed scan copies (`.rcs`) of a project are a closed format and are not read |
 | BCF 2.1 (`.bcf`) | no | yes | Saved views with notes and pictures |
 | PNG | no | yes | Picture of the 3D view, through the command API |
@@ -257,6 +266,8 @@ Limits in the application:
 | Mesh shown in the scene | 1,000,000 vertices and 2,000,000 triangles per file |
 | 3D surface | 3 to 1,000,000 vertices (50,000 by default) |
 | 3D BAG download | 2 by 2 km and about 5,000 buildings |
+| Section drawing | 150,000 points by default and at most 400,000; when the slab holds more after thinning to 5 mm, the point spacing doubles. Writing takes about 2.8 kB of memory per point: about 1.1 GB at 400,000 |
+| Filled cut of a section drawing | A grid of at most 16 million cells: 80 by 80 m at the default cell of 20 mm, with larger cells beyond that. Gaps up to the largest wall thickness (0.50 m by default, at most 2 m) are closed |
 
 An index can take several gigabytes on disk for a large survey.
 
@@ -277,6 +288,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--photos INPUT OUTPUT_DIRECTORY` | Saves the station photos of a scan as image files |
 | `--export INPUT OUTPUT` | Converts a scan; the extension of `OUTPUT` chooses the format (`.ply`, `.xyz`, `.pts`, `.csv`, `.las`, `.laz`, `.e57`) |
 | `--section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT` | Exports the points of a scan that lie inside a box |
+| `--drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf\|.dwg [--view plan\|front\|back\|left\|right] [--thickness METRES] [--units mm\|m] [--fill on\|off]` | Draws the slab behind one face of a box in a scan as a 2D drawing in DXF or DWG: a plan with a slab of 0.10 m in millimetres unless the options say otherwise |
 | `--merge OUTPUT.laz INPUT1.las INPUT2.laz [...]` | Merges LAS and LAZ scans into one file |
 | `--mesh INPUT OUTPUT.obj` | Writes a terrain mesh of a scan |
 | `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N]` | Writes a 3D surface mesh of a scan |
@@ -290,6 +302,8 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 ```bash
 open-pointcloud-studio --export scan.laz scan.e57
 open-pointcloud-studio --section scan.laz 207440,474000,-100,208000,475000,1000 crop.laz
+open-pointcloud-studio --drawing scan.laz 0,0,0,20,15,1.1 plan.dxf
+open-pointcloud-studio --drawing scan.laz 0,6,-1,20,15,8 section.dwg --view front --units m
 open-pointcloud-studio --merge merged.laz north.laz south.laz
 ```
 
@@ -302,7 +316,7 @@ curl -H 'Content-Type: application/json' -H 'X-OPS-Token: TOKEN' \
   -d '{"command":"status"}' http://127.0.0.1:PORT/exec
 ```
 
-The commands open and close scans, set the camera, the section box and the display, select, delete, measure, save views, export, mesh and take pictures of the 3D view. The server listens on the loopback address only and refuses a command without the token. [native/API.md](native/API.md) lists every command.
+The commands open and close scans, set the camera, the section box and the display, select, delete, measure, save views, export, draw sections, mesh and take pictures of the 3D view. The server listens on the loopback address only and refuses a command without the token. [native/API.md](native/API.md) lists every command.
 
 ### MCP server
 
@@ -346,7 +360,7 @@ The executable is `native/target/release/open-pointcloud-studio`, with `.exe` on
 
 | Path | What it holds |
 | --- | --- |
-| `native/core` | The point-cloud library: readers and writers, the index on disk and the reads from it, export, meshing |
+| `native/core` | The point-cloud library: readers and writers, the index on disk and the reads from it, export, meshing, 2D drawings |
 | `native/desktop` | The desktop application: window, 3D view, selection and the other tools, command API and MCP server |
 | `native/assets` | Fonts, icons and the Dutch interface texts |
 | `native/installer`, `native/packaging` | The Windows installer script and the packaging of all systems |

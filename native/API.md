@@ -34,7 +34,7 @@ Commands use absolute file paths. They return JSON with `ok: true` or
 `ok: false` and an `error`. File opening returns `accepted: true` as soon as
 the GUI starts loading; poll `status` for the new layer. `open` answers after
 a folder or scan project file has been read on a worker thread, with the list
-of files it started loading. Exports return
+of files it started loading. Exports and section drawings return
 `accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
 for a durable `running`, `complete` (with point count), or `failed` result.
 The newest 32 jobs remain queryable even if the GUI status line changes.
@@ -91,6 +91,128 @@ extension, for a layer without a mesh (`status.result.clouds[].mesh` is
 `null` there), for the source file of the layer as destination, and while
 another mesh export is open or running. `status.result.mesh_export_pending`
 is true while the file is written.
+
+## Section drawings
+
+`export_drawing` draws what the section box cuts as a 2D drawing at scale 1:1
+and writes it as DXF or DWG; `path` is an absolute destination in a folder
+that exists, and its extension (`.dxf` or `.dwg`) chooses the format. The cut
+plane is one face of the box, and the drawing holds the slab behind that face,
+`thickness` metres deep and never deeper than the box:
+
+| Cut plane | `view` | To the right in the drawing | Up in the drawing |
+| --- | --- | --- | --- |
+| The top face (Z max), seen from above | `plan` | +X | +Y |
+| The face at Y min, looking along +Y | `front` | +X | +Z |
+| The face at Y max, looking along -Y | `back` | -X | +Z |
+| The face at X min, looking along +X | `left` | -Y | +Z |
+| The face at X max, looking along -X | `right` | +Y | +Z |
+
+The other fields are the choices of the Section drawing block in Properties.
+A field that is left out keeps what the block has, and a field that is given
+is put in the block as well, so the window shows what was drawn:
+
+- `thickness`: depth of the slab in metres, 0.005 to 5; the block starts at
+  0.10.
+- `units`: `mm` (the start) or `m`. Scene units are taken as metres.
+- `origin`: `model` (the start) keeps model X and Y in a plan and model Z as
+  the height in a vertical view, where the horizontal axis starts at the left
+  edge of the box as seen; `box` puts the lower left corner of the view at
+  zero.
+- `fill`: whether the material the cut plane goes through is drawn as filled
+  regions with their outlines. Choosing another `view` than the block has
+  sets it to true for `plan` and false for the others, unless `fill` is given.
+- `square`: whether an edge of the filled cut is turned onto the main
+  direction of the building when that moves neither of its ends more than
+  30 mm; true at the start.
+- `grid`: cell of the grid the filled cut is traced from, in metres, at least
+  0.005; 0.02 at the start.
+- `max_wall_thickness`: two scanned faces at most this far apart are filled
+  as one wall, in metres, above 0 and at most 2; 0.50 at the start. Gaps up
+  to this width are closed too, wider ones stay open.
+- `color`: `layer` (the start) or `rgb`, the scanned colour of each point.
+- `point_layers`: `scan` (the start: a layer per scan file when several are
+  drawn) or `class` (a layer per classification).
+- `max_points`: the most points in the drawing, 1 to 400,000; 150,000 at the
+  start. The points are thinned to one per 5 mm on the cut plane; when that
+  leaves more than the limit, the spacing doubles until they fit.
+- `version`: `r2004`, `r2010`, `r2013` (the start) or `r2018`.
+
+The drawing is made from every visible layer where it stands in the scene,
+without deleted points and hidden classes. A layer with an octree is read
+only where its leaves touch the slab; a layer without one is read in full.
+With `fill` on, and for a preview, a slab whose layers reach far beyond the
+surfaces in it (stray points inside the box) is read a second and at most a
+third time, to lay the grid over the surfaces alone.
+The layers of the file are `OPS-POINTS` (or `OPS-POINTS-` followed by the
+file name of the scan without its extension, or `OPS-POINTS-CLASS-nn` per
+class), `OPS-CUT-FILL` with the solid fills,
+`OPS-CUT-OUTLINE` with a closed polyline per ring of a fill, `OPS-FRAME` with
+the rectangle of the box as the view sees it, and `OPS-INFO` with one line of
+text: the view, where the cut plane lies, the slab thickness, the units and
+the model position of drawing zero. Scans with the same file name get `~2`,
+`~3` after the name of their layer, and a character a layer name cannot hold,
+such as `,` `;` or `=`, becomes `_`.
+
+The command answers with a `job_id`. While the job runs, its job and
+`status.result.drawing.job` hold `operation` (`export_drawing`), `path`,
+`view`, `stage`, `done`, `total`, `fraction`, `cancel_requested` and
+`elapsed_seconds`, refreshed four times a second. The stages are `reading` (counted in points read),
+`tracing` (the filled cut; it has no measure, so `total` is 0 and `fraction`
+is `null`) and `writing` (counted in entities). The complete job has:
+
+- `path`, `format` (`dxf` or `dwg`), `bytes`, and the `view`, `thickness` and
+  `units` that were drawn; `thickness` is the depth of the slab in metres,
+  which is the depth of the box where the box is shallower than what was
+  asked, as the text on `OPS-INFO` says it;
+- `slab_points`, the points of the scans that lie in the slab, `read_points`,
+  the points read to find them, counted for every read of the slab and so
+  two or three times after a second or third read, and `drawn_points`, the
+  points in the drawing;
+- `point_spacing` in metres, with `point_spacing_raised` true when the point
+  limit made it larger than 0.005;
+- `regions` and `vertices` of the filled cut, and `dropped_regions`, the
+  regions left out because they are smaller than the smallest wall, 50 mm by
+  0.30 m;
+- `grid_cell` in metres and `direction_degrees`, the main direction the cut
+  was traced along (both `null` without a fill), with `grid_cell_raised` true
+  when the cell is larger than asked: the points were too sparse for it, or
+  the surfaces in the slab span more than 16 million cells.
+
+A job that fails has `error`; a slab without points fails with `the slab
+holds no points` and writes nothing. `cancel_drawing` stops the job once the
+step under way has ended; the job becomes `cancelled`. The file is written to
+a temporary file first, so a failed or cancelled job leaves an existing
+destination as it was. Writing costs about 2.8 kB of memory per point of the
+drawing: about 0.4 GB at 150,000 points and 1.1 GB at 400,000.
+
+`preview_drawing` takes the same fields without `path`. It traces the filled
+cut as `export_drawing` would draw it, whatever `fill` says, writes nothing
+and lays the regions over the points in the viewport, on the cut plane. Its
+complete job has the figures above without the file, with `drawn_points` 0.
+The preview goes away when what it was made from changes: the section box,
+the visible layers, a layer transform, the deleted points, the classes shown,
+or the `view`, `thickness`, `square`, `grid` or `max_wall_thickness` of the
+block. A preview that is still being made when that happens is cancelled, and
+one that is ready only afterwards is not shown and ends its job as `failed`.
+`clear_drawing_preview` takes the preview away and answers with `cleared`,
+which is false when there was none.
+
+`status.result.drawing` holds `settings` (the choices of the block under the
+field names above; a number that cannot be read is `null`), `job` (the
+running job, or `null`), `last` (how the last job ended, as its job reports
+it, or `null`), `preview_shown` and `preview_regions`.
+
+Both commands are refused for a destination that is not absolute or has
+another extension, a destination folder that does not exist, a destination
+that is the source file of an open layer, a value outside the limits above,
+a section box that is off (`section box is not enabled`), no visible layer
+(`no visible point cloud to draw`), a visible layer that is still being
+imported (`a visible point cloud is still loading:` and its file name; wait
+for it or hide it), and while another drawing or preview runs or the save
+dialog of the window is open. A refused command changes nothing
+in the block. One drawing or preview runs at a time; it can run beside a mesh
+job.
 
 ## 3D BAG download
 
@@ -280,8 +402,8 @@ when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
-| `job` | `id` | Reads an export, selection, mesh, mesh export, merge or 3D BAG download task's state and result |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
+| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, merge or 3D BAG download task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |
@@ -350,12 +472,17 @@ when the view is restored.
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |
 | `export_minus_selection` | `path` | Exports the active source without selected or deleted points |
+| `export_drawing` | `path`, optional `view`, `thickness`, `units`, `origin`, `fill`, `square`, `grid`, `max_wall_thickness`, `color`, `point_layers`, `max_points`, `version` | Draws the slab behind one face of the section box, from every visible layer, as a 2D drawing and writes it to an absolute `.dxf` or `.dwg` path; the extension chooses the format. Returns a job ID; the complete job reports the points, the point spacing, the regions of the filled cut and the file size |
+| `preview_drawing` | optional `view`, `thickness`, `units`, `origin`, `fill`, `square`, `grid`, `max_wall_thickness`, `color`, `point_layers`, `max_points`, `version` | Traces the filled cut of that slab and lays it over the points in the viewport without writing a file; returns a job ID |
+| `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
+| `cancel_drawing` | — | Requests cancellation of the running section drawing or preview |
 | `screenshot` | optional `path`, `base64`, `max_edge` | Captures the 3D viewport as a PNG image: written atomically to an absolute `.png` path, replacing a file there, and/or returned as base64 in `png_base64` |
 
 ## Exports, stored settings and the server
 
-The destination extension selects PLY, XYZ, PTS, CSV, LAS, LAZ or E57. Export
-is atomic and scans the complete source rather than the viewport sample.
+The destination extension of a point export selects PLY, XYZ, PTS, CSV, LAS,
+LAZ or E57. Export is atomic and scans the complete source rather than the
+viewport sample.
 `status.result.hidden_classes` lists disabled numeric classification codes.
 Color mode, point size, eye-dome settings, point budget and auto-index changes
 made through this API also update the native `settings.json` defaults after a

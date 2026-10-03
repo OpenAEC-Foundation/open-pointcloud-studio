@@ -51,8 +51,18 @@ pub fn number_in(description: &str, minimum: f64, maximum: f64) -> Value {
     json!({"type": "number", "minimum": minimum, "maximum": maximum, "description": description})
 }
 
+/// A number with a lower limit only.
+pub fn number_from(description: &str, minimum: f64) -> Value {
+    json!({"type": "number", "minimum": minimum, "description": description})
+}
+
 pub fn positive(description: &str) -> Value {
     json!({"type": "number", "exclusiveMinimum": 0, "description": description})
+}
+
+/// A number above zero with an upper limit.
+pub fn positive_up_to(description: &str, maximum: f64) -> Value {
+    json!({"type": "number", "exclusiveMinimum": 0, "maximum": maximum, "description": description})
 }
 
 pub fn integer_in(description: &str, minimum: u64, maximum: u64) -> Value {

@@ -1,0 +1,3874 @@
+//! The Section drawing tool: what the section box cuts, as a 2D drawing in
+//! DXF or DWG. A plan takes the slab under the top face of the box, a
+//! vertical section the slab behind one of its four sides.
+//!
+//! This module holds the choices of the tool, the job that reads the slab
+//! from every visible layer with its progress and its cancel, the preview of
+//! the filled cut over the points, the Properties block, the commands of the
+//! local API and the `--drawing` mode of the command line. The drawing itself
+//! is made by the core.
+
+use std::ffi::OsString;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use iced::widget::canvas::{self, Frame};
+use iced::widget::{button, checkbox, column, container, pick_list, row, text};
+use iced::{Color, Element, Fill, Point as UiPoint, Size, Task};
+use pointcloud_core::region_source::{RegionSource, SourceTransform};
+use pointcloud_core::{
+    Bounds, CutPreview, DrawingFormat, DrawingOrigin, DrawingProgress, DrawingRequest,
+    DrawingSource, DrawingStage, DrawingStats, DrawingUnits, DrawingVersion, DrawingView,
+    IndexConfig, LoadError, OctreeIndex, Point, PointCloud, PointColor, PointLayers,
+    DEFAULT_MIN_WALL_THICKNESS,
+};
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::bag_panel::plain_reason;
+use crate::cloud_transform::CloudTransform;
+use crate::i18n::{key, tr, tr_args};
+use crate::open_progress::{Line, Phase};
+use crate::selection::{ClassFilter, ClassVisibility, DeletionMask, Projection};
+use crate::{
+    camera_views, compact_count, flat_tool_style, format_count, measure, muted_checkbox_style,
+    opencad_properties, opencad_ribbon, same_deletion_mask, themed_pick_list_style, CloudEntry,
+    Message, PointViewport, Studio,
+};
+
+/// The formats in the order the save dialog offers them, each with the name
+/// of its filter. The first one is what a file name without an extension
+/// gets where the system adds one.
+const FORMATS: [(DrawingFormat, &str); 2] = [
+    (DrawingFormat::Dxf, "DXF drawing"),
+    (DrawingFormat::Dwg, "DWG drawing"),
+];
+
+const NO_FORMAT: &str = "Choose a .dxf or .dwg file name for the drawing";
+const SAME_FILE: &str = "Choose a drawing file different from the open scans";
+const BUSY: &str = "A section drawing is already open or running";
+
+/// Why no drawing can be started, in the words of the status bar and of the
+/// local API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Refusal {
+    NoSection,
+    NoLayer,
+    /// A visible layer is still being read; this is the name of its file.
+    Loading(String),
+}
+
+impl Refusal {
+    fn status(&self) -> String {
+        match self {
+            Self::NoSection => "Switch on the section box before making a drawing".into(),
+            Self::NoLayer => "Show at least one scan to draw".into(),
+            Self::Loading(name) => {
+                format!("{name} is still loading; wait for it or hide it before making a drawing")
+            }
+        }
+    }
+
+    fn api(&self) -> String {
+        match self {
+            Self::NoSection => "section box is not enabled".into(),
+            Self::NoLayer => "no visible point cloud to draw".into(),
+            Self::Loading(name) => format!("a visible point cloud is still loading: {name}"),
+        }
+    }
+}
+
+/// The smallest wall that goes with a largest wall. The block has no field
+/// for it; it never stands above the largest one that was typed.
+fn min_wall_for(max_wall_thickness: f64) -> f64 {
+    DEFAULT_MIN_WALL_THICKNESS.min(max_wall_thickness)
+}
+
+/// A refusal of the core as a line of its own: it starts with a capital.
+fn capitalised(reason: &str) -> String {
+    let mut letters = reason.chars();
+    match letters.next() {
+        Some(first) => first.to_uppercase().chain(letters).collect(),
+        None => String::new(),
+    }
+}
+
+/// A length in metres as it was typed, with a comma or a point.
+fn metres(input: &str) -> Option<f64> {
+    input
+        .trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+fn view_text(view: DrawingView) -> &'static str {
+    match view {
+        DrawingView::Plan => key("Plan"),
+        DrawingView::Front => key("Section, front"),
+        DrawingView::Back => key("Section, back"),
+        DrawingView::Left => key("Section, left"),
+        DrawingView::Right => key("Section, right"),
+    }
+}
+
+fn units_text(units: DrawingUnits) -> &'static str {
+    match units {
+        DrawingUnits::Millimetres => key("Millimetres"),
+        DrawingUnits::Metres => key("Metres"),
+    }
+}
+
+fn origin_text(origin: DrawingOrigin) -> &'static str {
+    match origin {
+        DrawingOrigin::Model => key("Model coordinates"),
+        DrawingOrigin::BoxCorner => key("Corner of the box"),
+    }
+}
+
+fn color_text(color: PointColor) -> &'static str {
+    match color {
+        PointColor::Layer => key("Layer colour"),
+        PointColor::Rgb => key("Scan colour (RGB)"),
+    }
+}
+
+fn layers_text(layers: PointLayers) -> &'static str {
+    match layers {
+        PointLayers::Source => key("Per scan"),
+        PointLayers::Class => key("Per class"),
+    }
+}
+
+/// The name of a file version; it is the same in every language.
+fn version_text(version: DrawingVersion) -> &'static str {
+    match version {
+        DrawingVersion::R2004 => "R2004",
+        DrawingVersion::R2010 => "R2010",
+        DrawingVersion::R2013 => "R2013",
+        DrawingVersion::R2018 => "R2018",
+    }
+}
+
+/// A value of a choice list with the English text that names it; the list
+/// shows the text in the language in use.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Choice<T> {
+    value: T,
+    text: &'static str,
+}
+
+impl<T> fmt::Display for Choice<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(tr(self.text))
+    }
+}
+
+/// A list that chooses one of the values of a setting.
+fn choice_list<'a, T, const N: usize>(
+    all: [T; N],
+    current: T,
+    name: fn(T) -> &'static str,
+    action: fn(T) -> DrawingAction,
+) -> Element<'a, Message>
+where
+    T: Copy + PartialEq + 'static,
+{
+    let choice = move |value: T| Choice {
+        value,
+        text: name(value),
+    };
+    pick_list(all.map(choice), Some(choice(current)), move |chosen| {
+        Message::Drawing(action(chosen.value))
+    })
+    .text_size(11)
+    .padding([2, 4])
+    .width(Fill)
+    .style(themed_pick_list_style)
+    .into()
+}
+
+/// The choices of the Properties block. Lengths and the point limit are kept
+/// as the text that was typed, so that a number is not rewritten while it is
+/// being typed.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DrawingSettings {
+    view: DrawingView,
+    thickness: String,
+    units: DrawingUnits,
+    origin: DrawingOrigin,
+    fill: bool,
+    square: bool,
+    grid: String,
+    max_wall: String,
+    color: PointColor,
+    point_layers: PointLayers,
+    max_points: String,
+    version: DrawingVersion,
+}
+
+impl Default for DrawingSettings {
+    fn default() -> Self {
+        let request = DrawingRequest::default();
+        Self {
+            view: request.view,
+            thickness: format!("{:.2}", request.thickness.unwrap_or_default()),
+            units: request.units,
+            origin: request.origin,
+            fill: request.fill,
+            square: request.square,
+            grid: format!("{:.2}", request.grid),
+            max_wall: format!("{:.2}", request.max_wall_thickness),
+            color: request.color,
+            point_layers: request.point_layers,
+            max_points: request.max_points.to_string(),
+            version: request.version,
+        }
+    }
+}
+
+impl DrawingSettings {
+    /// Another view starts with the filled cut as that view has it by
+    /// default: on for a plan, off for a vertical section.
+    fn set_view(&mut self, view: DrawingView) {
+        if view != self.view {
+            self.view = view;
+            self.fill = DrawingRequest::for_view(view).fill;
+        }
+    }
+
+    fn point_limit(&self) -> Option<usize> {
+        self.max_points
+            .trim()
+            .replace(['.', ',', ' '], "")
+            .parse()
+            .ok()
+    }
+
+    /// The settings of the cut as `cut_of` gives them for a request, or
+    /// `None` while one of their fields holds no number. The point limit and
+    /// the other choices that change the file but not the regions are left
+    /// out, so that typing in them never counts as another cut.
+    fn cut(&self) -> Option<CutSettings> {
+        let max_wall = metres(&self.max_wall)?;
+        Some((
+            self.view,
+            Some(metres(&self.thickness)?),
+            self.square,
+            metres(&self.grid)?,
+            max_wall,
+            min_wall_for(max_wall),
+        ))
+    }
+
+    /// What the core is asked for, or why these choices give no drawing.
+    fn request(&self) -> Result<DrawingRequest, String> {
+        let length = |input: &str, name: &str| {
+            metres(input).ok_or_else(|| format!("{name} must be a number of metres"))
+        };
+        let max_wall_thickness = length(&self.max_wall, "Largest wall thickness")?;
+        let request = DrawingRequest {
+            thickness: Some(length(&self.thickness, "Slab thickness")?),
+            fill: self.fill,
+            grid: length(&self.grid, "Grid size")?,
+            max_wall_thickness,
+            min_wall_thickness: min_wall_for(max_wall_thickness),
+            square: self.square,
+            units: self.units,
+            origin: self.origin,
+            max_points: self
+                .point_limit()
+                .ok_or("Point limit must be a whole number")?,
+            point_layers: self.point_layers,
+            color: self.color,
+            version: self.version,
+            ..DrawingRequest::for_view(self.view)
+        };
+        request
+            .validate()
+            .map_err(|error| capitalised(plain_reason(&error.to_string())))?;
+        Ok(request)
+    }
+
+    /// These choices with the fields a command of the local API names.
+    fn with(&self, options: &DrawingOptions) -> Result<Self, String> {
+        fn chosen<T>(
+            value: Option<&String>,
+            from_key: fn(&str) -> Option<T>,
+            problem: &str,
+        ) -> Result<Option<T>, String> {
+            value
+                .map(|value| {
+                    from_key(&value.to_ascii_lowercase()).ok_or_else(|| problem.to_owned())
+                })
+                .transpose()
+        }
+        let mut next = self.clone();
+        if let Some(view) = chosen(
+            options.view.as_ref(),
+            DrawingView::from_key,
+            "view must be plan, front, back, left or right",
+        )? {
+            next.set_view(view);
+        }
+        if let Some(units) = chosen(
+            options.units.as_ref(),
+            DrawingUnits::from_key,
+            "units must be mm or m",
+        )? {
+            next.units = units;
+        }
+        if let Some(origin) = chosen(
+            options.origin.as_ref(),
+            DrawingOrigin::from_key,
+            "origin must be model or box",
+        )? {
+            next.origin = origin;
+        }
+        if let Some(color) = chosen(
+            options.color.as_ref(),
+            PointColor::from_key,
+            "color must be layer or rgb",
+        )? {
+            next.color = color;
+        }
+        if let Some(layers) = chosen(
+            options.point_layers.as_ref(),
+            PointLayers::from_key,
+            "point_layers must be scan or class",
+        )? {
+            next.point_layers = layers;
+        }
+        if let Some(version) = chosen(
+            options.version.as_ref(),
+            DrawingVersion::from_key,
+            "version must be r2004, r2010, r2013 or r2018",
+        )? {
+            next.version = version;
+        }
+        if let Some(fill) = options.fill {
+            next.fill = fill;
+        }
+        if let Some(square) = options.square {
+            next.square = square;
+        }
+        if let Some(thickness) = options.thickness {
+            next.thickness = thickness.to_string();
+        }
+        if let Some(grid) = options.grid {
+            next.grid = grid.to_string();
+        }
+        if let Some(max_wall) = options.max_wall_thickness {
+            next.max_wall = max_wall.to_string();
+        }
+        if let Some(max_points) = options.max_points {
+            next.max_points = max_points.to_string();
+        }
+        Ok(next)
+    }
+
+    /// The choices as `status` of the local API reports them; a number that
+    /// cannot be read is null.
+    fn value(&self) -> Value {
+        json!({
+            "view": self.view.key(),
+            "thickness": metres(&self.thickness),
+            "units": self.units.key(),
+            "origin": self.origin.key(),
+            "fill": self.fill,
+            "square": self.square,
+            "grid": metres(&self.grid),
+            "max_wall_thickness": metres(&self.max_wall),
+            "color": self.color.key(),
+            "point_layers": self.point_layers.key(),
+            "max_points": self.point_limit(),
+            "version": self.version.key(),
+        })
+    }
+}
+
+/// The choices a command of the local API may name. A field that is left out
+/// keeps what the Properties block has.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct DrawingOptions {
+    /// `plan`, `front`, `back`, `left` or `right`.
+    pub view: Option<String>,
+    /// Depth of the slab behind the cut plane, in metres.
+    pub thickness: Option<f64>,
+    /// `mm` or `m`.
+    pub units: Option<String>,
+    /// `model` or `box`.
+    pub origin: Option<String>,
+    pub fill: Option<bool>,
+    pub square: Option<bool>,
+    /// Cell of the grid the filled cut is traced from, in metres.
+    pub grid: Option<f64>,
+    /// Two faces at most this far apart are one wall, in metres.
+    pub max_wall_thickness: Option<f64>,
+    /// `layer` or `rgb`.
+    pub color: Option<String>,
+    /// `scan` or `class`.
+    pub point_layers: Option<String>,
+    pub max_points: Option<u64>,
+    /// `r2004`, `r2010`, `r2013` or `r2018`.
+    pub version: Option<String>,
+}
+
+/// One visible layer as a job reads it.
+struct SceneLayer {
+    cloud: Arc<PointCloud>,
+    index: Option<Arc<OctreeIndex>>,
+    transform: CloudTransform,
+    deleted: Option<Arc<DeletionMask>>,
+    /// The file stem of the scan, which names its point layer.
+    name: String,
+}
+
+/// What of the scene a drawing is made from: the section box, the visible
+/// layers where they stand, their deleted points and the classes shown.
+struct Scene {
+    section: Bounds,
+    filter: ClassFilter,
+    layers: Vec<SceneLayer>,
+}
+
+enum Target {
+    Export(PathBuf, DrawingFormat),
+    Preview,
+}
+
+impl Target {
+    fn operation(&self) -> &'static str {
+        match self {
+            Self::Export(..) => "export_drawing",
+            Self::Preview => "preview_drawing",
+        }
+    }
+}
+
+/// Everything a job was started with. A preview keeps it, to tell when the
+/// scene it was made from is no longer the scene on screen.
+pub(crate) struct JobInput {
+    scene: Scene,
+    request: DrawingRequest,
+    target: Target,
+}
+
+/// What a finished job hands back.
+enum Done {
+    Exported(DrawingStats),
+    Preview(CutPreview),
+}
+
+/// Read the slab and write the drawing or trace the preview. This runs on a
+/// worker thread, or in the process of the command line.
+fn run(
+    input: &JobInput,
+    progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
+) -> Result<Done, LoadError> {
+    let scene = &input.scene;
+    // An index is read without a look at the file it was built from, so
+    // that the file is still the one that was opened is checked here.
+    for layer in scene.layers.iter().filter(|layer| layer.index.is_some()) {
+        layer.cloud.validate_source()?;
+    }
+    let sources: Vec<DrawingSource<'_>> = scene
+        .layers
+        .iter()
+        .map(|layer| DrawingSource {
+            source: RegionSource::new(
+                &layer.cloud,
+                layer.index.as_deref(),
+                SourceTransform {
+                    scale: layer.transform.scale,
+                    offset: layer.transform.offset,
+                },
+            ),
+            name: &layer.name,
+        })
+        .collect();
+    let filter = scene.filter;
+    let accept = |position: usize, ordinal: u64, point: &Point| {
+        scene.layers[position]
+            .deleted
+            .as_ref()
+            .is_none_or(|mask| !mask.contains(ordinal))
+            && filter.accepts(point)
+    };
+    match &input.target {
+        Target::Export(path, _) => pointcloud_core::export_section_drawing(
+            &sources,
+            scene.section,
+            &input.request,
+            path,
+            &accept,
+            progress,
+        )
+        .map(Done::Exported),
+        Target::Preview => pointcloud_core::preview_cut_regions(
+            &sources,
+            scene.section,
+            &input.request,
+            &accept,
+            progress,
+        )
+        .map(Done::Preview),
+    }
+}
+
+/// How a job ended, as the worker tells the window.
+#[derive(Debug, Clone)]
+pub enum DrawingEnd {
+    Exported(DrawingStats),
+    Preview(Arc<CutPreview>),
+    Cancelled,
+    Failed(String),
+}
+
+impl DrawingEnd {
+    fn of(result: Result<Done, LoadError>) -> Self {
+        match result {
+            Ok(Done::Exported(stats)) => Self::Exported(stats),
+            Ok(Done::Preview(preview)) => Self::Preview(Arc::new(preview)),
+            Err(LoadError::Cancelled) => Self::Cancelled,
+            Err(error) => Self::Failed(plain_reason(&error.to_string()).to_owned()),
+        }
+    }
+}
+
+fn stage_key(stage: DrawingStage) -> &'static str {
+    match stage {
+        DrawingStage::Reading => "reading",
+        DrawingStage::Tracing => "tracing",
+        DrawingStage::Writing => "writing",
+    }
+}
+
+/// What the worker of a job tells the window, and the window the worker.
+#[derive(Default)]
+pub(crate) struct DrawingControl {
+    cancelled: AtomicBool,
+    stage: AtomicU8,
+    done: AtomicU64,
+    total: AtomicU64,
+}
+
+impl DrawingControl {
+    /// Keep how far the job is, and stop it when that was asked.
+    fn report(&self, step: DrawingProgress) -> Result<(), LoadError> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err(LoadError::Cancelled);
+        }
+        self.stage.store(step.stage as u8, Ordering::Relaxed);
+        self.done.store(step.done, Ordering::Relaxed);
+        self.total.store(step.total, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn snapshot(&self) -> DrawingProgress {
+        let stage = self.stage.load(Ordering::Relaxed);
+        DrawingProgress {
+            stage: [DrawingStage::Tracing, DrawingStage::Writing]
+                .into_iter()
+                .find(|known| *known as u8 == stage)
+                .unwrap_or(DrawingStage::Reading),
+            done: self.done.load(Ordering::Relaxed),
+            total: self.total.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// A drawing or a preview that is being made.
+pub(crate) struct DrawingJob {
+    /// Tells this job from an earlier one whose answer is still on its way.
+    serial: u64,
+    input: Arc<JobInput>,
+    control: Arc<DrawingControl>,
+    started: Instant,
+    api_job_id: Option<String>,
+    /// The line last written to the status bar, so that a look that finds
+    /// nothing new leaves the messages of other work readable.
+    reported: String,
+}
+
+impl DrawingJob {
+    fn cancelling(&self) -> bool {
+        self.control.cancelled.load(Ordering::Relaxed)
+    }
+
+    fn preview(&self) -> bool {
+        matches!(self.input.target, Target::Preview)
+    }
+
+    /// How far the job is, in the words of a stage.
+    fn stage_text(&self) -> String {
+        let progress = self.control.snapshot();
+        match progress.stage {
+            DrawingStage::Reading if progress.total == 0 => "reading the slab".to_owned(),
+            DrawingStage::Reading => format!(
+                "reading the slab, {} of {} points",
+                compact_count(progress.done.min(progress.total)),
+                compact_count(progress.total)
+            ),
+            DrawingStage::Tracing => "tracing the filled cut".to_owned(),
+            DrawingStage::Writing => format!(
+                "writing {} of {} entities",
+                compact_count(progress.done.min(progress.total)),
+                compact_count(progress.total)
+            ),
+        }
+    }
+
+    /// The line of the status bar while the job runs.
+    fn status_text(&self) -> String {
+        if self.cancelling() {
+            return "Cancelling the section drawing…".into();
+        }
+        let subject = if self.preview() {
+            "Preview of the filled cut"
+        } else {
+            "Section drawing"
+        };
+        format!("{subject}: {}…", self.stage_text())
+    }
+
+    /// The job as `status` and `job` of the local API report it.
+    fn progress_value(&self) -> Value {
+        let progress = self.control.snapshot();
+        json!({
+            "state": "running",
+            "operation": self.input.target.operation(),
+            "path": match &self.input.target {
+                Target::Export(path, _) => Some(path),
+                Target::Preview => None,
+            },
+            "view": self.input.request.view.key(),
+            "stage": stage_key(progress.stage),
+            "done": progress.done,
+            "total": progress.total,
+            "fraction": progress.fraction(),
+            "cancel_requested": self.cancelling(),
+            "elapsed_seconds": self.started.elapsed().as_secs(),
+        })
+    }
+}
+
+fn length_text(metres: f64) -> String {
+    format!("{:.0} mm", metres * 1000.0)
+}
+
+fn size_text(bytes: u64) -> String {
+    if bytes >= 1_000_000 {
+        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+    } else {
+        format!("{:.0} kB", (bytes as f64 / 1_000.0).max(1.0))
+    }
+}
+
+/// The main direction without the sign a value that rounds to zero keeps.
+fn direction_text(degrees: f64) -> String {
+    let rounded = (degrees * 100.0).round() / 100.0;
+    format!("{:.2}°", if rounded == 0.0 { 0.0 } else { rounded })
+}
+
+/// The thinning doubled the spacing to stay within the point limit.
+fn spacing_raised(stats: &DrawingStats, request: &DrawingRequest) -> bool {
+    stats.drawn_points > 0 && stats.point_spacing > request.point_spacing * 1.000_1
+}
+
+/// The filled cut was traced on larger cells than asked: the points are too
+/// sparse for the cell, or they span more than the grid holds at that cell.
+fn grid_raised(stats: &DrawingStats, request: &DrawingRequest) -> bool {
+    stats
+        .grid_cell
+        .is_some_and(|cell| cell > request.grid * 1.000_1)
+}
+
+/// How deep the slab of a drawing is. The core keeps the slab within the
+/// section box, so in a box that is shallower than the thickness asked this
+/// is the depth of the box.
+fn slab_depth(section: Bounds, request: &DrawingRequest) -> f64 {
+    pointcloud_core::slab_from_section(section, request.view, request.thickness, request.origin)
+        .map(|slab| slab.thickness)
+        .ok()
+        .or(request.thickness)
+        .unwrap_or_default()
+}
+
+/// The box was shallower than the slab that was asked.
+fn slab_cut_down(slab: f64, request: &DrawingRequest) -> bool {
+    request
+        .thickness
+        .is_some_and(|asked| slab < asked * (1.0 - 1e-9))
+}
+
+/// What the core reports of a job, as one line: the points in the slab and
+/// in the drawing with their spacing, the regions of the filled cut with the
+/// cell and the main direction they were traced with. `slab` is the depth
+/// that was drawn; the line names it when the box made it less than asked.
+fn summary(
+    stats: &DrawingStats,
+    request: &DrawingRequest,
+    slab: f64,
+    count: &dyn Fn(u64) -> String,
+) -> String {
+    let mut line = format!("{} points in the slab", count(stats.slab_points));
+    if slab_cut_down(slab, request) {
+        line.push_str(&format!(
+            " of {} (the box is thinner than the {} asked)",
+            length_text(slab),
+            length_text(request.thickness.unwrap_or_default())
+        ));
+    }
+    if stats.drawn_points > 0 {
+        line.push_str(&format!(
+            ", {} drawn at {}",
+            count(stats.drawn_points),
+            length_text(stats.point_spacing)
+        ));
+        if spacing_raised(stats, request) {
+            line.push_str(&format!(
+                " (raised from {} by the limit of {} points)",
+                length_text(request.point_spacing),
+                count(request.max_points as u64)
+            ));
+        }
+    }
+    if let Some(cell) = stats.grid_cell {
+        line.push_str(&match stats.regions {
+            1 => "; 1 region".to_owned(),
+            regions => format!("; {regions} regions"),
+        });
+        match stats.dropped_regions {
+            0 => {}
+            1 => line.push_str(" (1 small one dropped)"),
+            dropped => line.push_str(&format!(" ({dropped} small ones dropped)")),
+        }
+        line.push_str(&format!(", grid {}", length_text(cell)));
+        if grid_raised(stats, request) {
+            line.push_str(&format!(
+                " (coarser than the {} asked)",
+                length_text(request.grid)
+            ));
+        }
+        if let Some(degrees) = stats.direction_degrees {
+            line.push_str(&format!(", main direction {}", direction_text(degrees)));
+        }
+    }
+    line
+}
+
+/// The figures of a job for the local API. Lengths are metres; `slab` is the
+/// depth of the slab that was drawn.
+fn stats_value(stats: &DrawingStats, request: &DrawingRequest, slab: f64) -> Value {
+    json!({
+        "view": request.view.key(),
+        "thickness": slab,
+        "units": request.units.key(),
+        "slab_points": stats.slab_points,
+        "read_points": stats.read_points,
+        "drawn_points": stats.drawn_points,
+        "point_spacing": stats.point_spacing,
+        "point_spacing_raised": spacing_raised(stats, request),
+        "regions": stats.regions,
+        "vertices": stats.vertices,
+        "dropped_regions": stats.dropped_regions,
+        "grid_cell": stats.grid_cell,
+        "grid_cell_raised": grid_raised(stats, request),
+        "direction_degrees": stats.direction_degrees,
+    })
+}
+
+/// How the last job ended, for the Properties block and the local API.
+#[derive(Debug, Clone, PartialEq)]
+enum Last {
+    Exported {
+        path: PathBuf,
+        format: DrawingFormat,
+        request: DrawingRequest,
+        /// Depth of the slab that was drawn, in metres.
+        slab: f64,
+        stats: DrawingStats,
+    },
+    Previewed {
+        request: DrawingRequest,
+        slab: f64,
+        stats: DrawingStats,
+    },
+    Cancelled {
+        operation: &'static str,
+    },
+    Failed {
+        operation: &'static str,
+        error: String,
+    },
+}
+
+impl Last {
+    /// The finished job as `job` and `status` of the local API report it.
+    fn value(&self) -> Value {
+        match self {
+            Self::Exported {
+                path,
+                format,
+                request,
+                slab,
+                stats,
+            } => {
+                let mut value = stats_value(stats, request, *slab);
+                value["state"] = "complete".into();
+                value["operation"] = "export_drawing".into();
+                value["path"] = json!(path);
+                value["format"] = format.extension().into();
+                value["bytes"] = stats.bytes.into();
+                value
+            }
+            Self::Previewed {
+                request,
+                slab,
+                stats,
+            } => {
+                let mut value = stats_value(stats, request, *slab);
+                value["state"] = "complete".into();
+                value["operation"] = "preview_drawing".into();
+                value
+            }
+            Self::Cancelled { operation } => json!({
+                "state": "cancelled",
+                "operation": operation,
+            }),
+            Self::Failed { operation, error } => json!({
+                "state": "failed",
+                "operation": operation,
+                "error": error,
+            }),
+        }
+    }
+
+    /// The line of the status bar when the job has ended.
+    fn status(&self) -> String {
+        match self {
+            Self::Exported {
+                path,
+                format,
+                request,
+                slab,
+                stats,
+            } => format!(
+                "Section drawing exported as {format}: {}; {} to {}",
+                summary(stats, request, *slab, &|count| format_count(count)),
+                size_text(stats.bytes),
+                path.display()
+            ),
+            Self::Previewed {
+                request,
+                slab,
+                stats,
+            } => format!(
+                "Filled cut previewed: {}",
+                summary(stats, request, *slab, &|count| format_count(count))
+            ),
+            Self::Cancelled {
+                operation: "export_drawing",
+            } => "Section drawing cancelled; an existing file is left as it was".into(),
+            Self::Cancelled { .. } => "Preview of the filled cut cancelled".into(),
+            Self::Failed {
+                operation: "export_drawing",
+                error,
+            } => format!("Section drawing failed: {error}"),
+            Self::Failed { error, .. } => format!("Preview of the filled cut failed: {error}"),
+        }
+    }
+}
+
+/// The filled cut that lies over the points, with what it was made from.
+struct ShownPreview {
+    cut: Arc<CutPreview>,
+    input: Arc<JobInput>,
+}
+
+/// What the Section drawing tool holds: whether its block is open, its
+/// choices, a job under way, the preview on screen and how the last job
+/// ended.
+#[derive(Default)]
+pub(crate) struct DrawingTool {
+    open: bool,
+    settings: DrawingSettings,
+    /// The save dialog of an export is open.
+    dialog_pending: bool,
+    job: Option<DrawingJob>,
+    next_serial: u64,
+    preview: Option<ShownPreview>,
+    last: Option<Last>,
+}
+
+impl DrawingTool {
+    pub(crate) fn is_running(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// A job runs or the save dialog is open: nothing else can start.
+    pub(crate) fn busy(&self) -> bool {
+        self.job.is_some() || self.dialog_pending
+    }
+
+    /// The filled cut to lay over the points, when there is one.
+    pub(crate) fn overlay(&self) -> Option<&CutPreview> {
+        self.preview.as_ref().map(|shown| &*shown.cut)
+    }
+
+    /// Ask the worker of a running job to stop.
+    pub(crate) fn cancel(&self) -> bool {
+        match &self.job {
+            Some(job) => {
+                job.control.cancelled.store(true, Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The line of the strip above the scene while a job runs.
+    pub(crate) fn progress_line(&self) -> Option<Line> {
+        let job = self.job.as_ref()?;
+        let progress = job.control.snapshot();
+        let cancelling = job.cancelling();
+        // A preview traces and writes nothing; an export traces only when
+        // it draws the filled cut, and writing is its last step.
+        let traced = job.preview() || job.input.request.fill;
+        let steps = 1 + u8::from(traced) + u8::from(!job.preview());
+        let step = match progress.stage {
+            DrawingStage::Reading => 1,
+            DrawingStage::Tracing => 2,
+            DrawingStage::Writing => steps,
+        };
+        Some(Line {
+            phase: Phase::Drawing,
+            title: if cancelling {
+                "Cancelling…".to_owned()
+            } else if job.preview() {
+                "Previewing the filled cut".to_owned()
+            } else {
+                format!("Section drawing ({})", job.input.request.view.key())
+            },
+            detail: format!("Step {step} of {steps}  ·  {}", job.stage_text()),
+            fraction: progress.fraction(),
+            timed: true,
+            cancel: (!cancelling).then_some(Message::Drawing(DrawingAction::Cancel)),
+        })
+    }
+
+    /// The tool as `status` of the local API reports it.
+    pub(crate) fn value(&self) -> Value {
+        json!({
+            "settings": self.settings.value(),
+            "job": self.job.as_ref().map(DrawingJob::progress_value),
+            "last": self.last.as_ref().map(Last::value),
+            "preview_shown": self.preview.is_some(),
+            "preview_regions": self.preview.as_ref().map(|shown| shown.cut.regions.len()),
+        })
+    }
+}
+
+/// Everything the Section drawing tool reacts to.
+#[derive(Debug, Clone)]
+pub enum DrawingAction {
+    /// Open the block of the tool in Properties, or close it.
+    Toggle,
+    View(DrawingView),
+    Thickness(String),
+    Units(DrawingUnits),
+    Origin(DrawingOrigin),
+    Fill(bool),
+    Square(bool),
+    Grid(String),
+    MaxWall(String),
+    Color(PointColor),
+    Layers(PointLayers),
+    MaxPoints(String),
+    Version(DrawingVersion),
+    Preview,
+    ClearPreview,
+    /// Ask where to save the drawing.
+    Export,
+    PathChosen(Option<PathBuf>),
+    Poll,
+    Cancel,
+    Finished(u64, DrawingEnd),
+}
+
+/// The view, the slab thickness, squaring, the grid cell and the largest and
+/// smallest wall.
+type CutSettings = (DrawingView, Option<f64>, bool, f64, f64, f64);
+
+/// The settings a traced cut depends on. Units, origin, colours, layers and
+/// the point limit change the file but not the regions.
+fn cut_of(request: &DrawingRequest) -> CutSettings {
+    (
+        request.view,
+        request.thickness,
+        request.square,
+        request.grid,
+        request.max_wall_thickness,
+        request.min_wall_thickness,
+    )
+}
+
+/// Whether a layer takes part in a drawing: its points are shown.
+fn drawn(entry: &CloudEntry) -> bool {
+    entry.visible && entry.cloud.total_points > 0
+}
+
+impl Studio {
+    /// The section box and the visible layers, as a job reads them.
+    fn drawing_scene(&self) -> Result<Scene, Refusal> {
+        let section = self.section_bounds().ok_or(Refusal::NoSection)?;
+        // A layer that is still being read holds a cloud that was not checked
+        // against its source. The core refuses it only when the read reaches
+        // it, after every layer before it was read in full, and leaves it out
+        // without a word while its bounds do not reach the slab yet.
+        if let Some(loading) = self
+            .clouds
+            .iter()
+            .find(|entry| drawn(entry) && entry.cloud.provisional)
+        {
+            return Err(Refusal::Loading(
+                loading
+                    .cloud
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "A visible scan".into()),
+            ));
+        }
+        let layers: Vec<SceneLayer> = self
+            .clouds
+            .iter()
+            .filter(|entry| drawn(entry))
+            .map(|entry| SceneLayer {
+                cloud: Arc::clone(&entry.cloud),
+                index: entry.index.as_ref().map(Arc::clone),
+                transform: entry.transform,
+                deleted: entry.deleted.as_ref().map(Arc::clone),
+                name: entry
+                    .cloud
+                    .path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("scan")
+                    .to_owned(),
+            })
+            .collect();
+        if layers.is_empty() {
+            return Err(Refusal::NoLayer);
+        }
+        Ok(Scene {
+            section,
+            // The slab lies inside the box already.
+            filter: ClassFilter {
+                section: None,
+                ..self.mesh_filter()
+            },
+            layers,
+        })
+    }
+
+    /// Whether what a job was started with is still what the window shows:
+    /// the same section box, the same visible layers where they stood, the
+    /// same deleted points and classes, and the same settings of the cut.
+    fn drawing_scene_current(&self, input: &JobInput) -> bool {
+        let scene = &input.scene;
+        if self.section_bounds() != Some(scene.section) {
+            return false;
+        }
+        let filter = self.mesh_filter();
+        let groups = |filter: &ClassFilter| {
+            (
+                filter.ground,
+                filter.vegetation,
+                filter.buildings,
+                filter.other,
+                filter.classes,
+            )
+        };
+        if groups(&filter) != groups(&scene.filter) {
+            return false;
+        }
+        let mut visible = self.clouds.iter().filter(|entry| drawn(entry));
+        let same_layers = scene.layers.iter().all(|layer| {
+            visible.next().is_some_and(|entry| {
+                Arc::ptr_eq(&entry.cloud, &layer.cloud)
+                    && entry.transform == layer.transform
+                    && same_deletion_mask(entry.deleted.as_ref(), layer.deleted.as_ref())
+            })
+        }) && visible.next().is_none();
+        // The request of the job passed the checks of the core when it
+        // started, so settings that give the same cut need none here. A field
+        // of the cut that cannot be read counts as changed.
+        same_layers && self.drawing.settings.cut() == Some(cut_of(&input.request))
+    }
+
+    /// After every message: take the preview away when the section box, the
+    /// visible layers, a layer transform, the deleted points, the classes
+    /// shown or the settings of the cut are no longer what it was made from,
+    /// and stop a preview that is being made for a scene that has changed.
+    pub(crate) fn settle_drawing(&mut self) {
+        let stale = self
+            .drawing
+            .preview
+            .as_ref()
+            .is_some_and(|shown| !self.drawing_scene_current(&shown.input));
+        if stale {
+            self.drawing.preview = None;
+        }
+        let overtaken = self
+            .drawing
+            .job
+            .as_ref()
+            .is_some_and(|job| job.preview() && !self.drawing_scene_current(&job.input));
+        if overtaken {
+            self.drawing.cancel();
+        }
+    }
+
+    fn drawing_poll_task() -> Task<Message> {
+        Task::perform(
+            async { tokio::time::sleep(Duration::from_millis(250)).await },
+            |()| Message::Drawing(DrawingAction::Poll),
+        )
+    }
+
+    /// Start a job on a worker thread. The window reads its progress four
+    /// times a second until `DrawingAction::Finished` arrives.
+    fn start_drawing_job(
+        &mut self,
+        scene: Scene,
+        request: DrawingRequest,
+        target: Target,
+        api_job_id: Option<String>,
+    ) -> Task<Message> {
+        let control = Arc::new(DrawingControl::default());
+        let input = Arc::new(JobInput {
+            scene,
+            request,
+            target,
+        });
+        let serial = self.drawing.next_serial;
+        self.drawing.next_serial += 1;
+        let mut job = DrawingJob {
+            serial,
+            input: Arc::clone(&input),
+            control: Arc::clone(&control),
+            started: Instant::now(),
+            api_job_id,
+            reported: String::new(),
+        };
+        job.reported = job.status_text();
+        self.status.clone_from(&job.reported);
+        self.drawing.job = Some(job);
+        // The result of an earlier job would read as the result of this one.
+        self.drawing.last = None;
+        self.drawing.open = true;
+        let worker = Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    DrawingEnd::of(run(&input, &mut |step| control.report(step)))
+                })
+                .await
+                .unwrap_or_else(|error| DrawingEnd::Failed(error.to_string()))
+            },
+            move |end| Message::Drawing(DrawingAction::Finished(serial, end)),
+        );
+        Task::batch([worker, Self::drawing_poll_task()])
+    }
+
+    /// Whether a destination is the source file of an open layer. A scan can
+    /// be a DXF file itself, and writing over it would cut it off while it
+    /// is being read.
+    fn is_open_source(&self, destination: &Path) -> bool {
+        let destination = camera_views::source_key(destination);
+        self.clouds
+            .iter()
+            .any(|entry| camera_views::source_key(&entry.cloud.path) == destination)
+    }
+
+    /// What a job needs from the window, or why it cannot start.
+    fn drawing_start(&self) -> Result<(Scene, DrawingRequest), String> {
+        if self.drawing.busy() {
+            return Err(BUSY.into());
+        }
+        let scene = self.drawing_scene().map_err(|refusal| refusal.status())?;
+        Ok((scene, self.drawing.settings.request()?))
+    }
+
+    pub(crate) fn update_drawing(&mut self, action: DrawingAction) -> Task<Message> {
+        match action {
+            DrawingAction::Toggle => {
+                // The 3D BAG panel takes the place of Properties. With that
+                // panel open the block is out of sight, and the button
+                // brings it back instead of closing it.
+                let hidden = self.drawing.open && self.bag_panel;
+                self.drawing.open = hidden || !self.drawing.open;
+                if self.drawing.open {
+                    let _ = self.set_bag_panel(false);
+                    self.status = "Section drawing: choose a view and a slab thickness in Properties, then Preview or Export drawing…".into();
+                }
+            }
+            DrawingAction::View(view) => self.drawing.settings.set_view(view),
+            DrawingAction::Thickness(value) => self.drawing.settings.thickness = value,
+            DrawingAction::Units(units) => self.drawing.settings.units = units,
+            DrawingAction::Origin(origin) => self.drawing.settings.origin = origin,
+            DrawingAction::Fill(fill) => self.drawing.settings.fill = fill,
+            DrawingAction::Square(square) => self.drawing.settings.square = square,
+            DrawingAction::Grid(value) => self.drawing.settings.grid = value,
+            DrawingAction::MaxWall(value) => self.drawing.settings.max_wall = value,
+            DrawingAction::Color(color) => self.drawing.settings.color = color,
+            DrawingAction::Layers(layers) => self.drawing.settings.point_layers = layers,
+            DrawingAction::MaxPoints(value) => self.drawing.settings.max_points = value,
+            DrawingAction::Version(version) => self.drawing.settings.version = version,
+            DrawingAction::Preview => match self.drawing_start() {
+                Ok((scene, request)) => {
+                    return self.start_drawing_job(scene, request, Target::Preview, None)
+                }
+                Err(problem) => self.status = problem,
+            },
+            DrawingAction::ClearPreview => {
+                if self.drawing.preview.take().is_some() {
+                    self.status = "Preview of the filled cut cleared".into();
+                }
+            }
+            DrawingAction::Export => {
+                let request = match self.drawing_start() {
+                    Ok((_, request)) => request,
+                    Err(problem) => {
+                        self.status = problem;
+                        return Task::none();
+                    }
+                };
+                let stem = self
+                    .active
+                    .and_then(|index| self.clouds.get(index))
+                    .and_then(|entry| entry.cloud.path.file_stem())
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("section");
+                let suggestion = match request.view {
+                    DrawingView::Plan => format!("{stem}-plan"),
+                    view => format!("{stem}-section-{}", view.key()),
+                };
+                let suggestion = format!("{suggestion}.{}", FORMATS[0].0.extension());
+                self.drawing.dialog_pending = true;
+                self.drawing.open = true;
+                self.status = "Choose where to save the drawing as DXF or DWG…".into();
+                return Task::perform(
+                    async move {
+                        FORMATS
+                            .iter()
+                            .fold(rfd::AsyncFileDialog::new(), |dialog, (format, name)| {
+                                dialog.add_filter(*name, &[format.extension()])
+                            })
+                            .set_file_name(suggestion)
+                            .save_file()
+                            .await
+                            .map(|selection| selection.path().to_path_buf())
+                    },
+                    |path| Message::Drawing(DrawingAction::PathChosen(path)),
+                );
+            }
+            DrawingAction::PathChosen(path) => {
+                self.drawing.dialog_pending = false;
+                let Some(path) = path else {
+                    self.status = "Section drawing cancelled".into();
+                    return Task::none();
+                };
+                let Some(format) = DrawingFormat::from_path(&path) else {
+                    self.status = NO_FORMAT.into();
+                    return Task::none();
+                };
+                if self.is_open_source(&path) {
+                    self.status = SAME_FILE.into();
+                    return Task::none();
+                }
+                // The box or the layers may have changed while the dialog
+                // was open: the drawing is of what the window shows now.
+                match self.drawing_start() {
+                    Ok((scene, request)) => {
+                        return self.start_drawing_job(
+                            scene,
+                            request,
+                            Target::Export(path, format),
+                            None,
+                        )
+                    }
+                    Err(problem) => self.status = problem,
+                }
+            }
+            DrawingAction::Poll => {
+                let Some(job) = &mut self.drawing.job else {
+                    return Task::none();
+                };
+                let text = job.status_text();
+                if text != job.reported {
+                    self.status.clone_from(&text);
+                    job.reported = text;
+                }
+                if let Some(entry) = job
+                    .api_job_id
+                    .as_ref()
+                    .and_then(|id| self.api_jobs.get_mut(id))
+                {
+                    *entry = job.progress_value();
+                }
+                return Self::drawing_poll_task();
+            }
+            DrawingAction::Cancel => self.cancel_drawing(),
+            DrawingAction::Finished(serial, end) => {
+                let Some(job) = self.drawing.job.take_if(|job| job.serial == serial) else {
+                    return Task::none();
+                };
+                self.drawing_finished(job, end);
+            }
+        }
+        Task::none()
+    }
+
+    /// Ask a running job to stop. The step under way ends first, and an
+    /// existing file at the destination stays as it was.
+    pub(crate) fn cancel_drawing(&mut self) {
+        if self.drawing.cancel() {
+            if let Some(job) = &mut self.drawing.job {
+                job.reported = job.status_text();
+                self.status.clone_from(&job.reported);
+            }
+        }
+    }
+
+    /// A job ended: keep what it reports, show its preview when the scene is
+    /// still the one it was made from, and tell the job of the local API.
+    fn drawing_finished(&mut self, job: DrawingJob, end: DrawingEnd) {
+        let operation = job.input.target.operation();
+        let request = job.input.request;
+        // What is reported is the slab that was drawn, not the one asked.
+        let slab = slab_depth(job.input.scene.section, &request);
+        let last = match (end, &job.input.target) {
+            (DrawingEnd::Exported(stats), Target::Export(path, format)) => Last::Exported {
+                path: path.clone(),
+                format: *format,
+                request,
+                slab,
+                stats,
+            },
+            (DrawingEnd::Preview(cut), Target::Preview) => {
+                let stats = cut.stats;
+                if self.drawing_scene_current(&job.input) {
+                    self.drawing.preview = Some(ShownPreview {
+                        cut,
+                        input: Arc::clone(&job.input),
+                    });
+                    Last::Previewed {
+                        request,
+                        slab,
+                        stats,
+                    }
+                } else {
+                    Last::Failed {
+                        operation,
+                        error:
+                            "the section box, the layers or the settings changed while it was made"
+                                .into(),
+                    }
+                }
+            }
+            (DrawingEnd::Cancelled, _) => Last::Cancelled { operation },
+            (DrawingEnd::Failed(error), _) => Last::Failed { operation, error },
+            // A worker answers in the kind it was asked for.
+            (DrawingEnd::Exported(_) | DrawingEnd::Preview(_), _) => Last::Failed {
+                operation,
+                error: "the job answered with another result than was asked".into(),
+            },
+        };
+        if let Some(entry) = job
+            .api_job_id
+            .as_ref()
+            .and_then(|id| self.api_jobs.get_mut(id))
+        {
+            *entry = last.value();
+        }
+        self.status = last.status();
+        self.drawing.last = Some(last);
+    }
+
+    /// Start a job for a command of the local API: put the fields it names
+    /// in the Properties block and draw with what the block then holds.
+    fn api_start_drawing(
+        &mut self,
+        command: &str,
+        destination: Option<PathBuf>,
+        options: &DrawingOptions,
+    ) -> (Value, Task<Message>) {
+        let refuse = |error: String| (json!({"ok": false, "error": error}), Task::none());
+        let target = match destination {
+            Some(path) => match DrawingFormat::from_path(&path).filter(|_| path.is_absolute()) {
+                Some(format) => Target::Export(path, format),
+                None => {
+                    return refuse(format!(
+                        "{command} requires an absolute .dxf or .dwg destination"
+                    ))
+                }
+            },
+            None => Target::Preview,
+        };
+        if self.drawing.busy() {
+            return refuse("a section drawing is already open or running".into());
+        }
+        let settings = match self.drawing.settings.with(options) {
+            Ok(settings) => settings,
+            Err(problem) => return refuse(problem),
+        };
+        let request = match settings.request() {
+            Ok(request) => request,
+            Err(problem) => {
+                // The refusals of the core start with a capital for the
+                // status bar; the answers of this API do not.
+                let mut letters = problem.chars();
+                return refuse(match letters.next() {
+                    Some(first) => first.to_lowercase().chain(letters).collect(),
+                    None => problem,
+                });
+            }
+        };
+        let scene = match self.drawing_scene() {
+            Ok(scene) => scene,
+            Err(refusal) => return refuse(refusal.api()),
+        };
+        if let Target::Export(path, _) = &target {
+            // The core opens its temporary file beside the destination only
+            // when the slab has been read, so a mistyped folder would cost
+            // the whole read.
+            if !path.parent().is_some_and(Path::is_dir) {
+                return refuse(format!(
+                    "the folder of the {command} destination does not exist"
+                ));
+            }
+            if self.is_open_source(path) {
+                return refuse(format!(
+                    "{command} requires a destination different from the open scans"
+                ));
+            }
+        }
+        self.drawing.settings = settings;
+        let path = match &target {
+            Target::Export(path, _) => Some(path.clone()),
+            Target::Preview => None,
+        };
+        let id = self.record_api_job(json!({
+            "state": "running",
+            "operation": target.operation(),
+            "path": path,
+            "view": request.view.key(),
+        }));
+        let task = self.start_drawing_job(scene, request, target, Some(id.clone()));
+        let mut answer = json!({"ok": true, "accepted": true, "job_id": id});
+        if let Some(path) = path {
+            answer["path"] = json!(path);
+        }
+        (answer, task)
+    }
+
+    /// The `export_drawing` command of the local API.
+    pub(crate) fn api_export_drawing(
+        &mut self,
+        path: PathBuf,
+        options: &DrawingOptions,
+    ) -> (Value, Task<Message>) {
+        self.api_start_drawing("export_drawing", Some(path), options)
+    }
+
+    /// The `preview_drawing` command of the local API.
+    pub(crate) fn api_preview_drawing(
+        &mut self,
+        options: &DrawingOptions,
+    ) -> (Value, Task<Message>) {
+        self.api_start_drawing("preview_drawing", None, options)
+    }
+
+    /// The `clear_drawing_preview` command of the local API.
+    pub(crate) fn api_clear_drawing_preview(&mut self) -> Value {
+        let cleared = self.drawing.preview.take().is_some();
+        if cleared {
+            self.status = "Preview of the filled cut cleared".into();
+        }
+        json!({"ok": true, "cleared": cleared})
+    }
+
+    /// The `cancel_drawing` command of the local API.
+    pub(crate) fn api_cancel_drawing(&mut self) -> Value {
+        if !self.drawing.is_running() {
+            return json!({"ok": false, "error": "no section drawing is running"});
+        }
+        self.cancel_drawing();
+        json!({"ok": true, "cancel_requested": true})
+    }
+
+    /// Whether the ribbon button can be pressed: it needs the section box,
+    /// and an open block can always be closed with it.
+    pub(crate) fn drawing_button_enabled(&self) -> bool {
+        self.section_enabled || self.drawing.open
+    }
+
+    /// Whether the File view entry can be chosen: the section box is on and
+    /// no job or save dialog of the tool is under way.
+    pub(crate) fn drawing_entry_enabled(&self) -> bool {
+        self.section_enabled && !self.drawing.busy()
+    }
+
+    /// The button of the tool in the SECTION BOX group of the ribbon.
+    pub(crate) fn drawing_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
+        opencad_ribbon::RibbonItem::Small(crate::small_tool_button_when(
+            "Section drawing",
+            Message::Drawing(DrawingAction::Toggle),
+            self.drawing.open,
+            self.drawing_button_enabled(),
+        ))
+    }
+
+    /// The block of the tool in Properties: its choices, the buttons that
+    /// preview and export, a job under way and what the last job reported.
+    pub(crate) fn drawing_properties(&self) -> Option<Element<'_, Message>> {
+        let tool = &self.drawing;
+        if !tool.open {
+            return None;
+        }
+        let settings = &tool.settings;
+        let check = |label: &'static str, on: bool, action: fn(bool) -> DrawingAction| {
+            container(
+                checkbox(label, on)
+                    .on_toggle(move |value| Message::Drawing(action(value)))
+                    .style(muted_checkbox_style)
+                    .text_size(11)
+                    .size(13),
+            )
+            .padding([4, 8])
+        };
+        let note = |content: &'static str| {
+            container(text(content).size(10).color(self.ui_theme.colors().muted)).padding([4, 8])
+        };
+        let mut block = column![
+            opencad_properties::section_header("Section drawing"),
+            opencad_properties::property_control(
+                "View",
+                choice_list(
+                    DrawingView::ALL,
+                    settings.view,
+                    view_text,
+                    DrawingAction::View
+                ),
+            ),
+            opencad_properties::property_input(
+                "Slab thickness (m)",
+                "0.10",
+                &settings.thickness,
+                |value| Message::Drawing(DrawingAction::Thickness(value)),
+            ),
+            opencad_properties::property_control(
+                "Units",
+                choice_list(
+                    DrawingUnits::ALL,
+                    settings.units,
+                    units_text,
+                    DrawingAction::Units
+                ),
+            ),
+            opencad_properties::property_control(
+                "Origin",
+                choice_list(
+                    DrawingOrigin::ALL,
+                    settings.origin,
+                    origin_text,
+                    DrawingAction::Origin
+                ),
+            ),
+            check(tr("Filled cut"), settings.fill, DrawingAction::Fill),
+            check(
+                tr("Square to main directions"),
+                settings.square,
+                DrawingAction::Square
+            ),
+            opencad_properties::property_input(
+                "Largest wall (m)",
+                "0.50",
+                &settings.max_wall,
+                |value| Message::Drawing(DrawingAction::MaxWall(value)),
+            ),
+            opencad_properties::property_input("Grid size (m)", "0.02", &settings.grid, |value| {
+                Message::Drawing(DrawingAction::Grid(value))
+            },),
+            opencad_properties::property_control(
+                "Point colour",
+                choice_list(
+                    PointColor::ALL,
+                    settings.color,
+                    color_text,
+                    DrawingAction::Color
+                ),
+            ),
+            opencad_properties::property_control(
+                "Point layers",
+                choice_list(
+                    PointLayers::ALL,
+                    settings.point_layers,
+                    layers_text,
+                    DrawingAction::Layers
+                ),
+            ),
+            opencad_properties::property_input(
+                "Point limit",
+                "150000",
+                &settings.max_points,
+                |value| Message::Drawing(DrawingAction::MaxPoints(value)),
+            ),
+            opencad_properties::property_control(
+                "File version",
+                choice_list(
+                    DrawingVersion::ALL,
+                    settings.version,
+                    version_text,
+                    DrawingAction::Version
+                ),
+            ),
+            note(tr("The file name chooses the format: .dxf or .dwg.")),
+        ]
+        .spacing(0)
+        .width(Fill);
+
+        if let Some(job) = &tool.job {
+            let cancelling = job.cancelling();
+            let progress = job.control.snapshot();
+            let state = if cancelling {
+                tr("Cancelling…")
+            } else {
+                match progress.stage {
+                    DrawingStage::Reading => tr("Reading the slab…"),
+                    DrawingStage::Tracing => tr("Tracing the filled cut…"),
+                    DrawingStage::Writing => tr("Writing the file…"),
+                }
+            };
+            block = block
+                .push(container(text(state).size(11)).padding([6, 8]))
+                .push(
+                    container(
+                        button(tr("Cancel"))
+                            .on_press_maybe(
+                                (!cancelling).then_some(Message::Drawing(DrawingAction::Cancel)),
+                            )
+                            .style(flat_tool_style),
+                    )
+                    .padding([3, 8]),
+                );
+        } else {
+            let ready = self.section_enabled && !tool.busy();
+            let act = |action: DrawingAction| ready.then_some(Message::Drawing(action));
+            if !self.section_enabled {
+                block = block.push(note(tr("Switch on the section box to make a drawing.")));
+            }
+            block = block
+                .push(
+                    container(
+                        row![
+                            button(tr("Preview"))
+                                .on_press_maybe(act(DrawingAction::Preview))
+                                .style(flat_tool_style),
+                            button(tr("Clear preview"))
+                                .on_press_maybe(
+                                    tool.preview
+                                        .is_some()
+                                        .then_some(Message::Drawing(DrawingAction::ClearPreview),)
+                                )
+                                .style(flat_tool_style),
+                        ]
+                        .spacing(3),
+                    )
+                    .padding([3, 8]),
+                )
+                .push(
+                    container(
+                        button(tr("Export drawing…"))
+                            .on_press_maybe(act(DrawingAction::Export))
+                            .style(|theme, status| {
+                                opencad_ribbon::tool_btn_style(theme, false, status)
+                            }),
+                    )
+                    .padding([3, 8]),
+                );
+        }
+
+        match &tool.last {
+            Some(Last::Exported {
+                format,
+                request,
+                slab,
+                stats,
+                ..
+            }) => {
+                // The status bar names the file; a row has no room for it.
+                block = block.push(opencad_properties::property_row(
+                    "Last drawing",
+                    format!("{format} · {}", size_text(stats.bytes)),
+                ));
+                for line in result_rows(stats, request, *slab) {
+                    block = block.push(line);
+                }
+            }
+            Some(Last::Previewed {
+                request,
+                slab,
+                stats,
+            }) => {
+                block = block.push(opencad_properties::property_row(
+                    "Last drawing",
+                    tr(if tool.preview.is_some() {
+                        key("Preview, shown")
+                    } else {
+                        key("Preview, cleared")
+                    })
+                    .to_owned(),
+                ));
+                for line in result_rows(stats, request, *slab) {
+                    block = block.push(line);
+                }
+            }
+            Some(Last::Failed { error, .. }) => {
+                block = block.push(note(tr("The last drawing failed:"))).push(
+                    container(
+                        text(error.as_str())
+                            .size(11)
+                            .color(self.ui_theme.colors().accent),
+                    )
+                    .padding([0, 8]),
+                );
+            }
+            Some(Last::Cancelled { .. }) => {
+                block = block.push(note(tr("The last drawing was cancelled.")));
+            }
+            None => {}
+        }
+        Some(block.into())
+    }
+}
+
+/// What the core reported of the last job, as rows of the Properties block.
+/// The depth of the slab gets a row only when the box made it less than
+/// asked; otherwise it is what the block says above.
+fn result_rows(
+    stats: &DrawingStats,
+    request: &DrawingRequest,
+    slab: f64,
+) -> Vec<Element<'static, Message>> {
+    let mut rows = Vec::new();
+    if slab_cut_down(slab, request) {
+        let depth = format!("{:.0}", slab * 1000.0);
+        rows.push(opencad_properties::property_row(
+            "Slab drawn",
+            tr_args("{depth} mm (box is thinner)", &[("depth", &depth)]),
+        ));
+    }
+    rows.push(opencad_properties::property_row(
+        "Points in slab",
+        format_count(stats.slab_points),
+    ));
+    if stats.drawn_points > 0 {
+        let spacing = format!("{:.0}", stats.point_spacing * 1000.0);
+        rows.push(opencad_properties::property_row(
+            "Points drawn",
+            format_count(stats.drawn_points),
+        ));
+        rows.push(opencad_properties::property_row(
+            "Point spacing",
+            if spacing_raised(stats, request) {
+                tr_args("{spacing} mm (raised)", &[("spacing", &spacing)])
+            } else {
+                format!("{spacing} mm")
+            },
+        ));
+    }
+    if let Some(cell) = stats.grid_cell {
+        rows.push(opencad_properties::property_row(
+            "Regions",
+            if stats.dropped_regions > 0 {
+                tr_args(
+                    "{regions} · {dropped} dropped",
+                    &[
+                        ("regions", &stats.regions),
+                        ("dropped", &stats.dropped_regions),
+                    ],
+                )
+            } else {
+                stats.regions.to_string()
+            },
+        ));
+        let cell = format!("{:.0}", cell * 1000.0);
+        rows.push(opencad_properties::property_row(
+            "Grid cell",
+            if grid_raised(stats, request) {
+                tr_args("{cell} mm (coarser)", &[("cell", &cell)])
+            } else {
+                format!("{cell} mm")
+            },
+        ));
+        if let Some(degrees) = stats.direction_degrees {
+            rows.push(opencad_properties::property_row(
+                "Main direction",
+                direction_text(degrees),
+            ));
+        }
+    }
+    rows
+}
+
+/// The part of a ring that lies in front of the eye and inside the viewport
+/// with a margin, on screen. Every ring is cut off on its own. The edges that
+/// adds run along the near plane and the margin, where they enclose nothing,
+/// so the even-odd fill of all rings of a region covers the same pixels of
+/// the viewport as the whole region would. Without this a vertex behind a
+/// walking camera has no place on screen, and one close to the eye or far
+/// outside a zoomed-in view lands millions of pixels away.
+fn screen_ring(projection: Projection, ring: &[[f64; 3]], size: Size) -> Vec<UiPoint> {
+    // The limits `measure::project_edge` cuts the edges of the outline at.
+    const NEAR: f64 = 0.02;
+    const MARGIN: f64 = 16.0;
+    // In the scene first: a vertex behind the eye cannot be projected.
+    let mut front = Vec::with_capacity(ring.len() + 2);
+    for (index, from) in ring.iter().enumerate() {
+        let to = ring[(index + 1) % ring.len()];
+        let (depth_from, depth_to) = (projection.depth(*from), projection.depth(to));
+        if depth_from >= NEAR {
+            front.push(*from);
+        }
+        if (depth_from >= NEAR) != (depth_to >= NEAR) {
+            let t = (NEAR - depth_from) / (depth_to - depth_from);
+            front.push(std::array::from_fn(|axis| {
+                from[axis] + (to[axis] - from[axis]) * t
+            }));
+        }
+    }
+    let mut points: Vec<[f64; 2]> = front
+        .iter()
+        .filter_map(|xyz| projection.project_unclipped(*xyz))
+        .map(|(x, y, _)| [f64::from(x), f64::from(y)])
+        .collect();
+    // Then against the four sides of the viewport, one after the other.
+    for (axis, limit, above) in [
+        (0, -MARGIN, true),
+        (0, f64::from(size.width) + MARGIN, false),
+        (1, -MARGIN, true),
+        (1, f64::from(size.height) + MARGIN, false),
+    ] {
+        let inside = |point: &[f64; 2]| {
+            if above {
+                point[axis] >= limit
+            } else {
+                point[axis] <= limit
+            }
+        };
+        let mut kept = Vec::with_capacity(points.len() + 2);
+        for (index, from) in points.iter().enumerate() {
+            let to = points[(index + 1) % points.len()];
+            if inside(from) {
+                kept.push(*from);
+            }
+            if inside(from) != inside(&to) {
+                let t = (limit - from[axis]) / (to[axis] - from[axis]);
+                let mut cut = [
+                    from[0] + (to[0] - from[0]) * t,
+                    from[1] + (to[1] - from[1]) * t,
+                ];
+                cut[axis] = limit;
+                kept.push(cut);
+            }
+        }
+        points = kept;
+    }
+    points
+        .into_iter()
+        .map(|[x, y]| UiPoint::new(x as f32, y as f32))
+        .collect()
+}
+
+impl PointViewport<'_> {
+    /// Lay the filled cut of the preview over the points: each region with
+    /// its holes as one shape filled by the even-odd rule, and its outline.
+    /// It is drawn on top of the points without a depth test, so it reads
+    /// best looking straight at the cut plane.
+    pub fn draw_drawing(&self, frame: &mut Frame, size: Size) {
+        let (Some(preview), Some(scene)) = (self.drawing, crate::combined_bounds(self.clouds))
+        else {
+            return;
+        };
+        let projection = self.projection(scene, size.width, size.height);
+        let outline = canvas::Stroke::default()
+            .with_color(Color::from_rgb8(245, 158, 11))
+            .with_width(1.2);
+        for region in &preview.regions {
+            let rings = || std::iter::once(&region.outer).chain(&region.holes);
+            let shape = canvas::Path::new(|path| {
+                for ring in rings() {
+                    let points = screen_ring(projection, ring, size);
+                    let Some((first, rest)) = points.split_first().filter(|_| points.len() >= 3)
+                    else {
+                        continue;
+                    };
+                    path.move_to(*first);
+                    for point in rest {
+                        path.line_to(*point);
+                    }
+                    path.close();
+                }
+            });
+            frame.fill(
+                &shape,
+                canvas::Fill {
+                    style: canvas::Style::Solid(Color::from_rgba8(168, 168, 176, 0.55)),
+                    rule: canvas::fill::Rule::EvenOdd,
+                },
+            );
+            // The outline is drawn edge by edge: a stroke of the shape would
+            // also draw the edges the cutting off added.
+            let edges = canvas::Path::new(|path| {
+                for ring in rings() {
+                    for (edge, from) in ring.iter().enumerate() {
+                        let to = ring[(edge + 1) % ring.len()];
+                        if let Some([start, end]) =
+                            measure::project_edge(projection, *from, to, size)
+                        {
+                            path.move_to(start);
+                            path.line_to(end);
+                        }
+                    }
+                }
+            });
+            frame.stroke(&edges, outline);
+        }
+    }
+}
+
+/// The value that follows an option of the command line, by its position.
+fn option_value(arguments: &[OsString], at: usize) -> Option<&str> {
+    arguments.get(at).and_then(|value| value.to_str())
+}
+
+/// The `--drawing` mode of the command line: draw the slab behind one face
+/// of a box in a scan file and write it as DXF or DWG. `arguments` are what
+/// follows the flag. Returns the line to print, or the exit code with the
+/// line that says what is wrong; an empty line stands for the usage line.
+pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, String)> {
+    let usage = || (2, String::new());
+    let wrong = |line: &str| (2, line.to_owned());
+    let [source, limits, destination, options @ ..] = arguments else {
+        return Err(usage());
+    };
+    let (source, destination) = (PathBuf::from(source), PathBuf::from(destination));
+    let Some(format) = DrawingFormat::from_path(&destination) else {
+        return Err(wrong("Supported drawing extensions: .dxf, .dwg"));
+    };
+    if camera_views::source_key(&source) == camera_views::source_key(&destination) {
+        return Err(wrong("Choose an output path different from the input"));
+    }
+    let values: Vec<f64> = limits
+        .to_str()
+        .and_then(|limits| {
+            limits
+                .split(',')
+                .map(|value| value.trim().parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let [x0, y0, z0, x1, y1, z1] = values[..] else {
+        return Err(wrong("Section limits must be six comma-separated numbers"));
+    };
+    let section = Bounds {
+        min: [x0, y0, z0],
+        max: [x1, y1, z1],
+    };
+    // "nan" and "inf" are read as numbers too.
+    let ordered = (0..3).all(|axis| section.min[axis] <= section.max[axis]);
+    if !ordered || values.iter().any(|value| !value.is_finite()) {
+        return Err(wrong(
+            "Section limits must be finite numbers that run from the minimum to the maximum",
+        ));
+    }
+
+    if options.len() % 2 != 0 {
+        return Err(usage());
+    }
+    let mut settings = DrawingSettings::default();
+    // The view comes first, whatever its place: it decides whether the cut
+    // is filled when no option says so.
+    for at in (0..options.len()).step_by(2) {
+        if options[at] == "--view" {
+            let view = option_value(options, at + 1)
+                .and_then(DrawingView::from_key)
+                .ok_or_else(|| wrong("--view must be plan, front, back, left or right"))?;
+            settings.set_view(view);
+        }
+    }
+    for at in (0..options.len()).step_by(2) {
+        let value = option_value(options, at + 1).unwrap_or_default();
+        match options[at].to_str() {
+            Some("--view") => {}
+            Some("--thickness") => settings.thickness = value.to_owned(),
+            Some("--units") => {
+                settings.units = DrawingUnits::from_key(value)
+                    .ok_or_else(|| wrong("--units must be mm or m"))?;
+            }
+            Some("--fill") => {
+                settings.fill = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err(wrong("--fill must be on or off")),
+                };
+            }
+            _ => return Err(usage()),
+        }
+    }
+    let request = settings.request().map_err(|problem| (2, problem))?;
+    // The box and the folder of the output are checked before the input is
+    // opened: opening a file that is not LAS or LAZ is a full pass over it,
+    // and the core opens its temporary file beside the output only when the
+    // slab has been read. The box is put to the test of the core itself.
+    let slab = pointcloud_core::slab_from_section(
+        section,
+        request.view,
+        request.thickness,
+        request.origin,
+    )
+    .map_err(|error| (2, capitalised(plain_reason(&error.to_string()))))?
+    .thickness;
+    // A bare file name has an empty parent, which is the current folder.
+    let folder = destination
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty());
+    if folder.is_some_and(|folder| !folder.is_dir()) {
+        return Err(wrong("The folder of the output path does not exist"));
+    }
+
+    let failed = |error: LoadError| {
+        (
+            1,
+            format!("Drawing failed: {}", plain_reason(&error.to_string())),
+        )
+    };
+    let cloud = crate::open_for_export(&source).map_err(failed)?;
+    // An index that `--index` or the window left in the cache saves reading
+    // the whole file; without one the file is read in full.
+    let index = OctreeIndex::open_cached_if_present(&cloud, IndexConfig::default())
+        .ok()
+        .flatten();
+    let name = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("scan")
+        .to_owned();
+    let input = JobInput {
+        scene: Scene {
+            section,
+            filter: ClassFilter {
+                ground: true,
+                vegetation: true,
+                buildings: true,
+                other: true,
+                classes: ClassVisibility::default(),
+                section: None,
+            },
+            layers: vec![SceneLayer {
+                cloud: Arc::new(cloud),
+                index: index.map(Arc::new),
+                transform: CloudTransform::default(),
+                deleted: None,
+                name,
+            }],
+        },
+        request,
+        target: Target::Export(destination.clone(), format),
+    };
+    match run(&input, &mut |_| Ok(())).map_err(failed)? {
+        Done::Exported(stats) => Ok(format!(
+            "Drawing written as {format}, view {}: {}; {} -> {}",
+            request.view.key(),
+            summary(&stats, &request, slab, &|count| count.to_string()),
+            size_text(stats.bytes),
+            destination.display()
+        )),
+        Done::Preview(_) => Err((1, "Drawing failed: nothing was written".into())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use pointcloud_core::MAX_DRAWING_POINTS;
+
+    use super::*;
+    use crate::file_view::FileAction;
+    use crate::i18n::{Language, TestLanguage};
+    use crate::native_api::{ApiCommand, ApiRequest};
+
+    /// A room of 4 by 3 m inside with walls of 0.1 m, scanned on both faces
+    /// of every wall at four heights between 1.0 and 1.1 m and at four
+    /// heights beside that, with a door opening of 0.9 m in the wall at
+    /// y = 0. Two loose points far above and below keep the model larger
+    /// than the room, so that a section box around the room lies inside it.
+    /// Returns the points and how many lie between the heights 1.0 and 1.1.
+    fn room_points() -> (Vec<[f64; 3]>, u64) {
+        const STEP: f64 = 0.01;
+        const DOOR: [f64; 2] = [1.5, 2.4];
+        let mut plan: Vec<[f64; 2]> = Vec::new();
+        let run = |from: f64, to: f64| {
+            let count = ((to - from) / STEP).round() as usize;
+            (0..=count).map(move |step| from + step as f64 * STEP)
+        };
+        for (low, high, offset) in [(0.0, 4.0, 0.0), (-0.1, 4.1, -0.1)] {
+            // The wall at y = 0 with its door, and the wall at y = 3.
+            for x in run(low, high) {
+                if x <= DOOR[0] || x >= DOOR[1] {
+                    plan.push([x, offset]);
+                }
+                plan.push([x, 3.0 - offset]);
+            }
+            for y in run(offset, 3.0 - offset) {
+                plan.push([offset, y]);
+                plan.push([4.0 - offset, y]);
+            }
+        }
+        // The jambs of the door.
+        for y in run(-0.1, 0.0) {
+            plan.push([DOOR[0], y]);
+            plan.push([DOOR[1], y]);
+        }
+        let heights = [0.96, 0.985, 1.01, 1.035, 1.06, 1.085, 1.11, 1.135];
+        let mut points = vec![[-2.0, -2.0, 0.0], [6.0, 5.0, 2.0]];
+        for z in heights {
+            points.extend(plan.iter().map(|[x, y]| [*x, *y, z]));
+        }
+        let in_slab = heights.iter().filter(|z| (1.0..=1.1).contains(*z)).count();
+        (points, (plan.len() * in_slab) as u64)
+    }
+
+    /// The room as the text of an XYZ file, with how many of its points lie
+    /// between the heights 1.0 and 1.1.
+    fn room_xyz() -> (String, u64) {
+        let (points, in_slab) = room_points();
+        let text = points
+            .iter()
+            .map(|[x, y, z]| format!("{x:.3} {y:.3} {z:.3}\n"))
+            .collect();
+        (text, in_slab)
+    }
+
+    /// The room 10 m further along X, as an ASCII PLY file in which every
+    /// second point is ground (class 2) and the others are building
+    /// (class 6).
+    fn annex_ply_with_classes() -> String {
+        let (points, _) = room_points();
+        let mut text = format!(
+            "ply\nformat ascii 1.0\nelement vertex {}\nproperty double x\nproperty double y\n\
+             property double z\nproperty uchar classification\nend_header\n",
+            points.len()
+        );
+        for (ordinal, [x, y, z]) in points.iter().enumerate() {
+            let class = if ordinal % 2 == 0 { 2 } else { 6 };
+            text.push_str(&format!("{:.3} {y:.3} {z:.3} {class}\n", x + 10.0));
+        }
+        text
+    }
+
+    /// The section box of a plan of the room: its top face at 1.1 m.
+    const PLAN_BOX: Bounds = Bounds {
+        min: [-0.5, -0.5, 0.5],
+        max: [4.5, 3.5, 1.1],
+    };
+
+    /// A window with the room open as its one layer, and the points the
+    /// slab of a plan holds.
+    fn studio_with_room(directory: &Path) -> (Studio, u64) {
+        let (text, in_slab) = room_xyz();
+        let path = directory.join("room.xyz");
+        std::fs::write(&path, text).unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 1_000).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        (studio, in_slab)
+    }
+
+    /// Send a command the way the window receives it, so that the tool
+    /// settles after it as after any other message.
+    fn send(studio: &mut Studio, command: ApiCommand) -> Value {
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.update(Message::ApiRequest(ApiRequest { command, reply }));
+        receive.recv().unwrap()
+    }
+
+    fn status(studio: &mut Studio) -> Value {
+        send(studio, ApiCommand::Status)["result"]["drawing"].clone()
+    }
+
+    fn job(studio: &mut Studio, id: &str) -> Value {
+        send(studio, ApiCommand::Job { id: id.to_owned() })["job"].clone()
+    }
+
+    fn set_plan_box(studio: &mut Studio) {
+        let answer = send(
+            studio,
+            ApiCommand::SetSection {
+                min: PLAN_BOX.min,
+                max: PLAN_BOX.max,
+            },
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+    }
+
+    /// What the worker thread of the running job does, and its message to
+    /// the window.
+    fn finish(studio: &mut Studio) {
+        let running = studio.drawing.job.as_ref().expect("a job runs");
+        let (serial, input, control) = (
+            running.serial,
+            Arc::clone(&running.input),
+            Arc::clone(&running.control),
+        );
+        let end = DrawingEnd::of(run(&input, &mut |step| control.report(step)));
+        let _ = studio.update(Message::Drawing(DrawingAction::Finished(serial, end)));
+    }
+
+    fn preview(studio: &mut Studio) -> Value {
+        let accepted = send(
+            studio,
+            ApiCommand::PreviewDrawing {
+                options: DrawingOptions::default(),
+            },
+        );
+        assert_eq!(accepted["ok"], true, "{accepted}");
+        finish(studio);
+        status(studio)
+    }
+
+    /// The entities of an ASCII DXF: how many of each kind there are, and
+    /// the layers they lie on.
+    fn dxf_entities(path: &Path) -> (BTreeMap<String, usize>, Vec<String>) {
+        let text = std::fs::read_to_string(path).unwrap();
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let mut kinds = BTreeMap::new();
+        let mut layers = Vec::new();
+        let mut in_entities = false;
+        for pair in lines.chunks(2) {
+            let [code, value] = pair else { break };
+            match (*code, *value) {
+                ("2", "ENTITIES") => in_entities = true,
+                ("0", "ENDSEC") => in_entities = false,
+                ("0", kind) if in_entities => *kinds.entry(kind.to_owned()).or_insert(0) += 1,
+                ("8", layer) if in_entities && !layers.iter().any(|known| known == layer) => {
+                    layers.push(layer.to_owned());
+                }
+                _ => {}
+            }
+        }
+        layers.sort();
+        (kinds, layers)
+    }
+
+    #[test]
+    fn block_starts_with_the_defaults_of_the_core() {
+        let settings = DrawingSettings::default();
+        let request = settings.request().unwrap();
+        assert_eq!(request, DrawingRequest::default());
+        assert_eq!(request.view, DrawingView::Plan);
+        assert_eq!(request.thickness, Some(0.10));
+        assert!(request.fill && request.square && request.points);
+        assert_eq!(request.units, DrawingUnits::Millimetres);
+        assert_eq!(request.max_points, 150_000);
+        assert_eq!(settings.thickness, "0.10");
+
+        // Every list of the block offers every value the core knows, and
+        // each has a name of its own.
+        let names: Vec<&str> = DrawingView::ALL.into_iter().map(view_text).collect();
+        assert_eq!(names.len(), 5);
+        assert!(names
+            .iter()
+            .all(|name| names.iter().filter(|other| *other == name).count() == 1));
+        assert_eq!(
+            DrawingVersion::ALL.map(version_text),
+            ["R2004", "R2010", "R2013", "R2018"]
+        );
+        let offered: Vec<DrawingFormat> = FORMATS.iter().map(|(format, _)| *format).collect();
+        assert_eq!(offered, DrawingFormat::ALL);
+    }
+
+    #[test]
+    fn typed_numbers_are_read_with_a_comma_or_a_point_and_checked() {
+        let mut settings = DrawingSettings {
+            thickness: " 0,25 ".into(),
+            max_points: "40.000".into(),
+            ..DrawingSettings::default()
+        };
+        let request = settings.request().unwrap();
+        assert_eq!(request.thickness, Some(0.25));
+        assert_eq!(request.max_points, 40_000);
+
+        settings.thickness = "thick".into();
+        assert_eq!(
+            settings.request().unwrap_err(),
+            "Slab thickness must be a number of metres"
+        );
+        settings.thickness = "9".into();
+        assert_eq!(
+            settings.request().unwrap_err(),
+            "Slab thickness must be between 0.005 and 5 m"
+        );
+        settings.thickness = "0.1".into();
+        settings.max_points = (MAX_DRAWING_POINTS + 1).to_string();
+        assert!(settings
+            .request()
+            .unwrap_err()
+            .starts_with("A drawing holds between 1 and"));
+        settings.max_points = "many".into();
+        assert_eq!(
+            settings.request().unwrap_err(),
+            "Point limit must be a whole number"
+        );
+        settings.max_points = "1000".into();
+        // A thin largest wall takes the smallest wall down with it.
+        settings.max_wall = "0.03".into();
+        let request = settings.request().unwrap();
+        assert_eq!(request.max_wall_thickness, 0.03);
+        assert_eq!(request.min_wall_thickness, 0.03);
+        settings.max_wall = "3".into();
+        assert_eq!(
+            settings.request().unwrap_err(),
+            "Largest wall thickness must be at most 2 m"
+        );
+        assert_eq!(settings.value()["thickness"], 0.1);
+        settings.grid = "fine".into();
+        assert_eq!(settings.value()["grid"], Value::Null);
+    }
+
+    #[test]
+    fn cut_settings_are_those_of_the_request_and_ignore_the_point_limit() {
+        let mut settings = DrawingSettings::default();
+        for change in [
+            |_: &mut DrawingSettings| {},
+            |settings: &mut DrawingSettings| settings.set_view(DrawingView::Left),
+            |settings: &mut DrawingSettings| settings.thickness = "0,25".into(),
+            |settings: &mut DrawingSettings| settings.square = false,
+            |settings: &mut DrawingSettings| settings.grid = "0.04".into(),
+            // A thin largest wall takes the smallest wall down with it.
+            |settings: &mut DrawingSettings| settings.max_wall = "0.03".into(),
+        ] {
+            change(&mut settings);
+            let request = settings.request().unwrap();
+            assert_eq!(settings.cut(), Some(cut_of(&request)), "{settings:?}");
+            // A point limit that is being typed, or that the core would
+            // refuse, leaves the cut what it is.
+            for limit in ["", "many", "0", "9999999"] {
+                let typing = DrawingSettings {
+                    max_points: limit.into(),
+                    ..settings.clone()
+                };
+                assert!(typing.request().is_err(), "{limit}");
+                assert_eq!(typing.cut(), settings.cut(), "{limit}");
+            }
+        }
+        // A field of the cut that holds no number gives no cut.
+        for unreadable in [
+            DrawingSettings {
+                thickness: String::new(),
+                ..settings.clone()
+            },
+            DrawingSettings {
+                grid: "fine".into(),
+                ..settings.clone()
+            },
+            DrawingSettings {
+                max_wall: "-".into(),
+                ..settings.clone()
+            },
+        ] {
+            assert_eq!(unreadable.cut(), None);
+        }
+    }
+
+    #[test]
+    fn another_view_starts_with_its_own_filled_cut() {
+        let mut settings = DrawingSettings::default();
+        assert!(settings.fill);
+        settings.set_view(DrawingView::Front);
+        assert!(!settings.fill, "a vertical section starts as points only");
+        settings.fill = true;
+        settings.set_view(DrawingView::Front);
+        assert!(settings.fill, "choosing the same view keeps the choice");
+        settings.set_view(DrawingView::Plan);
+        assert!(settings.fill);
+        settings.fill = false;
+        settings.set_view(DrawingView::Back);
+        settings.set_view(DrawingView::Plan);
+        assert!(settings.fill, "a plan starts filled");
+    }
+
+    #[test]
+    fn fields_of_a_command_go_into_the_block_and_wrong_ones_change_nothing() {
+        let settings = DrawingSettings::default();
+        let next = settings
+            .with(&DrawingOptions {
+                view: Some("Front".into()),
+                thickness: Some(0.5),
+                units: Some("m".into()),
+                origin: Some("box".into()),
+                square: Some(false),
+                grid: Some(0.04),
+                max_wall_thickness: Some(0.8),
+                color: Some("rgb".into()),
+                point_layers: Some("class".into()),
+                max_points: Some(20_000),
+                version: Some("r2018".into()),
+                fill: None,
+            })
+            .unwrap();
+        let request = next.request().unwrap();
+        assert_eq!(request.view, DrawingView::Front);
+        assert!(!request.fill, "the view brought its own default");
+        assert_eq!(request.thickness, Some(0.5));
+        assert_eq!(request.units, DrawingUnits::Metres);
+        assert_eq!(request.origin, DrawingOrigin::BoxCorner);
+        assert!(!request.square);
+        assert_eq!((request.grid, request.max_wall_thickness), (0.04, 0.8));
+        assert_eq!(request.color, PointColor::Rgb);
+        assert_eq!(request.point_layers, PointLayers::Class);
+        assert_eq!(request.max_points, 20_000);
+        assert_eq!(request.version, DrawingVersion::R2018);
+        assert_eq!(
+            next.value(),
+            json!({
+                "view": "front", "thickness": 0.5, "units": "m", "origin": "box",
+                "fill": false, "square": false, "grid": 0.04, "max_wall_thickness": 0.8,
+                "color": "rgb", "point_layers": "class", "max_points": 20_000,
+                "version": "r2018",
+            })
+        );
+        // A fill that is named wins over the default of the view.
+        let filled = settings
+            .with(&DrawingOptions {
+                view: Some("left".into()),
+                fill: Some(true),
+                ..DrawingOptions::default()
+            })
+            .unwrap();
+        assert!(filled.fill);
+        // Nothing named keeps everything.
+        assert_eq!(settings.with(&DrawingOptions::default()).unwrap(), settings);
+
+        for (options, problem) in [
+            (
+                DrawingOptions {
+                    view: Some("top".into()),
+                    ..DrawingOptions::default()
+                },
+                "view must be plan, front, back, left or right",
+            ),
+            (
+                DrawingOptions {
+                    units: Some("cm".into()),
+                    ..DrawingOptions::default()
+                },
+                "units must be mm or m",
+            ),
+            (
+                DrawingOptions {
+                    version: Some("r12".into()),
+                    ..DrawingOptions::default()
+                },
+                "version must be r2004, r2010, r2013 or r2018",
+            ),
+        ] {
+            assert_eq!(settings.with(&options).unwrap_err(), problem);
+        }
+    }
+
+    #[test]
+    fn commands_are_read_with_the_fields_they_name() {
+        let command: ApiCommand = serde_json::from_value(json!({
+            "command": "export_drawing", "path": "/out/plan.dwg", "view": "plan",
+            "thickness": 1, "fill": false, "max_points": 5000,
+        }))
+        .unwrap();
+        let ApiCommand::ExportDrawing { path, options } = command else {
+            panic!("another command was read");
+        };
+        assert_eq!(path, PathBuf::from("/out/plan.dwg"));
+        assert_eq!(
+            options,
+            DrawingOptions {
+                view: Some("plan".into()),
+                thickness: Some(1.0),
+                fill: Some(false),
+                max_points: Some(5_000),
+                ..DrawingOptions::default()
+            }
+        );
+        let command: ApiCommand =
+            serde_json::from_value(json!({"command": "preview_drawing"})).unwrap();
+        assert!(matches!(
+            command,
+            ApiCommand::PreviewDrawing { options } if options == DrawingOptions::default()
+        ));
+        for name in ["clear_drawing_preview", "cancel_drawing"] {
+            assert!(serde_json::from_value::<ApiCommand>(json!({"command": name})).is_ok());
+        }
+        assert!(
+            serde_json::from_value::<ApiCommand>(json!({"command": "export_drawing"})).is_err(),
+            "an export needs a path"
+        );
+    }
+
+    #[test]
+    fn result_line_says_what_the_core_reports() {
+        let request = DrawingRequest::default();
+        let stats = DrawingStats {
+            slab_points: 1_822_308,
+            read_points: 4_000_000,
+            drawn_points: 65_637,
+            point_spacing: 0.04,
+            regions: 3,
+            vertices: 40,
+            dropped_regions: 2,
+            grid_cell: Some(0.04),
+            direction_degrees: Some(-17.304),
+            bytes: 5_700_000,
+        };
+        let plain = |count: u64| count.to_string();
+        assert_eq!(
+            summary(&stats, &request, 0.10, &plain),
+            "1822308 points in the slab, 65637 drawn at 40 mm (raised from 5 mm by the limit \
+             of 150000 points); 3 regions (2 small ones dropped), grid 40 mm (coarser than the \
+             20 mm asked), main direction -17.30°"
+        );
+        let value = stats_value(&stats, &request, 0.10);
+        assert_eq!(value["point_spacing_raised"], true);
+        assert_eq!(value["grid_cell_raised"], true);
+        assert_eq!(value["dropped_regions"], 2);
+        assert_eq!(value["thickness"], 0.10);
+
+        // Nothing raised, one region, no fill at all, and a direction that
+        // rounds to zero from below.
+        let exact = DrawingStats {
+            point_spacing: 0.005,
+            regions: 1,
+            dropped_regions: 1,
+            grid_cell: Some(0.02),
+            direction_degrees: Some(-0.001),
+            ..stats
+        };
+        assert_eq!(
+            summary(&exact, &request, 0.10, &plain),
+            "1822308 points in the slab, 65637 drawn at 5 mm; 1 region (1 small one dropped), \
+             grid 20 mm, main direction 0.00°"
+        );
+        let points_only = DrawingStats {
+            grid_cell: None,
+            direction_degrees: None,
+            regions: 0,
+            dropped_regions: 0,
+            ..exact
+        };
+        assert_eq!(
+            summary(&points_only, &request, 0.10, &plain),
+            "1822308 points in the slab, 65637 drawn at 5 mm"
+        );
+        // A box that is shallower than the slab asked: the line and the
+        // figures give the depth that was drawn.
+        assert_eq!(
+            summary(&points_only, &request, 0.05, &plain),
+            "1822308 points in the slab of 50 mm (the box is thinner than the 100 mm asked), \
+             65637 drawn at 5 mm"
+        );
+        assert_eq!(stats_value(&points_only, &request, 0.05)["thickness"], 0.05);
+        assert_eq!(result_rows(&points_only, &request, 0.10).len(), 3);
+        assert_eq!(result_rows(&points_only, &request, 0.05).len(), 4);
+        let preview = DrawingStats {
+            drawn_points: 0,
+            point_spacing: 0.0,
+            ..exact
+        };
+        assert!(
+            summary(&preview, &request, 0.10, &plain).starts_with("1822308 points in the slab; 1")
+        );
+        assert_eq!(
+            stats_value(&preview, &request, 0.10)["point_spacing_raised"],
+            false
+        );
+
+        // The status bar groups the digits as the rest of the window does.
+        let last = Last::Exported {
+            path: PathBuf::from("plan.dxf"),
+            format: DrawingFormat::Dxf,
+            request,
+            slab: 0.10,
+            stats,
+        };
+        assert!(
+            last.status().starts_with(
+                "Section drawing exported as DXF: 1.822.308 points in the slab, 65.637 drawn"
+            ),
+            "{}",
+            last.status()
+        );
+        assert!(last.status().ends_with("; 5.7 MB to plan.dxf"));
+        assert_eq!(size_text(790_000), "790 kB");
+        assert_eq!(size_text(12), "1 kB");
+    }
+
+    #[test]
+    fn worker_reports_its_stage_and_hears_a_cancel() {
+        let control = DrawingControl::default();
+        assert_eq!(control.snapshot().stage, DrawingStage::Reading);
+        for (stage, done, total, fraction) in [
+            (DrawingStage::Reading, 4_096, 16_384, Some(0.25)),
+            (DrawingStage::Tracing, 0, 0, None),
+            (DrawingStage::Writing, 30, 40, Some(0.75)),
+        ] {
+            let step = DrawingProgress { stage, done, total };
+            assert!(control.report(step).is_ok());
+            assert_eq!(control.snapshot(), step);
+            assert_eq!(control.snapshot().fraction(), fraction);
+        }
+        assert_eq!(
+            [
+                DrawingStage::Reading,
+                DrawingStage::Tracing,
+                DrawingStage::Writing
+            ]
+            .map(stage_key),
+            ["reading", "tracing", "writing"]
+        );
+        // A cancel is heard at the next report, which then changes nothing.
+        control.cancelled.store(true, Ordering::Relaxed);
+        let late = DrawingProgress {
+            stage: DrawingStage::Writing,
+            done: 40,
+            total: 40,
+        };
+        assert!(matches!(control.report(late), Err(LoadError::Cancelled)));
+        assert_eq!(control.snapshot().done, 30);
+        assert!(matches!(
+            DrawingEnd::of(Err(LoadError::Cancelled)),
+            DrawingEnd::Cancelled
+        ));
+        // The reason of a failure comes without the words the core puts
+        // before every refusal of data.
+        assert!(matches!(
+            DrawingEnd::of(Err(LoadError::InvalidData("the slab holds no points".into()))),
+            DrawingEnd::Failed(reason) if reason == "the slab holds no points"
+        ));
+    }
+
+    #[test]
+    fn api_refuses_what_cannot_be_drawn_and_changes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("plan.dxf");
+        let export = |studio: &mut Studio, path: &Path, options: DrawingOptions| {
+            send(
+                studio,
+                ApiCommand::ExportDrawing {
+                    path: path.to_path_buf(),
+                    options,
+                },
+            )
+        };
+        let plain = DrawingOptions::default;
+        let (mut studio, _) = studio_with_room(directory.path());
+
+        for refused in [
+            PathBuf::from("plan.dxf"),
+            directory.path().join("plan.pdf"),
+            directory.path().join("plan"),
+        ] {
+            assert_eq!(
+                export(&mut studio, &refused, plain())["error"],
+                "export_drawing requires an absolute .dxf or .dwg destination",
+                "{}",
+                refused.display()
+            );
+        }
+        assert_eq!(
+            export(&mut studio, &destination, plain())["error"],
+            "section box is not enabled"
+        );
+        assert_eq!(
+            send(&mut studio, ApiCommand::PreviewDrawing { options: plain() })["error"],
+            "section box is not enabled"
+        );
+        set_plan_box(&mut studio);
+
+        let wrong_view = DrawingOptions {
+            view: Some("above".into()),
+            units: Some("m".into()),
+            ..plain()
+        };
+        assert_eq!(
+            export(&mut studio, &destination, wrong_view)["error"],
+            "view must be plan, front, back, left or right"
+        );
+        let too_thick = DrawingOptions {
+            thickness: Some(-1.0),
+            units: Some("m".into()),
+            ..plain()
+        };
+        assert_eq!(
+            export(&mut studio, &destination, too_thick)["error"],
+            "slab thickness must be between 0.005 and 5 m"
+        );
+        assert_eq!(
+            export(
+                &mut studio,
+                &directory.path().join("missing/plan.dwg"),
+                plain()
+            )["error"],
+            "the folder of the export_drawing destination does not exist"
+        );
+        // The room itself is not written over. An XYZ file is no drawing
+        // format, so a DXF scan stands in for it here.
+        let scan = directory.path().join("scan.dxf");
+        std::fs::write(
+            &scan,
+            "0\nSECTION\n2\nENTITIES\n0\nPOINT\n10\n1\n20\n1\n30\n1\n0\nENDSEC\n0\nEOF\n",
+        )
+        .unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&scan, 10).unwrap());
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        set_plan_box(&mut studio);
+        assert_eq!(
+            export(&mut studio, &scan, plain())["error"],
+            "export_drawing requires a destination different from the open scans"
+        );
+
+        let _ = studio.update(Message::SetVisible(0, false));
+        let _ = studio.update(Message::SetVisible(1, false));
+        assert_eq!(
+            export(&mut studio, &destination, plain())["error"],
+            "no visible point cloud to draw"
+        );
+
+        // A refusal starts no job and leaves the block as it was.
+        assert!(studio.api_jobs.is_empty());
+        assert!(!studio.drawing.busy());
+        assert_eq!(studio.drawing.settings, DrawingSettings::default());
+        assert!(!destination.exists());
+        assert_eq!(
+            send(&mut studio, ApiCommand::CancelDrawing)["error"],
+            "no section drawing is running"
+        );
+        assert_eq!(
+            send(&mut studio, ApiCommand::ClearDrawingPreview),
+            json!({"ok": true, "cleared": false})
+        );
+    }
+
+    #[test]
+    fn layer_that_is_still_loading_is_refused_by_name_before_anything_is_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, in_slab) = studio_with_room(directory.path());
+        let annex = directory.path().join("annex.ply");
+        std::fs::write(&annex, annex_ply_with_classes()).unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&annex, 1_000).unwrap());
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        set_plan_box(&mut studio);
+        // The second scan as it stands while it is read: shown, without an
+        // index, and its cloud not yet checked against the file.
+        let mut loading = (*studio.clouds[1].cloud).clone();
+        loading.provisional = true;
+        studio.clouds[1].cloud = Arc::new(loading);
+        assert!(studio.clouds[1].index.is_none());
+
+        let preview = |studio: &mut Studio| {
+            send(
+                studio,
+                ApiCommand::PreviewDrawing {
+                    options: DrawingOptions::default(),
+                },
+            )
+        };
+        assert_eq!(
+            preview(&mut studio)["error"],
+            "a visible point cloud is still loading: annex.ply"
+        );
+        assert_eq!(
+            send(
+                &mut studio,
+                ApiCommand::ExportDrawing {
+                    path: directory.path().join("plan.dxf"),
+                    options: DrawingOptions::default(),
+                },
+            )["error"],
+            "a visible point cloud is still loading: annex.ply"
+        );
+        let said = "annex.ply is still loading; wait for it or hide it before making a drawing";
+        let _ = studio.update(Message::Drawing(DrawingAction::Preview));
+        assert_eq!(studio.status, said);
+        let _ = studio.update(Message::Drawing(DrawingAction::Export));
+        assert_eq!(studio.status, said);
+        // Nothing started: no job, no save dialog, no file.
+        assert!(studio.api_jobs.is_empty());
+        assert!(!studio.drawing.busy());
+        assert!(!directory.path().join("plan.dxf").exists());
+
+        // With the loading scan hidden the others are drawn.
+        let _ = studio.update(Message::SetVisible(1, false));
+        let accepted = preview(&mut studio);
+        assert_eq!(accepted["ok"], true, "{accepted}");
+        finish(&mut studio);
+        assert_eq!(status(&mut studio)["last"]["slab_points"], in_slab);
+    }
+
+    #[test]
+    fn job_reports_the_slab_that_was_drawn_in_a_box_thinner_than_asked() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, in_slab) = studio_with_room(directory.path());
+        // A box of 0.05 m under the cut plane, and a slab of 0.10 m asked.
+        let answer = send(
+            &mut studio,
+            ApiCommand::SetSection {
+                min: [PLAN_BOX.min[0], PLAN_BOX.min[1], 1.05],
+                max: PLAN_BOX.max,
+            },
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        let destination = directory.path().join("thin.dxf");
+        let accepted = send(
+            &mut studio,
+            ApiCommand::ExportDrawing {
+                path: destination.clone(),
+                options: DrawingOptions {
+                    thickness: Some(0.10),
+                    ..DrawingOptions::default()
+                },
+            },
+        );
+        let id = accepted["job_id"].as_str().unwrap().to_owned();
+        finish(&mut studio);
+        let done = job(&mut studio, &id);
+        assert_eq!(done["state"], "complete", "{done}");
+        let drawn = done["thickness"].as_f64().unwrap();
+        assert!((drawn - 0.05).abs() < 1e-6, "{drawn}");
+        // Two of the four heights of the full slab lie in this box.
+        assert_eq!(done["slab_points"], in_slab / 2);
+        assert_eq!(status(&mut studio)["last"]["thickness"], done["thickness"]);
+        // The block still holds what was asked.
+        assert_eq!(status(&mut studio)["settings"]["thickness"], 0.1);
+        assert!(
+            studio
+                .status
+                .contains("points in the slab of 50 mm (the box is thinner than the 100 mm asked)"),
+            "{}",
+            studio.status
+        );
+        // The text in the file says the same depth.
+        let text = std::fs::read_to_string(&destination).unwrap();
+        assert!(text.contains("slab 0.050 m"));
+        let _ = studio.view();
+
+        // A preview reports it the same way.
+        let shown = preview(&mut studio);
+        let previewed = shown["last"]["thickness"].as_f64().unwrap();
+        assert!((previewed - 0.05).abs() < 1e-6, "{previewed}");
+    }
+
+    #[test]
+    fn api_exports_a_plan_of_the_room_as_a_job() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, in_slab) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        assert_eq!(status(&mut studio)["job"], Value::Null);
+        assert_eq!(status(&mut studio)["last"], Value::Null);
+
+        for (name, units) in [("plan.dxf", "mm"), ("plan.dwg", "m")] {
+            let destination = directory.path().join(name);
+            let accepted = send(
+                &mut studio,
+                ApiCommand::ExportDrawing {
+                    path: destination.clone(),
+                    options: DrawingOptions {
+                        units: Some(units.into()),
+                        ..DrawingOptions::default()
+                    },
+                },
+            );
+            assert_eq!(accepted["ok"], true, "{accepted}");
+            assert_eq!(accepted["accepted"], true);
+            assert_eq!(accepted["path"], json!(destination));
+            let id = accepted["job_id"].as_str().unwrap().to_owned();
+            let running = job(&mut studio, &id);
+            assert_eq!(running["state"], "running");
+            assert_eq!(running["operation"], "export_drawing");
+
+            // A wait for an idle window sees the drawing as work under way,
+            // and so does the strip above the scene.
+            let state = send(&mut studio, ApiCommand::Status)["result"].clone();
+            assert_eq!(crate::mcp::busy(&state), ["drawing"]);
+            assert_eq!(state["drawing"]["job"]["stage"], "reading");
+            assert_eq!(state["drawing"]["settings"]["units"], units);
+            let lines = studio.progress_lines();
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].phase, Phase::Drawing);
+            assert_eq!(lines[0].title, "Section drawing (plan)");
+            assert!(lines[0].detail.starts_with("Step 1 of 3"));
+            assert!(studio.progress_strip().is_some());
+            // Tracing the filled cut is the second step, writing the third.
+            let control = Arc::clone(&studio.drawing.job.as_ref().unwrap().control);
+            for (stage, step) in [
+                (DrawingStage::Tracing, "Step 2 of 3"),
+                (DrawingStage::Writing, "Step 3 of 3"),
+                (DrawingStage::Reading, "Step 1 of 3"),
+            ] {
+                let (done, total) = (0, 0);
+                control
+                    .report(DrawingProgress { stage, done, total })
+                    .unwrap();
+                let detail = studio.progress_lines().remove(0).detail;
+                assert!(detail.starts_with(step), "{detail}");
+            }
+            // No second job beside it.
+            assert_eq!(
+                send(
+                    &mut studio,
+                    ApiCommand::PreviewDrawing {
+                        options: DrawingOptions::default()
+                    }
+                )["error"],
+                "a section drawing is already open or running"
+            );
+
+            finish(&mut studio);
+            let done = job(&mut studio, &id);
+            assert_eq!(done["state"], "complete", "{done}");
+            assert_eq!(done["operation"], "export_drawing");
+            assert_eq!(done["format"], &name[5..]);
+            assert_eq!(done["view"], "plan");
+            assert_eq!(done["units"], units);
+            // The box is deeper than the slab: what was asked was drawn.
+            assert_eq!(done["thickness"], 0.1);
+            assert!(!studio.status.contains("thinner"), "{}", studio.status);
+            assert_eq!(done["slab_points"], in_slab);
+            let drawn = done["drawn_points"].as_u64().unwrap();
+            assert!(drawn > 1_000 && drawn <= in_slab, "{drawn}");
+            assert_eq!(done["point_spacing"], 0.005);
+            assert_eq!(done["point_spacing_raised"], false);
+            // The walls are one region: the door leaves the ring open.
+            assert_eq!(done["regions"], 1);
+            assert_eq!(done["grid_cell"], 0.02);
+            assert_eq!(done["grid_cell_raised"], false);
+            assert_eq!(
+                done["bytes"].as_u64().unwrap(),
+                std::fs::metadata(&destination).unwrap().len()
+            );
+            let state = send(&mut studio, ApiCommand::Status)["result"].clone();
+            assert!(crate::mcp::busy(&state).is_empty());
+            assert_eq!(state["drawing"]["last"], done);
+            assert!(studio.progress_lines().is_empty());
+            assert!(
+                studio.status.starts_with(&format!(
+                    "Section drawing exported as {}: ",
+                    name[5..].to_uppercase()
+                )),
+                "{}",
+                studio.status
+            );
+            assert!(studio
+                .status
+                .contains("1 region, grid 20 mm, main direction 0.00°"));
+
+            if name.ends_with(".dxf") {
+                // The file as the reader of the core sees it: the points of
+                // the drawing, a thousand times the scan in millimetres.
+                let read = pointcloud_core::open(&destination, 10).unwrap();
+                assert_eq!(read.total_points, drawn);
+                assert!(
+                    (read.bounds.max[0] - 4_100.0).abs() < 1.0,
+                    "{:?}",
+                    read.bounds
+                );
+                assert!(
+                    (read.bounds.min[1] + 100.0).abs() < 1.0,
+                    "{:?}",
+                    read.bounds
+                );
+                // And as its text says it.
+                let (kinds, layers) = dxf_entities(&destination);
+                assert_eq!(kinds["POINT"] as u64, drawn);
+                assert_eq!(kinds["HATCH"], 1);
+                assert_eq!(kinds["TEXT"], 1);
+                // The outline of the region and the frame of the box.
+                assert_eq!(kinds["LWPOLYLINE"], 2);
+                assert_eq!(
+                    layers,
+                    [
+                        "OPS-CUT-FILL",
+                        "OPS-CUT-OUTLINE",
+                        "OPS-FRAME",
+                        "OPS-INFO",
+                        "OPS-POINTS"
+                    ]
+                );
+            } else {
+                let bytes = std::fs::read(&destination).unwrap();
+                assert!(bytes.starts_with(DrawingVersion::R2013.tag().as_bytes()));
+            }
+        }
+        // The block stands open with what was drawn, in either language.
+        assert!(studio.drawing.open);
+        let _language = TestLanguage::hold(Language::Table(0));
+        assert!(studio.drawing_properties().is_some());
+        let _ = studio.view();
+    }
+
+    #[test]
+    fn point_limit_raises_the_spacing_and_says_so() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, _) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        let accepted = send(
+            &mut studio,
+            ApiCommand::ExportDrawing {
+                path: directory.path().join("few.dxf"),
+                options: DrawingOptions {
+                    max_points: Some(500),
+                    fill: Some(false),
+                    ..DrawingOptions::default()
+                },
+            },
+        );
+        let id = accepted["job_id"].as_str().unwrap().to_owned();
+        // Without a filled cut nothing is traced: reading and writing are
+        // the two steps of the job.
+        let detail = |studio: &Studio| studio.progress_lines().remove(0).detail;
+        assert!(
+            detail(&studio).starts_with("Step 1 of 2"),
+            "{}",
+            detail(&studio)
+        );
+        let control = Arc::clone(&studio.drawing.job.as_ref().unwrap().control);
+        let writing = DrawingProgress {
+            stage: DrawingStage::Writing,
+            done: 1,
+            total: 2,
+        };
+        control.report(writing).unwrap();
+        assert!(
+            detail(&studio).starts_with("Step 2 of 2"),
+            "{}",
+            detail(&studio)
+        );
+        finish(&mut studio);
+        let done = job(&mut studio, &id);
+        assert_eq!(done["state"], "complete", "{done}");
+        assert!(done["drawn_points"].as_u64().unwrap() <= 500);
+        assert!(done["point_spacing"].as_f64().unwrap() > 0.005);
+        assert_eq!(done["point_spacing_raised"], true);
+        // Without a fill there are no regions and no grid to report.
+        assert_eq!(done["grid_cell"], Value::Null);
+        assert!(
+            studio.status.contains("by the limit of 500 points"),
+            "{}",
+            studio.status
+        );
+        assert!(!studio.status.contains("region"));
+        let (kinds, layers) = dxf_entities(&directory.path().join("few.dxf"));
+        assert!(!kinds.contains_key("HATCH"));
+        assert_eq!(layers, ["OPS-FRAME", "OPS-INFO", "OPS-POINTS"]);
+    }
+
+    #[test]
+    fn every_visible_layer_is_drawn_without_its_hidden_classes() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, in_slab) = studio_with_room(directory.path());
+        // The same room once more beside it, as a second scan with classes.
+        let annex = directory.path().join("annex.ply");
+        std::fs::write(&annex, annex_ply_with_classes()).unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&annex, 1_000).unwrap());
+        assert!(cloud.has_classification);
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        let around_both = send(
+            &mut studio,
+            ApiCommand::SetSection {
+                min: PLAN_BOX.min,
+                max: [14.5, PLAN_BOX.max[1], PLAN_BOX.max[2]],
+            },
+        );
+        assert_eq!(around_both["ok"], true, "{around_both}");
+        let slab_points =
+            |studio: &mut Studio| preview(studio)["last"]["slab_points"].as_u64().unwrap();
+
+        assert_eq!(slab_points(&mut studio), 2 * in_slab);
+        // Hiding the ground leaves half of the scan that has classes; the
+        // scan without classes is not touched by it.
+        let _ = studio.update(Message::FilterClass(2, false));
+        let without_ground = slab_points(&mut studio);
+        assert!(
+            (without_ground * 2).abs_diff(3 * in_slab) <= 8,
+            "{without_ground} of {in_slab} twice"
+        );
+        let _ = studio.update(Message::SetVisible(0, false));
+        let one_layer = slab_points(&mut studio);
+        assert!((one_layer * 2).abs_diff(in_slab) <= 8, "{one_layer}");
+        let _ = studio.update(Message::FilterClass(2, true));
+        assert_eq!(slab_points(&mut studio), in_slab);
+
+        // Two scans get a point layer each, named after their files.
+        let _ = studio.update(Message::SetVisible(0, true));
+        let destination = directory.path().join("both.dxf");
+        let accepted = send(
+            &mut studio,
+            ApiCommand::ExportDrawing {
+                path: destination.clone(),
+                options: DrawingOptions {
+                    fill: Some(false),
+                    ..DrawingOptions::default()
+                },
+            },
+        );
+        assert_eq!(accepted["ok"], true, "{accepted}");
+        finish(&mut studio);
+        let (_, layers) = dxf_entities(&destination);
+        assert_eq!(
+            layers,
+            [
+                "OPS-FRAME",
+                "OPS-INFO",
+                "OPS-POINTS-annex",
+                "OPS-POINTS-room"
+            ]
+        );
+        // One layer per class instead: the scan without classes keeps the
+        // plain point layer.
+        let accepted = send(
+            &mut studio,
+            ApiCommand::ExportDrawing {
+                path: destination.clone(),
+                options: DrawingOptions {
+                    point_layers: Some("class".into()),
+                    ..DrawingOptions::default()
+                },
+            },
+        );
+        assert_eq!(accepted["ok"], true, "{accepted}");
+        finish(&mut studio);
+        let (_, layers) = dxf_entities(&destination);
+        assert_eq!(
+            layers,
+            [
+                "OPS-FRAME",
+                "OPS-INFO",
+                "OPS-POINTS",
+                "OPS-POINTS-CLASS-02",
+                "OPS-POINTS-CLASS-06"
+            ]
+        );
+    }
+
+    #[test]
+    fn moved_layers_and_deleted_points_are_drawn_as_the_scene_has_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, in_slab) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        // The layer moved up by a metre is no longer cut by the box.
+        studio.clouds[0].transform.offset[2] = 1.0;
+        let accepted = send(
+            &mut studio,
+            ApiCommand::PreviewDrawing {
+                options: DrawingOptions::default(),
+            },
+        );
+        let id = accepted["job_id"].as_str().unwrap().to_owned();
+        finish(&mut studio);
+        let failed = job(&mut studio, &id);
+        assert_eq!(failed["state"], "failed");
+        assert_eq!(failed["error"], "the slab holds no points");
+        assert_eq!(
+            studio.status,
+            "Preview of the filled cut failed: the slab holds no points"
+        );
+        // The block says why the last job gave nothing.
+        assert!(matches!(studio.drawing.last, Some(Last::Failed { .. })));
+        let _ = studio.view();
+        studio.clouds[0].transform.offset[2] = 0.0;
+
+        // Every second point deleted halves what the slab holds.
+        let total = studio.clouds[0].cloud.total_points;
+        let every_second = crate::selection::SelectionMask {
+            bits: vec![0x5555_5555_5555_5555; total.div_ceil(64) as usize],
+            count: 0,
+            highlights: Vec::new(),
+            highlights_source: true,
+            source_bounds: None,
+        };
+        let mut deleted = DeletionMask::new(total).unwrap();
+        deleted.apply(&every_second).unwrap();
+        studio.clouds[0].deleted = Some(Arc::new(deleted));
+        let accepted = send(
+            &mut studio,
+            ApiCommand::PreviewDrawing {
+                options: DrawingOptions::default(),
+            },
+        );
+        let id = accepted["job_id"].as_str().unwrap().to_owned();
+        finish(&mut studio);
+        let done = job(&mut studio, &id);
+        assert_eq!(done["state"], "complete", "{done}");
+        let remaining = done["slab_points"].as_u64().unwrap();
+        // Each of the four heights in the slab keeps half of its points,
+        // give or take one.
+        assert!(
+            (remaining * 2).abs_diff(in_slab) <= 8,
+            "{remaining} of {in_slab}"
+        );
+    }
+
+    #[test]
+    fn preview_lies_on_the_cut_plane_and_goes_when_the_scene_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, in_slab) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        assert_eq!(status(&mut studio)["preview_shown"], false);
+
+        let shown = preview(&mut studio);
+        assert_eq!(shown["preview_shown"], true, "{shown}");
+        assert_eq!(shown["preview_regions"], 1);
+        assert_eq!(shown["last"]["operation"], "preview_drawing");
+        assert_eq!(shown["last"]["state"], "complete");
+        assert_eq!(shown["last"]["slab_points"], in_slab);
+        // A preview collects no points for a drawing.
+        assert_eq!(shown["last"]["drawn_points"], 0);
+        assert!(studio.status.starts_with("Filled cut previewed: "));
+
+        // The regions lie on the top face of the box, around the room.
+        let cut = studio.drawing.overlay().expect("a preview is shown");
+        let region = &cut.regions[0];
+        assert!(region.holes.is_empty(), "the door leaves the walls open");
+        for xyz in &region.outer {
+            assert!((xyz[2] - PLAN_BOX.max[2]).abs() < 1e-6, "{xyz:?}");
+            assert!((-0.11..=4.11).contains(&xyz[0]) && (-0.11..=3.11).contains(&xyz[1]));
+        }
+        // From above, every ring is on screen and can be filled.
+        let _ = studio.update(Message::CameraPreset(crate::CameraPreset::Top));
+        assert!(
+            studio.drawing.overlay().is_some(),
+            "the camera is no scene change"
+        );
+        let size = studio.viewport_size;
+        let scene = crate::combined_bounds(&studio.clouds).unwrap();
+        let projection = studio.projection(scene, size.width, size.height);
+        let outer = studio.drawing.overlay().unwrap().regions[0].outer.clone();
+        let ring = screen_ring(projection, &outer, size);
+        assert_eq!(ring.len(), outer.len(), "nothing is cut off");
+        assert!(ring.len() >= 8);
+        for point in &ring {
+            assert!(
+                (0.0..=size.width).contains(&point.x) && (0.0..=size.height).contains(&point.y),
+                "{point:?} outside {size:?}"
+            );
+        }
+        let _ = studio.view();
+
+        // Whether a pixel is filled: inside the ring by the even-odd rule.
+        let filled = |ring: &[UiPoint], x: f32, y: f32| {
+            let mut inside = false;
+            for (index, from) in ring.iter().enumerate() {
+                let to = ring[(index + 1) % ring.len()];
+                if (from.y > y) != (to.y > y)
+                    && x < from.x + (y - from.y) / (to.y - from.y) * (to.x - from.x)
+                {
+                    inside = !inside;
+                }
+            }
+            inside
+        };
+        let within = |ring: &[UiPoint], size: Size| {
+            ring.iter().all(|point| {
+                (-16.0..=size.width + 16.0).contains(&point.x)
+                    && (-16.0..=size.height + 16.0).contains(&point.y)
+            })
+        };
+        // A spot in the wall at x = 4 and one on the floor of the room, both
+        // on the cut plane.
+        let (in_wall, in_room) = ([4.05, 1.5, PLAN_BOX.max[2]], [3.0, 1.5, PLAN_BOX.max[2]]);
+        let on_screen = |projection: Projection, xyz: [f64; 3]| {
+            let (x, y, _) = projection.project_unclipped(xyz).unwrap();
+            (x, y)
+        };
+        let (x, y) = on_screen(projection, in_wall);
+        assert!(filled(&ring, x, y));
+        let (x, y) = on_screen(projection, in_room);
+        assert!(!filled(&ring, x, y));
+
+        // Zoomed in on that wall until it covers the whole viewport, the
+        // corners of the room lie far more than a hundred thousand pixels
+        // away: the ring is cut off at the viewport and still fills it.
+        let zoom = 0.000_5;
+        let centred = Projection::new(
+            scene,
+            studio.yaw,
+            studio.pitch,
+            zoom,
+            [0.0, 0.0],
+            size.width,
+            size.height,
+        );
+        let (x, y) = on_screen(centred, in_wall);
+        let pan = [size.width / 2.0 - x, size.height / 2.0 - y];
+        let close = Projection::new(
+            scene,
+            studio.yaw,
+            studio.pitch,
+            zoom,
+            pan,
+            size.width,
+            size.height,
+        );
+        assert!(outer.iter().any(|xyz| {
+            let (x, y) = on_screen(close, *xyz);
+            x.abs().max(y.abs()) > 100_000.0
+        }));
+        let ring = screen_ring(close, &outer, size);
+        assert!(ring.len() >= 4 && within(&ring, size), "{ring:?}");
+        for (x, y) in [
+            (1.0, 1.0),
+            (size.width / 2.0, size.height / 2.0),
+            (size.width - 1.0, size.height - 1.0),
+        ] {
+            assert!(filled(&ring, x, y), "{x}, {y}");
+        }
+
+        // A walking camera stands in the room, 0.5 m above the cut plane,
+        // and looks along +X and down: half of the walls lie behind the eye.
+        // The wall in front of it is filled and the floor before it is not.
+        let (sin, cos) = 0.5_f64.sin_cos();
+        let eye = [2.0, 1.5, PLAN_BOX.max[2] + 0.5];
+        let basis = [[0.0, -1.0, 0.0], [sin, 0.0, cos], [cos, 0.0, -sin]];
+        let walking = Projection::from_eye(scene, eye, basis, 500.0, size.width, size.height);
+        assert!(outer.iter().any(|xyz| walking.depth(*xyz) < 0.0));
+        let ring = screen_ring(walking, &outer, size);
+        assert!(ring.len() >= 4 && within(&ring, size), "{ring:?}");
+        let (x, y) = on_screen(walking, in_wall);
+        assert!((0.0..size.width).contains(&x) && (0.0..size.height).contains(&y));
+        assert!(filled(&ring, x, y));
+        let (x, y) = on_screen(walking, in_room);
+        assert!((0.0..size.width).contains(&x) && (0.0..size.height).contains(&y));
+        assert!(!filled(&ring, x, y));
+        // A ring that lies behind the eye altogether gives nothing to fill.
+        let behind: Vec<[f64; 3]> = outer.iter().map(|[x, y, z]| [x - 10.0, *y, *z]).collect();
+        assert!(screen_ring(walking, &behind, size).is_empty());
+        assert!(screen_ring(walking, &[], size).is_empty());
+
+        // Cleared by hand.
+        assert_eq!(
+            send(&mut studio, ApiCommand::ClearDrawingPreview),
+            json!({"ok": true, "cleared": true})
+        );
+        assert_eq!(status(&mut studio)["preview_shown"], false);
+
+        // Cleared by everything the cut was made from.
+        type Change = Box<dyn Fn(&mut Studio)>;
+        let changes: Vec<(&str, Change)> = vec![
+            (
+                "the section box moved",
+                Box::new(|studio| {
+                    let _ = studio.update(Message::SectionMax(2, 40.0));
+                }),
+            ),
+            (
+                "the section box switched off",
+                Box::new(|studio| {
+                    let _ = studio.update(Message::SetSectionEnabled(false));
+                }),
+            ),
+            (
+                "the layer hidden",
+                Box::new(|studio| {
+                    let _ = studio.update(Message::SetVisible(0, false));
+                }),
+            ),
+            (
+                "a class hidden",
+                Box::new(|studio| {
+                    let _ = studio.update(Message::FilterClass(6, false));
+                }),
+            ),
+            (
+                "the layer moved",
+                Box::new(|studio| {
+                    studio.translate_x = "0.5".into();
+                    let _ = studio.update(Message::ApplyTranslation);
+                }),
+            ),
+            (
+                "points deleted",
+                Box::new(|studio| {
+                    let total = studio.clouds[0].cloud.total_points;
+                    studio.clouds[0].deleted = Some(Arc::new(DeletionMask::new(total).unwrap()));
+                    let _ = studio.update(Message::Modifiers(iced::keyboard::Modifiers::default()));
+                }),
+            ),
+            (
+                "another view chosen",
+                Box::new(|studio| {
+                    let _ =
+                        studio.update(Message::Drawing(DrawingAction::View(DrawingView::Front)));
+                }),
+            ),
+            (
+                "another slab thickness typed",
+                Box::new(|studio| {
+                    let _ =
+                        studio.update(Message::Drawing(DrawingAction::Thickness("0.05".into())));
+                }),
+            ),
+        ];
+        for (what, change) in changes {
+            let directory = tempfile::tempdir().unwrap();
+            let (mut studio, _) = studio_with_room(directory.path());
+            set_plan_box(&mut studio);
+            assert_eq!(preview(&mut studio)["preview_shown"], true, "{what}");
+            change(&mut studio);
+            assert!(studio.drawing.overlay().is_none(), "{what}");
+            assert_eq!(status(&mut studio)["preview_shown"], false, "{what}");
+        }
+
+        // What changes the file but not the cut leaves the preview.
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, _) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        assert_eq!(preview(&mut studio)["preview_shown"], true);
+        // A point limit that is being typed is one of those, also while it
+        // holds no number or one the core would refuse.
+        for action in [
+            DrawingAction::Units(DrawingUnits::Metres),
+            DrawingAction::Origin(DrawingOrigin::BoxCorner),
+            DrawingAction::Color(PointColor::Rgb),
+            DrawingAction::Fill(false),
+            DrawingAction::MaxPoints(String::new()),
+            DrawingAction::MaxPoints("many".into()),
+            DrawingAction::MaxPoints("0".into()),
+            DrawingAction::MaxPoints("9999999".into()),
+            DrawingAction::MaxPoints("9000".into()),
+        ] {
+            let what = format!("{action:?}");
+            let _ = studio.update(Message::Drawing(action));
+            assert!(studio.drawing.overlay().is_some(), "{what}");
+        }
+
+        // A preview that arrives for a scene that has changed is not shown,
+        // and the job that makes it is told to stop.
+        let accepted = send(
+            &mut studio,
+            ApiCommand::PreviewDrawing {
+                options: DrawingOptions::default(),
+            },
+        );
+        let id = accepted["job_id"].as_str().unwrap().to_owned();
+        // A preview reads and traces, and it is not stopped by a point limit
+        // that is typed while it is made.
+        let detail = studio.progress_lines().remove(0).detail;
+        assert!(detail.starts_with("Step 1 of 2"), "{detail}");
+        let _ = studio.update(Message::Drawing(DrawingAction::MaxPoints(String::new())));
+        assert!(!studio.drawing.job.as_ref().unwrap().cancelling());
+        let _ = studio.update(Message::SectionMax(0, 60.0));
+        let running = studio.drawing.job.as_ref().unwrap();
+        assert!(running.cancelling());
+        let (serial, input) = (running.serial, Arc::clone(&running.input));
+        let late = DrawingEnd::of(run(&input, &mut |_| Ok(())));
+        assert!(matches!(late, DrawingEnd::Preview(_)));
+        let _ = studio.update(Message::Drawing(DrawingAction::Finished(serial, late)));
+        assert!(studio.drawing.overlay().is_none());
+        assert_eq!(job(&mut studio, &id)["state"], "failed");
+    }
+
+    #[test]
+    fn cancelled_export_leaves_the_existing_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, _) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        let destination = directory.path().join("kept.dwg");
+        std::fs::write(&destination, "earlier drawing").unwrap();
+        let accepted = send(
+            &mut studio,
+            ApiCommand::ExportDrawing {
+                path: destination.clone(),
+                options: DrawingOptions::default(),
+            },
+        );
+        let id = accepted["job_id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            send(&mut studio, ApiCommand::CancelDrawing),
+            json!({"ok": true, "cancel_requested": true})
+        );
+        assert_eq!(studio.status, "Cancelling the section drawing…");
+        let line = &studio.progress_lines()[0];
+        assert_eq!(line.title, "Cancelling…");
+        assert!(line.cancel.is_none());
+        assert_eq!(status(&mut studio)["job"]["cancel_requested"], true);
+
+        finish(&mut studio);
+        let cancelled = job(&mut studio, &id);
+        assert_eq!(
+            cancelled,
+            json!({"state": "cancelled", "operation": "export_drawing"})
+        );
+        assert_eq!(
+            studio.status,
+            "Section drawing cancelled; an existing file is left as it was"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "earlier drawing"
+        );
+        // The room, the earlier drawing and nothing else.
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+        assert!(!studio.drawing.is_running());
+        assert!(matches!(studio.drawing.last, Some(Last::Cancelled { .. })));
+        let _ = studio.view();
+
+        // Leaving the application asks a running job to stop as well.
+        let _ = send(
+            &mut studio,
+            ApiCommand::PreviewDrawing {
+                options: DrawingOptions::default(),
+            },
+        );
+        studio.stop_background_work();
+        assert!(studio.drawing.job.as_ref().unwrap().cancelling());
+
+        // An answer of a job that is no longer the running one is ignored.
+        let serial = studio.drawing.job.as_ref().unwrap().serial;
+        let _ = studio.update(Message::Drawing(DrawingAction::Finished(
+            serial + 7,
+            DrawingEnd::Cancelled,
+        )));
+        assert!(studio.drawing.is_running());
+    }
+
+    #[test]
+    fn ribbon_button_and_file_view_open_the_tool_with_the_section_box() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, _) = studio_with_room(directory.path());
+        assert!(studio.drawing_properties().is_none());
+        // Without the section box neither the button nor the entry is
+        // available.
+        assert!(!studio.drawing_button_enabled());
+        assert!(!studio.drawing_entry_enabled());
+
+        // The File view entry closes the view; without a box it says why
+        // nothing is drawn.
+        let _ = studio.update(Message::ToggleFile);
+        let _ = studio.update(Message::FileAction(FileAction::ExportDrawing));
+        assert!(!studio.file_open);
+        assert!(!studio.drawing.busy());
+        assert_eq!(
+            studio.status,
+            "Switch on the section box before making a drawing"
+        );
+
+        set_plan_box(&mut studio);
+        assert!(studio.drawing_button_enabled());
+        assert!(studio.drawing_entry_enabled());
+        let _ = studio.update(Message::Drawing(DrawingAction::Toggle));
+        assert!(studio.drawing.open);
+        assert!(studio.drawing_properties().is_some());
+        let _ = studio.view();
+
+        // A number that cannot be read stops the export before the dialog.
+        let _ = studio.update(Message::Drawing(DrawingAction::Thickness("x".into())));
+        let _ = studio.update(Message::Drawing(DrawingAction::Export));
+        assert!(!studio.drawing.busy());
+        assert_eq!(studio.status, "Slab thickness must be a number of metres");
+        let _ = studio.update(Message::Drawing(DrawingAction::Thickness("0.1".into())));
+
+        let _ = studio.update(Message::Drawing(DrawingAction::Export));
+        assert!(studio.drawing.dialog_pending);
+        assert_eq!(
+            studio.status,
+            "Choose where to save the drawing as DXF or DWG…"
+        );
+        // While the dialog is open nothing else starts, and the File view
+        // entry waits for it.
+        assert!(!studio.drawing_entry_enabled());
+        let _ = studio.update(Message::Drawing(DrawingAction::Preview));
+        assert_eq!(studio.status, BUSY);
+        assert!(!studio.drawing.is_running());
+
+        let _ = studio.update(Message::Drawing(DrawingAction::PathChosen(None)));
+        assert!(!studio.drawing.busy());
+        assert!(studio.drawing_entry_enabled());
+        assert_eq!(studio.status, "Section drawing cancelled");
+
+        for (name, problem) in [("plan.pdf", NO_FORMAT), ("plan", NO_FORMAT)] {
+            studio.drawing.dialog_pending = true;
+            let _ = studio.update(Message::Drawing(DrawingAction::PathChosen(Some(
+                directory.path().join(name),
+            ))));
+            assert!(!studio.drawing.busy(), "{name}");
+            assert_eq!(studio.status, problem, "{name}");
+        }
+
+        studio.drawing.dialog_pending = true;
+        let destination = directory.path().join("room-plan.DXF");
+        let _ = studio.update(Message::Drawing(DrawingAction::PathChosen(Some(
+            destination.clone(),
+        ))));
+        assert!(studio.drawing.is_running());
+        assert!(!studio.drawing_entry_enabled());
+        assert!(studio.drawing_button_enabled());
+        assert_eq!(studio.status, "Section drawing: reading the slab…");
+        // While the job runs, the block shows its stage and a cancel button.
+        let _ = studio.view();
+        finish(&mut studio);
+        assert!(destination.is_file());
+        assert!(matches!(studio.drawing.last, Some(Last::Exported { .. })));
+        let _ = studio.view();
+
+        // With the 3D BAG panel in the place of Properties, the button
+        // brings the block back; it does not close what was out of sight.
+        studio.bag_panel = true;
+        let _ = studio.update(Message::Drawing(DrawingAction::Toggle));
+        assert!(studio.drawing.open && !studio.bag_panel);
+
+        // The button closes the block again, also with the box off; after
+        // that it needs the box once more.
+        let _ = studio.update(Message::SetSectionEnabled(false));
+        assert!(studio.drawing_button_enabled());
+        assert!(!studio.drawing_entry_enabled());
+        let _ = studio.view();
+        let _ = studio.update(Message::Drawing(DrawingAction::Toggle));
+        assert!(!studio.drawing.open);
+        assert!(studio.drawing_properties().is_none());
+        assert!(!studio.drawing_button_enabled());
+    }
+
+    #[test]
+    fn block_is_translated() {
+        let _language = TestLanguage::hold(Language::Table(0));
+        assert_eq!(tr("Section drawing"), "Snedetekening");
+        assert_eq!(tr(view_text(DrawingView::Plan)), "Plattegrond");
+        assert_eq!(
+            Choice {
+                value: DrawingUnits::Millimetres,
+                text: units_text(DrawingUnits::Millimetres),
+            }
+            .to_string(),
+            "Millimeters"
+        );
+        assert_eq!(
+            tr_args(
+                "{regions} · {dropped} dropped",
+                &[("regions", &3), ("dropped", &2)]
+            ),
+            "3 · 2 weggelaten"
+        );
+        assert_eq!(tr("Slab drawn"), "Getekende plak");
+        assert_eq!(
+            tr_args("{depth} mm (box is thinner)", &[("depth", &50)]),
+            "50 mm (box is dunner)"
+        );
+    }
+
+    #[test]
+    fn command_line_draws_a_box_of_a_scan_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let (text, in_slab) = room_xyz();
+        let source = directory.path().join("room.xyz");
+        std::fs::write(&source, text).unwrap();
+        // The room, the box of its plan, an output in the folder of the test
+        // and the options that follow.
+        let arguments = |output: &str, options: &[&str]| -> Vec<OsString> {
+            [
+                source.clone().into_os_string(),
+                "-0.5,-0.5,0.5,4.5,3.5,1.1".into(),
+                directory.path().join(output).into_os_string(),
+            ]
+            .into_iter()
+            .chain(options.iter().map(OsString::from))
+            .collect()
+        };
+
+        let line = command_line(&arguments("plan.dxf", &[])).unwrap();
+        assert!(
+            line.starts_with(&format!(
+                "Drawing written as DXF, view plan: {in_slab} points in the slab, "
+            )),
+            "{line}"
+        );
+        assert!(
+            line.contains("; 1 region, grid 20 mm, main direction 0.00°; "),
+            "{line}"
+        );
+        assert!(line.ends_with(&format!(
+            "-> {}",
+            directory.path().join("plan.dxf").display()
+        )));
+        let (kinds, _) = dxf_entities(&directory.path().join("plan.dxf"));
+        assert_eq!(kinds["HATCH"], 1);
+        let millimetres = pointcloud_core::open(directory.path().join("plan.dxf"), 10).unwrap();
+
+        // Metres, without a fill, as DWG.
+        let line =
+            command_line(&arguments("plan.dwg", &["--fill", "off", "--units", "m"])).unwrap();
+        assert!(
+            line.starts_with("Drawing written as DWG, view plan: "),
+            "{line}"
+        );
+        assert!(!line.contains("region"), "{line}");
+        let line = command_line(&arguments("metres.dxf", &["--units", "m"])).unwrap();
+        assert!(line.contains("1 region"), "{line}");
+        let in_metres = pointcloud_core::open(directory.path().join("metres.dxf"), 10).unwrap();
+        assert_eq!(in_metres.total_points, millimetres.total_points);
+        assert!((millimetres.bounds.max[0] - in_metres.bounds.max[0] * 1000.0).abs() < 1e-3);
+
+        // A vertical section looks at the front of the box: the whole depth
+        // of the room in a slab of 4 m, points only unless a fill is asked.
+        let line = command_line(&arguments(
+            "front.dxf",
+            &["--thickness", "4", "--view", "front"],
+        ))
+        .unwrap();
+        assert!(
+            line.starts_with("Drawing written as DXF, view front: "),
+            "{line}"
+        );
+        assert!(!line.contains("region"), "{line}");
+        let (kinds, _) = dxf_entities(&directory.path().join("front.dxf"));
+        assert!(!kinds.contains_key("HATCH"));
+        let line = command_line(&arguments(
+            "front-filled.dxf",
+            &["--view", "front", "--fill", "on", "--thickness", "4"],
+        ))
+        .unwrap();
+        assert!(line.contains("region"), "{line}");
+
+        let refused =
+            |options: &[&str]| command_line(&arguments("refused.dxf", options)).unwrap_err();
+        assert_eq!(
+            command_line(&arguments("plan.pdf", &[])).unwrap_err(),
+            (2, "Supported drawing extensions: .dxf, .dwg".to_owned())
+        );
+        assert_eq!(refused(&["--view"]), (2, String::new()));
+        assert_eq!(refused(&["--scale", "2"]), (2, String::new()));
+        assert_eq!(
+            refused(&["--view", "top"]),
+            (
+                2,
+                "--view must be plan, front, back, left or right".to_owned()
+            )
+        );
+        assert_eq!(
+            refused(&["--units", "cm"]),
+            (2, "--units must be mm or m".to_owned())
+        );
+        assert_eq!(
+            refused(&["--fill", "yes"]),
+            (2, "--fill must be on or off".to_owned())
+        );
+        assert_eq!(
+            refused(&["--thickness", "9"]),
+            (2, "Slab thickness must be between 0.005 and 5 m".to_owned())
+        );
+        assert_eq!(command_line(&[]).unwrap_err(), (2, String::new()));
+        for limits in ["0,0,0,1,1", "0,0,0,1,1,x", "0,0,0,1,1,1,1"] {
+            let mut wrong = arguments("refused.dxf", &[]);
+            wrong[1] = limits.into();
+            assert_eq!(
+                command_line(&wrong).unwrap_err(),
+                (
+                    2,
+                    "Section limits must be six comma-separated numbers".to_owned()
+                ),
+                "{limits}"
+            );
+        }
+        assert!(!directory.path().join("refused.dxf").exists());
+
+        // A box that is no box and an output folder that does not exist are
+        // refused before the input is opened: here there is no input at all.
+        let unopened = |limits: &str, output: PathBuf| {
+            command_line(&[
+                directory.path().join("no-such-scan.e57").into_os_string(),
+                limits.into(),
+                output.into_os_string(),
+            ])
+            .unwrap_err()
+        };
+        let not_a_box = (
+            2,
+            "Section limits must be finite numbers that run from the minimum to the maximum"
+                .to_owned(),
+        );
+        for limits in [
+            "4.5,3.5,1.1,-0.5,-0.5,0.5",
+            "0,0,nan,1,1,1",
+            "0,0,0,1,inf,1",
+        ] {
+            assert_eq!(
+                unopened(limits, directory.path().join("refused.dxf")),
+                not_a_box,
+                "{limits}"
+            );
+        }
+        assert_eq!(
+            unopened("0,0,0,0,1,1", directory.path().join("refused.dxf")),
+            (2, "The section box has no size in this view".to_owned())
+        );
+        assert_eq!(
+            unopened("0,0,0,1,1,1", directory.path().join("missing/plan.dxf")),
+            (2, "The folder of the output path does not exist".to_owned())
+        );
+        // A bare file name stands in the current folder, which exists: the
+        // refusal is that of the input.
+        let (code, line) = unopened("0,0,0,1,1,1", PathBuf::from("bare-name.dxf"));
+        assert_eq!(code, 1, "{line}");
+        assert!(line.starts_with("Drawing failed: "), "{line}");
+        assert!(!Path::new("bare-name.dxf").exists());
+
+        // A box that is thinner than the slab says so in the line.
+        let mut thin = arguments("thin.dxf", &[]);
+        thin[1] = "-0.5,-0.5,1.05,4.5,3.5,1.1".into();
+        let line = command_line(&thin).unwrap();
+        assert!(
+            line.contains(&format!(
+                "{} points in the slab of 50 mm (the box is thinner than the 100 mm asked)",
+                in_slab / 2
+            )),
+            "{line}"
+        );
+
+        // A box beside the scan holds nothing, and nothing is written.
+        let mut beside = arguments("empty.dxf", &[]);
+        beside[1] = "100,100,0,101,101,1".into();
+        assert_eq!(
+            command_line(&beside).unwrap_err(),
+            (1, "Drawing failed: the slab holds no points".to_owned())
+        );
+        assert!(!directory.path().join("empty.dxf").exists());
+        // The scan itself is never the output.
+        let scan = directory.path().join("plan.dxf");
+        let over_itself = [
+            scan.clone().into_os_string(),
+            "0,0,0,1,1,1".into(),
+            scan.into_os_string(),
+        ];
+        assert_eq!(
+            command_line(&over_itself).unwrap_err(),
+            (
+                2,
+                "Choose an output path different from the input".to_owned()
+            )
+        );
+    }
+}

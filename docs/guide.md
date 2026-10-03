@@ -17,6 +17,7 @@ The interface is in English or Dutch. The guide uses the English names.
 - [Measuring distances and areas](#measuring-distances-and-areas)
 - [Saved views, annotations and BCF](#saved-views-annotations-and-bcf)
 - [Exporting and merging](#exporting-and-merging)
+- [Section drawings](#section-drawings)
 - [Meshing](#meshing)
 - [3D BAG buildings](#3d-bag-buildings)
 - [Index and level of detail](#index-and-level-of-detail)
@@ -29,10 +30,10 @@ The interface is in English or Dutch. The guide uses the English names.
 ## The window
 
 - The **top strip** starts with the application logo, the **File** button and the **Home** tab. At its right end are five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo delete and Redo delete), and the **Settings** button. Actions that are not available are shown muted.
-- The **ribbon** holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE and INDEX. At the default window width of 1440 pixels the whole ribbon is visible. In a narrower window the groups scroll sideways, with the wheel, the scrollbar or the arrow buttons that appear at both ends.
+- The **ribbon** holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE and INDEX. The ribbon is wider than the default window of 1440 pixels. The groups that do not fit scroll sideways, with the wheel, the scrollbar or the arrow buttons that appear at both ends; in a window wide enough for all groups the arrows go away.
 - The **project panel** at the left lists the open clouds in name order, one row each with a visibility switch, the point count and a button to close the cloud. A second line appears only while a cloud is loading or indexing, or when it has selected or deleted points. Below the clouds, the classes that occur in them are listed.
 - The **scene** in the middle is the 3D view, with the view cube in a corner.
-- The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the saved views and the annotations of the active view, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the strength of eye-dome lighting while that is on, the 3D surface settings, the size of the mesh of the active scan with its open edges and connected parts, and the progress of mesh, merge and scale jobs with their cancel buttons.
+- The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the saved views and the annotations of the active view, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the Section drawing block while that tool is open, the strength of eye-dome lighting while that is on, the 3D surface settings, the size of the mesh of the active scan with its open edges and connected parts, and the progress of mesh, merge and scale jobs with their cancel buttons.
 - The **status bar** at the bottom says what is going on, how many files and points are open and how many points are selected, and ends with the version.
 - The **File view** opens with the File button and covers the ribbon and the scene. Its menu has the import entries, **3D BAG buildings…**, the exports and the merge, above the pages Workspace, Extensions and About and the entries **Settings…**, **Return to model** and **Exit**. The Workspace page lists the open scans (click one to make it the active scan, the same as a click on its row in the project panel) and has the export format and the "every Nth point" setting. Escape or Return to model closes the File view.
 
@@ -81,7 +82,7 @@ Any source of that size that is read in full (PLY, E57, PCD, PTX and the text fo
 
 ### Progress
 
-A strip above the scene has a line for every import that reads its source and for every index being built: the name of the scan, the step it is in, the points done of the total, a bar with the percentage, the time left at the pace so far and a button to cancel. An import that also builds an index reports two steps, reading and building. Scans opened together share a line that says how many are done, with one button that cancels the rest.
+A strip above the scene has a line for every import that reads its source, for every index being built and for a section drawing that is being made: the name of the scan, the step it is in, the points done of the total, a bar with the percentage, the time left at the pace so far and a button to cancel. An import that also builds an index reports two steps, reading and building. Scans opened together share a line that says how many are done, with one button that cancels the rest.
 
 The percentage needs a known total: an E57 file states its record count, and an index build knows the points of its cloud. Other formats show the points read so far without a bar. Each row of the project panel shows the percentage of its own scan with a thin bar underneath. The status bar has a **Cancel import** button while an import runs.
 
@@ -151,7 +152,7 @@ Walking starts from the current orbit view, or from inside a station. Walking ou
 
 The limits are coordinates in the model. They stay where they are when another layer is shown or hidden.
 
-The box also limits box selection, point picking and both meshers. **Section box…** among the exports of the File view writes every source point of the active scan inside the box; see [Exporting and merging](#exporting-and-merging).
+The box also limits box selection, point picking and both meshers. **Section box…** among the exports of the File view writes every source point of the active scan inside the box; see [Exporting and merging](#exporting-and-merging). **Section drawing** makes a 2D drawing of what the box cuts; see [Section drawings](#section-drawings).
 
 The box is aligned to the X, Y and Z axes of the model and cannot be rotated. A vertical cut through a building that stands at an angle to those axes is therefore a cut at that angle, not one along its walls.
 
@@ -247,11 +248,12 @@ The exports are in the File view under **EXPORT**. Each asks where to save and t
 | **Selected points…** | The selected points of the active scan |
 | **Without selected points…** | The active scan without the selected and the deleted points |
 | **Section box…** | The points of the active scan inside the section box; available while the box is on |
+| **Section drawing…** | What the section box cuts as a 2D drawing in DXF or DWG, from every visible scan; available while the box is on. See [Section drawings](#section-drawings) |
 | **Every Nth point…** | One point of the active scan in 2, 5, 10, 20, 50 or 100, as set under **EVERY NTH POINT** on the Workspace page |
 | **Surface mesh…** | The mesh of the active scan as OBJ, PLY or STL; see [Saving a mesh](#saving-a-mesh) |
 | **Views as BCF…** | The saved views of the active scan; see [BCF export](#bcf-export) |
 
-Every export reads the source again from start to end, so points that are not on screen are written too. The file appears under its name only when it is complete.
+Every export reads the source again from start to end, so points that are not on screen are written too. The file appears under its name only when it is complete. A section drawing has its own formats and reads only the slab it draws.
 
 What an export keeps depends on the formats:
 
@@ -263,6 +265,129 @@ What an export keeps depends on the formats:
 **Merge visible LAS/LAZ scans…** joins the visible LAS and LAZ layers into one `.las` or `.laz` file in the background, with their deletions and their moves and scales applied and the original point attributes kept. The Workspace page shows the progress and a **Cancel merge** button; a cancelled merge leaves an existing file as it was. Sources with a different point layout, coordinate grid or coordinate system are refused before anything is written.
 
 The command line does the same without a window: `--export`, `--section` and `--merge`; see the [README](../README.md#command-line).
+
+## Section drawings
+
+**Section drawing** in the SECTION BOX group makes a 2D drawing at scale 1:1 of what the section box cuts, and saves it as DXF or DWG for a drawing program. The button needs the section box to be on. It opens the **Section drawing** block at the top of Properties, and closes it again. **Section drawing…** among the exports of the File view asks for the file name at once, with the choices the block has.
+
+### What is drawn
+
+The cut plane is one face of the section box. The drawing holds the slab behind that face: everything between the face and a parallel plane a slab thickness deeper into the box.
+
+| View | Cut plane | The viewer looks | Across and up in the drawing |
+| --- | --- | --- | --- |
+| **Plan** | The top face of the box | Down | X to the right, Y up |
+| **Section, front** | The face at Y min | Along +Y | X to the right, Z up |
+| **Section, back** | The face at Y max | Along -Y | X to the left, Z up |
+| **Section, left** | The face at X min | Along +X | Y to the left, Z up |
+| **Section, right** | The face at X max | Along -X | Y to the right, Z up |
+
+The drawing holds:
+
+- **The points of the slab**, thinned to one point per 5 mm on the cut plane. They come from every visible scan, not only the active one, each where it stands in the scene after Move and Scale, without its deleted points and without the classes that are hidden. All source points in the slab take part, not only those on screen. A scan with an index is read only where the index touches the slab; a scan without one is read from start to end for every preview and every export. For the filled cut and for a preview, a box that holds stray points far from the building, so that the scans in it span more than the grid holds at the grid size asked, is read a second and at most a third time, to lay the grid over the surfaces alone. A scan that is still loading cannot be drawn: the status bar names it, and the drawing starts once it is loaded or hidden.
+- **The filled cut**, when **Filled cut** is on: the walls, columns and floors that the slab goes through, as filled regions with a closed outline. See [The filled cut and its limits](#the-filled-cut-and-its-limits).
+- **The frame**: the rectangle of the section box as the view sees it.
+- **One line of text** under the frame: the view, where the cut plane lies, the slab thickness, the units and the model position of drawing zero.
+
+### A plan, step by step
+
+1. Open the scans of the storey and hide the layers that should stay out of the drawing.
+2. Switch on **Section box**. Put its top face at the height of the cut: under **Section box** in Properties, type the height as Z **Max** and choose **Apply XYZ limits**. With a top face at 1.10 m above a floor that lies at zero and a slab of 0.10 m, the plan shows what lies between 1.00 and 1.10 m: above most furniture, through the doors and under the sills of most windows. Pull the four sides in to the part of the building that is wanted. Where the bottom face lies does not matter, as long as the box is deeper than the slab.
+3. Choose **Section drawing**. Leave **View** on **Plan** and **Slab thickness (m)** on 0.10.
+4. Choose **Preview**. The filled cut appears over the points on the cut plane; **Top** in the VIEW group looks straight at it. Where a cupboard or a person shows up as a region, select those points with **Box select**, **Delete** them and preview again. **Clear preview** takes the preview away.
+5. Choose **Export drawing…** and give a file name that ends in `.dxf` or `.dwg`. The strip above the scene shows the job with a **Cancel** button; a cancelled job leaves an existing file as it was. When the job is done, the status bar and the block say what was drawn.
+
+### A vertical section, step by step
+
+1. Switch on **Section box** and put one of its four sides where the cut should be. For a section that looks along +Y, that is the face at Y min: type the position as Y **Min** and choose **Apply XYZ limits**. Set the other faces around the part to draw, the top and bottom faces above the roof and under the floor.
+2. Choose **Section drawing** and the **View** that stands at that face: **Section, front** for Y min, **back** for Y max, **left** for X min, **right** for X max.
+3. Set **Slab thickness (m)**. With 0.10 the drawing shows only what the cut plane goes through. A thicker slab, up to 5 m, also shows what lies behind the cut, as an elevation does. The slab is never deeper than the box: in a box that is shallower than the thickness asked, the slab is the whole box, and the result says so.
+4. A vertical section starts with **Filled cut** off: points only. Switch it on to get the floors and walls that are cut as filled regions.
+5. Preview and export as for a plan. A front or side view of the VIEW group looks at the cut plane.
+
+The section box is aligned to the X, Y and Z axes of the model and cannot be rotated. A vertical section of a building that stands at an angle to those axes is therefore a skewed cut through its walls, not one along them.
+
+### The choices
+
+| Choice | What it does | Starts at |
+| --- | --- | --- |
+| **View** | The face of the box that is drawn. Choosing another view sets **Filled cut** on for a plan and off for a vertical section | Plan |
+| **Slab thickness (m)** | Depth of the slab behind the cut plane, from 0.005 to 5 m; a comma or a point is read as the decimal mark | 0.10 |
+| **Units** | **Millimetres** or **Metres**. The coordinates of the scans are taken as metres | Millimetres |
+| **Origin** | **Model coordinates**: a plan keeps model X and Y, and a vertical section measures across from the left edge of the box as seen and keeps model Z, so levels read as heights. **Corner of the box**: the lower left corner of the view is zero | Model coordinates |
+| **Filled cut** | Draws the cut material as filled regions with outlines | On for a plan |
+| **Square to main directions** | Turns an edge of the filled cut onto the main direction of the building, or square to it, when that moves neither end of the edge more than 30 mm | On |
+| **Largest wall (m)** | Two scanned faces at most this far apart are filled as one wall, above 0 and at most 2 m. Gaps up to this width are closed as well | 0.50 |
+| **Grid size (m)** | The cell of the grid the filled cut is traced from, at least 0.005 m | 0.02 |
+| **Point colour** | **Layer colour**, or **Scan colour (RGB)**: each point with the colour the scan stores for it | Layer colour |
+| **Point layers** | **Per scan**: with several scans in the drawing, each gets a layer of its own. **Per class**: a layer per class | Per scan |
+| **Point limit** | The most points in the drawing, at most 400,000. When thinning to 5 mm leaves more, the spacing doubles (to 10 mm, 20 mm and so on) until they fit | 150,000 |
+| **File version** | R2004, R2010, R2013 or R2018, for DXF and DWG alike | R2013 |
+
+The format is chosen by the file name: `.dxf` or `.dwg`. The choices hold for the session and are not kept between sessions.
+
+With national grid coordinates, a drawing in millimetres has numbers of hundreds of millions, and some drawing programs draw less precisely that far from zero. **Corner of the box** keeps the numbers small; the line of text in the drawing gives the model position of drawing zero.
+
+### Layers of the drawing
+
+| Layer | What is on it |
+| --- | --- |
+| `OPS-POINTS` | The points. With several scans and **Per scan**: `OPS-POINTS-` followed by the file name of the scan without its extension, each in a colour of its own; the scans inside one multi-scan file share a layer, two scans with the same file name get `~2`, `~3` after the name, and a character a layer name cannot hold, such as `,` `;` or `=`, becomes `_`. With **Per class**: `OPS-POINTS-CLASS-02`, `-06` and so on, and `OPS-POINTS` for points without a class |
+| `OPS-CUT-FILL` | The filled regions, as solid fills in grey |
+| `OPS-CUT-OUTLINE` | A closed polyline around every region and around every hole in it |
+| `OPS-FRAME` | The rectangle of the section box as the view sees it |
+| `OPS-INFO` | The line of text |
+
+A scan with no point in the slab gets no layer. Fills are written first, so that a drawing program draws them under the points and the outlines.
+
+### What the result says
+
+When a job is done, the status bar says what was drawn, and the block keeps it under **Last drawing**:
+
+- **Slab drawn**, only when the section box is shallower than the slab thickness asked: the depth that was drawn, which is the depth of the box. The status bar names both depths, and the line of text in the drawing gives the depth that was drawn.
+- **Points in slab**: the source points that lie in the slab.
+- **Points drawn** and **Point spacing**: the points in the drawing and the spacing they were thinned to. "(raised)" means the point limit made the spacing larger than 5 mm; the status bar names both spacings.
+- **Regions**: the filled regions, and how many small ones were dropped because they are smaller than a wall of 50 mm by 0.30 m.
+- **Grid cell**: the cell the filled cut was traced with. "(coarser)" means it is larger than the grid size asked for, because the points are too sparse for that cell or the surfaces in the slab span more than the grid holds.
+- **Main direction**: the direction of the walls, in degrees from the X axis, between -45 and 45. A vertical section always has zero.
+- The size of the file.
+
+A slab without points gives no drawing: the job fails with "the slab holds no points" and nothing is written.
+
+### The filled cut and its limits
+
+A scanner records surfaces, not what is behind them. A wall that the slab cuts is two rows of points, one for each face that was scanned. The filled cut closes the space between two such rows when they are at most the **Largest wall** apart, traces the outline of what results, and moves every edge onto the points it came from. Openings wider than that stay open, so doors and windows do.
+
+Measured on generated rooms with a scanner noise of 2 mm, not on scans of real buildings: a face that was scanned on both sides of the wall is drawn within 10 mm of its points, and the jambs of doors and windows too. What the filled cut does not do:
+
+- **A wall scanned from one side** has no thickness that can be measured. It is drawn as a strip of one grid cell (20 mm) on the points, not as a wall. The outer walls of an interior scan are of this kind. Such a face is drawn from a length of 0.30 m.
+- **Gaps up to the largest wall thickness are closed**, in practice up to one or two cells more (0.52 to 0.54 m at the start values). A niche, a shaft or an opening narrower than about half a metre is filled, and an object of 0.15 m or more that stands that close to a wall becomes part of it. A closed door closes its opening.
+- **Furniture and people stay.** Objects under 0.15 m across, such as chair legs and cables, are removed, regions smaller than 50 mm by 0.30 m are dropped and counted, and holes under 0.05 m² are filled. Anything larger in the slab is drawn as if it were a wall, unless its points are deleted first.
+- **One main direction.** The gaps are closed along the main direction of the building and square to it. Walls at another angle are drawn as measured, but where a wing at another angle joins the main building, its inside corners are filled over up to about 0.5 m. A part that stands apart from everything else by more than the closing distance is traced in its own direction.
+- **Squaring** turns an edge only when neither end moves more than 30 mm, so a wall of 5 m that is 2 degrees off stays as measured. Switch it off to keep every edge as measured.
+- **Round columns and curved walls** are drawn as straight segments; with squaring on, corners can lie up to 50 mm outside a column of 0.30 m.
+- **A shallow bump or recess**, under 30 mm deep, that returns to the face is not drawn.
+- **Sparse points.** A cell counts from 3 points. For a sparse cloud the cells are doubled, at most twice (to 80 mm), and the accuracy falls to one cell; below 3 points per 80 mm cell nothing is drawn.
+- **Large extents.** The grid has at most 16 million cells over the part of the cut plane where the scans have points: 80 by 80 m at 20 mm. A larger extent gets larger cells. Tracing a grid of that size takes about half a gigabyte of memory and a second or two.
+- **A plan whose slab holds the floor** fills the floor: keep the slab above it.
+- **In a vertical section** floors are taken as level, and the section box follows the model axes, as said above.
+
+### Other limits
+
+- **Points.** A drawing holds 150,000 points at the start and at most 400,000. While the file is written, every point takes about 2.8 kB of memory: about 0.4 GB at 150,000 points and 1.1 GB at 400,000. A dense underlay of millions of points is not what this drawing is for; export the section as a point cloud instead.
+- **Opening the drawing here again.** Open Pointcloud Studio opens the POINT entities of an ASCII DXF as a point cloud and skips fills, polylines and text. It does not apply the units of the drawing, so a drawing in millimetres comes back a thousand times larger than the scan. DWG files are not opened.
+- **The preview** is drawn over the points without regard to depth, so it reads right when looking straight at the cut plane and only roughly from the side. It shows the filled cut whether **Filled cut** is on or off. It goes away when what it was made from changes: the section box, the visible scans, a Move or Scale, deleted points, the classes shown, or the view, slab thickness, squaring, largest wall or grid size of the block. The other choices of the block, the point limit among them, leave it in place. It is not kept with a saved view.
+- **Checked with** the reader of the codec that writes the files and with this application's own DXF reader, not yet with a range of drawing programs. If a program refuses a DWG file, try DXF or another file version.
+- One drawing or preview runs at a time, and Undo does not apply to it.
+
+Without a window, `--drawing` draws a box of one scan file:
+
+```bash
+open-pointcloud-studio --drawing scan.laz 0,0,0,20,15,1.1 plan.dxf
+open-pointcloud-studio --drawing scan.laz 0,6,-1,20,15,8 section.dwg --view front --thickness 0.1 --units m --fill on
+```
+
+The six numbers are the section box: X, Y and Z min, then X, Y and Z max. `--view` is `plan`, `front`, `back`, `left` or `right`, `--thickness` the slab in metres, `--units` `mm` or `m`, and `--fill` `on` or `off`; without them the drawing is a plan with a slab of 0.10 m in millimetres, filled for a plan and not for a vertical section. Limits that do not run from the minimum to the maximum and an output folder that does not exist are refused before the scan is read. The file is read through its index when `--index` or the window built one, and from start to end otherwise.
 
 ## Meshing
 

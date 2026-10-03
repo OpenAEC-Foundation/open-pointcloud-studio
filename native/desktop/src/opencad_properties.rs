@@ -1,6 +1,7 @@
 // Adapted from OpenCADStudio/src/ui/properties.rs, commit 1fec34d.
 // Copyright OpenCADStudio contributors. GPL-3.0.
-// Changes: read-only point-cloud fields and iced 0.13 palette API.
+// Changes: read-only point-cloud fields, a row that holds a control and the
+// iced 0.13 palette API.
 
 use iced::widget::{container, row, text, text_input};
 use iced::{Background, Border, Element, Fill, Length, Theme};
@@ -115,6 +116,41 @@ pub fn property_input<'a>(
     .height(ROW_H)
     .align_y(iced::Alignment::Center)
     .padding([0, 5]);
+    container(row![label_col, value_col])
+        .height(ROW_H)
+        .width(Fill)
+        .style(|theme: &Theme| container::Style {
+            border: Border {
+                color: ui_theme::colors(theme).border,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+/// The two-column row with a control of the caller's choice, such as a
+/// choice list, in the place of the value.
+pub fn property_control<'a>(
+    label: &'static str,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let label = crate::i18n::tr(label);
+    let label_col = container(text(label).size(FONT_SZ).style(|theme| text::Style {
+        color: Some(ui_theme::colors(theme).muted),
+    }))
+    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel_alt))
+    .width(Length::FillPortion(5))
+    .height(ROW_H)
+    .align_y(iced::Alignment::Center)
+    .padding([0, 6]);
+    let value_col = container(control)
+        .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel))
+        .width(Length::FillPortion(6))
+        .height(ROW_H)
+        .align_y(iced::Alignment::Center)
+        .padding([0, 5]);
     container(row![label_col, value_col])
         .height(ROW_H)
         .width(Fill)

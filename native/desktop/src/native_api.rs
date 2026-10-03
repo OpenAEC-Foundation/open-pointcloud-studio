@@ -200,6 +200,19 @@ pub enum ApiCommand {
     ExportMinusSelection {
         path: PathBuf,
     },
+    ExportDrawing {
+        /// Absolute destination; its extension (`.dxf` or `.dwg`) chooses
+        /// the format.
+        path: PathBuf,
+        #[serde(flatten)]
+        options: crate::drawing::DrawingOptions,
+    },
+    PreviewDrawing {
+        #[serde(flatten)]
+        options: crate::drawing::DrawingOptions,
+    },
+    ClearDrawingPreview,
+    CancelDrawing,
     MergeVisible {
         path: PathBuf,
     },

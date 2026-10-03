@@ -83,13 +83,13 @@ command of the same name with the same arguments, and return the window's
 JSON answer as text (and as `structuredContent` from protocol version
 `2025-06-18`).
 
-Exports, selections, picks, meshes, mesh exports, merges and 3D BAG downloads
-answer at once with a `job_id`.
+Exports, section drawings and their previews, selections, picks, meshes, mesh
+exports, merges and 3D BAG downloads answer at once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
-edits, meshing, mesh export, merging, a 3D BAG download, point loading for the
-camera and view snapshots have finished; call it
+edits, meshing, mesh export, a section drawing or its preview, merging, a 3D
+BAG download, point loading for the camera and view snapshots have finished; call it
 after `open`, before `screenshot` when the camera changed, and before
 `export_bcf`. `screenshot` returns MCP image content (`type: "image"`,
 `mimeType: "image/png"`, base64 data) followed by a text part with the image
@@ -101,7 +101,7 @@ follows when that view is restored.
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `status` | — | State of the window: layers, imports and tasks, camera, viewport size, section box, selection, measurement, views, settings |
+| `status` | — | State of the window: layers, imports and tasks, camera, viewport size, section box, the Section drawing tool, selection, measurement, views, settings |
 | `job` | `id` | Reads a background job once |
 | `wait_for_job` | `id`, optional `timeout_seconds` (default 60) | Waits until the job no longer runs |
 | `wait_until_idle` | optional `timeout_seconds` (default 60) | Waits until no work is under way; reports what is still busy |
@@ -167,6 +167,10 @@ follows when that view is restored.
 | `export_section` | `path`, optional `wait_seconds` | Exports the section box; job |
 | `export_selection` | `path`, optional `wait_seconds` | Exports the selected points; job |
 | `export_minus_selection` | `path`, optional `wait_seconds` | Exports all but the selected points; job |
+| `export_drawing` | `path` (`.dxf` or `.dwg`), optional `view` (`plan`, `front`, `back`, `left` or `right`), `thickness` (0.005–5 m), `units` (`mm` or `m`), `origin` (`model` or `box`), `fill`, `square`, `grid` (at least 0.005 m), `max_wall_thickness` (above 0, at most 2 m), `color` (`layer` or `rgb`), `point_layers` (`scan` or `class`), `max_points` (1–400,000), `version` (`r2004`, `r2010`, `r2013` or `r2018`), `wait_seconds` | Draws the slab behind one face of the section box as a 2D drawing in DXF or DWG; job. Choices left out keep what the Section drawing block has |
+| `preview_drawing` | the choices of `export_drawing` without `path`, optional `wait_seconds` | Traces the filled cut of that slab and lays it over the points in the viewport; job |
+| `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
+| `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |
 | `cancel_merge` | — | Cancels the merge |
 | `bag3d` | `bbox` (`[xmin, ymin, xmax, ymax]` in RD New, at most 2 by 2 km), `lod` (`1.2`, `1.3` or `2.2`), `path` (`.obj`), optional `wait_seconds` | Downloads the 3D BAG buildings of an area and opens them as a layer; job |

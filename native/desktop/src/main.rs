@@ -15,6 +15,7 @@ mod camera_views;
 mod cli_help;
 mod cloud_centroid;
 mod cloud_transform;
+mod drawing;
 mod extensions;
 mod file_view;
 mod gpu_viewport;
@@ -726,6 +727,25 @@ fn main() -> iced::Result {
             Err(error) => {
                 eprintln!("Section export failed: {error}");
                 std::process::exit(1);
+            }
+        }
+    }
+    if first.as_deref() == Some(OsStr::new("--drawing")) {
+        let arguments: Vec<_> = args.collect();
+        match drawing::command_line(&arguments) {
+            Ok(line) => {
+                println!("{line}");
+                return Ok(());
+            }
+            Err((code, line)) => {
+                if line.is_empty() {
+                    eprintln!(
+                        "Usage: open-pointcloud-studio --drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf|.dwg [--view plan|front|back|left|right] [--thickness METRES] [--units mm|m] [--fill on|off]"
+                    );
+                } else {
+                    eprintln!("{line}");
+                }
+                std::process::exit(code);
             }
         }
     }
@@ -1638,6 +1658,7 @@ enum Message {
     ToggleBoxSelect,
     TogglePickSelect,
     Measure(measure::MeasureAction),
+    Drawing(drawing::DrawingAction),
     ClearSelection,
     SelectionDrag([f32; 2], [f32; 2]),
     BoxSelect {
@@ -1769,6 +1790,8 @@ struct Studio {
     box_select: bool,
     pick_mode: bool,
     measure: measure::MeasureTool,
+    /// The Section drawing tool: its choices, its job and its preview.
+    drawing: drawing::DrawingTool,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     selection_pending: bool,
@@ -2193,6 +2216,7 @@ impl Default for Studio {
             box_select: false,
             pick_mode: false,
             measure: measure::MeasureTool::default(),
+            drawing: drawing::DrawingTool::default(),
             drag_rectangle: None,
             context_menu: None,
             selection_pending: false,
@@ -2931,6 +2955,7 @@ impl Studio {
                     json!(self.bag_job.as_ref().map(bag_panel::BagJob::progress_value));
                 answer.0["result"]["mesh_export_pending"] = Value::Bool(self.mesh_export_pending);
                 answer.0["result"]["file_view"] = self.file_view_value();
+                answer.0["result"]["drawing"] = self.drawing.value();
                 answer
             }
             ApiCommand::Job { id } => {
@@ -3694,6 +3719,10 @@ impl Studio {
             ApiCommand::ExportMinusSelection { path } => {
                 self.api_export(path, ApiExportMode::WithoutSelection)
             }
+            ApiCommand::ExportDrawing { path, options } => self.api_export_drawing(path, &options),
+            ApiCommand::PreviewDrawing { options } => self.api_preview_drawing(&options),
+            ApiCommand::ClearDrawingPreview => (self.api_clear_drawing_preview(), Task::none()),
+            ApiCommand::CancelDrawing => (self.api_cancel_drawing(), Task::none()),
             ApiCommand::MergeVisible { path } => {
                 if !path.is_absolute()
                     || !matches!(
@@ -3973,6 +4002,7 @@ impl Studio {
     /// Each of them leaves an existing destination as it was.
     fn stop_background_work(&mut self) {
         self.cancel_bag();
+        self.cancel_drawing();
         if let Some(job) = &self.merge_job {
             job.control.cancelled.store(true, Ordering::Relaxed);
         }
@@ -4635,6 +4665,7 @@ impl Studio {
         let task = self.handle(message);
         self.track_progress();
         self.settle_views();
+        self.settle_drawing();
         task
     }
 
@@ -7418,6 +7449,7 @@ impl Studio {
                 self.drag_rectangle = None;
             }
             Message::Measure(action) => return self.update_measure(action),
+            Message::Drawing(action) => return self.update_drawing(action),
             Message::ClearSelection => {
                 self.pending_delete = false;
                 if self.selection_pending {
@@ -8097,6 +8129,7 @@ impl Studio {
                     Message::ResetSectionBox,
                     false,
                 )),
+                self.drawing_ribbon_item(),
             ],
         );
         // A running selection scan offers its cancel action instead of the zoom.
@@ -8529,6 +8562,7 @@ impl Studio {
             box_select: self.box_select,
             pick_mode: self.pick_mode,
             measure: &self.measure,
+            drawing: self.drawing.overlay(),
             annotate: self.views_overlay(),
             drag_rectangle: self.drag_rectangle,
             context_menu: self.context_menu,
@@ -8686,6 +8720,15 @@ impl Studio {
                 .width(Fill)
                 .style(|theme| container::Style::default()
                     .background(ui_theme::colors(theme).panel_alt)),
+        ]
+        .spacing(0)
+        .width(270);
+        // The block of the Section drawing tool comes first: it is opened
+        // from the ribbon and stands in view without scrolling.
+        if let Some(drawing) = self.drawing_properties() {
+            properties = properties.push(drawing);
+        }
+        for row in [
             opencad_properties::section_header("General"),
             opencad_properties::property_row("Source points", format_count(source_points)),
             opencad_properties::property_row(
@@ -8707,9 +8750,9 @@ impl Studio {
                 .into(),
             ),
             opencad_properties::property_row("Selected", format_count(selected_points)),
-        ]
-        .spacing(0)
-        .width(270);
+        ] {
+            properties = properties.push(row);
+        }
         if active_cloud.is_some() {
             properties = properties
                 .push(opencad_properties::section_header("3D surface settings"))
@@ -9290,6 +9333,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::ToggleBoxSelect => ToolIcon::Select,
         Message::TogglePickSelect => ToolIcon::Pick,
         Message::Measure(action) => action.icon(),
+        Message::Drawing(_) => ToolIcon::Drawing,
         Message::ClearSelection => ToolIcon::Clear,
         Message::SetEyeDome(_) => ToolIcon::Shading,
         Message::ShowScanPoses(_) => ToolIcon::Pick,
@@ -9609,6 +9653,7 @@ enum ToolIcon {
     Mesh,
     Building,
     Shading,
+    Drawing,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -9654,6 +9699,8 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Mesh => include_bytes!("../../assets/opencad-icons/region.svg"),
         ToolIcon::Building => include_bytes!("../../assets/opencad-icons/solid.svg"),
         ToolIcon::Shading => include_bytes!("../../assets/opencad-icons/sphere.svg"),
+        // The section drawing icon is drawn for this app in the same palette.
+        ToolIcon::Drawing => include_bytes!("../../assets/opencad-icons/section_drawing.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)
@@ -10063,6 +10110,8 @@ struct PointViewport<'a> {
     box_select: bool,
     pick_mode: bool,
     measure: &'a measure::MeasureTool,
+    /// The filled cut of a section drawing that is previewed.
+    drawing: Option<&'a pointcloud_core::CutPreview>,
     annotate: views::Overlay<'a>,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
@@ -11014,6 +11063,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 }
             }
         }
+        self.draw_drawing(&mut frame, bounds.size());
         self.draw_measure(&mut frame, bounds.size());
         self.draw_annotations(&mut frame, bounds.size());
         view_cube::draw(
@@ -11332,6 +11382,7 @@ impl PointViewport<'_> {
                 ..canvas::Text::default()
             });
         };
+        self.draw_drawing(frame, size);
         self.draw_measure(frame, size);
         self.draw_annotations(frame, size);
         let inside = self.walk_station.is_some();

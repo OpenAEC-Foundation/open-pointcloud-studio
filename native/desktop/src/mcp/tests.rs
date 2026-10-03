@@ -815,6 +815,158 @@ fn mesh_export_is_a_job_whose_destination_names_the_format() {
 }
 
 #[test]
+fn section_drawing_is_a_job_with_a_preview_and_a_cancel() {
+    let export = tools::find("export_drawing").unwrap();
+    let preview = tools::find("preview_drawing").unwrap();
+    assert_eq!((export.kind, preview.kind), (Kind::Job, Kind::Job));
+    assert!(!export.read_only() && !preview.read_only());
+    assert_eq!(export.schema["required"], json!(["path"]));
+    assert!(preview.schema.get("required").is_none());
+    for tool in [export, preview] {
+        assert!(tool.schema["properties"]["wait_seconds"].is_object());
+    }
+    // The destination names both formats the core writes.
+    let destination = export.schema["properties"]["path"]["description"]
+        .as_str()
+        .unwrap();
+    for format in pointcloud_core::DrawingFormat::ALL {
+        assert!(
+            destination.contains(&format!(".{}", format.extension())),
+            "{format:?}"
+        );
+    }
+    // The choices are those of the core, with its limits.
+    let choices = &export.schema["properties"];
+    assert_eq!(
+        choices["view"]["enum"],
+        json!(["plan", "front", "back", "left", "right"])
+    );
+    assert_eq!(choices["units"]["enum"], json!(["mm", "m"]));
+    assert_eq!(choices["origin"]["enum"], json!(["model", "box"]));
+    assert_eq!(choices["color"]["enum"], json!(["layer", "rgb"]));
+    assert_eq!(choices["point_layers"]["enum"], json!(["scan", "class"]));
+    assert_eq!(
+        choices["version"]["enum"],
+        json!(["r2004", "r2010", "r2013", "r2018"])
+    );
+    assert_eq!(
+        choices["max_points"]["maximum"],
+        pointcloud_core::MAX_DRAWING_POINTS
+    );
+    assert_eq!(
+        choices["thickness"]["maximum"],
+        pointcloud_core::MAX_SLAB_THICKNESS
+    );
+    assert_eq!(
+        choices["max_wall_thickness"]["maximum"],
+        pointcloud_core::MAX_WALL_THICKNESS
+    );
+    // No limit of its own: the largest wall is above zero and the grid has
+    // no largest cell, as the command and the Properties block have it.
+    assert_eq!(choices["max_wall_thickness"]["exclusiveMinimum"], 0);
+    assert!(choices["max_wall_thickness"].get("minimum").is_none());
+    assert_eq!(choices["grid"]["minimum"], pointcloud_core::MIN_CUT_GRID);
+    assert!(choices["grid"].get("maximum").is_none());
+    // A preview takes the same choices, without a destination.
+    let mut without_path = choices.as_object().unwrap().clone();
+    without_path.remove("path");
+    assert_eq!(preview.schema["properties"], Value::Object(without_path));
+
+    let arguments = json!({
+        "path": "/d/plan.dwg", "view": "front", "thickness": 0.25, "units": "m",
+        "fill": true, "square": false, "max_points": 20000.0, "version": "r2018",
+    });
+    schema::validate_arguments(&export.schema, &arguments).unwrap();
+    schema::validate_arguments(&preview.schema, &json!({})).unwrap();
+    // A wall thinner than the smallest wall the block starts with, and a
+    // coarse grid.
+    let thin_wall = json!({"path": "/d/plan.dxf", "max_wall_thickness": 0.03, "grid": 5.0});
+    schema::validate_arguments(&export.schema, &thin_wall).unwrap();
+    for refused in [
+        json!({}),
+        json!({"path": "/d/plan.dxf", "view": "top"}),
+        json!({"path": "/d/plan.dxf", "thickness": -0.1}),
+        json!({"path": "/d/plan.dxf", "thickness": 6}),
+        json!({"path": "/d/plan.dxf", "max_wall_thickness": 0}),
+        json!({"path": "/d/plan.dxf", "max_wall_thickness": 2.5}),
+        json!({"path": "/d/plan.dxf", "grid": 0.004}),
+        json!({"path": "/d/plan.dxf", "max_points": 400_001}),
+        json!({"path": "/d/plan.dxf", "format": "dwg"}),
+    ] {
+        assert!(
+            schema::validate_arguments(&export.schema, &refused).is_err(),
+            "{refused}"
+        );
+    }
+    assert!(schema::validate_arguments(&preview.schema, &json!({"path": "/d/plan.dxf"})).is_err());
+    for name in ["clear_drawing_preview", "cancel_drawing"] {
+        let tool = tools::find(name).unwrap();
+        assert_eq!(tool.kind, Kind::Command);
+        assert!(tool.schema["properties"].as_object().unwrap().is_empty());
+    }
+    // The job tool tells a caller that these commands answer with a job.
+    let job = tools::find("job").unwrap().description;
+    assert!(job.contains("export_drawing") && job.contains("preview_drawing"));
+
+    // A drawing that is being made is work under way; its last result and
+    // a preview on screen are not.
+    assert_eq!(
+        tools::busy(&json!({"drawing": {"job": {"stage": "reading"}, "last": null}})),
+        ["drawing"]
+    );
+    assert!(tools::busy(&json!({"drawing": {
+        "job": null, "last": {"state": "complete"}, "preview_shown": true,
+    }}))
+    .is_empty());
+
+    let link = FakeLink::new(|command| {
+        Ok(match command["command"].as_str().unwrap() {
+            "export_drawing" => json!({"ok": true, "accepted": true, "job_id": "d-1"}),
+            "preview_drawing" => json!({"ok": true, "accepted": true, "job_id": "d-2"}),
+            "job" => json!({"ok": true, "job": {"state": "complete", "regions": 3}}),
+            _ => json!({"ok": true}),
+        })
+    });
+    let commands = Arc::clone(&link.commands);
+    let mut waiting = arguments.clone();
+    waiting["wait_seconds"] = json!(5);
+    let answers = session(
+        &[
+            initialize(1, "2025-06-18"),
+            call(2, "export_drawing", waiting),
+            call(3, "preview_drawing", json!({"view": "plan"})),
+            call(4, "clear_drawing_preview", json!({})),
+            call(5, "cancel_drawing", json!({})),
+        ],
+        link,
+    );
+    let export = text_of(&by_id(&answers, 2)["result"], 0);
+    assert_eq!(export["job"]["regions"], 3);
+    assert_eq!(export["timed_out"], false);
+    assert_eq!(
+        text_of(&by_id(&answers, 3)["result"], 0)["job_id"],
+        "d-2",
+        "without wait_seconds the answer comes at once"
+    );
+    // The whole number of points goes out as an integer, as the command
+    // reads it.
+    assert_eq!(
+        *commands.lock().unwrap(),
+        [
+            json!({
+                "command": "export_drawing", "path": "/d/plan.dwg", "view": "front",
+                "thickness": 0.25, "units": "m", "fill": true, "square": false,
+                "max_points": 20000, "version": "r2018",
+            }),
+            json!({"command": "job", "id": "d-1"}),
+            json!({"command": "preview_drawing", "view": "plan"}),
+            json!({"command": "clear_drawing_preview"}),
+            json!({"command": "cancel_drawing"}),
+        ]
+    );
+}
+
+#[test]
 fn extension_and_file_view_tools_offer_what_the_window_knows() {
     let list = tools::find("list_extensions").unwrap();
     assert_eq!(list.kind, Kind::Command);

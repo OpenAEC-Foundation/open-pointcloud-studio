@@ -75,6 +75,8 @@ pub enum FileAction {
     ExportSelection,
     ExportWithoutSelection,
     ExportSection,
+    /// Ask where to save what the section box cuts as a 2D drawing.
+    ExportDrawing,
     ExportDecimated,
     ExportMesh,
     ExportBcf,
@@ -98,6 +100,7 @@ impl Studio {
             FileAction::ExportSelection => Message::ExportSelection,
             FileAction::ExportWithoutSelection => Message::RemoveSelection,
             FileAction::ExportSection => Message::ExportSection,
+            FileAction::ExportDrawing => Message::Drawing(crate::drawing::DrawingAction::Export),
             FileAction::ExportDecimated => Message::Decimate,
             FileAction::ExportMesh => Message::ExportMesh,
             FileAction::ExportBcf => Message::Views(views::ViewAction::ExportBcf),
@@ -221,6 +224,11 @@ impl Studio {
                 "Section box…",
                 FileAction::ExportSection,
                 active_cloud.is_some() && self.section_enabled && !self.section_export_pending,
+            ),
+            entry(
+                "Section drawing…",
+                FileAction::ExportDrawing,
+                self.drawing_entry_enabled(),
             ),
             entry(
                 "Every Nth point…",

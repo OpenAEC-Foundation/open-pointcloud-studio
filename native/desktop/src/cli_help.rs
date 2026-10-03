@@ -80,6 +80,14 @@ pub const MODES: &[Mode] = &[
         description: key("Exports the points of a scan that lie inside a box."),
     },
     Mode {
+        flag: "--drawing",
+        short: None,
+        arguments: "INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf|.dwg [--view plan|front|back|left|right] [--thickness METRES] [--units mm|m] [--fill on|off]",
+        description: key(
+            "Draws the slab behind one face of a box in a scan as a 2D drawing in DXF or DWG.",
+        ),
+    },
+    Mode {
         flag: "--merge",
         short: None,
         arguments: "OUTPUT.laz INPUT1.las INPUT2.laz [...]",

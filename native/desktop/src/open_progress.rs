@@ -1,5 +1,6 @@
-//! What the window tells about scans that are still being opened or indexed:
-//! a line per task with how far it is and how long it will still take.
+//! What the window tells about scans that are still being opened or indexed
+//! and about a section drawing that is being made: a line per task with how
+//! far it is and how long it will still take.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -25,6 +26,8 @@ pub enum Phase {
     Reading,
     /// Partitioning the octree on disk.
     Building,
+    /// Reading, tracing and writing a section drawing or its preview.
+    Drawing,
 }
 
 /// When a task was first seen, and how far it was then.
@@ -214,6 +217,7 @@ impl Studio {
                 }),
             });
         }
+        lines.extend(self.drawing.progress_line());
         lines
     }
 
@@ -223,7 +227,7 @@ impl Studio {
         if self.imports.is_empty() {
             self.opening_total = 0;
             self.import_expected.clear();
-            if !self.index_pending {
+            if !self.index_pending && !self.drawing.is_running() {
                 self.progress_marks.clear();
                 return;
             }

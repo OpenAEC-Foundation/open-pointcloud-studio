@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Map, Value};
 
 use super::schema::{
-    boolean, choice, integer_in, list, number_in, numbers, object, optional, ordinal, path, pixel,
-    positive, required, text, validate_arguments, whole_numbers_as_integers, xyz, Argument,
+    boolean, choice, integer_in, list, number_from, number_in, numbers, object, optional, ordinal,
+    path, pixel, positive, positive_up_to, required, text, validate_arguments,
+    whole_numbers_as_integers, xyz, Argument,
 };
 
 /// Where tool calls go: the command API of a running window, and the
@@ -142,6 +143,29 @@ fn walk_pitch() -> Value {
     )
 }
 
+/// The choices of a section drawing, which `export_drawing` and
+/// `preview_drawing` share. Each one that is left out keeps what the Section
+/// drawing block in Properties has. The limits are those the core checks, no
+/// others: the command and the block accept what a tool call accepts.
+fn drawing_choices() -> Vec<Argument> {
+    let version_keys =
+        pointcloud_core::DrawingVersion::ALL.map(pointcloud_core::DrawingVersion::key);
+    vec![
+        optional("view", choice("Face of the section box that is drawn: plan takes the slab under the top face, seen from above; front, back, left and right take the slab behind the face at Y min, Y max, X min and X max. Another view than the block has sets fill to on for plan and off for the others, unless fill is given", &pointcloud_core::DrawingView::ALL.map(pointcloud_core::DrawingView::key))),
+        optional("thickness", number_in("Depth of the slab behind the cut plane in metres, from 0.005 to 5; it is kept within the box. The block starts at 0.10", pointcloud_core::MIN_SLAB_THICKNESS, pointcloud_core::MAX_SLAB_THICKNESS)),
+        optional("units", choice("Unit of the drawing: mm (the block starts with it) or m. Scene units are taken as metres", &pointcloud_core::DrawingUnits::ALL.map(pointcloud_core::DrawingUnits::key))),
+        optional("origin", choice("Zero of the drawing: model keeps model X and Y in a plan and model Z as height in a vertical view; box puts the lower left corner of the view at zero, which keeps the numbers small for survey coordinates", &pointcloud_core::DrawingOrigin::ALL.map(pointcloud_core::DrawingOrigin::key))),
+        optional("fill", boolean("Whether the material the cut plane goes through is drawn as filled regions with outlines")),
+        optional("square", boolean("Whether edges of the filled cut are turned onto the main direction where that moves neither end more than 30 mm")),
+        optional("grid", number_from("Cell of the grid the filled cut is traced from, in metres, at least 0.005; the block starts at 0.02", pointcloud_core::MIN_CUT_GRID)),
+        optional("max_wall_thickness", positive_up_to("Two scanned faces at most this far apart are filled as one wall, in metres, above 0 and at most 2; gaps up to this width are closed. The block starts at 0.50", pointcloud_core::MAX_WALL_THICKNESS)),
+        optional("color", choice("Colour of the points: layer (the colour of their layer) or rgb (their scanned colour)", &pointcloud_core::PointColor::ALL.map(pointcloud_core::PointColor::key))),
+        optional("point_layers", choice("Layers of the points: scan (one per scan file when several are drawn) or class (one per classification)", &pointcloud_core::PointLayers::ALL.map(pointcloud_core::PointLayers::key))),
+        optional("max_points", integer_in("Most points in the drawing, from 1 to 400000; the block starts at 150000. When thinning leaves more, the point spacing doubles until they fit", 1, pointcloud_core::MAX_DRAWING_POINTS as u64)),
+        optional("version", choice("File version of the DXF or DWG; the block starts with r2013", &version_keys)),
+    ]
+}
+
 fn view_name() -> Value {
     text(
         "Name of a saved view of the active scan; letter case is ignored",
@@ -154,6 +178,7 @@ const POINT_FILE: &str = "Absolute destination path; its extension (.ply, .xyz, 
 const LAS_FILE: &str = "Absolute destination path ending in .las or .laz";
 const OBJ_FILE: &str = "Absolute destination path ending in .obj";
 const MESH_FILE: &str = "Absolute destination path; its extension selects the format: .obj (colours and normals), .ply (binary, double coordinates, colours and normals) or .stl (binary, triangles only). The file is replaced atomically";
+const DRAWING_FILE: &str = "Absolute destination path; its extension selects the format: .dxf or .dwg. The file is replaced atomically";
 const BCF_FILE: &str = "Absolute destination path ending in .bcf";
 const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (EPSG:28992, metres): each side longer than 0 and at most 2000";
 
@@ -163,15 +188,15 @@ const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (E
 fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
-        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view) and the status line.", vec![]),
-        tool("job", Command, "Reads a background job by the job_id that an export, select_world, pick_screen, mesh, export_mesh, merge_visible or bag3d returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
+        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view) and the status line.", vec![]),
+        tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, merge_visible or bag3d returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
         tool("wait_for_job", WaitForJob, "Waits until a background job is no longer running and returns it, polling it four times a second. Answers with timed_out: true and the running job when the time is up.", vec![
             required("id", text("The job_id", 1, 64)),
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, merging, 3D BAG download, station photos, view snapshots or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
+        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, section drawing or its preview, merging, 3D BAG download, station photos, view snapshots or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
         tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load. The text part gives the width and height in pixels. Fails while the window is minimised, and while the File view or Settings covers the viewport; file_view with open false returns to the model.", vec![
@@ -349,6 +374,14 @@ fn table() -> Vec<Tool> {
         tool("export_minus_selection", Job, "Exports the active layer without its selected and deleted points. Answers with a job_id.", vec![
             required("path", path(POINT_FILE)),
         ]),
+        tool("export_drawing", Job, "Draws what the section box cuts as a 2D drawing at scale 1:1 and writes it as DXF or DWG: the points of the slab behind one face of the box, thinned to one per 5 mm, and for a plan the filled cut with its outlines, from every visible layer with its transform, without deleted points and hidden classes. Needs the section box. The choices given are also put in the Section drawing block of Properties; those left out keep what the block has. Answers with a job_id; the running job reports its stage (reading, tracing, writing), the complete job the points in the slab and drawn, the point spacing used and whether the point limit raised it, the regions and the small ones dropped, the grid cell and main direction of the filled cut, and the file size.", {
+            let mut arguments = vec![required("path", path(DRAWING_FILE))];
+            arguments.extend(drawing_choices());
+            arguments
+        }),
+        tool("preview_drawing", Job, "Traces the filled cut of the section box as export_drawing would draw it and lays it over the points in the viewport, on the cut plane; nothing is written. The cut is traced whatever fill says. Answers with a job_id; the complete job reports the regions. status.result.drawing.preview_shown tells whether it is on screen: it goes away when the section box, the visible layers, a layer transform, the deleted points, the classes shown or the view, slab thickness, squaring, grid or wall thickness change.", drawing_choices()),
+        tool("clear_drawing_preview", Command, "Takes the preview of the filled cut off the viewport.", vec![]),
+        tool("cancel_drawing", Command, "Cancels the running section drawing or preview; the step under way ends first, and an existing file at the destination is left as it is.", vec![]),
         tool("merge_visible", Job, "Merges the visible LAS/LAZ layers, with their deletions and transforms, into one file. Answers with a job_id.", vec![
             required("path", path(LAS_FILE)),
         ]),
@@ -626,6 +659,9 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
     }
     if result["views"]["export_pending"] == true {
         busy.push("bcf_export");
+    }
+    if result["drawing"]["job"].is_object() {
+        busy.push("drawing");
     }
     busy
 }
