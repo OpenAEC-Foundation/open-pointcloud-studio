@@ -2939,7 +2939,7 @@ dependencies = [
 
 [[package]]
 name = "open-pointcloud-studio-native"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "flate2",
@@ -3190,7 +3190,7 @@ dependencies = [
 
 [[package]]
 name = "pointcloud-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "crc32c",
  "delaunator",
