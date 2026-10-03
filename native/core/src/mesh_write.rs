@@ -352,9 +352,11 @@ mod tests {
     /// The coordinates as a binary STL file holds them, three per corner.
     fn stl_floats(bytes: &[u8]) -> Vec<f32> {
         bytes[84..]
-            .chunks_exact(50)
-            .flat_map(|record| record[12..48].chunks_exact(4))
-            .map(|value| f32::from_le_bytes(value.try_into().unwrap()))
+            .as_chunks::<50>()
+            .0
+            .iter()
+            .flat_map(|record| record[12..48].as_chunks::<4>().0)
+            .map(|value| f32::from_le_bytes(*value))
             .collect()
     }
 
