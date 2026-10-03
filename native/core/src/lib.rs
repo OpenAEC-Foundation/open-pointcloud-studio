@@ -25,7 +25,10 @@ mod snapshots;
 mod surface_mesh;
 mod window_reader;
 
-pub use bag3d::{fetch_bag3d_obj, BagBounds, BagLod, BagStats};
+pub use bag3d::{
+    fetch_bag3d_obj, fetch_bag3d_obj_with, BagBounds, BagLod, BagProgress, BagStats,
+    BAG3D_USER_AGENT,
+};
 pub use dxf::read_mesh as read_dxf_mesh;
 pub use export::{
     export_affine, export_affine_axes, export_affine_axes_where, export_affine_where,
