@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 mod bag3d;
+mod closed_mesh;
 mod drawing;
 mod dxf;
 mod e57_points;
@@ -31,6 +32,7 @@ pub mod region_source;
 mod scan_image;
 mod snapshots;
 mod surface_mesh;
+pub mod surfels;
 #[cfg(test)]
 mod test_shapes;
 mod window_reader;
@@ -38,6 +40,11 @@ mod window_reader;
 pub use bag3d::{
     fetch_bag3d_obj, fetch_bag3d_obj_with, BagBounds, BagLod, BagProgress, BagStats,
     BAG3D_USER_AGENT,
+};
+pub use closed_mesh::{
+    mesh_closed, ClosedMeshConfig, ClosedMeshProgress, ClosedMeshReport, ClosedMeshStage,
+    ClosedMeshTimings, MeshOrientation, OrientationUsed, DEFAULT_CLOSED_MESH_TRIANGLES,
+    DEFAULT_CLOSED_MESH_VERTICES, MAX_CLOSED_MESH_HOLE,
 };
 pub use drawing::{
     class_point_layer, collect_slab, drawing_info_text, export_section_drawing, layer_name,
@@ -62,8 +69,9 @@ pub use export::{
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
 pub use mesh_quality::{
-    mesh_deviation, mesh_topology, mesh_topology_by_position, open_boundary_vertices,
-    MeshDeviation, MeshTopology,
+    mesh_deviation, mesh_deviation_progress, mesh_topology, mesh_topology_by_position,
+    mesh_topology_progress, open_boundary_vertices, open_boundary_vertices_progress, MeshDeviation,
+    MeshTopology,
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
 pub use mesh_write::{read_stl_origin, write_mesh, MeshFormat, MeshWriteReport};

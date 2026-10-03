@@ -13,6 +13,12 @@ const LEAF_TRIANGLES: usize = 8;
 /// From this many triangles on, the two halves of a branch are sorted on
 /// separate threads.
 const PARALLEL_TRIANGLES: usize = 8_192;
+/// Points measured between two calls of the progress callback of
+/// `mesh_deviation_progress`: a few hundredths of a second of work.
+const DEVIATION_CHUNK: usize = 16_384;
+/// Triangles or vertices handled between two calls of the progress callback
+/// while the sides of a mesh are counted: a few hundredths of a second.
+const SIDES_CHUNK: u64 = 1 << 18;
 
 /// Distance between points and a mesh surface, in the unit of the mesh.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -44,29 +50,51 @@ pub struct MeshTopology {
 /// the size and the extent of the mesh. Non-finite points and unusable
 /// triangles are left out.
 pub fn mesh_deviation(mesh: &MeshGeometry, points: &[[f64; 3]]) -> MeshDeviation {
+    never_stopped(mesh_deviation_progress(mesh, points, &mut |_, _| Ok(())))
+}
+
+/// As `mesh_deviation`, for a measurement that may take seconds: `proceed`
+/// is called with the points handled so far and their number, before the
+/// first point and after every `DEVIATION_CHUNK` of them, on the calling
+/// thread. An error from it stops the measurement and is returned. The
+/// result is that of `mesh_deviation`, to the last bit.
+pub fn mesh_deviation_progress<E>(
+    mesh: &MeshGeometry,
+    points: &[[f64; 3]],
+    proceed: &mut dyn FnMut(u64, u64) -> Result<(), E>,
+) -> Result<MeshDeviation, E> {
+    let total = points.len() as u64;
+    proceed(0, total)?;
     let Some(index) = TriangleIndex::build(mesh) else {
-        return MeshDeviation::default();
+        return Ok(MeshDeviation::default());
     };
-    let mut distances = points
-        .par_iter()
-        .with_min_len(1024)
-        .filter(|point| point.iter().all(|value| value.is_finite()))
-        // One search stack per worker instead of one per point.
-        .map_init(Vec::new, |pending, point| index.distance(*point, pending))
-        .collect::<Vec<f64>>();
+    let mut distances = Vec::with_capacity(points.len());
+    let mut handled = 0u64;
+    for chunk in points.chunks(DEVIATION_CHUNK) {
+        distances.par_extend(
+            chunk
+                .par_iter()
+                .with_min_len(1024)
+                .filter(|point| point.iter().all(|value| value.is_finite()))
+                // One search stack per worker instead of one per point.
+                .map_init(Vec::new, |pending, point| index.distance(*point, pending)),
+        );
+        handled += chunk.len() as u64;
+        proceed(handled, total)?;
+    }
     if distances.is_empty() {
-        return MeshDeviation::default();
+        return Ok(MeshDeviation::default());
     }
     distances.sort_unstable_by(f64::total_cmp);
     let samples = distances.len();
     // Nearest rank: the smallest measured distance that covers 95 %.
     let rank = (samples * 95).div_ceil(100).max(1);
-    MeshDeviation {
+    Ok(MeshDeviation {
         mean: distances.iter().sum::<f64>() / samples as f64,
         p95: distances[rank - 1],
         max: distances[samples - 1],
         samples: samples as u64,
-    }
+    })
 }
 
 /// Count open and non-manifold edges, connected components and the Euler
@@ -74,7 +102,7 @@ pub fn mesh_deviation(mesh: &MeshGeometry, points: &[[f64; 3]]) -> MeshDeviation
 /// do not share vertices reports every edge as open. Triangles that repeat a
 /// vertex or point outside the vertex list are not counted.
 pub fn mesh_topology(mesh: &MeshGeometry) -> MeshTopology {
-    topology(mesh.vertices.len(), &mesh.triangles)
+    never_stopped(mesh_topology_progress(mesh, &mut |_, _| Ok(())))
 }
 
 /// The same figures with the vertices that lie at the same position counted
@@ -101,27 +129,47 @@ pub fn mesh_topology_by_position(mesh: &MeshGeometry) -> MeshTopology {
         .filter(|triangle| triangle.iter().all(|index| (*index as usize) < place.len()))
         .map(|triangle| triangle.map(|index| place[index as usize]))
         .collect::<Vec<_>>();
-    topology(places.len(), &triangles)
+    // Only the number of vertices and the triangles count for these figures.
+    mesh_topology(&MeshGeometry {
+        vertices: vec![[0.0; 3]; places.len()],
+        triangles,
+        colors: None,
+        normals: None,
+    })
 }
 
-fn topology(vertex_count: usize, triangles: &[[u32; 3]]) -> MeshTopology {
-    let edges = sorted_edges(vertex_count, triangles);
+/// As `mesh_topology`, for a mesh of millions of triangles: `proceed` is
+/// called on the calling thread with the steps done so far and their
+/// number, at the start, at the end and every few hundredths of a second in
+/// between. An error from it stops the count and is returned.
+pub fn mesh_topology_progress<E>(
+    mesh: &MeshGeometry,
+    proceed: &mut dyn FnMut(u64, u64) -> Result<(), E>,
+) -> Result<MeshTopology, E> {
+    let (triangles, vertices) = (mesh.triangles.len() as u64, mesh.vertices.len() as u64);
+    let mut steps = Steps::new(Sides::steps(mesh) + triangles + vertices, proceed)?;
+    let sides = Sides::new(mesh, &mut steps)?;
     let mut topology = MeshTopology::default();
     let mut distinct_edges = 0_i64;
-    for run in edges.chunk_by(|a, b| a == b) {
+    sides.for_each(|_, _, triangles| {
         distinct_edges += 1;
-        match run.len() {
+        match triangles {
             1 => topology.open_edges += 1,
             2 => {}
             _ => topology.non_manifold_edges += 1,
         }
-    }
+    });
+    drop(sides);
 
     // Union-find over the vertices, joined by every triangle.
-    let mut parent = (0..vertex_count as u32).collect::<Vec<_>>();
-    let mut used = vec![false; vertex_count];
+    let mut parent = (0..mesh.vertices.len() as u32).collect::<Vec<_>>();
+    let mut used = vec![false; mesh.vertices.len()];
     let mut faces = 0_i64;
-    for [a, b, c] in valid_triangles(vertex_count, triangles) {
+    for triangle in &mesh.triangles {
+        steps.step()?;
+        let Some([a, b, c]) = valid_triangle(mesh, *triangle) else {
+            continue;
+        };
         faces += 1;
         for vertex in [a, b, c] {
             used[vertex as usize] = true;
@@ -133,7 +181,8 @@ fn topology(vertex_count: usize, triangles: &[[u32; 3]]) -> MeshTopology {
         }
     }
     let mut vertices = 0_i64;
-    for vertex in 0..vertex_count as u32 {
+    for vertex in 0..mesh.vertices.len() as u32 {
+        steps.step()?;
         if used[vertex as usize] {
             vertices += 1;
             if find(&mut parent, vertex) == vertex {
@@ -142,48 +191,151 @@ fn topology(vertex_count: usize, triangles: &[[u32; 3]]) -> MeshTopology {
         }
     }
     topology.euler = vertices - distinct_edges + faces;
-    topology
+    steps.finish()?;
+    Ok(topology)
 }
 
 /// Mark the vertices on an edge that does not have exactly two triangles:
 /// the rim of the surface. Simplification locks these to keep the outline.
 pub fn open_boundary_vertices(mesh: &MeshGeometry) -> Vec<bool> {
+    never_stopped(open_boundary_vertices_progress(mesh, &mut |_, _| Ok(())))
+}
+
+/// As `open_boundary_vertices`, with the callback of
+/// `mesh_topology_progress`.
+pub fn open_boundary_vertices_progress<E>(
+    mesh: &MeshGeometry,
+    proceed: &mut dyn FnMut(u64, u64) -> Result<(), E>,
+) -> Result<Vec<bool>, E> {
+    let mut steps = Steps::new(Sides::steps(mesh), proceed)?;
+    let sides = Sides::new(mesh, &mut steps)?;
     let mut boundary = vec![false; mesh.vertices.len()];
-    for run in sorted_edges(mesh.vertices.len(), &mesh.triangles).chunk_by(|a, b| a == b) {
-        if run.len() != 2 {
-            boundary[(run[0] >> 32) as usize] = true;
-            boundary[(run[0] & 0xffff_ffff) as usize] = true;
+    sides.for_each(|low, high, triangles| {
+        if triangles != 2 {
+            boundary[low as usize] = true;
+            boundary[high as usize] = true;
         }
-    }
-    boundary
+    });
+    steps.finish()?;
+    Ok(boundary)
 }
 
-fn valid_triangles(
-    vertex_count: usize,
-    triangles: &[[u32; 3]],
-) -> impl Iterator<Item = [u32; 3]> + '_ {
-    triangles.iter().copied().filter(move |[a, b, c]| {
-        a != b
-            && b != c
-            && a != c
-            && [a, b, c]
-                .iter()
-                .all(|index| (**index as usize) < vertex_count)
-    })
+/// The result of work whose callback never stops it.
+fn never_stopped<T>(result: Result<T, std::convert::Infallible>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(never) => match never {},
+    }
 }
 
-/// One key per triangle side, lower index in the high half, sorted so equal
-/// edges are neighbours. Sorting keeps this in one allocation where a hash
-/// map would need several times the memory on a large mesh.
-fn sorted_edges(vertex_count: usize, triangles: &[[u32; 3]]) -> Vec<u64> {
-    let mut edges = Vec::with_capacity(triangles.len() * 3);
-    for [a, b, c] in valid_triangles(vertex_count, triangles) {
-        for (from, to) in [(a, b), (b, c), (c, a)] {
-            edges.push((u64::from(from.min(to)) << 32) | u64::from(from.max(to)));
+/// A triangle that names three different vertices of the mesh.
+fn valid_triangle(mesh: &MeshGeometry, triangle: [u32; 3]) -> Option<[u32; 3]> {
+    let [a, b, c] = triangle;
+    let count = mesh.vertices.len();
+    (a != b && b != c && a != c && triangle.iter().all(|index| (*index as usize) < count))
+        .then_some(triangle)
+}
+
+/// Counts the steps of a long piece of work and asks its callback once in a
+/// while whether to go on.
+struct Steps<'a, E> {
+    done: u64,
+    total: u64,
+    /// The step at which the callback is asked next.
+    ask_at: u64,
+    proceed: &'a mut dyn FnMut(u64, u64) -> Result<(), E>,
+}
+
+impl<'a, E> Steps<'a, E> {
+    fn new(total: u64, proceed: &'a mut dyn FnMut(u64, u64) -> Result<(), E>) -> Result<Self, E> {
+        proceed(0, total)?;
+        Ok(Self {
+            done: 0,
+            total,
+            ask_at: SIDES_CHUNK,
+            proceed,
+        })
+    }
+
+    fn step(&mut self) -> Result<(), E> {
+        self.done += 1;
+        if self.done >= self.ask_at {
+            self.ask_at = self.done + SIDES_CHUNK;
+            (self.proceed)(self.done, self.total)?;
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), E> {
+        (self.proceed)(self.total, self.total)
+    }
+}
+
+/// The sides of the usable triangles of a mesh, each under the lower of its
+/// two vertices with the higher ones sorted, so that the triangles along one
+/// edge are neighbours. Counting them per vertex takes a few passes over the
+/// mesh that can each be stopped half way, and less memory than a sorted
+/// list of all sides, which on a mesh of millions of triangles is seconds
+/// of work without a pause.
+struct Sides {
+    /// Per vertex where its sides start in `higher`, and one entry more for
+    /// where the last one ends.
+    first: Vec<usize>,
+    higher: Vec<u32>,
+}
+
+impl Sides {
+    /// The steps `new` counts for a mesh.
+    fn steps(mesh: &MeshGeometry) -> u64 {
+        2 * mesh.triangles.len() as u64 + mesh.vertices.len() as u64
+    }
+
+    fn new<E>(mesh: &MeshGeometry, steps: &mut Steps<'_, E>) -> Result<Self, E> {
+        let sides = |[a, b, c]: [u32; 3]| {
+            [(a, b), (b, c), (c, a)].map(|(from, to)| (from.min(to) as usize, from.max(to)))
+        };
+        let count = mesh.vertices.len();
+        let mut first = vec![0usize; count + 1];
+        for triangle in &mesh.triangles {
+            steps.step()?;
+            if let Some(triangle) = valid_triangle(mesh, *triangle) {
+                for (low, _) in sides(triangle) {
+                    first[low + 1] += 1;
+                }
+            }
+        }
+        for vertex in 0..count {
+            first[vertex + 1] += first[vertex];
+        }
+        let mut next = first[..count].to_vec();
+        let mut higher = vec![0u32; first[count]];
+        for triangle in &mesh.triangles {
+            steps.step()?;
+            if let Some(triangle) = valid_triangle(mesh, *triangle) {
+                for (low, high) in sides(triangle) {
+                    higher[next[low]] = high;
+                    next[low] += 1;
+                }
+            }
+        }
+        drop(next);
+        for vertex in 0..count {
+            steps.step()?;
+            higher[first[vertex]..first[vertex + 1]].sort_unstable();
+        }
+        Ok(Self { first, higher })
+    }
+
+    /// Call `visit` for every edge with its two vertices, lower first, and
+    /// the number of triangles along it.
+    fn for_each(&self, mut visit: impl FnMut(u32, u32, usize)) {
+        for vertex in 0..self.first.len() - 1 {
+            let sides = &self.higher[self.first[vertex]..self.first[vertex + 1]];
+            for run in sides.chunk_by(|a, b| a == b) {
+                visit(vertex as u32, run[0], run.len());
+            }
         }
     }
-    edges.sort_unstable();
-    edges
 }
 
 fn find(parent: &mut [u32], mut vertex: u32) -> u32 {
@@ -677,6 +829,143 @@ mod tests {
         let deviation = mesh_deviation(&square, &with_outlier);
         assert!((deviation.p95 - 0.001).abs() < 1e-12);
         assert!((deviation.max - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn deviation_reports_its_progress_and_can_be_stopped() {
+        let square = unit_square();
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        // Two full chunks and a part of a third.
+        let points = (0..2 * DEVIATION_CHUNK + 500)
+            .map(|_| {
+                [
+                    xorshift(&mut state),
+                    xorshift(&mut state),
+                    xorshift(&mut state),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let total = points.len() as u64;
+        let mut steps = Vec::new();
+        let measured = mesh_deviation_progress::<()>(&square, &points, &mut |handled, of| {
+            assert_eq!(of, total);
+            steps.push(handled);
+            Ok(())
+        })
+        .unwrap();
+        let chunk = DEVIATION_CHUNK as u64;
+        assert_eq!(steps, [0, chunk, 2 * chunk, total]);
+        // Cutting the points in chunks changes nothing in the result.
+        assert_eq!(measured, mesh_deviation(&square, &points));
+        assert_eq!(measured.samples, total);
+
+        // An error from the callback ends the measurement and comes back.
+        let mut calls = 0;
+        let stopped = mesh_deviation_progress(&square, &points, &mut |_, _| {
+            calls += 1;
+            if calls == 2 {
+                Err("stop")
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!((stopped, calls), (Err("stop"), 2));
+        // Without a usable triangle the callback is asked once.
+        let mut calls = 0;
+        let empty =
+            mesh_deviation_progress::<()>(&MeshGeometry::default(), &points, &mut |_, _| {
+                calls += 1;
+                Ok(())
+            });
+        assert_eq!((empty, calls), (Ok(MeshDeviation::default()), 1));
+    }
+
+    #[test]
+    fn counting_edges_reports_its_progress_and_can_be_stopped() {
+        // A sheet of 400 x 400 squares: enough triangles for the callback
+        // to be asked on the way.
+        let side = 401u32;
+        let vertices = (0..side * side)
+            .map(|index| [f64::from(index % side), f64::from(index / side), 0.0])
+            .collect::<Vec<_>>();
+        let mut triangles = Vec::new();
+        for y in 0..side - 1 {
+            for x in 0..side - 1 {
+                let corner = y * side + x;
+                triangles.push([corner, corner + 1, corner + side + 1]);
+                triangles.push([corner, corner + side + 1, corner + side]);
+            }
+        }
+        let sheet = mesh(vertices, triangles);
+        let total = 3 * sheet.triangles.len() as u64 + 2 * sheet.vertices.len() as u64;
+        let mut steps = Vec::new();
+        let topology = mesh_topology_progress::<()>(&sheet, &mut |done, of| {
+            assert_eq!(of, total);
+            steps.push(done);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(topology, mesh_topology(&sheet));
+        assert_eq!(
+            topology,
+            MeshTopology {
+                open_edges: 1_600,
+                non_manifold_edges: 0,
+                components: 1,
+                euler: 1,
+            }
+        );
+        // Asked at the start, at the end and every chunk between them.
+        assert_eq!((steps[0], *steps.last().unwrap()), (0, total));
+        assert_eq!(steps.len() as u64, 2 + total / SIDES_CHUNK);
+        assert!(steps
+            .windows(2)
+            .all(|pair| pair[0] < pair[1] && pair[1] - pair[0] <= SIDES_CHUNK));
+
+        let mut steps = Vec::new();
+        let boundary = open_boundary_vertices_progress::<()>(&sheet, &mut |done, of| {
+            steps.push((done, of));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(boundary, open_boundary_vertices(&sheet));
+        assert_eq!(boundary.iter().filter(|rim| **rim).count(), 1_600);
+        let total = 2 * sheet.triangles.len() as u64 + sheet.vertices.len() as u64;
+        assert_eq!(
+            (steps[0], *steps.last().unwrap()),
+            ((0, total), (total, total))
+        );
+        assert!(steps.len() >= 4, "{}", steps.len());
+
+        // An error from the callback ends either and comes back, at
+        // whatever call it is given.
+        for stop_at in 1..=4 {
+            let mut calls = 0;
+            let mut stop = |_, _| {
+                calls += 1;
+                if calls == stop_at {
+                    Err("stop")
+                } else {
+                    Ok(())
+                }
+            };
+            assert_eq!(mesh_topology_progress(&sheet, &mut stop), Err("stop"));
+            assert_eq!(calls, stop_at);
+            calls = 0;
+            let mut stop = |_, _| {
+                calls += 1;
+                if calls == stop_at {
+                    Err("stop")
+                } else {
+                    Ok(())
+                }
+            };
+            assert_eq!(
+                open_boundary_vertices_progress(&sheet, &mut stop),
+                Err("stop")
+            );
+            assert_eq!(calls, stop_at);
+        }
     }
 
     #[test]
