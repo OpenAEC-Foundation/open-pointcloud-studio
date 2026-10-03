@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::selection::{ClassVisibility, DeletionMask};
 use crate::station_photos::{self, PhotoAtlas, PhotoSet};
@@ -206,6 +207,7 @@ impl<'a> GpuViewport<'a> {
                 .sum();
             let stride = sampled.div_ceil(self.overlay.budget.max(1)).max(1);
             points.reserve(sampled.div_ceil(stride));
+            let started = Instant::now();
             for record in self
                 .overlay
                 .clouds
@@ -232,6 +234,15 @@ impl<'a> GpuViewport<'a> {
                     ],
                     color: [color.r, color.g, color.b, color.a],
                 });
+            }
+            // The pace counts the records walked, not the points kept: the
+            // section box, class filters and deletions drop a record after
+            // the work of reaching it. A build thinned to the budget skips
+            // records unseen, so only a full one is a measure.
+            if stride == 1 {
+                self.overlay
+                    .lod_pace
+                    .record_build(sampled, started.elapsed());
             }
             for entry in self
                 .overlay
@@ -1531,5 +1542,54 @@ mod tests {
             reflected_mesh.geometry.mesh_vertices[0].normal,
             [0.0, 0.0, -1.0, 0.0]
         );
+    }
+
+    #[test]
+    fn geometry_build_feeds_the_pace() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("pace.xyz");
+        std::fs::write(&source, "0 0 0\n1 0 0\n0 1 0\n1 1 1\n").unwrap();
+        let cloud = pointcloud_core::open(&source, 4).unwrap();
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::new(cloud))));
+        let bounds = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        let draw = |studio: &Studio| {
+            let viewport = GpuViewport {
+                overlay: studio.point_viewport(),
+            };
+            let state = RefCell::new(RenderCache::default());
+            shader::Program::draw(&viewport, &state, mouse::Cursor::Unavailable, bounds)
+        };
+
+        // Too few points to say anything about the pace.
+        assert_eq!(draw(&studio).geometry.points.len(), 4);
+        assert_eq!(studio.lod_pace.build_points_per_ms(), None);
+
+        let detail: Vec<IndexedPoint> = (0..140_000u64)
+            .map(|ordinal| IndexedPoint {
+                point: studio.clouds[0].cloud.points[(ordinal % 4) as usize],
+                ordinal,
+            })
+            .collect();
+        studio.clouds[0].detail_points = Some(detail.into());
+        // A build thinned to the budget is not a measure of a full one.
+        studio.budget = 70_000;
+        assert_eq!(draw(&studio).geometry.points.len(), 70_000);
+        assert_eq!(studio.lod_pace.build_points_per_ms(), None);
+
+        // A section box that keeps a quarter of the points: all of them are
+        // walked, and that is the work the pace is about.
+        studio.budget = 140_000;
+        studio.section_enabled = true;
+        studio.section_min_percent[2] = 50.0;
+        assert_eq!(draw(&studio).geometry.points.len(), 35_000);
+        assert!(studio.lod_pace.build_points_per_ms().is_some());
+
+        studio.section_enabled = false;
+        assert_eq!(draw(&studio).geometry.points.len(), 140_000);
+        assert!(studio
+            .lod_pace
+            .build_points_per_ms()
+            .is_some_and(|pace| pace > 0.0));
     }
 }

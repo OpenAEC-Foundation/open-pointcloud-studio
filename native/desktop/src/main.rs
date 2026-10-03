@@ -15,6 +15,7 @@ mod cloud_centroid;
 mod cloud_transform;
 mod gpu_viewport;
 mod i18n;
+mod lod_pace;
 mod mcp;
 mod measure;
 mod native_api;
@@ -42,6 +43,9 @@ use iced::widget::{
     text, text_input, tooltip,
 };
 use iced::{Color, Element, Fill, Font, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
+use lod_pace::{
+    first_pass_budget, plan_first_pass, preview_improves, preview_tier_points, LodPace, ScreenFill,
+};
 use pointcloud_core::{
     BagBounds, BagLod, Bounds, ExportFormat, IndexConfig, IndexProgress, IndexStage, IndexedPoint,
     MeshGeometry, OctreeIndex, Point, PointCloud, SurfaceMeshConfig,
@@ -61,7 +65,6 @@ use station_photos::{PhotoAtlas, PhotoSet, WalkView};
 use ui_theme::UiTheme;
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
-const FAST_LOD_PREVIEW_LIMIT: usize = 250_000;
 const EXACT_VISIBLE_LOD_ZOOM: f32 = 0.05;
 const MAX_EXACT_VISIBLE_LOD_CANDIDATES: u64 = 2_000_000;
 const AUTO_INDEX_MIN_POINTS: u64 = 1_000_000;
@@ -1649,6 +1652,9 @@ struct Studio {
     detail_cancel: Arc<AtomicBool>,
     detail_loaded_revision: Option<u64>,
     detail_urgent_revision: Option<u64>,
+    /// Revision the last viewport LOD request was started for.
+    detail_request_revision: Option<u64>,
+    lod_pace: Arc<LodPace>,
     auto_index: bool,
     revision: u64,
 }
@@ -1683,6 +1689,9 @@ struct CloudEntry {
     picked: bool,
 }
 
+/// The points read for each cloud of a refinement, by cloud index.
+type LodSets = Vec<(usize, Vec<IndexedPoint>)>;
+
 struct LodRefinement {
     sources: Vec<(usize, Arc<OctreeIndex>, CloudTransform, f32)>,
     source_weights: Vec<(f32, usize)>,
@@ -1694,6 +1703,13 @@ struct LodRefinement {
     cancel: Arc<AtomicBool>,
     budget: usize,
     deep_zoom: bool,
+    pace: Arc<LodPace>,
+    /// What the sets now drawn put in the viewport of this request.
+    shown: ScreenFill,
+    /// Points drawn for visible clouds outside this request; they count
+    /// toward the budget the renderer thins all sets to.
+    drawn_elsewhere: usize,
+    pass: u8,
 }
 
 impl LodRefinement {
@@ -1708,18 +1724,8 @@ impl LodRefinement {
                 let section = self.section;
                 let projection = self.projection;
                 let deep_zoom = self.deep_zoom;
-                let projected = |node_bounds: Bounds| {
-                    let node_bounds = transform.bounds(node_bounds);
-                    if section.is_some_and(|clip| {
-                        (0..3).any(|axis| {
-                            node_bounds.max[axis] < clip.min[axis]
-                                || node_bounds.min[axis] > clip.max[axis]
-                        })
-                    }) {
-                        return None;
-                    }
-                    projection.screen_span(node_bounds)
-                };
+                let projected =
+                    |node_bounds| lod_node_span(*transform, section, projection, node_bounds);
                 let exact = if deep_zoom {
                     tree.sample_visible_indexed_cancellable(
                         limit,
@@ -1766,11 +1772,23 @@ impl LodRefinement {
         )
     }
 
-    fn snapshot(&self) -> Vec<(usize, Vec<IndexedPoint>)> {
+    /// The samples as a set to show in between. A slot the next pass reads
+    /// again gives its points away: that pass replaces them before anything
+    /// looks at them.
+    fn snapshot(&mut self) -> LodSets {
+        let (requested, sampled) = (&self.requested, &self.sampled_limits);
         self.sources
             .iter()
-            .zip(&self.samples)
-            .map(|((index, _, _, _), points)| (*index, points.clone()))
+            .zip(&mut self.samples)
+            .enumerate()
+            .map(|(slot, ((index, _, _, _), points))| {
+                let points = if requested[slot] > sampled[slot] {
+                    std::mem::take(points)
+                } else {
+                    points.clone()
+                };
+                (*index, points)
+            })
             .collect()
     }
 
@@ -1780,6 +1798,60 @@ impl LodRefinement {
             .zip(self.samples)
             .map(|((index, _, _, _), points)| (index, points))
             .collect()
+    }
+
+    /// Read on until there is a set worth showing in between, or `None` once
+    /// the samples are final. A set that would thin the picture on screen is
+    /// kept back, so the points do not flicker while the camera moves.
+    fn advance(&mut self) -> Result<Option<LodSets>, String> {
+        loop {
+            let before = self.sampled_limits.clone();
+            let started = Instant::now();
+            self.sample_pass()?;
+            // The exact scan at deep zoom costs the same for any limit, so
+            // it says nothing about the pace of a regular pass.
+            if !self.deep_zoom {
+                let read = self
+                    .samples
+                    .iter()
+                    .zip(before.iter().zip(&self.sampled_limits))
+                    .filter(|(_, (before, after))| before != after)
+                    .map(|(points, _)| points.len())
+                    .sum();
+                self.pace.record_read(read, started.elapsed());
+            }
+            if self.pass >= 2 {
+                return Ok(None);
+            }
+            let Some(next) = self.next_limits() else {
+                return Ok(None);
+            };
+            self.requested = next;
+            self.pass += 1;
+            let fresh = self.fill();
+            if preview_improves(self.shown, fresh) {
+                self.shown = fresh;
+                return Ok(Some(self.snapshot()));
+            }
+        }
+    }
+
+    /// What the samples read so far would put in the viewport, thinned the
+    /// way the renderer would thin them.
+    fn fill(&self) -> ScreenFill {
+        let mut fill = ScreenFill::default();
+        let mut drawn = self.drawn_elsewhere;
+        for ((_, _, transform, _), points) in self.sources.iter().zip(&self.samples) {
+            fill.add(
+                points,
+                |record| transform.xyz(record.point.xyz),
+                self.projection,
+                self.section,
+            );
+            drawn = drawn.saturating_add(points.len());
+        }
+        fill.points /= drawn.div_ceil(self.budget.max(1)).max(1);
+        fill
     }
 }
 
@@ -1996,6 +2068,8 @@ impl Default for Studio {
             detail_cancel: Arc::new(AtomicBool::new(false)),
             detail_loaded_revision: None,
             detail_urgent_revision: None,
+            detail_request_revision: None,
+            lod_pace: Arc::default(),
             auto_index: settings.auto_index,
             revision: 0,
         }
@@ -6420,16 +6494,30 @@ impl Studio {
                         )
                     })
                     .collect();
-                let initial_budget = if budget > FAST_LOD_PREVIEW_LIMIT * 2 {
-                    FAST_LOD_PREVIEW_LIMIT
-                } else {
-                    budget
-                };
-                let limits = distribute_lod_budget(initial_budget, &source_weights);
+                let deep_zoom = self.walk.is_some() || self.zoom <= EXACT_VISIBLE_LOD_ZOOM;
+                let shown = self.shown_fill(&sources, projection, section);
+                let limits = self.first_read_limits(
+                    &sources,
+                    &source_weights,
+                    projection,
+                    section,
+                    deep_zoom,
+                    shown,
+                );
+                let drawn_elsewhere = self
+                    .clouds
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, entry)| {
+                        entry.visible && !sources.iter().any(|(source, _, _, _)| source == index)
+                    })
+                    .map(|(_, entry)| entry.view_len())
+                    .fold(0usize, usize::saturating_add);
                 let revision = self.revision;
                 let cancel = Arc::new(AtomicBool::new(false));
                 self.detail_cancel = Arc::clone(&cancel);
                 self.detail_pending = true;
+                self.detail_request_revision = Some(revision);
                 if !self.section_export_pending {
                     self.status = format!(
                         "Refining visible octree nodes in {} cloud(s)…",
@@ -6446,35 +6534,28 @@ impl Studio {
                     projection,
                     cancel,
                     budget,
-                    deep_zoom: self.walk.is_some() || self.zoom <= EXACT_VISIBLE_LOD_ZOOM,
+                    deep_zoom,
+                    pace: Arc::clone(&self.lod_pace),
+                    shown,
+                    drawn_elsewhere,
+                    pass: 0,
                 };
-                let stream =
-                    iced::futures::stream::unfold(Some((refinement, 0u8)), |state| async move {
-                        let (refinement, pass) = state?;
-                        let outcome = tokio::task::spawn_blocking(move || {
-                            let mut refinement = refinement;
-                            let result = refinement.sample_pass();
-                            (refinement, result)
-                        })
-                        .await;
-                        match outcome {
-                            Ok((mut refinement, Ok(()))) => {
-                                if pass < 2 {
-                                    if let Some(next) = refinement.next_limits() {
-                                        let preview = refinement.snapshot();
-                                        refinement.requested = next;
-                                        return Some((
-                                            Ok((false, preview)),
-                                            Some((refinement, pass + 1)),
-                                        ));
-                                    }
-                                }
-                                Some((Ok((true, refinement.finish())), None))
-                            }
-                            Ok((_, Err(error))) => Some((Err(error), None)),
-                            Err(error) => Some((Err(error.to_string()), None)),
+                let stream = iced::futures::stream::unfold(Some(refinement), |state| async move {
+                    let mut refinement = state?;
+                    let outcome = tokio::task::spawn_blocking(move || {
+                        let step = refinement.advance();
+                        (refinement, step)
+                    })
+                    .await;
+                    match outcome {
+                        Ok((refinement, Ok(Some(preview)))) => {
+                            Some((Ok((false, preview)), Some(refinement)))
                         }
-                    });
+                        Ok((refinement, Ok(None))) => Some((Ok((true, refinement.finish())), None)),
+                        Ok((_, Err(error))) => Some((Err(error), None)),
+                        Err(error) => Some((Err(error.to_string()), None)),
+                    }
+                });
                 return Task::run(stream, move |result| match result {
                     Ok((false, details)) => Message::DetailPreview(revision, details),
                     Ok((true, details)) => Message::DetailReady(revision, Ok(details)),
@@ -7154,6 +7235,14 @@ impl Studio {
                 {
                     return Task::none();
                 }
+                // A release without movement: the running request already
+                // reads this view, so restarting it would only lose time.
+                if self.detail_pending
+                    && self.detail_request_revision == Some(self.revision)
+                    && !self.detail_cancel.load(Ordering::Relaxed)
+                {
+                    return Task::none();
+                }
                 if self.detail_pending {
                     self.detail_cancel.store(true, Ordering::Relaxed);
                     self.detail_urgent_revision = Some(self.revision);
@@ -7617,6 +7706,129 @@ impl Studio {
             display_name(&source.path)
         );
         self.start_index_job(source, true)
+    }
+
+    /// What the sets now drawn for the clouds of a refinement put in the
+    /// viewport of its camera, thinned the way the renderer thins them.
+    fn shown_fill(
+        &self,
+        sources: &[(usize, Arc<OctreeIndex>, CloudTransform, f32)],
+        projection: Projection,
+        section: Option<Bounds>,
+    ) -> ScreenFill {
+        let mut shown = ScreenFill::default();
+        for entry in sources
+            .iter()
+            .filter_map(|(index, _, _, _)| self.clouds.get(*index))
+        {
+            let transform = entry.transform;
+            match &entry.detail_points {
+                Some(detail) => shown.add(
+                    detail,
+                    |record| transform.xyz(record.point.xyz),
+                    projection,
+                    section,
+                ),
+                None => shown.add(
+                    &entry.cloud.points,
+                    |point| transform.xyz(point.xyz),
+                    projection,
+                    section,
+                ),
+            }
+        }
+        let drawn: usize = self
+            .clouds
+            .iter()
+            .filter(|entry| entry.visible)
+            .map(CloudEntry::view_len)
+            .sum();
+        shown.points /= drawn.div_ceil((self.budget as usize).max(1)).max(1);
+        shown
+    }
+
+    /// Cells of the viewport that a first pass over these clouds can bring
+    /// points to. The sample a cloud keeps in memory outlines it better than
+    /// its box, which a few stray far points stretch well past the scan. At
+    /// deep zoom too little of that sample is in view to outline anything.
+    fn first_pass_reach(
+        &self,
+        sources: &[(usize, Arc<OctreeIndex>, CloudTransform, f32)],
+        projection: Projection,
+        section: Option<Bounds>,
+        deep_zoom: bool,
+    ) -> usize {
+        // A union over the clouds: overlapping scans reach the same part of
+        // the viewport only once.
+        let mut reach = ScreenFill::default();
+        for (index, tree, transform, _) in sources {
+            let sample = self
+                .clouds
+                .get(*index)
+                .map(|entry| entry.cloud.points.as_slice())
+                .filter(|points| !deep_zoom && !points.is_empty());
+            if let Some(points) = sample {
+                reach.add(
+                    points,
+                    |point| transform.xyz(point.xyz),
+                    projection,
+                    section,
+                );
+            } else if let Some(bounds) =
+                section_clipped(transform.bounds(tree.root.bounds), section)
+            {
+                reach.add_box(projection, bounds);
+            }
+        }
+        reach.cell_count()
+    }
+
+    /// Limits per source for the first read of a refinement: the whole
+    /// budget when one pass is the plan, else a first pass sized for this
+    /// computer and bound by what this view gives from node previews.
+    fn first_read_limits(
+        &self,
+        sources: &[(usize, Arc<OctreeIndex>, CloudTransform, f32)],
+        source_weights: &[(f32, usize)],
+        projection: Projection,
+        section: Option<Bounds>,
+        deep_zoom: bool,
+        shown: ScreenFill,
+    ) -> Vec<usize> {
+        let budget = self.budget as usize;
+        let effective = budget.min(
+            source_weights
+                .iter()
+                .fold(0usize, |sum, (_, capacity)| sum.saturating_add(*capacity)),
+        );
+        let first = first_pass_budget(
+            effective,
+            self.lod_pace.read_points_per_ms(),
+            self.lod_pace.build_points_per_ms(),
+            sources.len(),
+        );
+        let first = if first < effective {
+            let reach = self.first_pass_reach(sources, projection, section, deep_zoom);
+            plan_first_pass(effective, first, shown, reach)
+        } else {
+            first
+        };
+        (first < effective)
+            .then(|| {
+                first_pass_limits(first, source_weights, |slot, limit| {
+                    // The exact scan at deep zoom reads the leaves in view
+                    // whatever the limit, so there is nothing to stay within.
+                    if deep_zoom {
+                        return None;
+                    }
+                    let (_, tree, transform, _) = &sources[slot];
+                    preview_tier_points(&tree.root, limit, |bounds| {
+                        lod_node_span(*transform, section, projection, bounds)
+                    })
+                })
+            })
+            .flatten()
+            .unwrap_or_else(|| distribute_lod_budget(budget, source_weights))
     }
 
     fn schedule_detail(&self) -> Task<Message> {
@@ -8417,6 +8629,7 @@ impl Studio {
             eye_dome_strength: self.eye_dome_strength,
             show_scan_poses: self.show_scan_poses,
             budget: self.budget as usize,
+            lod_pace: &self.lod_pace,
             filter_ground: self.filter_ground,
             filter_vegetation: self.filter_vegetation,
             filter_buildings: self.filter_buildings,
@@ -9826,24 +10039,46 @@ fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
     overall
 }
 
+/// Size on screen of an octree node of a placed cloud, as the sampler is
+/// told it: `None` when the section box or the camera leaves the node out.
+fn lod_node_span(
+    transform: CloudTransform,
+    section: Option<Bounds>,
+    projection: Projection,
+    node_bounds: Bounds,
+) -> Option<f32> {
+    let node_bounds = transform.bounds(node_bounds);
+    if section.is_some_and(|clip| {
+        (0..3).any(|axis| {
+            node_bounds.max[axis] < clip.min[axis] || node_bounds.min[axis] > clip.max[axis]
+        })
+    }) {
+        return None;
+    }
+    projection.screen_span(node_bounds)
+}
+
+/// The part of a box that the section box leaves visible, if any.
+fn section_clipped(bounds: Bounds, section: Option<Bounds>) -> Option<Bounds> {
+    let Some(section) = section else {
+        return Some(bounds);
+    };
+    let clipped = Bounds {
+        min: std::array::from_fn(|axis| bounds.min[axis].max(section.min[axis])),
+        max: std::array::from_fn(|axis| bounds.max[axis].min(section.max[axis])),
+    };
+    if (0..3).any(|axis| clipped.min[axis] > clipped.max[axis]) {
+        return None;
+    }
+    Some(clipped)
+}
+
 fn source_lod_coverage(
     projection: Projection,
     bounds: Bounds,
     section: Option<Bounds>,
 ) -> Option<f32> {
-    let visible_bounds = if let Some(section) = section {
-        let clipped = Bounds {
-            min: std::array::from_fn(|axis| bounds.min[axis].max(section.min[axis])),
-            max: std::array::from_fn(|axis| bounds.max[axis].min(section.max[axis])),
-        };
-        if (0..3).any(|axis| clipped.min[axis] > clipped.max[axis]) {
-            return None;
-        }
-        clipped
-    } else {
-        bounds
-    };
-    projection.screen_coverage(visible_bounds)
+    projection.screen_coverage(section_clipped(bounds, section)?)
 }
 
 /// Reserve a small sample for each visible scan, then share the remaining
@@ -9918,6 +10153,24 @@ fn distribute_lod_budget(budget: usize, sources: &[(f32, usize)]) -> Vec<usize> 
         }
     }
     allocated
+}
+
+/// Limits per source for a first pass of `first` points, each kept within
+/// what `preview_tier` allows that source at its limit. `None` when that
+/// leaves less than a first pass is worth: the view then holds so few leaves
+/// that reading them in full once is the shorter way.
+fn first_pass_limits(
+    first: usize,
+    sources: &[(f32, usize)],
+    preview_tier: impl Fn(usize, usize) -> Option<usize>,
+) -> Option<Vec<usize>> {
+    let mut limits = distribute_lod_budget(first, sources);
+    for (slot, limit) in limits.iter_mut().enumerate() {
+        if let Some(tier) = preview_tier(slot, *limit) {
+            *limit = (*limit).min(tier);
+        }
+    }
+    (limits.iter().sum::<usize>() >= lod_pace::LOD_FIRST_PASS_MIN).then_some(limits)
 }
 
 fn rebalance_lod_limits(
@@ -10151,6 +10404,7 @@ struct PointViewport<'a> {
     eye_dome_strength: f32,
     show_scan_poses: bool,
     budget: usize,
+    lod_pace: &'a LodPace,
     filter_ground: bool,
     filter_vegetation: bool,
     filter_buildings: bool,
@@ -12385,6 +12639,336 @@ mod lod_transition_tests {
         ));
         assert_eq!(studio.clouds[0].view_len(), 1);
         assert_eq!(studio.clouds[0].view_records().next().unwrap().ordinal, 3);
+    }
+
+    /// A window with one indexed scan of four points, and those points.
+    fn indexed_studio(directory: &Path) -> (Studio, Vec<IndexedPoint>) {
+        let source = directory.join("scan.xyz");
+        std::fs::write(&source, "0 0 0\n1 0 0\n2 0 0\n3 0 0\n").unwrap();
+        let cloud = pointcloud_core::open(&source, 4).unwrap();
+        let index = Arc::new(OctreeIndex::build(&cloud, IndexConfig::default()).unwrap());
+        let records = cloud
+            .points
+            .iter()
+            .copied()
+            .zip(cloud.point_ordinals.iter().copied())
+            .map(|(point, ordinal)| IndexedPoint { point, ordinal })
+            .collect();
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::new(cloud))));
+        studio.clouds[0].index = Some(index);
+        (studio, records)
+    }
+
+    /// A refinement of a 20,000-point scan seen from above that reads a
+    /// quarter of its budget first, and what the whole scan puts in view.
+    fn grid_refinement(directory: &Path) -> (LodRefinement, ScreenFill) {
+        let source = directory.join("grid.xyz");
+        let lines: String = (0..20_000)
+            .map(|index| format!("{} {} 0\n", index % 200, index / 200))
+            .collect();
+        std::fs::write(&source, lines).unwrap();
+        let cloud = pointcloud_core::open(&source, 20_000).unwrap();
+        let tree = Arc::new(OctreeIndex::build(&cloud, IndexConfig::default()).unwrap());
+        let projection = Projection::new(cloud.bounds, 0.0, 1.5, 1.0, [0.0; 2], 800.0, 600.0);
+        let mut whole = ScreenFill::default();
+        whole.add(&cloud.points, |point| point.xyz, projection, None);
+        assert_eq!(whole.points, 20_000);
+        (refinement_of(tree, projection, 5_000), whole)
+    }
+
+    /// A refinement of one scan, with all its points as the budget, that
+    /// asks for `requested` points first.
+    fn refinement_of(
+        tree: Arc<OctreeIndex>,
+        projection: Projection,
+        requested: usize,
+    ) -> LodRefinement {
+        let total = usize::try_from(tree.root.total_points).unwrap();
+        LodRefinement {
+            sources: vec![(0, tree, CloudTransform::default(), 1.0)],
+            source_weights: vec![(1.0, total)],
+            requested: vec![requested],
+            sampled_limits: vec![0],
+            samples: vec![Vec::new()],
+            section: None,
+            projection,
+            cancel: Arc::new(AtomicBool::new(false)),
+            budget: total,
+            deep_zoom: false,
+            pace: Arc::default(),
+            shown: ScreenFill::default(),
+            drawn_elsewhere: 0,
+            pass: 0,
+        }
+    }
+
+    /// A flat scan of 512 by 512 points, indexed in sixteen leaves that each
+    /// keep a preview next to their points.
+    fn leafy_scan(directory: &Path) -> (PointCloud, Arc<OctreeIndex>) {
+        let source = directory.join("leafy.xyz");
+        let lines: String = (0..512 * 512)
+            .map(|index| format!("{} {} 0\n", index % 512, index / 512))
+            .collect();
+        std::fs::write(&source, lines).unwrap();
+        let cloud = pointcloud_core::open(&source, 512 * 512).unwrap();
+        let config = IndexConfig {
+            leaf_points: 20_000,
+            ..IndexConfig::default()
+        };
+        let tree = Arc::new(OctreeIndex::build(&cloud, config).unwrap());
+        (cloud, tree)
+    }
+
+    /// The scan seen from above, at a zoom of the framed view.
+    fn from_above(cloud: &PointCloud, zoom: f32) -> Projection {
+        Projection::new(cloud.bounds, 0.0, 1.5, zoom, [0.0; 2], 800.0, 600.0)
+    }
+
+    #[test]
+    fn refinement_pass_feeds_the_read_pace() {
+        let directory = tempfile::tempdir().unwrap();
+        let (cloud, tree) = leafy_scan(directory.path());
+        let total = cloud.points.len();
+        let seed = LodPace::default().read_points_per_ms();
+
+        let mut regular = refinement_of(Arc::clone(&tree), from_above(&cloud, 1.0), total);
+        let pace = Arc::clone(&regular.pace);
+        assert!(regular.advance().unwrap().is_none());
+        assert_eq!(regular.finish()[0].1.len(), total);
+        assert_ne!(pace.read_points_per_ms(), seed);
+
+        // The exact scan at deep zoom is no measure of a regular pass.
+        let mut exact = refinement_of(tree, from_above(&cloud, 1.0), total);
+        exact.deep_zoom = true;
+        assert!(exact.advance().unwrap().is_none());
+        assert!(!exact.samples[0].is_empty());
+        assert_eq!(exact.pace.read_points_per_ms(), seed);
+    }
+
+    #[test]
+    fn preview_tier_follows_the_nodes_in_view() {
+        let directory = tempfile::tempdir().unwrap();
+        let (cloud, tree) = leafy_scan(directory.path());
+        let total = cloud.points.len();
+        let leaf = total / 16;
+        let tier = |projection: Projection| {
+            preview_tier_points(&tree.root, 1_000_000, |bounds| {
+                projection.screen_span(bounds)
+            })
+        };
+        // What the sampler itself reads for a view when asked for all there
+        // is: the measure of which nodes it picks.
+        let read = |projection: Projection| {
+            tree.sample_lod_indexed(total, |bounds| projection.screen_span(bounds))
+                .unwrap()
+                .len()
+        };
+
+        // Framed, every leaf is in view and gives its preview.
+        let framed = from_above(&cloud, 1.0);
+        assert_eq!(read(framed), total);
+        assert_eq!(tier(framed), Some(16 * lod_pace::LOD_NODE_PREVIEW_POINTS));
+
+        // Zoomed in, only the leaves around the middle are.
+        let close = from_above(&cloud, 0.2);
+        let leaves = read(close) / leaf;
+        assert!((1..16).contains(&leaves), "{leaves} leaves");
+        assert_eq!(read(close), leaves * leaf);
+        assert_eq!(
+            tier(close),
+            Some(leaves * lod_pace::LOD_NODE_PREVIEW_POINTS)
+        );
+
+        // From afar the sampler keeps to the root, which holds no more than
+        // its preview, so a larger request costs nothing extra.
+        let afar = from_above(&cloud, 8.0);
+        assert_eq!(read(afar), lod_pace::LOD_NODE_PREVIEW_POINTS);
+        assert_eq!(tier(afar), None);
+
+        let away = Projection::new(cloud.bounds, 0.0, 1.5, 1.0, [5_000.0, 0.0], 800.0, 600.0);
+        assert_eq!(tier(away), None);
+    }
+
+    #[test]
+    fn first_pass_is_bound_by_the_previews_of_each_cloud() {
+        let weights = [(900.0, 50_000_000), (100.0, 50_000_000)];
+        let open = distribute_lod_budget(1_000_000, &weights);
+        assert_eq!(
+            first_pass_limits(1_000_000, &weights, |_, _| None),
+            Some(open.clone())
+        );
+        // The cloud that fills the view has 300 leaves in it.
+        assert_eq!(
+            first_pass_limits(1_000_000, &weights, |slot, limit| {
+                assert_eq!(limit, open[slot]);
+                (slot == 0).then_some(300 * 2_048)
+            }),
+            Some(vec![300 * 2_048, open[1]])
+        );
+        // With 60 leaves in view of each cloud the previews are too few for
+        // a first pass, and reading those leaves once is the shorter way.
+        assert_eq!(
+            first_pass_limits(1_000_000, &weights, |_, _| Some(60 * 2_048)),
+            None
+        );
+    }
+
+    #[test]
+    fn first_read_stays_within_the_previews_or_is_the_only_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let (cloud, tree) = leafy_scan(directory.path());
+        let studio = Studio {
+            budget: 6_000_000,
+            ..Studio::default()
+        };
+        // As for a scan with far more points than the budget.
+        let weights = [(1.0, 50_000_000)];
+        let sources = [(0, tree, CloudTransform::default(), 1.0)];
+        let limits = |zoom: f32, deep_zoom: bool| {
+            studio.first_read_limits(
+                &sources,
+                &weights,
+                from_above(&cloud, zoom),
+                None,
+                deep_zoom,
+                ScreenFill::default(),
+            )
+        };
+
+        // From afar only the root is read, which no limit makes slower.
+        assert_eq!(limits(8.0, false), vec![lod_pace::LOD_FIRST_PASS_MIN]);
+        // Framed, a first pass of that size would read all sixteen leaves in
+        // full and the next pass would read them again.
+        assert_eq!(limits(1.0, false), vec![6_000_000]);
+        // The exact scan at deep zoom has its own way of reading.
+        assert_eq!(limits(1.0, true), vec![lod_pace::LOD_FIRST_PASS_MIN]);
+    }
+
+    #[test]
+    fn stray_points_do_not_widen_the_reach_of_a_first_pass() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("stray.xyz");
+        // One point far from the scan makes the box of the cloud a hundred
+        // times as wide as the scan itself.
+        let lines: String = (0..10_000)
+            .map(|index| format!("{} {} 0\n", index % 100, index / 100))
+            .chain(["10000 10000 0\n".to_string()])
+            .collect();
+        std::fs::write(&source, lines).unwrap();
+        let cloud = pointcloud_core::open(&source, 10_001).unwrap();
+        let tree = Arc::new(OctreeIndex::build(&cloud, IndexConfig::default()).unwrap());
+        let projection = from_above(&cloud, 1.0);
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::new(cloud))));
+        studio.budget = 6_000_000;
+        let sources = [(0, tree, studio.clouds[0].transform, 1.0)];
+
+        let shown = studio.shown_fill(&sources, projection, None);
+        assert_eq!(shown.points, 10_001);
+        let reach = studio.first_pass_reach(&sources, projection, None, false);
+        assert_eq!(reach, shown.cell_count());
+        // What is on screen already holds, so everything is read in one go.
+        assert_eq!(plan_first_pass(10_001, 5_000, shown, reach), 10_001);
+
+        // The box of the cloud promises far more of the viewport than a
+        // first pass could fill; at deep zoom it is all there is to go by.
+        let boxed = studio.first_pass_reach(&sources, projection, None, true);
+        assert!(boxed > reach * 10, "{boxed} against {reach} cells");
+        assert_eq!(plan_first_pass(10_001, 5_000, shown, boxed), 5_000);
+    }
+
+    #[test]
+    fn withheld_preview_reads_on_to_the_final_set() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut withheld, whole) = grid_refinement(directory.path());
+        withheld.shown = whole;
+        assert!(withheld.advance().unwrap().is_none());
+        assert_eq!(withheld.pass, 1);
+        let details = withheld.finish();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].1.len(), 20_000);
+
+        let (mut bare, _) = grid_refinement(directory.path());
+        let preview = bare.advance().unwrap().unwrap();
+        assert_eq!(preview[0].1.len(), 5_000);
+        // The next pass reads this scan again, so the set was handed over
+        // instead of copied.
+        assert!(bare.samples[0].is_empty());
+        assert!(bare.advance().unwrap().is_none());
+        // Passes this small say nothing about the pace of the computer.
+        assert_eq!(
+            bare.pace.read_points_per_ms(),
+            LodPace::default().read_points_per_ms()
+        );
+        assert_eq!(bare.finish()[0].1.len(), 20_000);
+    }
+
+    #[test]
+    fn fresh_set_is_judged_as_the_renderer_would_draw_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut refinement, _) = grid_refinement(directory.path());
+        refinement.sample_pass().unwrap();
+        let alone = refinement.fill();
+        assert_eq!(alone.points, 5_000);
+        // Sets of visible clouds outside the request use the budget too, and
+        // past it the renderer draws every second point of all of them.
+        refinement.drawn_elsewhere = 30_000;
+        let crowded = refinement.fill();
+        assert_eq!(crowded.points, 2_500);
+        assert_eq!(crowded.cell_count(), alone.cell_count());
+    }
+
+    #[test]
+    fn cancelled_refinement_keeps_the_rich_set() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, records) = indexed_studio(directory.path());
+        let rich: Arc<[IndexedPoint]> = records.into();
+        studio.clouds[0].detail_points = Some(Arc::clone(&rich));
+        let kept =
+            |studio: &Studio| Arc::ptr_eq(studio.clouds[0].detail_points.as_ref().unwrap(), &rich);
+
+        let _ = studio.update(Message::Orbit(20.0, 5.0));
+        let _ = studio.update(Message::NavigationFinished);
+        assert!(studio.detail_pending);
+        assert!(kept(&studio));
+        let old_revision = studio.revision;
+        let running = Arc::clone(&studio.detail_cancel);
+
+        let _ = studio.update(Message::Orbit(20.0, 5.0));
+        assert!(running.load(Ordering::Relaxed));
+        assert!(kept(&studio));
+        let _ = studio.update(Message::DetailReady(
+            old_revision,
+            Err("Operation cancelled".into()),
+        ));
+        assert!(!studio.detail_pending);
+        assert_ne!(studio.detail_loaded_revision, Some(studio.revision));
+        assert!(kept(&studio));
+    }
+
+    #[test]
+    fn release_without_movement_keeps_the_running_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, _) = indexed_studio(directory.path());
+
+        let _ = studio.update(Message::Pan(20.0, 0.0));
+        let _ = studio.update(Message::NavigationFinished);
+        let revision = studio.revision;
+        assert!(studio.detail_pending);
+        assert_eq!(studio.detail_request_revision, Some(revision));
+        let running = Arc::clone(&studio.detail_cancel);
+
+        let _ = studio.update(Message::NavigationFinished);
+        assert!(Arc::ptr_eq(&running, &studio.detail_cancel));
+        assert!(!running.load(Ordering::Relaxed));
+        assert_eq!(studio.detail_urgent_revision, None);
+        assert!(studio.detail_pending);
+
+        // A request that was cancelled in the meantime is restarted at once.
+        running.store(true, Ordering::Relaxed);
+        let _ = studio.update(Message::NavigationFinished);
+        assert_eq!(studio.detail_urgent_revision, Some(revision));
     }
 }
 

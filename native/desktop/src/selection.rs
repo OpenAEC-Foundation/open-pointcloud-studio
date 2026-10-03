@@ -503,6 +503,54 @@ impl Projection {
         let height = (max_y.min(self.height as f32) - min_y.max(0.0)).max(0.0);
         Some((width * height).max(1.0))
     }
+
+    /// Cell that a position falls in when the viewport is divided in `grid`
+    /// columns and rows, counted row by row. `None` when it is out of view.
+    pub fn grid_cell(self, xyz: [f64; 3], grid: usize) -> Option<usize> {
+        let (x, y, _) = self.project(xyz)?;
+        Some(grid_index(y, self.height, grid) * grid + grid_index(x, self.width, grid))
+    }
+
+    /// Cells a box can reach on that grid, as the first and last column and
+    /// the first and last row. `None` when the box lies outside the viewport.
+    pub fn grid_rect(self, bounds: Bounds, grid: usize) -> Option<[usize; 4]> {
+        let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
+        let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
+        for corner in 0..8 {
+            let xyz = std::array::from_fn(|axis| {
+                if corner & (1 << axis) == 0 {
+                    bounds.min[axis]
+                } else {
+                    bounds.max[axis]
+                }
+            });
+            match self.project_unclipped(xyz) {
+                Some((x, y, _)) if x.is_finite() && y.is_finite() => {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y);
+                }
+                // A corner behind the eye, as when walking inside the box,
+                // leaves the outline unknown: any cell may hold its points.
+                _ => return Some([0, grid - 1, 0, grid - 1]),
+            }
+        }
+        if max_x < 0.0 || min_x >= self.width as f32 || max_y < 0.0 || min_y >= self.height as f32 {
+            return None;
+        }
+        Some([
+            grid_index(min_x, self.width, grid),
+            grid_index(max_x, self.width, grid),
+            grid_index(min_y, self.height, grid),
+            grid_index(max_y, self.height, grid),
+        ])
+    }
+}
+
+/// Column or row of a pixel coordinate, kept inside the grid.
+fn grid_index(pixel: f32, size: f64, grid: usize) -> usize {
+    ((f64::from(pixel).max(0.0) / size * grid as f64) as usize).min(grid - 1)
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -1843,5 +1891,39 @@ mod tests {
                 .ordinal,
             0
         );
+    }
+
+    #[test]
+    fn grid_cell_and_grid_rect_follow_the_viewport() {
+        let scene = Bounds {
+            min: [0.0; 3],
+            max: [100.0; 3],
+        };
+        let framed = Projection::new(scene, 0.0, 0.0, 1.0, [0.0; 2], 800.0, 600.0);
+        assert_eq!(framed.grid_cell(scene.center(), 16), Some(8 * 16 + 8));
+        let [column_min, column_max, row_min, row_max] = framed.grid_rect(scene, 16).unwrap();
+        assert!((1..=8).contains(&column_min), "{column_min}");
+        assert!((8..15).contains(&column_max), "{column_max}");
+        assert!(row_min <= 8 && (8..=15).contains(&row_max));
+        for corner in [scene.min, scene.max, [0.0, 100.0, 0.0], [100.0, 0.0, 100.0]] {
+            let cell = framed.grid_cell(corner, 16).unwrap();
+            assert!((column_min..=column_max).contains(&(cell % 16)));
+            assert!((row_min..=row_max).contains(&(cell / 16)));
+        }
+
+        let panned = Projection::new(scene, 0.0, 0.0, 1.0, [2_000.0, 0.0], 800.0, 600.0);
+        assert_eq!(panned.grid_cell(scene.center(), 16), None);
+        assert_eq!(panned.grid_rect(scene, 16), None);
+
+        // A camera standing inside the box has corners behind it.
+        let inside = Projection::from_eye(
+            scene,
+            scene.center(),
+            [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]],
+            600.0,
+            800.0,
+            600.0,
+        );
+        assert_eq!(inside.grid_rect(scene, 16), Some([0, 15, 0, 15]));
     }
 }
