@@ -975,6 +975,60 @@ impl OctreeIndex {
     ) -> Result<(), LoadError> {
         visit_intersecting_node(&self.root, self.storage.path(), &mut intersects, &mut visit)
     }
+
+    /// The leaves whose bounds, and those of every node above them, pass a
+    /// spatial test, in tree order. With `visit_leaf` a caller knows the size
+    /// of a read before it starts and can read leaves on several threads:
+    /// reading changes nothing in the index.
+    pub fn intersecting_leaves(
+        &self,
+        mut intersects: impl FnMut(Bounds) -> bool,
+    ) -> Vec<&IndexedNode> {
+        fn collect<'a>(
+            node: &'a IndexedNode,
+            intersects: &mut impl FnMut(Bounds) -> bool,
+            leaves: &mut Vec<&'a IndexedNode>,
+        ) {
+            if !intersects(node.bounds) {
+                return;
+            }
+            if node.is_leaf() {
+                leaves.push(node);
+            } else {
+                for child in &node.children {
+                    collect(child, intersects, leaves);
+                }
+            }
+        }
+        let mut leaves = Vec::new();
+        collect(&self.root, &mut intersects, &mut leaves);
+        leaves
+    }
+
+    /// Visit every exact source point of one leaf of this index, each with
+    /// its ordinal in the original file.
+    pub fn visit_leaf(
+        &self,
+        leaf: &IndexedNode,
+        mut visit: impl FnMut(IndexedPoint) -> Result<(), LoadError>,
+    ) -> Result<(), LoadError> {
+        if !leaf.is_leaf() {
+            // An inner node holds a preview of the points below it.
+            return Err(LoadError::InvalidData(format!(
+                "octree node is not a leaf: {}",
+                leaf.id
+            )));
+        }
+        let mut count = 0u64;
+        read_records(&self.storage.path().join(&leaf.data_path), |point| {
+            count += 1;
+            visit(point)
+        })?;
+        if count != leaf.stored_points {
+            return Err(LoadError::InvalidData("damaged octree leaf".into()));
+        }
+        Ok(())
+    }
 }
 
 fn visit_intersecting_node(

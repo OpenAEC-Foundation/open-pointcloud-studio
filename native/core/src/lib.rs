@@ -13,6 +13,8 @@ mod dxf;
 mod e57_points;
 mod e57_quick;
 mod export;
+pub mod grid2d;
+pub mod local_fit;
 mod mesh_formats;
 mod mesh_points;
 mod mesh_quality;
@@ -25,9 +27,12 @@ mod pcd;
 mod ply;
 mod ply_mesh;
 mod ptx;
+pub mod region_source;
 mod scan_image;
 mod snapshots;
 mod surface_mesh;
+#[cfg(test)]
+mod test_shapes;
 mod window_reader;
 
 pub use bag3d::{

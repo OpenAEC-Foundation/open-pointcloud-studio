@@ -12,6 +12,7 @@ use std::path::Path;
 use rayon::prelude::*;
 
 use super::{visit_points, LoadError, Point, PointCloud};
+use crate::local_fit::{cross, difference, dot, symmetric_eigen3, unit};
 use crate::mesher::{MeshProgress, MeshStage, MeshStats};
 
 #[derive(Clone, Copy, Debug)]
@@ -165,27 +166,6 @@ fn nearest(
     }
 }
 
-fn difference(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
-    let length = dot(v, v).sqrt();
-    (length > 1e-12).then(|| [v[0] / length, v[1] / length, v[2] / length])
-}
-
 /// Smallest-eigenvalue eigenvector of a symmetric 3x3 covariance matrix.
 fn surface_normal(neighbors: &[Near], vertices: &[[f64; 3]]) -> [f64; 3] {
     if neighbors.len() < 3 {
@@ -209,53 +189,8 @@ fn surface_normal(neighbors: &[Near], vertices: &[[f64; 3]]) -> [f64; 3] {
             }
         }
     }
-    matrix[1][0] = matrix[0][1];
-    matrix[2][0] = matrix[0][2];
-    matrix[2][1] = matrix[1][2];
-    let mut eigenvectors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-    for _ in 0..20 {
-        let (mut p, mut q) = (0, 1);
-        for (a, b) in [(0, 2), (1, 2)] {
-            if matrix[a][b].abs() > matrix[p][q].abs() {
-                (p, q) = (a, b);
-            }
-        }
-        if matrix[p][q].abs() < 1e-12 {
-            break;
-        }
-        let angle = 0.5 * (2.0 * matrix[p][q]).atan2(matrix[q][q] - matrix[p][p]);
-        let (s, c) = angle.sin_cos();
-        let app = matrix[p][p];
-        let aqq = matrix[q][q];
-        let apq = matrix[p][q];
-        matrix[p][p] = c * c * app - 2.0 * s * c * apq + s * s * aqq;
-        matrix[q][q] = s * s * app + 2.0 * s * c * apq + c * c * aqq;
-        matrix[p][q] = 0.0;
-        matrix[q][p] = 0.0;
-        for r in 0..3 {
-            if r != p && r != q {
-                let arp = matrix[r][p];
-                let arq = matrix[r][q];
-                matrix[r][p] = c * arp - s * arq;
-                matrix[p][r] = matrix[r][p];
-                matrix[r][q] = s * arp + c * arq;
-                matrix[q][r] = matrix[r][q];
-            }
-            let vrp = eigenvectors[r][p];
-            let vrq = eigenvectors[r][q];
-            eigenvectors[r][p] = c * vrp - s * vrq;
-            eigenvectors[r][q] = s * vrp + c * vrq;
-        }
-    }
-    let smallest = (0..3)
-        .min_by(|a, b| matrix[*a][*a].total_cmp(&matrix[*b][*b]))
-        .unwrap_or(2);
-    let mut normal = unit([
-        eigenvectors[0][smallest],
-        eigenvectors[1][smallest],
-        eigenvectors[2][smallest],
-    ])
-    .unwrap_or([0.0, 0.0, 1.0]);
+    let (_, eigenvectors) = symmetric_eigen3(matrix);
+    let mut normal = unit(eigenvectors[0]).unwrap_or([0.0, 0.0, 1.0]);
     let dominant = (0..3)
         .max_by(|a, b| normal[*a].abs().total_cmp(&normal[*b].abs()))
         .unwrap_or(2);
