@@ -194,6 +194,14 @@ pub enum ApiCommand {
         path: PathBuf,
     },
     CancelMerge,
+    Screenshot {
+        /// Absolute `.png` path to write the image to.
+        path: Option<PathBuf>,
+        /// Whether the answer carries the PNG as base64; without a path it does.
+        base64: Option<bool>,
+        /// Longest edge of the image in pixels.
+        max_edge: Option<u32>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -213,7 +221,7 @@ impl Drop for ApiHandle {
     }
 }
 
-fn discovery_directory() -> PathBuf {
+pub fn discovery_directory() -> PathBuf {
     crate::preferences::config_directory()
         .unwrap_or_else(|| std::env::temp_dir().join("open-pointcloud-studio-native"))
         .join("instances")
@@ -247,7 +255,16 @@ fn remove_stale_instances(directory: &Path) {
     }
 }
 
-fn write_discovery(port: u16, token: &str) -> Result<PathBuf, String> {
+/// Milliseconds since 1970, the start time a discovery file records.
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
+fn write_discovery(port: u16, token: &str, started: u64) -> Result<PathBuf, String> {
     let directory = discovery_directory();
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     remove_stale_instances(&directory);
@@ -270,7 +287,13 @@ fn write_discovery(port: u16, token: &str) -> Result<PathBuf, String> {
     }
     serde_json::to_writer(
         &mut temporary,
-        &json!({"pid": std::process::id(), "port": port, "token": token, "api": "native-rust-v1"}),
+        &json!({
+            "pid": std::process::id(),
+            "port": port,
+            "token": token,
+            "api": "native-rust-v1",
+            "started": started,
+        }),
     )
     .map_err(|error| error.to_string())?;
     temporary
@@ -291,6 +314,7 @@ fn respond(request: Request, status: u16, body: Value) {
 fn handle_request(
     mut request: Request,
     port: u16,
+    started: u64,
     token: &str,
     sender: &UnboundedSender<ApiRequest>,
 ) {
@@ -303,7 +327,8 @@ fn handle_request(
                 "pid": std::process::id(),
                 "port": port,
                 "version": env!("CARGO_PKG_VERSION"),
-                "api": "native-rust-v1"
+                "api": "native-rust-v1",
+                "started": started,
             }),
         ),
         (&Method::Post, "/eval") => respond(
@@ -365,11 +390,12 @@ pub fn start(
         .port();
     let server = Server::from_listener(listener, None).map_err(|error| error.to_string())?;
     let token = uuid::Uuid::new_v4().to_string();
-    let discovery_path = write_discovery(port, &token)?;
+    let started = unix_millis();
+    let discovery_path = write_discovery(port, &token, started)?;
     let (sender, receiver) = unbounded_channel();
     thread::spawn(move || {
         for request in server.incoming_requests() {
-            handle_request(request, port, &token, &sender);
+            handle_request(request, port, started, &token, &sender);
         }
     });
     Ok((
@@ -422,6 +448,20 @@ mod tests {
         );
         let discovery: Value =
             serde_json::from_slice(&fs::read(&handle.discovery_path).unwrap()).unwrap();
+        let info: Value = serde_json::from_str(
+            &client
+                .get(format!("{url}/info"))
+                .send()
+                .unwrap()
+                .text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(discovery["started"]
+            .as_u64()
+            .is_some_and(|started| started > 0));
+        assert_eq!(info["started"], discovery["started"]);
+        assert_eq!(info["pid"], discovery["pid"]);
         let token = discovery["token"].as_str().unwrap().to_owned();
         let send = thread::spawn(move || {
             client

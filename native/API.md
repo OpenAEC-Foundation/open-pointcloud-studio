@@ -6,10 +6,15 @@ use a webview. The port and a per-process token are written to
 `$XDG_CONFIG_HOME/open-pointcloud-studio-native/instances/instance-<pid>.json`
 (or `~/.config/open-pointcloud-studio-native/instances/` when XDG_CONFIG_HOME
 is unset; on Windows `%APPDATA%\open-pointcloud-studio-native\instances\`). The directory is mode 0700 and the discovery file mode 0600 on
-Unix. A fixed port can be requested with `--api-port PORT [INPUT ...]`.
+Unix. Besides `port` and `token`, the file holds the process ID `pid`, the
+API name `api` (`native-rust-v1`) and `started`, the time the server started
+in milliseconds since 1970, so a client can tell several windows apart and
+pick the newest. A fixed port can be requested with `--api-port PORT [INPUT ...]`.
+[MCP.md](MCP.md) describes `--mcp`, a Model Context Protocol server that finds
+windows this way and offers these commands as tools.
 
 `GET /health` returns `{"status":"ok"}`. `GET /info` returns the process ID,
-port, version and API name. `POST /exec` accepts one JSON command and requires
+port, version, API name and start time. `POST /exec` accepts one JSON command and requires
 the discovery file's token in the `X-OPS-Token` header. A request without a
 valid token receives HTTP 403. The legacy `POST /eval` endpoint returns HTTP
 410 because script evaluation is not part of the native application.
@@ -140,10 +145,26 @@ the view's `frame` rewrites `pan` and `frame` for that size. Wait for `snapshots
 writes all views of the active scan synchronously and answers with the
 number of `views` and of `snapshots` in the file, and with `snapshots_due`:
 the views whose snapshot is missing or older than the view.
+`screenshot` captures the scene part of the window, without ribbon, panels and
+status bar, the way view snapshots are taken. It first waits until the
+viewport has read the points for the current camera, at most about 4
+seconds; `status.result.detail_pending` is true while those points are still
+being read, which starts about 0.2 seconds after the camera changed. The answer has the `width` and `height` of the PNG image in
+pixels, its size in `bytes`, the `viewport_size` in logical pixels with the
+window's `scale_factor`, `detail_pending` (true when the points were still
+being read when the picture was taken), the `path` it was written to or
+`null`, and `png_base64`, the image as standard base64 text, when `base64`
+is true. Without a `path` the image is returned as base64; with a `path` only
+when `base64` is true as well. An image whose longer edge exceeds `max_edge`
+(16–8192, default 1920 pixels) is scaled down. A file that exists at `path`
+is replaced. The command fails while the File view or Settings covers the
+viewport, and while the window is minimised (`"the window is minimised;
+restore it to take a screenshot"`); a view snapshot due meanwhile is taken
+when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, section box, auto-index and 3D surface settings, index and scale progress, and current status text |
+| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, section box, auto-index and 3D surface settings, index and scale progress, `detail_pending` while the viewport reads points for its camera, and current status text |
 | `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found), `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -206,6 +227,7 @@ the views whose snapshot is missing or older than the view.
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |
 | `export_minus_selection` | `path` | Exports the active source without selected or deleted points |
+| `screenshot` | optional `path`, `base64`, `max_edge` | Captures the 3D viewport as a PNG image: written atomically to an absolute `.png` path, replacing a file there, and/or returned as base64 in `png_base64` |
 
 The destination extension selects PLY, XYZ, PTS, CSV, LAS, LAZ or E57. Export
 is atomic and scans the complete source rather than the viewport sample.

@@ -15,6 +15,7 @@ mod cloud_centroid;
 mod cloud_transform;
 mod gpu_viewport;
 mod i18n;
+mod mcp;
 mod measure;
 mod native_api;
 mod native_chrome;
@@ -23,6 +24,7 @@ mod opencad_properties;
 mod opencad_ribbon;
 mod preferences;
 mod project_open;
+mod screenshot;
 mod selection;
 mod settings_dialog;
 mod station_photos;
@@ -379,6 +381,15 @@ fn release_own_console() {}
 fn main() -> iced::Result {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
+    if first.as_deref() == Some(OsStr::new("--mcp")) {
+        if args.next().is_some() {
+            eprintln!("Usage: open-pointcloud-studio --mcp");
+            std::process::exit(2);
+        }
+        // Standard input and output carry the protocol, so the console stays
+        // attached and no window opens in this process.
+        std::process::exit(mcp::run());
+    }
     if first.as_deref() == Some(OsStr::new("--index")) {
         let (Some(source), None) = (args.next(), args.next()) else {
             eprintln!("Usage: open-pointcloud-studio --index INPUT");
@@ -1294,6 +1305,7 @@ impl WalkKey {
 enum Message {
     SyncWindowChrome(u8),
     ApiRequest(native_api::ApiRequest),
+    ApiScreenshot(screenshot::Step),
     ApiExported(String, bool, Result<(PathBuf, u64), String>),
     MergeVisible,
     MergePathChosen(Option<PathBuf>),
@@ -2637,7 +2649,7 @@ impl Studio {
                     .iter()
                     .filter(|view| active_source.as_ref() == Some(&view.source))
                     .collect();
-                (
+                let mut answer = (
                     json!({"ok": true, "result": {
                         "clouds": clouds,
                         "imports": self.imports.iter().map(|(id, job)| json!({
@@ -2701,7 +2713,9 @@ impl Studio {
                         "api_port": self.api_handle.as_ref().map(|handle| handle.port),
                     }}),
                     Task::none(),
-                )
+                );
+                answer.0["result"]["detail_pending"] = Value::Bool(self.detail_pending);
+                answer
             }
             ApiCommand::Job { id } => {
                 if let Some(merge) = self
@@ -3482,6 +3496,11 @@ impl Studio {
                     (json!({"ok": true, "cancel_requested": true}), task)
                 }
             }
+            ApiCommand::Screenshot {
+                path,
+                base64,
+                max_edge,
+            } => return self.api_screenshot(request.reply, path, base64, max_edge),
         };
         let _ = request.reply.send(response);
         task
@@ -4373,6 +4392,7 @@ impl Studio {
                 }
             }
             Message::ApiRequest(request) => return self.handle_api(request),
+            Message::ApiScreenshot(step) => return self.screenshot_step(step),
             Message::ApiExported(id, section_only, result) => {
                 if section_only {
                     self.section_export_pending = false;

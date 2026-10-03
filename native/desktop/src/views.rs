@@ -151,6 +151,11 @@ impl ViewTool {
         self.line_start.take().is_some() | self.note_point.take().is_some()
     }
 
+    /// Where the scene canvas lies in the window, as it was last drawn.
+    pub fn canvas_bounds(&self) -> Option<Rectangle> {
+        self.canvas.get()
+    }
+
     /// Stop what Escape stops first: a rename, or a half-placed annotation.
     /// Returns the status line for it, or `None` when there was neither.
     pub fn cancel_input(&mut self) -> Option<&'static str> {
@@ -294,6 +299,20 @@ pub fn encode_snapshot(
     scale_factor: f64,
     canvas: Rectangle,
 ) -> Result<Vec<u8>, String> {
+    encode_viewport(rgba, width, height, scale_factor, canvas, SNAPSHOT_MAX_EDGE)
+        .map(|(png, _)| png)
+}
+
+/// The scene part of a window screenshot as a PNG image whose longest edge
+/// is at most `max_edge` pixels, with the image's width and height.
+pub fn encode_viewport(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+    canvas: Rectangle,
+    max_edge: u32,
+) -> Result<(Vec<u8>, [u32; 2]), String> {
     if rgba.len() != width as usize * height as usize * 4 {
         return Err("the screenshot does not match its size".into());
     }
@@ -322,9 +341,10 @@ pub fn encode_snapshot(
     let mut image = ::image::RgbImage::from_raw(crop_width, crop_height, pixels)
         .ok_or_else(|| "the screenshot could not be cropped".to_owned())?;
     let longest = crop_width.max(crop_height);
-    if longest > SNAPSHOT_MAX_EDGE {
+    let max_edge = max_edge.max(1);
+    if longest > max_edge {
         let shrink = |edge: u32| {
-            ((u64::from(edge) * u64::from(SNAPSHOT_MAX_EDGE)) / u64::from(longest)).max(1) as u32
+            ((u64::from(edge) * u64::from(max_edge)) / u64::from(longest)).max(1) as u32
         };
         image = ::image::imageops::resize(
             &image,
@@ -333,6 +353,7 @@ pub fn encode_snapshot(
             ::image::imageops::FilterType::Triangle,
         );
     }
+    let size = [image.width(), image.height()];
     let mut png = Vec::new();
     image
         .write_to(
@@ -340,7 +361,7 @@ pub fn encode_snapshot(
             ::image::ImageFormat::Png,
         )
         .map_err(|error| error.to_string())?;
-    Ok(png)
+    Ok((png, size))
 }
 
 /// What an export wrote.
@@ -1150,14 +1171,10 @@ impl Studio {
                     // The points of this camera are still being read.
                     return self.snapshot_timer(guid, serial, tries - 1);
                 }
-                return iced::window::get_latest()
-                    .then(|window| match window {
-                        Some(window) => iced::window::screenshot(window).map(Some),
-                        None => Task::done(None),
-                    })
-                    .map(move |screenshot| {
-                        Message::Views(ViewAction::Captured(guid.clone(), serial, screenshot))
-                    });
+                // A minimised window gives no screenshot; the view stays due.
+                return crate::screenshot::capture_window().map(move |captured| {
+                    Message::Views(ViewAction::Captured(guid.clone(), serial, captured.ok()))
+                });
             }
             ViewAction::Captured(guid, serial, screenshot) => {
                 if self.views.snapshots.get(&guid) != Some(&serial) {
