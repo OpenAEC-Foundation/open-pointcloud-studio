@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
+use super::mesh_write::stl_header_origin;
 use super::obj_mesh::{MeshGeometry, MAX_TRIANGLES, MAX_VERTICES};
 use super::{LoadError, SourceStamp};
 
@@ -130,15 +131,23 @@ pub fn read_stl_mesh(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, Loa
             return Err(LoadError::InvalidData("STL triangle limit exceeded".into()));
         }
         mesh.triangles.reserve(count);
+        // A mesh this application wrote at survey coordinates is relative to
+        // the origin in its header.
+        let origin = stl_header_origin(&header[..80]);
         let mut record = [0u8; 50];
         for _ in 0..count {
             file.read_exact(&mut record)?;
             let mut triangle = [0u32; 3];
             for (corner, offset) in [12, 24, 36].into_iter().enumerate() {
-                let xyz = std::array::from_fn(|axis| {
+                let mut xyz = std::array::from_fn(|axis| {
                     let start = offset + axis * 4;
                     f32::from_le_bytes(record[start..start + 4].try_into().unwrap()) as f64
                 });
+                if let Some(origin) = origin {
+                    for axis in 0..3 {
+                        xyz[axis] += origin[axis];
+                    }
+                }
                 triangle[corner] = intern_vertex(&mut mesh, &mut indices, xyz)?;
             }
             mesh.triangles.push(triangle);

@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
+use super::mesh_write::stl_header_origin;
 use super::{LoadError, Point};
 
 pub fn read_obj(
@@ -93,14 +94,22 @@ pub fn read_stl(
             .and_then(|bytes| bytes.checked_add(84))
             == Some(length)
         {
+            // The same origin as the face loader adds, so the points and
+            // the faces of one file stay together.
+            let origin = stl_header_origin(&header[..80]);
             let mut record = [0u8; 50];
             for _ in 0..triangles {
                 file.read_exact(&mut record)?;
                 for offset in [12, 24, 36] {
-                    let xyz = std::array::from_fn(|axis| {
+                    let mut xyz = std::array::from_fn(|axis| {
                         let start = offset + axis * 4;
                         f32::from_le_bytes(record[start..start + 4].try_into().unwrap()) as f64
                     });
+                    if let Some(origin) = origin {
+                        for axis in 0..3 {
+                            xyz[axis] += origin[axis];
+                        }
+                    }
                     push(Point {
                         xyz,
                         rgb: None,

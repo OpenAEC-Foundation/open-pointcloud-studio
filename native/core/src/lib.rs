@@ -14,6 +14,9 @@ mod e57_quick;
 mod export;
 mod mesh_formats;
 mod mesh_points;
+mod mesh_quality;
+mod mesh_simplify;
+mod mesh_write;
 mod mesher;
 mod obj_mesh;
 mod octree;
@@ -38,6 +41,11 @@ pub use export::{
     export_where, merge_las_map_count, ExportFormat,
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
+pub use mesh_quality::{
+    mesh_deviation, mesh_topology, open_boundary_vertices, MeshDeviation, MeshTopology,
+};
+pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
+pub use mesh_write::{read_stl_origin, write_mesh, MeshFormat, MeshWriteReport};
 pub use mesher::{
     mesh_terrain_obj, mesh_terrain_obj_where, mesh_terrain_obj_where_progress, MeshConfig,
     MeshProgress, MeshStage, MeshStats,
