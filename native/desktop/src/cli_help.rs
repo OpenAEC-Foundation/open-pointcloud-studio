@@ -287,4 +287,68 @@ mod tests {
         }
         assert!(checked >= 12, "only {checked} usage lines found");
     }
+
+    /// The README at the root of the repository lists the modes for someone
+    /// who has not started the program yet. Its command-line section names
+    /// every flag the program accepts, each mode with its arguments as the
+    /// list spells them, and no flag that does not exist.
+    #[test]
+    fn readme_lists_every_mode_and_no_flag_that_does_not_exist() {
+        // Flags in a text: `--name` and the one-letter `-N`.
+        fn flags(text: &str) -> BTreeSet<&str> {
+            text.split(|character: char| !(character.is_ascii_alphanumeric() || character == '-'))
+                .filter(|word| {
+                    let long = word.strip_prefix("--").is_some_and(|name| {
+                        name.starts_with(|first: char| first.is_ascii_alphabetic())
+                    });
+                    let short = word.len() == 2
+                        && word.starts_with('-')
+                        && word.ends_with(|letter: char| letter.is_ascii_alphabetic());
+                    long || short
+                })
+                .collect()
+        }
+
+        let readme = include_str!("../../../README.md");
+        let heading = "### Command line";
+        let start = readme
+            .find(heading)
+            .expect("the README has a command-line section");
+        let rest = &readme[start + heading.len()..];
+        let section = &rest[..rest.find("\n### ").unwrap_or(rest.len())];
+        // A table cell writes the bar between alternatives with a backslash.
+        let section = section.replace("\\|", "|");
+
+        let mut accepted = BTreeSet::new();
+        for mode in MODES {
+            let row = if mode.flag.is_empty() {
+                invocation(mode)
+            } else {
+                [mode.flag, mode.arguments]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            assert!(
+                section.contains(&format!("`{row}`")),
+                "the README has no row `{row}`"
+            );
+            if let Some(short) = mode.short {
+                assert!(
+                    section.contains(&format!("`{short}`")),
+                    "the README does not name {short}"
+                );
+                accepted.insert(short);
+            }
+            accepted.extend(flags(mode.flag));
+            accepted.extend(flags(mode.arguments));
+        }
+        assert!(accepted.len() >= 20, "{accepted:?}");
+        assert_eq!(
+            flags(&section),
+            accepted,
+            "the flags the README names, against the flags the program accepts"
+        );
+    }
 }

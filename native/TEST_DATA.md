@@ -3,6 +3,19 @@
 The files themselves are deliberately kept outside the repository. Check the
 source terms before redistributing a dataset or screenshots from it.
 
+On 3 October 2026, the points on screen during camera movement were counted
+on a synthetic cloud of 40 million points: a generated scene with ground, a
+building and trees, stored as LAS 1.2 with colours in a file of 1.04 GB.
+Building the index of that file took about 11 seconds. With a point budget
+of 6 million, two release builds for Windows were compared: the one from
+before the change that keeps the picture while the viewport refines, and the
+one with it. The same movements were made in both: single camera moves, an
+orbit with short pauses, a continuous drag, and zooming. The lowest number
+of points on screen during them was 250,000 before the change and between
+2.96 and 6 million after it. The time until the full detail of the new view
+was back was the same in both builds, about 0.6 to 1.2 seconds with the
+leaves in the file cache of the system.
+
 On 2 October 2026, the native OBJ loader opened TinyObjLoader's public
 [multi-material Cornell box](https://github.com/tinyobjloader/tinyobjloader/blob/release/models/cornell_box_multimaterial.obj)
 with its adjacent [MTL file](https://github.com/tinyobjloader/tinyobjloader/blob/release/models/cornell_box.mtl).

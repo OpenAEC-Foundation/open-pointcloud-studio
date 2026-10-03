@@ -1,5 +1,7 @@
 # Native command API
 
+## Connecting
+
 The Rust desktop app starts a local command server on `127.0.0.1`. It executes
 named Rust operations in the running GUI; it does not evaluate JavaScript or
 use a webview. The port and a per-process token are written to
@@ -26,6 +28,8 @@ curl -H 'Content-Type: application/json' -H 'X-OPS-Token: TOKEN' \
   -d '{"command":"status"}' http://127.0.0.1:PORT/exec
 ```
 
+## Answers, jobs and imports
+
 Commands use absolute file paths. They return JSON with `ok: true` or
 `ok: false` and an `error`. File opening returns `accepted: true` as soon as
 the GUI starts loading; poll `status` for the new layer. `open` answers after
@@ -39,6 +43,9 @@ imports with decoded finite-point counts and cancellation state. Use
 `cancel_import` with that ID to stop a long import. A cancelled import never
 adds a partial layer. LAS/LAZ header previews open immediately and have a null
 `import_id`.
+
+## Meshing and merging
+
 Mesh jobs report `reading`, `reconstructing`, or `writing` with completed and
 total units. `cancel_mesh` requests cancellation; a cancelled mesh leaves an
 existing destination untouched. Only one mesh job runs at a time.
@@ -49,6 +56,9 @@ version, point layout, coordinate grid and metadata; incompatible CRS metadata
 is rejected instead of silently choosing one. Poll its job or
 `status.result.merge` for processed and written point counts. `cancel_merge`
 stops the task and leaves an existing destination unchanged.
+
+## 3D BAG download
+
 `bag3d` downloads the buildings of the Dutch 3D BAG register inside a box and
 opens them as a mesh layer, as the 3D BAG panel does, which File > 3D BAG
 buildings… opens. `bbox` is `[xmin, ymin, xmax, ymax]` in RD New (EPSG:28992)
@@ -71,6 +81,9 @@ whose folder does not exist are refused before anything is asked.
 way has ended; the job becomes `cancelled` and an existing destination stays
 as it was. Only one download runs at a time. While the extension is switched
 off the command answers `extension bag3d is disabled`.
+
+## Extensions
+
 `list_extensions` lists the optional features built into the application in
 `extensions`: for each its `id`, `name`, `version` (the version of the
 application), `description`, `author`, `category`, `builtin` (always true: no
@@ -81,6 +94,9 @@ The answer holds `id`, `enabled` and `saved`. When `saved` is false the file
 could not be written: the switch holds for this session only and `save_error`
 says why. Switching `bag3d` off closes its panel, stops a running download
 and disables its entry in the File view.
+
+## File view
+
 `file_view` opens the File view over the model or closes it. With
 `open: true` an optional `page` (`workspace`, `extensions` or `about`) chooses
 the page; without it the view opens on `workspace`, or keeps the page it
@@ -93,6 +109,9 @@ through this API.
 `status.result.mesh_export_pending` is true from the moment the window asks
 where to save a mesh from the File view or Properties until that file has
 been written.
+
+## Editing
+
 For large clouds, `scale` returns `running: true`. Poll `status.result.scale`
 for processed and total source points; it becomes `null` when the transform
 finishes or is cancelled. `cancel_scale` stops the scan without applying the
@@ -102,6 +121,9 @@ until the set of remaining points changes.
 Poll `status.result.thin_pending`; after it becomes false, the active cloud's
 `remaining` and `deleted` counts reflect the exact edit. `undo_delete` restores
 the removed points without changing the source file.
+
+## Index
+
 While an uncached octree is built, `status.result.index_progress` reports the
 source-read count and known total, then tree records handled, depth and leaf
 count, with `settled` for the points that have reached their leaf of the
@@ -111,6 +133,9 @@ count, with `settled` for the points that have reached their leaf of the
 `cancelling` shows whether cancellation has been requested. The field becomes
 `null` after the build finishes. `cancel_index` stops the build and discards
 its temporary files without publishing a partial cache.
+
+## Selection and picking
+
 World-box selection also returns a job ID and uses the same query. Its limits
 are inclusive source XYZ coordinates, independent of the viewport camera and
 point budget. It selects across visible layers while respecting class filters,
@@ -143,6 +168,9 @@ when its deletion mask has no ordinal in common with the current selection.
 becomes `cancelled` and no partial selection replaces the previous one. Escape
 or Clear in the native UI also stops an in-progress scan. An in-progress point
 pick is discarded when cancelled.
+
+## Measuring
+
 `measure` sets a finished distance or area measurement from scene coordinates,
 as if its points had been picked in the viewport. It replaces the current
 measurement, leaves the active tool unchanged and returns the measurement.
@@ -157,6 +185,9 @@ difference is the last point's Z minus the first point's, `area` is the true
 units. `status.result.measure_mode` is the measuring mode active in the
 viewport: `distance`, `area` or `null`. Points picked there appear in
 `measure` with `finished: false` until the measurement is finished.
+
+## Views and annotations
+
 A saved view holds the orbit camera (`yaw`, `pitch`, `zoom`, `pan`), the
 walking camera in `walk` when it was saved while walking, the scene bounds and
 viewport size the camera was relative to in `frame`, the section box in
@@ -189,6 +220,9 @@ the view's `frame` rewrites `pan` and `frame` for that size. Wait for `snapshots
 writes all views of the active scan synchronously and answers with the
 number of `views` and of `snapshots` in the file, and with `snapshots_due`:
 the views whose snapshot is missing or older than the view.
+
+## Screenshots
+
 `screenshot` captures the scene part of the window, without ribbon, panels and
 status bar, the way view snapshots are taken. It first waits until the
 viewport has read the points for the current camera, at most about 4
@@ -206,6 +240,8 @@ viewport (`file_view` with `open: false` returns to the model), and while the
 window is minimised (`"the window is minimised;
 restore it to take a screenshot"`); a view snapshot due meanwhile is taken
 when the view is restored.
+
+## Commands
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
@@ -279,6 +315,8 @@ when the view is restored.
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |
 | `export_minus_selection` | `path` | Exports the active source without selected or deleted points |
 | `screenshot` | optional `path`, `base64`, `max_edge` | Captures the 3D viewport as a PNG image: written atomically to an absolute `.png` path, replacing a file there, and/or returned as base64 in `png_base64` |
+
+## Exports, stored settings and the server
 
 The destination extension selects PLY, XYZ, PTS, CSV, LAS, LAZ or E57. Export
 is atomic and scans the complete source rather than the viewport sample.
