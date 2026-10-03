@@ -240,8 +240,8 @@ impl ScreenFill {
         if step > 1 && (1..LOD_FILL_MIN_HITS as u128).contains(&hits) {
             (probes, hits) = sweep((step / LOD_FILL_RESWEEP).max(1));
         }
-        if probes > 0 {
-            self.points += (items.len() as u128 * hits / probes) as usize;
+        if let Some(seen) = (items.len() as u128 * hits).checked_div(probes) {
+            self.points += seen as usize;
         }
     }
 
