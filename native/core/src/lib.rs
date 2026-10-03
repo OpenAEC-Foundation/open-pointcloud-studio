@@ -40,14 +40,18 @@ pub use bag3d::{
     BAG3D_USER_AGENT,
 };
 pub use drawing::{
-    class_point_layer, drawing_info_text, layer_name, source_point_layer, write_drawing,
-    write_drawing_progress, Drawing2d, DrawingEntity, DrawingFormat, DrawingFrame, DrawingLayer,
-    DrawingOrigin, DrawingRequest, DrawingStats, DrawingUnits, DrawingVersion, DrawingView,
-    PointColor, PointLayers, DEFAULT_CUT_GRID, DEFAULT_DRAWING_POINTS, DEFAULT_MAX_WALL_THICKNESS,
-    DEFAULT_MIN_WALL_THICKNESS, DEFAULT_POINT_SPACING, DEFAULT_SLAB_THICKNESS, LAYER_CUT_FILL,
-    LAYER_CUT_OUTLINE, LAYER_FRAME, LAYER_INFO, LAYER_POINTS, LAYER_RGB_CONTRAST,
-    LAYER_RGB_CUT_FILL, LAYER_RGB_FRAME, MAX_DRAWING_POINTS, MAX_SLAB_THICKNESS,
-    MIN_SLAB_THICKNESS,
+    class_point_layer, collect_slab, drawing_info_text, export_section_drawing, layer_name,
+    preview_cut_regions, section_drawing, slab_from_section, source_point_layer, trace_cut_regions,
+    write_drawing, write_drawing_progress, CutGrid, CutOutline, CutPreview, CutRegion, Drawing2d,
+    DrawingEntity, DrawingFormat, DrawingFrame, DrawingLayer, DrawingOrigin, DrawingProgress,
+    DrawingRequest, DrawingSource, DrawingStage, DrawingStats, DrawingUnits, DrawingVersion,
+    DrawingView, OutlineOptions, PointColor, PointLayers, PreviewRegion, Slab, SlabCut,
+    SlabOptions, SlabPoint, CUT_MIN_POINTS_PER_CELL, DEFAULT_CUT_GRID, DEFAULT_DRAWING_POINTS,
+    DEFAULT_MAX_WALL_THICKNESS, DEFAULT_MIN_WALL_LENGTH, DEFAULT_MIN_WALL_THICKNESS,
+    DEFAULT_POINT_SPACING, DEFAULT_SLAB_THICKNESS, LAYER_CUT_FILL, LAYER_CUT_OUTLINE, LAYER_FRAME,
+    LAYER_INFO, LAYER_POINTS, LAYER_RGB_CONTRAST, LAYER_RGB_CUT_FILL, LAYER_RGB_FRAME,
+    MAX_CUT_GRID_CELLS, MAX_DRAWING_POINTS, MAX_SLAB_THICKNESS, MAX_WALL_THICKNESS, MIN_CUT_GRID,
+    MIN_CUT_HOLE_AREA, MIN_SLAB_THICKNESS, SQUARE_TOLERANCE,
 };
 pub use dxf::read_mesh as read_dxf_mesh;
 pub use export::{

@@ -6,6 +6,9 @@
 //! The unit factor is applied once, by the writer, so a preview and an export
 //! are made from the same numbers.
 
+mod outline;
+mod section;
+mod slab;
 mod write;
 
 use std::fmt;
@@ -13,6 +16,18 @@ use std::path::Path;
 
 use super::LoadError;
 
+pub use outline::{
+    trace_cut_regions, CutOutline, CutRegion, OutlineOptions, CUT_MIN_POINTS_PER_CELL,
+    DEFAULT_MIN_WALL_LENGTH, MIN_CUT_HOLE_AREA, SQUARE_TOLERANCE,
+};
+pub use section::{
+    export_section_drawing, preview_cut_regions, section_drawing, CutPreview, DrawingProgress,
+    DrawingSource, DrawingStage, PreviewRegion,
+};
+pub use slab::{
+    collect_slab, slab_from_section, CutGrid, Slab, SlabCut, SlabOptions, SlabPoint,
+    MAX_CUT_GRID_CELLS,
+};
 pub use write::{write_drawing, write_drawing_progress};
 
 /// Thinned scan points. With several scans one layer per scan
@@ -45,7 +60,15 @@ pub const DEFAULT_SLAB_THICKNESS: f64 = 0.10;
 pub const MIN_SLAB_THICKNESS: f64 = 0.005;
 pub const MAX_SLAB_THICKNESS: f64 = 5.0;
 pub const DEFAULT_CUT_GRID: f64 = 0.02;
+/// A finer grid than this holds no more than the noise of a scanner, and
+/// the work of the filled cut grows with the wall thickness counted in
+/// cells.
+pub const MIN_CUT_GRID: f64 = 0.005;
 pub const DEFAULT_MAX_WALL_THICKNESS: f64 = 0.50;
+/// Two faces farther apart than this are never taken as one wall. The gap
+/// between them is closed on a grid that is wider by that gap on every side,
+/// so this also bounds what the filled cut costs, whatever a request asks.
+pub const MAX_WALL_THICKNESS: f64 = 2.0;
 pub const DEFAULT_MIN_WALL_THICKNESS: f64 = 0.05;
 
 /// A layer table entry cannot be longer than this.
@@ -334,10 +357,11 @@ pub struct DrawingRequest {
     pub thickness: Option<f64>,
     pub points: bool,
     pub fill: bool,
-    /// Cell of the occupancy grid that the fills are traced from.
+    /// Cell of the occupancy grid that the fills are traced from, at least
+    /// `MIN_CUT_GRID`.
     pub grid: f64,
     /// Two scanned faces at most this far apart are one wall; wider gaps stay
-    /// open, so door and window openings do.
+    /// open, so door and window openings do. At most `MAX_WALL_THICKNESS`.
     pub max_wall_thickness: f64,
     pub min_wall_thickness: f64,
     pub square: bool,
@@ -390,11 +414,15 @@ impl DrawingRequest {
         if !positive(self.point_spacing) {
             return invalid("point spacing must be above zero");
         }
-        if !positive(self.grid) {
-            return invalid("grid size must be above zero");
+        // Written so that a NaN fails the test.
+        if !(self.grid.is_finite() && self.grid >= MIN_CUT_GRID) {
+            return invalid("grid size must be at least 0.005 m");
         }
         if !positive(self.min_wall_thickness) || !positive(self.max_wall_thickness) {
             return invalid("wall thickness must be above zero");
+        }
+        if self.max_wall_thickness > MAX_WALL_THICKNESS {
+            return invalid("largest wall thickness must be at most 2 m");
         }
         if self.min_wall_thickness > self.max_wall_thickness {
             return invalid("smallest wall thickness is above the largest");
@@ -420,6 +448,9 @@ impl Default for DrawingRequest {
 pub struct DrawingStats {
     /// Points of the scans that lie in the slab.
     pub slab_points: u64,
+    /// Points that were read to find them: those of the octree leaves that
+    /// touch the slab, and all points of a layer without an index.
+    pub read_points: u64,
     /// Point entities in the drawing, after thinning.
     pub drawn_points: u64,
     /// The spacing the points were thinned to; above the requested spacing
@@ -428,7 +459,12 @@ pub struct DrawingStats {
     /// Filled regions, and the vertices of all their rings.
     pub regions: usize,
     pub vertices: usize,
+    /// Regions left out because they are smaller than the smallest wall.
+    pub dropped_regions: usize,
     /// Grid cell and main direction of the filled cut; `None` without a fill.
+    /// The cell is larger than the one asked when the cloud is too sparse
+    /// for it, or when the surfaces in the slab span more than the grid
+    /// holds at that cell.
     pub grid_cell: Option<f64>,
     pub direction_degrees: Option<f64>,
     pub bytes: u64,
@@ -813,7 +849,16 @@ mod tests {
         assert!(refused(|request| request.thickness = Some(f64::NAN)));
         assert!(refused(|request| request.point_spacing = 0.0));
         assert!(refused(|request| request.grid = f64::INFINITY));
+        assert!(refused(|request| request.grid = 0.0));
+        assert!(refused(|request| request.grid = 0.004));
         assert!(refused(|request| request.min_wall_thickness = 0.8));
+        // Half a metre typed as millimetres.
+        assert!(refused(|request| request.max_wall_thickness = 500.0));
+        assert!(refused(|request| request.max_wall_thickness = 2.5));
+        let mut widest = valid;
+        widest.grid = MIN_CUT_GRID;
+        widest.max_wall_thickness = MAX_WALL_THICKNESS;
+        assert!(widest.validate().is_ok());
         assert!(refused(|request| request.max_points = 0));
         assert!(refused(
             |request| request.max_points = MAX_DRAWING_POINTS + 1
