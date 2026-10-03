@@ -755,7 +755,7 @@ impl Studio {
         if let Some(mode) = view.color_mode.filter(|mode| *mode != self.color_mode) {
             tasks.push(self.update(Message::ColorMode(mode)));
         }
-        self.view_label = "SAVED VIEW";
+        self.view_label = i18n::key("SAVED VIEW");
         self.views.drop_placing();
         self.activate_view(&view.guid);
         self.views.shown = self

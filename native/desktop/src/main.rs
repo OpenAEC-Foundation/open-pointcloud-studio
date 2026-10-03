@@ -11,11 +11,15 @@ use std::time::{Duration, Instant};
 mod bag_map;
 mod bcf;
 mod camera_views;
+mod cli_help;
 mod cloud_centroid;
 mod cloud_transform;
+mod file_view;
 mod gpu_viewport;
 mod i18n;
 mod lod_pace;
+#[cfg(target_os = "macos")]
+mod macos_open;
 mod mcp;
 mod measure;
 mod native_api;
@@ -28,6 +32,8 @@ mod project_open;
 mod screenshot;
 mod selection;
 mod settings_dialog;
+#[cfg(test)]
+mod shell_tests;
 mod station_photos;
 mod ui_theme;
 mod view_cube;
@@ -35,6 +41,7 @@ mod views;
 
 use bag_map::{BagMap, MapView, TileKey};
 use cloud_transform::CloudTransform;
+use file_view::{FileAction, FilePage};
 use iced::futures::SinkExt;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
@@ -64,27 +71,54 @@ use serde_json::{json, Value};
 use station_photos::{PhotoAtlas, PhotoSet, WalkView};
 use ui_theme::UiTheme;
 
+/// The name of the application wherever it is shown.
+pub(crate) const APP_NAME: &str = "Open Pointcloud Studio";
+/// Where the source code of the application is published.
+pub(crate) const SOURCE_URL: &str = "https://github.com/OpenAEC-Foundation/open-pointcloud-studio";
+/// The version as the status bar shows it.
+const VERSION_LABEL: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+/// The name window managers and launchers know the application by, which is
+/// the name of the desktop entry the packages install.
+#[cfg(target_os = "linux")]
+const APPLICATION_ID: &str = "org.openaec.OpenPointcloudStudio";
+
+/// The name and the version of the application as one text.
+pub(crate) fn app_title() -> String {
+    format!("{APP_NAME} {VERSION_LABEL}")
+}
+
+/// The title of the window: the application, after the file name of the
+/// active scan when there is one.
+fn title_for(active: Option<&str>) -> String {
+    match active {
+        Some(name) => format!("{name} - {}", app_title()),
+        None => app_title(),
+    }
+}
+
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
 const EXACT_VISIBLE_LOD_ZOOM: f32 = 0.05;
 const MAX_EXACT_VISIBLE_LOD_CANDIDATES: u64 = 2_000_000;
 const AUTO_INDEX_MIN_POINTS: u64 = 1_000_000;
 const ONE_PASS_IMPORT_MIN_BYTES: u64 = 64 * 1024 * 1024;
+/// The standard classes of LAS points; the names are translated where the
+/// project panel lists them.
 const ASPRS_CLASSIFICATIONS: &[(u8, &str)] = &[
-    (0, "Never classified"),
-    (1, "Unassigned"),
-    (2, "Ground"),
-    (3, "Low vegetation"),
-    (4, "Medium vegetation"),
-    (5, "High vegetation"),
-    (6, "Building"),
-    (7, "Low point / noise"),
-    (9, "Water"),
-    (10, "Rail"),
-    (11, "Road surface"),
-    (13, "Wire guard"),
-    (14, "Wire conductor"),
-    (15, "Transmission tower"),
-    (17, "Bridge deck"),
+    (0, i18n::key("Never classified")),
+    (1, i18n::key("Unassigned")),
+    (2, i18n::key("Ground")),
+    (3, i18n::key("Low vegetation")),
+    (4, i18n::key("Medium vegetation")),
+    (5, i18n::key("High vegetation")),
+    (6, i18n::key("Building")),
+    (7, i18n::key("Low point / noise")),
+    (9, i18n::key("Water")),
+    (10, i18n::key("Rail")),
+    (11, i18n::key("Road surface")),
+    (13, i18n::key("Wire guard")),
+    (14, i18n::key("Wire conductor")),
+    (15, i18n::key("Transmission tower")),
+    (17, i18n::key("Bridge deck")),
 ];
 const BAG3D_MESH_COMMENTS: &[&str] = &[
     "© 3DBAG door tudelft3d en 3DGI · CC BY 4.0",
@@ -384,6 +418,13 @@ fn release_own_console() {}
 fn main() -> iced::Result {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
+    i18n::set(i18n::load());
+    // The version and the help text are answered before anything else, so
+    // that a script can ask for them where no window can open.
+    if let Some(text) = cli_help::answer(first.as_deref()) {
+        println!("{text}");
+        return Ok(());
+    }
     if first.as_deref() == Some(OsStr::new("--mcp")) {
         if args.next().is_some() {
             eprintln!("Usage: open-pointcloud-studio --mcp");
@@ -851,8 +892,7 @@ fn main() -> iced::Result {
         }
     };
     release_own_console();
-    i18n::set(i18n::load());
-    iced::application("Open Pointcloud Studio", Studio::update, Studio::view)
+    iced::application(Studio::window_title, Studio::update, Studio::view)
         // Controls without an explicit size match the compact property rows.
         .settings(iced::Settings {
             default_text_size: iced::Pixels(12.0),
@@ -871,7 +911,9 @@ fn main() -> iced::Result {
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete),
                     ..
-                }) if status == iced::event::Status::Ignored => Some(Message::DeleteSelection),
+                }) if status == iced::event::Status::Ignored => {
+                    Some(Message::ModelKey(ModelKey::Delete))
+                }
                 // Backspace and Enter edit and finish a measurement.
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace),
@@ -895,21 +937,25 @@ fn main() -> iced::Result {
                     && !modifiers.logo()
                     && value.eq_ignore_ascii_case("f") =>
                 {
-                    Some(Message::ResetCamera)
+                    Some(Message::ModelKey(ModelKey::Fit))
                 }
+                // With the command key of the system: Control, and Command on
+                // macOS.
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Character(value),
                     modifiers,
                     ..
-                }) if status == iced::event::Status::Ignored && modifiers.control() => {
+                }) if status == iced::event::Status::Ignored && modifiers.command() => {
                     if value.eq_ignore_ascii_case("z") {
-                        Some(if modifiers.shift() {
-                            Message::RedoDelete
+                        Some(Message::ModelKey(if modifiers.shift() {
+                            ModelKey::Redo
                         } else {
-                            Message::UndoDelete
-                        })
+                            ModelKey::Undo
+                        }))
                     } else if value.eq_ignore_ascii_case("y") {
-                        Some(Message::RedoDelete)
+                        Some(Message::ModelKey(ModelKey::Redo))
+                    } else if value.as_str() == "," {
+                        Some(Message::Settings(settings_dialog::SettingsAction::Open))
                     } else {
                         None
                     }
@@ -959,7 +1005,24 @@ fn main() -> iced::Result {
             } else {
                 iced::Subscription::none()
             };
-            iced::Subscription::batch([keyboard, api, walking])
+            // Files the system hands over are opened like files dropped on
+            // the window.
+            let opened = if let Some(receiver) = &studio.opened_files {
+                let receiver = Arc::clone(receiver);
+                let stream = iced::stream::channel(32, move |mut output| async move {
+                    loop {
+                        let path = receiver.lock().await.recv().await;
+                        let Some(path) = path else { break };
+                        if output.send(Message::FileDropped(path)).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                iced::Subscription::run_with_id("opened_files", stream)
+            } else {
+                iced::Subscription::none()
+            };
+            iced::Subscription::batch([keyboard, api, opened, walking])
         })
         .font(include_bytes!("../../assets/fonts/Inter.ttf").as_slice())
         .font(include_bytes!("../../assets/fonts/SpaceGrotesk.ttf").as_slice())
@@ -973,6 +1036,11 @@ fn main() -> iced::Result {
                 None,
             )
             .ok(),
+            #[cfg(target_os = "linux")]
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: APPLICATION_ID.into(),
+                ..Default::default()
+            },
             ..iced::window::Settings::default()
         })
         .run_with(move || {
@@ -980,6 +1048,13 @@ fn main() -> iced::Result {
             if let Some((receiver, handle)) = api {
                 studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
                 studio.api_handle = Some(handle);
+            }
+            // This runs on the main thread after the event loop was made and
+            // before it starts, which is when the hand-over must be in place.
+            #[cfg(target_os = "macos")]
+            {
+                studio.opened_files = macos_open::install()
+                    .map(|receiver| Arc::new(tokio::sync::Mutex::new(receiver)));
             }
             let chrome = Task::perform(
                 async {
@@ -1011,22 +1086,6 @@ impl fmt::Display for ColorMode {
             Self::Classification => "Classification",
         })
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FileAction {
-    Import,
-    ImportFolder,
-    Activate(usize),
-    ExportFull,
-    ExportSelection,
-    ExportWithoutSelection,
-    ExportSection,
-    ExportDecimated,
-    ExportMesh,
-    ExportBcf,
-    MergeVisible,
-    CancelMerge,
 }
 
 fn ribbon_scroll_id() -> scrollable::Id {
@@ -1263,18 +1322,40 @@ impl CameraPreset {
             Self::Top => (
                 -std::f32::consts::FRAC_PI_2,
                 std::f32::consts::FRAC_PI_2,
-                "TOP",
+                i18n::key("TOP"),
             ),
             Self::Bottom => (
                 -std::f32::consts::FRAC_PI_2,
                 -std::f32::consts::FRAC_PI_2,
-                "BOTTOM",
+                i18n::key("BOTTOM"),
             ),
-            Self::Front => (-std::f32::consts::FRAC_PI_2, 0.0, "FRONT"),
-            Self::Back => (std::f32::consts::FRAC_PI_2, 0.0, "BACK"),
-            Self::Right => (0.0, 0.0, "RIGHT"),
-            Self::Left => (std::f32::consts::PI, 0.0, "LEFT"),
-            Self::Isometric => (-0.8, 0.6, "ISOMETRIC"),
+            Self::Front => (-std::f32::consts::FRAC_PI_2, 0.0, i18n::key("FRONT")),
+            Self::Back => (std::f32::consts::FRAC_PI_2, 0.0, i18n::key("BACK")),
+            Self::Right => (0.0, 0.0, i18n::key("RIGHT")),
+            Self::Left => (std::f32::consts::PI, 0.0, i18n::key("LEFT")),
+            Self::Isometric => (-0.8, 0.6, i18n::key("ISOMETRIC")),
+        }
+    }
+}
+
+/// A key that edits the model or moves its camera. The same actions come
+/// from buttons and from the command API; only the keys are held back while
+/// the model is not shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelKey {
+    Delete,
+    Undo,
+    Redo,
+    Fit,
+}
+
+impl ModelKey {
+    fn message(self) -> Message {
+        match self {
+            Self::Delete => Message::DeleteSelection,
+            Self::Undo => Message::UndoDelete,
+            Self::Redo => Message::RedoDelete,
+            Self::Fit => Message::ResetCamera,
         }
     }
 }
@@ -1323,6 +1404,11 @@ enum Message {
     ApiPickReady(String, u64, usize, Result<Option<IndexedPoint>, String>),
     ToggleFile,
     FileAction(FileAction),
+    /// Show a page of the File view.
+    FilePage(FilePage),
+    /// Open a web page of the application in the browser of the system.
+    OpenUrl(&'static str),
+    Exit,
     RibbonScroll(f32),
     RibbonViewport(f32, f32, f32),
     RibbonReset,
@@ -1478,6 +1564,7 @@ enum Message {
     WalkLook(f32, f32),
     WalkZoom(f32),
     WalkKey(WalkKey, bool),
+    ModelKey(ModelKey),
     Modifiers(iced::keyboard::Modifiers),
     WalkTick(Instant),
     WalkStop,
@@ -1536,6 +1623,9 @@ struct Studio {
         Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<native_api::ApiRequest>>>,
     >,
     api_handle: Option<native_api::ApiHandle>,
+    /// Files the system hands to the application after it started; only
+    /// macOS delivers files this way.
+    opened_files: Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<PathBuf>>>>,
     api_jobs: HashMap<String, Value>,
     api_job_order: VecDeque<String>,
     imports: HashMap<u64, ImportJob>,
@@ -1635,6 +1725,8 @@ struct Studio {
     viewport_size: Size,
     ribbon_viewport: Option<(f32, f32, f32)>,
     file_open: bool,
+    /// The page the File view shows.
+    file_page: FilePage,
     ui_theme: UiTheme,
     settings_revision: u64,
     box_select: bool,
@@ -1952,6 +2044,7 @@ impl Default for Studio {
         Self {
             api_receiver: None,
             api_handle: None,
+            opened_files: None,
             api_jobs: HashMap::new(),
             api_job_order: VecDeque::new(),
             imports: HashMap::new(),
@@ -2051,6 +2144,7 @@ impl Default for Studio {
             viewport_size: Size::new(915.0, 743.0),
             ribbon_viewport: None,
             file_open: false,
+            file_page: FilePage::default(),
             ui_theme: UiTheme::load(),
             settings_revision: 0,
             box_select: false,
@@ -2788,7 +2882,10 @@ impl Studio {
                     }}),
                     Task::none(),
                 );
+                // The literal above is as large as its macro can expand; further
+                // fields are added to the answer here.
                 answer.0["result"]["detail_pending"] = Value::Bool(self.detail_pending);
+                answer.0["result"]["language"] = Value::from(i18n::choice().key());
                 answer
             }
             ApiCommand::Job { id } => {
@@ -2916,7 +3013,7 @@ impl Studio {
                     self.pitch = pitch;
                     self.zoom = zoom;
                     self.pan = pan;
-                    self.view_label = "CUSTOM";
+                    self.view_label = i18n::key("CUSTOM");
                     self.revision += 1;
                     let task = self.schedule_detail();
                     (
@@ -3026,6 +3123,20 @@ impl Studio {
                     (json!({"ok": true, "theme": theme.key()}), task)
                 } else {
                     (json!({"ok": false, "error": "unknown theme"}), Task::none())
+                }
+            }
+            ApiCommand::SetLanguage { language } => {
+                if let Some(language) = i18n::Language::from_key(&language.to_ascii_lowercase()) {
+                    self.choose_language(language);
+                    (
+                        json!({"ok": true, "language": language.key()}),
+                        Task::none(),
+                    )
+                } else {
+                    (
+                        json!({"ok": false, "error": "unknown language"}),
+                        Task::none(),
+                    )
                 }
             }
             ApiCommand::SetColor { mode } => {
@@ -4642,25 +4753,17 @@ impl Studio {
             }
             Message::ToggleFile => {
                 self.file_open = !self.file_open;
+                self.file_page = FilePage::default();
                 self.ribbon_viewport = None;
             }
-            Message::FileAction(action) => {
-                self.file_open = false;
-                return self.update(match action {
-                    FileAction::Import => Message::Open,
-                    FileAction::ImportFolder => Message::OpenFolder,
-                    FileAction::Activate(index) => Message::Select(index),
-                    FileAction::ExportFull => Message::Export,
-                    FileAction::ExportSelection => Message::ExportSelection,
-                    FileAction::ExportWithoutSelection => Message::RemoveSelection,
-                    FileAction::ExportSection => Message::ExportSection,
-                    FileAction::ExportDecimated => Message::Decimate,
-                    FileAction::ExportMesh => Message::ExportMesh,
-                    FileAction::ExportBcf => Message::Views(views::ViewAction::ExportBcf),
-                    FileAction::MergeVisible => Message::MergeVisible,
-                    FileAction::CancelMerge => Message::CancelMerge,
-                });
+            Message::FileAction(action) => return self.file_action(action),
+            Message::FilePage(page) => self.file_page = page,
+            Message::OpenUrl(url) => {
+                if let Err(error) = open::that(url) {
+                    self.status = format!("Could not open {url}: {error}");
+                }
             }
+            Message::Exit => return iced::exit(),
             Message::RibbonScroll(direction) => {
                 return scrollable::scroll_by(
                     ribbon_scroll_id(),
@@ -4731,6 +4834,13 @@ impl Studio {
             }
             Message::DroppedFilesReady => {
                 let paths = std::mem::take(&mut self.dropped_paths);
+                // A file handed over while the File view covers the model
+                // must be seen opening.
+                if self.file_open {
+                    self.file_open = false;
+                    self.file_page = FilePage::default();
+                    self.ribbon_viewport = None;
+                }
                 return self.open_paths(paths);
             }
             Message::ScansExpanded(expansion) => return self.open_expanded(expansion).1,
@@ -6890,6 +7000,14 @@ impl Studio {
                 self.walk_fast = false;
                 self.modifiers = iced::keyboard::Modifiers::default();
             }
+            Message::ModelKey(key) => {
+                // The File view and the Settings dialog cover the model: a key
+                // must not change what is not shown.
+                if self.file_open || self.settings.is_some() {
+                    return Task::none();
+                }
+                return self.update(key.message());
+            }
             Message::WalkKey(key, pressed) => {
                 if pressed && self.file_open {
                     return Task::none();
@@ -7200,7 +7318,7 @@ impl Studio {
                     .rem_euclid(std::f32::consts::TAU)
                     - std::f32::consts::PI;
                 self.pitch = (self.pitch + dy * 0.01).clamp(-1.56, 1.56);
-                self.view_label = "CUSTOM";
+                self.view_label = i18n::key("CUSTOM");
                 self.revision += 1;
                 return self.schedule_detail();
             }
@@ -7294,7 +7412,7 @@ impl Studio {
             }
             Message::CubeCorner(corner) => {
                 (self.yaw, self.pitch) = view_cube::view_from(corner);
-                self.view_label = "ISO CORNER";
+                self.view_label = i18n::key("ISO CORNER");
                 self.revision += 1;
                 return self.schedule_detail();
             }
@@ -8471,8 +8589,8 @@ impl Studio {
                     .iter()
                     .find(|(known, _)| *known == code)
                     .map_or_else(
-                        || format!("{code:02}  Class {code}"),
-                        |(_, label)| format!("{code:02}  {label}"),
+                        || format!("{code:02}  {} {code}", i18n::tr("Class")),
+                        |(_, label)| format!("{code:02}  {}", i18n::tr(label)),
                     );
                 list = list.push(
                     checkbox(label, self.class_visibility.allows(Some(code)))
@@ -8528,9 +8646,9 @@ impl Studio {
                 .clip(true),
             row![
                 button(if self.bag_map_drawing {
-                    "Cancel draw"
+                    i18n::tr("Cancel draw")
                 } else {
-                    "Draw area"
+                    i18n::tr("Draw area")
                 })
                 .on_press(Message::BagMapDraw(!self.bag_map_drawing))
                 .style(flat_tool_style),
@@ -8561,7 +8679,7 @@ impl Studio {
             .align_y(iced::Alignment::Center),
             row![
                 text(i18n::tr("© Kadaster (BRT) via PDOK · CC BY 4.0")).size(10),
-                button(i18n::tr("Licentie ↗"))
+                button(i18n::tr("License ↗"))
                     .on_press(Message::OpenPdokLicense)
                     .style(flat_tool_style),
             ]
@@ -8574,7 +8692,16 @@ impl Studio {
         .spacing(10)
         .padding(12)
         .width(Fill);
-        for (index, label) in ["X min", "Y min", "X max", "Y max"].into_iter().enumerate() {
+        for (index, label) in [
+            i18n::key("X min"),
+            i18n::key("Y min"),
+            i18n::key("X max"),
+            i18n::key("Y max"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let label = i18n::tr(label);
             panel = panel.push(
                 column![
                     text(label).size(11),
@@ -8593,9 +8720,9 @@ impl Studio {
             )
             .push(
                 button(if self.bag_pending {
-                    "Downloading…"
+                    i18n::tr("Downloading…")
                 } else {
-                    "Download OBJ"
+                    i18n::tr("Download OBJ")
                 })
                 .on_press_maybe((!self.bag_pending).then_some(Message::BagDownload))
                 .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status)),
@@ -8610,9 +8737,9 @@ impl Studio {
             );
         }
         panel
-            .push(text(i18n::tr("© 3DBAG door tudelft3d en 3DGI")).size(10))
+            .push(text(i18n::tr("© 3DBAG by tudelft3d and 3DGI")).size(10))
             .push(
-                button(i18n::tr("CC BY 4.0 · bron en licentie ↗"))
+                button(i18n::tr("CC BY 4.0 · source and license ↗"))
                     .on_press(Message::OpenBagLicense)
                     .style(flat_tool_style),
             )
@@ -8661,275 +8788,70 @@ impl Studio {
         }
     }
 
-    fn file_view(&self) -> Element<'_, Message> {
-        let action = |label: &'static str, action: FileAction, available: bool| {
-            button(text(label).size(14))
-                .on_press_maybe(available.then_some(Message::FileAction(action)))
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
-                .width(Fill)
-                .padding([11, 18])
-        };
-        let active_cloud = self.active.and_then(|index| self.clouds.get(index));
-        let selected = self.selected_total();
-        let active_selected = active_cloud
-            .and_then(|entry| entry.selection.as_ref())
-            .map_or(0, |selection| selection.count);
-        let menu = column![
-            container(
-                text(i18n::tr("FILE"))
-                    .size(12)
-                    .color(self.ui_theme.colors().accent)
-            )
-            .padding([20, 18]),
-            action("Import point cloud…", FileAction::Import, true),
-            action("Open scan folder…", FileAction::ImportFolder, true),
-            container(
-                text(i18n::tr("EXPORT"))
-                    .size(10)
-                    .color(self.ui_theme.colors().muted)
-            )
-            .padding(iced::Padding {
-                top: 22.0,
-                right: 18.0,
-                bottom: 7.0,
-                left: 18.0,
-            }),
-            action(
-                "Full resolution…",
-                FileAction::ExportFull,
-                active_cloud.is_some()
-            ),
-            action(
-                "Selected points…",
-                FileAction::ExportSelection,
-                active_selected > 0
-            ),
-            action(
-                "Without selected points…",
-                FileAction::ExportWithoutSelection,
-                active_selected > 0
-            ),
-            action(
-                "Section box…",
-                FileAction::ExportSection,
-                active_cloud.is_some() && self.section_enabled && !self.section_export_pending,
-            ),
-            action(
-                "Every Nth point…",
-                FileAction::ExportDecimated,
-                active_cloud.is_some()
-            ),
-            action(
-                "Merge visible LAS/LAZ scans…",
-                FileAction::MergeVisible,
-                self.merge_job.is_none()
-                    && !self.merge_dialog_pending
-                    && self.visible_merge_sources().is_ok(),
-            ),
-            action(
-                "Cancel merge",
-                FileAction::CancelMerge,
-                self.merge_job.is_some(),
-            ),
-            action(
-                "Surface mesh…",
-                FileAction::ExportMesh,
-                active_cloud.is_some_and(|entry| entry.mesh.is_some()) && !self.mesh_export_pending,
-            ),
-            action(
-                "Views as BCF…",
-                FileAction::ExportBcf,
-                self.can_export_bcf(),
-            ),
-            iced::widget::vertical_space(),
-            button(text(i18n::tr("←  Return to model")).size(13))
-                .on_press(Message::ToggleFile)
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
-                .width(Fill)
-                .padding([13, 18]),
-        ]
-        .width(260)
-        .height(Fill);
-        let menu = container(menu).width(260).height(Fill).style(sidebar_style);
+    /// The title of the window: the application with its version, after the
+    /// file name of the active scan.
+    fn window_title(&self) -> String {
+        let active = self.active.and_then(|index| self.clouds.get(index));
+        title_for(active.map(|entry| display_name(&entry.cloud.path)))
+    }
 
+    /// The bar along the bottom of the window: what is going on at the left,
+    /// the totals beside it and the version of the application at the right.
+    fn status_bar(&self, message: String) -> Element<'_, Message> {
         let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
-        let active_name = active_cloud
-            .map(|entry| display_name(&entry.cloud.path))
-            .unwrap_or("No active scan");
-        let open_scans = self.clouds.iter().enumerate().fold(
-            column![].spacing(3).width(Fill),
-            |rows, (index, entry)| {
-                rows.push(
-                    button(
-                        row![
-                            text(display_name(&entry.cloud.path)).size(13),
-                            iced::widget::horizontal_space(),
-                            text(format!("{} points", format_count(entry.remaining_count())))
-                                .size(11)
-                                .color(self.ui_theme.colors().muted),
-                        ]
-                        .spacing(16)
-                        .align_y(iced::Alignment::Center),
-                    )
-                    .on_press(Message::FileAction(FileAction::Activate(index)))
-                    .style(move |theme, status| {
-                        opencad_ribbon::tool_btn_style(theme, self.active == Some(index), status)
-                    })
-                    .width(Fill)
-                    .padding([9, 12]),
-                )
-            },
-        );
-        let mut details = column![
-            text(i18n::tr("Point cloud workspace"))
-                .size(26)
-                .font(Font::with_name("Space Grotesk")),
+        let mut details = row![
+            text(message).size(11),
             text(format!(
                 "{} files  ·  {} points  ·  {} selected",
                 self.clouds.len(),
                 format_count(total_points),
-                format_count(selected),
+                format_count(self.selected_total())
             ))
-            .size(13)
-            .color(self.ui_theme.colors().muted),
-            container(
-                text(i18n::tr("CURRENT SCAN"))
-                    .size(10)
-                    .color(self.ui_theme.colors().muted)
-            )
-            .padding(iced::Padding {
-                top: 28.0,
-                bottom: 4.0,
-                ..iced::Padding::ZERO
-            }),
-            text(active_name).size(16),
-            container(
-                text(i18n::tr("OPEN SCANS"))
-                    .size(10)
-                    .color(self.ui_theme.colors().muted)
-            )
-            .padding(iced::Padding {
-                top: 28.0,
-                bottom: 4.0,
-                ..iced::Padding::ZERO
-            }),
-            container(open_scans).width(Fill).max_width(560),
-            container(
-                text(i18n::tr("EXPORT FORMAT"))
-                    .size(10)
-                    .color(self.ui_theme.colors().muted)
-            )
-            .padding(iced::Padding {
-                top: 28.0,
-                bottom: 4.0,
-                ..iced::Padding::ZERO
-            }),
-            pick_list(
-                ExportFormat::ALL,
-                Some(self.export_format),
-                Message::ExportFormat,
-            )
-            .style(themed_pick_list_style)
-            .width(240),
-            container(
-                text(i18n::tr("EVERY NTH POINT"))
-                    .size(10)
-                    .color(self.ui_theme.colors().muted)
-            )
-            .padding(iced::Padding {
-                top: 28.0,
-                bottom: 4.0,
-                ..iced::Padding::ZERO
-            }),
-            row![
-                text(i18n::tr("Keep 1 in")).size(13),
-                pick_list(
-                    [2u64, 5, 10, 20, 50, 100],
-                    Some(self.decimation_stride),
-                    Message::DecimationStride
-                )
-                .style(themed_pick_list_style)
-                .width(90),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
-            container(
-                text(i18n::tr(
-                    "Choose an export format, then save the active scan or selection."
-                ))
-                .size(12)
-                .color(self.ui_theme.colors().muted),
-            )
-            .padding(iced::Padding {
-                top: 32.0,
-                ..iced::Padding::ZERO
-            }),
+            .size(11),
         ]
-        .spacing(8)
+        .spacing(24)
+        .align_y(iced::Alignment::Center)
         .width(Fill);
-        if let Some(job) = &self.merge_job {
-            let processed = job.control.processed.load(Ordering::Relaxed);
-            details = details
-                .push(text(job.progress_text()).size(13))
-                .push(
-                    iced::widget::progress_bar(
-                        0.0..=1.0,
-                        processed as f32 / job.control.total.max(1) as f32,
+        if let Some((&id, job)) = self.imports.iter().max_by_key(|(id, _)| *id) {
+            details = details.push(
+                button(i18n::tr("Cancel import"))
+                    .on_press_maybe(
+                        (!job.cancel.load(Ordering::Relaxed)).then_some(Message::CancelImport(id)),
                     )
-                    .height(8),
-                )
-                .push(
-                    text(format!(
-                        "{} points written to {}",
-                        format_count(job.control.written.load(Ordering::Relaxed)),
-                        job.path.display()
-                    ))
-                    .size(11),
-                )
-                .push(button(i18n::tr("Cancel merge")).on_press(Message::CancelMerge));
+                    .style(flat_tool_style),
+            );
         }
-        row![
-            menu,
-            container(scrollable(details).height(Fill))
-                .padding([30, 40])
-                .width(Fill)
-                .height(Fill)
-                .style(|theme| container::Style::default()
-                    .background(ui_theme::colors(theme).panel_alt)),
+        // The version is measured first and the rest fills what is left, so
+        // a long message cannot push the version out of the window.
+        let status_bar = row![
+            details,
+            text(VERSION_LABEL)
+                .size(11)
+                .color(self.ui_theme.colors().muted),
         ]
-        .height(Fill)
-        .into()
+        .spacing(24)
+        .padding([7, 12])
+        .align_y(iced::Alignment::Center);
+        container(status_bar).width(Fill).style(status_style).into()
+    }
+
+    /// What the header of the model space shows beside its name: the view,
+    /// or that a box is being drawn. The label of the view stays English in
+    /// the state, since the command API reports it, and is translated here.
+    fn view_caption(&self) -> &'static str {
+        i18n::tr(if self.box_select {
+            i18n::key("BOX SELECT ACTIVE")
+        } else {
+            self.view_label
+        })
     }
 
     fn view(&self) -> Element<'_, Message> {
         if self.file_open {
-            let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
-            let mut status_bar = row![
-                text(&self.status).size(11),
-                text(format!(
-                    "{} files  ·  {} points  ·  {} selected",
-                    self.clouds.len(),
-                    format_count(total_points),
-                    format_count(self.selected_total())
-                ))
-                .size(11),
-            ]
-            .spacing(24)
-            .padding([7, 12]);
-            if let Some((&id, job)) = self.imports.iter().max_by_key(|(id, _)| *id) {
-                status_bar = status_bar.push(
-                    button(i18n::tr("Cancel import"))
-                        .on_press_maybe(
-                            (!job.cancel.load(Ordering::Relaxed))
-                                .then_some(Message::CancelImport(id)),
-                        )
-                        .style(flat_tool_style),
-                );
-            }
             return column![
                 self.ribbon(),
                 self.file_view(),
-                container(status_bar).width(Fill).style(status_style),
+                self.status_bar(self.status.clone()),
             ]
             .height(Fill)
             .into();
@@ -8990,8 +8912,9 @@ impl Studio {
             .and_then(|entry| entry.selection.as_ref())
             .map_or(0, |selection| selection.count);
         let indexed = active_cloud.is_some_and(|entry| entry.index.is_some());
-        let filename =
-            active_cloud.map_or("No file loaded", |entry| display_name(&entry.cloud.path));
+        let filename = active_cloud.map_or(i18n::tr("No file loaded"), |entry| {
+            display_name(&entry.cloud.path)
+        });
         let mut properties = column![
             container(
                 text(i18n::tr("Properties"))
@@ -9016,7 +8939,15 @@ impl Studio {
                 format_count(active_cloud.map_or(0, CloudEntry::deleted_count)),
             ),
             opencad_properties::property_row("View sample", format_count(view_points)),
-            opencad_properties::property_row("Indexed", if indexed { "Yes" } else { "No" }.into()),
+            opencad_properties::property_row(
+                "Indexed",
+                if indexed {
+                    i18n::tr("Yes")
+                } else {
+                    i18n::tr("No")
+                }
+                .into(),
+            ),
             opencad_properties::property_row("Selected", format_count(selected_points)),
         ]
         .spacing(0)
@@ -9230,9 +9161,9 @@ impl Studio {
                     .push(
                         container(
                             button(if self.expand_scan_poses {
-                                "Hide list"
+                                i18n::tr("Hide list")
                             } else {
-                                "Show list"
+                                i18n::tr("Show list")
                             })
                             .on_press(Message::ExpandScanPoses(!self.expand_scan_poses))
                             .style(flat_tool_style),
@@ -9285,7 +9216,7 @@ impl Studio {
                                             axes[1][0], axes[1][1], axes[1][2],
                                             axes[2][0], axes[2][1], axes[2][2],
                                         ),
-                                        None => "Orientation unavailable".into(),
+                                        None => i18n::tr("Orientation unavailable").into(),
                                     })
                                     .size(9),
                                 ]
@@ -9443,13 +9374,9 @@ impl Studio {
                 .size(12)
                 .font(Font::with_name("Space Grotesk"))
                 .color(Color::from_rgb8(250, 250, 249)),
-            text(if self.box_select {
-                "BOX SELECT ACTIVE"
-            } else {
-                self.view_label
-            })
-            .size(11)
-            .color(Color::from_rgb8(161, 161, 170)),
+            text(self.view_caption())
+                .size(11)
+                .color(Color::from_rgb8(161, 161, 170)),
         ]
         .spacing(16)
         .padding([8, 14]);
@@ -9466,8 +9393,8 @@ impl Studio {
             viewport = viewport.push(
                 container(
                     row![
-                        text(i18n::tr("© 3DBAG door tudelft3d en 3DGI")).size(10),
-                        button(i18n::tr("Bron en licentie ↗"))
+                        text(i18n::tr("© 3DBAG by tudelft3d and 3DGI")).size(10),
+                        button(i18n::tr("Source and license ↗"))
                             .on_press(Message::OpenBagLicense)
                             .style(flat_tool_style),
                     ]
@@ -9491,33 +9418,11 @@ impl Studio {
                 .style(sidebar_style),
         ]
         .height(Fill);
-        let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
         let mesh_status = self.mesh_job.as_ref().map(MeshJob::progress_text);
-        let mut status_bar = row![
-            text(mesh_status.unwrap_or_else(|| self.status.clone())).size(11),
-            text(format!(
-                "{} files  ·  {} points  ·  {} selected",
-                self.clouds.len(),
-                format_count(total_points),
-                format_count(self.selected_total())
-            ))
-            .size(11),
-        ]
-        .spacing(24)
-        .padding([7, 12]);
-        if let Some((&id, job)) = self.imports.iter().max_by_key(|(id, _)| *id) {
-            status_bar = status_bar.push(
-                button(i18n::tr("Cancel import"))
-                    .on_press_maybe(
-                        (!job.cancel.load(Ordering::Relaxed)).then_some(Message::CancelImport(id)),
-                    )
-                    .style(flat_tool_style),
-            );
-        }
         let window = column![
             self.ribbon(),
             content,
-            container(status_bar).width(Fill).style(status_style)
+            self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
         ]
         .height(Fill);
         match self.settings_view() {

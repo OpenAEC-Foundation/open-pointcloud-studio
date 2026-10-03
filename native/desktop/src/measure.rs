@@ -12,6 +12,7 @@ use iced::{Color, Element, Point as UiPoint, Size, Task};
 use pointcloud_core::IndexedPoint;
 use serde_json::{json, Value};
 
+use crate::i18n::{key, tr};
 use crate::selection::Projection;
 use crate::{opencad_properties, opencad_ribbon, Message, PointViewport, Studio, ToolIcon};
 
@@ -153,10 +154,11 @@ impl MeasureMode {
         }
     }
 
+    /// The English name of the mode, translated where it is shown.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Distance => "Distance",
-            Self::Area => "Area",
+            Self::Distance => key("Distance"),
+            Self::Area => key("Area"),
         }
     }
 
@@ -245,47 +247,48 @@ impl Measurement {
         }
     }
 
-    /// Label and value rows for the Properties panel.
+    /// Label and value rows for the Properties panel. The labels are
+    /// English and translated by the row that shows them.
     pub fn rows(&self) -> Vec<(&'static str, String)> {
         let mut rows = vec![
-            ("Type", self.mode.label().to_owned()),
+            (key("Type"), tr(self.mode.label()).to_owned()),
             (
-                "Points",
+                key("Points"),
                 if self.finished {
                     self.points.len().to_string()
                 } else {
-                    format!("{} · picking", self.points.len())
+                    format!("{} · {}", self.points.len(), tr("picking"))
                 },
             ),
         ];
         match self.mode {
             MeasureMode::Distance => rows.extend([
-                ("Length", format_length(self.length())),
+                (key("Length"), format_length(self.length())),
                 (
-                    "Horizontal length",
+                    key("Horizontal length"),
                     format_length(horizontal_length(&self.points)),
                 ),
                 (
-                    "Height difference",
+                    key("Height difference"),
                     format_height(height_difference(&self.points)),
                 ),
             ]),
             MeasureMode::Area => rows.extend([
-                ("Area", format_area(area(&self.points))),
-                ("Plan area", format_area(plan_area(&self.points))),
-                ("Perimeter", format_length(self.length())),
+                (key("Area"), format_area(area(&self.points))),
+                (key("Plan area"), format_area(plan_area(&self.points))),
+                (key("Perimeter"), format_length(self.length())),
             ]),
         }
         let lengths = self.segment_lengths();
         for (index, length) in lengths.iter().take(MAX_SEGMENT_ROWS).enumerate() {
             rows.push((
-                "Segment",
+                key("Segment"),
                 format!("{} · {}", index + 1, format_length(*length)),
             ));
         }
         if lengths.len() > MAX_SEGMENT_ROWS {
             rows.push((
-                "Segments",
+                key("Segments"),
                 format!("{} more", lengths.len() - MAX_SEGMENT_ROWS),
             ));
         }
@@ -503,7 +506,7 @@ impl MeasureTool {
             None => {
                 section = section.push(opencad_properties::property_row(
                     "Points",
-                    "Click the first point".into(),
+                    tr("Click the first point").into(),
                 ));
             }
         }
@@ -511,7 +514,7 @@ impl MeasureTool {
             section
                 .push(
                     container(
-                        button(crate::i18n::tr("Clear"))
+                        button(tr("Clear"))
                             .on_press_maybe(
                                 self.current
                                     .is_some()
@@ -965,6 +968,9 @@ mod tests {
 
     #[test]
     fn rows_and_api_value_carry_the_values_of_each_mode() {
+        // The values hold translated words; the language is one setting of
+        // the whole process.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
         let distance = Measurement {
             mode: MeasureMode::Distance,
             points: vec![[0.0, 0.0, 0.0], [3.0, 4.0, 0.0], [3.0, 4.0, 12.0]],
@@ -1018,6 +1024,99 @@ mod tests {
             MAX_SEGMENT_ROWS
         );
         assert_eq!(rows.last(), Some(&("Segments", "15 more".into())));
+    }
+
+    #[test]
+    fn row_labels_stay_english_keys_and_the_kind_is_translated() {
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::Table(0));
+        let labels = |measurement: &Measurement| -> Vec<&'static str> {
+            measurement
+                .rows()
+                .into_iter()
+                .map(|(label, _)| label)
+                .collect()
+        };
+        let shown = |measurement: &Measurement| -> Vec<&'static str> {
+            labels(measurement).into_iter().map(tr).collect()
+        };
+
+        let mut distance = Measurement {
+            mode: MeasureMode::Distance,
+            points: vec![[0.0, 0.0, 0.0], [3.0, 4.0, 0.0]],
+            finished: false,
+        };
+        assert_eq!(
+            distance.rows()[..2],
+            [
+                ("Type", "Afstand".to_owned()),
+                ("Points", "2 · bezig".to_owned()),
+            ]
+        );
+        distance.finished = true;
+        assert_eq!(distance.rows()[1], ("Points", "2".to_owned()));
+        // The labels are the keys of the table; the row that shows them
+        // looks them up, so a label translated here would be looked up twice.
+        assert_eq!(
+            labels(&distance),
+            [
+                "Type",
+                "Points",
+                "Length",
+                "Horizontal length",
+                "Height difference",
+                "Segment"
+            ]
+        );
+        assert_eq!(
+            shown(&distance),
+            [
+                "Type",
+                "Punten",
+                "Lengte",
+                "Horizontale lengte",
+                "Hoogteverschil",
+                "Segment"
+            ]
+        );
+
+        let area = Measurement {
+            mode: MeasureMode::Area,
+            points: vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 3.0, 0.0]],
+            finished: true,
+        };
+        assert_eq!(area.rows()[0], ("Type", "Oppervlakte".to_owned()));
+        assert_eq!(
+            labels(&area),
+            [
+                "Type",
+                "Points",
+                "Area",
+                "Plan area",
+                "Perimeter",
+                "Segment",
+                "Segment",
+                "Segment"
+            ]
+        );
+        assert_eq!(
+            shown(&area)[..5],
+            [
+                "Type",
+                "Punten",
+                "Oppervlakte",
+                "Horizontale oppervlakte",
+                "Omtrek"
+            ]
+        );
+
+        // The row past the last segment that is shown.
+        let long = Measurement {
+            mode: MeasureMode::Distance,
+            points: (0..40).map(|index| [f64::from(index), 0.0, 0.0]).collect(),
+            finished: true,
+        };
+        assert_eq!(labels(&long).last().copied(), Some("Segments"));
+        assert_eq!(shown(&long).last().copied(), Some("Segmenten"));
     }
 
     #[test]

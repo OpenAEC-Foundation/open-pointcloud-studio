@@ -9,8 +9,10 @@ mod schema;
 mod tools;
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -43,7 +45,12 @@ type Failure = (i64, String);
 /// Run the server on standard input and output until the input ends, and
 /// return the exit code of the process.
 pub fn run() -> i32 {
-    let program = match std::env::current_exe() {
+    let program = match window_program(
+        std::env::var_os("APPIMAGE"),
+        std::env::var_os("APPDIR"),
+        is_mount_point,
+        std::env::current_exe(),
+    ) {
         Ok(program) => program,
         Err(error) => {
             eprintln!("open-pointcloud-studio mcp: cannot find this program: {error}");
@@ -71,6 +78,64 @@ pub fn run() -> i32 {
             1
         }
     }
+}
+
+/// The program that starts a new window: this executable, or the AppImage it
+/// was started from. Inside a mounted AppImage the executable lies in a mount
+/// that goes away when this server ends, which would end the windows it
+/// started and promises to leave open; the AppImage file itself stays.
+///
+/// `appimage` and `appdir` are the variables the AppImage runtime sets. Every
+/// program an AppImage starts inherits them, so they count only when this
+/// executable lies in the folder they announce. That folder must also be a
+/// mount: an AppImage that was unpacked instead runs the application as a
+/// child of the process that is started, so the window would not be
+/// recognised by its process id, and where mounting is not possible the file
+/// does not start at all without the option that unpacks it. The unpacked
+/// executable starts a window directly.
+fn window_program(
+    appimage: Option<OsString>,
+    appdir: Option<OsString>,
+    is_mount: impl Fn(&Path) -> bool,
+    executable: io::Result<PathBuf>,
+) -> io::Result<PathBuf> {
+    let executable = executable?;
+    let appimage = appimage.map(PathBuf::from);
+    let appdir = appdir.map(PathBuf::from);
+    Ok(match (appimage, appdir) {
+        (Some(appimage), Some(appdir))
+            if lies_in(&executable, &appdir) && is_mount(&appdir) && appimage.is_file() =>
+        {
+            appimage
+        }
+        _ => executable,
+    })
+}
+
+/// Whether a resolved path lies in a folder, which may be named through a
+/// link.
+fn lies_in(path: &Path, folder: &Path) -> bool {
+    // An empty path is the start of every path.
+    !folder.as_os_str().is_empty()
+        && (path.starts_with(folder)
+            || std::fs::canonicalize(folder).is_ok_and(|resolved| path.starts_with(resolved)))
+}
+
+/// Whether a folder is where a file system is mounted: it then lies on
+/// another device than the folder that holds it.
+#[cfg(unix)]
+fn is_mount_point(folder: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (folder.metadata(), folder.parent().map(Path::metadata)) {
+        (Ok(own), Some(Ok(parent))) => own.dev() != parent.dev(),
+        _ => false,
+    }
+}
+
+/// AppImages exist on Linux only.
+#[cfg(not(unix))]
+fn is_mount_point(_: &Path) -> bool {
+    false
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

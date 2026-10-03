@@ -164,7 +164,7 @@ when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, section box, auto-index and 3D surface settings, index and scale progress, `detail_pending` while the viewport reads points for its camera, and current status text |
+| `status` | — | Lists clouds, active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, `detail_pending` while the viewport reads points for its camera, and current status text |
 | `job` | `id` | Reads an export, selection, mesh or merge task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found), `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -192,6 +192,7 @@ when the view is restored.
 | `submit_note` | `text` | Gives the note that waits for its text its text, adds it to the active view and returns the view's `annotations` |
 | `export_bcf` | `path` | Writes all views of the active scan as one BCF 2.1 file at an absolute `.bcf` path |
 | `set_theme` | `theme` | Chooses and persists `forge`, `light`, `night`, `blueprint` or `contrast`; `openaec` remains an alias for Night Build |
+| `set_language` | `language` | Chooses and persists the language of the user interface: `auto` for the language of the system when there is a translation for it, `en` for English or `nl` for Dutch. Returns the `language` now chosen, as `status.result.language` reports it; an unknown value is refused and changes nothing |
 | `set_color` | `mode` | Chooses `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code`, `visible` | Shows or hides one classification code in the viewport and exact selection |
 | `set_point_size` | `size` | Sets point size from 0.1 to 20 |

@@ -109,6 +109,11 @@ pub enum ApiCommand {
     SetTheme {
         theme: String,
     },
+    SetLanguage {
+        /// `auto` for the language of the system, `en`, or the code of a
+        /// translation such as `nl`.
+        language: String,
+    },
     SetColor {
         mode: String,
     },

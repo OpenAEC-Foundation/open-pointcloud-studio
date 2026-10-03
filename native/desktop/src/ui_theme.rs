@@ -185,12 +185,13 @@ impl UiTheme {
 
 impl fmt::Display for UiTheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The names are translated where Settings lists the themes.
         let label = match self {
-            Self::Forge => "Deep Forge",
-            Self::Light => "Blueprint Light",
-            Self::Night => "Night Build",
-            Self::Blueprint => "Blueprint Blue",
-            Self::Contrast => "High Contrast",
+            Self::Forge => crate::i18n::key("Deep Forge"),
+            Self::Light => crate::i18n::key("Blueprint Light"),
+            Self::Night => crate::i18n::key("Night Build"),
+            Self::Blueprint => crate::i18n::key("Blueprint Blue"),
+            Self::Contrast => crate::i18n::key("High Contrast"),
         };
         f.write_str(label)
     }

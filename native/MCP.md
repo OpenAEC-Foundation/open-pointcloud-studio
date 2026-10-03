@@ -62,7 +62,10 @@ The first tool call that needs a window uses the most recently started live
 one. When none runs, the server starts the application itself with
 `--api-port` on a free port, as a detached process without console, and waits
 up to a minute for its discovery file. That window stays open when the client
-or the server ends.
+or the server ends. A server that runs from a mounted AppImage starts the
+window through that AppImage file, because the executable inside it is only
+there while the server runs. A server started with `--appimage-extract-and-run`
+starts the unpacked executable instead.
 
 `list_instances` lists the live windows and which one is in use;
 `select_instance` chooses one by process ID or port, and `start_instance`
@@ -125,6 +128,7 @@ follows when that view is restored.
 | `submit_note` | `text` | Gives the waiting note its text |
 | `export_bcf` | `path` (`.bcf`) | Writes the views of the active scan as BCF |
 | `set_theme` | `theme` | `forge`, `light`, `night`, `blueprint` or `contrast`; `openaec`, as `status` reports Night Build, is the same as `night` |
+| `set_language` | `language` | `auto` (the language of the system), `en` or `nl`; kept for later sessions |
 | `set_color` | `mode` | `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code` (0–255), `visible` | Shows or hides a classification code |
 | `set_point_size` | `size` (0.1–20 pixels) | Point size |

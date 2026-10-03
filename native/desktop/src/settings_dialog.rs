@@ -9,7 +9,7 @@ use iced::widget::{
 use iced::{Border, Color, Element, Fill};
 
 use crate::i18n::{self, tr, Language};
-use crate::ui_theme::{self, UiTheme};
+use crate::ui_theme::{self, UiColors, UiTheme};
 use crate::{flat_tool_style, opencad_ribbon, themed_pick_list_style, Message, Studio};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,16 +38,61 @@ pub struct SettingsDialog {
     theme: UiTheme,
 }
 
+/// What the application is: its name and version, what it is built with and
+/// on, its licences and where its source code is. The About tab of the dialog
+/// and the About page of the File view show the same.
+pub(crate) fn about<'a>(colors: UiColors) -> iced::widget::Column<'a, Message> {
+    let fact = |name: &'static str, value: &'static str| {
+        row![
+            text(tr(name)).size(12).color(colors.muted).width(120),
+            text(value).size(12)
+        ]
+        .spacing(12)
+    };
+    column![
+        text(crate::APP_NAME).size(16),
+        text(tr("Native viewer and editor for point clouds."))
+            .size(12)
+            .color(colors.muted),
+        fact("Version", env!("CARGO_PKG_VERSION")),
+        fact("Framework", "Rust · iced · wgpu"),
+        fact("License", "GPL-3.0-only · LGPL-3.0-or-later"),
+        text(tr("Built on the OpenAEC platform"))
+            .size(12)
+            .color(colors.muted),
+        button(text(tr("Source code ↗")).size(12))
+            .on_press(Message::OpenUrl(crate::SOURCE_URL))
+            .style(flat_tool_style)
+            .padding([4, 8]),
+    ]
+    .spacing(10)
+}
+
 impl Studio {
+    /// Use a language chosen outside the dialog and keep it for later
+    /// sessions. An open dialog then no longer goes back to the language it
+    /// opened with.
+    pub(crate) fn choose_language(&mut self, language: Language) {
+        i18n::set(language);
+        i18n::save(language);
+        if let Some(dialog) = &mut self.settings {
+            dialog.language = language;
+        }
+    }
+
     pub(crate) fn settings_action(&mut self, action: SettingsAction) {
         match action {
             SettingsAction::Open => {
                 self.file_open = false;
-                self.settings = Some(SettingsDialog {
-                    tab: SettingsTab::General,
-                    language: i18n::choice(),
-                    theme: self.ui_theme,
-                });
+                // The shortcut also arrives while the dialog is open, which
+                // must not forget what Cancel goes back to.
+                if self.settings.is_none() {
+                    self.settings = Some(SettingsDialog {
+                        tab: SettingsTab::General,
+                        language: i18n::choice(),
+                        theme: self.ui_theme,
+                    });
+                }
             }
             SettingsAction::Tab(tab) => {
                 if let Some(dialog) = &mut self.settings {
@@ -125,7 +170,7 @@ impl Studio {
                 heading("Application"),
                 row![
                     label("Language"),
-                    pick_list(Language::ALL, Some(i18n::choice()), move |language| send(
+                    pick_list(Language::all(), Some(i18n::choice()), move |language| send(
                         SettingsAction::Language(language)
                     ))
                     .style(themed_pick_list_style)
@@ -203,22 +248,7 @@ impl Studio {
                 }
                 themes.into()
             }
-            SettingsTab::About => {
-                let fact = |name: &'static str, value: &'static str| {
-                    row![label(name), text(value).size(12)].spacing(12)
-                };
-                column![
-                    text("Open Pointcloud Studio").size(16),
-                    text(tr("Native viewer and editor for point clouds."))
-                        .size(12)
-                        .color(colors.muted),
-                    fact("Version", env!("CARGO_PKG_VERSION")),
-                    fact("Framework", "Rust · iced · wgpu"),
-                    fact("License", "GPL-3.0-only · LGPL-3.0-or-later"),
-                ]
-                .spacing(10)
-                .into()
-            }
+            SettingsTab::About => about(colors).into(),
         };
 
         let footer = row![
@@ -289,6 +319,8 @@ mod tests {
 
     #[test]
     fn cancel_puts_the_theme_back_and_save_keeps_it() {
+        // Cancel also puts the language back, which other tests set.
+        let _language = i18n::TestLanguage::hold(Language::English);
         let mut studio = Studio::default();
         let before = studio.ui_theme;
         let other = UiTheme::ALL
@@ -301,6 +333,8 @@ mod tests {
         studio.settings_action(SettingsAction::Theme(other));
         assert_eq!(studio.ui_theme, other);
         assert!(studio.settings_view().is_some());
+        // Asking for the open dialog again keeps what Cancel goes back to.
+        studio.settings_action(SettingsAction::Open);
         studio.settings_action(SettingsAction::Cancel);
         assert_eq!(studio.ui_theme, before);
         assert!(studio.settings.is_none() && studio.settings_view().is_none());
@@ -312,5 +346,25 @@ mod tests {
         studio.settings_action(SettingsAction::Tab(SettingsTab::About));
         assert!(studio.settings_view().is_some());
         studio.settings_action(SettingsAction::Cancel);
+    }
+
+    #[test]
+    fn language_chosen_outside_the_dialog_survives_its_cancel() {
+        let _language = i18n::TestLanguage::hold(Language::English);
+        let dutch = Language::from_key("nl").unwrap();
+        let mut studio = Studio::default();
+        studio.settings_action(SettingsAction::Open);
+        // Inside the dialog a choice is a preview that Cancel takes back.
+        studio.settings_action(SettingsAction::Language(dutch));
+        assert_eq!(tr("Settings"), "Instellingen");
+        assert!(studio.settings_view().is_some());
+        studio.settings_action(SettingsAction::Cancel);
+        assert_eq!(i18n::choice(), Language::English);
+
+        studio.settings_action(SettingsAction::Open);
+        studio.choose_language(dutch);
+        studio.settings_action(SettingsAction::Cancel);
+        assert_eq!(i18n::choice(), dutch);
+        assert_eq!(tr("Cancel"), "Annuleren");
     }
 }

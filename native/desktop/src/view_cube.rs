@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use iced::widget::canvas::{self, Frame, Path};
 use iced::{alignment, Color, Font, Point, Rectangle, Size, Vector};
 
+use crate::i18n::key;
 use crate::CameraPreset;
 
 const CUBE_SCALE: f32 = 25.0;
@@ -270,22 +271,23 @@ pub fn view_from(direction: [i8; 3]) -> (f32, f32) {
     (y.atan2(x), z.atan2(x.hypot(y)))
 }
 
-/// Name of the view from an edge: the two faces it joins.
+/// Name of the view from an edge: the two faces it joins. The names are
+/// English and translated where they are shown.
 pub fn edge_label(direction: [i8; 3]) -> &'static str {
     match direction {
-        [1, 0, 1] => "TOP RIGHT",
-        [-1, 0, 1] => "TOP LEFT",
-        [0, -1, 1] => "TOP FRONT",
-        [0, 1, 1] => "TOP BACK",
-        [1, 0, -1] => "BOTTOM RIGHT",
-        [-1, 0, -1] => "BOTTOM LEFT",
-        [0, -1, -1] => "BOTTOM FRONT",
-        [0, 1, -1] => "BOTTOM BACK",
-        [1, -1, 0] => "FRONT RIGHT",
-        [-1, -1, 0] => "FRONT LEFT",
-        [1, 1, 0] => "BACK RIGHT",
-        [-1, 1, 0] => "BACK LEFT",
-        _ => "CUSTOM",
+        [1, 0, 1] => key("TOP RIGHT"),
+        [-1, 0, 1] => key("TOP LEFT"),
+        [0, -1, 1] => key("TOP FRONT"),
+        [0, 1, 1] => key("TOP BACK"),
+        [1, 0, -1] => key("BOTTOM RIGHT"),
+        [-1, 0, -1] => key("BOTTOM LEFT"),
+        [0, -1, -1] => key("BOTTOM FRONT"),
+        [0, 1, -1] => key("BOTTOM BACK"),
+        [1, -1, 0] => key("FRONT RIGHT"),
+        [-1, -1, 0] => key("FRONT LEFT"),
+        [1, 1, 0] => key("BACK RIGHT"),
+        [-1, 1, 0] => key("BACK LEFT"),
+        _ => key("CUSTOM"),
     }
 }
 

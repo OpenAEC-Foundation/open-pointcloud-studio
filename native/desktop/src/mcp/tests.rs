@@ -677,6 +677,127 @@ fn wait_until_idle_follows_the_status() {
     );
 }
 
+#[test]
+fn language_tool_offers_the_languages_of_the_table_and_sends_the_choice() {
+    let tool = tools::find("set_language").unwrap();
+    assert_eq!(tool.kind, Kind::Command);
+    assert!(!tool.read_only());
+    assert_eq!(tool.schema["required"], json!(["language"]));
+    assert_eq!(
+        tool.schema["properties"]["language"]["enum"],
+        json!(crate::i18n::Language::keys())
+    );
+    schema::validate_arguments(&tool.schema, &json!({"language": "nl"})).unwrap();
+    assert!(schema::validate_arguments(&tool.schema, &json!({"language": "xx"})).is_err());
+
+    let link = FakeLink::new(|command| Ok(json!({"ok": true, "language": command["language"]})));
+    let commands = Arc::clone(&link.commands);
+    let answers = session(
+        &[
+            initialize(1, "2025-06-18"),
+            call(2, "set_language", json!({"language": "nl"})),
+        ],
+        link,
+    );
+    assert_eq!(by_id(&answers, 2)["result"]["isError"], false);
+    assert_eq!(
+        *commands.lock().unwrap(),
+        [json!({"command": "set_language", "language": "nl"})]
+    );
+}
+
+#[test]
+fn new_windows_start_from_the_appimage_when_there_is_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let appimage = directory.path().join("Open-Pointcloud-Studio.AppImage");
+    std::fs::write(&appimage, b"image").unwrap();
+    let executable = PathBuf::from("/tmp/.mount_abc/usr/bin/open-pointcloud-studio");
+    let program = |appimage: Option<&Path>, appdir: Option<&str>, mounted: bool| {
+        window_program(
+            appimage.map(Into::into),
+            appdir.map(Into::into),
+            |_| mounted,
+            Ok(executable.clone()),
+        )
+        .unwrap()
+    };
+
+    assert_eq!(program(None, None, false), executable);
+    assert_eq!(
+        program(Some(&appimage), Some("/tmp/.mount_abc"), true),
+        appimage
+    );
+    // A client that itself runs from an AppImage hands its variables on to
+    // an installed server: they name an existing file that is another
+    // program, and a folder this executable does not lie in.
+    for inherited in [
+        None,
+        Some("/tmp/.mount_other"),
+        Some("/tmp/.mount_ab"),
+        Some(""),
+    ] {
+        assert_eq!(program(Some(&appimage), inherited, true), executable);
+    }
+    // An unpacked AppImage is a plain folder: the file would start the
+    // application as a child of the process this server waits for.
+    assert_eq!(
+        program(Some(&appimage), Some("/tmp/.mount_abc"), false),
+        executable
+    );
+    // The variable may name a file that is gone, or nothing.
+    let gone = directory.path().join("gone.AppImage");
+    for stale in [gone.as_path(), Path::new("")] {
+        assert_eq!(
+            program(Some(stale), Some("/tmp/.mount_abc"), true),
+            executable
+        );
+    }
+    // The failure to find this program is reported, whatever the variables say.
+    for appimage in [None, Some(appimage.clone().into())] {
+        let missing = window_program(
+            appimage,
+            Some("/tmp/.mount_abc".into()),
+            |_| true,
+            Err(io::Error::other("no executable")),
+        );
+        assert!(missing.is_err());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_folder_of_an_appimage_is_recognised_through_a_link_and_as_a_mount() {
+    let directory = tempfile::tempdir().unwrap();
+    let appimage = directory.path().join("Open-Pointcloud-Studio.AppImage");
+    std::fs::write(&appimage, b"image").unwrap();
+    let folder = directory.path().join("mount");
+    std::fs::create_dir_all(folder.join("usr/bin")).unwrap();
+    let link = directory.path().join("link");
+    std::os::unix::fs::symlink(&folder, &link).unwrap();
+    // The path of the running executable is resolved; the announced folder
+    // need not be.
+    let executable = std::fs::canonicalize(&folder)
+        .unwrap()
+        .join("usr/bin/open-pointcloud-studio");
+    assert_eq!(
+        window_program(
+            Some(appimage.clone().into()),
+            Some(link.into()),
+            |_| true,
+            Ok(executable),
+        )
+        .unwrap(),
+        appimage
+    );
+
+    // A folder made in another folder lies on the same device as it.
+    assert!(!is_mount_point(&folder));
+    assert!(!is_mount_point(&directory.path().join("missing")));
+    assert!(!is_mount_point(Path::new("/")));
+    #[cfg(target_os = "linux")]
+    assert!(is_mount_point(Path::new("/proc")));
+}
+
 /// The command names in the first column of a Markdown table.
 fn table_names(document: &str) -> Vec<&str> {
     document

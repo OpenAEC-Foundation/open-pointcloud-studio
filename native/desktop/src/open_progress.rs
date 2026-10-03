@@ -333,7 +333,7 @@ impl Studio {
             .align_y(iced::Alignment::Center);
             if let Some(cancel) = line.cancel {
                 heading = heading.push(
-                    button(text("Cancel").size(11))
+                    button(text(crate::i18n::tr("Cancel")).size(11))
                         .on_press(cancel)
                         .style(flat_tool_style)
                         .padding([1, 8]),
