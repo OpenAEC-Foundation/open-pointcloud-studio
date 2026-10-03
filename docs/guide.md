@@ -2,7 +2,7 @@
 
 How each part of Open Pointcloud Studio works. The [README](../README.md) has the installation, a first walk through the application and the file formats; this guide goes into each tool.
 
-The interface is in English or Dutch. The guide uses the English names.
+The interface is in English or Dutch. The guide uses the English names. Its pictures show the Dutch interface in one of the dark themes; a new installation starts in the light theme Blueprint Light, see [Settings, language and extensions](#settings-language-and-extensions).
 
 ## Contents
 
@@ -39,7 +39,7 @@ The interface is in English or Dutch. The guide uses the English names.
 - The **status bar** at the bottom says what is going on, how many files and points are open and how many points are selected, and ends with the version.
 - The **File view** opens with the File button and covers the ribbon and the scene. Its menu has the import entries, **3D BAG buildings…**, the exports and the merge, above the pages Workspace, Extensions and About and the entries **Settings…**, **Return to model** and **Exit**. The Workspace page lists the open scans (click one to make it the active scan, the same as a click on its row in the project panel) and has the export format and the "every Nth point" setting. Escape or Return to model closes the File view.
 
-The title of the window is the file name of the active scan followed by the name and the version of the application, such as `Open Pointcloud Studio v0.8.0`.
+The title of the window is the file name of the active scan followed by the name and the version of the application, such as `rooms.las - Open Pointcloud Studio v0.8.0`; without a scan it is the name and the version alone.
 
 In the project panel, click a row to make that scan the **active scan**; its row gets a coloured outline. The active scan is the one Properties describes, the one points are picked from (Pick point, Distance, Area and the annotation tools), the one Thin, Move, Scale and the meshers work on, and the one the exports and the saved views belong to. Shift-click marks every row from the active one up to the clicked one, and Ctrl-click (Command-click on macOS) adds or drops one row. The visibility switch and the close button of a marked row then act on all marked rows, so a set of scans can be hidden, shown or closed at once.
 
@@ -271,7 +271,13 @@ The command line does the same without a window: `--export`, `--section` and `--
 
 ## Section drawings
 
+![The Dutch interface with the Section drawing block in Properties and, seen from above, the preview of the filled cut of two generated rooms inside the frame of the section box: the wall between the rooms with its door opening, and a round column](images/section-drawing.jpg)
+
+*The Section drawing block (Snedetekening) and the preview of the filled cut on a plan of two generated rooms, in the Dutch interface.*
+
 **Section drawing** in the SECTION BOX group makes a 2D drawing at scale 1:1 of what the section box cuts, and saves it as DXF or DWG for a drawing program. The button needs the section box to be on. It opens the **Section drawing** block at the top of Properties, and closes it again. **Section drawing…** among the exports of the File view asks for the file name at once, with the choices the block has.
+
+A section drawing is flat: it shows one slab of the building, and what it fills of a wall is traced from the points in that slab. For the floors, ceilings and walls of a room as planes in 3D, each with its area and with how far the points lie from it, use **Detect faces**; see [Detected faces](#detected-faces). Detected faces are saved as JSON or OBJ and not as a drawing, and a drawing does not use them.
 
 ### What is drawn
 
@@ -310,7 +316,7 @@ The drawing holds:
 
 The section box is aligned to the X, Y and Z axes of the model and cannot be rotated. A vertical section of a building that stands at an angle to those axes is therefore a skewed cut through its walls, not one along them.
 
-### The choices
+### The choices of a drawing
 
 | Choice | What it does | Starts at |
 | --- | --- | --- |
@@ -343,7 +349,7 @@ With national grid coordinates, a drawing in millimetres has numbers of hundreds
 
 A scan with no point in the slab gets no layer. Fills are written first, so that a drawing program draws them under the points and the outlines.
 
-### What the result says
+### What the result of a drawing says
 
 When a job is done, the status bar says what was drawn, and the block keeps it under **Last drawing**:
 
@@ -375,7 +381,7 @@ Measured on generated rooms with a scanner noise of 2 mm, not on scans of real b
 - **A plan whose slab holds the floor** fills the floor: keep the slab above it.
 - **In a vertical section** floors are taken as level, and the section box follows the model axes, as said above.
 
-### Other limits
+### Other limits of a section drawing
 
 - **Points.** A drawing holds 150,000 points at the start and at most 400,000. While the file is written, every point takes about 2.8 kB of memory: about 0.4 GB at 150,000 points and 1.1 GB at 400,000. A dense underlay of millions of points is not what this drawing is for; export the section as a point cloud instead.
 - **Opening the drawing here again.** Open Pointcloud Studio opens the POINT entities of an ASCII DXF as a point cloud and skips fills, polylines and text. It does not apply the units of the drawing, so a drawing in millimetres comes back a thousand times larger than the scan. DWG files are not opened.
@@ -411,7 +417,7 @@ The OBJ file has the colours of the source where it has them and a normal per ve
 
 A scan holds one mesh: a new mesh takes the place of the previous one, and Undo does not apply to meshes. The project panel has a separate **Surface** switch per layer, so the points can be hidden while the faces stay.
 
-OBJ, PLY, OFF and STL files open as meshes and are drawn as faces too, several at once. Of a DXF file, which must be an ASCII DXF, the POINT entities open as points and the 3DFACE entities as faces; other entities are skipped. Colours per vertex of OBJ and PLY are shown; OBJ files also get the diffuse colours of their material file. Texture images are not drawn. A mesh has at most 4,000,000 vertices and 8,000,000 triangles, whether it comes from a file or from a mesh job; a file with more is refused. A mesh file at that limit takes about 0.9 GB of memory for a moment while it is opened and about 0.55 GB while it is shown, with 0.4 GB on the graphics card. All meshes are drawn from one buffer of the graphics card that holds about 5.5 million vertices: one mesh always fits, and a mesh that no longer fits beside the others that are shown is held but not drawn, which Properties says under **Surface mesh**. Switch off the **Surface** of another layer to see it.
+OBJ, PLY, OFF and STL files open as meshes and are drawn as faces too, several at once. Of a DXF file, which must be an ASCII DXF, the POINT entities open as points and the 3DFACE entities as faces; other entities are skipped. Colours per vertex of OBJ and PLY are shown; OBJ files also get the diffuse colours of their material file. Texture images are not drawn. A mesh has at most 4,000,000 vertices and 8,000,000 triangles, whether it comes from a file or from a mesh job; a file with more is refused. A mesh at that limit takes about 0.25 GB of memory and 0.55 GB while it is shown, with about 0.3 GB more on the graphics card; a mesh file of that size takes up to 0.9 GB for a moment while it is opened. All meshes are drawn from one pair of buffers of the graphics card, which holds about 5.6 million vertices and 22 million triangles: one mesh always fits, and a mesh that no longer fits beside the others that are shown is held but not drawn, which Properties says under **Surface mesh**. Switch off the **Surface** of another layer to see it.
 
 To reduce the number of points instead of making a mesh, use **Thin** in the EDIT group; see [Editing](#editing).
 
@@ -447,7 +453,13 @@ Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, and `--
 
 ## Closed mesh
 
+![The Dutch interface with a closed mesh of two generated rooms in the scene, a door opening left open and the two scanner stations marked, and the Closed mesh block in Properties with the report of the mesh: 15,868 vertices, 30,563 triangles, a mean deviation of 1.6 mm, 1,287 open edges and 2 connected parts](images/closed-mesh.jpg)
+
+*A closed mesh of two generated rooms with its report in the Closed mesh block (Gesloten mesh), in the Dutch interface.*
+
 **Closed mesh** in the SURFACE group makes a surface of the points in a region that has no overlapping faces and is closed wherever the scan has points or a gap narrower than the hole limit. It is the mesher for a room or a part of a building of which the result has to be right: it uses every point of the region, not a sample, tells how far the points lie from the mesh, and leaves door and window openings open. The button opens the **Closed mesh** block at the top of Properties, and closes it again.
+
+The table under [Meshing](#meshing) sets it beside **Terrain mesh** and **3D surface** and says when to use which; [What Properties says about a mesh](#what-properties-says-about-a-mesh) and [Saving a mesh](#saving-a-mesh) hold for a closed mesh as for the other two. For the planes of a building instead of its surface, see [Detected faces](#detected-faces).
 
 ### How it works, in short
 
@@ -465,7 +477,7 @@ The points are reduced, per cell of half a voxel, to small pieces of surface wit
 
 A scan holds one mesh. The closed mesh takes the place of the mesh the active scan had, whichever mesher made it, and Undo does not bring that one back. The mesh is kept in the frame of its scan: **Move** and **Scale** afterwards take the mesh along with the points.
 
-### The settings
+### The settings of a closed mesh
 
 | Setting | What it does | Starts at |
 | --- | --- | --- |
@@ -479,7 +491,7 @@ A comma or a point is read as the decimal mark. The centre of the region is the 
 
 Stations come with E57, PTX and PCD scans. A merged cloud, a LAS or LAZ file and a text file have none. An index that was built by an earlier version does not say which station measured which point: with **Automatic**, the first job on such a scan reads its file once more to find out (the strip says "finding the station of every point") and keeps the answer with the index. The answer also stays with the layer for as long as it is open, when the job is cancelled or fails after that pass too, so the next job does not read the file again.
 
-### What the result says
+### What the report of a closed mesh says
 
 When a job is done, the status bar gives its figures in one line and the block keeps them under **Last mesh**, with the time the job took and the voxel it used:
 
@@ -501,7 +513,7 @@ None of these numbers comes from a scan of a real building; they were taken in a
 - Two rooms with a wall of 0.20 m between them, a door opening, a window and a round column of 0.20 m radius, about 2.9 million points per room with a noise of 2 mm, one station per room. The first room in a box of 5.2 by 4.2 by 2.8 m, at voxels of 2 cm: 10,036 vertices and 19,091 triangles in 3.3 s on one run and 4.6 s on another, mean deviation 1.6 mm, 95% 4.0 mm, largest 15.3 mm. The door and the window are open, each with one rim around it. The column is there with a mean radius of 0.2001 m, as a part of its own that does not join the floor and the ceiling and whose far half faces inward: the generated scan has points all around the column that the one station could never have seen. The same box of the same points without stations, with **Towards the centre**: 9,997 vertices and 19,100 triangles in 4.0 s, mean deviation 1.6 mm, 95% 4.0 mm, largest 14.6 mm, the same openings and the same column, and one edge with more than two triangles.
 - 5.4 million points of nine rooms at voxels of 2 cm on a computer with 32 logical processors: 12 to 13 s and 1.2 GB of memory at its peak.
 
-### Limits
+### Limits of a closed mesh
 
 - **Corners are rounded.** Within about one and a half voxels of an edge the surface can lie a quarter of a voxel off: 10 mm at voxels of 4 cm.
 - **Thin objects.** Detail smaller than about two voxels is lost. A wall with openings needs about three voxels of thickness; at two it gets extra holes. Two faces closer together than two voxels, such as a door leaf or sheet material, are not kept apart: they merge, with holes and now and then an edge with more than two triangles. A loose piece smaller than 64 voxel faces, 16 by 16 cm at voxels of 2 cm, is taken for dust and dropped.
@@ -530,9 +542,15 @@ The extension of the output chooses OBJ, PLY or STL. `--box` gives the region as
 
 ## Detected faces
 
+![The Dutch interface with the detected faces of two generated rooms in the scene, the walls in sand and the ceilings in blue, and the Detect faces block in Properties with the number of faces per type and the start of the list; the status bar reports 15 faces: 2 floors, 2 ceilings, 10 walls and 1 cylinder](images/detected-faces.jpg)
+
+*The detected faces of two generated rooms with their list in the Detect faces block (Vlakken herkennen), in the Dutch interface. The 1.6 s in the picture is the time of that one run, on the whole PTX file; the times under [Found on generated rooms](#found-on-generated-rooms) are of other runs.*
+
 **Detect faces** in the SURFACE group finds the flat faces in a region of a scan and the round columns and pipes in it. A flat face is a floor, a ceiling, a wall or a sloped plane: one plane with an outline, in which a window is a hole and a door a notch. A cylinder is an axis with a radius, as far along it and around it as it was scanned. Every face comes with the number of scan points that belong to it and with how far those points lie from it. The button opens the **Detect faces** block in Properties, and closes it again.
 
 A detected face is not a mesh. A mesh follows the scanned surface with many small triangles and keeps every bump of it. A face replaces a wall by the one plane that fits it, and says where that plane lies, how large it is and how well the points agree with it. Faces are what you measure and draw from: the area of a floor, the height between a floor and a ceiling, whether a wall is plumb, where an opening begins and ends. Use **Closed mesh** for a surface to look at or to pass on as a model of what is there, and **Detect faces** for the planes of a building. A scan keeps its faces beside its mesh; neither takes the place of the other.
+
+Faces are not a drawing either: they are saved as JSON or OBJ. For a plan or a vertical section as a 2D drawing in DXF or DWG, use **Section drawing**; see [Section drawings](#section-drawings). Its filled cut is traced from the points of one slab, not from the faces found here.
 
 ### How faces are found, in short
 
@@ -593,7 +611,7 @@ Click a row to highlight that face: its outline is drawn over the scene in the a
 - **One colour per face**: the outline of each face filled in the colour of its type (floors green, ceilings blue, walls sand, sloped planes rose, cylinders violet) in one of four shades, so that neighbours can be told apart.
 - **Deviation of the points**: every cell of 5 cm of a face that holds points gets a colour for the mean distance of its points to the face. The legend in the block gives the three colours with their values: blue where the scan lies the distance tolerance or more behind the face, near white where it lies on the face, and red where it lies the distance tolerance or more in front of it; in between the colours blend. A wall that bulges shows as a red or a blue patch. The faces are drawn with the light of the scene, which makes the colours somewhat darker on faces turned away from it, so read a colour as an indication and the figures in the list as the measurement. Cells without points are not drawn, so the gaps in a face show.
 
-The faces are drawn through the same buffer of the graphics card as the meshes; see [Meshing](#meshing). Faces that no longer fit beside the meshes that are shown are held, listed and exported, but not drawn, which the block says.
+The faces are drawn through the same buffers of the graphics card as the meshes; see [Meshing](#meshing). Faces that no longer fit beside the meshes that are shown are held, listed and exported, but not drawn, which the block says.
 
 **Clear faces** removes the faces of the active scan.
 
@@ -737,7 +755,7 @@ A large cloud is not held in memory. The application builds an index on disk, an
 - The index is kept on disk and found again when the same unchanged file is opened later. A PLY, E57, PCD, PTX or text file then opens from its index without being read again. A changed file is read and indexed anew.
 - An index can take several gigabytes for a large survey; see [Where settings and indexes are stored](#where-settings-and-indexes-are-stored).
 
-While the camera moves, the points on screen stay. Shortly after it stops, the detail for the new view is read and takes their place, more of it for what is near and large on screen. At deep zoom the points inside the view are read from the index directly, so a close view shows the source points that are there.
+While the camera moves, the points on screen stay. Shortly after it stops, the detail for the new view is read and takes their place, more of it for what is near and large on screen. With a budget above 500,000 points a smaller first pass is read before the full detail. Its size follows the pace at which this computer reads and draws points, with 250,000 points as the least, and it is shown only when it improves on the points on screen. At deep zoom the points inside the view are read from the index directly, so a close view shows the source points that are there.
 
 **Indexed** under General in Properties says whether the active scan has its index, and **View sample** how many of its points are drawn.
 

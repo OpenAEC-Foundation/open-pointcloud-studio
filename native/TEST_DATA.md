@@ -1138,5 +1138,28 @@ before each release. Write the date and the outcome under them.
    Download at LoD 2.2 and a second download cancelled midway. Screenshots
    show public data only: the map and the buildings.
 
-Last run: _date and outcome, to be filled in by the person who runs the
-steps_.
+Last run: 3 October 2026, before release 0.8.0. All steps passed except the
+part of step 5 that needs the mouse.
+
+- Step 1: as described. The description of the service also lists a `crs`
+  parameter for the coordinates of the answer, which the client does not
+  send.
+- Step 2: 200 `application/json`, `Content-Crs` EPSG:7415, the six keys,
+  `scale` and `translate` in `metadata.transform`, 88 buildings matched and
+  2 returned, and a `next` link on `api.3dbag.nl` with `offset=3&limit=2`.
+- Step 3: the layer `grijs` with `EPSG:28992`, levels 00 to 14, top-left
+  corner `-285401.92 903401.92` and scale denominator 12288000 at level 00.
+- Step 4: both tests passed, on the source of commit `21b7250`.
+- Step 5: `--bag3d 91440,398430,91460,398450 2.2 out.obj` wrote one building
+  of 62 vertices and 56 triangles, with a debug build of commit `21b7250`
+  and with the installed Windows package of commit `efe7784`; the two files
+  are the same. In a window of the debug build the `bag3d` command of the
+  local command API downloaded the box 121000,487000,121235,487218 of
+  central Amsterdam at LoD 2.2 and opened it as a layer of 23,610 vertices
+  and 29,041 triangles. A second download, of the box
+  120700,486700,121700,487700 in 56 pages, was cancelled with
+  `cancel_bag3d` after page 3: it stopped within half a second, wrote no
+  file and left no temporary file, and the layers stayed as they were. A box
+  of 1.5 by 1.5 km there was refused with the message that it holds about
+  6,840 buildings where 5,000 is the most. Drawing the area on the map of
+  the panel with the mouse was not run this time.

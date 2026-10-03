@@ -3,8 +3,9 @@
 `open-pointcloud-studio --mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io)
 server on standard input and output. Its tools drive a running window of the
 application through the local [command API](API.md): they open scans, move
-the camera, take screenshots of the 3D view, measure, select, save views and
-export, just as the commands of that API do.
+the camera, take screenshots of the 3D view, measure, select, save views,
+export, draw sections, mesh and detect faces, just as the commands of that
+API do.
 
 The server speaks JSON-RPC 2.0 with one message per line. Standard output
 carries nothing but those messages; diagnostics go to standard error. The
@@ -20,15 +21,30 @@ clients:
 {
   "mcpServers": {
     "open-pointcloud-studio": {
-      "command": "C:\\Program Files\\Open Pointcloud Studio\\open-pointcloud-studio.exe",
+      "command": "/usr/bin/open-pointcloud-studio",
       "args": ["--mcp"]
     }
   }
 }
 ```
 
-On Linux and macOS, `command` is the path of the `open-pointcloud-studio`
-binary. A development build works the same way:
+`command` is the full path of the executable, which depends on the system
+and on how the application was installed:
+
+| Installed from | `command` |
+| --- | --- |
+| Windows installer, current user | `C:\Users\NAME\AppData\Local\Programs\Open Pointcloud Studio\open-pointcloud-studio.exe`, with the name of the account for `NAME`, unless another folder was chosen |
+| Windows installer, all users | `C:\Program Files\Open Pointcloud Studio\open-pointcloud-studio.exe`, unless another folder was chosen |
+| macOS disk image | `/Applications/Open Pointcloud Studio.app/Contents/MacOS/open-pointcloud-studio` |
+| Linux package (`.deb`) | `/usr/bin/open-pointcloud-studio` |
+| AppImage | The full path of the AppImage file itself |
+| zip or `.tar.gz` | The full path of `open-pointcloud-studio` (`.exe` on Windows) in the unpacked folder |
+
+Write the path out: most clients do not fill in `%LOCALAPPDATA%` or `~`. In
+JSON every backslash of a Windows path is written twice:
+`"C:\\Program Files\\Open Pointcloud Studio\\open-pointcloud-studio.exe"`.
+
+A development build works the same way:
 `cargo run -p open-pointcloud-studio-native -- --mcp` from `native/`, or the
 built `target/release/open-pointcloud-studio --mcp`.
 
@@ -89,10 +105,10 @@ at once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
-edits, meshing (a closed mesh included), mesh export, a face detection, a faces export, a section drawing or its preview, merging, a 3D
-BAG download, point loading for the camera and view snapshots have finished; call it
-after `open`, before `screenshot` when the camera changed, and before
-`export_bcf`. `screenshot` returns MCP image content (`type: "image"`,
+edits, meshing (a closed mesh included), mesh export, a face detection, a
+faces export, a section drawing or its preview, merging, a 3D BAG download,
+point loading for the camera and view snapshots have finished; call it after
+`open`, before `screenshot` when the camera changed, and before `export_bcf`. `screenshot` returns MCP image content (`type: "image"`,
 `mimeType: "image/png"`, base64 data) followed by a text part with the image
 size. While the File view or Settings covers the model, `screenshot` answers
 with an error; `file_view` with `open: false` returns to the model. While the

@@ -9,6 +9,13 @@ licensed LGPL-3.0-or-later (LICENSE-LGPL-3.0.md).
 The embedded fonts Inter and Space Grotesk are licensed under the SIL
 Open Font License (the *-OFL.txt files).
 
+The application links Rust crates, each one unmodified and under its own
+licence. Writing a drawing as DXF or DWG uses the crate acadrust, version
+0.5.5, which is covered by the Mozilla Public License, version 2.0
+(https://mozilla.org/MPL/2.0/). Its source code is available from crates.io
+under that name and version. native/NOTICE in the source repository lists
+it with the crates it brings along.
+
 A package for a Debian-based system refers to the licence texts that the
 system keeps in /usr/share/common-licenses instead of carrying the two
 LICENSE files.
