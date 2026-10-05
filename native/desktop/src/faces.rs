@@ -27,8 +27,8 @@ use pointcloud_core::surfaces::{
     SurfaceStage, DEFAULT_DEVIATION_CELLS,
 };
 use pointcloud_core::{
-    Bounds, DrawingFormat, IndexConfig, IndexedPoint, LoadError, MeshGeometry, OctreeIndex,
-    OrientedBox, Point, PointCloud,
+    Bounds, DrawingFormat, IndexConfig, IndexedPoint, LoadError, MeshGeometry, OctreeIndex, Point,
+    PointCloud,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -36,10 +36,14 @@ use serde_json::{json, Value};
 use crate::bag_panel::plain_reason;
 use crate::closed_mesh::{
     box_limits, choice_list, lacks_scan_ranges, number, option_value, rotation_option, turned_box,
-    uncapitalised, with_scan_ranges, Layers, Learned, Sentence, UNINDEXED_LIMIT,
+    uncapitalised, with_scan_ranges, Layers, Learned, Sentence,
 };
+// The tests of how a layer is read size a scan by the limit of memory.
+#[cfg(test)]
+use crate::closed_mesh::UNINDEXED_LIMIT;
 use crate::cloud_transform::CloudTransform;
 use crate::i18n::{key, tr, tr_args};
+use crate::job_scene::{JobLayer, JobScene};
 use crate::open_progress::{Line, Phase};
 use crate::selection::{ClassFilter, ClassVisibility, DeletionMask};
 use crate::{
@@ -325,45 +329,24 @@ pub struct FaceOptions {
     pub color: Option<String>,
 }
 
-/// One layer as a job reads it.
-struct SceneLayer {
-    /// The cloud the job reads: that of the layer, or the same cloud with
-    /// the station of every point when an earlier job found those out.
-    cloud: Arc<PointCloud>,
-    /// What tells the layer from the others for as long as it is open.
-    identity: Arc<PointCloud>,
-    name: String,
-    index: Option<Arc<OctreeIndex>>,
-    transform: CloudTransform,
-    deleted: Option<Arc<DeletionMask>>,
-}
-
-impl SceneLayer {
-    /// Whether the job holds the points of this layer in memory: a layer
-    /// without an index that is small enough for that. A larger one is read
-    /// from its file twice.
-    fn resident(&self) -> bool {
-        self.index.is_none() && self.cloud.total_points <= UNINDEXED_LIMIT
-    }
-
-    /// Whether the file of this layer is read from start to end, twice.
-    fn streamed(&self) -> bool {
-        self.index.is_none() && !self.resident()
-    }
-}
-
 /// What of the window a job is made from: the layers where they stand, their
 /// deleted points, the classes shown, the section box, and the scan that
-/// keeps the faces.
+/// keeps the faces. A layer without an index is held in memory when it is
+/// small enough, and read from its file twice otherwise.
 struct Scene {
-    /// The section box, turned or not. The core is given the box around it
-    /// and the filter leaves out what lies in its corners.
-    section: Option<OrientedBox>,
-    filter: ClassFilter,
-    layers: Vec<SceneLayer>,
+    /// The layers in the section box, turned or not.
+    job: JobScene,
     /// The place in `layers` of the scan that keeps the faces. The result
     /// holds for where that scan stood when the job started.
     anchor: usize,
+}
+
+impl std::ops::Deref for Scene {
+    type Target = JobScene;
+
+    fn deref(&self) -> &JobScene {
+        &self.job
+    }
 }
 
 /// Everything a job was started with.
@@ -562,11 +545,7 @@ fn run(input: &JobInput, control: &Control) -> Result<Finished, LoadError> {
     {
         return Err(LoadError::InvalidData(FLAT_TARGET.into()));
     }
-    // An index is read without a look at the file it was built from, so
-    // that the file is still the one that was opened is checked here.
-    for layer in scene.layers.iter().filter(|layer| layer.index.is_some()) {
-        layer.cloud.validate_source()?;
-    }
+    scene.validate()?;
     // The side of a face comes from the station that measured its points.
     // An index cache written before scans were recorded per point gives a
     // cloud with stations that does not know which of them measured what.
@@ -601,7 +580,7 @@ fn run(input: &JobInput, control: &Control) -> Result<Finished, LoadError> {
         .zip(&clouds)
         .zip(&resident)
         .map(|((layer, cloud), resident)| {
-            let transform = source_transform(layer.transform);
+            let transform = layer.source_transform();
             let cloud: &PointCloud = cloud;
             SurfaceSource {
                 points: match resident {
@@ -612,21 +591,12 @@ fn run(input: &JobInput, control: &Control) -> Result<Finished, LoadError> {
             }
         })
         .collect();
-    let filter = scene.filter;
-    let accept = |position: usize, ordinal: u64, point: &Point| {
-        scene.layers[position]
-            .deleted
-            .as_ref()
-            .is_none_or(|mask| !mask.contains(ordinal))
-            && filter.accepts(point)
-            && scene
-                .section
-                .is_none_or(|section| !section.is_turned() || section.contains(point.xyz))
-    };
+    let accept =
+        |position: usize, ordinal: u64, point: &Point| scene.accepts(position, ordinal, point);
     let surfaces = detect_surfaces(
         &sources,
         scene.anchor,
-        scene.section.map_or(EVERYWHERE, |section| section.aabb()),
+        scene.region().unwrap_or(EVERYWHERE),
         &input.config,
         &accept,
         &mut |step| control.report(Stage::of(step.stage), step.completed, step.total),
@@ -689,7 +659,7 @@ impl FaceJob {
             .into_iter()
             .filter(|stage| match stage {
                 Stage::Stations => layers.iter().any(|layer| lacks_scan_ranges(&layer.cloud)),
-                Stage::Loading => layers.iter().any(SceneLayer::resident),
+                Stage::Loading => layers.iter().any(JobLayer::resident),
                 Stage::Meshing => self.input.meshes,
                 _ => true,
             })
@@ -1769,24 +1739,12 @@ impl Studio {
             .iter()
             .position(|entry| std::ptr::eq(*entry, active))
             .ok_or_else(|| Refusal::ActiveOut(name(active)))?;
+        let layers = taken
+            .into_iter()
+            .map(|entry| JobLayer::of(entry, self.closed_mesh.stationed(&entry.cloud)))
+            .collect();
         Ok(Scene {
-            section,
-            // The region of the job is the section box already.
-            filter: ClassFilter {
-                section: None,
-                ..self.mesh_filter()
-            },
-            layers: taken
-                .into_iter()
-                .map(|entry| SceneLayer {
-                    cloud: self.closed_mesh.stationed(&entry.cloud),
-                    identity: Arc::clone(&entry.load_identity),
-                    name: name(entry),
-                    index: entry.index.as_ref().map(Arc::clone),
-                    transform: entry.transform,
-                    deleted: entry.deleted.as_ref().map(Arc::clone),
-                })
-                .collect(),
+            job: JobScene::new(section, self.mesh_filter(), layers),
             anchor,
         })
     }
@@ -1798,25 +1756,11 @@ impl Studio {
             .faces_scene(settings.layers)
             .map_err(Problem::Refused)?;
         let config = settings.config().map_err(Problem::Setting)?;
-        let mut data: Option<Bounds> = None;
-        let mut points = 0u64;
-        for layer in &scene.layers {
-            let bounds = layer.transform.bounds(layer.cloud.bounds);
-            data = Some(data.map_or(bounds, |all| Bounds {
-                min: std::array::from_fn(|axis| all.min[axis].min(bounds.min[axis])),
-                max: std::array::from_fn(|axis| all.max[axis].max(bounds.max[axis])),
-            }));
-            points = points.saturating_add(layer.cloud.total_points);
-        }
-        let data = data.ok_or(Problem::Refused(Refusal::NoLayer))?;
         // As the core does: only the part of the box that can hold points.
-        let bounds = match scene.section.map(|section| section.aabb()) {
-            Some(section) => Bounds {
-                min: std::array::from_fn(|axis| section.min[axis].max(data.min[axis])),
-                max: std::array::from_fn(|axis| section.max[axis].min(data.max[axis])),
-            },
-            None => data,
-        };
+        let bounds = scene.bounds().ok_or(Problem::Refused(Refusal::NoLayer))?;
+        let points = scene.layers.iter().fold(0u64, |points, layer| {
+            points.saturating_add(layer.cloud.total_points)
+        });
         let voxel = expected_voxel(bounds, points, &config);
         Ok(RegionInfo {
             bounds,
@@ -3004,7 +2948,7 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
             ),
         )
     };
-    let cloud = Arc::new(crate::open_for_export(&source).map_err(failed)?);
+    let cloud = crate::open_for_export(&source).map_err(failed)?;
     // An index that `--index` or the window left in the cache is used.
     // Without one a small file is read into memory and a larger one is read
     // from start to end twice.
@@ -3013,23 +2957,18 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
         .flatten();
     let input = JobInput {
         scene: Scene {
-            section,
-            filter: ClassFilter {
-                ground: true,
-                vegetation: true,
-                buildings: true,
-                other: true,
-                classes: ClassVisibility::default(),
-                section: None,
-            },
-            layers: vec![SceneLayer {
-                cloud: Arc::clone(&cloud),
-                identity: Arc::clone(&cloud),
-                name: display_name(&source).to_owned(),
-                index: index.map(Arc::new),
-                transform: CloudTransform::default(),
-                deleted: None,
-            }],
+            job: JobScene::new(
+                section,
+                ClassFilter {
+                    ground: true,
+                    vegetation: true,
+                    buildings: true,
+                    other: true,
+                    classes: ClassVisibility::default(),
+                    section: None,
+                },
+                vec![JobLayer::of_file(cloud, index)],
+            ),
             anchor: 0,
         },
         config,

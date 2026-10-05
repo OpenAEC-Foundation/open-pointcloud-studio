@@ -24,6 +24,7 @@ mod faces;
 mod file_view;
 mod gpu_viewport;
 mod i18n;
+mod job_scene;
 mod lod_pace;
 #[cfg(target_os = "macos")]
 mod macos_open;

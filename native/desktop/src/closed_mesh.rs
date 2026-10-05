@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Element, Fill, Task};
-use pointcloud_core::region_source::{resident_points, RegionSource, SourceTransform};
+use pointcloud_core::region_source::{resident_points, RegionSource};
 use pointcloud_core::surfels::{SurfelSource, MAX_VOXEL, MIN_VOXEL};
 use pointcloud_core::{
     Bounds, ClosedMeshConfig, ClosedMeshReport, ClosedMeshStage, IndexConfig, IndexedPoint,
@@ -32,9 +32,10 @@ use serde_json::{json, Value};
 use crate::bag_panel::plain_reason;
 use crate::cloud_transform::CloudTransform;
 use crate::i18n::{key, tr, tr_args};
+use crate::job_scene::{JobLayer, JobScene};
 use crate::mesh_export::{topology_text, MeasuredMesh};
 use crate::open_progress::{Line, Phase};
-use crate::selection::{ClassFilter, ClassVisibility, DeletionMask};
+use crate::selection::{ClassFilter, ClassVisibility};
 use crate::{
     camera_views, compact_count, display_name, flat_tool_style, format_count, opencad_properties,
     opencad_ribbon, themed_pick_list_style, CloudEntry, Message, Studio,
@@ -406,27 +407,24 @@ pub struct ClosedMeshOptions {
     pub layers: Option<String>,
 }
 
-/// One layer as a job reads it.
-struct SceneLayer {
-    cloud: Arc<PointCloud>,
-    index: Option<Arc<OctreeIndex>>,
-    transform: CloudTransform,
-    deleted: Option<Arc<DeletionMask>>,
-}
-
 /// What of the window a job is made from: the layers where they stand, their
 /// deleted points, the classes shown, the section box, and the scan that
 /// gets the mesh.
 struct Scene {
-    /// The section box, turned or not. The core is given the box around it
-    /// and the filter leaves out what lies in its corners.
-    section: Option<OrientedBox>,
-    filter: ClassFilter,
-    layers: Vec<SceneLayer>,
+    /// The layers in the section box, turned or not.
+    job: JobScene,
     /// The scan the mesh is attached to, and where it stood when the job
     /// started: the mesh is kept in the frame of that scan.
     target: Arc<PointCloud>,
     target_transform: CloudTransform,
+}
+
+impl std::ops::Deref for Scene {
+    type Target = JobScene;
+
+    fn deref(&self) -> &JobScene {
+        &self.job
+    }
 }
 
 /// Everything a job was started with.
@@ -676,11 +674,7 @@ fn run(input: &JobInput, control: &Control) -> Result<Finished, LoadError> {
     if scene.target_transform.source_xyz([0.0; 3]).is_none() {
         return Err(LoadError::InvalidData(FLAT_TARGET.into()));
     }
-    // An index is read without a look at the file it was built from, so
-    // that the file is still the one that was opened is checked here.
-    for layer in scene.layers.iter().filter(|layer| layer.index.is_some()) {
-        layer.cloud.validate_source()?;
-    }
+    scene.validate()?;
     // An index cache written before scans were recorded per point gives a
     // cloud with stations that does not know which of them measured what.
     // One pass over its source tells, and the cache keeps the answer.
@@ -716,10 +710,7 @@ fn run(input: &JobInput, control: &Control) -> Result<Finished, LoadError> {
         .zip(&clouds)
         .zip(&resident)
         .map(|((layer, cloud), resident)| {
-            let transform = SourceTransform {
-                scale: layer.transform.scale,
-                offset: layer.transform.offset,
-            };
+            let transform = layer.source_transform();
             match resident {
                 Some(points) => {
                     SurfelSource::of_cloud(RegionSource::resident(points, transform), cloud)
@@ -728,20 +719,11 @@ fn run(input: &JobInput, control: &Control) -> Result<Finished, LoadError> {
             }
         })
         .collect();
-    let filter = scene.filter;
-    let accept = |position: usize, ordinal: u64, point: &Point| {
-        scene.layers[position]
-            .deleted
-            .as_ref()
-            .is_none_or(|mask| !mask.contains(ordinal))
-            && filter.accepts(point)
-            && scene
-                .section
-                .is_none_or(|section| !section.is_turned() || section.contains(point.xyz))
-    };
+    let accept =
+        |position: usize, ordinal: u64, point: &Point| scene.accepts(position, ordinal, point);
     let (mesh, report) = pointcloud_core::mesh_closed(
         &sources,
-        scene.section.map(|section| section.aabb()),
+        scene.region(),
         &accept,
         &input.config,
         &mut |step| control.report(Stage::of(step.stage), step.completed, step.total),
@@ -1511,22 +1493,12 @@ impl Studio {
         if !taken.iter().any(|entry| reaches(entry)) {
             return Err(Refusal::Outside);
         }
+        let layers = taken
+            .into_iter()
+            .map(|entry| JobLayer::of(entry, self.closed_mesh.stationed(&entry.cloud)))
+            .collect();
         Ok(Scene {
-            section,
-            // The region of the job is the section box already.
-            filter: ClassFilter {
-                section: None,
-                ..self.mesh_filter()
-            },
-            layers: taken
-                .into_iter()
-                .map(|entry| SceneLayer {
-                    cloud: self.closed_mesh.stationed(&entry.cloud),
-                    index: entry.index.as_ref().map(Arc::clone),
-                    transform: entry.transform,
-                    deleted: entry.deleted.as_ref().map(Arc::clone),
-                })
-                .collect(),
+            job: JobScene::new(section, self.mesh_filter(), layers),
             target: Arc::clone(&active.cloud),
             target_transform: active.transform,
         })
@@ -1539,23 +1511,8 @@ impl Studio {
             .closed_mesh_scene(settings.layers)
             .map_err(Problem::Refused)?;
         let config = settings.config().map_err(Problem::Setting)?;
-        let mut data: Option<Bounds> = None;
-        for layer in &scene.layers {
-            let bounds = layer.transform.bounds(layer.cloud.bounds);
-            data = Some(data.map_or(bounds, |all| Bounds {
-                min: std::array::from_fn(|axis| all.min[axis].min(bounds.min[axis])),
-                max: std::array::from_fn(|axis| all.max[axis].max(bounds.max[axis])),
-            }));
-        }
-        let data = data.ok_or(Problem::Refused(Refusal::NoLayer))?;
         // As the core does: only the part of the box that can hold points.
-        let bounds = match scene.section.map(|section| section.aabb()) {
-            Some(section) => Bounds {
-                min: std::array::from_fn(|axis| section.min[axis].max(data.min[axis])),
-                max: std::array::from_fn(|axis| section.max[axis].min(data.max[axis])),
-            },
-            None => data,
-        };
+        let bounds = scene.bounds().ok_or(Problem::Refused(Refusal::NoLayer))?;
         let voxel = config.voxel_for(bounds);
         let triangles = box_triangles(bounds, voxel);
         Ok(RegionInfo {
@@ -2222,25 +2179,23 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
             .map_err(failed)?,
         );
     }
-    let cloud = Arc::new(cloud);
+    let layer = JobLayer::of_file(cloud, index);
+    let target = Arc::clone(&layer.cloud);
     let input = JobInput {
         scene: Scene {
-            section,
-            filter: ClassFilter {
-                ground: true,
-                vegetation: true,
-                buildings: true,
-                other: true,
-                classes: ClassVisibility::default(),
-                section: None,
-            },
-            layers: vec![SceneLayer {
-                cloud: Arc::clone(&cloud),
-                index: index.map(Arc::new),
-                transform: CloudTransform::default(),
-                deleted: None,
-            }],
-            target: cloud,
+            job: JobScene::new(
+                section,
+                ClassFilter {
+                    ground: true,
+                    vegetation: true,
+                    buildings: true,
+                    other: true,
+                    classes: ClassVisibility::default(),
+                    section: None,
+                },
+                vec![layer],
+            ),
+            target,
             target_transform: CloudTransform::default(),
         },
         config,

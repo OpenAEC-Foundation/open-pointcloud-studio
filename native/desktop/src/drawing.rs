@@ -18,22 +18,25 @@ use std::time::{Duration, Instant};
 use iced::widget::canvas::{self, Frame};
 use iced::widget::{button, checkbox, column, container, pick_list, row, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Size, Task};
-use pointcloud_core::region_source::{RegionFilter, RegionSource, SourceTransform};
+use pointcloud_core::region_source::{RegionFilter, RegionSource};
 use pointcloud_core::{
     Bounds, CutPreview, Drawing2d, DrawingFormat, DrawingOrigin, DrawingProgress, DrawingRequest,
     DrawingSource, DrawingStage, DrawingStats, DrawingUnits, DrawingVersion, DrawingView,
-    IndexConfig, LoadError, OctreeIndex, OrientedBox, Point, PointCloud, PointColor, PointLayers,
+    IndexConfig, LoadError, OctreeIndex, OrientedBox, Point, PointColor, PointLayers,
     WallDirection, DEFAULT_MIN_WALL_THICKNESS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::bag_panel::plain_reason;
-use crate::cloud_transform::CloudTransform;
 use crate::drawing_view::{DrawScene, DrawingSource as ViewSource, DrawingViewAction};
 use crate::i18n::{key, tr, tr_args};
+use crate::job_scene::{JobLayer, JobScene};
 use crate::open_progress::{Line, Phase};
-use crate::selection::{ClassFilter, ClassVisibility, DeletionMask, Projection};
+use crate::selection::{ClassFilter, ClassVisibility, Projection};
+// The tests delete points of a layer.
+#[cfg(test)]
+use crate::selection::DeletionMask;
 use crate::{
     camera_views, compact_count, flat_tool_style, format_count, measure, muted_checkbox_style,
     opencad_properties, opencad_ribbon, same_deletion_mask, themed_pick_list_style, CloudEntry,
@@ -419,27 +422,32 @@ pub struct DrawingOptions {
     pub version: Option<String>,
 }
 
-/// One visible layer as a job reads it.
-struct SceneLayer {
-    cloud: Arc<PointCloud>,
-    index: Option<Arc<OctreeIndex>>,
-    transform: CloudTransform,
-    deleted: Option<Arc<DeletionMask>>,
-    /// The file stem of the scan, which names its point layer.
-    name: String,
-}
-
 /// What of the scene a drawing is made from: the section box, the visible
 /// layers where they stand, their deleted points and the classes shown.
 struct Scene {
     section: OrientedBox,
-    filter: ClassFilter,
-    layers: Vec<SceneLayer>,
+    job: JobScene,
+}
+
+impl std::ops::Deref for Scene {
+    type Target = JobScene;
+
+    fn deref(&self) -> &JobScene {
+        &self.job
+    }
 }
 
 impl Scene {
+    fn new(section: OrientedBox, filter: ClassFilter, layers: Vec<JobLayer>) -> Self {
+        Self {
+            section,
+            job: JobScene::for_box(section, filter, layers),
+        }
+    }
+
     /// Hand the layers, as the core reads them, and the filter of deleted
-    /// points and hidden classes to `read`.
+    /// points and hidden classes to `read`. The slab lies inside the box,
+    /// so the filter does not look at the box.
     fn read<R>(&self, read: impl FnOnce(&[DrawingSource<'_>], &RegionFilter<'_>) -> R) -> R {
         let sources: Vec<DrawingSource<'_>> = self
             .layers
@@ -448,32 +456,14 @@ impl Scene {
                 source: RegionSource::new(
                     &layer.cloud,
                     layer.index.as_deref(),
-                    SourceTransform {
-                        scale: layer.transform.scale,
-                        offset: layer.transform.offset,
-                    },
+                    layer.source_transform(),
                 ),
-                name: &layer.name,
+                name: layer.stem(),
             })
             .collect();
-        let filter = self.filter;
-        let accept = |position: usize, ordinal: u64, point: &Point| {
-            self.layers[position]
-                .deleted
-                .as_ref()
-                .is_none_or(|mask| !mask.contains(ordinal))
-                && filter.accepts(point)
-        };
+        let accept =
+            |position: usize, ordinal: u64, point: &Point| self.keeps(position, ordinal, point);
         read(&sources, &accept)
-    }
-
-    /// An index is read without a look at the file it was built from, so
-    /// that the file is still the one that was opened is checked first.
-    fn validate(&self) -> Result<(), LoadError> {
-        for layer in self.layers.iter().filter(|layer| layer.index.is_some()) {
-            layer.cloud.validate_source()?;
-        }
-        Ok(())
     }
 }
 
@@ -1156,36 +1146,16 @@ impl Studio {
                     .unwrap_or_else(|| "A visible scan".into()),
             ));
         }
-        let layers: Vec<SceneLayer> = self
+        let layers: Vec<JobLayer> = self
             .clouds
             .iter()
             .filter(|entry| drawn(entry))
-            .map(|entry| SceneLayer {
-                cloud: Arc::clone(&entry.cloud),
-                index: entry.index.as_ref().map(Arc::clone),
-                transform: entry.transform,
-                deleted: entry.deleted.as_ref().map(Arc::clone),
-                name: entry
-                    .cloud
-                    .path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("scan")
-                    .to_owned(),
-            })
+            .map(|entry| JobLayer::of(entry, Arc::clone(&entry.cloud)))
             .collect();
         if layers.is_empty() {
             return Err(Refusal::NoLayer);
         }
-        Ok(Scene {
-            section,
-            // The slab lies inside the box already.
-            filter: ClassFilter {
-                section: None,
-                ..self.mesh_filter()
-            },
-            layers,
-        })
+        Ok(Scene::new(section, self.mesh_filter(), layers))
     }
 
     /// The slab the tool would draw with its settings as they are, while
@@ -2385,15 +2355,10 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
     let index = OctreeIndex::open_cached_if_present(&cloud, IndexConfig::default())
         .ok()
         .flatten();
-    let name = source
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("scan")
-        .to_owned();
     let input = JobInput {
-        scene: Scene {
+        scene: Scene::new(
             section,
-            filter: ClassFilter {
+            ClassFilter {
                 ground: true,
                 vegetation: true,
                 buildings: true,
@@ -2401,14 +2366,8 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
                 classes: ClassVisibility::default(),
                 section: None,
             },
-            layers: vec![SceneLayer {
-                cloud: Arc::new(cloud),
-                index: index.map(Arc::new),
-                transform: CloudTransform::default(),
-                deleted: None,
-                name,
-            }],
-        },
+            vec![JobLayer::of_file(cloud, index)],
+        ),
         request,
         target: Target::Export(destination.clone(), format),
     };
