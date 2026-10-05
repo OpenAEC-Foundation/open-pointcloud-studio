@@ -10,6 +10,10 @@ A desktop application for viewing, measuring, editing and converting laser scans
 
 *One scan of 455 million points, six million of them on screen. The picture was taken with a build from before 0.8.0: the title bar does not yet show the file name and the version, and **Section drawing** is not yet in the SECTION BOX group. It shows the Dutch interface in one of the dark themes; a new installation starts in the light theme Blueprint Light, and **Settings** changes the language and the theme.*
 
+[![A frame of the teaser: the scan of the office building turning in the window of Open Pointcloud Studio. Click to watch the 24-second video.](docs/media/teaser-poster.jpg)](docs/media/open-pointcloud-studio-teaser-en.mp4)
+
+*The [teaser](docs/media/open-pointcloud-studio-teaser-en.mp4) (24 seconds, MP4, 34 MB) turns around the same office scan. It was recorded with 0.8.0, in the dark theme and before the ribbon and the panel at the left were rearranged.*
+
 ## Contents
 
 - [Download and install](#download-and-install)
