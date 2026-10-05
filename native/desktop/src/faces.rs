@@ -2502,54 +2502,57 @@ impl Studio {
                 );
         } else {
             let mut ready = true;
+            let mut explanation: Vec<String> = Vec::new();
+            let mut warnings: Vec<String> = Vec::new();
             match self.faces_region() {
                 Ok(region) => {
-                    block = block.push(note(region_note(&region, settings.layers)));
+                    explanation.push(region_note(&region, settings.layers));
                     let voxel = format!("{:.0}", region.voxel * 1000.0);
                     let budget = format_count(region.budget);
                     let values: [(&str, &dyn fmt::Display); 2] =
                         [("voxel", &voxel), ("budget", &budget)];
-                    block = block.push(if region.coarse {
-                        warning(tr_args(
+                    if region.coarse {
+                        warnings.push(tr_args(
                             "This region needs voxels of {voxel} mm or more to stay within {budget} working points: narrow faces and faces close together are lost. A smaller section box brings them back.",
                             &values,
-                        ))
+                        ));
                     } else {
-                        note(tr_args(
+                        explanation.push(tr_args(
                             "Voxels of {voxel} mm: the budget of {budget} working points holds the faces of this box. Walls and objects inside it take more and can make the voxels larger.",
                             &values,
-                        ))
-                    });
+                        ));
+                    }
                     for name in &region.streamed {
-                        block = block.push(note(tr_args(
+                        warnings.push(tr_args(
                             "{name} has no index: its file is read twice. Build the index first (INDEX > Build index) for a faster job.",
                             &[("name", name)],
-                        )));
+                        ));
                     }
                 }
                 Err(problem) => {
                     ready = false;
-                    block = block.push(warning(match problem {
+                    warnings.push(match problem {
                         Problem::Setting(sentence) => sentence.translated(),
                         Problem::Refused(refusal) => refusal.sentence().translated(),
-                    }));
+                    });
                 }
             }
-            block = block
-                .push(note(
-                    tr("The faces are kept with the active scan, as a layer beside its points and its mesh; faces it had are replaced.")
-                        .to_owned(),
-                ))
-                .push(
-                    container(
-                        button(tr("Start"))
-                            .on_press_maybe(ready.then_some(Message::Faces(FaceAction::Start)))
-                            .style(|theme, status| {
-                                opencad_ribbon::tool_btn_style(theme, false, status)
-                            }),
-                    )
-                    .padding([3, 8]),
-                );
+            explanation.push(
+                tr("The faces are kept with the active scan, as a layer beside its points and its mesh; faces it had are replaced.")
+                    .to_owned(),
+            );
+            let mut start = row![opencad_properties::explained(
+                button(tr("Start"))
+                    .on_press_maybe(ready.then_some(Message::Faces(FaceAction::Start)))
+                    .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status)),
+                explanation,
+            )]
+            .spacing(6)
+            .align_y(iced::Alignment::Center);
+            if let Some(mark) = opencad_properties::warning_mark(warnings) {
+                start = start.push(mark);
+            }
+            block = block.push(container(start).padding([3, 8]));
         }
 
         match &tool.last {

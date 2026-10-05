@@ -7960,10 +7960,11 @@ impl Studio {
                         self.status = "Orbit mode".into();
                     }
                     ContextAction::BoxSelect => {
-                        self.box_select = true;
-                        self.pick_mode = false;
-                        self.measure.leave(true);
-                        self.views.leave_tool();
+                        // The menu turns the tool on; the ribbon no longer
+                        // has it, as a left drag selects with a box anyway.
+                        if !self.box_select {
+                            let _ = self.update(Message::ToggleBoxSelect);
+                        }
                         self.status = "Box selection active; Escape exits".into();
                     }
                     ContextAction::PickPoint => {
@@ -8872,75 +8873,15 @@ impl Studio {
             column![
                 row![
                     small_tool_button("Select", Message::SelectMode, self.plain_mouse()),
-                    small_tool_button("Box select", Message::ToggleBoxSelect, self.box_select),
-                ]
-                .spacing(2),
-                row![
                     small_tool_button("Pick point", Message::TogglePickSelect, self.pick_mode),
+                ]
+                .spacing(2),
+                row![
                     small_tool_button("Clear", Message::ClearSelection, false),
-                ]
-                .spacing(2),
-                row![
                     small_tool_button_when("Delete", Message::DeleteSelection, false, selected > 0),
-                    zoom_selection,
                 ]
                 .spacing(2),
-            ]
-            .spacing(1)
-            .into(),
-        );
-        let edit_action = |tool: Element<'static, Message>| container(tool).width(66);
-        let scale_action = if self.scale_job.is_some() {
-            small_tool_button("Cancel", Message::CancelScale, false)
-        } else {
-            small_tool_button_when("Scale", Message::ApplyScale, false, has_active)
-        };
-        let edit = ribbon_group(
-            "EDIT",
-            column![
-                row![
-                    axis_input("X", "0", &self.translate_x, Message::TranslateX),
-                    axis_input("Y", "0", &self.translate_y, Message::TranslateY),
-                    axis_input("Z", "0", &self.translate_z, Message::TranslateZ),
-                    edit_action(small_tool_button_when(
-                        "Move",
-                        Message::ApplyTranslation,
-                        false,
-                        has_active,
-                    )),
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center)
-                .height(opencad_ribbon::ROW_H),
-                row![
-                    axis_input("X", "1", &self.scale_inputs[0], |value| {
-                        Message::ScaleAxis(0, value)
-                    }),
-                    axis_input("Y", "1", &self.scale_inputs[1], |value| {
-                        Message::ScaleAxis(1, value)
-                    }),
-                    axis_input("Z", "1", &self.scale_inputs[2], |value| {
-                        Message::ScaleAxis(2, value)
-                    }),
-                    edit_action(scale_action),
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center)
-                .height(opencad_ribbon::ROW_H),
-                row![
-                    text(i18n::tr("Keep")).size(12).width(44),
-                    slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
-                    text(format!("{}%", self.thin_percent)).size(11).width(30),
-                    edit_action(small_tool_button_when(
-                        "Thin",
-                        Message::Thin,
-                        false,
-                        has_active && !self.thin_pending,
-                    )),
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center)
-                .height(opencad_ribbon::ROW_H),
+                zoom_selection,
             ]
             .spacing(1)
             .into(),
@@ -9009,7 +8950,6 @@ impl Studio {
             selection,
             self.measure.ribbon(),
             self.views_ribbon(),
-            edit,
             opencad_ribbon::render_group_items("SURFACE", surface_tools),
             index,
         ]
@@ -9330,6 +9270,68 @@ impl Studio {
         title_for(active.map(|entry| display_name(&entry.cloud.path)))
     }
 
+    /// Move, scale and thin the active scan: the controls that were the EDIT
+    /// group of the ribbon, now with the scan in Properties.
+    fn transform_properties(&self) -> Element<'_, Message> {
+        let has_active = self.active.is_some();
+        let edit_action = |tool: Element<'static, Message>| container(tool).width(66);
+        let scale_action = if self.scale_job.is_some() {
+            small_tool_button("Cancel", Message::CancelScale, false)
+        } else {
+            small_tool_button_when("Scale", Message::ApplyScale, false, has_active)
+        };
+        let rows = column![
+            row![
+                axis_input("X", "0", &self.translate_x, Message::TranslateX),
+                axis_input("Y", "0", &self.translate_y, Message::TranslateY),
+                axis_input("Z", "0", &self.translate_z, Message::TranslateZ),
+                edit_action(small_tool_button_when(
+                    "Move",
+                    Message::ApplyTranslation,
+                    false,
+                    has_active,
+                )),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center)
+            .height(opencad_ribbon::ROW_H),
+            row![
+                axis_input("X", "1", &self.scale_inputs[0], |value| {
+                    Message::ScaleAxis(0, value)
+                }),
+                axis_input("Y", "1", &self.scale_inputs[1], |value| {
+                    Message::ScaleAxis(1, value)
+                }),
+                axis_input("Z", "1", &self.scale_inputs[2], |value| {
+                    Message::ScaleAxis(2, value)
+                }),
+                edit_action(scale_action),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center)
+            .height(opencad_ribbon::ROW_H),
+            row![
+                text(i18n::tr("Keep")).size(12).width(44),
+                slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
+                text(format!("{}%", self.thin_percent)).size(11).width(30),
+                edit_action(small_tool_button_when(
+                    "Thin",
+                    Message::Thin,
+                    false,
+                    has_active && !self.thin_pending,
+                )),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center)
+            .height(opencad_ribbon::ROW_H),
+        ]
+        .spacing(1)
+        .padding([4, 8]);
+        column![opencad_properties::section_header("Transform"), rows]
+            .spacing(0)
+            .into()
+    }
+
     /// The bar along the bottom of the window: what is going on at the left,
     /// the totals beside it and the version of the application at the right.
     fn status_bar(&self, message: String) -> Element<'_, Message> {
@@ -9549,6 +9551,9 @@ impl Studio {
                     &self.surface_settings[3],
                     |value| Message::SurfaceSetting(3, value),
                 ));
+        }
+        if self.active.is_some() {
+            properties = properties.push(self.transform_properties());
         }
         properties = properties.push(opencad_properties::section_header("Geometry"));
         if let Some(job) = &self.mesh_job {
@@ -11183,7 +11188,7 @@ fn finish_viewport_drag(
 
 const CONTEXT_ACTIONS: [(ContextAction, &str); 6] = [
     (ContextAction::Orbit, "Orbit"),
-    (ContextAction::BoxSelect, "Box select"),
+    (ContextAction::BoxSelect, i18n::key("Box select")),
     (ContextAction::PickPoint, "Pick point"),
     (ContextAction::SectionBox, "Section box"),
     (ContextAction::FitView, "Zoom all"),

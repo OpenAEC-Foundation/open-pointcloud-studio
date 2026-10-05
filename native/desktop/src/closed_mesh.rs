@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-use iced::widget::{button, column, container, pick_list, text};
+use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Element, Fill, Task};
 use pointcloud_core::region_source::{resident_points, RegionSource, SourceTransform};
 use pointcloud_core::surfels::{SurfelSource, MAX_VOXEL, MIN_VOXEL};
@@ -1881,6 +1881,8 @@ impl Studio {
         let warning = |content: String| {
             container(text(content).size(10).color(colors.accent)).padding([4, 8])
         };
+        let mut explanation: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
         let mut block = column![
             opencad_properties::section_header("Closed mesh"),
             opencad_properties::property_input(
@@ -1947,42 +1949,43 @@ impl Studio {
             let mut ready = self.mesh_job.is_none() && !self.mesh_dialog_pending;
             match self.closed_mesh_region() {
                 Ok(region) => {
-                    block = block.push(note(region_note(&region, settings.layers)));
+                    explanation.push(region_note(&region, settings.layers));
                     let voxel = format!("{:.0}", region.voxel * 1000.0);
                     let triangles = format_count(region.triangles);
-                    block = block.push(note(tr_args(
+                    explanation.push(tr_args(
                         "Voxels of {voxel} mm: about {triangles} triangles before simplification for the faces of this box alone. Furniture and inner walls add to that.",
                         &[("voxel", &voxel), ("triangles", &triangles)],
-                    )));
+                    ));
                     if let Some(line) = fit_warning(region.fit) {
-                        block = block.push(warning(line));
+                        warnings.push(line);
                     }
                 }
                 Err(problem) => {
                     ready = false;
-                    block = block.push(warning(match problem {
+                    warnings.push(match problem {
                         Problem::Setting(sentence) => sentence.translated(),
                         Problem::Refused(refusal) => refusal.sentence().translated(),
-                    }));
+                    });
                 }
             }
-            block = block
-                .push(note(
-                    tr("The result becomes the mesh of the active scan and takes the place of a mesh it has.")
-                        .to_owned(),
-                ))
-                .push(
-                    container(
-                        button(tr("Start"))
-                            .on_press_maybe(
-                                ready.then_some(Message::ClosedMesh(ClosedMeshAction::Start)),
-                            )
-                            .style(|theme, status| {
-                                opencad_ribbon::tool_btn_style(theme, false, status)
-                            }),
-                    )
-                    .padding([3, 8]),
-                );
+            explanation.push(
+                tr("The result becomes the mesh of the active scan and takes the place of a mesh it has.")
+                    .to_owned(),
+            );
+            // The explanation is in the tooltip of Start, warnings behind the
+            // mark beside it; the panel keeps the settings and the results.
+            let mut start = row![opencad_properties::explained(
+                button(tr("Start"))
+                    .on_press_maybe(ready.then_some(Message::ClosedMesh(ClosedMeshAction::Start)))
+                    .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status)),
+                std::mem::take(&mut explanation),
+            )]
+            .spacing(6)
+            .align_y(iced::Alignment::Center);
+            if let Some(mark) = opencad_properties::warning_mark(std::mem::take(&mut warnings)) {
+                start = start.push(mark);
+            }
+            block = block.push(container(start).padding([3, 8]));
         }
 
         match &tool.last {
@@ -1990,8 +1993,20 @@ impl Studio {
                 for row in result_rows(report, *sides) {
                     block = block.push(row);
                 }
-                for sentence in advice_sentences(report, *sides, &|count| format_count(count)) {
-                    block = block.push(warning(sentence.translated()));
+                let advice: Vec<String> =
+                    advice_sentences(report, *sides, &|count| format_count(count))
+                        .into_iter()
+                        .map(|sentence| sentence.translated())
+                        .collect();
+                if let Some(mark) = opencad_properties::warning_mark(advice) {
+                    block = block.push(
+                        container(
+                            row![text(tr("Advice")).size(11).color(colors.accent), mark]
+                                .spacing(6)
+                                .align_y(iced::Alignment::Center),
+                        )
+                        .padding([4, 8]),
+                    );
                 }
             }
             Some(Last::Failed(error)) => {

@@ -3,7 +3,7 @@
 // Changes: read-only point-cloud fields, a row that holds a control and the
 // iced 0.13 palette API.
 
-use iced::widget::{container, row, text, text_input};
+use iced::widget::{container, row, text, text_input, tooltip};
 use iced::{Background, Border, Element, Fill, Length, Theme};
 
 use crate::ui_theme;
@@ -174,4 +174,62 @@ pub fn section_header(title: &'static str) -> Element<'static, Message> {
             ..Default::default()
         })
         .into()
+}
+
+/// The box a tooltip of the panels is shown in.
+fn tip_box<'a>(lines: &[String]) -> Element<'a, Message> {
+    container(text(lines.join("\n\n")).size(11))
+        .padding([6, 8])
+        .max_width(340)
+        .style(|theme| {
+            let colors = ui_theme::colors(theme);
+            container::Style::default()
+                .background(colors.panel_alt)
+                .color(colors.text)
+                .border(Border {
+                    color: colors.border,
+                    width: 1.0,
+                    radius: 3.0.into(),
+                })
+        })
+        .into()
+}
+
+/// A control whose explanation shows in a tooltip instead of as text on the
+/// panel.
+pub fn explained<'a>(
+    content: impl Into<Element<'a, Message>>,
+    lines: Vec<String>,
+) -> Element<'a, Message> {
+    if lines.is_empty() {
+        return content.into();
+    }
+    tooltip(content, tip_box(&lines), tooltip::Position::Bottom)
+        .gap(4)
+        .into()
+}
+
+/// A small mark in the accent colour whose tooltip holds warnings or
+/// advice; nothing when there are none.
+pub fn warning_mark<'a>(lines: Vec<String>) -> Option<Element<'a, Message>> {
+    if lines.is_empty() {
+        return None;
+    }
+    let mark = container(text("!").size(12).style(|theme| text::Style {
+        color: Some(ui_theme::colors(theme).accent),
+    }))
+    .padding([2, 7])
+    .style(|theme| {
+        let colors = ui_theme::colors(theme);
+        container::Style::default().border(Border {
+            color: colors.accent,
+            width: 1.0,
+            radius: 9.0.into(),
+        })
+    });
+    Some(
+        tooltip(mark, tip_box(&lines), tooltip::Position::Bottom)
+            .gap(4)
+            .into(),
+    )
 }

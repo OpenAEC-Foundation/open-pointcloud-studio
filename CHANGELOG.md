@@ -14,6 +14,9 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- The ribbon is lighter: **Box select** left the SELECTION group (a left drag selects with a box), and Move, Scale and Thin moved from the EDIT group to **Transform** in Properties, with the scan they act on.
+- The explanations in the Closed mesh, Detect faces and Section drawing blocks are tooltips of their Start, Preview and Export buttons; warnings and advice sit behind a small **!** mark.
+
 ## 0.9.1 - 2026-10-05
 
 - **Closed mesh** keeps the edges and corners of walls, floors and steps sharp. Near an edge the distance to the surface is measured to the planes of the faces that meet there instead of to their mean, so step nosings, the foot of a wall and outside corners are no longer rounded off: on generated scans at voxels of 4 cm the true edge lies about 3 mm from the mesh instead of 5 to 7 mm.

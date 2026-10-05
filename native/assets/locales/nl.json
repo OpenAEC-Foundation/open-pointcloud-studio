@@ -28,7 +28,6 @@
   "Delete": "Verwijderen",
   "Cancel": "Annuleren",
   "Scale": "Schalen",
-  "EDIT": "BEWERKEN",
   "Move": "Verplaatsen",
   "Keep": "Behoud",
   "Thin": "Uitdunnen",
@@ -551,5 +550,7 @@
   "VIEWS AND SECTIONS": "VIEWS EN DOORSNEDEN",
   "Save section": "Doorsnede opslaan",
   "Name": "Naam",
-  "section": "doorsnede"
+  "section": "doorsnede",
+  "Transform": "Transformeren",
+  "Advice": "Advies"
 }

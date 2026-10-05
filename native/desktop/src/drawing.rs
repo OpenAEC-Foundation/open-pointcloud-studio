@@ -1738,7 +1738,6 @@ impl Studio {
                     DrawingAction::View
                 ),
             ),
-            note(tr(cut_plane_text(settings.view))),
             opencad_properties::property_input(
                 "Slab thickness (m)",
                 "0.10",
@@ -1811,10 +1810,18 @@ impl Studio {
                     DrawingAction::Version
                 ),
             ),
-            note(tr("The file name chooses the format: .dxf or .dwg.")),
         ]
         .spacing(0)
         .width(Fill);
+        // What the cut plane is and how the format is chosen show in the
+        // tooltips of the buttons, not as text on the panel.
+        let mut explanation = vec![tr(cut_plane_text(settings.view)).to_owned()];
+        if !self.section_enabled {
+            explanation.insert(
+                0,
+                tr("Switch on the section box to make a drawing.").to_owned(),
+            );
+        }
 
         if let Some(job) = &tool.job {
             let cancelling = job.cancelling();
@@ -1843,16 +1850,16 @@ impl Studio {
         } else {
             let ready = self.section_enabled && !tool.busy();
             let act = |action: DrawingAction| ready.then_some(Message::Drawing(action));
-            if !self.section_enabled {
-                block = block.push(note(tr("Switch on the section box to make a drawing.")));
-            }
             block = block
                 .push(
                     container(
                         row![
-                            button(tr("Preview"))
-                                .on_press_maybe(act(DrawingAction::Preview))
-                                .style(flat_tool_style),
+                            opencad_properties::explained(
+                                button(tr("Preview"))
+                                    .on_press_maybe(act(DrawingAction::Preview))
+                                    .style(flat_tool_style),
+                                explanation.clone(),
+                            ),
                             button(tr("Clear preview"))
                                 .on_press_maybe(
                                     tool.preview
@@ -1866,13 +1873,20 @@ impl Studio {
                     .padding([3, 8]),
                 )
                 .push(
-                    container(
+                    container(opencad_properties::explained(
                         button(tr("Export drawing…"))
                             .on_press_maybe(act(DrawingAction::Export))
                             .style(|theme, status| {
                                 opencad_ribbon::tool_btn_style(theme, false, status)
                             }),
-                    )
+                        {
+                            let mut lines = explanation.clone();
+                            lines.push(
+                                tr("The file name chooses the format: .dxf or .dwg.").to_owned(),
+                            );
+                            lines
+                        },
+                    ))
                     .padding([3, 8]),
                 );
         }
