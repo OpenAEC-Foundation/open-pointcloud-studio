@@ -92,7 +92,8 @@ pub use oriented_box::{bounds_corners, normalized_degrees, OrientedBox};
 pub use ply_mesh::read_ply_mesh;
 pub use scan_image::{select_scan_image, ScanImage, ScanImageFormat};
 pub use surface_mesh::{
-    mesh_surface_obj, mesh_surface_obj_where, mesh_surface_obj_where_progress, SurfaceMeshConfig,
+    mesh_surface_obj, mesh_surface_obj_from, mesh_surface_obj_where,
+    mesh_surface_obj_where_progress, SurfaceMeshConfig, SurfacePoints,
 };
 
 pub fn read_mesh_geometry(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, LoadError> {

@@ -1,6 +1,7 @@
 //! Bounded 3D surface reconstruction from a complete point stream.
-//! A reservoir covers the full source, then spatial thinning spreads its points
-//! across the scan; a k-d tree supports local tangent-plane triangulation
+//! A reservoir chosen by a hash of the point ordinals covers the full source,
+//! then spatial thinning spreads its points across the scan; a k-d tree
+//! supports local tangent-plane triangulation
 //! without assuming that the surface is a height field.
 
 use std::cmp::Ordering;
@@ -355,15 +356,82 @@ fn voxel_thin_indices(candidates: &[[f64; 3]], width: f64) -> Vec<usize> {
     indices
 }
 
+/// A well-mixed hash of the ordinal of a source point: the finaliser of
+/// splitmix64 with a fixed seed. It is a bijection, so two ordinals never
+/// share a hash.
+fn ordinal_hash(ordinal: u64) -> u64 {
+    let mut hash = ordinal.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    hash ^ (hash >> 31)
+}
+
 pub(crate) fn sampled_ordinal(ordinal: u64, percent: f64) -> bool {
     if percent >= 100.0 {
         return true;
     }
-    let mut hash = ordinal.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    hash ^= hash >> 31;
-    (hash as f64 / u64::MAX as f64) < percent / 100.0
+    (ordinal_hash(ordinal) as f64 / u64::MAX as f64) < percent / 100.0
+}
+
+/// The points a 3D surface is made from: of the points offered, the `limit`
+/// whose ordinals have the smallest hashes. The choice depends on the
+/// ordinals alone and not on the order in which the points arrive, so the
+/// source file and an index of it, which gives its points leaf by leaf, give
+/// the same candidates.
+struct Candidates {
+    limit: usize,
+    points: Vec<(u64, Point)>,
+    /// The hash of every candidate with its place in `points`, the largest
+    /// on top: the one a point with a smaller hash takes the place of.
+    largest: BinaryHeap<(u64, usize)>,
+}
+
+impl Candidates {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            points: Vec::with_capacity(limit),
+            largest: BinaryHeap::with_capacity(limit),
+        }
+    }
+
+    fn offer(&mut self, ordinal: u64, point: Point) {
+        let hash = ordinal_hash(ordinal);
+        if self.points.len() < self.limit {
+            self.largest.push((hash, self.points.len()));
+            self.points.push((ordinal, point));
+        } else if let Some(mut top) = self.largest.peek_mut() {
+            if hash < top.0 {
+                self.points[top.1] = (ordinal, point);
+                top.0 = hash;
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.points.len()
+    }
+
+    /// The candidates in the order of their ordinals, so that what comes
+    /// after does not depend on the order they were offered in either.
+    fn into_points(self) -> Vec<Point> {
+        let mut points = self.points;
+        points.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+        points.into_iter().map(|(_, point)| point).collect()
+    }
+}
+
+/// Where a 3D surface reads the points of its cloud. Each gives the same
+/// mesh: an index only saves decoding the source file once more.
+#[derive(Clone, Copy)]
+pub enum SurfacePoints<'a> {
+    /// The source file.
+    Source,
+    /// This index of the cloud.
+    Index(&'a OctreeIndex),
+    /// The index a cache with these settings holds for the cloud when it
+    /// holds a valid one, and the source file otherwise.
+    Cached(&'a IndexConfig),
 }
 
 /// Reconstruct a general 3D surface and atomically write an OBJ. The point
@@ -387,8 +455,30 @@ pub fn mesh_surface_obj_where(
 }
 
 /// Full-stream surface reconstruction with progress and cancellation support.
+/// The points are read from the index in the default cache when it holds
+/// one for the cloud.
 pub fn mesh_surface_obj_where_progress(
     cloud: &PointCloud,
+    destination: impl AsRef<Path>,
+    config: SurfaceMeshConfig,
+    include: impl FnMut(u64, &Point) -> bool,
+    progress: impl FnMut(MeshProgress) -> Result<(), LoadError>,
+) -> Result<MeshStats, LoadError> {
+    mesh_surface_obj_from(
+        cloud,
+        SurfacePoints::Cached(&IndexConfig::default()),
+        destination,
+        config,
+        include,
+        progress,
+    )
+}
+
+/// Full-stream surface reconstruction that reads the points from where
+/// `points` says.
+pub fn mesh_surface_obj_from(
+    cloud: &PointCloud,
+    points: SurfacePoints<'_>,
     destination: impl AsRef<Path>,
     config: SurfaceMeshConfig,
     mut include: impl FnMut(u64, &Point) -> bool,
@@ -396,6 +486,7 @@ pub fn mesh_surface_obj_where_progress(
 ) -> Result<MeshStats, LoadError> {
     mesh_surface_obj_inner(
         cloud,
+        points,
         destination.as_ref(),
         config,
         &mut include,
@@ -408,6 +499,7 @@ pub fn mesh_surface_obj_where_progress(
 // when called from its CLI or GUI and makes a large LAZ mesh many times slower.
 fn mesh_surface_obj_inner(
     cloud: &PointCloud,
+    points: SurfacePoints<'_>,
     destination: &Path,
     config: SurfaceMeshConfig,
     include: &mut dyn FnMut(u64, &Point) -> bool,
@@ -428,10 +520,9 @@ fn mesh_surface_obj_inner(
         .max_vertices
         .saturating_mul(4)
         .min(config.max_vertices.saturating_add(150_000));
-    let mut candidates = Vec::<Point>::with_capacity(candidate_limit);
+    let mut candidates = Candidates::new(candidate_limit);
     let mut visited = 0u64;
     let mut source_points = 0u64;
-    let mut random = 0x7a81_09e6_63d1_c207u64;
     progress(MeshProgress::new(MeshStage::Reading, 0, cloud.total_points))?;
     let mut take = |ordinal: u64, point: Point| {
         visited += 1;
@@ -452,27 +543,25 @@ fn mesh_surface_obj_inner(
             return Err(LoadError::InvalidData("non-finite mesh vertex".into()));
         }
         source_points += 1;
-        if candidates.len() < candidate_limit {
-            candidates.push(point);
-        } else {
-            random ^= random << 13;
-            random ^= random >> 7;
-            random ^= random << 17;
-            let slot = random % source_points;
-            if slot < candidate_limit as u64 {
-                candidates[slot as usize] = point;
-            }
-        }
+        candidates.offer(ordinal, point);
         Ok(())
     };
     // A validated on-disk octree stores every point with its original file
     // ordinal. Reuse it when present: reconstructing a large E57 repeatedly
     // need not decode the compressed source for every parameter change.
     // An absent cache or one that fails validation falls back to the source.
-    if let Some(index) = OctreeIndex::open_cached_if_present(cloud, IndexConfig::default())
-        .ok()
-        .flatten()
-    {
+    let cached;
+    let index = match points {
+        SurfacePoints::Source => None,
+        SurfacePoints::Index(index) => Some(index),
+        SurfacePoints::Cached(config) => {
+            cached = OctreeIndex::open_cached_if_present(cloud, config.clone())
+                .ok()
+                .flatten();
+            cached.as_ref()
+        }
+    };
+    if let Some(index) = index {
         index.visit_intersecting(|_| true, |record| take(record.ordinal, record.point))?;
     } else {
         let mut ordinal = 0;
@@ -500,6 +589,7 @@ fn mesh_surface_obj_inner(
         ));
     }
     progress(MeshProgress::new(MeshStage::Reconstructing, 0, 0))?;
+    let candidates = candidates.into_points();
     let candidate_xyz: Vec<_> = candidates.iter().map(|point| point.xyz).collect();
     let spaced = voxel_thin_indices(&candidate_xyz, config.mesh_size);
     let spaced_xyz: Vec<_> = spaced.iter().map(|&index| candidate_xyz[index]).collect();
@@ -1438,6 +1528,88 @@ mod tests {
             let zs = face.map(|i| mesh.vertices[i as usize][2]);
             assert_eq!(zs[0], zs[1]);
             assert_eq!(zs[1], zs[2]);
+        }
+    }
+
+    /// A floor and two walls of 3,321 points in all, written as XYZ.
+    fn corner_of_a_room(path: &Path) {
+        let mut data = String::new();
+        for x in 0..41 {
+            for y in 0..41 {
+                data.push_str(&format!(
+                    "{} {} 0\n",
+                    f64::from(x) * 0.1,
+                    f64::from(y) * 0.1
+                ));
+            }
+        }
+        for along in 0..41 {
+            for z in 1..21 {
+                let (along, z) = (f64::from(along) * 0.1, f64::from(z) * 0.1);
+                data.push_str(&format!("{along} 0 {z}\n0 {along} {z}\n"));
+            }
+        }
+        fs::write(path, data).unwrap();
+    }
+
+    #[test]
+    fn the_index_and_the_source_give_the_same_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("corner.xyz");
+        corner_of_a_room(&source);
+        let cloud = open(&source, 1).unwrap();
+        assert_eq!(cloud.total_points, 3_321);
+        let cache = IndexConfig {
+            leaf_points: 32,
+            scratch_dir: Some(dir.path().join("cache")),
+            ..IndexConfig::default()
+        };
+        let index = OctreeIndex::build_cached(&cloud, cache.clone()).unwrap();
+        // The index gives its points leaf by leaf, not in the order of the
+        // file.
+        let mut order = Vec::new();
+        index
+            .visit_intersecting(
+                |_| true,
+                |record| {
+                    order.push(record.ordinal);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(order.len(), 3_321);
+        assert!(!order.is_sorted());
+
+        // At most 400 candidates for 100 vertices: fewer than the points.
+        let config = SurfaceMeshConfig {
+            max_vertices: 100,
+            ..SurfaceMeshConfig::default()
+        };
+        let surface = |points: SurfacePoints<'_>, name: &str, include: fn(u64) -> bool| {
+            let target = dir.path().join(name);
+            mesh_surface_obj_from(
+                &cloud,
+                points,
+                &target,
+                config,
+                |ordinal, _| include(ordinal),
+                |_| Ok(()),
+            )
+            .unwrap();
+            fs::read(target).unwrap()
+        };
+        // Every point, and the points an edit left: two in three.
+        let filters: [fn(u64) -> bool; 2] = [|_| true, |ordinal| ordinal % 3 != 0];
+        for include in filters {
+            let from_source = surface(SurfacePoints::Source, "source.obj", include);
+            assert_eq!(
+                surface(SurfacePoints::Index(&index), "index.obj", include),
+                from_source
+            );
+            assert_eq!(
+                surface(SurfacePoints::Cached(&cache), "cached.obj", include),
+                from_source
+            );
         }
     }
 
