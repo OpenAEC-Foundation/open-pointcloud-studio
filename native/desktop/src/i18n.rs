@@ -430,6 +430,7 @@ mod tests {
             include_str!("opencad_properties.rs"),
         ),
         ("opencad_ribbon.rs", include_str!("opencad_ribbon.rs")),
+        ("section_fill.rs", include_str!("section_fill.rs")),
         ("settings_dialog.rs", include_str!("settings_dialog.rs")),
         ("station_photos.rs", include_str!("station_photos.rs")),
         ("ui_theme.rs", include_str!("ui_theme.rs")),

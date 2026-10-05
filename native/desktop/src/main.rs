@@ -39,6 +39,7 @@ mod orbit_point;
 mod preferences;
 mod project_open;
 mod screenshot;
+mod section_fill;
 mod sections;
 mod selection;
 mod settings_dialog;
@@ -1753,6 +1754,7 @@ enum Message {
     PointSize(f32),
     SetEyeDome(bool),
     EyeDomeStrength(f32),
+    SectionFill(section_fill::FillAction),
     ShowScanPoses(bool),
     ExpandScanPoses(bool),
     FitScanPoses,
@@ -1909,6 +1911,7 @@ struct Studio {
     point_size: f32,
     eye_dome: bool,
     eye_dome_strength: f32,
+    section_fill: section_fill::SectionFill,
     show_scan_poses: bool,
     expand_scan_poses: bool,
     /// Small station photos in arrival order; the atlas is rebuilt from them.
@@ -2365,6 +2368,11 @@ impl Default for Studio {
             point_size: settings.point_size,
             eye_dome: settings.eye_dome,
             eye_dome_strength: settings.eye_dome_strength,
+            section_fill: section_fill::SectionFill::new(
+                settings.fill_cut,
+                settings.cap_color,
+                settings.cap_max_thickness,
+            ),
             show_scan_poses: settings.show_scan_poses,
             expand_scan_poses: false,
             station_photos: Vec::new(),
@@ -2471,6 +2479,9 @@ impl Studio {
             open_after_export: self.cad_viewer.open_after_export,
             show_drawing_after_export: self.drawing_view.show_after_export,
             orthographic: selection::orthographic(),
+            fill_cut: self.section_fill.fill_cut,
+            cap_color: self.section_fill.color,
+            cap_max_thickness: self.section_fill.max_thickness,
         }
     }
 
@@ -3286,6 +3297,7 @@ impl Studio {
                 answer.0["result"]["section_align_pending"] =
                     Value::Bool(self.section_align_pending);
                 answer.0["result"]["closed_mesh"] = self.closed_mesh.value();
+                answer.0["result"]["section_fill"] = self.section_fill.value();
                 answer.0["result"]["faces"] = self.faces_value();
                 answer
             }
@@ -3677,6 +3689,20 @@ impl Studio {
                     )
                 }
             }
+            ApiCommand::SetSectionFill {
+                fill_cut,
+                color,
+                max_thickness,
+            } => match self
+                .section_fill
+                .set(fill_cut, color.as_deref(), max_thickness)
+            {
+                Ok(()) => (
+                    json!({"ok": true, "section_fill": self.section_fill.value()}),
+                    self.queue_preferences_save(),
+                ),
+                Err(error) => (json!({"ok": false, "error": error}), Task::none()),
+            },
             ApiCommand::ClearSection => {
                 let task = self.update(Message::SetSectionEnabled(false));
                 (json!({"ok": true}), task)
@@ -7257,6 +7283,11 @@ impl Studio {
                 self.eye_dome_strength = strength;
                 return self.queue_preferences_save();
             }
+            Message::SectionFill(action) => {
+                if self.section_fill.apply(action) {
+                    return self.queue_preferences_save();
+                }
+            }
             Message::ShowScanPoses(enabled) => {
                 self.show_scan_poses = enabled;
                 return self.queue_preferences_save();
@@ -9284,6 +9315,7 @@ impl Studio {
             class_visibility: self.class_visibility,
             section: self.section_box(),
             section_reference: self.section_reference_bounds,
+            section_fill: self.section_fill.style(),
             yaw: self.yaw,
             pitch: self.pitch,
             zoom: self.zoom,
@@ -9991,6 +10023,7 @@ impl Studio {
                 )
                 .padding([3, 8]),
             );
+            properties = properties.push(self.section_fill.properties());
         }
         if let Some(mesh) = self.mesh_properties() {
             properties = properties.push(mesh);
@@ -11038,6 +11071,8 @@ struct PointViewport<'a> {
     class_visibility: ClassVisibility,
     section: Option<OrientedBox>,
     section_reference: Option<Bounds>,
+    /// How the cut of a mesh by the section box is filled, when it is.
+    section_fill: Option<section_fill::CapStyle>,
     yaw: f32,
     pitch: f32,
     zoom: f32,
@@ -13090,6 +13125,51 @@ mod section_box_tests {
 
     fn near(a: [f64; 3], b: [f64; 3], slack: f64) -> bool {
         (0..3).all(|axis| (a[axis] - b[axis]).abs() <= slack)
+    }
+
+    #[test]
+    fn the_fill_of_the_cut_is_set_through_the_api_and_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = studio_with_grid(directory.path());
+        let status = send(&mut studio, native_api::ApiCommand::Status);
+        assert_eq!(status["result"]["section_fill"]["fill_cut"], true);
+        assert_eq!(status["result"]["section_fill"]["color"], "#808080");
+        assert_eq!(status["result"]["section_fill"]["max_thickness"], 0.5);
+        let answer = send(
+            &mut studio,
+            native_api::ApiCommand::SetSectionFill {
+                fill_cut: None,
+                color: Some("#5a5a5a".into()),
+                max_thickness: Some(0.35),
+            },
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["section_fill"]["color"], "#5a5a5a");
+        let refused = send(
+            &mut studio,
+            native_api::ApiCommand::SetSectionFill {
+                fill_cut: Some(false),
+                color: None,
+                max_thickness: Some(5.0),
+            },
+        );
+        assert_eq!(refused["ok"], false);
+        let answer = send(
+            &mut studio,
+            native_api::ApiCommand::SetSectionFill {
+                fill_cut: Some(false),
+                color: None,
+                max_thickness: None,
+            },
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        let status = send(&mut studio, native_api::ApiCommand::Status);
+        assert_eq!(
+            status["result"]["section_fill"],
+            json!({"fill_cut": false, "color": "#5a5a5a", "max_thickness": 0.35})
+        );
+        assert_eq!(studio.preferences().cap_max_thickness, 0.35);
+        assert!(studio.point_viewport().section_fill.is_none());
     }
 
     #[test]

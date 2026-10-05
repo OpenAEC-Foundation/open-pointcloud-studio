@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::section_fill::CapStyle;
 use crate::selection::{ClassVisibility, DeletionMask};
 use crate::station_photos::{self, PhotoAtlas, PhotoSet};
 use crate::CloudTransform;
@@ -15,7 +16,9 @@ use iced::widget::shader::{self, Shader};
 use iced::Rectangle;
 use iced_wgpu::primitive::{Primitive, Storage};
 use iced_wgpu::wgpu;
-use pointcloud_core::{Bounds, IndexedPoint, MeshGeometry, OrientedBox, PointCloud};
+use pointcloud_core::{
+    section_caps, Bounds, CapOptions, IndexedPoint, MeshGeometry, OrientedBox, PointCloud,
+};
 
 // Keep each upload below conservative WGPU adapter buffer limits. The full
 // viewport budget can span multiple draw calls without losing detail.
@@ -95,6 +98,28 @@ pub struct RenderCache {
     geometry: Option<Arc<RenderGeometry>>,
     mesh_key: Option<MeshKey>,
     mesh: Option<Arc<MeshBuffers>>,
+    caps_key: Option<CapKey>,
+    caps: Arc<MeshBuffers>,
+}
+
+/// What the caps over the cut of the meshes are made from: the meshes, the
+/// section box and how the cut is filled.
+struct CapKey {
+    meshes: MeshKey,
+    section: OrientedBox,
+    style: CapStyle,
+}
+
+impl CapKey {
+    fn matches(
+        &self,
+        clouds: &[CloudEntry],
+        bounds: Option<Bounds>,
+        section: OrientedBox,
+        style: CapStyle,
+    ) -> bool {
+        self.section == section && self.style == style && self.meshes.matches(clouds, bounds)
+    }
 }
 
 /// What the buffers of the meshes are made from. The points on screen, the
@@ -462,6 +487,59 @@ impl<'a> GpuViewport<'a> {
             indices: mesh_indices,
         }
     }
+
+    /// The caps where the section box cuts the meshes of the layers, in
+    /// the cap colour and without a normal, so they are drawn flat. Detected
+    /// faces are single surfaces and get none.
+    fn build_caps(
+        &self,
+        overall_bounds: Option<Bounds>,
+        section: OrientedBox,
+        style: CapStyle,
+    ) -> MeshBuffers {
+        let mut caps = MeshBuffers::default();
+        let Some(overall_bounds) = overall_bounds else {
+            return caps;
+        };
+        let center = overall_bounds.center();
+        let color = [
+            f32::from(style.color[0]) / 255.0,
+            f32::from(style.color[1]) / 255.0,
+            f32::from(style.color[2]) / 255.0,
+            1.0,
+        ];
+        let options = CapOptions {
+            max_thickness: style.max_thickness,
+        };
+        for (index, part, mesh) in drawn(self.overlay.clouds) {
+            if part != MeshPart::Surface {
+                continue;
+            }
+            let transform = self.overlay.clouds[index].transform;
+            let found = section_caps(mesh, |xyz| transform.xyz(xyz), &section, options);
+            let Ok(base) = u32::try_from(caps.vertices.len()) else {
+                break;
+            };
+            caps.vertices
+                .extend(found.vertices.iter().map(|xyz| GpuMeshVertex {
+                    relative: [
+                        (xyz[0] - center[0]) as f32,
+                        (xyz[1] - center[1]) as f32,
+                        (xyz[2] - center[2]) as f32,
+                        0.0,
+                    ],
+                    color,
+                    normal: [0.0; 4],
+                }));
+            caps.indices.extend(
+                found
+                    .triangles
+                    .iter()
+                    .flat_map(|face| face.map(|index| index + base)),
+            );
+        }
+        caps
+    }
 }
 
 impl shader::Program<Message> for GpuViewport<'_> {
@@ -506,6 +584,32 @@ impl shader::Program<Message> for GpuViewport<'_> {
                 cache.key = Some(SceneKey::capture(self.overlay, overall_bounds));
             }
             Arc::clone(cache.geometry.as_ref().expect("render geometry cached"))
+        };
+        let caps = {
+            let mut cache = state.borrow_mut();
+            match (self.overlay.section, self.overlay.section_fill) {
+                (Some(section), Some(style)) => {
+                    let clouds = self.overlay.clouds;
+                    if !cache
+                        .caps_key
+                        .as_ref()
+                        .is_some_and(|key| key.matches(clouds, overall_bounds, section, style))
+                    {
+                        cache.caps = Arc::new(self.build_caps(overall_bounds, section, style));
+                        cache.caps_key = Some(CapKey {
+                            meshes: MeshKey::capture(clouds, overall_bounds),
+                            section,
+                            style,
+                        });
+                    }
+                }
+                _ => {
+                    if cache.caps_key.take().is_some() {
+                        cache.caps = Arc::default();
+                    }
+                }
+            }
+            Arc::clone(&cache.caps)
         };
 
         let mut camera = CameraUniform::zeroed();
@@ -640,6 +744,7 @@ impl shader::Program<Message> for GpuViewport<'_> {
         }
         CloudPrimitive {
             geometry,
+            caps,
             camera,
             photos,
         }
@@ -734,8 +839,90 @@ struct PanoramaFrame {
 #[derive(Debug)]
 pub struct CloudPrimitive {
     geometry: Arc<RenderGeometry>,
+    /// The caps over the cut of the meshes by the section box.
+    caps: Arc<MeshBuffers>,
     camera: CameraUniform,
     photos: PhotoFrame,
+}
+
+/// Vertex and index buffers of meshes on the device. They are sent again
+/// only when the buffers they are made from change.
+struct MeshUpload {
+    label: &'static str,
+    vertex_buffer: wgpu::Buffer,
+    vertex_capacity: u64,
+    index_buffer: wgpu::Buffer,
+    index_capacity: u64,
+    index_count: u32,
+    uploaded: Option<Arc<MeshBuffers>>,
+}
+
+impl MeshUpload {
+    fn new(device: &wgpu::Device, label: &'static str) -> Self {
+        let vertex_capacity = std::mem::size_of::<GpuMeshVertex>() as u64;
+        let index_capacity = std::mem::size_of::<u32>() as u64;
+        Self {
+            label,
+            vertex_buffer: Self::buffer(device, label, vertex_capacity, wgpu::BufferUsages::VERTEX),
+            vertex_capacity,
+            index_buffer: Self::buffer(device, label, index_capacity, wgpu::BufferUsages::INDEX),
+            index_capacity,
+            index_count: 0,
+            uploaded: None,
+        }
+    }
+
+    fn buffer(
+        device: &wgpu::Device,
+        label: &'static str,
+        size: u64,
+        usage: wgpu::BufferUsages,
+    ) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: usage | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mesh: &Arc<MeshBuffers>) {
+        if self
+            .uploaded
+            .as_ref()
+            .is_some_and(|previous| Arc::ptr_eq(previous, mesh))
+        {
+            return;
+        }
+        let vertex_bytes = std::mem::size_of_val(mesh.vertices.as_slice()) as u64;
+        if vertex_bytes > self.vertex_capacity {
+            self.vertex_capacity = vertex_bytes.next_power_of_two();
+            self.vertex_buffer = Self::buffer(
+                device,
+                self.label,
+                self.vertex_capacity,
+                wgpu::BufferUsages::VERTEX,
+            );
+        }
+        if !mesh.vertices.is_empty() {
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&mesh.vertices));
+        }
+        let index_bytes = std::mem::size_of_val(mesh.indices.as_slice()) as u64;
+        if index_bytes > self.index_capacity {
+            self.index_capacity = index_bytes.next_power_of_two();
+            self.index_buffer = Self::buffer(
+                device,
+                self.label,
+                self.index_capacity,
+                wgpu::BufferUsages::INDEX,
+            );
+        }
+        if !mesh.indices.is_empty() {
+            queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&mesh.indices));
+        }
+        self.index_count = mesh.indices.len() as u32;
+        self.uploaded = Some(Arc::clone(mesh));
+    }
 }
 
 struct PhotoTexture {
@@ -855,13 +1042,9 @@ struct GpuState {
     camera_buffer: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
     point_buffers: Vec<PointBufferChunk>,
-    mesh_vertex_buffer: wgpu::Buffer,
-    mesh_vertex_capacity: u64,
-    mesh_index_buffer: wgpu::Buffer,
-    mesh_index_capacity: u64,
-    mesh_index_count: u32,
+    mesh: MeshUpload,
+    caps: MeshUpload,
     uploaded_geometry: Option<Arc<RenderGeometry>>,
-    uploaded_mesh: Option<Arc<MeshBuffers>>,
     depth_texture: Option<wgpu::Texture>,
     depth_view: Option<wgpu::TextureView>,
     color_texture: Option<wgpu::Texture>,
@@ -1150,20 +1333,6 @@ impl GpuState {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let mesh_vertex_capacity = std::mem::size_of::<GpuMeshVertex>() as u64;
-        let mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("terrain mesh vertices"),
-            size: mesh_vertex_capacity,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mesh_index_capacity = std::mem::size_of::<u32>() as u64;
-        let mesh_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("terrain mesh indices"),
-            size: mesh_index_capacity,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         Self {
             pipeline,
             mesh_pipeline,
@@ -1182,13 +1351,9 @@ impl GpuState {
             camera_buffer,
             camera_group,
             point_buffers: Vec::new(),
-            mesh_vertex_buffer,
-            mesh_vertex_capacity,
-            mesh_index_buffer,
-            mesh_index_capacity,
-            mesh_index_count: 0,
+            mesh: MeshUpload::new(device, "terrain mesh"),
+            caps: MeshUpload::new(device, "section caps"),
             uploaded_geometry: None,
-            uploaded_mesh: None,
             depth_texture: None,
             depth_view: None,
             color_texture: None,
@@ -1395,49 +1560,8 @@ impl Primitive for CloudPrimitive {
         }
         // The meshes are sent only when they changed: a refinement of the
         // points keeps the buffers of a mesh of millions of triangles.
-        if state
-            .uploaded_mesh
-            .as_ref()
-            .is_none_or(|previous| !Arc::ptr_eq(previous, &self.geometry.mesh))
-        {
-            let mesh = &self.geometry.mesh;
-            let vertex_bytes = (mesh.vertices.len() * std::mem::size_of::<GpuMeshVertex>()) as u64;
-            if vertex_bytes > state.mesh_vertex_capacity {
-                state.mesh_vertex_capacity = vertex_bytes.next_power_of_two();
-                state.mesh_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("terrain mesh vertices"),
-                    size: state.mesh_vertex_capacity,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-            if !mesh.vertices.is_empty() {
-                queue.write_buffer(
-                    &state.mesh_vertex_buffer,
-                    0,
-                    bytemuck::cast_slice(&mesh.vertices),
-                );
-            }
-            let index_bytes = (mesh.indices.len() * std::mem::size_of::<u32>()) as u64;
-            if index_bytes > state.mesh_index_capacity {
-                state.mesh_index_capacity = index_bytes.next_power_of_two();
-                state.mesh_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("terrain mesh indices"),
-                    size: state.mesh_index_capacity,
-                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-            if !mesh.indices.is_empty() {
-                queue.write_buffer(
-                    &state.mesh_index_buffer,
-                    0,
-                    bytemuck::cast_slice(&mesh.indices),
-                );
-            }
-            state.mesh_index_count = mesh.indices.len() as u32;
-            state.uploaded_mesh = Some(Arc::clone(mesh));
-        }
+        state.mesh.upload(device, queue, &self.geometry.mesh);
+        state.caps.upload(device, queue, &self.caps);
         if let Some(atlas) = &self.photos.atlas {
             state.upload_ball_photos(device, queue, atlas);
         }
@@ -1523,7 +1647,11 @@ impl Primitive for CloudPrimitive {
             .ball_photos
             .as_ref()
             .filter(|_| !self.photos.balls.is_empty());
-        if state.point_buffers.is_empty() && state.mesh_index_count == 0 && balls.is_none() {
+        if state.point_buffers.is_empty()
+            && state.mesh.index_count == 0
+            && state.caps.index_count == 0
+            && balls.is_none()
+        {
             return;
         }
         {
@@ -1555,11 +1683,15 @@ impl Primitive for CloudPrimitive {
                 clip_bounds.height,
             );
             pass.set_bind_group(0, &state.camera_group, &[]);
-            if state.mesh_index_count > 0 {
-                pass.set_pipeline(&state.mesh_pipeline);
-                pass.set_vertex_buffer(0, state.mesh_vertex_buffer.slice(..));
-                pass.set_index_buffer(state.mesh_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..state.mesh_index_count, 0, 0..1);
+            // The caps are drawn with the meshes: flat, as they carry no
+            // normal.
+            for meshes in [&state.mesh, &state.caps] {
+                if meshes.index_count > 0 {
+                    pass.set_pipeline(&state.mesh_pipeline);
+                    pass.set_vertex_buffer(0, meshes.vertex_buffer.slice(..));
+                    pass.set_index_buffer(meshes.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..meshes.index_count, 0, 0..1);
+                }
             }
             if !state.point_buffers.is_empty() {
                 pass.set_pipeline(&state.pipeline);
@@ -1719,6 +1851,82 @@ mod tests {
         assert!(display_point_radius(2.0, 1.0 / 270.0) > 4.0);
         assert_eq!(display_point_radius(2.0, 0.000_001), 6.0);
         assert_eq!(display_point_radius(8.0, 0.000_001), 12.0);
+    }
+
+    #[test]
+    fn the_cut_of_a_wall_is_capped_while_the_box_and_the_fill_are_on() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("wall.xyz");
+        std::fs::write(&source, "0 -1 0\n4 1 2\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 2).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        // A wall of 0.2 from x 0 to 4 and z 0 to 2: its outer face looks
+        // to -y, its inner face to +y.
+        let wall = MeshGeometry {
+            vertices: vec![
+                [0.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [4.0, 0.0, 2.0],
+                [0.0, 0.0, 2.0],
+                [0.0, 0.2, 0.0],
+                [4.0, 0.2, 0.0],
+                [4.0, 0.2, 2.0],
+                [0.0, 0.2, 2.0],
+            ],
+            triangles: vec![[0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6]],
+            colors: None,
+            normals: None,
+        };
+        studio.clouds[0].mesh = Some(Arc::new(wall));
+        studio.clouds[0].mesh_visible = true;
+        let state = RefCell::new(RenderCache::default());
+        let bounds = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        let draw = |studio: &Studio| {
+            let viewport = GpuViewport {
+                overlay: studio.point_viewport(),
+            };
+            shader::Program::draw(&viewport, &state, mouse::Cursor::Unavailable, bounds)
+        };
+
+        // Without a section box nothing is cut.
+        assert!(draw(&studio).caps.indices.is_empty());
+        studio.section_enabled = true;
+        studio.section_reference_bounds = Some(studio.clouds[0].cloud.bounds);
+        studio.section_max_percent[2] = 50.0;
+        let capped = draw(&studio);
+        assert!(!capped.caps.indices.is_empty());
+        let grey = 128.0 / 255.0;
+        for vertex in &capped.caps.vertices {
+            assert_eq!(vertex.color, [grey, grey, grey, 1.0]);
+            assert_eq!(vertex.normal, [0.0; 4]);
+        }
+        // A turn of the camera keeps the caps; a change of the fill does
+        // not.
+        studio.yaw += 0.3;
+        assert!(Arc::ptr_eq(&capped.caps, &draw(&studio).caps));
+        let _ = studio.update(Message::SectionFill(
+            crate::section_fill::FillAction::Color("#204060".into()),
+        ));
+        let blue = draw(&studio);
+        assert!(!Arc::ptr_eq(&capped.caps, &blue.caps));
+        assert_eq!(
+            blue.caps.vertices[0].color,
+            [32.0 / 255.0, 64.0 / 255.0, 96.0 / 255.0, 1.0]
+        );
+        // A wall thicker than the largest thickness is not filled.
+        let _ = studio.update(Message::SectionFill(
+            crate::section_fill::FillAction::MaxThickness("0.1".into()),
+        ));
+        assert!(draw(&studio).caps.indices.is_empty());
+        let _ = studio.update(Message::SectionFill(
+            crate::section_fill::FillAction::MaxThickness("0.5".into()),
+        ));
+        assert!(!draw(&studio).caps.indices.is_empty());
+        let _ = studio.update(Message::SectionFill(
+            crate::section_fill::FillAction::Enabled(false),
+        ));
+        assert!(draw(&studio).caps.indices.is_empty());
     }
 
     #[test]

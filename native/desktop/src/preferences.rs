@@ -35,6 +35,11 @@ pub(crate) struct Preferences {
     pub show_drawing_after_export: bool,
     /// Whether the orbit camera draws without perspective.
     pub orthographic: bool,
+    /// Whether the cut of a mesh by the section box is filled.
+    pub fill_cut: bool,
+    pub cap_color: [u8; 3],
+    /// Two faces farther apart than this, in metres, are not filled.
+    pub cap_max_thickness: f64,
 }
 
 impl Default for Preferences {
@@ -55,6 +60,9 @@ impl Default for Preferences {
             open_after_export: false,
             show_drawing_after_export: true,
             orthographic: false,
+            fill_cut: true,
+            cap_color: crate::section_fill::DEFAULT_CAP_COLOR,
+            cap_max_thickness: pointcloud_core::DEFAULT_CAP_MAX_THICKNESS,
         }
     }
 }
@@ -70,6 +78,9 @@ impl Preferences {
         }
         if !(MIN_POINT_BUDGET..=MAX_POINT_BUDGET).contains(&self.budget) {
             self.budget = defaults.budget;
+        }
+        if !crate::section_fill::valid_thickness(self.cap_max_thickness) {
+            self.cap_max_thickness = defaults.cap_max_thickness;
         }
         self
     }
@@ -161,6 +172,9 @@ mod tests {
             open_after_export: true,
             show_drawing_after_export: false,
             orthographic: true,
+            fill_cut: false,
+            cap_color: [40, 50, 60],
+            cap_max_thickness: 0.35,
             ..Preferences::default()
         };
         save_to(&path, &settings).unwrap();
@@ -168,7 +182,7 @@ mod tests {
 
         fs::write(
             &path,
-            r#"{"point_size": -2, "eye_dome_strength": 99, "budget": 0, "auto_index": false}"#,
+            r#"{"point_size": -2, "eye_dome_strength": 99, "budget": 0, "auto_index": false, "cap_max_thickness": 9}"#,
         )
         .unwrap();
         let repaired = load_from(&path);
@@ -176,6 +190,8 @@ mod tests {
         assert_eq!(repaired.eye_dome_strength, 1.0);
         assert_eq!(repaired.budget, 250_000);
         assert!(!repaired.auto_index);
+        assert_eq!(repaired.cap_max_thickness, 0.5);
+        assert!(repaired.fill_cut);
 
         let high_budget = Preferences {
             budget: MAX_POINT_BUDGET,

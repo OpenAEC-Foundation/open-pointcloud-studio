@@ -32,6 +32,7 @@ mod ply_mesh;
 mod ptx;
 pub mod region_source;
 mod scan_image;
+mod section_caps;
 mod snapshots;
 mod surface_mesh;
 pub mod surfaces;
@@ -91,6 +92,10 @@ pub use octree::{IndexConfig, IndexProgress, IndexStage, IndexedNode, IndexedPoi
 pub use oriented_box::{bounds_corners, normalized_degrees, OrientedBox};
 pub use ply_mesh::read_ply_mesh;
 pub use scan_image::{select_scan_image, ScanImage, ScanImageFormat};
+pub use section_caps::{
+    section_caps, CapOptions, DEFAULT_CAP_MAX_THICKNESS, MAX_CAP_MAX_THICKNESS,
+    MIN_CAP_MAX_THICKNESS,
+};
 pub use surface_mesh::{
     mesh_surface_obj, mesh_surface_obj_from, mesh_surface_obj_where,
     mesh_surface_obj_where_progress, SurfaceMeshConfig, SurfacePoints,

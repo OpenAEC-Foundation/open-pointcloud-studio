@@ -1,0 +1,943 @@
+//! Solid caps where a section box cuts a mesh.
+//!
+//! A wall, floor or ceiling that was meshed from both sides is two surfaces
+//! with material between them. Cut by a box, the view looks into the gap
+//! between those surfaces. The caps close that gap on the faces of the box,
+//! as the cut material of a section drawing is filled.
+//!
+//! On every face of the box the mesh is cut into segments. Each segment
+//! knows the side its triangle faces, the side of the air: the front of a
+//! triangle looks away from the material. Along lines in eight directions
+//! over the face, a stretch between two segments is material when the line
+//! passes into the material through the back of the first one and out
+//! through the front of the second, the two face roughly opposite ways and
+//! they lie no farther apart than the largest thickness. A single surface,
+//! such as a facade seen from one side only, has no second surface to pair
+//! with and gets no cap; two surfaces that face the same way do not pair
+//! either. The stretches are gathered on a fine grid over the face, the
+//! small gaps where walls meet are closed, and the grid is written as
+//! rectangles.
+
+use rayon::prelude::*;
+
+use crate::{MeshGeometry, OrientedBox, DEFAULT_MAX_WALL_THICKNESS, MAX_WALL_THICKNESS};
+
+/// The largest thickness of material that is capped when nothing else is
+/// asked: that of a wall in a section drawing.
+pub const DEFAULT_CAP_MAX_THICKNESS: f64 = DEFAULT_MAX_WALL_THICKNESS;
+/// Two surfaces farther apart than this are never taken as one piece of
+/// material.
+pub const MAX_CAP_MAX_THICKNESS: f64 = MAX_WALL_THICKNESS;
+/// The smallest thickness a request may ask for.
+pub const MIN_CAP_MAX_THICKNESS: f64 = 0.01;
+
+/// Directions of the lines that look for material, spread over half a turn.
+const DIRECTIONS: usize = 8;
+/// The grid over a face has at most this many cells along its longer side.
+const MAX_CELLS_PER_SIDE: f64 = 4096.0;
+/// Cells are never smaller than this, in scene units.
+const MIN_CELL: f64 = 0.002;
+/// A line counts a surface only when it crosses it at least this steeply:
+/// the cosine between the line and the normal of the surface.
+const MIN_FACING: f64 = 0.5;
+/// Two surfaces enclose material only when their normals point at least
+/// this much against each other.
+const OPPOSITE: f64 = -0.5;
+/// The caps lie this far inside the box, so that the clip of the box keeps
+/// them; never more than a thousandth of the size of the box.
+const INSET: f64 = 0.0005;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CapOptions {
+    /// Two opposite surfaces farther apart than this enclose no cap.
+    pub max_thickness: f64,
+}
+
+impl Default for CapOptions {
+    fn default() -> Self {
+        Self {
+            max_thickness: DEFAULT_CAP_MAX_THICKNESS,
+        }
+    }
+}
+
+/// One face of the box: the axis it stands across in the frame of the box,
+/// whether it is the face at the top of that axis, and where it lies.
+#[derive(Debug, Clone, Copy)]
+struct Face {
+    axis: usize,
+    upper: bool,
+    level: f64,
+    /// The other two axes, in an order that makes `u` × `v` point along
+    /// `axis`.
+    u: usize,
+    v: usize,
+    /// The extent of the face along `u` and `v`.
+    min: [f64; 2],
+    max: [f64; 2],
+}
+
+/// Where a triangle crosses a face, with the unit normal in the face of
+/// the side the triangle faces.
+#[derive(Debug, Clone, Copy)]
+struct Segment {
+    a: [f64; 2],
+    b: [f64; 2],
+    air: [f64; 2],
+}
+
+/// The caps of one mesh on the faces of a section box, in scene
+/// coordinates, their fronts looking out of the box. Empty when nothing is
+/// capped.
+///
+/// `place` gives the scene position of a vertex of the mesh.
+pub fn section_caps(
+    mesh: &MeshGeometry,
+    place: impl Fn([f64; 3]) -> [f64; 3] + Sync,
+    section: &OrientedBox,
+    options: CapOptions,
+) -> MeshGeometry {
+    let mut caps = MeshGeometry::default();
+    if !section.is_valid()
+        || !options.max_thickness.is_finite()
+        || options.max_thickness <= 0.0
+        || mesh.triangles.is_empty()
+    {
+        return caps;
+    }
+    let max_thickness = options.max_thickness.min(MAX_CAP_MAX_THICKNESS);
+    let faces = box_faces(section);
+    if faces.is_empty() {
+        return caps;
+    }
+    let segments = cut_segments(mesh, &place, section, &faces, max_thickness);
+    for (face, segments) in faces.iter().zip(&segments) {
+        if segments.is_empty() {
+            continue;
+        }
+        let Some(grid) = Grid::over(face, segments, max_thickness) else {
+            continue;
+        };
+        let mask = grid.material(segments, max_thickness);
+        write_rectangles(&mut caps, face, &grid, &mask, section);
+    }
+    caps
+}
+
+fn box_faces(section: &OrientedBox) -> Vec<Face> {
+    let (min, max) = (section.bounds.min, section.bounds.max);
+    let mut faces = Vec::with_capacity(6);
+    for axis in 0..3 {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        // A box without depth along an axis shows nothing on those faces,
+        // and one without width has no face.
+        if max[axis] - min[axis] <= 4.0 * INSET || max[u] <= min[u] || max[v] <= min[v] {
+            continue;
+        }
+        for (upper, level) in [(false, min[axis]), (true, max[axis])] {
+            faces.push(Face {
+                axis,
+                upper,
+                level,
+                u,
+                v,
+                min: [min[u], min[v]],
+                max: [max[u], max[v]],
+            });
+        }
+    }
+    faces
+}
+
+/// The segments of every face, keeping those that lie over the face or
+/// within the largest thickness of it.
+fn cut_segments(
+    mesh: &MeshGeometry,
+    place: &(impl Fn([f64; 3]) -> [f64; 3] + Sync),
+    section: &OrientedBox,
+    faces: &[Face],
+    reach: f64,
+) -> Vec<Vec<Segment>> {
+    let count = mesh.vertices.len();
+    mesh.triangles
+        .par_iter()
+        .fold(
+            || vec![Vec::new(); faces.len()],
+            |mut found: Vec<Vec<Segment>>, triangle| {
+                if triangle.iter().any(|&index| index as usize >= count) {
+                    return found;
+                }
+                let corners =
+                    triangle.map(|index| section.to_box(place(mesh.vertices[index as usize])));
+                if corners
+                    .iter()
+                    .any(|corner| corner.iter().any(|value| !value.is_finite()))
+                {
+                    return found;
+                }
+                let normal = cross(
+                    difference(corners[1], corners[0]),
+                    difference(corners[2], corners[0]),
+                );
+                for (face, found) in faces.iter().zip(found.iter_mut()) {
+                    if let Some(segment) = cut(face, triangle, &corners, normal, reach) {
+                        found.push(segment);
+                    }
+                }
+                found
+            },
+        )
+        .reduce(
+            || vec![Vec::new(); faces.len()],
+            |mut left, right| {
+                for (left, right) in left.iter_mut().zip(right) {
+                    left.extend(right);
+                }
+                left
+            },
+        )
+}
+
+/// Where one triangle crosses the plane of a face. A corner on the plane
+/// counts as above it, so neighbouring triangles agree on what crosses.
+fn cut(
+    face: &Face,
+    triangle: &[u32; 3],
+    corners: &[[f64; 3]; 3],
+    normal: [f64; 3],
+    reach: f64,
+) -> Option<Segment> {
+    let distance = corners.map(|corner| corner[face.axis] - face.level);
+    let below = distance.map(|value| value < 0.0);
+    if below.iter().all(|&value| value) || below.iter().all(|&value| !value) {
+        return None;
+    }
+    let along = [normal[face.u], normal[face.v]];
+    let length = along[0].hypot(along[1]);
+    let size = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+    if !(length > size * 1e-9) {
+        return None;
+    }
+    let air = [along[0] / length, along[1] / length];
+    let mut points = [[0.0; 2]; 2];
+    let mut found = 0;
+    for (first, second) in [(0, 1), (1, 2), (2, 0)] {
+        if below[first] == below[second] {
+            continue;
+        }
+        // The same edge in the triangle next door is crossed at exactly
+        // the same place: measured from its lower vertex.
+        let (from, to) = if triangle[first] < triangle[second] {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let share = distance[from] / (distance[from] - distance[to]);
+        let at =
+            |axis: usize| corners[from][axis] + (corners[to][axis] - corners[from][axis]) * share;
+        if found < 2 {
+            points[found] = [at(face.u), at(face.v)];
+        }
+        found += 1;
+    }
+    if found != 2 {
+        return None;
+    }
+    let [a, b] = points;
+    let outside = (0..2).any(|axis| {
+        a[axis].max(b[axis]) < face.min[axis] - reach
+            || a[axis].min(b[axis]) > face.max[axis] + reach
+    });
+    (!outside).then_some(Segment { a, b, air })
+}
+
+/// A grid over the part of a face where segments lie, aligned to the
+/// corner of the face.
+#[derive(Debug, Clone, Copy)]
+struct Grid {
+    origin: [f64; 2],
+    cell: f64,
+    columns: usize,
+    rows: usize,
+}
+
+impl Grid {
+    fn over(face: &Face, segments: &[Segment], reach: f64) -> Option<Self> {
+        let mut low = [f64::INFINITY; 2];
+        let mut high = [f64::NEG_INFINITY; 2];
+        for segment in segments {
+            for point in [segment.a, segment.b] {
+                for axis in 0..2 {
+                    low[axis] = low[axis].min(point[axis]);
+                    high[axis] = high[axis].max(point[axis]);
+                }
+            }
+        }
+        // Material may reach past the last segment by no more than the
+        // largest thickness; the face bounds the rest.
+        for axis in 0..2 {
+            low[axis] = (low[axis] - reach).max(face.min[axis]);
+            high[axis] = (high[axis] + reach).min(face.max[axis]);
+            if !(low[axis] < high[axis]) {
+                return None;
+            }
+        }
+        let longest = (high[0] - low[0]).max(high[1] - low[1]);
+        let cell = (longest / MAX_CELLS_PER_SIDE).max(MIN_CELL);
+        let origin: [f64; 2] = std::array::from_fn(|axis| {
+            face.min[axis] + ((low[axis] - face.min[axis]) / cell).floor() * cell
+        });
+        let columns = ((high[0] - origin[0]) / cell).ceil().max(1.0) as usize;
+        let rows = ((high[1] - origin[1]) / cell).ceil().max(1.0) as usize;
+        Some(Self {
+            origin,
+            cell,
+            columns,
+            rows,
+        })
+    }
+
+    /// The cells whose centre lies in material, row after row.
+    ///
+    /// Where a wall meets another one, as in a T, a small part of the
+    /// junction has no pair of opposite faces nearby in any direction. Such
+    /// a gap is closed when it lies inside material along a row or a column
+    /// and capped cells surround it within half the largest thickness; a
+    /// thick block on its own has no capped cells to close between.
+    fn material(&self, segments: &[Segment], max_thickness: f64) -> Vec<bool> {
+        let mut mask = vec![false; self.columns * self.rows];
+        let mut inside = vec![false; self.columns * self.rows];
+        for step in 0..DIRECTIONS {
+            let angle = std::f64::consts::PI * step as f64 / DIRECTIONS as f64;
+            self.scan(segments, max_thickness, step, angle, &mut mask, &mut inside);
+        }
+        let radius = (0.5 * max_thickness / self.cell).ceil() as usize;
+        let grown = self.dilate(&mask, radius);
+        let outside: Vec<bool> = grown.iter().map(|&set| !set).collect();
+        // Cells beyond the grid count as grown: the closing does not shrink
+        // at the edges of the face.
+        let closed = self.dilate(&outside, radius);
+        for (cell, set) in mask.iter_mut().enumerate() {
+            *set |= inside[cell] && !closed[cell];
+        }
+        mask
+    }
+
+    /// Every cell within `radius` cells of a set one, along rows and
+    /// columns; cells beyond the grid count as unset.
+    fn dilate(&self, mask: &[bool], radius: usize) -> Vec<bool> {
+        let along = |values: &mut dyn FnMut(usize) -> bool, count: usize, out: &mut Vec<bool>| {
+            out.clear();
+            // Set cells in the window from `start` to `end` (exclusive).
+            let mut prefix = Vec::with_capacity(count + 1);
+            prefix.push(0usize);
+            for index in 0..count {
+                prefix.push(prefix[index] + usize::from(values(index)));
+            }
+            for index in 0..count {
+                let start = index.saturating_sub(radius);
+                let end = (index + radius + 1).min(count);
+                out.push(prefix[end] > prefix[start]);
+            }
+        };
+        let (columns, rows) = (self.columns, self.rows);
+        let mut across = vec![false; columns * rows];
+        let mut line = Vec::new();
+        for row in 0..rows {
+            along(
+                &mut |column| mask[row * columns + column],
+                columns,
+                &mut line,
+            );
+            across[row * columns..(row + 1) * columns].copy_from_slice(&line);
+        }
+        let mut grown = vec![false; columns * rows];
+        for column in 0..columns {
+            along(&mut |row| across[row * columns + column], rows, &mut line);
+            for (row, &set) in line.iter().enumerate() {
+                grown[row * columns + column] = set;
+            }
+        }
+        grown
+    }
+
+    /// Mark what lines in one direction find. Along the axes the lines run
+    /// through the centres of the cells; in between they lie half a cell
+    /// apart. Along rows and columns every stretch from the back of one
+    /// face to the front of the next is also marked in `inside`, however
+    /// far apart and however turned the faces are.
+    #[allow(clippy::too_many_arguments)]
+    fn scan(
+        &self,
+        segments: &[Segment],
+        max_thickness: f64,
+        step: usize,
+        angle: f64,
+        mask: &mut [bool],
+        inside: &mut [bool],
+    ) {
+        let (along, across, first, spacing, lines) = match step {
+            0 => (
+                [1.0, 0.0],
+                [0.0, 1.0],
+                self.origin[1] + 0.5 * self.cell,
+                self.cell,
+                self.rows,
+            ),
+            _ if 2 * step == DIRECTIONS => (
+                [0.0, 1.0],
+                [-1.0, 0.0],
+                -(self.origin[0] + (self.columns as f64 - 0.5) * self.cell),
+                self.cell,
+                self.columns,
+            ),
+            _ => {
+                let (sin, cos) = angle.sin_cos();
+                let across = [-sin, cos];
+                let corners = [
+                    self.origin,
+                    [
+                        self.origin[0] + self.columns as f64 * self.cell,
+                        self.origin[1],
+                    ],
+                    [
+                        self.origin[0],
+                        self.origin[1] + self.rows as f64 * self.cell,
+                    ],
+                    [
+                        self.origin[0] + self.columns as f64 * self.cell,
+                        self.origin[1] + self.rows as f64 * self.cell,
+                    ],
+                ];
+                let reach = corners.map(|corner| dot(corner, across));
+                let low = reach.iter().copied().fold(f64::INFINITY, f64::min);
+                let high = reach.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let spacing = 0.5 * self.cell;
+                (
+                    [cos, sin],
+                    across,
+                    low + 0.5 * spacing,
+                    spacing,
+                    ((high - low) / spacing).ceil() as usize,
+                )
+            }
+        };
+        if lines == 0 {
+            return;
+        }
+        // The segments each line crosses: a segment from one side of a line
+        // to the other, its lower end counted and its upper end not.
+        let mut crossing: Vec<Vec<u32>> = vec![Vec::new(); lines];
+        for (index, segment) in segments.iter().enumerate() {
+            let (wa, wb) = (dot(segment.a, across), dot(segment.b, across));
+            if wa == wb {
+                continue;
+            }
+            let (low, high) = (wa.min(wb), wa.max(wb));
+            let start = ((low - first) / spacing).ceil().max(0.0);
+            if start >= lines as f64 {
+                continue;
+            }
+            let mut line = start as usize;
+            while line < lines && first + line as f64 * spacing < high {
+                crossing[line].push(index as u32);
+                line += 1;
+            }
+        }
+        let mut hits: Vec<(f64, f64, [f64; 2])> = Vec::new();
+        for (line, found) in crossing.iter().enumerate() {
+            if found.len() < 2 {
+                continue;
+            }
+            let level = first + line as f64 * spacing;
+            hits.clear();
+            for &index in found {
+                let segment = &segments[index as usize];
+                let (wa, wb) = (dot(segment.a, across), dot(segment.b, across));
+                let share = (level - wa) / (wb - wa);
+                let point = [
+                    segment.a[0] + (segment.b[0] - segment.a[0]) * share,
+                    segment.a[1] + (segment.b[1] - segment.a[1]) * share,
+                ];
+                hits.push((dot(point, along), dot(segment.air, along), segment.air));
+            }
+            hits.sort_by(|left, right| left.0.total_cmp(&right.0));
+            for pair in hits.windows(2) {
+                let ((start, into, air_in), (end, out, air_out)) = (pair[0], pair[1]);
+                // In through the back of the first, out through the front
+                // of the second.
+                let (into, out) = (-into, out);
+                if into > 0.0 && out > 0.0 && (step == 0 || 2 * step == DIRECTIONS) {
+                    self.mark(inside, step, along, across, level, start, end);
+                }
+                if into < MIN_FACING || out < MIN_FACING || dot(air_in, air_out) > OPPOSITE {
+                    continue;
+                }
+                if (end - start) * into.max(out) > max_thickness {
+                    continue;
+                }
+                self.mark(mask, step, along, across, level, start, end);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mark(
+        &self,
+        mask: &mut [bool],
+        step: usize,
+        along: [f64; 2],
+        across: [f64; 2],
+        level: f64,
+        start: f64,
+        end: f64,
+    ) {
+        let cell = self.cell;
+        // The cells whose centres lie from `start` to `end` along a row or
+        // a column with centres at `origin + (i + ½) cell`.
+        let centres = |origin: f64, count: usize| {
+            let first = ((start - origin) / cell - 0.5).ceil().max(0.0) as usize;
+            let last = ((end - origin) / cell - 0.5).floor();
+            let last = if last < 0.0 {
+                None
+            } else {
+                Some((last as usize).min(count.saturating_sub(1)))
+            };
+            last.filter(|last| first <= *last).map(|last| first..=last)
+        };
+        if step == 0 {
+            let row = ((level - self.origin[1]) / cell).floor() as usize;
+            if let Some(columns) = centres(self.origin[0], self.columns) {
+                for column in columns {
+                    mask[row * self.columns + column] = true;
+                }
+            }
+            return;
+        }
+        if 2 * step == DIRECTIONS {
+            let column = ((-level - self.origin[0]) / cell).floor() as usize;
+            if let Some(rows) = centres(self.origin[1], self.rows) {
+                for row in rows {
+                    mask[row * self.columns + column] = true;
+                }
+            }
+            return;
+        }
+        let samples = ((end - start) / (0.5 * cell)).ceil().max(1.0) as usize;
+        for sample in 0..=samples {
+            let at = start + (end - start) * sample as f64 / samples as f64;
+            let point = [
+                along[0] * at + across[0] * level,
+                along[1] * at + across[1] * level,
+            ];
+            let column = ((point[0] - self.origin[0]) / cell).floor();
+            let row = ((point[1] - self.origin[1]) / cell).floor();
+            if column < 0.0 || row < 0.0 {
+                continue;
+            }
+            let (column, row) = (column as usize, row as usize);
+            if column < self.columns && row < self.rows {
+                mask[row * self.columns + column] = true;
+            }
+        }
+    }
+}
+
+/// Write the marked cells as rectangles: runs along the rows, a run that
+/// repeats in the next row grown into it.
+fn write_rectangles(
+    caps: &mut MeshGeometry,
+    face: &Face,
+    grid: &Grid,
+    mask: &[bool],
+    section: &OrientedBox,
+) {
+    // Open rectangles: (first column, column after the last, first row).
+    let mut open: Vec<(usize, usize, usize)> = Vec::new();
+    let mut next: Vec<(usize, usize, usize)> = Vec::new();
+    for row in 0..=grid.rows {
+        next.clear();
+        if row < grid.rows {
+            let cells = &mask[row * grid.columns..(row + 1) * grid.columns];
+            let mut column = 0;
+            while column < grid.columns {
+                if !cells[column] {
+                    column += 1;
+                    continue;
+                }
+                let start = column;
+                while column < grid.columns && cells[column] {
+                    column += 1;
+                }
+                let first_row = open
+                    .iter()
+                    .find(|(from, to, _)| *from == start && *to == column)
+                    .map_or(row, |open| open.2);
+                next.push((start, column, first_row));
+            }
+        }
+        for &(from, to, first_row) in &open {
+            if !next
+                .iter()
+                .any(|(next_from, next_to, _)| *next_from == from && *next_to == to)
+            {
+                write_rectangle(caps, face, grid, section, [from, to], [first_row, row]);
+            }
+        }
+        std::mem::swap(&mut open, &mut next);
+    }
+}
+
+fn write_rectangle(
+    caps: &mut MeshGeometry,
+    face: &Face,
+    grid: &Grid,
+    section: &OrientedBox,
+    columns: [usize; 2],
+    rows: [usize; 2],
+) {
+    let u = columns
+        .map(|column| (grid.origin[0] + column as f64 * grid.cell).clamp(face.min[0], face.max[0]));
+    let v =
+        rows.map(|row| (grid.origin[1] + row as f64 * grid.cell).clamp(face.min[1], face.max[1]));
+    if u[0] >= u[1] || v[0] >= v[1] {
+        return;
+    }
+    let depth = section.bounds.max[face.axis] - section.bounds.min[face.axis];
+    let inset = INSET.min(depth * 0.001);
+    let level = if face.upper {
+        face.level - inset
+    } else {
+        face.level + inset
+    };
+    let Ok(base) = u32::try_from(caps.vertices.len()) else {
+        return;
+    };
+    for [x, y] in [[u[0], v[0]], [u[1], v[0]], [u[1], v[1]], [u[0], v[1]]] {
+        let mut local = [0.0; 3];
+        local[face.axis] = level;
+        local[face.u] = x;
+        local[face.v] = y;
+        caps.vertices.push(section.to_scene(local));
+    }
+    // Counter-clockwise in the face looks along its axis: out of the box at
+    // the upper face, into it at the lower one.
+    if face.upper {
+        caps.triangles.push([base, base + 1, base + 2]);
+        caps.triangles.push([base, base + 2, base + 3]);
+    } else {
+        caps.triangles.push([base, base + 2, base + 1]);
+        caps.triangles.push([base, base + 3, base + 2]);
+    }
+}
+
+fn difference(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn dot(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Bounds;
+
+    /// A box as a closed mesh; `outward` chooses which way its triangles
+    /// face.
+    fn add_box(mesh: &mut MeshGeometry, min: [f64; 3], max: [f64; 3], outward: bool) {
+        let base = mesh.vertices.len() as u32;
+        for corner in 0..8 {
+            mesh.vertices.push([
+                if corner & 1 == 0 { min[0] } else { max[0] },
+                if corner & 2 == 0 { min[1] } else { max[1] },
+                if corner & 4 == 0 { min[2] } else { max[2] },
+            ]);
+        }
+        // Each side counter-clockwise seen from outside.
+        let sides = [
+            [0, 2, 3, 1], // bottom
+            [4, 5, 7, 6], // top
+            [0, 1, 5, 4], // front, y = min
+            [2, 6, 7, 3], // back, y = max
+            [0, 4, 6, 2], // left, x = min
+            [1, 3, 7, 5], // right, x = max
+        ];
+        for [a, b, c, d] in sides {
+            let quad = [a, b, c, d].map(|corner| base + corner);
+            let (first, second) = ([quad[0], quad[1], quad[2]], [quad[0], quad[2], quad[3]]);
+            if outward {
+                mesh.triangles.push(first);
+                mesh.triangles.push(second);
+            } else {
+                mesh.triangles.push([first[0], first[2], first[1]]);
+                mesh.triangles.push([second[0], second[2], second[1]]);
+            }
+        }
+    }
+
+    /// A flat rectangle at y = `y` from x0 to x1 and z0 to z1, facing +y or
+    /// -y.
+    fn add_sheet(mesh: &mut MeshGeometry, y: f64, x: [f64; 2], z: [f64; 2], toward_plus: bool) {
+        let base = mesh.vertices.len() as u32;
+        mesh.vertices.extend([
+            [x[0], y, z[0]],
+            [x[1], y, z[0]],
+            [x[1], y, z[1]],
+            [x[0], y, z[1]],
+        ]);
+        // Counter-clockwise from -y faces -y.
+        if toward_plus {
+            mesh.triangles.push([base, base + 2, base + 1]);
+            mesh.triangles.push([base, base + 3, base + 2]);
+        } else {
+            mesh.triangles.push([base, base + 1, base + 2]);
+            mesh.triangles.push([base, base + 2, base + 3]);
+        }
+    }
+
+    /// A room of 4 by 5 metres inside, with walls, floor and ceiling of
+    /// 0.3: the outer box faces out, the inner one faces into the room.
+    fn room() -> MeshGeometry {
+        let mut mesh = MeshGeometry::default();
+        add_box(&mut mesh, [-0.3, -0.3, -0.3], [4.3, 5.3, 3.3], true);
+        add_box(&mut mesh, [0.0, 0.0, 0.0], [4.0, 5.0, 3.0], false);
+        mesh
+    }
+
+    fn area(caps: &MeshGeometry) -> f64 {
+        caps.triangles
+            .iter()
+            .map(|triangle| {
+                let [a, b, c] = triangle.map(|index| caps.vertices[index as usize]);
+                let normal = cross(difference(b, a), difference(c, a));
+                0.5 * (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt()
+            })
+            .sum()
+    }
+
+    fn caps_of(mesh: &MeshGeometry, section: OrientedBox) -> MeshGeometry {
+        section_caps(mesh, |xyz| xyz, &section, CapOptions::default())
+    }
+
+    fn boxed(min: [f64; 3], max: [f64; 3]) -> OrientedBox {
+        OrientedBox::from(Bounds { min, max })
+    }
+
+    #[test]
+    fn the_walls_of_a_room_cut_at_half_height_are_capped() {
+        let caps = caps_of(&room(), boxed([-1.0, -1.0, -1.0], [5.0, 6.0, 1.5]));
+        // The ring of walls on the top face of the box.
+        let ring = 4.6 * 5.6 - 4.0 * 5.0;
+        let found = area(&caps);
+        assert!((found - ring).abs() < 0.03 * ring, "{found} against {ring}");
+        // Every cap lies on the top face, just inside the box.
+        for vertex in &caps.vertices {
+            assert!((vertex[2] - 1.5).abs() < 0.001, "{vertex:?}");
+        }
+        // And faces up, out of the box.
+        for triangle in &caps.triangles {
+            let [a, b, c] = triangle.map(|index| caps.vertices[index as usize]);
+            assert!(cross(difference(b, a), difference(c, a))[2] > 0.0);
+        }
+        // The open middle of the room stays open.
+        let middle = caps.triangles.iter().any(|triangle| {
+            let [a, b, c] = triangle.map(|index| caps.vertices[index as usize]);
+            let centre = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0];
+            (0.5..3.5).contains(&centre[0]) && (0.5..4.5).contains(&centre[1])
+        });
+        assert!(!middle);
+    }
+
+    /// Whether a point of the plan lies on a cap.
+    fn covered(caps: &MeshGeometry, at: [f64; 2]) -> bool {
+        caps.triangles.iter().any(|triangle| {
+            let [a, b, c] = triangle.map(|index| caps.vertices[index as usize]);
+            let side = |p: [f64; 3], q: [f64; 3]| {
+                (q[0] - p[0]) * (at[1] - p[1]) - (q[1] - p[1]) * (at[0] - p[0])
+            };
+            let sides = [side(a, b), side(b, c), side(c, a)];
+            sides.iter().all(|&value| value >= 0.0) || sides.iter().all(|&value| value <= 0.0)
+        })
+    }
+
+    #[test]
+    fn the_junction_of_a_partition_and_an_outer_wall_is_capped() {
+        // Two rooms beside each other: a partition of 0.2 between them meets
+        // the outer walls of 0.3 in a T.
+        let mut mesh = MeshGeometry::default();
+        add_box(&mut mesh, [-0.3, -0.3, -0.25], [9.3, 5.3, 3.25], true);
+        add_box(&mut mesh, [0.0, 0.0, 0.0], [4.0, 5.0, 3.0], false);
+        add_box(&mut mesh, [4.2, 0.0, 0.0], [9.0, 5.0, 3.0], false);
+        let caps = caps_of(&mesh, boxed([-1.0, -1.0, -1.0], [10.0, 6.0, 1.5]));
+        let walls = 9.6 * 5.6 - 4.0 * 5.0 - 4.8 * 5.0;
+        let found = area(&caps);
+        assert!(
+            (found - walls).abs() < 0.01 * walls,
+            "{found} against {walls}"
+        );
+        for at in [
+            [4.1, -0.1],
+            [4.1, -0.01],
+            [4.01, -0.15],
+            [4.1, 5.1],
+            [-0.15, -0.15],
+        ] {
+            assert!(covered(&caps, at), "{at:?}");
+        }
+        for at in [[2.0, 2.5], [4.1, -0.5], [6.0, 0.1]] {
+            assert!(!covered(&caps, at), "{at:?}");
+        }
+    }
+
+    #[test]
+    fn a_floor_cut_by_a_side_of_the_box_is_capped() {
+        // The side x = 2 of the box cuts the floor, the ceiling and the
+        // two walls along x; it faces -x, out of the box.
+        let caps = caps_of(&room(), boxed([2.0, -1.0, -1.0], [6.0, 6.0, 4.0]));
+        let expected = 2.0 * 0.3 * 5.6 + 2.0 * 0.3 * 3.0;
+        let found = area(&caps);
+        assert!(
+            (found - expected).abs() < 0.03 * expected,
+            "{found} against {expected}"
+        );
+        for triangle in &caps.triangles {
+            let [a, b, c] = triangle.map(|index| caps.vertices[index as usize]);
+            assert!(cross(difference(b, a), difference(c, a))[0] < 0.0);
+        }
+    }
+
+    #[test]
+    fn a_single_sheet_gets_no_cap() {
+        let mut mesh = MeshGeometry::default();
+        add_sheet(&mut mesh, 0.0, [0.0, 10.0], [0.0, 6.0], false);
+        assert!(caps_of(&mesh, boxed([-1.0, -1.0, -1.0], [11.0, 1.0, 3.0]))
+            .triangles
+            .is_empty());
+    }
+
+    #[test]
+    fn two_sheets_pair_only_when_they_face_apart_within_the_thickness() {
+        let section = boxed([-1.0, -1.0, -1.0], [11.0, 2.0, 3.0]);
+        // The outer face of a wall faces -y, the inner +y: material between.
+        let mut wall = MeshGeometry::default();
+        add_sheet(&mut wall, 0.0, [0.0, 10.0], [0.0, 6.0], false);
+        add_sheet(&mut wall, 0.25, [0.0, 10.0], [0.0, 6.0], true);
+        let found = area(&caps_of(&wall, section));
+        assert!((found - 2.5).abs() < 0.08, "{found}");
+
+        // Both facing the same way, as a mesh turned to one point may.
+        let mut turned = MeshGeometry::default();
+        add_sheet(&mut turned, 0.0, [0.0, 10.0], [0.0, 6.0], true);
+        add_sheet(&mut turned, 0.25, [0.0, 10.0], [0.0, 6.0], true);
+        assert!(caps_of(&turned, section).triangles.is_empty());
+
+        // Facing each other: the air between two walls.
+        let mut gap = MeshGeometry::default();
+        add_sheet(&mut gap, 0.0, [0.0, 10.0], [0.0, 6.0], true);
+        add_sheet(&mut gap, 0.25, [0.0, 10.0], [0.0, 6.0], false);
+        assert!(caps_of(&gap, section).triangles.is_empty());
+
+        // Farther apart than the thickness.
+        let mut far = MeshGeometry::default();
+        add_sheet(&mut far, 0.0, [0.0, 10.0], [0.0, 6.0], false);
+        add_sheet(&mut far, 0.8, [0.0, 10.0], [0.0, 6.0], true);
+        assert!(caps_of(&far, section).triangles.is_empty());
+        let wide = section_caps(&far, |xyz| xyz, &section, CapOptions { max_thickness: 1.0 });
+        assert!((area(&wide) - 8.0).abs() < 0.2, "{}", area(&wide));
+    }
+
+    #[test]
+    fn a_thick_block_is_not_capped() {
+        let mut mesh = MeshGeometry::default();
+        add_box(&mut mesh, [0.0, 0.0, 0.0], [3.0, 2.0, 2.0], true);
+        assert!(caps_of(&mesh, boxed([-1.0, -1.0, -1.0], [4.0, 3.0, 1.0]))
+            .triangles
+            .is_empty());
+    }
+
+    #[test]
+    fn a_room_beside_a_facade_caps_the_walls_and_not_the_facade() {
+        let mut mesh = room();
+        add_sheet(&mut mesh, -3.0, [-2.0, 6.0], [-1.0, 4.0], false);
+        let caps = caps_of(&mesh, boxed([-4.0, -4.0, -2.0], [7.0, 7.0, 1.5]));
+        let ring = 4.6 * 5.6 - 4.0 * 5.0;
+        let found = area(&caps);
+        assert!((found - ring).abs() < 0.03 * ring, "{found} against {ring}");
+        assert!(caps.vertices.iter().all(|vertex| vertex[1] > -1.0));
+    }
+
+    #[test]
+    fn a_turned_box_caps_in_its_own_frame() {
+        let mut mesh = room();
+        let (sin, cos) = 30.0_f64.to_radians().sin_cos();
+        let center = [2.0, 2.5, 1.5];
+        let turn = |xyz: [f64; 3]| {
+            let (dx, dy) = (xyz[0] - center[0], xyz[1] - center[1]);
+            [
+                center[0] + cos * dx - sin * dy,
+                center[1] + sin * dx + cos * dy,
+                xyz[2],
+            ]
+        };
+        for vertex in &mut mesh.vertices {
+            *vertex = turn(*vertex);
+        }
+        let section = OrientedBox::new(
+            Bounds {
+                min: [-1.0, -1.5, -1.0],
+                max: [5.0, 6.5, 1.5],
+            },
+            30.0,
+        );
+        let caps = caps_of(&mesh, section);
+        let ring = 4.6 * 5.6 - 4.0 * 5.0;
+        let found = area(&caps);
+        assert!((found - ring).abs() < 0.03 * ring, "{found} against {ring}");
+        assert!(caps.vertices.iter().all(|vertex| {
+            let local = section.to_box(*vertex);
+            (local[2] - 1.5).abs() < 0.001 && local[0] >= -1.0 - 1e-9 && local[0] <= 5.0 + 1e-9
+        }));
+    }
+
+    #[test]
+    fn a_wall_at_an_angle_is_capped_to_its_thickness() {
+        // A wall of 0.2 at 20 degrees to the axes.
+        let (sin, cos) = 20.0_f64.to_radians().sin_cos();
+        let mut wall = MeshGeometry::default();
+        add_sheet(&mut wall, 0.0, [0.0, 8.0], [0.0, 6.0], false);
+        add_sheet(&mut wall, 0.2, [0.0, 8.0], [0.0, 6.0], true);
+        for vertex in &mut wall.vertices {
+            let [x, y, z] = *vertex;
+            *vertex = [cos * x - sin * y, sin * x + cos * y, z];
+        }
+        let found = area(&caps_of(&wall, boxed([-1.0, -1.0, -1.0], [9.0, 4.0, 3.0])));
+        assert!((found - 1.6).abs() < 0.1, "{found}");
+    }
+
+    #[test]
+    fn an_empty_or_invalid_request_has_no_caps() {
+        let section = boxed([-1.0, -1.0, -1.0], [5.0, 6.0, 1.5]);
+        assert!(caps_of(&MeshGeometry::default(), section)
+            .triangles
+            .is_empty());
+        let none = section_caps(
+            &room(),
+            |xyz| xyz,
+            &section,
+            CapOptions {
+                max_thickness: f64::NAN,
+            },
+        );
+        assert!(none.triangles.is_empty());
+    }
+}

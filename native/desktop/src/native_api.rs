@@ -152,6 +152,15 @@ pub enum ApiCommand {
         rotation: Option<f64>,
     },
     ClearSection,
+    /// How the cut of a mesh by the section box is filled; what is left out
+    /// is kept.
+    SetSectionFill {
+        fill_cut: Option<bool>,
+        /// `#rrggbb`.
+        color: Option<String>,
+        /// Metres, from 0.01 to 2.
+        max_thickness: Option<f64>,
+    },
     /// Turn the section box along the walls inside it.
     AlignSectionToWalls,
     SelectWorld {
