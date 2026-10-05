@@ -303,7 +303,7 @@ Limits in the application:
 | Meshes shown together | About 5.6 million vertices and 22 million triangles: what fits in the two buffers of 256 MiB each that the graphics card takes for them. One mesh always fits; one that does not fit beside the others is held, and can be saved, but is not drawn |
 | Terrain mesh | 100,000 vertices |
 | 3D surface | 3 to 1,000,000 vertices (50,000 by default), and an optional minimum mesh size |
-| Closed mesh | Voxels of 0.005 to 0.5 m; a source share above 0 to 100%; gaps closed up to 3.2 m and at most 32 voxels; a scan without an index up to 5,000,000 points. About 2 GB of memory for the blocks in work |
+| Closed mesh | Voxels of 0.005 to 0.5 m; 0.01 to 100% of the source points; gaps closed up to 3.2 m and at most 32 voxels; a scan without an index up to 5,000,000 points. About 2 GB of memory for the blocks in work |
 | Detected faces | Distance tolerance 1 to 500 mm, angle tolerance 1 to 45°, smallest face 0.01 to 10,000 m². A working set of 1,500,000 voxels of 30 mm, beyond which the voxels double; at most 4,096 faces per job, of which the block lists the 200 largest flat faces and the 200 largest cylinders; cylinders with a radius of 0.01 to 1 m |
 | 3D BAG download | 2 by 2 km and about 5,000 buildings |
 

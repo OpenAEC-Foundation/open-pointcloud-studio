@@ -47,7 +47,7 @@ pub use bag3d::{
 pub use closed_mesh::{
     mesh_closed, ClosedMeshConfig, ClosedMeshProgress, ClosedMeshReport, ClosedMeshStage,
     ClosedMeshTimings, MeshOrientation, OrientationUsed, DEFAULT_CLOSED_MESH_TRIANGLES,
-    DEFAULT_CLOSED_MESH_VERTICES, MAX_CLOSED_MESH_HOLE,
+    DEFAULT_CLOSED_MESH_VERTICES, MAX_CLOSED_MESH_HOLE, MIN_CLOSED_MESH_SAMPLE_PERCENT,
 };
 pub use drawing::{
     class_point_layer, collect_slab, drawing_info_text, export_section_drawing, layer_name,

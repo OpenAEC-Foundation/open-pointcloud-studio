@@ -42,6 +42,8 @@ use crate::{Bounds, IndexedPoint, LoadError};
 
 /// The widest hole limit a job takes, in metres.
 pub const MAX_CLOSED_MESH_HOLE: f64 = 3.2;
+/// The smallest share of the source points a job takes, in percent.
+pub const MIN_CLOSED_MESH_SAMPLE_PERCENT: f64 = 0.01;
 /// Vertices and triangles of a mesh that every mesh writer and the viewer
 /// take: a job stops above them unless it is given limits of its own.
 pub const DEFAULT_CLOSED_MESH_VERTICES: usize = crate::obj_mesh::MAX_VERTICES;
@@ -138,8 +140,9 @@ pub enum MeshOrientation {
 /// The settings of a closed mesh job.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClosedMeshConfig {
-    /// Share of the source points used for surface fitting. 100 keeps every
-    /// point; smaller values use a deterministic sample over all indexed tiles.
+    /// Share of the source points used for surface fitting, in percent, from
+    /// 0.01 to 100. 100 keeps every point; a smaller share takes the same
+    /// points on every run, spread over the whole region.
     pub sample_percent: f64,
     /// Edge of a voxel in metres, between 0.005 and 0.5. Detail smaller
     /// than about two voxels is lost. A wall with openings needs about
@@ -213,11 +216,8 @@ impl ClosedMeshConfig {
     /// not.
     pub fn validate(&self) -> Result<(), LoadError> {
         let invalid = |reason: &str| Err(LoadError::InvalidData(reason.into()));
-        if !self.sample_percent.is_finite()
-            || self.sample_percent <= 0.0
-            || self.sample_percent > 100.0
-        {
-            return invalid("the source sample must be above 0 and at most 100 percent");
+        if !(MIN_CLOSED_MESH_SAMPLE_PERCENT..=100.0).contains(&self.sample_percent) {
+            return invalid("the share of source points must lie between 0.01 and 100 percent");
         }
         if self
             .voxel
@@ -636,6 +636,13 @@ pub fn mesh_closed(
         _ => OrientationUsed::Mixed,
     };
     if report.points == 0 {
+        // The tiles were planned with every point, so the sample took none.
+        if config.sample_percent < 100.0 {
+            return Err(LoadError::InvalidData(
+                "the source sample left no points in the region; raise the source percentage"
+                    .into(),
+            ));
+        }
         return Err(empty());
     }
     // Joining takes seconds on a large mesh: the callback is asked between
@@ -3946,6 +3953,37 @@ mod tests {
         let (again, repeated) = mesh_of(&cloud, &room, &config(3));
         assert!(same(&first, &again));
         assert_eq!(report.surfels, repeated.surfels);
+    }
+
+    #[test]
+    fn a_source_share_is_checked_and_says_when_it_left_nothing() {
+        for share in [0.0, 0.009, 100.5, f64::NAN] {
+            let config = ClosedMeshConfig {
+                sample_percent: share,
+                ..ClosedMeshConfig::default()
+            };
+            assert!(
+                matches!(config.validate(), Err(LoadError::InvalidData(reason)) if reason.contains("0.01 and 100")),
+                "{share}"
+            );
+        }
+        let room = room();
+        let cloud = layer(&room);
+        let sources = [source(&cloud, &room)];
+        // Fifty points, none of which is in the smallest share.
+        let first = |_: usize, ordinal: u64, _: &Point| ordinal < 50;
+        assert!((0..50).all(|ordinal| !crate::surface_mesh::sampled_ordinal(ordinal, 0.01)));
+        let config = ClosedMeshConfig {
+            sample_percent: MIN_CLOSED_MESH_SAMPLE_PERCENT,
+            ..raw()
+        };
+        match mesh_closed(&sources, None, &first, &config, &mut |_| Ok(())) {
+            Err(LoadError::InvalidData(reason)) => assert_eq!(
+                reason,
+                "the source sample left no points in the region; raise the source percentage"
+            ),
+            other => panic!("{:?}", other.map(|(_, report)| report)),
+        }
     }
 
     #[test]

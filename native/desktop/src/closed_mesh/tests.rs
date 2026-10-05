@@ -313,6 +313,26 @@ fn typed_numbers_are_read_with_a_comma_or_a_point_and_checked() {
         dutch(|settings| settings.simplify = "2000".into()),
         "De vereenvoudigingstolerantie moet tussen 0 en 1 m liggen"
     );
+    assert_eq!(
+        dutch(|settings| settings.sample_percent = "x".into()),
+        "Het aandeel bronpunten moet een getal zijn"
+    );
+    for share in ["0", "0,005", "100.5"] {
+        let settings = ClosedMeshSettings {
+            sample_percent: share.into(),
+            ..ClosedMeshSettings::default()
+        };
+        assert_eq!(
+            settings.config().unwrap_err().translated(),
+            "Het aandeel bronpunten moet tussen 0.01 en 100 % liggen",
+            "{share}"
+        );
+    }
+    let smallest = ClosedMeshSettings {
+        sample_percent: "0,01".into(),
+        ..ClosedMeshSettings::default()
+    };
+    assert_eq!(smallest.config().unwrap().sample_percent, 0.01);
     // A field that holds no number is null in the status.
     settings.max_hole = "wide".into();
     assert_eq!(settings.value()["max_hole"], Value::Null);
@@ -396,7 +416,11 @@ fn fields_of_a_command_go_into_the_block_and_wrong_ones_change_nothing() {
         (json!({"layers": "all"}), "layers must be active or visible"),
         (
             json!({"sample_percent": 101.0}),
-            "a setting lies outside its limits",
+            "the share of source points must lie between 0.01 and 100 %",
+        ),
+        (
+            json!({"sample_percent": 0.005}),
+            "the share of source points must lie between 0.01 and 100 %",
         ),
     ] {
         let answer = set(&mut studio, body);

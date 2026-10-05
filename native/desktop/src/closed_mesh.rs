@@ -24,6 +24,7 @@ use pointcloud_core::{
     Bounds, ClosedMeshConfig, ClosedMeshReport, ClosedMeshStage, IndexConfig, IndexedPoint,
     LoadError, MeshFormat, MeshGeometry, MeshOrientation, OctreeIndex, OrientationUsed,
     OrientedBox, Point, PointCloud, MAX_CLOSED_MESH_HOLE, MAX_MESH_TRIANGLES, MAX_MESH_VERTICES,
+    MIN_CLOSED_MESH_SAMPLE_PERCENT,
 };
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
@@ -281,8 +282,9 @@ impl ClosedMeshSettings {
         };
         let config = ClosedMeshConfig {
             voxel: self.voxel()?,
-            sample_percent: number(&self.sample_percent)
-                .ok_or_else(|| Sentence::plain(key("Source sample must be a percentage")))?,
+            sample_percent: number(&self.sample_percent).ok_or_else(|| {
+                Sentence::plain(key("The share of source points must be a number"))
+            })?,
             max_hole: number(&self.max_hole)
                 .ok_or_else(|| Sentence::plain(key("Hole limit must be a number of metres")))?,
             simplify_tolerance: self.tolerance()?,
@@ -292,7 +294,7 @@ impl ClosedMeshSettings {
             max_triangles: MAX_MESH_TRIANGLES,
             ..ClosedMeshConfig::default()
         };
-        // The limits of the three numbers are said here, in the words of the
+        // The limits of the four numbers are said here, in the words of the
         // core, because a refusal of the core is English only.
         if config
             .voxel
@@ -319,6 +321,12 @@ impl ClosedMeshSettings {
             return Err(Sentence::plain(key(
                 "The simplification tolerance must lie between 0 and 1 m",
             )));
+        }
+        if !(MIN_CLOSED_MESH_SAMPLE_PERCENT..=100.0).contains(&config.sample_percent) {
+            return Err(Sentence::with(
+                key("The share of source points must lie between {min} and 100 %"),
+                &[("min", MIN_CLOSED_MESH_SAMPLE_PERCENT.to_string())],
+            ));
         }
         // Nothing else of the config comes from the block.
         config
