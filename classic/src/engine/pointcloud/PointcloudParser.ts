@@ -16,11 +16,11 @@
  *   .ptx  — PTX structured scan
  *   .off  — Object File Format
  *   .stl  — Stereolithography (ASCII + binary)
- *   .dxf  — AutoCAD Drawing Exchange Format
+ *   .dxf  — Drawing Exchange Format
  *   .e57  — ASTM E57 (uncompressed, main-thread only)
  *
  * Not supported (proprietary):
- *   .rcp/.rcs — Autodesk ReCap (convert to LAS/LAZ first)
+ *   .rcp/.rcs, .fls — scan formats of proprietary scanner software (convert to LAS/LAZ first)
  */
 
 import type { ParsedPointcloud } from './LASParser';
@@ -37,9 +37,9 @@ export const FILE_INPUT_ACCEPT = SUPPORTED_EXTENSIONS.join(',');
 
 /** Unsupported formats that we should warn about */
 const UNSUPPORTED_PROPRIETARY: Record<string, string> = {
-  '.rcp': 'Autodesk ReCap Project — convert to LAS/LAZ using ReCap or CloudCompare',
-  '.rcs': 'Autodesk ReCap Scan — convert to LAS/LAZ using ReCap or CloudCompare',
-  '.fls': 'FARO Scene — convert to LAS/LAZ using FARO Scene or CloudCompare',
+  '.rcp': 'Scan project in a proprietary format — export its scans to LAS/LAZ or E57 first',
+  '.rcs': 'Scan in a proprietary format — export it to LAS/LAZ or E57 first',
+  '.fls': 'Scan in a proprietary scanner format — export it to LAS/LAZ or E57 first',
 };
 
 /**

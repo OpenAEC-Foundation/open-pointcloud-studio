@@ -166,7 +166,7 @@ function parseE57Xml(xmlString: string): E57ScanDescriptor[] {
     if (codecsEl && codecsEl.children.length > 0) {
       throw new Error(
         'This E57 file uses compressed data (codecs), which is not yet supported.\n' +
-        'Please convert to LAS/LAZ using CloudCompare.'
+        'Please convert it to LAS/LAZ first.'
       );
     }
 

@@ -1,8 +1,8 @@
 /**
- * Browser-side DXF file parser (AutoCAD Drawing Exchange Format).
+ * Browser-side DXF file parser (Drawing Exchange Format).
  *
  * Extracts POINT entities and optionally 3DFACE vertex data from the ENTITIES section.
- * Supports ACI (AutoCAD Color Index) and true color (group code 420).
+ * Supports ACI (the indexed colours of DXF) and true color (group code 420).
  */
 
 import type { ParsedPointcloud, LASHeader } from './LASParser';

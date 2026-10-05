@@ -398,7 +398,7 @@ const PointcloudViewerInner = () => {
     rendererRef.current = renderer;
 
     // OrbitControls (from three/examples)
-    // CloudCompare convention: Left=Rotate, Right=Pan, Scroll=Zoom
+    // Left=Rotate, Right=Pan, Scroll=Zoom
     import('three/examples/jsm/controls/OrbitControls.js').then((module) => {
       OrbitControls = module.OrbitControls;
       const controls = new OrbitControls(camera, renderer.domElement);
@@ -419,7 +419,7 @@ const PointcloudViewerInner = () => {
       // Apply current editMode state
       controls.enabled = !useAppStore.getState().editMode;
 
-      // Double-click to set rotation center (like CloudCompare/Potree)
+      // Double-click to set rotation center
       renderer.domElement.addEventListener('dblclick', (event: MouseEvent) => {
         const rect = renderer.domElement.getBoundingClientRect();
         const mouse = new THREE.Vector2(
