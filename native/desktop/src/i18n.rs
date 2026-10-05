@@ -426,6 +426,10 @@ mod tests {
         ("mesh_export.rs", include_str!("mesh_export.rs")),
         ("mesh_to_plans/mod.rs", include_str!("mesh_to_plans/mod.rs")),
         (
+            "mesh_to_plans/pipeline.rs",
+            include_str!("mesh_to_plans/pipeline.rs"),
+        ),
+        (
             "mesh_to_plans/strip.rs",
             include_str!("mesh_to_plans/strip.rs"),
         ),

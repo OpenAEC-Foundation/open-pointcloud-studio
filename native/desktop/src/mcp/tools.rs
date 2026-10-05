@@ -225,14 +225,14 @@ fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
         tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), the Detect faces tool (faces: its settings, a running job, the last job, export_pending and result, the faces of the active layer in figures; clouds[].faces has those figures per layer, or null), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view), the Mesh to Plans wizard (mesh_to_plans: whether it is shown as card or strip, its step and the status of every step) and the status line.", vec![]),
-        tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, detect_faces, export_faces, merge_visible or bag3d returned: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
+        tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, detect_faces, export_faces, merge_visible or bag3d returned, or that status.result.mesh_to_plans.job names: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
         tool("wait_for_job", WaitForJob, "Waits until a background job is no longer running and returns it, polling it four times a second. Answers with timed_out: true and the running job when the time is up.", vec![
             required("id", text("The job_id", 1, 64)),
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, a drawing file being read, merging, 3D BAG download, station photos, view snapshots, the fill of the cut of a mesh by the section box or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
+        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, a drawing file being read, steps of Mesh to Plans, merging, 3D BAG download, station photos, view snapshots, the fill of the cut of a mesh by the section box or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
         tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load and the fill of the cut of a mesh to be made; while the Drawing view is shown it captures the drawing instead, and the answer says which in view (model or drawing). The text part gives the width and height in pixels. Fails while the window is minimised, and while the File view, Settings or the card of the Mesh to Plans wizard covers the viewport; file_view with open false returns to the model, mesh_to_plans_view with minimized true leaves the wizard as a strip that is not captured.", vec![
@@ -767,6 +767,9 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
     }
     if result["section_fill"]["pending"] == true {
         busy.push("section_caps");
+    }
+    if result["mesh_to_plans"]["job"].is_object() {
+        busy.push("mesh_to_plans");
     }
     busy
 }

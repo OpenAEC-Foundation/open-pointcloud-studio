@@ -607,5 +607,13 @@
   "Run all automatically": "Alles automatisch",
   "Skip this step": "Stap overslaan",
   "Show in model": "Toon in model",
-  "Back to wizard": "Terug naar wizard"
+  "Back to wizard": "Terug naar wizard",
+  "Running": "Bezig",
+  "Waiting for confirmation": "Wacht op bevestiging",
+  "Confirmed": "Bevestigd",
+  "Failed": "Mislukt",
+  "Wait until this step has finished": "Wacht tot deze stap klaar is",
+  "Confirm the result of this step first": "Bevestig eerst het resultaat van deze stap",
+  "This step failed: {reason}": "Deze stap is mislukt: {reason}",
+  "Confirm": "Bevestigen"
 }

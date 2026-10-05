@@ -414,3 +414,275 @@ fn card_takes_nine_tenths_of_the_window_and_at_least_its_least_size() {
         Size::new(800.0, 600.0)
     );
 }
+
+/// Steps that end at once.
+const QUICK: Work = Work::Placeholder {
+    ticks: 3,
+    tick: std::time::Duration::ZERO,
+};
+
+/// What the worker thread of the running job does, and its message to the
+/// window.
+fn finish(studio: &mut Studio) {
+    let job = studio.mesh_to_plans.job.as_ref().expect("a job runs");
+    let (serial, input, control) = (
+        job.serial,
+        std::sync::Arc::clone(&job.input),
+        std::sync::Arc::clone(&job.control),
+    );
+    let end = PipelineEnd::of(pipeline::run(&input, &control));
+    let _ = studio.update(wizard(WizardAction::Finished(serial, end)));
+}
+
+fn busy(studio: &mut Studio) -> Vec<&'static str> {
+    let status = send(studio, crate::native_api::ApiCommand::Status);
+    crate::mcp::busy(&status["result"])
+}
+
+#[test]
+fn a_cancelled_job_stops_within_one_poll() {
+    use std::time::{Duration, Instant};
+    // The work the window gives a step, cancelled while it runs.
+    let input = pipeline::JobInput {
+        steps: WizardStep::ALL.to_vec(),
+        work: pipeline::PLACEHOLDER,
+        confirm: false,
+    };
+    let control = pipeline::Control::default();
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| pipeline::run(&input, &control));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while control.snapshot().done < 2 {
+            assert!(Instant::now() < deadline, "the job did not start");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let asked = Instant::now();
+        control.cancel();
+        let ended = worker.join().unwrap();
+        let took = asked.elapsed();
+        assert!(
+            matches!(ended, Err(pointcloud_core::LoadError::Cancelled)),
+            "{ended:?}"
+        );
+        assert!(took < pipeline::POLL, "stopped after {took:?}");
+    });
+    assert!(control.finished().is_empty());
+    assert_eq!(control.snapshot().place, 0);
+}
+
+#[test]
+fn a_step_runs_on_the_worker_and_then_waits_for_confirmation() {
+    let _language = TestLanguage::hold(Language::English);
+    let mut studio = Studio::default();
+    studio.mesh_to_plans.work = QUICK;
+    let _ = studio.update(wizard(WizardAction::Open));
+    let _ = studio.update(wizard(WizardAction::Run));
+    assert!(studio.mesh_to_plans.is_running());
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Running
+    );
+    assert_eq!(studio.status, "Mesh to Plans: 0 Preparation…");
+    assert_eq!(
+        studio.mesh_to_plans.step_ready().unwrap_err().english(),
+        "Wait until this step has finished"
+    );
+    let lines = studio.progress_lines();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].phase, crate::open_progress::Phase::MeshToPlans);
+    assert_eq!(lines[0].title, "Mesh to Plans");
+    assert_eq!(lines[0].detail, "Step 1 of 1  ·  0 Preparation");
+    assert!(matches!(
+        lines[0].cancel,
+        Some(Message::MeshToPlans(WizardAction::Cancel))
+    ));
+    studio.track_progress();
+    let _ = studio.view();
+
+    // One job at a time; the status reports it as work under way, and its
+    // job of the local API follows it.
+    let _ = studio.update(wizard(WizardAction::Run));
+    assert_eq!(studio.status, "Mesh to Plans is already running a step");
+    assert_eq!(busy(&mut studio), ["mesh_to_plans"]);
+    let reported = status(&mut studio);
+    assert_eq!(reported["job"]["state"], "running");
+    assert_eq!(reported["job"]["steps"], json!(["prepare"]));
+    assert_eq!(reported["steps"][0]["status"], "running");
+    let id = reported["job_id"].as_str().unwrap().to_owned();
+    let _ = studio.update(wizard(WizardAction::Poll));
+    let job = send(
+        &mut studio,
+        crate::native_api::ApiCommand::Job { id: id.clone() },
+    );
+    assert_eq!(job["job"]["operation"], "mesh_to_plans");
+    assert_eq!(job["job"]["state"], "running");
+
+    finish(&mut studio);
+    assert!(!studio.mesh_to_plans.is_running());
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Done
+    );
+    assert!(studio.status.starts_with("Mesh to Plans: 1 step done in "));
+    assert_eq!(
+        studio.mesh_to_plans.step_ready().unwrap_err().english(),
+        "Confirm the result of this step first"
+    );
+    assert!(busy(&mut studio).is_empty());
+    let reported = status(&mut studio);
+    assert_eq!(reported["job"], Value::Null);
+    assert_eq!(reported["job_id"], id.as_str());
+    assert_eq!(reported["last"]["state"], "complete");
+    assert_eq!(reported["last"]["finished"][0]["id"], "prepare");
+    let job = send(&mut studio, crate::native_api::ApiCommand::Job { id });
+    assert_eq!(job["job"]["state"], "complete");
+    assert!(studio.progress_lines().is_empty());
+    let _ = studio.view();
+
+    let _ = studio.update(wizard(WizardAction::Confirm));
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Confirmed
+    );
+    let _ = studio.update(wizard(WizardAction::Next));
+    assert_eq!(studio.mesh_to_plans.step, WizardStep::Mesh);
+}
+
+#[test]
+fn run_all_confirms_each_step_it_runs_and_leaves_skipped_ones() {
+    let mut studio = Studio::default();
+    studio.mesh_to_plans.work = QUICK;
+    let _ = studio.update(wizard(WizardAction::Open));
+    let _ = studio.update(wizard(WizardAction::Step(WizardStep::Mesh)));
+    let _ = studio.update(wizard(WizardAction::Skip));
+    let _ = studio.update(wizard(WizardAction::RunAll));
+    let steps = studio
+        .mesh_to_plans
+        .job
+        .as_ref()
+        .unwrap()
+        .input
+        .steps
+        .clone();
+    assert_eq!(steps.len(), 8);
+    assert!(!steps.contains(&WizardStep::Mesh));
+    finish(&mut studio);
+    for step in WizardStep::ALL {
+        let expected = if step == WizardStep::Mesh {
+            StepStatus::Skipped
+        } else {
+            StepStatus::Confirmed
+        };
+        assert_eq!(*studio.mesh_to_plans.status(step), expected, "{step:?}");
+    }
+    assert!(studio.status.starts_with("Mesh to Plans: 8 steps done in "));
+    let _ = studio.view();
+
+    let _ = studio.update(wizard(WizardAction::RunAll));
+    assert!(!studio.mesh_to_plans.is_running());
+    assert_eq!(
+        studio.status,
+        "Every step of Mesh to Plans is confirmed or skipped"
+    );
+}
+
+#[test]
+fn a_cancelled_job_keeps_the_steps_it_finished() {
+    use std::time::{Duration, Instant};
+    let mut studio = Studio::default();
+    studio.mesh_to_plans.work = Work::Placeholder {
+        ticks: 2,
+        tick: Duration::from_millis(20),
+    };
+    let _ = studio.update(wizard(WizardAction::RunAll));
+    let job = studio.mesh_to_plans.job.as_ref().unwrap();
+    let (serial, input, control) = (
+        job.serial,
+        std::sync::Arc::clone(&job.input),
+        std::sync::Arc::clone(&job.control),
+    );
+    let ended = std::thread::scope(|scope| {
+        let worker = scope.spawn(|| pipeline::run(&input, &control));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while control.finished().is_empty() {
+            assert!(Instant::now() < deadline, "no step ended");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let _ = studio.update(wizard(WizardAction::Poll));
+        let _ = studio.update(wizard(WizardAction::Cancel));
+        assert_eq!(studio.status, "Cancelling Mesh to Plans…");
+        PipelineEnd::of(worker.join().unwrap())
+    });
+    assert_eq!(ended, PipelineEnd::Cancelled);
+    let _ = studio.update(wizard(WizardAction::Finished(serial, ended)));
+    let kept = control.finished().len();
+    assert!((1..9).contains(&kept), "{kept}");
+    for (place, step) in WizardStep::ALL.into_iter().enumerate() {
+        let expected = if place < kept {
+            StepStatus::Confirmed
+        } else {
+            StepStatus::NotRun
+        };
+        assert_eq!(*studio.mesh_to_plans.status(step), expected, "{step:?}");
+    }
+    assert!(studio.status.starts_with("Mesh to Plans cancelled after "));
+    assert_eq!(status(&mut studio)["last"]["state"], "cancelled");
+
+    // A message of a job that is no longer under way changes nothing.
+    let _ = studio.update(wizard(WizardAction::Finished(serial, PipelineEnd::Done)));
+    assert_eq!(status(&mut studio)["last"]["state"], "cancelled");
+}
+
+#[test]
+fn a_failed_step_says_why_and_exit_cancels_a_job() {
+    let _language = TestLanguage::hold(Language::English);
+    let mut studio = Studio::default();
+    studio.mesh_to_plans.work = QUICK;
+    let _ = studio.update(wizard(WizardAction::Step(WizardStep::Views)));
+    let _ = studio.update(wizard(WizardAction::Run));
+    let serial = studio.mesh_to_plans.job.as_ref().unwrap().serial;
+    let _ = studio.update(wizard(WizardAction::Finished(
+        serial,
+        PipelineEnd::Failed("disk full".into()),
+    )));
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Views),
+        StepStatus::Failed("disk full".into())
+    );
+    assert_eq!(
+        studio.mesh_to_plans.step_ready().unwrap_err().english(),
+        "This step failed: disk full"
+    );
+    assert_eq!(
+        studio.status,
+        "Mesh to Plans failed in 2 Sections, elevations and raw plans: disk full"
+    );
+    let last = status(&mut studio)["last"].clone();
+    assert_eq!(last["state"], "failed");
+    assert_eq!(last["step"], "views");
+    let _ = studio.update(wizard(WizardAction::Open));
+    let _ = studio.view();
+
+    // Exit asks the worker to stop; Escape leaves it running.
+    let _ = studio.update(wizard(WizardAction::Run));
+    let control = std::sync::Arc::clone(&studio.mesh_to_plans.job.as_ref().unwrap().control);
+    let _ = studio.update(Message::Escape);
+    assert!(!control.cancelling());
+    let _ = studio.update(Message::Exit);
+    assert!(control.cancelling());
+}
+
+#[test]
+fn a_job_waits_for_other_heavy_work() {
+    // An octree being built.
+    let mut studio = Studio {
+        index_pending: true,
+        ..Studio::default()
+    };
+    let _ = studio.update(wizard(WizardAction::Run));
+    assert!(!studio.mesh_to_plans.is_running());
+    assert_eq!(
+        studio.status,
+        "Mesh to Plans waits: an octree is being made; wait for it or cancel it first"
+    );
+}

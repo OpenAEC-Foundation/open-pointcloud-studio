@@ -4,13 +4,14 @@
 //! step in the middle, its preview at the right and the buttons that move
 //! through the steps at the bottom. Show in model makes the card a strip
 //! above the scene, so that the model can be looked at and the section box
-//! moved while the wizard waits.
+//! moved while the wizard waits. The steps run on the worker of
+//! `pipeline`, one job at a time.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{tree, Tree, Widget};
 use iced::advanced::{overlay, renderer, Clipboard, Shell};
 use iced::widget::{
-    button, column, container, horizontal_space, opaque, row, scrollable, text, Space,
+    button, column, container, horizontal_space, opaque, progress_bar, row, scrollable, text, Space,
 };
 use iced::{event, mouse, Border, Color, Element, Event, Fill, Length, Rectangle, Size, Task};
 use iced::{Theme, Vector};
@@ -20,9 +21,13 @@ use crate::closed_mesh::Sentence;
 use crate::i18n::{key, tr};
 use crate::{drawing_view, flat_tool_style, opencad_ribbon, ui_theme, Message, Studio};
 
+mod pipeline;
 mod strip;
 #[cfg(test)]
 mod tests;
+
+pub use pipeline::PipelineEnd;
+use pipeline::{Last, PipelineJob, Work};
 
 /// The share of the window the card takes, and the least it takes when the
 /// window is large enough for that.
@@ -193,7 +198,13 @@ impl WizardStep {
 pub enum StepStatus {
     #[default]
     NotRun,
+    Running,
+    /// Run, and waiting for the user to confirm what it proposes.
+    Done,
+    Confirmed,
     Skipped,
+    /// Failed for this reason.
+    Failed(String),
 }
 
 impl StepStatus {
@@ -201,7 +212,11 @@ impl StepStatus {
     pub fn key(&self) -> &'static str {
         match self {
             Self::NotRun => "not_run",
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Confirmed => "confirmed",
             Self::Skipped => "skipped",
+            Self::Failed(_) => "failed",
         }
     }
 
@@ -209,7 +224,11 @@ impl StepStatus {
     fn text(&self) -> String {
         match self {
             Self::NotRun => tr("Not run").into(),
+            Self::Running => tr("Running").into(),
+            Self::Done => tr("Waiting for confirmation").into(),
+            Self::Confirmed => tr("Confirmed").into(),
             Self::Skipped => tr("Skipped").into(),
+            Self::Failed(_) => tr("Failed").into(),
         }
     }
 
@@ -217,9 +236,14 @@ impl StepStatus {
     /// dot is filled.
     fn dot(&self, theme: &Theme) -> (Color, bool) {
         let colors = ui_theme::colors(theme);
+        let palette = theme.palette();
         match self {
             Self::NotRun => (colors.muted, false),
+            Self::Running => (colors.accent, true),
+            Self::Done => (palette.success, false),
+            Self::Confirmed => (palette.success, true),
             Self::Skipped => (colors.muted, true),
+            Self::Failed(_) => (palette.danger, true),
         }
     }
 }
@@ -241,6 +265,16 @@ pub enum WizardAction {
     Next,
     /// Go on without the shown step, where the wizard can do without it.
     Skip,
+    /// Run the shown step.
+    Run,
+    /// Run every step that is not confirmed or skipped, in their order,
+    /// and confirm each one as it ends.
+    RunAll,
+    /// Take what the shown step proposes.
+    Confirm,
+    Poll,
+    Cancel,
+    Finished(u64, PipelineEnd),
 }
 
 /// The wizard: whether it is shown, as a card or as a strip, the step it
@@ -252,6 +286,14 @@ pub(crate) struct Wizard {
     minimized: bool,
     step: WizardStep,
     states: [StepStatus; WizardStep::ALL.len()],
+    /// The job under way, how the last one ended and what the steps of a
+    /// job do.
+    job: Option<PipelineJob>,
+    next_serial: u64,
+    last: Option<Last>,
+    /// The job of the local API that reports the last job.
+    last_job_id: Option<String>,
+    work: Work,
 }
 
 impl Wizard {
@@ -267,6 +309,15 @@ impl Wizard {
 
     fn status(&self, step: WizardStep) -> &StepStatus {
         &self.states[step.place()]
+    }
+
+    fn set_status(&mut self, step: WizardStep, status: StepStatus) {
+        self.states[step.place()] = status;
+    }
+
+    /// Whether a job runs steps.
+    pub(crate) fn is_running(&self) -> bool {
+        self.job.is_some()
     }
 
     /// Make the card a strip, if the card is shown; whether it was.
@@ -293,6 +344,13 @@ impl Wizard {
                 "name": step.label(),
                 "status": self.status(step).key(),
             })).collect::<Vec<_>>(),
+            "job": self.job.as_ref().map(PipelineJob::progress_value),
+            "last": self.last.as_ref().map(Last::value),
+            "job_id": self
+                .job
+                .as_ref()
+                .map(|job| job.api_job_id.as_str())
+                .or(self.last_job_id.as_deref()),
         })
     }
 
@@ -303,8 +361,16 @@ impl Wizard {
             return Err(Sentence::plain(key("This is the last step")));
         }
         match self.status(self.step) {
-            StepStatus::Skipped => Ok(()),
+            StepStatus::Confirmed | StepStatus::Skipped => Ok(()),
             StepStatus::NotRun => Err(Sentence::plain(key("Run this step first"))),
+            StepStatus::Running => Err(Sentence::plain(key("Wait until this step has finished"))),
+            StepStatus::Done => Err(Sentence::plain(key(
+                "Confirm the result of this step first",
+            ))),
+            StepStatus::Failed(reason) => Err(Sentence::with(
+                key("This step failed: {reason}"),
+                &[("reason", reason.clone())],
+            )),
         }
     }
 }
@@ -347,10 +413,36 @@ impl Studio {
                 }
             }
             WizardAction::Skip => {
-                if wizard.step.optional() {
-                    wizard.states[wizard.step.place()] = StepStatus::Skipped;
+                // A step that runs is left alone until its job ends.
+                let running = *wizard.status(wizard.step) == StepStatus::Running;
+                if wizard.step.optional() && !running {
+                    wizard.set_status(wizard.step, StepStatus::Skipped);
                 }
             }
+            WizardAction::Run => {
+                let step = wizard.step;
+                return self.start_mesh_to_plans_job(vec![step], false);
+            }
+            WizardAction::RunAll => {
+                let steps = WizardStep::ALL
+                    .into_iter()
+                    .filter(|step| {
+                        !matches!(
+                            wizard.status(*step),
+                            StepStatus::Confirmed | StepStatus::Skipped
+                        )
+                    })
+                    .collect();
+                return self.start_mesh_to_plans_job(steps, true);
+            }
+            WizardAction::Confirm => {
+                if *wizard.status(wizard.step) == StepStatus::Done {
+                    wizard.set_status(wizard.step, StepStatus::Confirmed);
+                }
+            }
+            WizardAction::Poll => return self.mesh_to_plans_poll(),
+            WizardAction::Cancel => self.cancel_mesh_to_plans(),
+            WizardAction::Finished(serial, end) => self.mesh_to_plans_finished(serial, end),
         }
         Task::none()
     }
@@ -551,7 +643,25 @@ impl Studio {
         ]
         .spacing(12)
         .width(Fill);
-        if step.optional() && *wizard.status(step) != StepStatus::Skipped {
+        if let Some(line) = self.mesh_to_plans_progress_line() {
+            page = page.push(
+                column![
+                    text(line.detail).size(11).color(colors.muted),
+                    progress_bar(0.0..=1.0, line.fraction.unwrap_or(0.0)).height(6),
+                ]
+                .spacing(4),
+            );
+        }
+        if *wizard.status(step) == StepStatus::Done {
+            page = page.push(
+                button(text(tr("Confirm")).size(12))
+                    .on_press(Message::MeshToPlans(WizardAction::Confirm))
+                    .style(|theme, status| opencad_ribbon::file_tab_style(theme, false, status))
+                    .padding([5, 16]),
+            );
+        }
+        let running = *wizard.status(step) == StepStatus::Running;
+        if step.optional() && !running && *wizard.status(step) != StepStatus::Skipped {
             page = page.push(
                 button(text(tr("Skip this step")).size(12))
                     .on_press(Message::MeshToPlans(WizardAction::Skip))
@@ -609,12 +719,19 @@ impl Studio {
                 key("Previous"),
                 wizard.step.previous().map(|_| send(WizardAction::Back)),
             ),
-            plain(key("Run this step"), None),
+            if wizard.is_running() {
+                plain(key("Cancel"), Some(send(WizardAction::Cancel)))
+            } else {
+                plain(key("Run this step"), Some(send(WizardAction::Run)))
+            },
             button(text(tr("Next")).size(12))
                 .on_press_maybe(ready.is_ok().then_some(send(WizardAction::Next)))
                 .style(|theme, status| opencad_ribbon::file_tab_style(theme, false, status))
                 .padding([5, 16]),
-            plain(key("Run all automatically"), None),
+            plain(
+                key("Run all automatically"),
+                (!wizard.is_running()).then_some(send(WizardAction::RunAll)),
+            ),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center)

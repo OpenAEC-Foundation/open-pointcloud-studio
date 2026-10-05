@@ -719,8 +719,28 @@ strip, and closes the File view after that.
 The answer holds `mesh_to_plans` as `status.result.mesh_to_plans` does:
 `open`, `minimized`, `step` (the id of the step shown), `next_ready` (whether
 Next may leave that step), `next_reason` (why not, or `null`) and `steps`,
-for every step its `id`, `number`, English `name` and `status`: `not_run` or
-`skipped`.
+for every step its `id`, `number`, English `name` and `status`: `not_run`,
+`running`, `done` (run, waiting for confirmation), `confirmed`, `skipped` or
+`failed`.
+
+**Run this step** and **Run all automatically** start a job that runs steps
+one after the other on a worker thread; Run all automatically takes every
+step that is not confirmed or skipped and confirms each one as it ends. One
+job runs at a time, and it waits while a section drawing, a mesh, a face
+detection, a merge or an octree build is under way. The steps compute nothing
+yet: each one stands in for its work for about a second. While a job runs,
+`job` in the status holds `state` (`running`), `operation`
+(`mesh_to_plans`), `steps` (their ids, in order), `step` (the one under
+way), `place`, `completed`, `total`, `fraction`, `confirm`,
+`cancel_requested` and `elapsed_seconds`; it is `null` otherwise. `last`
+holds how the last job ended: `state` (`complete`, `cancelled` or `failed`)
+with `finished` (the steps that ended, each with its `id` and `seconds`), for
+a complete job `seconds`, and for a failed one the `step` and its `error`.
+`job_id` names the job of `job` and `wait_for_job` that reports the running
+or the last job. A step that ended keeps its result when the job is
+cancelled; the step under way goes back to what it was. The progress strip
+above the scene has a line for the job with Cancel, and Exit cancels it;
+Escape and Close leave it running.
 
 ## Editing
 
@@ -868,7 +888,7 @@ when the view is restored.
 | Command | JSON fields | Effect |
 | --- | --- | --- |
 | `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), and current status text |
-| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge or 3D BAG download task's state and result |
+| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge, 3D BAG download or Mesh to Plans task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |

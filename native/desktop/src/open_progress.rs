@@ -1,7 +1,7 @@
 //! What the window tells about scans that are still being opened or indexed
-//! and about a section drawing, a closed mesh or a face detection that is
-//! under way: a line per task with how far it is and how long it will still
-//! take.
+//! and about a section drawing, a closed mesh, a face detection or a step of
+//! Mesh to Plans that is under way: a line per task with how far it is and
+//! how long it will still take.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -33,6 +33,8 @@ pub enum Phase {
     ClosedMesh,
     /// The stages of a face detection; the bar starts again with each stage.
     Faces,
+    /// The steps of a Mesh to Plans job; the bar starts again with each step.
+    MeshToPlans,
 }
 
 /// When a task was first seen, and how far it was then.
@@ -225,6 +227,7 @@ impl Studio {
         lines.extend(self.drawing.progress_line());
         lines.extend(self.closed_mesh.progress_line());
         lines.extend(self.faces.progress_line());
+        lines.extend(self.mesh_to_plans_progress_line());
         lines
     }
 
@@ -238,6 +241,7 @@ impl Studio {
                 && !self.drawing.is_running()
                 && !self.closed_mesh.is_running()
                 && !self.faces.is_running()
+                && !self.mesh_to_plans.is_running()
             {
                 self.progress_marks.clear();
                 return;

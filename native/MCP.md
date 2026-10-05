@@ -106,7 +106,7 @@ They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
 edits, meshing (a closed mesh included), mesh export, a face detection, a
-faces export, a section drawing or its preview, a drawing file being read, merging, a 3D BAG download,
+faces export, a section drawing or its preview, a drawing file being read, steps of Mesh to Plans, merging, a 3D BAG download,
 point loading for the camera, the fill of the cut of a mesh by the section
 box and view snapshots have finished; call it after
 `open`, before `screenshot` when the camera changed, and before `export_bcf`.
