@@ -175,6 +175,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - A box with six draggable faces limits what is shown, selected, meshed and searched for faces, and its content can be exported on its own or drawn as a [2D drawing](#section-drawing).
 - Its limits can be typed as X, Y and Z coordinates in the Properties panel, fitted to the selection, or reset.
 - The box can be turned about the vertical: type a **Rotation (°)** in Properties, or press **Align to walls** to turn it along the main direction of the walls inside it. Its faces, the cut planes of a [2D drawing](#section-drawing) and what it keeps then follow the walls of a building that stands at an angle to the axes of the scan.
+- Where the box cuts a mesh, the cut looks solid: the material between two opposite faces of a wall, floor or ceiling, no farther apart than the **Max. wall thickness** (0.50 m by default), is filled on the faces of the box in one colour, as in a section drawing. A single surface, such as a facade scanned from one side, stays open. **Fill the cut**, **Max. wall thickness (m)** and **Cap colour** are under **Section box** in Properties.
 
 ### Select and edit
 
