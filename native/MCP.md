@@ -129,7 +129,9 @@ follows when that view is restored.
 | `set_active` | `index` | Chooses the active layer |
 | `set_visible` | `index`, `visible` | Shows or hides a layer |
 | `camera` | `preset` | `top`, `bottom`, `front`, `back`, `left`, `right` or `isometric` |
-| `set_camera` | `yaw`, `pitch` (radians), `zoom` (1 frames the model, smaller is closer), `pan` (`[x, y]` pixels) | Sets the orbit camera exactly |
+| `set_camera` | `yaw`, `pitch` (radians), `zoom` (1 frames the model, smaller is closer), `pan` (`[x, y]` pixels), optional `orbit_point` (`[x, y, z]` or `null`) | Sets the orbit camera exactly, and the point it turns about |
+| `orbit` | `yaw`, `pitch` (radians) | Turns the orbit camera as a left drag does, about the orbit point |
+| `pick_orbit_point` | `pointer` (`[x, y]` pixels) | Makes the drawn point at a viewport pixel the orbit point, as a double click does |
 | `zoom_all` | — | Fits the whole model |
 | `open_panorama` | `index`, `station` | Stands in a scanner station and shows its photos |
 | `set_panorama` | `yaw`, `pitch`, `field_of_view` (radians) | Turns the walking camera |

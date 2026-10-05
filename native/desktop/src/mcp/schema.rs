@@ -111,6 +111,13 @@ pub fn xyz(description: &str) -> Value {
     numbers(description, 3)
 }
 
+/// A position `[x, y, z]` in scene coordinates, or `null`.
+pub fn xyz_or_null(description: &str) -> Value {
+    let mut schema = xyz(description);
+    schema["type"] = json!(["array", "null"]);
+    schema
+}
+
 /// A position `[x, y]` in viewport pixels.
 pub fn pixel(description: &str) -> Value {
     numbers(description, 2)

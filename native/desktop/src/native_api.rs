@@ -46,6 +46,17 @@ pub enum ApiCommand {
         pitch: f32,
         zoom: f32,
         pan: [f32; 2],
+        /// Left out keeps the orbit point; `null` turns about the centre of
+        /// the scene again.
+        #[serde(default, deserialize_with = "given_point")]
+        orbit_point: Option<Option<[f64; 3]>>,
+    },
+    PickOrbitPoint {
+        pointer: [f32; 2],
+    },
+    Orbit {
+        yaw: f32,
+        pitch: f32,
     },
     OpenPanorama {
         index: usize,
@@ -302,6 +313,13 @@ impl Drop for ApiHandle {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.discovery_path);
     }
+}
+
+/// A field that tells "left out" from `null`.
+fn given_point<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<[f64; 3]>>, D::Error> {
+    Option::<[f64; 3]>::deserialize(deserializer).map(Some)
 }
 
 pub fn discovery_directory() -> PathBuf {

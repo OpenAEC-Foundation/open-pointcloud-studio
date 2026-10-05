@@ -14,6 +14,10 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- Double-click a point to orbit about it: from then on the view turns about that point, which keeps its place on the screen and its size, and a small target marks it while the view turns. Setting the point does not move the view. A double click where no point is drawn, or Zoom all, turns the view about the centre of the model again.
+- The command API and the MCP server can set the orbit point with `set_camera` (`orbit_point`), pick it at a viewport pixel with `pick_orbit_point` and turn the camera about it with `orbit`; `status` reports it with the camera.
+- Zoomed in far, the points at the left and right edges of the view are loaded as well when the 3D view changed size without the pointer passing over it.
+
 - Walking close to a floor, wall or other surface keeps loading its points. Before, the parts of a scan that reach behind the camera could be taken for out of view, so looking down at a floor from close by showed nothing, and parts wholly behind the camera were read in their place.
 
 ## 0.8.0 - 2026-10-03

@@ -770,6 +770,47 @@ pub(crate) fn pick_displayed(
     Ok(best.map(|(record, _, _, _)| record))
 }
 
+/// The drawn point nearest to the eye within `radius` pixels of `pointer`,
+/// over every visible layer: the surface under the pointer, in scene
+/// coordinates. The renderer's stride over the flattened layers is followed,
+/// so only points on screen are taken.
+pub(crate) fn pick_surface(
+    views: &[PickView],
+    budget: usize,
+    projection: Projection,
+    pointer: [f32; 2],
+    radius: f32,
+    filter: ClassFilter,
+) -> Option<[f64; 3]> {
+    validate_pick(pointer, radius).ok()?;
+    let sampled: usize = views
+        .iter()
+        .filter(|view| view.visible)
+        .map(PickView::len)
+        .sum();
+    let stride = sampled.div_ceil(budget.max(1)).max(1);
+    let mut position = 0usize;
+    let mut best: Option<([f64; 3], f64)> = None;
+    for view in views.iter().filter(|view| view.visible) {
+        for record in view.records().filter(|record| view.record_visible(*record)) {
+            let drawn = position.is_multiple_of(stride);
+            position += 1;
+            if !drawn || !filter.accepts(&record.point) {
+                continue;
+            }
+            let Some((x, y, depth)) = projection.project(record.point.xyz) else {
+                continue;
+            };
+            if (x - pointer[0]).hypot(y - pointer[1]) <= radius
+                && best.is_none_or(|(_, nearest)| depth < nearest)
+            {
+                best = Some((record.point.xyz, depth));
+            }
+        }
+    }
+    best.map(|(xyz, _)| xyz)
+}
+
 fn consider_pick(
     record: IndexedPoint,
     projection: Projection,

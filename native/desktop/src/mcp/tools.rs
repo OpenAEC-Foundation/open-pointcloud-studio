@@ -12,7 +12,7 @@ use serde_json::{json, Map, Value};
 use super::schema::{
     boolean, choice, integer_in, list, number_from, number_in, number_or_null, numbers, object,
     optional, ordinal, path, pixel, positive, positive_up_to, required, text, validate_arguments,
-    whole_numbers_as_integers, xyz, Argument,
+    whole_numbers_as_integers, xyz, xyz_or_null, Argument,
 };
 
 /// Where tool calls go: the command API of a running window, and the
@@ -262,6 +262,14 @@ fn table() -> Vec<Tool> {
             required("pitch", number_in("Elevation of the camera in radians, from -1.56 to 1.56; positive looks down on the model from above", -1.56, 1.56)),
             required("zoom", number_in("Viewing distance relative to the whole model: 1 frames the complete model and smaller values come closer (0.1 magnifies ten times); from 0.000001 to 10000", 0.000_001, 10_000.0)),
             required("pan", pixel("Shift of the picture [x, y] in screen pixels")),
+            optional("orbit_point", xyz_or_null("Point [x, y, z] in scene coordinates that the camera turns about from now on, or null to turn about the centre of the model again; left out keeps the current orbit point (status.result.camera.orbit_point)")),
+        ]),
+        tool("orbit", Command, "Turns the orbit camera by these angles, as a left drag in the scene does: about the orbit point while it is in view, which keeps its place on screen, otherwise about the centre of the model.", vec![
+            required("yaw", number_in("Turn about the vertical in radians, from -2π to 2π", -2.0 * PI, 2.0 * PI)),
+            required("pitch", number_in("Change of elevation in radians, from -π to π; the elevation stays within ±1.56", -PI, PI)),
+        ]),
+        tool("pick_orbit_point", Command, "Makes the drawn point nearest to the camera within 8 pixels of a viewport pixel the orbit point, as a double click in the scene does; with no point there the camera turns about the centre of the model again. Answers with orbit_point, the point or null.", vec![
+            required("pointer", pixel("Viewport pixel [x, y] from the top-left corner")),
         ]),
         tool("zoom_all", Command, "Fits the complete model in the viewport at the default isometric direction, like the F key.", vec![]),
         tool("open_panorama", Command, "Stands in a scanner station of a layer and shows the photos taken there (E57 scans with station images); status.result.walk reports the view.", vec![

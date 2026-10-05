@@ -33,6 +33,7 @@ mod native_chrome;
 mod open_progress;
 mod opencad_properties;
 mod opencad_ribbon;
+mod orbit_point;
 mod preferences;
 mod project_open;
 mod screenshot;
@@ -68,9 +69,9 @@ use rayon::prelude::*;
 #[cfg(test)]
 use selection::select_world;
 use selection::{
-    pick_displayed, pick_full_transformed, pick_indexed_transformed, select_full_cancellable,
-    select_world_cancellable, ClassFilter, ClassVisibility, DeletionMask, PickTarget, PickView,
-    Projection, ScreenRect, SelectionMask, SelectionSource,
+    pick_displayed, pick_full_transformed, pick_indexed_transformed, pick_surface,
+    select_full_cancellable, select_world_cancellable, ClassFilter, ClassVisibility, DeletionMask,
+    PickTarget, PickView, Projection, ScreenRect, SelectionMask, SelectionSource,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1679,6 +1680,10 @@ enum Message {
         Result<(Bounds, u64), String>,
     ),
     Orbit(f32, f32),
+    /// A double click at a pixel of the scene: the drawn point there becomes
+    /// the orbit point.
+    PickOrbitPoint([f32; 2], Size),
+    OrbitPointPicked(Option<[f64; 3]>),
     Pan(f32, f32),
     FinishPan(f32, f32),
     FinishOrbit(f32, f32),
@@ -1818,6 +1823,9 @@ struct Studio {
     pitch: f32,
     zoom: f32,
     pan: [f32; 2],
+    /// The point of the scene the orbit camera turns about, picked with a
+    /// double click; the centre of the scene when there is none.
+    orbit_point: Option<[f64; 3]>,
     view_label: &'static str,
     views: views::ViewTool,
     viewport_size: Size,
@@ -2253,6 +2261,7 @@ impl Default for Studio {
             pitch: 0.6,
             zoom: 1.0,
             pan: [0.0, 0.0],
+            orbit_point: None,
             view_label: "ISOMETRIC",
             views: views::ViewTool::load(),
             viewport_size: Size::new(915.0, 743.0),
@@ -2529,6 +2538,7 @@ impl Studio {
         }
         self.zoom = 1.0;
         self.pan = [0.0, 0.0];
+        self.orbit_point = None;
         if let (Some(scene), Some(focus)) = (combined_bounds(&self.clouds), self.scene_focus()) {
             if let Some((zoom, pan)) =
                 camera_to_frame_bounds(scene, focus, self.yaw, self.pitch, self.viewport_size)
@@ -2591,6 +2601,118 @@ impl Studio {
             );
         }
         self.photo_atlas = Some(Arc::new(atlas));
+    }
+
+    /// Size of the scene as it was last drawn, which the viewport only
+    /// reports when the pointer moves over it or turns the wheel.
+    fn scene_size(&self) -> Size {
+        self.views
+            .canvas_bounds()
+            .map(|canvas| canvas.size())
+            .filter(|size| size.width > 0.0 && size.height > 0.0)
+            .unwrap_or(self.viewport_size)
+    }
+
+    fn camera_value(&self) -> Value {
+        json!({
+            "yaw": self.yaw,
+            "pitch": self.pitch,
+            "zoom": self.zoom,
+            "pan": self.pan,
+            "view": self.view_label,
+            "orbit_point": self.orbit_point,
+        })
+    }
+
+    fn orbit_camera(&self) -> orbit_point::OrbitCamera {
+        orbit_point::OrbitCamera {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            zoom: self.zoom,
+            pan: self.pan,
+        }
+    }
+
+    /// Turn the orbit camera by these angles in radians: about the orbit
+    /// point while it is in view, about the centre of the scene otherwise.
+    fn turn_orbit(&mut self, yaw: f32, pitch: f32) {
+        let yaw = (self.yaw + yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        let pitch = (self.pitch + pitch).clamp(-1.56, 1.56);
+        let about = self
+            .orbit_point
+            .zip(combined_bounds(&self.clouds))
+            .and_then(|(point, scene)| {
+                orbit_point::turn_about(
+                    scene,
+                    self.orbit_camera(),
+                    yaw,
+                    pitch,
+                    point,
+                    self.scene_size(),
+                )
+            });
+        if let Some(camera) = about {
+            self.zoom = camera.zoom;
+            self.pan = camera.pan;
+        }
+        self.yaw = yaw;
+        self.pitch = pitch;
+        self.view_label = i18n::key("CUSTOM");
+        self.revision += 1;
+    }
+
+    /// The drawn point nearest to the eye under a pixel of the scene.
+    fn orbit_point_at(&self, pointer: [f32; 2], size: Size) -> impl FnOnce() -> Option<[f64; 3]> {
+        let views: Vec<_> = self
+            .clouds
+            .iter()
+            .map(|entry| PickView {
+                cloud: Arc::clone(&entry.cloud),
+                detail: entry.detail_points.as_ref().map(Arc::clone),
+                deleted: entry.deleted.as_ref().map(Arc::clone),
+                transform: entry.transform,
+                visible: entry.visible,
+            })
+            .collect();
+        let budget = self.budget as usize;
+        let filter = self.mesh_filter();
+        let projection = combined_bounds(&self.clouds)
+            .filter(|_| self.walk.is_none())
+            .map(|scene| self.projection(scene, size.width, size.height));
+        move || {
+            pick_surface(
+                &views,
+                budget,
+                projection?,
+                pointer,
+                orbit_point::PICK_RADIUS,
+                filter,
+            )
+        }
+    }
+
+    /// Look for the orbit point under a double click on a worker thread.
+    fn pick_orbit_point(&mut self, pointer: [f32; 2], size: Size) -> Task<Message> {
+        if self.walk.is_some() || self.clouds.is_empty() {
+            return Task::none();
+        }
+        let pick = self.orbit_point_at(pointer, size);
+        Task::perform(
+            async move { tokio::task::spawn_blocking(pick).await.ok().flatten() },
+            Message::OrbitPointPicked,
+        )
+    }
+
+    /// Turn about this point from now on, or about the centre of the scene.
+    fn set_orbit_point(&mut self, point: Option<[f64; 3]>) {
+        self.orbit_point = point;
+        self.status = if point.is_some() {
+            i18n::tr("Orbit point set: the view turns about the point that was double-clicked")
+        } else {
+            i18n::tr("No point there: the view turns about the centre of the model")
+        }
+        .into();
     }
 
     fn leave_walk(&mut self) -> bool {
@@ -2946,7 +3068,7 @@ impl Studio {
                         })).collect::<Vec<_>>(),
                         "active": self.active,
                         "status": self.status,
-                        "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label},
+                        "camera": self.camera_value(),
                         "viewport_size": [self.viewport_size.width, self.viewport_size.height],
                         "walk": self.walk_value(),
                         "photo_stations": self.photo_atlas.as_ref().map_or(0, |atlas| atlas.sets.len()),
@@ -3132,14 +3254,18 @@ impl Studio {
                 pitch,
                 zoom,
                 pan,
+                orbit_point,
             } => {
                 if !(-std::f32::consts::PI..=std::f32::consts::PI).contains(&yaw)
                     || !(-1.56..=1.56).contains(&pitch)
                     || !(0.000_001..=10_000.0).contains(&zoom)
                     || !pan.iter().all(|value| value.is_finite())
+                    || !orbit_point
+                        .flatten()
+                        .is_none_or(|point| point.iter().all(|value| value.is_finite()))
                 {
                     (
-                        json!({"ok": false, "error": "camera requires finite yaw within ±π, pitch within ±1.56, zoom from 0.000001 to 10000, and finite pan"}),
+                        json!({"ok": false, "error": "camera requires finite yaw within ±π, pitch within ±1.56, zoom from 0.000001 to 10000, finite pan and a finite orbit_point"}),
                         Task::none(),
                     )
                 } else {
@@ -3147,13 +3273,13 @@ impl Studio {
                     self.pitch = pitch;
                     self.zoom = zoom;
                     self.pan = pan;
+                    if let Some(point) = orbit_point {
+                        self.orbit_point = point;
+                    }
                     self.view_label = i18n::key("CUSTOM");
                     self.revision += 1;
                     let task = self.schedule_detail();
-                    (
-                        json!({"ok": true, "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label}}),
-                        task,
-                    )
+                    (json!({"ok": true, "camera": self.camera_value()}), task)
                 }
             }
             ApiCommand::OpenPanorama { index, station } => {
@@ -3233,10 +3359,7 @@ impl Studio {
             }
             ApiCommand::ZoomAll => {
                 let task = self.update(Message::ResetCamera);
-                (
-                    json!({"ok": true, "camera": {"yaw": self.yaw, "pitch": self.pitch, "zoom": self.zoom, "pan": self.pan, "view": self.view_label}}),
-                    task,
-                )
+                (json!({"ok": true, "camera": self.camera_value()}), task)
             }
             command @ (ApiCommand::ListCameraViews
             | ApiCommand::SaveCameraView { .. }
@@ -3444,6 +3567,50 @@ impl Studio {
                         );
                         (json!({"ok": true, "accepted": true, "job_id": id}), task)
                     }
+                }
+            }
+            ApiCommand::PickOrbitPoint { pointer } => {
+                if self.walk.is_some() {
+                    (
+                        json!({"ok": false, "error": "the walking camera is active"}),
+                        Task::none(),
+                    )
+                } else if !pointer.into_iter().all(f32::is_finite)
+                    || pointer[0] < 0.0
+                    || pointer[1] < 0.0
+                    || pointer[0] > self.scene_size().width
+                    || pointer[1] > self.scene_size().height
+                {
+                    (
+                        json!({"ok": false, "error": "pointer must lie inside the viewport"}),
+                        Task::none(),
+                    )
+                } else {
+                    let point = self.orbit_point_at(pointer, self.scene_size())();
+                    self.set_orbit_point(point);
+                    (
+                        json!({"ok": true, "orbit_point": self.orbit_point}),
+                        Task::none(),
+                    )
+                }
+            }
+            ApiCommand::Orbit { yaw, pitch } => {
+                if self.walk.is_some() {
+                    (
+                        json!({"ok": false, "error": "the walking camera is active"}),
+                        Task::none(),
+                    )
+                } else if !(-std::f32::consts::TAU..=std::f32::consts::TAU).contains(&yaw)
+                    || !(-std::f32::consts::PI..=std::f32::consts::PI).contains(&pitch)
+                {
+                    (
+                        json!({"ok": false, "error": "orbit requires yaw within ±2π and pitch within ±π"}),
+                        Task::none(),
+                    )
+                } else {
+                    self.turn_orbit(yaw, pitch);
+                    let task = self.schedule_detail();
+                    (json!({"ok": true, "camera": self.camera_value()}), task)
                 }
             }
             ApiCommand::PickScreen { pointer, radius } => {
@@ -6578,8 +6745,8 @@ impl Studio {
                     return Task::none();
                 };
                 let section = self.section_bounds();
-                let projection =
-                    self.projection(bounds, self.viewport_size.width, self.viewport_size.height);
+                let size = self.scene_size();
+                let projection = self.projection(bounds, size.width, size.height);
                 let indexed_sources: Vec<_> = self
                     .clouds
                     .iter()
@@ -7335,14 +7502,11 @@ impl Studio {
                 return self.schedule_detail();
             }
             Message::Orbit(dx, dy) => {
-                self.yaw = (self.yaw + dx * 0.01 + std::f32::consts::PI)
-                    .rem_euclid(std::f32::consts::TAU)
-                    - std::f32::consts::PI;
-                self.pitch = (self.pitch + dy * 0.01).clamp(-1.56, 1.56);
-                self.view_label = i18n::key("CUSTOM");
-                self.revision += 1;
+                self.turn_orbit(dx * 0.01, dy * 0.01);
                 return self.schedule_detail();
             }
+            Message::PickOrbitPoint(pointer, size) => return self.pick_orbit_point(pointer, size),
+            Message::OrbitPointPicked(point) => self.set_orbit_point(point),
             Message::Pan(dx, dy) => {
                 self.pan[0] += dx;
                 self.pan[1] += dy;
@@ -7413,6 +7577,7 @@ impl Studio {
             }
             Message::ResetCamera => {
                 self.leave_walk();
+                self.orbit_point = None;
                 let (yaw, pitch, label) = CameraPreset::Isometric.orientation();
                 self.yaw = yaw;
                 self.pitch = pitch;
@@ -8664,6 +8829,7 @@ impl Studio {
             pitch: self.pitch,
             zoom: self.zoom,
             pan: self.pan,
+            orbit_point: self.orbit_point,
             box_select: self.box_select,
             pick_mode: self.pick_mode,
             measure: &self.measure,
@@ -10230,6 +10396,7 @@ struct PointViewport<'a> {
     pitch: f32,
     zoom: f32,
     pan: [f32; 2],
+    orbit_point: Option<[f64; 3]>,
     box_select: bool,
     pick_mode: bool,
     measure: &'a measure::MeasureTool,
@@ -10367,6 +10534,9 @@ struct DragState {
 struct ViewportState {
     drag: Option<DragState>,
     modifiers: iced::keyboard::Modifiers,
+    /// When and where the last left click without a drag was, to tell a
+    /// double click.
+    last_click: Option<(Instant, UiPoint)>,
 }
 
 fn middle_drag_mode(modifiers: iced::keyboard::Modifiers) -> DragMode {
@@ -10375,6 +10545,28 @@ fn middle_drag_mode(modifiers: iced::keyboard::Modifiers) -> DragMode {
     } else {
         DragMode::Pan
     }
+}
+
+/// A left release in the orbit mode: the second click of a double click
+/// asks for the orbit point there. A release after a drag is no click.
+fn orbit_click(
+    last_click: &mut Option<(Instant, UiPoint)>,
+    drag: DragState,
+    position: UiPoint,
+    now: Instant,
+    size: Size,
+) -> Option<Message> {
+    let moved = (position.x - drag.start.x).hypot(position.y - drag.start.y);
+    if !matches!(drag.mode, DragMode::Orbit) || moved > orbit_point::DOUBLE_CLICK_REACH {
+        *last_click = None;
+        return None;
+    }
+    if orbit_point::is_double_click(*last_click, now, position) {
+        *last_click = None;
+        return Some(Message::PickOrbitPoint([position.x, position.y], size));
+    }
+    *last_click = Some((now, position));
+    None
 }
 
 fn finish_viewport_drag(
@@ -10630,6 +10822,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
             return (event::Status::Ignored, None);
         }
         let modifiers = state.modifiers;
+        let last_click = &mut state.last_click;
         let state = &mut state.drag;
         if let Some(view) = self.walk {
             return self.update_walk(view, state, event, bounds, cursor);
@@ -10768,6 +10961,13 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     let position = cursor
                         .position_from(bounds.position())
                         .unwrap_or(drag.position);
+                    if button == mouse::Button::Left {
+                        let click =
+                            orbit_click(last_click, drag, position, Instant::now(), bounds.size());
+                        if click.is_some() {
+                            return click;
+                        }
+                    }
                     finish_viewport_drag(button, drag, position, bounds.size())
                 });
                 (event::Status::Captured, message)
@@ -11190,6 +11390,17 @@ impl canvas::Program<Message> for PointViewport<'_> {
         self.draw_faces(&mut frame, bounds.size());
         self.draw_measure(&mut frame, bounds.size());
         self.draw_annotations(&mut frame, bounds.size());
+        // While the camera turns about the orbit point, the point is marked.
+        let turning = _state.drag.is_some_and(|drag| {
+            matches!(drag.mode, DragMode::Orbit | DragMode::Turn) && drag.position != drag.start
+        });
+        if let Some((x, y, _)) = self
+            .orbit_point
+            .filter(|_| turning)
+            .and_then(|point| projection.project(point))
+        {
+            orbit_point::draw_marker(&mut frame, UiPoint::new(x, y));
+        }
         view_cube::draw(
             &mut frame,
             bounds,
@@ -13401,6 +13612,7 @@ mod camera_api_tests {
                 pitch: -0.2,
                 zoom: 0.01,
                 pan: [120.0, -80.0],
+                orbit_point: None,
             },
         );
         assert_eq!(accepted["ok"], true);
@@ -13416,24 +13628,172 @@ mod camera_api_tests {
                 pitch: -0.2,
                 zoom: 0.0,
                 pan: [0.0, 0.0],
+                orbit_point: None,
             },
             native_api::ApiCommand::SetCamera {
                 yaw: 0.4,
                 pitch: -0.2,
                 zoom: 1.0,
                 pan: [f32::NAN, 0.0],
+                orbit_point: None,
+            },
+            native_api::ApiCommand::SetCamera {
+                yaw: 0.4,
+                pitch: -0.2,
+                zoom: 1.0,
+                pan: [0.0, 0.0],
+                orbit_point: Some(Some([0.0, f64::INFINITY, 0.0])),
             },
         ] {
             assert_eq!(send(&mut studio, command)["ok"], false);
             assert_eq!(studio.zoom, 0.01);
             assert_eq!(studio.pan, [120.0, -80.0]);
+            assert_eq!(studio.orbit_point, None);
         }
+
+        // The orbit point is kept when left out and cleared by null.
+        let camera = |orbit_point: &str| {
+            serde_json::from_str::<native_api::ApiCommand>(&format!(
+                r#"{{"command":"set_camera","yaw":0.4,"pitch":-0.2,"zoom":0.01,"pan":[120,-80]{orbit_point}}}"#
+            ))
+            .unwrap()
+        };
+        let set = send(&mut studio, camera(r#","orbit_point":[1,2,3]"#));
+        assert_eq!(set["camera"]["orbit_point"], json!([1.0, 2.0, 3.0]));
+        let _ = send(&mut studio, camera(""));
+        assert_eq!(studio.orbit_point, Some([1.0, 2.0, 3.0]));
+        let cleared = send(&mut studio, camera(r#","orbit_point":null"#));
+        assert_eq!(cleared["camera"]["orbit_point"], Value::Null);
+        let _ = send(&mut studio, camera(r#","orbit_point":[1,2,3]"#));
 
         let fitted = send(&mut studio, native_api::ApiCommand::ZoomAll);
         assert_eq!(fitted["ok"], true);
         assert_eq!(studio.zoom, 1.0);
         assert_eq!(studio.pan, [0.0, 0.0]);
         assert_eq!(studio.view_label, "ISOMETRIC");
+        // Zoom all turns about the centre of the model again.
+        assert_eq!(fitted["camera"]["orbit_point"], Value::Null);
+    }
+
+    #[test]
+    fn the_camera_turns_about_the_orbit_point_picked_on_screen() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("floor.xyz");
+        // A floor of 41 by 21 points one unit apart, and a post at one end.
+        let mut lines: String = (0..41 * 21)
+            .map(|index| format!("{} {} 0\n", index % 41, index / 41))
+            .collect();
+        lines.push_str("38 18 4\n");
+        std::fs::write(&source, lines).unwrap();
+        let cloud = pointcloud_core::open(&source, 10_000).unwrap();
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::new(cloud))));
+        studio.viewport_size = Size::new(800.0, 600.0);
+        let scene = combined_bounds(&studio.clouds).unwrap();
+        let post = [38.0, 18.0, 4.0];
+        let on_screen = |studio: &Studio| {
+            let (x, y, _) = studio
+                .projection(scene, 800.0, 600.0)
+                .project(post)
+                .unwrap();
+            [x, y]
+        };
+
+        // Without an orbit point the post moves while the camera turns.
+        let before = on_screen(&studio);
+        let turned = send(
+            &mut studio,
+            native_api::ApiCommand::Orbit {
+                yaw: 0.3,
+                pitch: 0.1,
+            },
+        );
+        assert_eq!(turned["ok"], true);
+        let after = on_screen(&studio);
+        assert!((after[0] - before[0]).hypot(after[1] - before[1]) > 20.0);
+
+        // Picked on screen, the post stays where it is.
+        let picked = send(
+            &mut studio,
+            native_api::ApiCommand::PickOrbitPoint {
+                pointer: [after[0] + 2.0, after[1] - 1.0],
+            },
+        );
+        assert_eq!(picked["orbit_point"], json!(post));
+        for (yaw, pitch) in [(0.4, 0.0), (-1.2, 0.3), (2.0, -0.5)] {
+            let turned = send(&mut studio, native_api::ApiCommand::Orbit { yaw, pitch });
+            assert_eq!(turned["camera"]["orbit_point"], json!(post));
+            let now = on_screen(&studio);
+            assert!(
+                (now[0] - after[0]).abs() < 0.05 && (now[1] - after[1]).abs() < 0.05,
+                "{now:?} {after:?}"
+            );
+        }
+
+        // Nothing under the pointer: the centre of the model again.
+        let missed = send(
+            &mut studio,
+            native_api::ApiCommand::PickOrbitPoint {
+                pointer: [2.0, 2.0],
+            },
+        );
+        assert_eq!(missed["orbit_point"], Value::Null);
+        assert_eq!(studio.orbit_point, None);
+        let outside = send(
+            &mut studio,
+            native_api::ApiCommand::PickOrbitPoint {
+                pointer: [900.0, 2.0],
+            },
+        );
+        assert_eq!(outside["ok"], false);
+    }
+
+    #[test]
+    fn the_scene_is_measured_as_it_was_last_drawn() {
+        let studio = Studio::default();
+        assert_eq!(studio.scene_size(), studio.viewport_size);
+        // Drawn smaller than the viewport last reported, without the pointer
+        // over it to report the new size.
+        let drawn = Size::new(915.0, 694.0);
+        studio
+            .views_overlay()
+            .drawn_at(Rectangle::new(UiPoint::new(280.0, 150.0), drawn));
+        assert_ne!(studio.viewport_size, drawn);
+        assert_eq!(studio.scene_size(), drawn);
+    }
+
+    #[test]
+    fn a_double_click_without_moving_asks_for_the_orbit_point() {
+        let start = UiPoint::new(200.0, 150.0);
+        let size = Size::new(800.0, 600.0);
+        let click = DragState {
+            start,
+            position: start,
+            mode: DragMode::Orbit,
+        };
+        let first = Instant::now();
+        let mut last = None;
+        assert!(orbit_click(&mut last, click, start, first, size).is_none());
+        let second = first + Duration::from_millis(250);
+        assert!(matches!(
+            orbit_click(&mut last, click, UiPoint::new(201.0, 151.0), second, size),
+            Some(Message::PickOrbitPoint([201.0, 151.0], _))
+        ));
+        // A third click starts a new pair.
+        assert!(orbit_click(&mut last, click, start, second, size).is_none());
+        // A drag in between is no click.
+        let mut last = None;
+        assert!(orbit_click(&mut last, click, start, first, size).is_none());
+        assert!(orbit_click(&mut last, click, UiPoint::new(260.0, 150.0), second, size).is_none());
+        assert!(orbit_click(&mut last, click, start, second, size).is_none());
+        // Measuring keeps its own clicks.
+        let measuring = DragState {
+            mode: DragMode::MeasurePending,
+            ..click
+        };
+        let mut last = None;
+        assert!(orbit_click(&mut last, measuring, start, first, size).is_none());
+        assert!(orbit_click(&mut last, measuring, start, second, size).is_none());
     }
 
     #[test]
