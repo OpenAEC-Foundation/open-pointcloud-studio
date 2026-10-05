@@ -14,6 +14,8 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- Walking close to a floor, wall or other surface keeps loading its points. Before, the parts of a scan that reach behind the camera could be taken for out of view, so looking down at a floor from close by showed nothing, and parts wholly behind the camera were read in their place.
+
 ## 0.8.0 - 2026-10-03
 
 - **Section drawing** in the SECTION BOX group makes a 2D drawing at scale 1:1 of what the section box cuts and saves it as DXF or DWG: a plan from the slab under the top face of the box, or a vertical section from the slab behind one of its sides (#9, #11). The drawing holds the points of the slab from every visible scan, thinned to one per 5 mm, on layers per scan or per class, in millimetres or metres.

@@ -437,17 +437,23 @@ impl Projection {
     }
 
     pub fn project_unclipped(self, xyz: [f64; 3]) -> Option<(f32, f32, f64)> {
-        let relative = std::array::from_fn(|axis| xyz[axis] - self.center[axis]);
-        let depth = self.eye[2] - dot(relative, self.toward_camera);
-        if depth <= 0.01 {
+        let depth = self.depth(xyz);
+        if depth <= NEAR_DEPTH {
             return None;
         }
+        let (x, y) = self.screen_at(xyz, depth);
+        Some((x as f32, y as f32, depth))
+    }
+
+    /// Pixel position of a scene position at a known depth.
+    fn screen_at(self, xyz: [f64; 3], depth: f64) -> (f64, f64) {
+        let relative = std::array::from_fn(|axis| xyz[axis] - self.center[axis]);
         let x = self.width * 0.5
             + self.pan[0] as f64
             + (dot(relative, self.right) - self.eye[0]) * self.scale / depth;
         let y = self.height * 0.5 + self.pan[1] as f64
             - (dot(relative, self.up) - self.eye[1]) * self.scale / depth;
-        Some((x as f32, y as f32, depth))
+        (x, y)
     }
 
     /// Distance of a position in front of the eye along the viewing
@@ -457,33 +463,60 @@ impl Projection {
         self.eye[2] - dot(relative, self.toward_camera)
     }
 
+    /// Least and most x and y on screen of the part of a box in front of
+    /// the eye; `None` when all of it lies behind. An edge that passes the
+    /// nearest drawn depth is cut there, so a box the eye stands in or next
+    /// to reaches as far across the screen as its part in front does: its
+    /// corners in front alone may all lie off one side of the screen while
+    /// the box fills the view.
     fn projected_extents(self, bounds: Bounds) -> Option<[f32; 4]> {
-        let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
-        let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
-        for corner in 0..8 {
-            let xyz = std::array::from_fn(|axis| {
+        let corners: [[f64; 3]; 8] = std::array::from_fn(|corner| {
+            std::array::from_fn(|axis| {
                 if corner & (1 << axis) == 0 {
                     bounds.min[axis]
                 } else {
                     bounds.max[axis]
                 }
-            });
-            if let Some((x, y, _)) = self.project_unclipped(xyz) {
-                if x.is_finite() && y.is_finite() {
-                    min_x = min_x.min(x);
-                    max_x = max_x.max(x);
-                    min_y = min_y.min(y);
-                    max_y = max_y.max(y);
+            })
+        });
+        let depths = corners.map(|corner| self.depth(corner));
+        let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
+        let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
+        let mut include = |xyz: [f64; 3], depth: f64| {
+            let (x, y) = self.screen_at(xyz, depth);
+            let (x, y) = (x as f32, y as f32);
+            if x.is_finite() && y.is_finite() {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+        };
+        for corner in 0..8 {
+            let near = depths[corner];
+            if near > NEAR_DEPTH {
+                include(corners[corner], near);
+            }
+            // Each edge once, from its corner with the axis bit clear.
+            for axis in (0..3).filter(|axis| corner & (1 << axis) == 0) {
+                let other = corner | (1 << axis);
+                let far = depths[other];
+                if (near > NEAR_DEPTH) != (far > NEAR_DEPTH) {
+                    let along = (NEAR_DEPTH - near) / (far - near);
+                    let cut = std::array::from_fn(|index| {
+                        corners[corner][index]
+                            + (corners[other][index] - corners[corner][index]) * along
+                    });
+                    include(cut, NEAR_DEPTH);
                 }
             }
         }
         min_x.is_finite().then_some([min_x, max_x, min_y, max_y])
     }
 
+    /// Size on screen of a box, `None` when none of it is in view.
     pub fn screen_span(self, bounds: Bounds) -> Option<f32> {
-        let Some([min_x, max_x, min_y, max_y]) = self.projected_extents(bounds) else {
-            return Some(f32::MAX);
-        };
+        let [min_x, max_x, min_y, max_y] = self.projected_extents(bounds)?;
         if max_x < 0.0 || min_x > self.width as f32 || max_y < 0.0 || min_y > self.height as f32 {
             return None;
         }
@@ -493,9 +526,7 @@ impl Projection {
     /// Pixel area covered by a projected node after clipping to the viewport.
     /// Used to share a bounded LOD budget between open scans.
     pub fn screen_coverage(self, bounds: Bounds) -> Option<f32> {
-        let Some([min_x, max_x, min_y, max_y]) = self.projected_extents(bounds) else {
-            return Some((self.width * self.height).max(1.0) as f32);
-        };
+        let [min_x, max_x, min_y, max_y] = self.projected_extents(bounds)?;
         if max_x < 0.0 || min_x > self.width as f32 || max_y < 0.0 || min_y > self.height as f32 {
             return None;
         }
@@ -514,28 +545,7 @@ impl Projection {
     /// Cells a box can reach on that grid, as the first and last column and
     /// the first and last row. `None` when the box lies outside the viewport.
     pub fn grid_rect(self, bounds: Bounds, grid: usize) -> Option<[usize; 4]> {
-        let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
-        let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
-        for corner in 0..8 {
-            let xyz = std::array::from_fn(|axis| {
-                if corner & (1 << axis) == 0 {
-                    bounds.min[axis]
-                } else {
-                    bounds.max[axis]
-                }
-            });
-            match self.project_unclipped(xyz) {
-                Some((x, y, _)) if x.is_finite() && y.is_finite() => {
-                    min_x = min_x.min(x);
-                    max_x = max_x.max(x);
-                    min_y = min_y.min(y);
-                    max_y = max_y.max(y);
-                }
-                // A corner behind the eye, as when walking inside the box,
-                // leaves the outline unknown: any cell may hold its points.
-                _ => return Some([0, grid - 1, 0, grid - 1]),
-            }
-        }
+        let [min_x, max_x, min_y, max_y] = self.projected_extents(bounds)?;
         if max_x < 0.0 || min_x >= self.width as f32 || max_y < 0.0 || min_y >= self.height as f32 {
             return None;
         }
@@ -547,6 +557,10 @@ impl Projection {
         ])
     }
 }
+
+/// Nearest depth in front of the eye that is drawn: the shaders and
+/// `Projection::project_unclipped` leave out what is nearer.
+const NEAR_DEPTH: f64 = 0.01;
 
 /// Column or row of a pixel coordinate, kept inside the grid.
 fn grid_index(pixel: f32, size: f64, grid: usize) -> usize {
@@ -1712,6 +1726,47 @@ mod tests {
         assert!(zoomed.screen_coverage(node).unwrap() > overview.screen_coverage(node).unwrap());
         assert!(panned.screen_span(node).is_none());
         assert!(panned.screen_coverage(node).is_none());
+    }
+
+    #[test]
+    fn boxes_reaching_behind_the_eye_are_measured_by_their_part_in_front() {
+        // A floor of 100 by 100 m, seen from 5 cm above it, ahead and down.
+        let floor = Bounds {
+            min: [0.0, 0.0, -0.1],
+            max: [100.0, 100.0, 0.0],
+        };
+        let mut view = crate::station_photos::WalkView::new([50.0, 50.0, 0.05], 0.0);
+        view.pitch = -0.6;
+        let size = iced::Size::new(800.0, 600.0);
+        let projection = Projection::from_eye(
+            floor,
+            view.eye,
+            view.basis(),
+            view.focal(size),
+            800.0,
+            600.0,
+        );
+        // The floor fills the view up to its far edge just under the
+        // horizon, although its far corners lie above the view and its near
+        // corners behind the eye.
+        assert!(projection.screen_span(floor).unwrap() > 600.0);
+        let coverage = projection.screen_coverage(floor).unwrap();
+        assert!(coverage > 800.0 * 600.0 * 0.95, "{coverage}");
+        // The part right in front of the eye is large on screen.
+        let ahead = Bounds {
+            min: [49.0, 49.0, -0.1],
+            max: [51.0, 51.0, 0.0],
+        };
+        assert!(projection.screen_span(ahead).unwrap() > 400.0);
+        assert!(projection.screen_coverage(ahead).unwrap() > 800.0 * 100.0);
+        // A part wholly behind the eye is out of view.
+        let behind = Bounds {
+            min: [10.0, 40.0, -0.1],
+            max: [20.0, 60.0, 0.0],
+        };
+        assert_eq!(projection.screen_span(behind), None);
+        assert_eq!(projection.screen_coverage(behind), None);
+        assert_eq!(projection.grid_rect(behind, 16), None);
     }
 
     #[test]

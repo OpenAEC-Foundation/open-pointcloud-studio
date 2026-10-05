@@ -12611,6 +12611,57 @@ mod lod_transition_tests {
     }
 
     #[test]
+    fn walking_close_over_a_floor_reads_the_nodes_in_front() {
+        let directory = tempfile::tempdir().unwrap();
+        let (cloud, tree) = leafy_scan(directory.path());
+        let total = cloud.points.len();
+        let leaf = total / 16;
+        // Half a unit above the floor, looking ahead and down along +X: the
+        // floor fills the view, and the first column of leaves lies behind.
+        let mut view = WalkView::new([200.0, 256.0, 0.5], 0.0);
+        view.pitch = -0.6;
+        let size = Size::new(800.0, 600.0);
+        let projection = Projection::from_eye(
+            cloud.bounds,
+            view.eye,
+            view.basis(),
+            view.focal(size),
+            size.width,
+            size.height,
+        );
+        let in_view = |records: &[IndexedPoint]| {
+            records
+                .iter()
+                .filter(|record| projection.project(record.point.xyz).is_some())
+                .count()
+        };
+        let seen = cloud
+            .points
+            .iter()
+            .filter(|point| projection.project(point.xyz).is_some())
+            .count();
+        assert!(seen > 10_000, "{seen}");
+        assert!(source_lod_coverage(projection, tree.root.bounds, None).is_some());
+
+        let span = |bounds| lod_node_span(CloudTransform::default(), None, projection, bounds);
+        let sample = tree.sample_lod_indexed(total, span).unwrap();
+        assert!(
+            in_view(&sample) * 2 > seen,
+            "{} of {seen}",
+            in_view(&sample)
+        );
+        assert!(sample.len() <= total - 4 * leaf, "{}", sample.len());
+
+        // Walking reads the leaves in view exactly.
+        let mut walking = refinement_of(Arc::clone(&tree), projection, total);
+        walking.deep_zoom = true;
+        assert!(walking.advance().unwrap().is_none());
+        let exact = &walking.finish()[0].1;
+        assert_eq!(exact.len(), seen);
+        assert_eq!(in_view(exact), seen);
+    }
+
+    #[test]
     fn first_pass_is_bound_by_the_previews_of_each_cloud() {
         let weights = [(900.0, 50_000_000), (100.0, 50_000_000)];
         let open = distribute_lod_budget(1_000_000, &weights);
