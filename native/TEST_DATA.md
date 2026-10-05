@@ -1099,11 +1099,11 @@ On 5 October 2026, the public nine-station E57 sample of 46,589,344 points,
 whose octree index had been built before, was meshed from the command line
 of a development build on a laptop with 8 logical processors and 13 GiB of
 memory; times are wall time and memory is the peak resident set of the
-process. A whole-scan 3D surface of at most 50,000 vertices, with a source
-share of 10 % and a minimum mesh size of 0.10 m, took 4.28 seconds at 96 MB
-when the points were read from the cached index, against 68.00 seconds at
-95 MB when the compressed E57 was decoded again; both results had 50,000
-vertices and about 128,500 triangles. A whole-scan closed mesh with voxels
+process. A whole-scan 3D surface of at most 50,000 vertices with a minimum
+mesh size of 0.10 m took 4.28 seconds at 96 MB when the points were read
+from the cached index, against 68.00 seconds at 95 MB when the compressed
+E57 was decoded again; both results had 50,000 vertices and about 128,500
+triangles. A whole-scan closed mesh with voxels
 of 0.10 m took 28.02 seconds at 766 MB from every source point (419,365
 vertices, 793,319 triangles) and 12.56 seconds at 602 MB from a 10 % source
 share (265,761 vertices, 488,157 triangles). For a box of 10 × 15 × 8 m

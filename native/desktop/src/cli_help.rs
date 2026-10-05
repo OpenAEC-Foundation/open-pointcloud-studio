@@ -102,7 +102,7 @@ pub const MODES: &[Mode] = &[
     Mode {
         flag: "--surface",
         short: None,
-        arguments: "INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--sample-percent P] [--mesh-size SIZE]",
+        arguments: "INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]",
         description: key("Writes a 3D surface mesh of a scan."),
     },
     Mode {

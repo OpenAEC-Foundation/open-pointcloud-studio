@@ -22,8 +22,6 @@ pub struct SurfaceMeshConfig {
     pub max_vertices: usize,
     pub neighbors: usize,
     pub max_edge_factor: f64,
-    /// Percentage of eligible source points considered before the bounded reservoir.
-    pub sample_percent: f64,
     /// Minimum voxel width in source units; zero lets the vertex budget choose it.
     pub mesh_size: f64,
 }
@@ -34,7 +32,6 @@ impl Default for SurfaceMeshConfig {
             max_vertices: 50_000,
             neighbors: 12,
             max_edge_factor: 4.0,
-            sample_percent: 100.0,
             mesh_size: 0.0,
         }
     }
@@ -55,14 +52,6 @@ impl SurfaceMeshConfig {
         if !self.max_edge_factor.is_finite() || self.max_edge_factor <= 0.0 {
             return Err(LoadError::InvalidData(
                 "3D surface edge factor must be finite and positive".into(),
-            ));
-        }
-        if !self.sample_percent.is_finite()
-            || !(0.0..=100.0).contains(&self.sample_percent)
-            || self.sample_percent == 0.0
-        {
-            return Err(LoadError::InvalidData(
-                "3D surface sample percent must be >0 and <=100".into(),
             ));
         }
         if !self.mesh_size.is_finite() || self.mesh_size < 0.0 {
@@ -366,6 +355,8 @@ fn ordinal_hash(ordinal: u64) -> u64 {
     hash ^ (hash >> 31)
 }
 
+/// Whether the point with this ordinal is in a share of `percent` of a
+/// source: the same points on every run, spread over the whole source.
 pub(crate) fn sampled_ordinal(ordinal: u64, percent: f64) -> bool {
     if percent >= 100.0 {
         return true;
@@ -535,9 +526,6 @@ fn mesh_surface_obj_inner(
             ))?;
         }
         if !include(ordinal, &point) {
-            return Ok(());
-        }
-        if !sampled_ordinal(ordinal, config.sample_percent) {
             return Ok(());
         }
         if !point.xyz.iter().all(|value| value.is_finite()) {

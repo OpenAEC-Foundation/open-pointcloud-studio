@@ -302,7 +302,7 @@ Limits in the application:
 | Mesh | 4,000,000 vertices and 8,000,000 triangles, for a mesh file and for a mesh job alike. Such a mesh takes about 0.25 GB of memory, 0.55 GB while it is shown, and up to 0.9 GB for a moment while a file of that size is opened |
 | Meshes shown together | About 5.6 million vertices and 22 million triangles: what fits in the two buffers of 256 MiB each that the graphics card takes for them. One mesh always fits; one that does not fit beside the others is held, and can be saved, but is not drawn |
 | Terrain mesh | 100,000 vertices |
-| 3D surface | 3 to 1,000,000 vertices (50,000 by default), a source share above 0 to 100%, and an optional minimum mesh voxel size |
+| 3D surface | 3 to 1,000,000 vertices (50,000 by default), and an optional minimum mesh size |
 | Closed mesh | Voxels of 0.005 to 0.5 m; a source share above 0 to 100%; gaps closed up to 3.2 m and at most 32 voxels; a scan without an index up to 5,000,000 points. About 2 GB of memory for the blocks in work |
 | Detected faces | Distance tolerance 1 to 500 mm, angle tolerance 1 to 45°, smallest face 0.01 to 10,000 m². A working set of 1,500,000 voxels of 30 mm, beyond which the voxels double; at most 4,096 faces per job, of which the block lists the 200 largest flat faces and the 200 largest cylinders; cylinders with a radius of 0.01 to 1 m |
 | 3D BAG download | 2 by 2 km and about 5,000 buildings |
@@ -329,7 +329,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf\|.dwg [--view plan\|front\|back\|left\|right] [--rotation DEGREES] [--thickness METRES] [--units mm\|m] [--fill on\|off]` | Draws the slab behind one face of a box in a scan as a 2D drawing in DXF or DWG: a plan with a slab of 0.10 m in millimetres unless the options say otherwise |
 | `--merge OUTPUT.laz INPUT1.las INPUT2.laz [...]` | Merges LAS and LAZ scans into one file |
 | `--mesh INPUT OUTPUT.obj` | Writes a terrain mesh of a scan |
-| `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--sample-percent P] [--mesh-size SIZE]` | Writes a 3D surface mesh of a scan; reuses a cached octree when available |
+| `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]` | Writes a 3D surface mesh of a scan; reads the points from the index of the scan when it has one |
 | `--closed-mesh INPUT OUTPUT.obj\|.ply\|.stl\|.dxf\|.dwg\|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic\|centre\|upward]` | Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY, STL, DXF, DWG or IFC; `P` selects a deterministic source share (100% by default) |
 | `--faces INPUT OUTPUT.json\|.obj\|.dxf\|.dwg\|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on\|off]` | Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON, OBJ, DXF, DWG or IFC: with a distance tolerance of 0.02 m, an angle tolerance of 10 degrees, faces from 0.25 m² and cylinders on unless the options say otherwise |
 | `--mesh-export INPUT OUTPUT` | Writes the faces of a mesh file as OBJ, PLY, STL, DXF, DWG or IFC; the extension of `OUTPUT` chooses the format (`.obj`, `.ply`, `.stl`, `.dxf`, `.dwg`, `.ifc`) |

@@ -913,7 +913,7 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--surface")) {
-        let usage = "Usage: open-pointcloud-studio --surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--sample-percent P] [--mesh-size SIZE]";
+        let usage = "Usage: open-pointcloud-studio --surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]";
         let (Some(source), Some(destination)) = (args.next(), args.next()) else {
             eprintln!("{usage}");
             std::process::exit(2);
@@ -941,12 +941,6 @@ fn main() -> iced::Result {
                 Some("--edge-factor") => {
                     config.max_edge_factor = value.parse().unwrap_or_else(|_| {
                         eprintln!("invalid --edge-factor: {value}");
-                        std::process::exit(2)
-                    });
-                }
-                Some("--sample-percent") => {
-                    config.sample_percent = value.parse().unwrap_or_else(|_| {
-                        eprintln!("invalid --sample-percent: {value}");
                         std::process::exit(2)
                     });
                 }
@@ -1852,7 +1846,7 @@ struct Studio {
     decimation_stride: u64,
     thin_percent: u8,
     thin_pending: bool,
-    surface_settings: [String; 5],
+    surface_settings: [String; 4],
     translate_x: String,
     translate_y: String,
     translate_z: String,
@@ -2300,7 +2294,6 @@ impl Default for Studio {
                 surface.max_vertices.to_string(),
                 surface.neighbors.to_string(),
                 surface.max_edge_factor.to_string(),
-                surface.sample_percent.to_string(),
                 surface.mesh_size.to_string(),
             ],
             translate_x: "0".into(),
@@ -3134,11 +3127,7 @@ impl Studio {
             .trim()
             .parse()
             .map_err(|_| "3D surface edge factor must be a number".to_string())?;
-        let sample_percent = self.surface_settings[3]
-            .trim()
-            .parse()
-            .map_err(|_| "3D surface sample percent must be a number".to_string())?;
-        let mesh_size = self.surface_settings[4]
+        let mesh_size = self.surface_settings[3]
             .trim()
             .parse()
             .map_err(|_| "3D surface mesh size must be a number".to_string())?;
@@ -3146,7 +3135,6 @@ impl Studio {
             max_vertices,
             neighbors,
             max_edge_factor,
-            sample_percent,
             mesh_size,
         };
         config.validate().map_err(|error| error.to_string())?;
@@ -3158,7 +3146,6 @@ impl Studio {
             config.max_vertices.to_string(),
             config.neighbors.to_string(),
             config.max_edge_factor.to_string(),
-            config.sample_percent.to_string(),
             config.mesh_size.to_string(),
         ];
     }
@@ -3239,8 +3226,7 @@ impl Studio {
                             "max_vertices": self.surface_settings[0],
                             "neighbors": self.surface_settings[1],
                             "edge_factor": self.surface_settings[2],
-                            "sample_percent": self.surface_settings[3],
-                            "mesh_size": self.surface_settings[4],
+                            "mesh_size": self.surface_settings[3],
                         },
                         "mesh": self.mesh_job.as_ref().map(MeshJob::progress_value),
                         "merge": self.merge_job.as_ref().map(MergeJob::progress_value),
@@ -4023,14 +4009,12 @@ impl Studio {
                 max_vertices,
                 neighbors,
                 edge_factor,
-                sample_percent,
                 mesh_size,
             } => {
                 let config = SurfaceMeshConfig {
                     max_vertices,
                     neighbors,
                     max_edge_factor: edge_factor,
-                    sample_percent,
                     mesh_size,
                 };
                 match config.validate() {
@@ -4041,7 +4025,6 @@ impl Studio {
                                 "max_vertices": max_vertices,
                                 "neighbors": neighbors,
                                 "edge_factor": edge_factor,
-                                "sample_percent": sample_percent,
                                 "mesh_size": mesh_size,
                             }}),
                             Task::none(),
@@ -9541,16 +9524,10 @@ impl Studio {
                     |value| Message::SurfaceSetting(2, value),
                 ))
                 .push(opencad_properties::property_input(
-                    "Source %",
-                    "100",
-                    &self.surface_settings[3],
-                    |value| Message::SurfaceSetting(3, value),
-                ))
-                .push(opencad_properties::property_input(
                     "Mesh size",
                     "0 = auto",
-                    &self.surface_settings[4],
-                    |value| Message::SurfaceSetting(4, value),
+                    &self.surface_settings[3],
+                    |value| Message::SurfaceSetting(3, value),
                 ));
         }
         properties = properties.push(opencad_properties::section_header("Geometry"));
