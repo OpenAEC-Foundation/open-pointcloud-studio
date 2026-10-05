@@ -108,6 +108,11 @@ python3 native/packaging/gui-smoke.py native/target/release/open-pointcloud-stud
 5. Tell the website work when file names change: its download buttons and
    its release notes read the release.
 
+The release workflow gives every Linux package a build attestation
+(`actions/attest`) before it creates the release; the release notes and the
+README say how to check one with `gh attestation verify` and
+`--signer-workflow`, which a bare `--repo` would not check.
+
 Not done here, and said in the release notes: the macOS bundle is signed ad
 hoc and not notarised, so the first start has to be allowed by hand, and the
 Windows files are signed only when the signing service is configured.

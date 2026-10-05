@@ -76,6 +76,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # For the build attestations of the Linux packages: a token to sign
+      # them with, and the right to store them with the repository.
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.prepare.outputs.tag }}
@@ -102,6 +106,20 @@ jobs:
           [[ "$missing" -eq 0 ]]
           for sum in *.sha256; do sha256sum -c "$sum"; done
           ls -l
+      # Every Linux package gets a build attestation, signed through Sigstore
+      # and kept by GitHub. `gh attestation verify FILE --repo OWNER/REPO
+      # --signer-workflow OWNER/REPO/.github/workflows/release.yml` then
+      # checks that this workflow attested the file and that it has not
+      # changed since; its output names the tag or branch the run was for.
+      # It comes before anything is put on the release page, so a failure
+      # leaves nothing behind.
+      - name: Attest the Linux packages
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            assets/*.deb
+            assets/*.AppImage
+            assets/*_linux-*.tar.gz
       - name: Write the release notes
         env:
           WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}

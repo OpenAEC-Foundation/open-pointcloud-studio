@@ -7,6 +7,8 @@
 
 Every file has a `.sha256` beside it. Check a download with `sha256sum -c FILE.sha256` on Linux, `shasum -a 256 -c FILE.sha256` on macOS, or compare the output of `Get-FileHash FILE` on Windows.
 
+The Linux packages also carry a build attestation, kept by GitHub. With the GitHub CLI, signed in with `gh auth login`, `gh attestation verify FILE --repo OpenAEC-Foundation/open-pointcloud-studio --signer-workflow OpenAEC-Foundation/open-pointcloud-studio/.github/workflows/release.yml` checks that the release workflow of this project attested the file and that it has not been changed since; the output names the tag the workflow ran for.
+
 ### First start on macOS
 
 The application is not signed with a paid developer certificate and not notarised, so macOS refuses to start it the first time. It has to be allowed once.
@@ -30,6 +32,8 @@ The desktop application is GPL-3.0-only, the point-cloud core LGPL-3.0-or-later.
 ### Nederlands
 
 Kies het bestand voor je systeem uit de lijst hierboven: het bestand op `_x64-setup.exe` voor Windows, het `.dmg`-bestand voor macOS, en voor Linux het `.deb`-bestand (Debian, Ubuntu) of de `.AppImage` (elke distributie). De pakketten voor Linux op 64-bits ARM zijn experimenteel.
+
+De Linux-pakketten hebben ook een build-attestatie, bewaard door GitHub. Met de GitHub CLI, aangemeld met `gh auth login`, controleert `gh attestation verify BESTAND --repo OpenAEC-Foundation/open-pointcloud-studio --signer-workflow OpenAEC-Foundation/open-pointcloud-studio/.github/workflows/release.yml` dat de release-workflow van dit project het bestand heeft geattesteerd en dat het daarna niet is veranderd; de uitvoer noemt de tag waarvoor de workflow liep.
 
 Een gedownloade AppImage is nog niet uitvoerbaar. Maak het bestand één keer uitvoerbaar met `chmod +x open-pointcloud-studio_@VERSION@_amd64.AppImage`, of in de bestandsbeheerder onder Eigenschappen > Rechten, en start het daarna.
 

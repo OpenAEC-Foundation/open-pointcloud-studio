@@ -137,6 +137,18 @@ else
     wrong "the release notes start the AppImage without making it executable"
 fi
 
+# The Linux packages are attested by the release workflow; the downloads
+# part of the notes must say how to check one, in both languages, against
+# the release workflow. Only that part is searched: the changelog section
+# above it may quote the command as well.
+downloads=${notes#*## Downloads}
+signer="--signer-workflow OpenAEC-Foundation/open-pointcloud-studio/.github/workflows/release.yml"
+if grep -qF -- "gh attestation verify FILE --repo OpenAEC-Foundation/open-pointcloud-studio $signer" <<< "$downloads"     && grep -qF -- "gh attestation verify BESTAND --repo OpenAEC-Foundation/open-pointcloud-studio $signer" <<< "$downloads"; then
+    passed "the release notes say how to verify the attestation of a Linux package"
+else
+    wrong "the release notes do not say how to verify the attestation of a Linux package"
+fi
+
 missing=
 for name in $(bash "$packaging_dir/expected-assets.sh" "$number"); do
     grep -qF "$name" <<< "$notes" || missing="$missing $name"

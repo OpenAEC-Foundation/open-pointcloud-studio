@@ -99,6 +99,12 @@ Get-Content open-pointcloud-studio_0.9.1_x64-setup.exe.sha256
 
 On Linux and macOS the command answers `OK`. On Windows, compare the two outputs: the hash must be the same, apart from upper and lower case.
 
+From the first release after 0.9.1, the Linux packages also carry a build attestation, kept by GitHub. With the [GitHub CLI](https://cli.github.com/), signed in with `gh auth login`, this checks that the release workflow of this repository attested the file and that it has not been changed since; the output names the tag the workflow ran for:
+
+```bash
+gh attestation verify FILE --repo OpenAEC-Foundation/open-pointcloud-studio   --signer-workflow OpenAEC-Foundation/open-pointcloud-studio/.github/workflows/release.yml
+```
+
 ### Starting
 
 Start the application from the Start menu, the Applications folder or the menu of your desktop.

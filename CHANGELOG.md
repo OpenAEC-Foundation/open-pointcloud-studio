@@ -14,6 +14,8 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- The Linux packages on the release page carry a build attestation kept by GitHub: with the GitHub CLI, `gh attestation verify` checks that the project's release workflow attested the file and that it has not been changed since. The release notes and the README give the full command.
+
 ## 0.9.1 - 2026-10-05
 
 - The ribbon shows the main tool of each group as a large button with its icon above its name: Zoom all, Section box, Section drawing, Select, Distance, Area, Closed mesh and Build index. The other tools are small buttons with smaller icons, three to a column.
