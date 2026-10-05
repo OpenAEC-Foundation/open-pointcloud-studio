@@ -1858,7 +1858,7 @@ impl Studio {
     /// The button of the tool in the SURFACE group of the ribbon. It needs a
     /// scan to be active, and an open block can always be closed with it.
     pub(crate) fn closed_mesh_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
-        opencad_ribbon::RibbonItem::Small(crate::small_tool_button_when(
+        opencad_ribbon::RibbonItem::Large(crate::large_tool_button_when(
             "Closed mesh",
             Message::ClosedMesh(ClosedMeshAction::Toggle),
             self.closed_mesh.open,

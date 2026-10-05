@@ -8810,7 +8810,7 @@ impl Studio {
         let view = opencad_ribbon::render_group_items(
             "VIEW",
             vec![
-                RibbonItem::Small(small_tool_button("Zoom all", Message::ResetCamera, false)),
+                RibbonItem::Large(large_tool_button("Zoom all", Message::ResetCamera, false)),
                 RibbonItem::Small(small_tool_button_when(
                     "Fit stations",
                     Message::FitScanPoses,
@@ -8881,11 +8881,12 @@ impl Studio {
         let section = opencad_ribbon::render_group_items(
             "SECTION BOX",
             vec![
-                RibbonItem::Small(small_tool_button(
+                RibbonItem::Large(large_tool_button(
                     "Section box",
                     Message::SetSectionEnabled(!self.section_enabled),
                     self.section_enabled,
                 )),
+                self.drawing_ribbon_item(),
                 RibbonItem::Small(small_tool_button_when(
                     "Fit selection",
                     Message::FitSectionToSelection,
@@ -8897,7 +8898,6 @@ impl Studio {
                     Message::ResetSectionBox,
                     false,
                 )),
-                self.drawing_ribbon_item(),
             ],
         );
         // A running selection scan offers its cancel action instead of the zoom.
@@ -8911,29 +8911,35 @@ impl Studio {
                 selected > 0 && !self.selection_bounds_pending,
             )
         };
-        let selection = ribbon_group(
+        let selection = opencad_ribbon::render_group_items(
             "SELECTION",
-            column![
-                row![
-                    small_tool_button("Select", Message::SelectMode, self.plain_mouse()),
-                    small_tool_button("Pick point", Message::TogglePickSelect, self.pick_mode),
-                ]
-                .spacing(2),
-                row![
-                    small_tool_button("Clear", Message::ClearSelection, false),
-                    small_tool_button_when("Delete", Message::DeleteSelection, false, selected > 0),
-                ]
-                .spacing(2),
-                zoom_selection,
-            ]
-            .spacing(1)
-            .into(),
+            vec![
+                RibbonItem::Large(large_tool_button(
+                    "Select",
+                    Message::SelectMode,
+                    self.plain_mouse(),
+                )),
+                RibbonItem::Small(small_tool_button(
+                    "Pick point",
+                    Message::TogglePickSelect,
+                    self.pick_mode,
+                )),
+                RibbonItem::Small(small_tool_button("Clear", Message::ClearSelection, false)),
+                RibbonItem::Small(small_tool_button_when(
+                    "Delete",
+                    Message::DeleteSelection,
+                    false,
+                    selected > 0,
+                )),
+                RibbonItem::Small(zoom_selection),
+            ],
         );
         let mesh_idle = has_active
             && self.mesh_job.is_none()
             && !self.mesh_dialog_pending
             && !self.closed_mesh.is_running();
         let mut surface_tools = vec![
+            self.closed_mesh_ribbon_item(),
             RibbonItem::Small(small_tool_button_when(
                 "Terrain mesh",
                 Message::MeshRequest(MeshMode::Terrain),
@@ -8946,7 +8952,6 @@ impl Studio {
                 false,
                 mesh_idle,
             )),
-            self.closed_mesh_ribbon_item(),
             self.faces_ribbon_item(),
         ];
         if self.mesh_job.is_some() {
@@ -8958,9 +8963,9 @@ impl Studio {
         }
         // A running manual build offers its cancel action instead of the start.
         let build_index = if self.index_pending && !self.indexing_during_import() {
-            small_tool_button("Cancel index", Message::CancelIndex, false)
+            large_tool_button("Cancel index", Message::CancelIndex, false)
         } else {
-            small_tool_button_when(
+            large_tool_button_when(
                 "Build index",
                 Message::BuildIndex,
                 false,
@@ -8970,7 +8975,7 @@ impl Studio {
         let index = opencad_ribbon::render_group_items(
             "INDEX",
             vec![
-                RibbonItem::Small(build_index),
+                RibbonItem::Large(build_index),
                 RibbonItem::Small(small_tool_button_when(
                     "Refresh LOD",
                     Message::LoadDetail,
@@ -10154,6 +10159,41 @@ fn small_tool_button(
     small_tool_button_when(label, message, active, true)
 }
 
+fn large_tool_button(
+    label: &'static str,
+    message: Message,
+    active: bool,
+) -> Element<'static, Message> {
+    large_tool_button_when(label, message, active, true)
+}
+
+/// The main tool of a ribbon group: a large icon above its name, over the
+/// full height of the group.
+fn large_tool_button_when(
+    label: &'static str,
+    message: Message,
+    active: bool,
+    enabled: bool,
+) -> Element<'static, Message> {
+    let icon = tool_icon(&message);
+    button(
+        column![
+            icon_svg(icon, 32.0),
+            text(i18n::tr(label))
+                .size(11)
+                .align_x(iced::alignment::Horizontal::Center),
+        ]
+        .spacing(4)
+        .align_x(iced::Alignment::Center),
+    )
+    .on_press_maybe(enabled.then_some(message))
+    .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
+    .width(iced::Length::Fixed(74.0))
+    .height(Fill)
+    .padding([8, 4])
+    .into()
+}
+
 fn small_tool_button_when(
     label: &'static str,
     message: Message,
@@ -10162,7 +10202,7 @@ fn small_tool_button_when(
 ) -> Element<'static, Message> {
     let icon = tool_icon(&message);
     button(
-        row![icon_svg(icon, 24.0), text(i18n::tr(label)).size(12),]
+        row![icon_svg(icon, 18.0), text(i18n::tr(label)).size(12),]
             .spacing(6)
             .align_y(iced::Alignment::Center),
     )

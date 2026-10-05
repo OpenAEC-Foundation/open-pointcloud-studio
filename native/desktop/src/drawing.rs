@@ -1760,7 +1760,7 @@ impl Studio {
 
     /// The button of the tool in the SECTION BOX group of the ribbon.
     pub(crate) fn drawing_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
-        opencad_ribbon::RibbonItem::Small(crate::small_tool_button_when(
+        opencad_ribbon::RibbonItem::Large(crate::large_tool_button_when(
             "Section drawing",
             Message::Drawing(DrawingAction::Toggle),
             self.drawing.open,

@@ -469,7 +469,7 @@ impl MeasureTool {
     /// Distance, Area and Clear for the ribbon's measure group.
     pub fn ribbon(&self) -> Element<'static, Message> {
         let mode_button = |mode: MeasureMode| {
-            opencad_ribbon::RibbonItem::Small(crate::small_tool_button(
+            opencad_ribbon::RibbonItem::Large(crate::large_tool_button(
                 mode.label(),
                 Message::Measure(MeasureAction::Toggle(mode)),
                 self.mode == Some(mode),

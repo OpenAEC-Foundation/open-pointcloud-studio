@@ -449,6 +449,8 @@ mod tests {
         // main.rs
         ("small_tool_button", 0),
         ("small_tool_button_when", 0),
+        ("large_tool_button", 0),
+        ("large_tool_button_when", 0),
         ("small_color_button", 0),
         ("ribbon_group", 0),
         ("preset", 0),
