@@ -7,13 +7,16 @@
 //! - `frame`: the box around what was scanned, without stray points far
 //!   away, and the frame that every drawing of the building shares.
 //! - `survey`: one read of the whole scene into a volume of occupied cells
-//!   in that frame.
+//!   in that frame, and the footprint it suggests.
 
 pub mod frame;
 pub mod survey;
 
-pub use frame::{robust_bounds, BuildingFrame, RobustBounds, RobustBoundsConfig};
+pub use frame::{
+    building_frame, robust_bounds, second_direction, BuildingFrame, RobustBounds,
+    RobustBoundsConfig,
+};
 pub use survey::{
-    survey_scene, SceneSurvey, SurveyConfig, SurveyGrid, SurveyStats, SurveySummary,
-    DEFAULT_SURVEY_BUDGET,
+    survey_scene, Footprint, FootprintConfig, PlanRegion, SceneSurvey, SurveyConfig, SurveyGrid,
+    SurveyStats, SurveySummary, DEFAULT_SURVEY_BUDGET,
 };

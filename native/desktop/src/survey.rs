@@ -1,15 +1,16 @@
 //! The `--survey` mode of the command line: the preparation of Mesh to
 //! Plans on one scan file, without a window. It finds the box around the
-//! building without the stray points far out, reads the scene once into a
-//! volume of occupied cells and writes what it found as JSON.
+//! building without the stray points far out and the main direction of its
+//! walls, reads the scene once into a volume of occupied cells in that
+//! direction, proposes the footprint and writes what it found as JSON.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use pointcloud_core::plans::{
-    robust_bounds, survey_scene, BuildingFrame, RobustBounds, RobustBoundsConfig, SceneSurvey,
-    SurveyConfig,
+    building_frame, robust_bounds, second_direction, survey_scene, BuildingFrame, Footprint,
+    FootprintConfig, RobustBounds, RobustBoundsConfig, SceneSurvey, SurveyConfig,
 };
 use pointcloud_core::region_source::{resident_points, RegionSource, SourceTransform};
 use pointcloud_core::{Bounds, IndexConfig, IndexedPoint, LoadError, OctreeIndex, OrientedBox};
@@ -27,6 +28,7 @@ const VERSION: u32 = 1;
 struct Found {
     robust: RobustBounds,
     survey: SceneSurvey,
+    footprint: Footprint,
     seconds: Vec<(&'static str, f64)>,
 }
 
@@ -46,9 +48,13 @@ fn survey(sources: &[RegionSource<'_>]) -> Result<Found, LoadError> {
         .ok_or_else(|| LoadError::InvalidData("the scan holds no points".into()))?;
     lap("bounds", &mut seconds);
     let core = robust.bounds;
-    let center = core.center();
-    let frame = BuildingFrame::new(0.0, [center[0].round(), center[1].round()]);
-    let survey = survey_scene(
+    let frame =
+        building_frame(sources, core, &|_, _, _| true, &mut |_| Ok(()))?.unwrap_or_else(|| {
+            let center = core.center();
+            BuildingFrame::new(0.0, [center[0].round(), center[1].round()])
+        });
+    lap("frame", &mut seconds);
+    let mut survey = survey_scene(
         sources,
         OrientedBox::from(core),
         &frame,
@@ -57,9 +63,15 @@ fn survey(sources: &[RegionSource<'_>]) -> Result<Found, LoadError> {
         &mut |_| Ok(()),
     )?;
     lap("survey", &mut seconds);
+    let config = FootprintConfig::default();
+    let walls = survey.wall_columns(config.wall_height);
+    survey.frame.second_direction_deg = second_direction(&survey, &walls);
+    let footprint = survey.footprint_proposal(&config);
+    lap("footprint", &mut seconds);
     Ok(Found {
         robust,
         survey,
+        footprint,
         seconds,
     })
 }
@@ -86,17 +98,29 @@ fn file_json(source: &Path, points: u64, found: &Found) -> Value {
             "outside_groups": robust.outside_groups,
         },
         "frame": found.survey.frame,
-        "survey": found.survey.summary(),
+        "survey": found.survey.summary(Some(&found.footprint)),
+        "footprint": {
+            "area": found.footprint.area(),
+            "scene": found.footprint.regions.iter().map(|region| {
+                let scene = |ring: &Vec<[f64; 2]>| -> Vec<[f64; 2]> {
+                    ring.iter().map(|uv| found.survey.frame.to_scene_xy(*uv)).collect()
+                };
+                json!({
+                    "outer": scene(&region.outer),
+                    "holes": region.holes.iter().map(scene).collect::<Vec<_>>(),
+                })
+            }).collect::<Vec<_>>(),
+        },
         "seconds": seconds,
     })
 }
 
-/// The line `--survey` prints when it is done.
-fn summary_line(found: &Found, destination: &Path) -> String {
+/// The lines `--survey` prints when it is done.
+fn summary_lines(found: &Found, destination: &Path) -> String {
     let survey = &found.survey;
     let stats = &survey.stats;
     let total: f64 = found.seconds.iter().map(|(_, seconds)| seconds).sum();
-    format!(
+    let mut lines = vec![format!(
         "Survey written: {} of {} points in a grid of {} by {} by {} cells of {:.3} by {:.3} by {:.3} m, \
          {} occupied, {} noise cells in {} groups taken out, {} MB; {} points outside the box in {} groups; \
          {:.1} s -> {}",
@@ -116,6 +140,29 @@ fn summary_line(found: &Found, destination: &Path) -> String {
         found.robust.outside_groups,
         total,
         destination.display()
+    )];
+    let frame = &survey.frame;
+    lines.push(match frame.second_direction_deg {
+        Some(second) => format!(
+            "Main direction {:.2}°, second direction {second:.1}°",
+            frame.rotation_deg
+        ),
+        None => format!("Main direction {:.2}°", frame.rotation_deg),
+    });
+    let footprint = &found.footprint;
+    lines.push(format!(
+        "Footprint {:.1} m² in {} {}",
+        footprint.area(),
+        footprint.regions.len(),
+        if footprint.regions.len() == 1 {
+            "part"
+        } else {
+            "parts"
+        }
+    ));
+    lines.join(
+        "
+",
     )
 }
 
@@ -188,7 +235,7 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
     let text = serde_json::to_string_pretty(&file_json(&source, cloud.total_points, &found))
         .map_err(|error| failed(LoadError::InvalidData(error.to_string())))?;
     std::fs::write(&destination, text).map_err(|error| failed(error.into()))?;
-    Ok(summary_line(&found, &destination))
+    Ok(summary_lines(&found, &destination))
 }
 
 #[cfg(test)]
@@ -198,9 +245,11 @@ mod tests {
     /// A box-shaped building of two storeys of 3 m on a plot, turned by 25
     /// degrees, as the lines of an XYZ file: ground 0.3 m below the ground
     /// floor, facades, two floors and ceilings with slabs of 0.25 m, a roof,
-    /// and a few stray points far below. A point every 6 cm.
+    /// and a few stray points far below. A point every 4 cm: closer than the
+    /// columns of a survey, so that a face is one group of cells and no
+    /// noise.
     pub(super) fn building_xyz() -> String {
-        let spacing = 0.06;
+        let spacing = 0.04;
         let (length, width, wall) = (8.0, 5.0, 0.25);
         let mut points: Vec<[f64; 3]> = Vec::new();
         let steps = |from: f64, to: f64| {
@@ -270,7 +319,10 @@ mod tests {
         assert!(line.starts_with("Survey written: "), "{line}");
         assert!(line.contains("12 points outside the box in "), "{line}");
         assert!(
-            line.ends_with(&format!("-> {}", output.display())),
+            line.lines()
+                .next()
+                .unwrap()
+                .ends_with(&format!("-> {}", output.display())),
             "{line}"
         );
         let written: Value =
@@ -279,7 +331,7 @@ mod tests {
         assert_eq!(written["version"], 1);
         assert_eq!(written["source"], "building.xyz");
         let points = written["points"].as_u64().unwrap();
-        assert!(points > 50_000, "{points}");
+        assert!(points > 300_000, "{points}");
         // The box leaves the strays out and keeps the building.
         let core = &written["bounds"]["core"];
         let low = core["min"][2].as_f64().unwrap();
@@ -299,6 +351,34 @@ mod tests {
         assert!(survey["stats"]["occupied_cells"].as_u64().unwrap() > 10_000);
         assert!(survey["digest"].as_u64().is_some());
         assert!(written["seconds"]["total"].as_f64().unwrap() >= 0.0);
+        // Along the walls, turned by 25 degrees, with the footprint of 8 by
+        // 5 m.
+        let rotation = written["frame"]["rotation_deg"].as_f64().unwrap();
+        assert!((rotation - 25.0).abs() < 0.05, "{rotation}");
+        assert!(written["frame"]["second_direction_deg"].is_null());
+        assert!(
+            line.contains(
+                "
+Main direction 25.0"
+            ),
+            "{line}"
+        );
+        assert!(
+            line.contains(
+                "
+Footprint 4"
+            ),
+            "{line}"
+        );
+        let area = written["footprint"]["area"].as_f64().unwrap();
+        assert!(area > 40.0 && area < 41.5, "{area}");
+        let outline = written["survey"]["footprint"][0]["outer"]
+            .as_array()
+            .unwrap();
+        assert!(outline.len() >= 4 && outline.len() <= 8, "{outline:?}");
+        let corner = &written["footprint"]["scene"][0]["outer"][0];
+        assert!((corner[0].as_f64().unwrap() - 1_000.0).abs() < 10.0);
+        assert!((corner[1].as_f64().unwrap() - 2_000.0).abs() < 10.0);
 
         // The same file gives the same survey.
         let again = directory.path().join("again.json");

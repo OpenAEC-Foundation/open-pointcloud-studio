@@ -12,7 +12,14 @@
 //! After the read, groups of fewer than 20 occupied cells that touch no
 //! other (counting the 26 neighbours of a cell) are noise: stray points in
 //! the air and under the ground. They are taken out of the volume and
-//! counted.
+//! counted. A face whose points lie farther apart than the cells falls
+//! apart into such groups as well, so a scan needs a point every 5 cm or
+//! closer on the faces that matter.
+//!
+//! The footprint is proposed from the columns of the walls: those with at
+//! least 1 m of occupied cells. The gaps between them are closed, the rooms
+//! they enclose are filled where they have a ceiling, and the outline of
+//! what is large enough is reduced to straight segments.
 //!
 //! The volume of a scene of 30 by 60 by 35 m takes about 160 MB. Above the
 //! memory budget the columns become 7.5 cm, then 10 cm wide; a region that
@@ -23,7 +30,7 @@ use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 use super::frame::BuildingFrame;
-use crate::grid2d::{GridFrame, Mask};
+use crate::grid2d::{Connectivity, GridFrame, Mask, Region};
 use crate::region_source::{visit_region_parallel, RegionFilter, RegionProgress, RegionSource};
 use crate::{Bounds, LoadError, OrientedBox};
 
@@ -496,7 +503,7 @@ impl SceneSurvey {
 }
 
 /// What is kept of a survey with the project: the cells, the horizontal area
-/// per height and what was left out.
+/// per height, what was left out and the footprint.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SurveySummary {
     pub grid: SurveyGrid,
@@ -506,15 +513,18 @@ pub struct SurveySummary {
     pub stats: SurveyStats,
     /// See `SceneSurvey::digest`.
     pub digest: u64,
+    /// The outlines of the footprint in plan coordinates.
+    pub footprint: Vec<PlanRegion>,
 }
 
 impl SceneSurvey {
-    pub fn summary(&self) -> SurveySummary {
+    pub fn summary(&self, footprint: Option<&Footprint>) -> SurveySummary {
         SurveySummary {
             grid: self.grid,
             area_histogram: self.area_histogram(None),
             stats: self.stats,
             digest: self.digest(),
+            footprint: footprint.map_or_else(Vec::new, |footprint| footprint.regions.clone()),
         }
     }
 
@@ -533,6 +543,197 @@ impl SceneSurvey {
                 grid.origin[2] + grid.size[2] as f64 * grid.cell_z - self.frame.peil_z,
             ],
         }
+    }
+}
+
+/// How `SceneSurvey::footprint_proposal` finds the footprint. Lengths in
+/// metres, areas in square metres.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FootprintConfig {
+    /// A column is part of a wall from this much occupied height on.
+    pub wall_height: f64,
+    /// Gaps between walls up to this wide are closed.
+    pub close: f64,
+    /// An enclosed part between the walls is inside the building when most
+    /// of its columns reach this much higher than their lowest cell: a room
+    /// has a floor and a ceiling, a courtyard has the ground and the sky.
+    pub roofed_height: f64,
+    /// An enclosed part smaller than this is filled whatever is above it.
+    pub small_hole: f64,
+    /// Smaller parts of the footprint are left out.
+    pub min_area: f64,
+    /// The outlines are reduced to straight segments within this distance.
+    pub simplify: f64,
+}
+
+impl Default for FootprintConfig {
+    fn default() -> Self {
+        Self {
+            wall_height: 1.0,
+            close: 0.5,
+            roofed_height: 2.0,
+            small_hole: 1.0,
+            min_area: 20.0,
+            simplify: 0.05,
+        }
+    }
+}
+
+/// An area of the plan in plan coordinates: its outer ring counter-clockwise
+/// and the rings of its holes clockwise, each closed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanRegion {
+    pub outer: Vec<[f64; 2]>,
+    pub holes: Vec<Vec<[f64; 2]>>,
+}
+
+impl PlanRegion {
+    pub fn area(&self) -> f64 {
+        self.as_region().area()
+    }
+
+    pub fn contains(&self, uv: [f64; 2]) -> bool {
+        self.as_region().contains(uv)
+    }
+
+    fn as_region(&self) -> Region {
+        Region {
+            outer: self.outer.clone(),
+            holes: self.holes.clone(),
+        }
+    }
+}
+
+/// The footprint of a building on the plan.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Footprint {
+    /// The columns of the building on `SurveyGrid::plan_grid`.
+    pub mask: Mask,
+    /// Its outlines, the largest first.
+    pub regions: Vec<PlanRegion>,
+}
+
+impl Footprint {
+    pub fn area(&self) -> f64 {
+        self.regions.iter().map(PlanRegion::area).sum()
+    }
+
+    /// The footprint of outlines drawn or changed by hand, on the plan grid
+    /// of a survey: the columns whose middle lies inside.
+    pub fn from_regions(grid: &SurveyGrid, regions: Vec<PlanRegion>) -> Self {
+        let mask = Mask::from_fn(grid.plan_grid(), |x, y| {
+            let at = grid.column_center(x, y);
+            regions.iter().any(|region| region.contains(at))
+        });
+        Self { mask, regions }
+    }
+}
+
+impl SceneSurvey {
+    /// The occupied height of a column in cells: its occupied cells, and
+    /// every single empty cell between two of them, so that a face scanned
+    /// with its points a little farther apart than the cells counts whole.
+    pub fn occupied_height(&self, column: usize) -> u32 {
+        let mut height = 0;
+        let mut previous: Option<u32> = None;
+        for bin in self.column_bins(column) {
+            height += match previous {
+                Some(previous) if bin - previous == 2 => 2,
+                _ => 1,
+            };
+            previous = Some(bin);
+        }
+        height
+    }
+
+    /// The columns with an occupied height of at least `height`: walls, and
+    /// whatever stands as high, such as a tall cabinet or a tree trunk.
+    pub fn wall_columns(&self, height: f64) -> Mask {
+        let cells = (height / self.grid.cell_z).round().max(1.0) as u32;
+        Mask::from_fn(self.grid.plan_grid(), |x, y| {
+            self.occupied_height(self.grid.column(x, y)) >= cells
+        })
+    }
+
+    /// Whether the occupied cells of a column reach `cells` above its
+    /// lowest one.
+    fn roofed(&self, column: usize, cells: u32) -> bool {
+        match (self.lowest_bin(column), self.highest_bin(column)) {
+            (Some(low), Some(high)) => high - low >= cells,
+            _ => false,
+        }
+    }
+
+    /// The footprint the survey suggests: the columns of the walls, with
+    /// the gaps between them closed and the rooms they enclose filled, in
+    /// parts of at least `min_area`, and their outlines.
+    ///
+    /// A courtyard, enclosed but open to the sky, stays out. What stands as
+    /// high as a wall within `close` of the building, such as a hedge or a
+    /// parked van, joins it; what stands apart and is smaller than
+    /// `min_area` does not.
+    pub fn footprint_proposal(&self, config: &FootprintConfig) -> Footprint {
+        let frame = self.grid.plan_grid();
+        let mut mask = self.wall_columns(config.wall_height);
+        mask.close((config.close * 0.5 / frame.cell).round() as u32);
+
+        // The enclosed parts that are roofed, or small, are inside.
+        let roofed = (config.roofed_height / self.grid.cell_z).round() as u32;
+        let empty = Mask::from_fn(frame, |x, y| !mask.get(x as i64, y as i64));
+        let holes = empty.components(Connectivity::Four);
+        let mut edge = vec![false; holes.count()];
+        let mut covered = vec![0u32; holes.count()];
+        for y in 0..frame.height {
+            for x in 0..frame.width {
+                let column = frame.index(x, y);
+                let label = holes.labels[column];
+                if label == 0 {
+                    continue;
+                }
+                let hole = label as usize - 1;
+                if x == 0 || y == 0 || x + 1 == frame.width || y + 1 == frame.height {
+                    edge[hole] = true;
+                }
+                if self.roofed(column, roofed) {
+                    covered[hole] += 1;
+                }
+            }
+        }
+        let small = frame.cells_for_area(config.small_hole) as u32;
+        let fill: Vec<bool> = (0..holes.count())
+            .map(|hole| {
+                !edge[hole] && (holes.sizes[hole] < small || 2 * covered[hole] >= holes.sizes[hole])
+            })
+            .collect();
+        for y in 0..frame.height {
+            for x in 0..frame.width {
+                let label = holes.labels[frame.index(x, y)];
+                if label > 0 && fill[label as usize - 1] {
+                    mask.set(x, y, true);
+                }
+            }
+        }
+        mask.remove_small_components(frame.cells_for_area(config.min_area), Connectivity::Eight);
+
+        let mut regions: Vec<PlanRegion> = mask
+            .regions(Connectivity::Eight)
+            .iter()
+            .map(|region| {
+                let simplified = region.simplified(config.simplify);
+                PlanRegion {
+                    outer: simplified.outer,
+                    holes: simplified.holes,
+                }
+            })
+            .collect();
+        regions.sort_by(|a, b| {
+            b.area().total_cmp(&a.area()).then_with(|| {
+                let first = |region: &PlanRegion| region.outer.first().copied().unwrap_or_default();
+                let (a, b) = (first(a), first(b));
+                a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1]))
+            })
+        });
+        Footprint { mask, regions }
     }
 }
 
@@ -791,6 +992,10 @@ pub(crate) mod tests {
         assert_eq!(survey.lowest_bin(0), Some(3));
         assert_eq!(survey.highest_bin(0), Some(130));
         assert_eq!(survey.occupied_bins(0), 4);
+        // Two cells apart, the one between counts as well.
+        survey.occupancy[1] |= 1 << 2;
+        assert_eq!(survey.occupied_bins(0), 5);
+        assert_eq!(survey.occupied_height(0), 6);
         assert_eq!(survey.point_range(0), None);
     }
 }
