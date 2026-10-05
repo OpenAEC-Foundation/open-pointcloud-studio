@@ -188,12 +188,17 @@ fn build_document(
                 }
                 EntityType::Hatch(hatch)
             }
-            DrawingEntity::Text { at, height, value } => {
+            DrawingEntity::Text {
+                at,
+                height,
+                rotation,
+                value,
+            } => {
                 let at = scaled(*at);
-                EntityType::Text(
-                    Text::with_value(text(value), Vector3::new(at.x, at.y, 0.0))
-                        .with_height(height * factor),
-                )
+                let mut written = Text::with_value(text(value), Vector3::new(at.x, at.y, 0.0))
+                    .with_height(height * factor);
+                written.rotation = *rotation;
+                EntityType::Text(written)
             }
         };
         let common = built.common_mut();

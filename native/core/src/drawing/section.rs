@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use super::outline::{main_direction_of, trace_cut_regions, CutOutline, OutlineOptions};
+use super::outline::{main_direction_of, trace_cut_regions, CutOutline, CutRegion, OutlineOptions};
 use super::slab::{collect_slab, slab_from_section, Slab, SlabCut, SlabOptions, SlabPoint};
 use super::{
     class_point_layer, drawing_info_text, source_point_layer, write_drawing_progress, Drawing2d,
@@ -256,15 +256,29 @@ pub fn section_drawing(
     )?;
     let stats = section.stats();
     let SectionCut { slab, cut, outline } = section;
+    let regions = outline.map(|cut| cut.regions).unwrap_or_default();
+    let drawing = build_drawing(sources, &slab, &cut.points, regions, request)?;
+    Ok((drawing, stats))
+}
+
+/// The drawing of a slab: the thinned points on their layers, the regions
+/// of the filled cut with their outlines, the frame of the box and the info
+/// text.
+fn build_drawing(
+    sources: &[DrawingSource<'_>],
+    slab: &Slab,
+    points: &[SlabPoint],
+    regions: Vec<CutRegion>,
+    request: &DrawingRequest,
+) -> Result<Drawing2d, LoadError> {
     let mut drawing = Drawing2d::new(request.units);
     let mut layers = PointLayerTable::new(sources, request.point_layers);
-    for point in &cut.points {
+    for point in points {
         let layer = layers.layer(&mut drawing, point)?;
         let rgb = point.rgb.filter(|_| request.color == PointColor::Rgb);
         drawing.add_point(layer, point.uv, rgb);
     }
-    drop(cut);
-    for region in outline.into_iter().flat_map(|cut| cut.regions) {
+    for region in regions {
         drawing.add_cut_region(region.outer, region.holes)?;
     }
     let [min, max] = slab.extent;
@@ -276,7 +290,7 @@ pub fn section_drawing(
         height,
         &drawing_info_text(request.view, &slab.frame, slab.thickness, request.units),
     )?;
-    Ok((drawing, stats))
+    Ok(drawing)
 }
 
 /// Draw the slab behind one face of the section box and write it as DXF or
@@ -380,6 +394,55 @@ pub fn preview_cut_regions(
         regions,
         stats,
     })
+}
+
+/// As [`preview_cut_regions`], and also the drawing an export with the same
+/// request would write, built from the same read of the slab: the points
+/// are collected when the request asks for them, and the filled cut is in
+/// the drawing when it asks for a fill.
+pub fn preview_section_drawing(
+    sources: &[DrawingSource<'_>],
+    section: impl Into<OrientedBox>,
+    request: &DrawingRequest,
+    accept: &RegionFilter<'_>,
+    progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
+) -> Result<(CutPreview, Drawing2d), LoadError> {
+    DrawingRequest {
+        fill: true,
+        ..*request
+    }
+    .validate()?;
+    let section = cut_section(
+        sources,
+        section.into(),
+        request,
+        (request.points, true),
+        accept,
+        progress,
+    )?;
+    let stats = section.stats();
+    let SectionCut { slab, cut, outline } = section;
+    let regions = outline.map(|cut| cut.regions).unwrap_or_default();
+    let world = |ring: &[[f64; 2]]| -> Vec<[f64; 3]> {
+        ring.iter().map(|uv| slab.frame.to_world(*uv)).collect()
+    };
+    let preview_regions = regions
+        .iter()
+        .map(|region| PreviewRegion {
+            outer: world(&region.outer),
+            holes: region.holes.iter().map(|hole| world(hole)).collect(),
+        })
+        .collect();
+    let drawn = if request.fill { regions } else { Vec::new() };
+    let drawing = build_drawing(sources, &slab, &cut.points, drawn, request)?;
+    Ok((
+        CutPreview {
+            slab,
+            regions: preview_regions,
+            stats,
+        },
+        drawing,
+    ))
 }
 
 /// The turn of a section box that sets its axes along the walls inside it.

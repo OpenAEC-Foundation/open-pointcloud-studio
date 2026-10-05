@@ -7,6 +7,7 @@
 //! are made from the same numbers.
 
 mod outline;
+mod read;
 mod section;
 mod slab;
 mod write;
@@ -20,9 +21,11 @@ pub use outline::{
     trace_cut_regions, CutOutline, CutRegion, OutlineOptions, CUT_MIN_POINTS_PER_CELL,
     DEFAULT_MIN_WALL_LENGTH, MIN_CUT_HOLE_AREA, SQUARE_TOLERANCE,
 };
+pub use read::{read_drawing, ReadDrawing};
 pub use section::{
-    export_section_drawing, preview_cut_regions, section_drawing, wall_direction, CutPreview,
-    DrawingProgress, DrawingSource, DrawingStage, PreviewRegion, WallDirection,
+    export_section_drawing, preview_cut_regions, preview_section_drawing, section_drawing,
+    wall_direction, CutPreview, DrawingProgress, DrawingSource, DrawingStage, PreviewRegion,
+    WallDirection,
 };
 pub use slab::{
     collect_slab, slab_from_section, CutGrid, Slab, SlabCut, SlabOptions, SlabPoint,
@@ -494,10 +497,12 @@ pub enum DrawingEntity {
         outer: Vec<[f64; 2]>,
         holes: Vec<Vec<[f64; 2]>>,
     },
-    /// One line of text, `at` its lower left corner.
+    /// One line of text, `at` its lower left corner, turned by `rotation`
+    /// radians counter-clockwise about that corner.
     Text {
         at: [f64; 2],
         height: f64,
+        rotation: f64,
         value: String,
     },
 }
@@ -565,6 +570,7 @@ impl Drawing2d {
             DrawingEntity::Text {
                 at,
                 height,
+                rotation: 0.0,
                 value: single_line(value),
             },
         ));
