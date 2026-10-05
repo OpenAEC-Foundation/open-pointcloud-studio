@@ -34,9 +34,9 @@ pub const MIN_CAP_MAX_THICKNESS: f64 = 0.01;
 /// Directions of the lines that look for material, spread over half a turn.
 const DIRECTIONS: usize = 8;
 /// The grid over a face has at most this many cells along its longer side.
-const MAX_CELLS_PER_SIDE: f64 = 4096.0;
+const MAX_CELLS_PER_SIDE: f64 = 2048.0;
 /// Cells are never smaller than this, in scene units.
-const MIN_CELL: f64 = 0.002;
+const MIN_CELL: f64 = 0.005;
 /// A line counts a surface only when it crosses it at least this steeply:
 /// the cosine between the line and the normal of the surface.
 const MIN_FACING: f64 = 0.5;

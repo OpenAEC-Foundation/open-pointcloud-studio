@@ -137,23 +137,26 @@ fn vs_mesh(input: MeshInput) -> VertexOutput {
     output.normal = input.normal.xyz;
     output.point_depth = depth;
     output.point_world_radius = 0.0;
-    if depth <= 0.01 {
-        output.position = vec4<f32>(2.0, 2.0, 1.0, 1.0);
-        return output;
-    }
-    let local_x = camera.projection.x * 0.5 + camera.view.x
-        + (dot(input.relative.xyz, camera.right.xyz) - camera.right.w) * camera.projection.z / depth;
-    let local_y = camera.projection.y * 0.5 + camera.view.y
-        - (dot(input.relative.xyz, camera.up.xyz) - camera.up.w) * camera.projection.z / depth;
-    let physical = (camera.surface.xy + vec2<f32>(local_x, local_y)) * camera.view.w;
-    // The distance along the view is the w of the position, so that what
-    // the fragments receive is interpolated in perspective: the depth and
-    // the position stay exact inside a large triangle, as in a cap over a
-    // cut wall or a wall of a few triangles.
+    // The position on screen is the physical pixel
+    //   offset + across * scale / depth
+    // with the distance along the view as the w of the position, so that
+    // what the fragments receive is interpolated in perspective: the depth
+    // and the position stay exact inside a large triangle, as in a cap over
+    // a cut wall or a wall of a few triangles. Every component is then
+    // linear in the corner, so the device cuts a triangle off where it
+    // passes the near plane instead of losing it whole when a corner lies
+    // behind the eye.
+    let scale = camera.projection.z * camera.view.w;
+    let offset = (camera.surface.xy + camera.projection.xy * 0.5 + camera.view.xy) * camera.view.w;
+    let across = vec2<f32>(
+        dot(input.relative.xyz, camera.right.xyz) - camera.right.w,
+        camera.up.w - dot(input.relative.xyz, camera.up.xyz)
+    ) * scale;
+    let physical_w = offset * depth + across;
     output.position = vec4<f32>(
-        (physical.x / camera.surface.z * 2.0 - 1.0) * depth,
-        (1.0 - physical.y / camera.surface.w * 2.0) * depth,
-        clamp(depth / (camera.projection.w * 4.0), 0.0, 1.0) * depth,
+        physical_w.x / camera.surface.z * 2.0 - depth,
+        depth - physical_w.y / camera.surface.w * 2.0,
+        depth - 0.01,
         depth
     );
     return output;
