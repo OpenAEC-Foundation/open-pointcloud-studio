@@ -643,6 +643,684 @@ pub(crate) fn stray_points(bounds: Bounds, count: usize, seed: u64) -> Shape {
     shape
 }
 
+/// An interior wall of the generated building, the same on every storey. It
+/// runs along x or along y, centred on `at` across, from `from` to `to`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Partition {
+    pub(crate) along_x: bool,
+    pub(crate) at: f64,
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    /// A door opening of 2.1 m high: where it begins along the wall and its
+    /// width.
+    pub(crate) door: Option<[f64; 2]>,
+}
+
+/// The height of every door opening in an interior wall.
+pub(crate) const PARTITION_DOOR_HEIGHT: f64 = 2.1;
+
+/// An opening through an exterior wall of the generated building, on one
+/// storey or on every storey.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FacadeOpening {
+    pub(crate) wall: Wall,
+    pub(crate) storey: Option<usize>,
+    /// Where it begins along the facade, from the outer corner at the
+    /// lowest x (south and north) or the lowest y (east and west).
+    pub(crate) start: f64,
+    pub(crate) width: f64,
+    /// Height of its lower edge above the floor of the storey.
+    pub(crate) sill: f64,
+    pub(crate) height: f64,
+}
+
+/// A desk or a cabinet: a box on the floor of a storey, in the coordinates of
+/// the plan. A desk shows its top and its two end panels; a cabinet shows its
+/// sides and, unless it reaches the ceiling, its top, and hides what is
+/// behind and under it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Furniture {
+    pub(crate) storey: usize,
+    pub(crate) min: [f64; 2],
+    pub(crate) max: [f64; 2],
+    /// Height of the top above the floor; nothing reaches the ceiling.
+    pub(crate) height: Option<f64>,
+}
+
+/// A suspended ceiling under the slab of one storey, over a rectangle of
+/// the plan. The slab above it is not scanned.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoweredCeiling {
+    pub(crate) storey: usize,
+    pub(crate) min: [f64; 2],
+    pub(crate) max: [f64; 2],
+    /// Height above the floor of the storey.
+    pub(crate) height: f64,
+}
+
+/// A building of several storeys as a scan without stations: ground around
+/// it, facades with windows and an entrance, a roof, and per storey a floor,
+/// a ceiling, the inside faces of the exterior walls, interior walls with
+/// doors and furniture. Lengths are in metres in the coordinates of the plan:
+/// the outer faces of the facades run from 0 to `size` along x and y, and the
+/// floor of the lowest storey is at height 0. The whole is then turned about
+/// the vertical through the origin and moved, as `Shape::transformed` does.
+#[derive(Debug, Clone)]
+pub(crate) struct BuildingSpec {
+    /// Outside length (x) and width (y) of the footprint.
+    pub(crate) size: [f64; 2],
+    pub(crate) storeys: usize,
+    /// From floor to floor.
+    pub(crate) storey_height: f64,
+    /// Thickness of every floor slab and of the roof slab.
+    pub(crate) slab: f64,
+    pub(crate) exterior_wall: f64,
+    pub(crate) interior_wall: f64,
+    pub(crate) partitions: Vec<Partition>,
+    pub(crate) openings: Vec<FacadeOpening>,
+    pub(crate) lowered_ceiling: Option<LoweredCeiling>,
+    pub(crate) desks: Vec<Furniture>,
+    pub(crate) cabinets: Vec<Furniture>,
+    /// How far the ground lies below the floor of the lowest storey.
+    pub(crate) ground_drop: f64,
+    /// How far the ground reaches out from the facades.
+    pub(crate) site_margin: f64,
+    pub(crate) roof_scanned: bool,
+    /// A storey whose floor slopes up towards +x, in millimetres per metre,
+    /// about the middle of the building.
+    pub(crate) sloped_floor: Option<(usize, f64)>,
+    /// Stray points far below the ground, as a share of the points of the
+    /// building: most in one cluster, the rest spread out.
+    pub(crate) stray_share: f64,
+    /// Distance between neighbouring points on a face.
+    pub(crate) spacing: f64,
+    /// Standard deviation of the noise along the normal.
+    pub(crate) noise: f64,
+    pub(crate) rotation_degrees: f64,
+    pub(crate) translation: [f64; 3],
+    pub(crate) seed: u64,
+}
+
+impl Default for BuildingSpec {
+    /// 12 by 8 m, three storeys of 3.0 m with slabs of 0.25 m, exterior
+    /// walls of 300 mm and interior walls of 100 mm, a suspended ceiling at
+    /// 2.45 m in the west room of the ground floor, desks with their tops at
+    /// 0.75 m, a cabinet up to the ceiling and a counter of 1.2 m, ground
+    /// 0.45 m below the ground floor, 0.1 % stray points, a point every 6 cm,
+    /// turned by 17 degrees. It goes through `indexed_cloud`.
+    fn default() -> Self {
+        let te = 0.3;
+        let window = |wall, start| FacadeOpening {
+            wall,
+            storey: None,
+            start,
+            width: 1.2,
+            sill: 0.9,
+            height: 1.5,
+        };
+        let mut openings: Vec<FacadeOpening> = [1.9, 6.9, 9.4]
+            .into_iter()
+            .flat_map(|start| [window(Wall::South, start), window(Wall::North, start)])
+            .chain(
+                [1.4, 5.4]
+                    .into_iter()
+                    .flat_map(|start| [window(Wall::East, start), window(Wall::West, start)]),
+            )
+            .collect();
+        openings.push(FacadeOpening {
+            wall: Wall::South,
+            storey: Some(0),
+            start: 3.5,
+            width: 1.0,
+            sill: 0.0,
+            height: 2.2,
+        });
+        let desk = |storey, x: f64, y: f64| Furniture {
+            storey,
+            min: [x, y],
+            max: [x + 1.8, y + 0.9],
+            height: Some(0.75),
+        };
+        let mut desks = Vec::new();
+        for storey in 0..2 {
+            for x in [5.6, 8.0] {
+                for y in [0.8, 2.5, 4.5, 6.0] {
+                    desks.push(desk(storey, x, y));
+                }
+            }
+        }
+        desks.push(desk(2, 5.6, 0.8));
+        desks.push(desk(2, 5.6, 6.0));
+        Self {
+            size: [12.0, 8.0],
+            storeys: 3,
+            storey_height: 3.0,
+            slab: 0.25,
+            exterior_wall: te,
+            interior_wall: 0.1,
+            partitions: vec![
+                Partition {
+                    along_x: false,
+                    at: 5.0,
+                    from: te,
+                    to: 8.0 - te,
+                    door: Some([1.55, 0.9]),
+                },
+                Partition {
+                    along_x: true,
+                    at: 4.0,
+                    from: 5.05,
+                    to: 12.0 - te,
+                    door: Some([8.05, 0.9]),
+                },
+            ],
+            openings,
+            lowered_ceiling: Some(LoweredCeiling {
+                storey: 0,
+                min: [te, te],
+                max: [4.95, 8.0 - te],
+                height: 2.45,
+            }),
+            desks,
+            cabinets: vec![
+                // Up to the ceiling in the north-east corner.
+                Furniture {
+                    storey: 0,
+                    min: [10.7, 7.1],
+                    max: [12.0 - te, 8.0 - te],
+                    height: None,
+                },
+                // A counter against the west wall.
+                Furniture {
+                    storey: 1,
+                    min: [te, 2.8],
+                    max: [0.9, 5.2],
+                    height: Some(1.2),
+                },
+            ],
+            ground_drop: 0.45,
+            site_margin: 4.0,
+            roof_scanned: true,
+            sloped_floor: None,
+            stray_share: 0.001,
+            spacing: 0.06,
+            noise: 0.002,
+            rotation_degrees: 17.0,
+            translation: [85_000.0, 445_000.0, 1.2],
+            seed: 1,
+        }
+    }
+}
+
+impl BuildingSpec {
+    /// Height of the floor of a storey in the plan.
+    pub(crate) fn floor_z(&self, storey: usize) -> f64 {
+        storey as f64 * self.storey_height
+    }
+
+    /// Height of the underside of the slab above a storey.
+    pub(crate) fn ceiling_z(&self, storey: usize) -> f64 {
+        (storey + 1) as f64 * self.storey_height - self.slab
+    }
+
+    /// Height of the top of the roof.
+    pub(crate) fn roof_z(&self) -> f64 {
+        self.storeys as f64 * self.storey_height
+    }
+
+    pub(crate) fn ground_z(&self) -> f64 {
+        -self.ground_drop
+    }
+
+    /// A position of the plan in the scene.
+    pub(crate) fn to_scene(&self, local: [f64; 3]) -> [f64; 3] {
+        let (sin, cos) = self.rotation_degrees.to_radians().sin_cos();
+        [
+            cos * local[0] - sin * local[1] + self.translation[0],
+            sin * local[0] + cos * local[1] + self.translation[1],
+            local[2] + self.translation[2],
+        ]
+    }
+
+    /// The four outer corners of the footprint in the scene,
+    /// counter-clockwise from the one at the origin of the plan.
+    pub(crate) fn footprint(&self) -> [[f64; 2]; 4] {
+        let [length, width] = self.size;
+        [[0.0, 0.0], [length, 0.0], [length, width], [0.0, width]].map(|[x, y]| {
+            let at = self.to_scene([x, y, 0.0]);
+            [at[0], at[1]]
+        })
+    }
+
+    /// Height of the floor of a storey at a position of the plan, with its
+    /// slope.
+    fn floor_at(&self, storey: usize, x: f64) -> f64 {
+        let slope = match self.sloped_floor {
+            Some((sloped, per_metre)) if sloped == storey => per_metre * 0.001,
+            _ => 0.0,
+        };
+        self.floor_z(storey) + slope * (x - self.size[0] * 0.5)
+    }
+}
+
+/// Collects the faces of the generated building in the coordinates of its
+/// plan, and the boxes that hide what lies strictly inside them.
+struct BuildingFaces {
+    shape: Shape,
+    hidden: Vec<Bounds>,
+    spacing: f64,
+}
+
+impl BuildingFaces {
+    /// A rectangle from `origin` along two directions, of a size along each,
+    /// without the points inside the holes, which are given as ranges
+    /// `[a0, a1, b0, b1]` along the two directions.
+    fn face(
+        &mut self,
+        origin: [f64; 3],
+        along: [f64; 3],
+        up: [f64; 3],
+        size: [f64; 2],
+        normal: [f64; 3],
+        holes: &[[f64; 4]],
+    ) {
+        for a in lattice(0.0, size[0], self.spacing) {
+            for b in lattice(0.0, size[1], self.spacing) {
+                if holes
+                    .iter()
+                    .any(|hole| a > hole[0] && a < hole[1] && b > hole[2] && b < hole[3])
+                {
+                    continue;
+                }
+                self.shape.push(
+                    std::array::from_fn(|axis| origin[axis] + a * along[axis] + b * up[axis]),
+                    normal,
+                    u32::MAX,
+                );
+            }
+        }
+    }
+
+    /// A horizontal rectangle from `min` to `max` at a height, seen from
+    /// above or from below.
+    fn level(&mut self, min: [f64; 2], max: [f64; 2], z: f64, up: bool) {
+        let normal = [0.0, 0.0, if up { 1.0 } else { -1.0 }];
+        self.face(
+            [min[0], min[1], z],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [max[0] - min[0], max[1] - min[1]],
+            normal,
+            &[],
+        );
+    }
+
+    /// Drop every point strictly inside a hiding box.
+    fn hide(&mut self) {
+        let keep: Vec<bool> = self
+            .shape
+            .points
+            .iter()
+            .map(|point| {
+                !self.hidden.iter().any(|solid| {
+                    (0..3)
+                        .all(|axis| point[axis] > solid.min[axis] && point[axis] < solid.max[axis])
+                })
+            })
+            .collect();
+        let mut index = 0;
+        self.shape.points.retain(|_| {
+            index += 1;
+            keep[index - 1]
+        });
+        let mut index = 0;
+        self.shape.normals.retain(|_| {
+            index += 1;
+            keep[index - 1]
+        });
+        self.shape.station_of.truncate(self.shape.points.len());
+    }
+}
+
+/// The scan of the building of a `BuildingSpec`, in the scene. The same
+/// specification gives the same points in the same order.
+pub(crate) fn building(spec: &BuildingSpec) -> Shape {
+    let [length, width] = spec.size;
+    let te = spec.exterior_wall;
+    let ti = spec.interior_wall;
+    let top = spec.roof_z();
+    let ground = spec.ground_z();
+    let inner_min = [te, te];
+    let inner_max = [length - te, width - te];
+    let mut faces = BuildingFaces {
+        shape: Shape::default(),
+        hidden: Vec::new(),
+        spacing: spec.spacing,
+    };
+
+    // The ground around the building, up to the facades.
+    let margin = spec.site_margin;
+    for x in lattice(-margin, length + margin, spec.spacing) {
+        for y in lattice(-margin, width + margin, spec.spacing) {
+            if !(x > 0.0 && x < length && y > 0.0 && y < width) {
+                faces.shape.push([x, y, ground], [0.0, 0.0, 1.0], u32::MAX);
+            }
+        }
+    }
+    if spec.roof_scanned {
+        faces.level([0.0, 0.0], [length, width], top, true);
+    }
+
+    // Per facade: where its outer face lies, the axis it runs along, its
+    // length, and the direction out of the building.
+    let facades = [
+        (Wall::South, 0usize, 0.0, -1.0),
+        (Wall::East, 1, length, 1.0),
+        (Wall::North, 0, width, 1.0),
+        (Wall::West, 1, 0.0, -1.0),
+    ];
+    let point = |along_axis: usize, along: f64, across: f64, z: f64| {
+        let mut at = [0.0, 0.0, z];
+        at[along_axis] = along;
+        at[1 - along_axis] = across;
+        at
+    };
+    let direction = |axis: usize, sign: f64| {
+        let mut unit = [0.0; 3];
+        unit[axis] = sign;
+        unit
+    };
+    let storey_openings = |wall: Wall, storey: usize| {
+        spec.openings
+            .iter()
+            .filter(move |opening| {
+                opening.wall == wall && opening.storey.is_none_or(|only| only == storey)
+            })
+            .map(move |opening| {
+                let low = spec.floor_z(storey) + opening.sill;
+                (
+                    opening.start,
+                    opening.start + opening.width,
+                    low,
+                    low + opening.height,
+                )
+            })
+    };
+    for (wall, along_axis, face, outward) in facades {
+        let run = if along_axis == 0 { length } else { width };
+        let across_axis = 1 - along_axis;
+        // The outer face from the ground to the roof.
+        let holes: Vec<[f64; 4]> = (0..spec.storeys)
+            .flat_map(|storey| storey_openings(wall, storey))
+            .map(|(a0, a1, z0, z1)| [a0, a1, z0 - ground, z1 - ground])
+            .collect();
+        faces.face(
+            point(along_axis, 0.0, face, ground),
+            direction(along_axis, 1.0),
+            [0.0, 0.0, 1.0],
+            [run, top - ground],
+            direction(across_axis, outward),
+            &holes,
+        );
+        let inside = face - outward * te;
+        for storey in 0..spec.storeys {
+            let (floor, ceiling) = (spec.floor_z(storey), spec.ceiling_z(storey));
+            // The inner face of the storey, between the inside corners.
+            let holes: Vec<[f64; 4]> = storey_openings(wall, storey)
+                .map(|(a0, a1, z0, z1)| [a0 - te, a1 - te, z0 - floor, z1 - floor])
+                .collect();
+            faces.face(
+                point(along_axis, te, inside, floor),
+                direction(along_axis, 1.0),
+                [0.0, 0.0, 1.0],
+                [run - 2.0 * te, ceiling - floor],
+                direction(across_axis, -outward),
+                &holes,
+            );
+            // The reveals of the openings, through the wall.
+            for (a0, a1, z0, z1) in storey_openings(wall, storey) {
+                let (near, far) = (face.min(inside), face.max(inside));
+                for (along, side) in [(a0, 1.0), (a1, -1.0)] {
+                    faces.face(
+                        point(along_axis, along, near, z0),
+                        direction(across_axis, 1.0),
+                        [0.0, 0.0, 1.0],
+                        [far - near, z1 - z0],
+                        direction(along_axis, side),
+                        &[],
+                    );
+                }
+                for (z, side) in [(z0, 1.0), (z1, -1.0)] {
+                    faces.face(
+                        point(along_axis, a0, near, z),
+                        direction(along_axis, 1.0),
+                        direction(across_axis, 1.0),
+                        [a1 - a0, far - near],
+                        [0.0, 0.0, side],
+                        &[],
+                    );
+                }
+            }
+        }
+    }
+
+    // A box that hides what lies strictly inside it; `wide` reaches a hair
+    // past the faces that touch the inside of an exterior wall, so that the
+    // part of that wall behind it is hidden too.
+    let wide = |min: [f64; 2], max: [f64; 2], low: f64, high: f64| {
+        let reach = |value: f64, wall: f64, out: f64| {
+            if (value - wall).abs() < 1e-9 {
+                wall + out * 1e-3
+            } else {
+                value
+            }
+        };
+        Bounds {
+            min: [
+                reach(min[0], inner_min[0], -1.0),
+                reach(min[1], inner_min[1], -1.0),
+                low,
+            ],
+            max: [
+                reach(max[0], inner_max[0], 1.0),
+                reach(max[1], inner_max[1], 1.0),
+                high,
+            ],
+        }
+    };
+
+    for storey in 0..spec.storeys {
+        let (floor, ceiling) = (spec.floor_z(storey), spec.ceiling_z(storey));
+        // The floor, which may slope along x.
+        for x in lattice(inner_min[0], inner_max[0], spec.spacing) {
+            let z = spec.floor_at(storey, x);
+            for y in lattice(inner_min[1], inner_max[1], spec.spacing) {
+                faces.shape.push([x, y, z], [0.0, 0.0, 1.0], u32::MAX);
+            }
+        }
+        faces.level(inner_min, inner_max, ceiling, false);
+        if let Some(lowered) = spec
+            .lowered_ceiling
+            .filter(|lowered| lowered.storey == storey)
+        {
+            let z = floor + lowered.height;
+            faces.level(lowered.min, lowered.max, z, false);
+            // The space above it, up to the slab, is not scanned.
+            let mut plenum = wide(lowered.min, lowered.max, z, ceiling + 1e-3);
+            for axis in 0..2 {
+                plenum.min[axis] -= 1e-3;
+                plenum.max[axis] += 1e-3;
+            }
+            faces.hidden.push(plenum);
+        }
+
+        for partition in &spec.partitions {
+            let (along_axis, across_axis) = if partition.along_x { (0, 1) } else { (1, 0) };
+            let (near, far) = (partition.at - ti * 0.5, partition.at + ti * 0.5);
+            let span = partition.to - partition.from;
+            let door = partition.door.map(|[start, width]| {
+                [
+                    start - partition.from,
+                    start + width - partition.from,
+                    0.0,
+                    PARTITION_DOOR_HEIGHT,
+                ]
+            });
+            let holes: Vec<[f64; 4]> = door.into_iter().collect();
+            for (across, side) in [(near, -1.0), (far, 1.0)] {
+                faces.face(
+                    point(along_axis, partition.from, across, floor),
+                    direction(along_axis, 1.0),
+                    [0.0, 0.0, 1.0],
+                    [span, ceiling - floor],
+                    direction(across_axis, side),
+                    &holes,
+                );
+            }
+            if let Some([start, door_width]) = partition.door {
+                let head = floor + PARTITION_DOOR_HEIGHT;
+                for (along, side) in [(start, 1.0), (start + door_width, -1.0)] {
+                    faces.face(
+                        point(along_axis, along, near, floor),
+                        direction(across_axis, 1.0),
+                        [0.0, 0.0, 1.0],
+                        [ti, PARTITION_DOOR_HEIGHT],
+                        direction(along_axis, side),
+                        &[],
+                    );
+                }
+                faces.face(
+                    point(along_axis, start, near, head),
+                    direction(along_axis, 1.0),
+                    direction(across_axis, 1.0),
+                    [door_width, ti],
+                    [0.0, 0.0, -1.0],
+                    &[],
+                );
+            }
+            // The wall itself, a hair longer than it is so that the faces
+            // it meets end at it, in pieces beside and above its door.
+            let mut pieces = Vec::new();
+            match partition.door {
+                Some([start, door_width]) => {
+                    pieces.push((partition.from - 1e-3, start, floor - 1e-3));
+                    pieces.push((start + door_width, partition.to + 1e-3, floor - 1e-3));
+                    pieces.push((start, start + door_width, floor + PARTITION_DOOR_HEIGHT));
+                }
+                None => pieces.push((partition.from - 1e-3, partition.to + 1e-3, floor - 1e-3)),
+            }
+            for (from, to, low) in pieces {
+                let mut solid = Bounds {
+                    min: [0.0, 0.0, low],
+                    max: [0.0, 0.0, ceiling + 1e-3],
+                };
+                solid.min[along_axis] = from;
+                solid.max[along_axis] = to;
+                solid.min[across_axis] = near;
+                solid.max[across_axis] = far;
+                faces.hidden.push(solid);
+            }
+        }
+
+        for desk in spec.desks.iter().filter(|desk| desk.storey == storey) {
+            let height = desk.height.unwrap_or(0.75);
+            faces.level(desk.min, desk.max, floor + height, true);
+            for (x, side) in [(desk.min[0], -1.0), (desk.max[0], 1.0)] {
+                faces.face(
+                    [x, desk.min[1], floor],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [desk.max[1] - desk.min[1], height - 0.02],
+                    [side, 0.0, 0.0],
+                    &[],
+                );
+            }
+        }
+
+        for cabinet in spec
+            .cabinets
+            .iter()
+            .filter(|cabinet| cabinet.storey == storey)
+        {
+            let high = cabinet.height.map_or(ceiling, |height| floor + height);
+            if cabinet.height.is_some() {
+                faces.level(cabinet.min, cabinet.max, high, true);
+            }
+            // The sides that do not stand against an exterior wall.
+            let against = |value: f64, wall: f64| (value - wall).abs() < 1e-9;
+            for (x, side, wall) in [
+                (cabinet.min[0], -1.0, inner_min[0]),
+                (cabinet.max[0], 1.0, inner_max[0]),
+            ] {
+                if !against(x, wall) {
+                    faces.face(
+                        [x, cabinet.min[1], floor],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                        [cabinet.max[1] - cabinet.min[1], high - floor],
+                        [side, 0.0, 0.0],
+                        &[],
+                    );
+                }
+            }
+            for (y, side, wall) in [
+                (cabinet.min[1], -1.0, inner_min[1]),
+                (cabinet.max[1], 1.0, inner_max[1]),
+            ] {
+                if !against(y, wall) {
+                    faces.face(
+                        [cabinet.min[0], y, floor],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                        [cabinet.max[0] - cabinet.min[0], high - floor],
+                        [0.0, side, 0.0],
+                        &[],
+                    );
+                }
+            }
+            faces.hidden.push(wide(
+                cabinet.min,
+                cabinet.max,
+                floor - 1e-3,
+                if cabinet.height.is_some() {
+                    high
+                } else {
+                    ceiling + 1e-3
+                },
+            ));
+        }
+    }
+    faces.hide();
+
+    let mut shape = faces
+        .shape
+        .scattered(spec.spacing * 0.5, spec.seed)
+        .with_noise(Noise::Gaussian(spec.noise), spec.seed.wrapping_add(1));
+    // Stray points far below the ground: most in one cluster, the rest
+    // spread under the whole site.
+    let strays = (shape.points.len() as f64 * spec.stray_share).round() as usize;
+    let clustered = strays * 7 / 10;
+    let deep = -9.7;
+    let cluster = stray_points(
+        Bounds {
+            min: [length * 0.5 - 1.0, width * 0.5 - 1.0, deep],
+            max: [length * 0.5 + 1.0, width * 0.5 + 1.0, deep + 0.5],
+        },
+        clustered,
+        spec.seed.wrapping_add(2),
+    );
+    let spread = stray_points(
+        Bounds {
+            min: [-margin, -margin, deep],
+            max: [length + margin, width + margin, ground - 1.5],
+        },
+        strays - clustered,
+        spec.seed.wrapping_add(3),
+    );
+    shape = shape.merged(cluster).merged(spread);
+    shape.transformed(spec.rotation_degrees, spec.translation)
+}
+
 /// Sources of this size and larger get a preview cache in the user's cache
 /// folder when they are opened; test files must stay below it.
 const PREVIEW_CACHE_BYTES: usize = 16 * 1024 * 1024;
@@ -1206,6 +1884,204 @@ mod tests {
         }
         assert_eq!(moved, 200);
         assert_eq!(wall.scattered(0.04, 3).points, scattered.points);
+    }
+
+    /// A scene position in the coordinates of the plan of a building.
+    fn in_plan(spec: &BuildingSpec, at: [f64; 3]) -> [f64; 3] {
+        let (sin, cos) = spec.rotation_degrees.to_radians().sin_cos();
+        let (dx, dy) = (at[0] - spec.translation[0], at[1] - spec.translation[1]);
+        [
+            cos * dx + sin * dy,
+            -sin * dx + cos * dy,
+            at[2] - spec.translation[2],
+        ]
+    }
+
+    #[test]
+    fn a_building_has_its_storeys_walls_furniture_ground_and_strays() {
+        let spec = BuildingSpec {
+            spacing: 0.05,
+            ..BuildingSpec::default()
+        };
+        let scan = building(&spec);
+        assert!(scan.stations.is_empty());
+        assert!(scan.station_of.iter().all(|station| *station == u32::MAX));
+        let plan: Vec<[f64; 3]> = scan.points.iter().map(|at| in_plan(&spec, *at)).collect();
+        let near = |value: f64, target: f64| (value - target).abs() < 0.012;
+        let count = |test: &dyn Fn(&[f64; 3], &[f64; 3]) -> bool| {
+            plan.iter()
+                .zip(&scan.normals)
+                .filter(|(at, normal)| test(at, normal))
+                .count()
+        };
+        let per_square_metre = 1.0 / (spec.spacing * spec.spacing);
+        // Turned by 17 degrees: the outer face of the south facade looks
+        // that far from -y.
+        let south = scan
+            .points
+            .iter()
+            .zip(&scan.normals)
+            .zip(&plan)
+            .find(|((_, _), at)| {
+                near(at[1], 0.0) && at[2] > 1.0 && at[2] < 2.0 && at[0] > 0.5 && at[0] < 1.5
+            })
+            .map(|((_, normal), _)| *normal)
+            .unwrap();
+        let (sin, cos) = 17f64.to_radians().sin_cos();
+        assert!((south[0] - sin).abs() < 1e-9 && (south[1] + cos).abs() < 1e-9);
+
+        // Three floors seen from above, the suspended ceiling and the roof,
+        // each about as large as it is.
+        let inner = (12.0 - 0.6) * (8.0 - 0.6);
+        for storey in 0..3 {
+            let floor = count(&|at, normal| near(at[2], spec.floor_z(storey)) && normal[2] > 0.9);
+            let expected = (inner - 1.4) * per_square_metre;
+            assert!(
+                (floor as f64) > 0.9 * expected && (floor as f64) < 1.08 * expected,
+                "{storey}: {floor} of {expected}"
+            );
+        }
+        let lowered = count(&|at, normal| near(at[2], 2.45) && normal[2] < -0.9);
+        assert!((lowered as f64 - 4.65 * 7.4 * per_square_metre).abs() < 0.05 * lowered as f64);
+        // Above it the slab is not scanned, beside it it is.
+        assert_eq!(
+            count(&|at, _| near(at[2], 2.75)
+                && at[0] > 0.4
+                && at[0] < 4.9
+                && at[1] > 0.4
+                && at[1] < 7.6),
+            0
+        );
+        assert!(count(&|at, normal| near(at[2], 2.75) && at[0] > 5.1 && normal[2] < -0.9) > 10_000);
+        let roof = count(&|at, normal| near(at[2], 9.0) && normal[2] > 0.9);
+        assert!((roof as f64 - 96.0 * per_square_metre).abs() < 0.03 * roof as f64);
+
+        // Exterior walls of 300 mm and interior walls of 100 mm: both faces
+        // at mid height of the ground floor.
+        for (axis, value) in [
+            (1, 0.0),
+            (1, 0.3),
+            (0, 4.95),
+            (0, 5.05),
+            (1, 3.95),
+            (1, 4.05),
+        ] {
+            assert!(
+                count(&|at, normal| near(at[axis], value)
+                    && normal[axis].abs() > 0.9
+                    && at[2] > 1.0
+                    && at[2] < 1.5)
+                    > 100,
+                "{axis} {value}"
+            );
+        }
+        // Desk tops at 0.75 m above two floors, and the counter at 1.2 m.
+        let desks = count(&|at, normal| near(at[2], 0.75) && normal[2] > 0.9);
+        assert!((desks as f64 - 8.0 * 1.62 * per_square_metre).abs() < 0.05 * desks as f64);
+        assert!(count(&|at, normal| near(at[2], 3.75) && normal[2] > 0.9) > 4_000);
+        assert!(count(&|at, normal| near(at[2], 4.2) && normal[2] > 0.9) > 400);
+        // The cabinet up to the ceiling hides the wall behind it.
+        assert_eq!(
+            count(&|at, _| near(at[1], 7.7) && at[0] > 10.75 && at[0] < 11.65 && at[2] < 2.7),
+            0
+        );
+        assert!(count(&|at, normal| near(at[1], 7.1) && normal[1] < -0.9 && at[2] > 2.6) > 30);
+        // A door through the interior wall and the entrance.
+        assert_eq!(
+            count(&|at, _| near(at[0], 4.95)
+                && at[1] > 1.6
+                && at[1] < 2.4
+                && at[2] > 0.05
+                && at[2] < 2.05),
+            0
+        );
+        assert_eq!(
+            count(&|at, _| near(at[1], 0.0)
+                && at[0] > 3.55
+                && at[0] < 4.45
+                && at[2] > 0.05
+                && at[2] < 2.15),
+            0
+        );
+
+        // Ground around the building and none inside it.
+        assert!(count(&|at, _| near(at[2], -0.45)) as f64 > 200.0 * per_square_metre);
+        assert_eq!(
+            count(&|at, _| at[2] < -0.1
+                && at[2] > -1.0
+                && at[0] > 0.1
+                && at[0] < 11.9
+                && at[1] > 0.1
+                && at[1] < 7.9),
+            0
+        );
+        // Stray points far below: a thousandth of the rest, mostly in one
+        // cluster near 9.7 m down.
+        let strays = count(&|at, _| at[2] < -1.0);
+        let rest = scan.points.len() - strays;
+        assert_eq!(strays, (rest as f64 * 0.001).round() as usize);
+        assert!(count(&|at, _| at[2] < -9.1) >= strays * 7 / 10);
+
+        // The same specification gives the same points; another seed moves
+        // them.
+        assert_eq!(building(&spec).points, scan.points);
+        let other = building(&BuildingSpec {
+            seed: 7,
+            ..spec.clone()
+        });
+        assert_eq!(other.points.len(), scan.points.len());
+        assert_ne!(other.points, scan.points);
+    }
+
+    #[test]
+    fn a_sloped_floor_rises_along_the_building() {
+        let spec = BuildingSpec {
+            spacing: 0.1,
+            sloped_floor: Some((1, 3.0)),
+            stray_share: 0.0,
+            noise: 0.0,
+            ..BuildingSpec::default()
+        };
+        let scan = building(&spec);
+        let floor: Vec<[f64; 3]> = scan
+            .points
+            .iter()
+            .zip(&scan.normals)
+            .map(|(at, normal)| (in_plan(&spec, *at), normal))
+            .filter(|(at, normal)| (at[2] - 3.0).abs() < 0.03 && normal[2] > 0.9)
+            .map(|(at, _)| at)
+            .collect();
+        assert!(floor.len() > 5_000);
+        for at in &floor {
+            // Scattering moves a point along the floor by up to 5 cm.
+            assert!((at[2] - (3.0 + 0.003 * (at[0] - 6.0))).abs() < 2e-4);
+        }
+    }
+
+    #[test]
+    fn the_default_building_goes_through_an_octree_index() {
+        let spec = BuildingSpec::default();
+        let scan = building(&spec);
+        let points = scan.cloud_points();
+        let indexed = indexed_cloud(&points, 4_096);
+        assert_eq!(indexed.cloud.total_points as usize, points.len());
+        let mut seen = 0usize;
+        indexed
+            .index
+            .visit_intersecting(
+                |_| true,
+                |record| {
+                    assert_eq!(record.point.xyz, points[record.ordinal as usize].xyz);
+                    seen += 1;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(seen, points.len());
+        // The footprint is where the building stands in the scene.
+        let corners = spec.footprint();
+        let at = spec.to_scene([12.0, 8.0, 0.0]);
+        assert!((corners[2][0] - at[0]).abs() < 1e-9 && (corners[2][1] - at[1]).abs() < 1e-9);
     }
 
     #[test]
