@@ -552,5 +552,18 @@
   "Name": "Naam",
   "section": "doorsnede",
   "Transform": "Transformeren",
-  "Advice": "Advies"
+  "Advice": "Advies",
+  "Create 2D plan / elevation / section…": "2D-plattegrond / aanzicht / doorsnede maken…",
+  "Create 2D plan / elevation / section": "2D-plattegrond / aanzicht / doorsnede maken",
+  "Section": "Doorsnede",
+  "Front": "Voor",
+  "Back": "Achter",
+  "Left": "Links",
+  "Right": "Rechts",
+  "Drawing": "Tekening",
+  "Based on": "Op basis van",
+  "Looking at": "Kijkend naar",
+  "Cut height (m)": "Snijhoogte (m)",
+  "Cut at (m)": "Snede op (m)",
+  "Create": "Maken"
 }

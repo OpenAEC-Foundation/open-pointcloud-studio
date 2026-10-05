@@ -73,6 +73,8 @@ pub(crate) enum DrawingSource {
     Export(PathBuf),
     /// A DXF or DWG file that was opened.
     File(PathBuf),
+    /// A drawing made with Create 2D plan / elevation / section, by name.
+    Sheet(String),
 }
 
 impl DrawingSource {
@@ -81,18 +83,22 @@ impl DrawingSource {
             Self::Preview => "preview",
             Self::Export(_) => "export",
             Self::File(_) => "file",
+            Self::Sheet(_) => "sheet",
         }
     }
 
     fn path(&self) -> Option<&Path> {
         match self {
-            Self::Preview => None,
+            Self::Preview | Self::Sheet(_) => None,
             Self::Export(path) | Self::File(path) => Some(path),
         }
     }
 
     /// What the header of the view says it shows.
     fn caption(&self) -> String {
+        if let Self::Sheet(name) = self {
+            return name.clone();
+        }
         match self.path().and_then(Path::file_name) {
             Some(name) => name.to_string_lossy().into_owned(),
             None => tr("Preview of the section drawing").to_owned(),
@@ -521,7 +527,7 @@ impl DrawingViewTool {
     pub(crate) fn set_scene(&mut self, scene: Arc<DrawScene>) {
         let same = |earlier: &Arc<DrawScene>| match (scene.source.path(), earlier.source.path()) {
             (Some(path), Some(other)) => path == other,
-            (None, None) => true,
+            (None, None) => earlier.source == scene.source,
             _ => false,
         };
         self.sheets.retain(|earlier| !same(earlier));

@@ -480,6 +480,9 @@ impl Scene {
 enum Target {
     Export(PathBuf, DrawingFormat),
     Preview,
+    /// A drawing for the Project Browser under this name: made as a preview
+    /// is, not written, and shown in the Drawing view.
+    Sheet(String),
 }
 
 impl Target {
@@ -487,6 +490,7 @@ impl Target {
         match self {
             Self::Export(..) => "export_drawing",
             Self::Preview => "preview_drawing",
+            Self::Sheet(_) => "create_sheet",
         }
     }
 }
@@ -548,7 +552,7 @@ fn run(
                     path: path.clone(),
                 })
             }
-            Target::Preview => pointcloud_core::preview_section_drawing(
+            Target::Preview | Target::Sheet(_) => pointcloud_core::preview_section_drawing(
                 sources,
                 scene.section,
                 &input.request,
@@ -743,7 +747,7 @@ impl DrawingJob {
             "operation": self.input.target.operation(),
             "path": match &self.input.target {
                 Target::Export(path, _) => Some(path),
-                Target::Preview => None,
+                Target::Preview | Target::Sheet(_) => None,
             },
             "view": self.input.request.view.key(),
             "stage": stage_key(progress.stage),
@@ -1129,6 +1133,11 @@ impl Studio {
     /// The section box and the visible layers, as a job reads them.
     fn drawing_scene(&self) -> Result<Scene, Refusal> {
         let section = self.section_box().ok_or(Refusal::NoSection)?;
+        self.drawing_scene_for(section)
+    }
+
+    /// The visible layers read through a box of its own.
+    fn drawing_scene_for(&self, section: OrientedBox) -> Result<Scene, Refusal> {
         // A layer that is still being read holds a cloud that was not checked
         // against its source. The core refuses it only when the read reaches
         // it, after every layer before it was read in full, and leaves it out
@@ -1343,6 +1352,44 @@ impl Studio {
             .any(|entry| camera_views::source_key(&entry.cloud.path) == destination)
     }
 
+    /// Make a drawing for the Project Browser from a box that Create 2D
+    /// plan / elevation / section worked out, with the other settings of the
+    /// Section drawing block. It shows in the Drawing view under its name.
+    pub(crate) fn create_sheet(
+        &mut self,
+        section: OrientedBox,
+        view: DrawingView,
+        thickness: Option<f64>,
+        name: String,
+    ) -> Task<Message> {
+        if self.drawing.busy() {
+            self.status = BUSY.into();
+            return Task::none();
+        }
+        let scene = match self.drawing_scene_for(section) {
+            Ok(scene) => scene,
+            Err(refusal) => {
+                self.status = refusal.status();
+                return Task::none();
+            }
+        };
+        let mut request = match self.drawing.settings.request() {
+            Ok(request) => request,
+            Err(reason) => {
+                self.status = reason;
+                return Task::none();
+            }
+        };
+        request.view = view;
+        request.thickness = thickness;
+        request.fill = DrawingRequest::for_view(view).fill;
+        // The block of the tool stays as it was: the dialog is the tool here.
+        let was_open = self.drawing.open;
+        let task = self.start_drawing_job(scene, request, Target::Sheet(name), None);
+        self.drawing.open = was_open;
+        task
+    }
+
     /// What a job needs from the window, or why it cannot start.
     fn drawing_start(&self) -> Result<(Scene, DrawingRequest), String> {
         if self.drawing.busy() {
@@ -1543,6 +1590,16 @@ impl Studio {
                     }
                 }
             }
+            (DrawingEnd::Preview(cut, scene), Target::Sheet(name)) => {
+                let mut named = (*scene).clone();
+                named.source = ViewSource::Sheet(name.clone());
+                built = Some((Arc::new(named), true));
+                Last::Previewed {
+                    request,
+                    slab,
+                    stats: cut.stats,
+                }
+            }
             (DrawingEnd::Cancelled, _) => Last::Cancelled { operation },
             (DrawingEnd::Failed(error), _) => Last::Failed { operation, error },
             // A worker answers in the kind it was asked for.
@@ -1564,8 +1621,13 @@ impl Studio {
             _ => None,
         };
         self.drawing.last = Some(last);
+        let sheet = matches!(job.input.target, Target::Sheet(_));
         if let Some((scene, exported)) = built {
             self.section_drawing_built(scene, exported);
+            if sheet {
+                self.drawing_view.shown = true;
+                self.file_open = false;
+            }
         }
         if let Some(path) = written {
             self.cad_file_written(&path);
@@ -1633,7 +1695,7 @@ impl Studio {
         self.drawing.settings = settings;
         let path = match &target {
             Target::Export(path, _) => Some(path.clone()),
-            Target::Preview => None,
+            Target::Preview | Target::Sheet(_) => None,
         };
         let id = self.record_api_job(json!({
             "state": "running",

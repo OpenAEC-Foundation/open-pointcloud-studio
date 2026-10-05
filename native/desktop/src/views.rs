@@ -1644,11 +1644,16 @@ impl Studio {
                         .style(flat),
                 ]
                 .spacing(4),
-            )
-            .padding(iced::Padding {
-                bottom: 4.0,
-                ..iced::Padding::ZERO
-            }),
+            ),
+            button(text(i18n::tr("Create 2D plan / elevation / section…")).size(11))
+                .on_press_maybe(
+                    self.active
+                        .is_some()
+                        .then_some(Message::Sheet(crate::sheet_dialog::SheetAction::Open)),
+                )
+                .style(flat)
+                .width(Fill),
+            container(iced::widget::Space::new(Fill, 4)),
         ]
         .spacing(0);
         let source = self.active_camera_source();

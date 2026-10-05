@@ -42,6 +42,7 @@ mod screenshot;
 mod sections;
 mod selection;
 mod settings_dialog;
+mod sheet_dialog;
 #[cfg(test)]
 mod shell_tests;
 mod station_photos;
@@ -1798,6 +1799,7 @@ enum Message {
     /// the orbit point.
     PickOrbitPoint([f32; 2], Size),
     Sections(sections::SectionAction),
+    Sheet(sheet_dialog::SheetAction),
     OrbitPointPicked(Option<[f64; 3]>),
     /// A single click at a pixel of the scene with no tool on: the point
     /// there becomes the selection, as with Pick point.
@@ -1960,6 +1962,7 @@ struct Studio {
     view_label: &'static str,
     views: views::ViewTool,
     sections: sections::SectionsTool,
+    sheet_dialog: Option<sheet_dialog::SheetDialog>,
     viewport_size: Size,
     ribbon_viewport: Option<(f32, f32, f32)>,
     file_open: bool,
@@ -2403,6 +2406,7 @@ impl Default for Studio {
             view_label: "ISOMETRIC",
             views: views::ViewTool::load(),
             sections: sections::SectionsTool::load(),
+            sheet_dialog: None,
             viewport_size: Size::new(915.0, 743.0),
             ribbon_viewport: None,
             file_open: false,
@@ -7946,6 +7950,7 @@ impl Studio {
             }
             Message::Views(action) => return self.update_views(action),
             Message::Sections(action) => return self.update_sections(action),
+            Message::Sheet(action) => return self.update_sheet_dialog(action),
             Message::ShowContextMenu(point) => self.context_menu = Some(point),
             Message::DismissContextMenu => self.context_menu = None,
             Message::ContextAction(action) => {
@@ -7984,6 +7989,9 @@ impl Studio {
             Message::Escape => {
                 if self.settings.is_some() {
                     self.settings_action(settings_dialog::SettingsAction::Cancel);
+                    return Task::none();
+                }
+                if self.sheet_dialog.take().is_some() {
                     return Task::none();
                 }
                 if self.file_open {
@@ -10034,7 +10042,7 @@ impl Studio {
             self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
         ]
         .height(Fill);
-        match self.settings_view() {
+        match self.settings_view().or_else(|| self.sheet_dialog_view()) {
             Some(dialog) => stack![window, dialog].into(),
             None => window.into(),
         }
@@ -12076,11 +12084,20 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     })
             {
                 mouse::Interaction::Pointer
-            } else if self.box_select || self.measure.mode.is_some() || self.annotate.tool.is_some()
+            } else if self.box_select
+                || self.pick_mode
+                || self.measure.mode.is_some()
+                || self.annotate.tool.is_some()
             {
                 mouse::Interaction::Crosshair
+            } else if _state
+                .drag
+                .is_some_and(|drag| matches!(drag.mode, DragMode::Orbit | DragMode::Pan))
+            {
+                mouse::Interaction::Grabbing
             } else {
-                mouse::Interaction::Grab
+                // Select is the plain mouse: an arrow, not a hand.
+                mouse::Interaction::Idle
             }
         } else {
             mouse::Interaction::default()
