@@ -1435,6 +1435,31 @@ mod tests {
             for at in [[-0.15, 1.5], [4.15, 1.5], [2.0, -0.15], [2.0, 3.15]] {
                 assert!(covered(&caps, at), "{at:?}");
             }
+            // Along the whole length of every wall the cap reaches to within
+            // two cells of each of its faces, and stops there.
+            let mut probes = Vec::new();
+            for step in 0..20 {
+                let x = 0.1 + 3.8 * f64::from(step) / 19.0;
+                let y = 0.1 + 2.8 * f64::from(step) / 19.0;
+                for (inside, outside) in [
+                    ([x, -0.01], [x, 0.02]),
+                    ([x, -0.29], [x, -0.32]),
+                    ([x, 3.01], [x, 2.98]),
+                    ([x, 3.29], [x, 3.32]),
+                    ([-0.01, y], [0.02, y]),
+                    ([-0.29, y], [-0.32, y]),
+                    ([4.01, y], [3.98, y]),
+                    ([4.29, y], [4.32, y]),
+                ] {
+                    probes.push((inside, true));
+                    probes.push((outside, false));
+                }
+            }
+            let wrong: Vec<_> = probes
+                .into_iter()
+                .filter(|(at, capped)| covered(&caps, *at) != *capped)
+                .collect();
+            assert!(wrong.is_empty(), "{wrong:?}");
         }
     }
 
