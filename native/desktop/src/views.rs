@@ -1551,7 +1551,7 @@ impl Studio {
         })
     }
 
-    /// Save view, Note, Line and Export BCF for the ribbon's views group.
+    /// Note and Line for the ribbon's views group.
     pub fn views_ribbon(&self) -> Element<'static, Message> {
         let has_scan = self.active.is_some();
         let tool = |label: &'static str, kind: AnnotationKind| {
@@ -1564,21 +1564,11 @@ impl Studio {
         };
         opencad_ribbon::render_group_items(
             "VIEWS",
+            // Saving a view is in the Project Browser, the BCF export in the
+            // File view.
             vec![
-                opencad_ribbon::RibbonItem::Small(crate::small_tool_button_when(
-                    "Save view",
-                    Message::Views(ViewAction::Save),
-                    false,
-                    has_scan,
-                )),
                 tool("Note", AnnotationKind::Note),
                 tool("Line", AnnotationKind::Line),
-                opencad_ribbon::RibbonItem::Small(crate::small_tool_button_when(
-                    "Export BCF",
-                    Message::Views(ViewAction::ExportBcf),
-                    false,
-                    self.can_export_bcf(),
-                )),
             ],
         )
     }

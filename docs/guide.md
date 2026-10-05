@@ -202,7 +202,7 @@ The measurement is drawn over the points with a label on every segment and one f
 
 A view holds everything needed to come back to it: the camera (the orbit camera, or the walking camera when the view was saved while walking), the section box with its limits in model coordinates and whether it was on, the colour mode, the time it was saved, an identifier and its annotations.
 
-**Save view** in the VIEWS group, or **Save view** under the name field of **VIEWS AND SECTIONS** in the Project Browser, saves what the scene shows. Without a name the view becomes "View 1", "View 2", and so on. The Project Browser lists the views of the active scan: a click on a name restores the view, **Rename** changes its name, **Update** overwrites it with the current view and × deletes it. A scan has at most 32 views, with names of at most 64 characters that are unique within it.
+**Save view** under the name field of **VIEWS AND SECTIONS** in the Project Browser saves what the scene shows. Without a name the view becomes "View 1", "View 2", and so on. The Project Browser lists the views of the active scan: a click on a name restores the view, **Rename** changes its name, **Update** overwrites it with the current view and × deletes it. A scan has at most 32 views, with names of at most 64 characters that are unique within it.
 
 Restoring puts the camera, the section box and the colour mode back. The orbit camera is relative to the bounds of the scene and to the size of the 3D view, so a view also keeps those: in a 3D view of another size the pan scales with the picture, and when other scans have been opened or closed since, the camera is moved to show what it showed.
 
@@ -229,7 +229,7 @@ When only the size of the 3D view has changed, with the window or with a status 
 
 ### BCF export
 
-**Export BCF** in the VIEWS group, or **Views as BCF…** among the exports of the File view, writes all views of the active scan as one BCF 2.1 file (`.bcf`, the BIM Collaboration Format of buildingSMART). The file is a ZIP container with `bcf.version` and one folder per view, named by the view's identifier:
+**Views as BCF…** on the Export page of the File view, or **Export BCF** under BCF in the Project Browser, writes all views of the active scan as one BCF 2.1 file (`.bcf`, the BIM Collaboration Format of buildingSMART). The file is a ZIP container with `bcf.version` and one folder per view, named by the view's identifier:
 
 - `markup.bcf`: a topic with that identifier, the name of the view as its title, its creation date and the account name of the user as author, the file name of the scan in its header, and one comment per note, each referring to the viewpoint.
 - `viewpoint.bcfv`: a perspective camera, the six clipping planes of the section box when it was on (each on a face, pointing at the side that is cut away), and lines: each line annotation, and a short upright line of 0.25 m at the point of each note.

@@ -14,6 +14,7 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- **Save view** and **Export BCF** left the ribbon: a view is saved in the Project Browser, and the BCF file is written from File → Export (**Views as BCF…**) or from BCF in the Project Browser.
 - The panel at the left is the **Project Browser**. Below the scans and classes it lists **DRAWINGS** (the 3D model and every drawing of the session: a click shows it, × takes it off the list), **VIEWS AND SECTIONS** (one name field with **Save view** and **Save section**; the saved views of the active scan with their annotations, and the section boxes saved under a name: a click puts a box back, also turned) and **BCF** (what a BCF file would hold, with Export BCF). The Model and Drawing tabs over the scene are gone; the Project Browser switches between them.
 - With Shift and the middle mouse button the model turns sideways the way the pointer moves; up and down stay as they were.
 - In the light theme Blueprint Light the 3D scene is white as well, with dark text and labels on it; the dark themes keep their dark scene.
