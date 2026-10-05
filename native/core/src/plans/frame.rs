@@ -151,6 +151,10 @@ pub struct RobustBounds {
     /// The groups those parts form: parts less than a margin apart are one
     /// group.
     pub outside_groups: u32,
+    /// Of those, the points in the parts wholly below the box, such as the
+    /// reflections of a puddle metres under the ground, and their groups.
+    pub below_points: u64,
+    pub below_groups: u32,
 }
 
 /// A part of a scene: the box of an octree leaf with its number of points,
@@ -272,12 +276,19 @@ pub fn robust_bounds(
         .collect();
     let outside_points = outside.iter().map(|piece| piece.weight).sum();
     let outside_groups = groups(&outside, margin);
+    let below: Vec<&Piece> = outside
+        .iter()
+        .copied()
+        .filter(|piece| piece.bounds.max[2] < bounds.min[2])
+        .collect();
     Ok(Some(RobustBounds {
         bounds,
         all,
         points: pieces.iter().map(|piece| piece.weight).sum(),
         outside_points,
         outside_groups,
+        below_points: below.iter().map(|piece| piece.weight).sum(),
+        below_groups: groups(&below, margin),
     }))
 }
 
@@ -585,6 +596,10 @@ mod tests {
         assert!(found.outside_points as f64 >= 0.7 * strays.len() as f64);
         assert!(found.outside_points as usize <= strays.len());
         assert!(found.outside_groups >= 1);
+        // The strays far below are the parts below the box.
+        assert!(found.below_points as f64 >= 0.7 * strays.len() as f64);
+        assert!(found.below_points <= found.outside_points);
+        assert!(found.below_groups >= 1 && found.below_groups <= found.outside_groups);
         assert!(found.all.min[2] <= strays.iter().map(|at| at[2]).fold(f64::INFINITY, f64::min));
     }
 
@@ -622,6 +637,7 @@ mod tests {
         assert_eq!((found.bounds.min[1], found.bounds.max[1]), (0.0, 0.0));
         assert_eq!(found.outside_points, 4);
         assert_eq!(found.outside_groups, 4);
+        assert_eq!((found.below_points, found.below_groups), (0, 0));
         assert_eq!(robust_bounds(&[], &config).unwrap(), None);
     }
 

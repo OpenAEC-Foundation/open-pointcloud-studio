@@ -356,6 +356,24 @@ impl SceneSurvey {
         })
     }
 
+    /// The lowest and the highest occupied cell of a column from `first` up
+    /// to `last`, both included; nothing when none of those is occupied.
+    pub fn occupied_between(&self, column: usize, first: u32, last: u32) -> Option<[u32; 2]> {
+        let mut found: Option<[u32; 2]> = None;
+        for bin in self.column_bins(column) {
+            if bin > last {
+                break;
+            }
+            if bin >= first {
+                found = Some(match found {
+                    None => [bin, bin],
+                    Some([low, _]) => [low, bin],
+                });
+            }
+        }
+        found
+    }
+
     /// The nearest occupied cell above `bin` in a column, and the nearest
     /// below it.
     pub fn neighbours_in_column(&self, column: usize, bin: u32) -> (Option<u32>, Option<u32>) {
@@ -991,6 +1009,9 @@ pub(crate) mod tests {
         assert_eq!(survey.neighbours_in_column(0, 130), (None, Some(64)));
         assert_eq!(survey.lowest_bin(0), Some(3));
         assert_eq!(survey.highest_bin(0), Some(130));
+        assert_eq!(survey.occupied_between(0, 4, 100), Some([63, 64]));
+        assert_eq!(survey.occupied_between(0, 3, 3), Some([3, 3]));
+        assert_eq!(survey.occupied_between(0, 65, 129), None);
         assert_eq!(survey.occupied_bins(0), 4);
         // Two cells apart, the one between counts as well.
         survey.occupancy[1] |= 1 << 2;

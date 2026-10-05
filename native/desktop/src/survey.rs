@@ -2,15 +2,17 @@
 //! Plans on one scan file, without a window. It finds the box around the
 //! building without the stray points far out and the main direction of its
 //! walls, reads the scene once into a volume of occupied cells in that
-//! direction, proposes the footprint and writes what it found as JSON.
+//! direction, proposes the footprint, finds the levels and refines their
+//! heights from the points, and writes what it found as JSON.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use pointcloud_core::plans::{
-    building_frame, robust_bounds, second_direction, survey_scene, BuildingFrame, Footprint,
-    FootprintConfig, RobustBounds, RobustBoundsConfig, SceneSurvey, SurveyConfig,
+    building_frame, detect_levels, refine_levels, robust_bounds, second_direction, survey_scene,
+    BuildingFrame, Footprint, FootprintConfig, LevelConfig, LevelDetection, RefineConfig,
+    RobustBounds, RobustBoundsConfig, SceneSurvey, SurveyConfig,
 };
 use pointcloud_core::region_source::{resident_points, RegionSource, SourceTransform};
 use pointcloud_core::{Bounds, IndexConfig, IndexedPoint, LoadError, OctreeIndex, OrientedBox};
@@ -29,6 +31,7 @@ struct Found {
     robust: RobustBounds,
     survey: SceneSurvey,
     footprint: Footprint,
+    levels: LevelDetection,
     seconds: Vec<(&'static str, f64)>,
 }
 
@@ -68,10 +71,25 @@ fn survey(sources: &[RegionSource<'_>]) -> Result<Found, LoadError> {
     survey.frame.second_direction_deg = second_direction(&survey, &walls);
     let footprint = survey.footprint_proposal(&config);
     lap("footprint", &mut seconds);
+    let mut levels = detect_levels(&survey, &footprint, &LevelConfig::default());
+    refine_levels(
+        sources,
+        &survey,
+        &footprint,
+        &mut levels,
+        &|_, _, _| true,
+        &RefineConfig::default(),
+        &mut |_, _| Ok(()),
+    )?;
+    if let Some(peil) = levels.peil_z {
+        survey.frame.peil_z = peil;
+    }
+    lap("levels", &mut seconds);
     Ok(Found {
         robust,
         survey,
         footprint,
+        levels,
         seconds,
     })
 }
@@ -96,9 +114,12 @@ fn file_json(source: &Path, points: u64, found: &Found) -> Value {
             "all": bounds_json(robust.all),
             "outside_points": robust.outside_points,
             "outside_groups": robust.outside_groups,
+            "below_points": robust.below_points,
+            "below_groups": robust.below_groups,
         },
         "frame": found.survey.frame,
         "survey": found.survey.summary(Some(&found.footprint)),
+        "levels": found.levels,
         "footprint": {
             "area": found.footprint.area(),
             "scene": found.footprint.regions.iter().map(|region| {
@@ -160,10 +181,36 @@ fn summary_lines(found: &Found, destination: &Path) -> String {
             "parts"
         }
     ));
-    lines.join(
-        "
-",
-    )
+    let peil = found.levels.peil_z.unwrap_or(0.0);
+    for level in &found.levels.levels {
+        let mut line = format!(
+            "Level {:>4}  {:?}  floor {:+.3} m (scene {:.3} m)",
+            level.id,
+            level.kind,
+            level.floor_z - peil,
+            level.floor_z
+        );
+        if let Some(ceiling) = level.ceiling_z {
+            line.push_str(&format!(", ceiling {:+.3} m", ceiling - peil));
+        }
+        if let Some(thickness) = level.slab_thickness {
+            line.push_str(&format!(", slab {thickness:.3} m"));
+        }
+        if let Some([along_u, along_v]) = level.tilt_mm_per_m {
+            line.push_str(&format!(", slope {along_u:.1}/{along_v:.1} mm/m"));
+        }
+        line.push_str(&format!(
+            ", cut at {:.2} m, {:.0}% of the footprint, confidence {:.2}",
+            level.cut_height,
+            level.share * 100.0,
+            level.confidence.score
+        ));
+        lines.push(line);
+    }
+    if let Some(ground) = found.levels.ground_z {
+        lines.push(format!("Ground {:+.3} m", ground - peil));
+    }
+    lines.join("\n")
 }
 
 /// The `--survey` mode of the command line: survey a scan file and write
@@ -340,6 +387,8 @@ mod tests {
         assert!((6.0..7.0).contains(&high), "{high}");
         assert!(written["bounds"]["all"]["min"][2].as_f64().unwrap() < -9.0);
         assert_eq!(written["bounds"]["outside_points"], 12);
+        assert_eq!(written["bounds"]["below_points"], 12);
+        assert_eq!(written["bounds"]["below_groups"], 1);
         let survey = &written["survey"];
         assert_eq!(survey["grid"]["cell_xy"], 0.05);
         assert_eq!(survey["grid"]["cell_z"], 0.02);
@@ -356,20 +405,29 @@ mod tests {
         let rotation = written["frame"]["rotation_deg"].as_f64().unwrap();
         assert!((rotation - 25.0).abs() < 0.05, "{rotation}");
         assert!(written["frame"]["second_direction_deg"].is_null());
+        assert!(line.contains("\nMain direction 25.0"), "{line}");
+        assert!(line.contains("\nFootprint 4"), "{line}");
+        // Two storeys and the roof, the ground floor at P, and the ground.
         assert!(
-            line.contains(
-                "
-Main direction 25.0"
-            ),
+            line.contains("\nLevel   00  Ground  floor +0.000 m"),
             "{line}"
         );
-        assert!(
-            line.contains(
-                "
-Footprint 4"
-            ),
-            "{line}"
-        );
+        assert!(line.contains("\nLevel   01  Storey  floor +"), "{line}");
+        assert!(line.contains("\nLevel    R  Roof  floor +"), "{line}");
+        assert!(line.contains("\nGround -0."), "{line}");
+        let ground = written["levels"]["ground_z"].as_f64().unwrap();
+        assert!((ground + 0.3).abs() < 0.02, "{ground}");
+        let levels = written["levels"]["levels"].as_array().unwrap();
+        let floors: Vec<f64> = levels
+            .iter()
+            .map(|level| level["floor_z"].as_f64().unwrap())
+            .collect();
+        assert_eq!(floors.len(), 3);
+        for (found, truth) in floors.iter().zip([0.0, 3.0, 6.0]) {
+            assert!((found - truth).abs() <= 0.002, "{floors:?}");
+        }
+        assert_eq!(levels[0]["is_peil"], true);
+        assert_eq!(written["frame"]["peil_z"], written["levels"]["peil_z"]);
         let area = written["footprint"]["area"].as_f64().unwrap();
         assert!(area > 40.0 && area < 41.5, "{area}");
         let outline = written["survey"]["footprint"][0]["outer"]
