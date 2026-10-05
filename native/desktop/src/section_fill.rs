@@ -2,7 +2,7 @@
 //! between the two faces of a wall, floor or ceiling is closed with a cap of
 //! one colour, as a section drawing fills its cut.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use iced::widget::{checkbox, column, container, row, text_input};
@@ -33,8 +33,40 @@ pub(crate) struct SectionFill {
     pub max_thickness: f64,
     color_input: String,
     thickness_input: String,
-    /// Set by the 3D view while it makes the caps of the scene.
-    pub pending: Arc<AtomicBool>,
+    /// The caps the 3D view is making.
+    pub cap_jobs: CapJobs,
+}
+
+/// How many sets of caps are being made on worker threads. A set counts from
+/// the moment its thread is started until that thread ends, whether or not
+/// the 3D view that started it is still drawn: a view that the Drawing view
+/// or the File view replaces, or the view of a minimised window, takes no
+/// frames, so it cannot say when its caps are done.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CapJobs(Arc<AtomicUsize>);
+
+impl CapJobs {
+    /// Whether caps are being made.
+    pub fn running(&self) -> bool {
+        self.0.load(Ordering::SeqCst) > 0
+    }
+
+    /// Count one more set until what this answers is dropped, at the end of
+    /// the thread that makes it.
+    pub fn start(&self) -> RunningCapJob {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        RunningCapJob(Arc::clone(&self.0))
+    }
+}
+
+/// One set of caps being made; it stops counting when dropped.
+#[derive(Debug)]
+pub(crate) struct RunningCapJob(Arc<AtomicUsize>);
+
+impl Drop for RunningCapJob {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// What the block in Properties changes.
@@ -86,7 +118,7 @@ impl SectionFill {
             max_thickness,
             color_input: format_color(color),
             thickness_input: format_thickness(max_thickness),
-            pending: Arc::default(),
+            cap_jobs: CapJobs::default(),
         }
     }
 
@@ -176,7 +208,7 @@ impl SectionFill {
             "fill_cut": self.fill_cut,
             "color": format_color(self.color),
             "max_thickness": self.max_thickness,
-            "pending": self.pending.load(Ordering::Relaxed),
+            "pending": self.cap_jobs.running(),
         })
     }
 
@@ -288,5 +320,20 @@ mod tests {
             json!({"fill_cut": false, "color": "#102030", "max_thickness": 1.2, "pending": false})
         );
         assert_eq!(fill.thickness_input, "1.20");
+    }
+
+    #[test]
+    fn caps_are_pending_while_a_thread_makes_them() {
+        let fill = SectionFill::default();
+        assert_eq!(fill.value()["pending"], false);
+        // A view that was replaced while its caps were made, and the view
+        // that took its place, each with caps on their way.
+        let first = fill.cap_jobs.start();
+        let second = fill.clone().cap_jobs.start();
+        assert_eq!(fill.value()["pending"], true);
+        drop(first);
+        assert_eq!(fill.value()["pending"], true);
+        drop(second);
+        assert_eq!(fill.value()["pending"], false);
     }
 }

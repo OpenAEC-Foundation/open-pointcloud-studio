@@ -9316,7 +9316,7 @@ impl Studio {
             section: self.section_box(),
             section_reference: self.section_reference_bounds,
             section_fill: self.section_fill.style(),
-            section_caps_pending: &self.section_fill.pending,
+            section_cap_jobs: &self.section_fill.cap_jobs,
             yaw: self.yaw,
             pitch: self.pitch,
             zoom: self.zoom,
@@ -11074,8 +11074,8 @@ struct PointViewport<'a> {
     section_reference: Option<Bounds>,
     /// How the cut of a mesh by the section box is filled, when it is.
     section_fill: Option<section_fill::CapStyle>,
-    /// Set while the caps of the scene are being made.
-    section_caps_pending: &'a AtomicBool,
+    /// Counts the caps of the scene while they are being made.
+    section_cap_jobs: &'a section_fill::CapJobs,
     yaw: f32,
     pitch: f32,
     zoom: f32,

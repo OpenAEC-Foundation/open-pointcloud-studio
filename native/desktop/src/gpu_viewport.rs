@@ -502,16 +502,10 @@ impl<'a> GpuViewport<'a> {
     /// Bring the caps up to date with the scene as far as they can be now:
     /// take caps that were made, start making them when they are not those
     /// of the scene, and leave out caps that no longer fit it. Answers
-    /// whether caps are still being made, and tells the window.
+    /// whether caps are still being made for this view. The window learns
+    /// it from `section_cap_jobs`, which counts a job until its thread ends,
+    /// also when no frame comes to take what it made.
     fn advance_caps(&self, cache: &mut RenderCache, overall_bounds: Option<Bounds>) -> bool {
-        let running = self.step_caps(cache, overall_bounds);
-        self.overlay
-            .section_caps_pending
-            .store(running, std::sync::atomic::Ordering::Relaxed);
-        running
-    }
-
-    fn step_caps(&self, cache: &mut RenderCache, overall_bounds: Option<Bounds>) -> bool {
         let clouds = self.overlay.clouds;
         let wanted = self.overlay.section.zip(self.overlay.section_fill);
         let current = |key: &CapKey| {
@@ -563,10 +557,14 @@ impl<'a> GpuViewport<'a> {
             return false;
         };
         let (send, result) = mpsc::channel();
+        let running = self.overlay.section_cap_jobs.start();
         let started = std::thread::Builder::new()
             .name("section caps".into())
             .spawn(move || {
                 let _ = send.send(build_caps(center, &meshes, section, style));
+                // Only once the caps are sent: when nothing is pending any
+                // more, the next frame finds them.
+                drop(running);
             });
         if started.is_err() {
             // Without a thread the cut is shown open, as without the fill.
@@ -1932,16 +1930,15 @@ mod tests {
         assert_eq!(display_point_radius(8.0, 0.000_001), 12.0);
     }
 
-    #[test]
-    fn the_cut_of_a_wall_is_capped_while_the_box_and_the_fill_are_on() {
+    /// A scan whose layer holds the mesh of a wall of 0.2 from x 0 to 4 and
+    /// z 0 to 2: its outer face looks to -y, its inner face to +y.
+    fn studio_with_wall() -> (Studio, tempfile::TempDir) {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("wall.xyz");
         std::fs::write(&source, "0 -1 0\n4 1 2\n").unwrap();
         let cloud = Arc::new(pointcloud_core::open(&source, 2).unwrap());
         let mut studio = Studio::default();
         let _ = studio.update(Message::Loaded(Ok(cloud)));
-        // A wall of 0.2 from x 0 to 4 and z 0 to 2: its outer face looks
-        // to -y, its inner face to +y.
         let wall = MeshGeometry {
             vertices: vec![
                 [0.0, 0.0, 0.0],
@@ -1959,8 +1956,25 @@ mod tests {
         };
         studio.clouds[0].mesh = Some(Arc::new(wall));
         studio.clouds[0].mesh_visible = true;
+        (studio, directory)
+    }
+
+    /// Cut the wall at half its height.
+    fn cut_at_half_height(studio: &mut Studio) {
+        studio.section_enabled = true;
+        studio.section_reference_bounds = Some(studio.clouds[0].cloud.bounds);
+        studio.section_max_percent[2] = 50.0;
+    }
+
+    fn viewport_bounds() -> Rectangle {
+        Rectangle::new(iced::Point::ORIGIN, iced::Size::new(800.0, 600.0))
+    }
+
+    #[test]
+    fn the_cut_of_a_wall_is_capped_while_the_box_and_the_fill_are_on() {
+        let (mut studio, _directory) = studio_with_wall();
         let state = RefCell::new(RenderCache::default());
-        let bounds = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        let bounds = viewport_bounds();
         // Frames until the caps that are being made are done.
         let draw = |studio: &Studio| {
             let viewport = GpuViewport {
@@ -1978,9 +1992,7 @@ mod tests {
 
         // Without a section box nothing is cut.
         assert!(draw(&studio).caps.indices.is_empty());
-        studio.section_enabled = true;
-        studio.section_reference_bounds = Some(studio.clouds[0].cloud.bounds);
-        studio.section_max_percent[2] = 50.0;
+        cut_at_half_height(&mut studio);
         // The first frame does not wait for the caps.
         let viewport = GpuViewport {
             overlay: studio.point_viewport(),
@@ -2021,6 +2033,63 @@ mod tests {
             crate::section_fill::FillAction::Enabled(false),
         ));
         assert!(draw(&studio).caps.indices.is_empty());
+    }
+
+    fn send(studio: &mut Studio, command: crate::native_api::ApiCommand) -> serde_json::Value {
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.handle_api(crate::native_api::ApiRequest { command, reply });
+        receive.try_recv().unwrap()
+    }
+
+    /// Whether the status reports caps pending, looked at until it no
+    /// longer does or ten seconds have passed.
+    fn pending_after_waiting(studio: &mut Studio) -> bool {
+        let started = std::time::Instant::now();
+        loop {
+            let status = send(studio, crate::native_api::ApiCommand::Status);
+            let pending = &status["result"]["section_fill"]["pending"];
+            assert!(pending.is_boolean(), "{status}");
+            if *pending == false || started.elapsed() > std::time::Duration::from_secs(10) {
+                return *pending == true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn caps_made_while_no_frame_comes_are_no_longer_pending() {
+        let (mut studio, _directory) = studio_with_wall();
+        cut_at_half_height(&mut studio);
+        let state = RefCell::new(RenderCache::default());
+        let bounds = viewport_bounds();
+        let frame = |studio: &Studio, state: &RefCell<RenderCache>| {
+            let viewport = GpuViewport {
+                overlay: studio.point_viewport(),
+            };
+            shader::Program::draw(&viewport, state, mouse::Cursor::Unavailable, bounds)
+        };
+        // A minimised window: the frame that starts the caps is the last
+        // one for a while.
+        assert!(frame(&studio, &state).caps.indices.is_empty());
+        assert!(state.borrow().caps_job.is_some());
+        assert!(!pending_after_waiting(&mut studio));
+        // The next frame shows them.
+        assert!(!frame(&studio, &state).caps.indices.is_empty());
+        assert!(state.borrow().caps_job.is_none());
+
+        // The Drawing view replaces the 3D view while the caps of another
+        // box are being made: the view and what it waits for are dropped,
+        // and no frame of it follows.
+        studio.section_max_percent[2] = 60.0;
+        assert!(frame(&studio, &state).caps.indices.is_empty());
+        assert!(state.borrow().caps_job.is_some());
+        drop(state);
+        let shown = send(
+            &mut studio,
+            crate::native_api::ApiCommand::DrawingView { show: true },
+        );
+        assert_eq!(shown["ok"], true, "{shown}");
+        assert!(!pending_after_waiting(&mut studio));
     }
 
     #[test]
