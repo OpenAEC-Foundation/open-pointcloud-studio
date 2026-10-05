@@ -11088,14 +11088,14 @@ fn finish_viewport_drag(
             Some(Message::FinishPan(dx, dy))
         }
         (mouse::Button::Left | mouse::Button::Middle, DragMode::Orbit) if total > 0.5 => {
-            Some(Message::FinishOrbit(dx, dy))
+            Some(Message::FinishOrbit(-dx, -dy))
         }
         (mouse::Button::Left, DragMode::MeasurePending | DragMode::AnnotatePending)
             if total >= 5.0 =>
         {
             Some(Message::FinishOrbit(
-                position.x - drag.start.x,
-                position.y - drag.start.y,
+                drag.start.x - position.x,
+                drag.start.y - position.y,
             ))
         }
         (mouse::Button::Left, DragMode::MeasurePending) => Some(Message::Measure(
@@ -11511,7 +11511,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     (
                         event::Status::Captured,
                         Some(match previous.mode {
-                            DragMode::Orbit => Message::Orbit(dx, dy),
+                            // The model follows the pointer, so the camera
+                            // turns the opposite way.
+                            DragMode::Orbit => Message::Orbit(-dx, -dy),
                             DragMode::Pan => Message::Pan(dx, dy),
                             DragMode::RightPending
                             | DragMode::MeasurePending
@@ -13924,13 +13926,13 @@ mod viewport_drag_tests {
             Size::new(800.0, 600.0),
         )
         .unwrap();
-        // Shift with the middle drag orbits as the left drag did before it selected.
-        assert!(matches!(message, Message::FinishOrbit(10.0, 5.0)));
+        // Shift with the middle drag orbits; the model follows the pointer.
+        assert!(matches!(message, Message::FinishOrbit(-10.0, -5.0)));
         let yaw = studio.yaw;
         let pitch = studio.pitch;
         let _ = studio.update(message);
-        assert!((studio.yaw - yaw - 0.1).abs() < 0.0001);
-        assert!((studio.pitch - pitch - 0.05).abs() < 0.0001);
+        assert!((studio.yaw - yaw + 0.1).abs() < 0.0001);
+        assert!((studio.pitch - pitch + 0.05).abs() < 0.0001);
         assert_eq!(studio.pan, [0.0, 0.0]);
     }
 
@@ -13966,12 +13968,12 @@ mod viewport_drag_tests {
             Size::new(800.0, 600.0),
         )
         .unwrap();
-        assert!(matches!(message, Message::FinishOrbit(10.0, 5.0)));
+        assert!(matches!(message, Message::FinishOrbit(-10.0, -5.0)));
         let yaw = studio.yaw;
         let pitch = studio.pitch;
         let _ = studio.update(message);
-        assert!((studio.yaw - yaw - 0.1).abs() < 0.0001);
-        assert!((studio.pitch - pitch - 0.05).abs() < 0.0001);
+        assert!((studio.yaw - yaw + 0.1).abs() < 0.0001);
+        assert!((studio.pitch - pitch + 0.05).abs() < 0.0001);
 
         let selection = DragState {
             start,
