@@ -2,7 +2,7 @@
 //! Survey coordinates are rebased in f64 before f32 upload to retain precision.
 
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
 use crate::section_fill::CapStyle;
@@ -11,9 +11,9 @@ use crate::station_photos::{self, PhotoAtlas, PhotoSet};
 use crate::CloudTransform;
 use crate::{combined_bounds, CloudEntry, ColorMode, Message, PointViewport};
 use bytemuck::{Pod, Zeroable};
-use iced::mouse;
+use iced::advanced::Shell;
 use iced::widget::shader::{self, Shader};
-use iced::Rectangle;
+use iced::{event, mouse, window, Rectangle};
 use iced_wgpu::primitive::{Primitive, Storage};
 use iced_wgpu::wgpu;
 use pointcloud_core::{
@@ -98,8 +98,19 @@ pub struct RenderCache {
     geometry: Option<Arc<RenderGeometry>>,
     mesh_key: Option<MeshKey>,
     mesh: Option<Arc<MeshBuffers>>,
+    /// What `caps` were made from; `None` while they are not those of the
+    /// scene.
     caps_key: Option<CapKey>,
     caps: Arc<MeshBuffers>,
+    /// The caps being made on a worker thread.
+    caps_job: Option<CapJob>,
+}
+
+/// Caps that are being made: for a mesh of millions of triangles that takes
+/// a moment, which the window does not wait for.
+struct CapJob {
+    key: CapKey,
+    result: mpsc::Receiver<MeshBuffers>,
 }
 
 /// What the caps over the cut of the meshes are made from: the meshes, the
@@ -488,63 +499,152 @@ impl<'a> GpuViewport<'a> {
         }
     }
 
-    /// The caps where the section box cuts the meshes of the layers, in
-    /// the cap colour and without a normal, so they are drawn flat. Detected
-    /// faces are single surfaces and get none.
-    fn build_caps(
-        &self,
-        overall_bounds: Option<Bounds>,
-        section: OrientedBox,
-        style: CapStyle,
-    ) -> MeshBuffers {
-        let mut caps = MeshBuffers::default();
-        let Some(overall_bounds) = overall_bounds else {
-            return caps;
-        };
-        let center = overall_bounds.center();
-        let color = [
-            f32::from(style.color[0]) / 255.0,
-            f32::from(style.color[1]) / 255.0,
-            f32::from(style.color[2]) / 255.0,
-            1.0,
-        ];
-        let options = CapOptions {
-            max_thickness: style.max_thickness,
-        };
-        for (index, part, mesh) in drawn(self.overlay.clouds) {
-            if part != MeshPart::Surface {
-                continue;
-            }
-            let transform = self.overlay.clouds[index].transform;
-            let found = section_caps(mesh, |xyz| transform.xyz(xyz), &section, options);
-            let Ok(base) = u32::try_from(caps.vertices.len()) else {
-                break;
-            };
-            caps.vertices
-                .extend(found.vertices.iter().map(|xyz| GpuMeshVertex {
-                    relative: [
-                        (xyz[0] - center[0]) as f32,
-                        (xyz[1] - center[1]) as f32,
-                        (xyz[2] - center[2]) as f32,
-                        0.0,
-                    ],
-                    color,
-                    normal: [0.0; 4],
-                }));
-            caps.indices.extend(
-                found
-                    .triangles
-                    .iter()
-                    .flat_map(|face| face.map(|index| index + base)),
-            );
-        }
-        caps
+    /// Bring the caps up to date with the scene as far as they can be now:
+    /// take caps that were made, start making them when they are not those
+    /// of the scene, and leave out caps that no longer fit it. Answers
+    /// whether caps are still being made, and tells the window.
+    fn advance_caps(&self, cache: &mut RenderCache, overall_bounds: Option<Bounds>) -> bool {
+        let running = self.step_caps(cache, overall_bounds);
+        self.overlay
+            .section_caps_pending
+            .store(running, std::sync::atomic::Ordering::Relaxed);
+        running
     }
+
+    fn step_caps(&self, cache: &mut RenderCache, overall_bounds: Option<Bounds>) -> bool {
+        let clouds = self.overlay.clouds;
+        let wanted = self.overlay.section.zip(self.overlay.section_fill);
+        let current = |key: &CapKey| {
+            wanted
+                .is_some_and(|(section, style)| key.matches(clouds, overall_bounds, section, style))
+        };
+        if let Some(job) = &cache.caps_job {
+            match job.result.try_recv() {
+                Ok(caps) => {
+                    let job = cache.caps_job.take().expect("cap job");
+                    if current(&job.key) {
+                        cache.caps = Arc::new(caps);
+                        cache.caps_key = Some(job.key);
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => cache.caps_job = None,
+            }
+        }
+        if cache.caps_key.as_ref().is_some_and(current) {
+            return false;
+        }
+        // Caps of another box or of other meshes are not shown.
+        if cache.caps_key.take().is_some() {
+            cache.caps = Arc::default();
+        }
+        let Some((section, style)) = wanted else {
+            return false;
+        };
+        if cache.caps_job.is_some() {
+            // Caps of an earlier box are still being made; those of this
+            // one are started once they are done, so that a box that is
+            // dragged keeps one job going and not one for every step.
+            return true;
+        }
+        let key = CapKey {
+            meshes: MeshKey::capture(clouds, overall_bounds),
+            section,
+            style,
+        };
+        let meshes: Vec<_> = drawn(clouds)
+            .into_iter()
+            .filter(|(_, part, _)| *part == MeshPart::Surface)
+            .map(|(index, _, mesh)| (Arc::clone(mesh), clouds[index].transform))
+            .collect();
+        let center = overall_bounds.map(|bounds| bounds.center());
+        let (Some(center), false) = (center, meshes.is_empty()) else {
+            cache.caps_key = Some(key);
+            return false;
+        };
+        let (send, result) = mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("section caps".into())
+            .spawn(move || {
+                let _ = send.send(build_caps(center, &meshes, section, style));
+            });
+        if started.is_err() {
+            // Without a thread the cut is shown open, as without the fill.
+            cache.caps_key = Some(key);
+            return false;
+        }
+        cache.caps_job = Some(CapJob { key, result });
+        true
+    }
+}
+
+/// The caps where the section box cuts meshes, in the cap colour and
+/// without a normal, so they are drawn flat; relative to the centre of the
+/// scene. Detected faces are single surfaces and are not among the meshes.
+fn build_caps(
+    center: [f64; 3],
+    meshes: &[(Arc<MeshGeometry>, CloudTransform)],
+    section: OrientedBox,
+    style: CapStyle,
+) -> MeshBuffers {
+    let mut caps = MeshBuffers::default();
+    let color = [
+        f32::from(style.color[0]) / 255.0,
+        f32::from(style.color[1]) / 255.0,
+        f32::from(style.color[2]) / 255.0,
+        1.0,
+    ];
+    let options = CapOptions {
+        max_thickness: style.max_thickness,
+    };
+    for (mesh, transform) in meshes {
+        let found = section_caps(mesh, |xyz| transform.xyz(xyz), &section, options);
+        let Ok(base) = u32::try_from(caps.vertices.len()) else {
+            break;
+        };
+        caps.vertices
+            .extend(found.vertices.iter().map(|xyz| GpuMeshVertex {
+                relative: [
+                    (xyz[0] - center[0]) as f32,
+                    (xyz[1] - center[1]) as f32,
+                    (xyz[2] - center[2]) as f32,
+                    0.0,
+                ],
+                color,
+                normal: [0.0; 4],
+            }));
+        caps.indices.extend(
+            found
+                .triangles
+                .iter()
+                .flat_map(|face| face.map(|index| index + base)),
+        );
+    }
+    caps
 }
 
 impl shader::Program<Message> for GpuViewport<'_> {
     type State = RefCell<RenderCache>;
     type Primitive = CloudPrimitive;
+
+    /// While caps are being made the window keeps drawing, so that they
+    /// show as soon as they are done.
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: shader::Event,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+        shell: &mut Shell<'_, Message>,
+    ) -> (event::Status, Option<Message>) {
+        if let shader::Event::RedrawRequested(_) = event {
+            let overall_bounds = combined_bounds(self.overlay.clouds);
+            if self.advance_caps(state.get_mut(), overall_bounds) {
+                shell.request_redraw(window::RedrawRequest::NextFrame);
+            }
+        }
+        (event::Status::Ignored, None)
+    }
 
     fn draw(
         &self,
@@ -587,28 +687,7 @@ impl shader::Program<Message> for GpuViewport<'_> {
         };
         let caps = {
             let mut cache = state.borrow_mut();
-            match (self.overlay.section, self.overlay.section_fill) {
-                (Some(section), Some(style)) => {
-                    let clouds = self.overlay.clouds;
-                    if !cache
-                        .caps_key
-                        .as_ref()
-                        .is_some_and(|key| key.matches(clouds, overall_bounds, section, style))
-                    {
-                        cache.caps = Arc::new(self.build_caps(overall_bounds, section, style));
-                        cache.caps_key = Some(CapKey {
-                            meshes: MeshKey::capture(clouds, overall_bounds),
-                            section,
-                            style,
-                        });
-                    }
-                }
-                _ => {
-                    if cache.caps_key.take().is_some() {
-                        cache.caps = Arc::default();
-                    }
-                }
-            }
+            self.advance_caps(&mut cache, overall_bounds);
             Arc::clone(&cache.caps)
         };
 
@@ -1882,11 +1961,19 @@ mod tests {
         studio.clouds[0].mesh_visible = true;
         let state = RefCell::new(RenderCache::default());
         let bounds = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(800.0, 600.0));
+        // Frames until the caps that are being made are done.
         let draw = |studio: &Studio| {
             let viewport = GpuViewport {
                 overlay: studio.point_viewport(),
             };
-            shader::Program::draw(&viewport, &state, mouse::Cursor::Unavailable, bounds)
+            loop {
+                let frame =
+                    shader::Program::draw(&viewport, &state, mouse::Cursor::Unavailable, bounds);
+                if state.borrow().caps_job.is_none() {
+                    return frame;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
         };
 
         // Without a section box nothing is cut.
@@ -1894,6 +1981,13 @@ mod tests {
         studio.section_enabled = true;
         studio.section_reference_bounds = Some(studio.clouds[0].cloud.bounds);
         studio.section_max_percent[2] = 50.0;
+        // The first frame does not wait for the caps.
+        let viewport = GpuViewport {
+            overlay: studio.point_viewport(),
+        };
+        let first = shader::Program::draw(&viewport, &state, mouse::Cursor::Unavailable, bounds);
+        assert!(first.caps.indices.is_empty());
+        assert!(state.borrow().caps_job.is_some());
         let capped = draw(&studio);
         assert!(!capped.caps.indices.is_empty());
         let grey = 128.0 / 255.0;

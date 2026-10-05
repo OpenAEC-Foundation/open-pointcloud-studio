@@ -215,7 +215,7 @@ fn cut(
     let along = [normal[face.u], normal[face.v]];
     let length = along[0].hypot(along[1]);
     let size = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
-    if !(length > size * 1e-9) {
+    if length <= size * 1e-9 {
         return None;
     }
     let air = [along[0] / length, along[1] / length];
@@ -278,7 +278,7 @@ impl Grid {
         for axis in 0..2 {
             low[axis] = (low[axis] - reach).max(face.min[axis]);
             high[axis] = (high[axis] + reach).min(face.max[axis]);
-            if !(low[axis] < high[axis]) {
+            if low[axis] >= high[axis] {
                 return None;
             }
         }
@@ -476,7 +476,19 @@ impl Grid {
                 if (end - start) * into.max(out) > max_thickness {
                     continue;
                 }
-                self.mark(mask, step, along, across, level, start, end);
+                if step == 0 || 2 * step == DIRECTIONS {
+                    self.mark(mask, step, along, across, level, start, end);
+                } else {
+                    // A slanted line marks the cells it passes, also those
+                    // whose centre lies beyond a face. Kept that far from
+                    // the faces, it marks none of them; the rows and the
+                    // columns find the edge of every straight wall exactly.
+                    let margin = std::f64::consts::FRAC_1_SQRT_2 * self.cell;
+                    let (start, end) = (start + margin / into, end - margin / out);
+                    if start < end {
+                        self.mark(mask, step, along, across, level, start, end);
+                    }
+                }
             }
         }
     }
@@ -778,7 +790,7 @@ mod tests {
         add_box(&mut mesh, [-0.3, -0.3, -0.25], [9.3, 5.3, 3.25], true);
         add_box(&mut mesh, [0.0, 0.0, 0.0], [4.0, 5.0, 3.0], false);
         add_box(&mut mesh, [4.2, 0.0, 0.0], [9.0, 5.0, 3.0], false);
-        let caps = caps_of(&mesh, boxed([-1.0, -1.0, -1.0], [10.0, 6.0, 1.5]));
+        let caps = caps_of(&mesh, boxed([-1.0, -2.5, -0.25], [10.0, 5.3, 1.5]));
         let walls = 9.6 * 5.6 - 4.0 * 5.0 - 4.8 * 5.0;
         let found = area(&caps);
         assert!(
@@ -797,6 +809,21 @@ mod tests {
         for at in [[2.0, 2.5], [4.1, -0.5], [6.0, 0.1]] {
             assert!(!covered(&caps, at), "{at:?}");
         }
+        // Across the walls, to within a cell of their faces.
+        let across = |from: f64, thickness: f64, step: usize| {
+            from + 0.003 + (thickness - 0.006) * step as f64 / 100.0
+        };
+        let gaps: Vec<_> = (0..=100)
+            .flat_map(|step| {
+                [
+                    [across(-0.3, 0.3, step), 2.5],
+                    [2.0, across(-0.3, 0.3, step)],
+                    [across(4.0, 0.2, step), 2.5],
+                ]
+            })
+            .filter(|at| !covered(&caps, *at))
+            .collect();
+        assert!(gaps.is_empty(), "{gaps:?}");
     }
 
     #[test]

@@ -1283,6 +1283,12 @@ fn face_detection_is_a_job_with_a_list_a_highlight_an_export_and_a_clear() {
         tools::busy(&json!({"faces": {"job": null, "export_pending": true}})),
         ["faces_export"]
     );
+    // So is the fill of the cut while the 3D view makes it.
+    assert_eq!(
+        tools::busy(&json!({"section_fill": {"fill_cut": true, "pending": true}})),
+        ["section_caps"]
+    );
+    assert!(tools::busy(&json!({"section_fill": {"fill_cut": true, "pending": false}})).is_empty());
     assert!(tools::busy(&json!({"faces": {
         "job": null, "last": {"state": "complete"}, "export_pending": false,
         "result": {"count": 7},

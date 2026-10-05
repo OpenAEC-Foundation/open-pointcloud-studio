@@ -9316,6 +9316,7 @@ impl Studio {
             section: self.section_box(),
             section_reference: self.section_reference_bounds,
             section_fill: self.section_fill.style(),
+            section_caps_pending: &self.section_fill.pending,
             yaw: self.yaw,
             pitch: self.pitch,
             zoom: self.zoom,
@@ -11073,6 +11074,8 @@ struct PointViewport<'a> {
     section_reference: Option<Bounds>,
     /// How the cut of a mesh by the section box is filled, when it is.
     section_fill: Option<section_fill::CapStyle>,
+    /// Set while the caps of the scene are being made.
+    section_caps_pending: &'a AtomicBool,
     yaw: f32,
     pitch: f32,
     zoom: f32,
@@ -13166,7 +13169,7 @@ mod section_box_tests {
         let status = send(&mut studio, native_api::ApiCommand::Status);
         assert_eq!(
             status["result"]["section_fill"],
-            json!({"fill_cut": false, "color": "#5a5a5a", "max_thickness": 0.35})
+            json!({"fill_cut": false, "color": "#5a5a5a", "max_thickness": 0.35, "pending": false})
         );
         assert_eq!(studio.preferences().cap_max_thickness, 0.35);
         assert!(studio.point_viewport().section_fill.is_none());

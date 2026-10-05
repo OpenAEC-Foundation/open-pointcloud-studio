@@ -107,7 +107,8 @@ They accept `wait_seconds` to wait for the job before answering, and
 an error. `wait_until_idle` waits until imports, octree builds, background
 edits, meshing (a closed mesh included), mesh export, a face detection, a
 faces export, a section drawing or its preview, a drawing file being read, merging, a 3D BAG download,
-point loading for the camera and view snapshots have finished; call it after
+point loading for the camera, the fill of the cut of a mesh by the section
+box and view snapshots have finished; call it after
 `open`, before `screenshot` when the camera changed, and before `export_bcf`. `screenshot` returns MCP image content (`type: "image"`,
 `mimeType: "image/png"`, base64 data) followed by a text part with the image
 size. While the Drawing view is shown, `screenshot` captures the drawing

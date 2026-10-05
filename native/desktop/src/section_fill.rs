@@ -2,6 +2,9 @@
 //! between the two faces of a wall, floor or ceiling is closed with a cap of
 //! one colour, as a section drawing fills its cut.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use iced::widget::{checkbox, column, container, row, text_input};
 use iced::{Background, Border, Color, Element, Fill};
 use pointcloud_core::{
@@ -30,6 +33,8 @@ pub(crate) struct SectionFill {
     pub max_thickness: f64,
     color_input: String,
     thickness_input: String,
+    /// Set by the 3D view while it makes the caps of the scene.
+    pub pending: Arc<AtomicBool>,
 }
 
 /// What the block in Properties changes.
@@ -81,6 +86,7 @@ impl SectionFill {
             max_thickness,
             color_input: format_color(color),
             thickness_input: format_thickness(max_thickness),
+            pending: Arc::default(),
         }
     }
 
@@ -170,6 +176,7 @@ impl SectionFill {
             "fill_cut": self.fill_cut,
             "color": format_color(self.color),
             "max_thickness": self.max_thickness,
+            "pending": self.pending.load(Ordering::Relaxed),
         })
     }
 
@@ -278,7 +285,7 @@ mod tests {
         fill.set(Some(false), Some("#102030"), Some(1.2)).unwrap();
         assert_eq!(
             fill.value(),
-            json!({"fill_cut": false, "color": "#102030", "max_thickness": 1.2})
+            json!({"fill_cut": false, "color": "#102030", "max_thickness": 1.2, "pending": false})
         );
         assert_eq!(fill.thickness_input, "1.20");
     }

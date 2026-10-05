@@ -760,6 +760,9 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
     if result["faces"]["export_pending"] == true {
         busy.push("faces_export");
     }
+    if result["section_fill"]["pending"] == true {
+        busy.push("section_caps");
+    }
     busy
 }
 
