@@ -39,3 +39,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 
 [build-dependencies]
 winresource = "0.1"
+
+# The software renderer the window falls back to: tests lay out and draw the
+# whole window with it, without a window, to see where its parts lie. The
+# version is the one iced already brings in, so the lock file gains no package.
+[dev-dependencies]
+iced_tiny_skia = "0.13"

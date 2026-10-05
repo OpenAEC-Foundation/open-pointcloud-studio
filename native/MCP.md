@@ -114,15 +114,15 @@ box and view snapshots have finished; call it after
 fill of the cut, and so does the snapshot of a view. `screenshot` returns MCP image content (`type: "image"`,
 `mimeType: "image/png"`, base64 data) followed by a text part with the image
 size. While the Drawing view is shown, `screenshot` captures the drawing
-instead of the 3D viewport. While the File view or Settings covers the model, `screenshot` answers
-with an error; `file_view` with `open: false` returns to the model. While the
+instead of the 3D viewport. While the File view, Settings or the card of the Mesh to Plans wizard covers the model, `screenshot` answers
+with an error; `file_view` with `open: false` returns to the model, and `mesh_to_plans_view` with `minimized: true` leaves the wizard as a strip above the scene that is not captured. While the
 window is minimised there is no picture to take: `screenshot`
 then answers with an error, and the snapshot of a view saved meanwhile
 follows when that view is restored.
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `status` | — | State of the window: layers (each with its mesh and its detected faces), imports and tasks, camera, viewport size, section box, the Section drawing, Closed mesh and Detect faces tools, selection, measurement, views, settings |
+| `status` | — | State of the window: layers (each with its mesh and its detected faces), imports and tasks, camera, viewport size, section box, the Section drawing, Closed mesh and Detect faces tools, the Mesh to Plans wizard, selection, measurement, views, settings |
 | `job` | `id` | Reads a background job once |
 | `wait_for_job` | `id`, optional `timeout_seconds` (default 60) | Waits until the job no longer runs |
 | `wait_until_idle` | optional `timeout_seconds` (default 60) | Waits until no work is under way; reports what is still busy |
@@ -216,6 +216,7 @@ follows when that view is restored.
 | `list_extensions` | — | Built-in optional features and whether each is enabled |
 | `set_extension_enabled` | `id` (`bag3d`), `enabled` | Switches a built-in optional feature on or off; kept for later sessions, unless the answer has `saved: false` with `save_error` |
 | `file_view` | `open`, optional `page` (`new`, `open`, `import`, `export`, `workspace`, `extensions` or `about`) | Opens the File view, on a page, or returns to the model |
+| `mesh_to_plans_view` | `open`, optional `step` (`prepare`, `mesh`, `views`, `walls`, `openings`, `rooms`, `sheet`, `site` or `result`) and `minimized` | Shows the Mesh to Plans wizard as its card or as a strip above the scene, on a step, or takes it away |
 | `list_instances` | — | Running windows and the one in use |
 | `select_instance` | `pid` or `port`, at least one | Chooses the window to drive |
 | `start_instance` | optional `files` | Starts a new window and chooses it |

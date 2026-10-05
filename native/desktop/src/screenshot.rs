@@ -13,6 +13,8 @@ use serde_json::{json, Value};
 
 use crate::{views, Message, Studio};
 
+/// Why no screenshot is taken while something covers the scene.
+pub const COVERED: &str = "the File view, Settings or the Mesh to Plans wizard covers the viewport";
 /// Longest edge of a screenshot when the command names none.
 pub const DEFAULT_MAX_EDGE: u32 = 1920;
 pub const MIN_MAX_EDGE: u32 = 16;
@@ -138,8 +140,8 @@ impl Studio {
         if !(MIN_MAX_EDGE..=MAX_MAX_EDGE).contains(&max_edge) {
             return failed("max_edge must be from 16 to 8192 pixels");
         }
-        if self.file_open || self.settings.is_some() {
-            return failed("the File view or Settings covers the viewport");
+        if self.model_covered() {
+            return failed(COVERED);
         }
         if self.shown_canvas_bounds().is_none() && !self.drawing_view.shown {
             return failed("the viewport has not been drawn yet");
@@ -191,8 +193,7 @@ impl Studio {
                 } else {
                     "model"
                 };
-                let (Some(canvas), false) = (canvas, self.file_open || self.settings.is_some())
-                else {
+                let (Some(canvas), false) = (canvas, self.model_covered()) else {
                     let _ = request
                         .reply
                         .send(json!({"ok": false, "error": Uncaptured::NoWindow.message()}));

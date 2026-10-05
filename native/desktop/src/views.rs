@@ -1150,8 +1150,7 @@ impl Studio {
                     return Task::none();
                 }
                 let shown = self.shows_view(&guid)
-                    && !self.file_open
-                    && self.settings.is_none()
+                    && !self.model_covered()
                     && self.views.canvas.get().is_some();
                 if !shown {
                     // The viewport shows something else than the view holds.

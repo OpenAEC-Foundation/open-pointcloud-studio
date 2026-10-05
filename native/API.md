@@ -690,11 +690,37 @@ shows. The answer holds `file_view` with `open` and `page`, as
 `status.result.file_view` does; `page` is `null` while the view is closed. The
 3D BAG panel is not part of the File view and is not opened by this command.
 A `page` with `open: false`, an unknown page, and opening while the Settings
-dialog is open are refused. The Settings dialog is not opened or closed
+dialog or the card of the Mesh to Plans wizard is open are refused. The Settings dialog is not opened or closed
 through this API.
 `status.result.mesh_export_pending` is true from the moment the window asks
 where to save a mesh from the File view or Properties, or from the moment
 `export_mesh` is accepted, until that file has been written.
+
+## Mesh to Plans
+
+`mesh_to_plans_view` shows the Mesh to Plans wizard or takes it away, as the
+button in the MESH TO PLANS group, its tiles in the File view, **Show in
+model**, **Back to wizard** and **Close** do. With `open: true` the wizard is
+shown as its card over the window, on the step `step` names (`prepare`,
+`mesh`, `views`, `walls`, `openings`, `rooms`, `sheet`, `site` or `result`)
+or on the step it showed last; with `minimized: true` as well it is shown as
+a strip above the scene instead, beside the progress lines. Opening closes the
+File view. `open: false` takes the wizard away; what its steps hold stays for
+the next time it is shown. A `step` or `minimized` with `open: false`, an
+unknown step and opening while the Settings dialog is open are refused.
+
+The card covers the model like the File view does: while it is shown the keys
+of the model do nothing, `screenshot` is refused, a view snapshot waits and
+`file_view` does not open. The strip covers nothing: the model can be turned,
+measured and the section box moved while the wizard waits, and a screenshot
+leaves the strip out. Escape closes Settings first, then makes the card the
+strip, and closes the File view after that.
+
+The answer holds `mesh_to_plans` as `status.result.mesh_to_plans` does:
+`open`, `minimized`, `step` (the id of the step shown), `next_ready` (whether
+Next may leave that step), `next_reason` (why not, or `null`) and `steps`,
+for every step its `id`, `number`, English `name` and `status`: `not_run` or
+`skipped`.
 
 ## Editing
 
@@ -829,8 +855,10 @@ caps were still being made), the `path` it was written to or
 is true. Without a `path` the image is returned as base64; with a `path` only
 when `base64` is true as well. An image whose longer edge exceeds `max_edge`
 (16–8192, default 1920 pixels) is scaled down. A file that exists at `path`
-is replaced. The command fails while the File view or Settings covers the
-viewport (`file_view` with `open: false` returns to the model), and while the
+is replaced. The command fails while the File view, Settings or the card of
+the Mesh to Plans wizard covers the viewport (`file_view` with `open: false`
+returns to the model, `mesh_to_plans_view` with `minimized: true` leaves the
+wizard as a strip that is not captured), and while the
 window is minimised (`"the window is minimised;
 restore it to take a screenshot"`); a view snapshot due meanwhile is taken
 when the view is restored.
@@ -839,7 +867,7 @@ when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), whether the File view covers the model (`file_view`), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge or 3D BAG download task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -917,6 +945,7 @@ when the view is restored.
 | `list_extensions` | — | Lists the built-in optional features and whether each is enabled |
 | `set_extension_enabled` | `id`, `enabled` | Switches a built-in optional feature (`bag3d`) on or off and persists that; `saved` in the answer is false, with `save_error`, when it could not be persisted |
 | `file_view` | `open`, optional `page` | Opens the File view, on the page `new`, `open`, `import`, `export`, `workspace`, `extensions` or `about` when one is named, or closes it and returns to the model |
+| `mesh_to_plans_view` | `open`, optional `step`, `minimized` | Shows the Mesh to Plans wizard as its card, on a step when one is named, or with `minimized: true` as a strip above the scene, or takes it away; answers with `mesh_to_plans` |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |

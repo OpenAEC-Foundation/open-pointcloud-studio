@@ -325,6 +325,17 @@ pub enum ApiCommand {
         #[serde(default)]
         page: Option<String>,
     },
+    MeshToPlansView {
+        open: bool,
+        /// The step to show, with `open: true`; without it the wizard keeps
+        /// the step it shows.
+        #[serde(default)]
+        step: Option<String>,
+        /// With `open: true`, whether the wizard is shown as the strip
+        /// above the scene instead of as the card; without it the card.
+        #[serde(default)]
+        minimized: Option<bool>,
+    },
     Screenshot {
         /// Absolute `.png` path to write the image to.
         path: Option<PathBuf>,

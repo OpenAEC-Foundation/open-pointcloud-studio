@@ -2999,6 +2999,7 @@ dependencies = [
  "bytemuck",
  "flate2",
  "iced",
+ "iced_tiny_skia",
  "iced_wgpu",
  "image",
  "objc2 0.6.4",

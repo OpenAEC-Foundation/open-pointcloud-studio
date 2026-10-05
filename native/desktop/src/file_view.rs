@@ -222,6 +222,10 @@ impl Studio {
         if open && self.settings.is_some() {
             return refuse("the Settings dialog is open".into());
         }
+        // The card would lie over the view; as a strip the wizard waits.
+        if open && self.mesh_to_plans.covers_model() {
+            return refuse("the Mesh to Plans wizard is open; minimize it first".into());
+        }
         if open != self.file_open {
             self.file_open = open;
             self.file_page = FilePage::default();

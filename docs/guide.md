@@ -805,7 +805,9 @@ The wizard is a card over the window, nine tenths of its size and at least 960 b
 - The **preview** at the right is to show the drawing of the step on paper.
 - The **buttons** at the bottom are **Close**, **Back**, **Run this step**, **Next** and **Run all automatically**; the two that run steps are greyed while the steps compute nothing. **Next** moves on once the step is confirmed or skipped; until then the sentence beside it says what the step waits for.
 
-**Close** or the × takes the card away; the wizard keeps the step it showed and the state of every step, and opens on that step again. Escape closes Settings first when that is open over the wizard, and the wizard after that.
+**Show in model** at the top of the card makes the card a strip above the scene, beside the progress of running tasks, so that the model can be turned, measured and the section box moved while the wizard waits. The strip names the step and where it stands and has **Back**, **Next**, **Back to wizard** and ×. While the card is shown the model is out of reach: its keys do nothing, and a screenshot through the local API is refused. The strip covers nothing and is never part of a screenshot, a view snapshot or a BCF image.
+
+**Close** or the × takes the card or the strip away; the wizard keeps the step it showed and the state of every step, and opens on that step again. Escape closes Settings first when that is open over the wizard, then makes the card the strip, and closes the File view after that; it never takes the wizard away.
 
 ## Viewing a drawing in Open CAD Studio
 

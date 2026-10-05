@@ -2515,6 +2515,15 @@ impl Studio {
             .map(|entry| self.views.source_of(&entry.cloud.path))
     }
 
+    /// Whether the model is out of sight behind the File view, the Settings
+    /// dialog or the card of the Mesh to Plans wizard. Keys then leave the
+    /// model alone, and a screenshot or a view snapshot is not taken, as it
+    /// would show what covers the model. The strip of the wizard lies
+    /// beside the scene and covers nothing.
+    fn model_covered(&self) -> bool {
+        self.file_open || self.settings.is_some() || self.mesh_to_plans.covers_model()
+    }
+
     fn mesh_filter(&self) -> ClassFilter {
         ClassFilter {
             ground: self.filter_ground,
@@ -3323,6 +3332,7 @@ impl Studio {
                 answer.0["result"]["closed_mesh"] = self.closed_mesh.value();
                 answer.0["result"]["section_fill"] = self.section_fill.value();
                 answer.0["result"]["faces"] = self.faces_value();
+                answer.0["result"]["mesh_to_plans"] = self.mesh_to_plans.value();
                 answer
             }
             ApiCommand::Job { id } => {
@@ -4308,6 +4318,14 @@ impl Studio {
             ApiCommand::FileView { open, page } => {
                 (self.api_file_view(open, page.as_deref()), Task::none())
             }
+            ApiCommand::MeshToPlansView {
+                open,
+                step,
+                minimized,
+            } => (
+                self.api_mesh_to_plans_view(open, step.as_deref(), minimized),
+                Task::none(),
+            ),
             ApiCommand::Screenshot {
                 path,
                 base64,
@@ -5478,13 +5496,14 @@ impl Studio {
             }
             Message::DroppedFilesReady => {
                 let paths = std::mem::take(&mut self.dropped_paths);
-                // A file handed over while the File view covers the model
-                // must be seen opening.
+                // A file handed over while the File view or the card of the
+                // wizard covers the model must be seen opening.
                 if self.file_open {
                     self.file_open = false;
                     self.file_page = FilePage::default();
                     self.ribbon_viewport = None;
                 }
+                self.mesh_to_plans.minimize();
                 return self.open_paths(paths);
             }
             Message::ScansExpanded(expansion) => return self.open_expanded(expansion).1,
@@ -7477,15 +7496,14 @@ impl Studio {
                 self.modifiers = iced::keyboard::Modifiers::default();
             }
             Message::ModelKey(key) => {
-                // The File view and the Settings dialog cover the model: a key
-                // must not change what is not shown.
-                if self.file_open || self.settings.is_some() {
+                // A key must not change what is not shown.
+                if self.model_covered() {
                     return Task::none();
                 }
                 return self.update(key.message());
             }
             Message::WalkKey(key, pressed) => {
-                if pressed && self.file_open {
+                if pressed && self.model_covered() {
                     return Task::none();
                 }
                 if pressed && self.walk.is_none() && !self.start_walk() {
@@ -8084,8 +8102,9 @@ impl Studio {
                 if self.sheet_dialog.take().is_some() {
                     return Task::none();
                 }
-                // The wizard comes next; a job it runs goes on.
-                if self.mesh_to_plans.close() {
+                // The card of the wizard comes next: it becomes the strip
+                // above the scene, and a job it runs goes on.
+                if self.mesh_to_plans.minimize() {
                     return Task::none();
                 }
                 if self.file_open {
@@ -10114,6 +10133,11 @@ impl Studio {
         let mut viewport = column![viewport_header].height(Fill).width(Fill);
         if let Some(progress) = self.progress_strip() {
             viewport = viewport.push(progress);
+        }
+        // The wizard shown in the model stands beside the progress lines,
+        // above the scene and out of its screenshots.
+        if let Some(strip) = self.mesh_to_plans_strip() {
+            viewport = viewport.push(strip);
         }
         viewport = viewport.push(container(canvas).width(Fill).height(Fill));
         if self

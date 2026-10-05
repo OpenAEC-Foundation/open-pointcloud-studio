@@ -605,5 +605,7 @@
   "Run this step": "Stap uitvoeren",
   "Next": "Volgende",
   "Run all automatically": "Alles automatisch",
-  "Skip this step": "Stap overslaan"
+  "Skip this step": "Stap overslaan",
+  "Show in model": "Toon in model",
+  "Back to wizard": "Terug naar wizard"
 }

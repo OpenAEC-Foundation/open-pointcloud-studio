@@ -618,7 +618,7 @@ impl Studio {
                 }
             }
             MeasureAction::RemoveLast => {
-                if self.file_open || self.measure.mode.is_none() {
+                if self.model_covered() || self.measure.mode.is_none() {
                     return Task::none();
                 }
                 if self.measure.remove_last() {
@@ -631,7 +631,7 @@ impl Studio {
                 }
             }
             MeasureAction::Finish => {
-                if self.file_open || self.measure.mode.is_none() {
+                if self.model_covered() || self.measure.mode.is_none() {
                     return Task::none();
                 }
                 match self.measure.finish() {

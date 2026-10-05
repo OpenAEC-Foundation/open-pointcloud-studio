@@ -2,7 +2,9 @@
 //! plan and a model of a building from its scan, one step at a time. It is a
 //! card over the window with the steps in a sidebar, the settings of the
 //! step in the middle, its preview at the right and the buttons that move
-//! through the steps at the bottom.
+//! through the steps at the bottom. Show in model makes the card a strip
+//! above the scene, so that the model can be looked at and the section box
+//! moved while the wizard waits.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{tree, Tree, Widget};
@@ -12,11 +14,13 @@ use iced::widget::{
 };
 use iced::{event, mouse, Border, Color, Element, Event, Fill, Length, Rectangle, Size, Task};
 use iced::{Theme, Vector};
+use serde_json::{json, Value};
 
 use crate::closed_mesh::Sentence;
 use crate::i18n::{key, tr};
 use crate::{drawing_view, flat_tool_style, opencad_ribbon, ui_theme, Message, Studio};
 
+mod strip;
 #[cfg(test)]
 mod tests;
 
@@ -67,6 +71,30 @@ impl WizardStep {
         Self::Site,
         Self::Result,
     ];
+
+    /// The name the local API knows the step by.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Prepare => "prepare",
+            Self::Mesh => "mesh",
+            Self::Views => "views",
+            Self::Walls => "walls",
+            Self::Openings => "openings",
+            Self::Rooms => "rooms",
+            Self::Sheet => "sheet",
+            Self::Site => "site",
+            Self::Result => "result",
+        }
+    }
+
+    pub fn from_id(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|step| step.id() == value)
+    }
+
+    /// Every id `from_id` accepts, for the command that shows a step.
+    pub fn ids() -> Vec<&'static str> {
+        Self::ALL.into_iter().map(Self::id).collect()
+    }
 
     /// The number of the step in the sidebar.
     pub fn number(self) -> &'static str {
@@ -169,6 +197,14 @@ pub enum StepStatus {
 }
 
 impl StepStatus {
+    /// The name of the status in the local API.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::NotRun => "not_run",
+            Self::Skipped => "skipped",
+        }
+    }
+
     /// The status in words, in the language in use.
     fn text(&self) -> String {
         match self {
@@ -191,10 +227,14 @@ impl StepStatus {
 /// Everything the wizard reacts to.
 #[derive(Debug, Clone)]
 pub enum WizardAction {
-    /// Show the card, on the step it showed last.
+    /// Show the card, on the step it showed last, also when it is a strip.
     Open,
-    /// Take the card away; what the steps hold stays.
+    /// Take the card or the strip away; what the steps hold stays.
     Close,
+    /// Show in model: make the card a strip above the scene.
+    Minimize,
+    /// Back to wizard: make the strip the card again.
+    Restore,
     /// Show a step.
     Step(WizardStep),
     Back,
@@ -203,28 +243,57 @@ pub enum WizardAction {
     Skip,
 }
 
-/// The wizard: whether its card is shown, the step it shows and where
-/// every step stands.
+/// The wizard: whether it is shown, as a card or as a strip, the step it
+/// shows and where every step stands.
 #[derive(Debug, Default)]
 pub(crate) struct Wizard {
     open: bool,
+    /// Shown as a strip above the scene instead of as a card.
+    minimized: bool,
     step: WizardStep,
     states: [StepStatus; WizardStep::ALL.len()],
 }
 
 impl Wizard {
-    /// Whether the card is shown.
+    /// Whether the wizard is shown, as a card or as a strip.
     pub(crate) fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Whether its card lies over the window and hides the model.
+    pub(crate) fn covers_model(&self) -> bool {
+        self.open && !self.minimized
     }
 
     fn status(&self, step: WizardStep) -> &StepStatus {
         &self.states[step.place()]
     }
 
-    /// Take the card away, if it is shown; whether it was.
-    pub(crate) fn close(&mut self) -> bool {
-        std::mem::take(&mut self.open)
+    /// Make the card a strip, if the card is shown; whether it was.
+    pub(crate) fn minimize(&mut self) -> bool {
+        let covering = self.covers_model();
+        self.minimized |= covering;
+        covering
+    }
+
+    /// The wizard as `status` of the local API reports it: whether it is
+    /// shown and how, the step it shows, whether Next may leave that step
+    /// and why not, and where every step stands.
+    pub(crate) fn value(&self) -> Value {
+        let ready = self.step_ready();
+        json!({
+            "open": self.open,
+            "minimized": self.open && self.minimized,
+            "step": self.step.id(),
+            "next_ready": ready.is_ok(),
+            "next_reason": ready.err().map(|reason| reason.english()),
+            "steps": WizardStep::ALL.into_iter().map(|step| json!({
+                "id": step.id(),
+                "number": step.number(),
+                "name": step.label(),
+                "status": self.status(step).key(),
+            })).collect::<Vec<_>>(),
+        })
     }
 
     /// Whether Next may leave the shown step, and why not: the step has to
@@ -249,9 +318,20 @@ impl Studio {
                 // been opened from steps aside.
                 self.file_open = false;
                 wizard.open = true;
+                wizard.minimized = false;
             }
             WizardAction::Close => {
                 wizard.open = false;
+                wizard.minimized = false;
+            }
+            WizardAction::Minimize => {
+                wizard.minimize();
+            }
+            WizardAction::Restore => {
+                if wizard.open {
+                    self.file_open = false;
+                    wizard.minimized = false;
+                }
             }
             WizardAction::Step(step) => wizard.step = step,
             WizardAction::Back => {
@@ -275,10 +355,52 @@ impl Studio {
         Task::none()
     }
 
-    /// The card over the dimmed window, while it is shown.
+    /// The `mesh_to_plans_view` command of the local API: show the wizard,
+    /// on a step when one is named and as the strip when `minimized` is
+    /// true, or take it away.
+    pub(crate) fn api_mesh_to_plans_view(
+        &mut self,
+        open: bool,
+        step: Option<&str>,
+        minimized: Option<bool>,
+    ) -> Value {
+        let refuse = |error: String| json!({"ok": false, "error": error});
+        let step = match step.map(|id| WizardStep::from_id(&id.to_ascii_lowercase())) {
+            Some(None) => {
+                return refuse(format!(
+                    "unknown step; use {}",
+                    WizardStep::ids().join(", ")
+                ))
+            }
+            Some(found) => found,
+            None => None,
+        };
+        if !open && (step.is_some() || minimized.is_some()) {
+            return refuse("step and minimized can only be given with open: true".into());
+        }
+        // The dialog lies over the card, and closes nothing when it opens.
+        if open && self.settings.is_some() {
+            return refuse("the Settings dialog is open".into());
+        }
+        let action = if open {
+            WizardAction::Open
+        } else {
+            WizardAction::Close
+        };
+        let _ = self.update_mesh_to_plans(action);
+        if let Some(step) = step {
+            self.mesh_to_plans.step = step;
+        }
+        if minimized == Some(true) {
+            self.mesh_to_plans.minimize();
+        }
+        json!({"ok": true, "mesh_to_plans": self.mesh_to_plans.value()})
+    }
+
+    /// The card over the dimmed window, while it is shown as a card.
     pub(crate) fn mesh_to_plans_view(&self) -> Option<Element<'_, Message>> {
         let wizard = &self.mesh_to_plans;
-        if !wizard.open {
+        if !wizard.covers_model() {
             return None;
         }
         let send = Message::MeshToPlans;
@@ -293,6 +415,10 @@ impl Studio {
             .size(12)
             .color(colors.muted),
             horizontal_space(),
+            button(text(tr("Show in model")).size(12))
+                .on_press(send(WizardAction::Minimize))
+                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                .padding([4, 12]),
             button(text("×").size(14))
                 .on_press(send(WizardAction::Close))
                 .style(flat_tool_style)

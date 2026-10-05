@@ -425,6 +425,10 @@ mod tests {
         ("measure.rs", include_str!("measure.rs")),
         ("mesh_export.rs", include_str!("mesh_export.rs")),
         ("mesh_to_plans/mod.rs", include_str!("mesh_to_plans/mod.rs")),
+        (
+            "mesh_to_plans/strip.rs",
+            include_str!("mesh_to_plans/strip.rs"),
+        ),
         ("open_progress.rs", include_str!("open_progress.rs")),
         (
             "opencad_properties.rs",
