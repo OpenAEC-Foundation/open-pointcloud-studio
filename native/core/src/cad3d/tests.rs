@@ -9,7 +9,8 @@ use cadcodec::entities::EntityType;
 use cadcodec::{CadDocument, Color, DwgReader, DxfReader};
 
 use super::cad::{
-    plane_layer, write_model_cad, CAD_VERSION, MAX_MESH_FACES, MAX_POLYFACE_VERTICES,
+    plane_layer, write_model_cad, CAD_VERSION, MAX_MESH_FACES, MAX_MESH_VERTICES,
+    MAX_POLYFACE_VERTICES,
 };
 use super::ifc::{local_origin, write_model_ifc, PROPERTY_SET};
 use super::step::{self, check};
@@ -63,6 +64,7 @@ pub(crate) fn sample(at: [f64; 3]) -> Model3d {
             .collect(),
         hidden_edges: inner_edges(&wall_triangles, &polygons),
         triangles: wall_triangles,
+        colors: None,
         polygons,
         cylinder: None,
         closed: Some(false),
@@ -99,6 +101,7 @@ pub(crate) fn sample(at: [f64; 3]) -> Model3d {
             .filter(|(low, high)| high - low == 3)
             .collect(),
         triangles: column_triangles,
+        colors: None,
         polygons: Vec::new(),
         cylinder: Some(Cylinder {
             start: shifted(centre, at),
@@ -356,6 +359,7 @@ fn a_large_mesh_is_split_into_entities_the_formats_hold() {
         rgb: [124, 172, 112],
         vertices: large.vertices,
         triangles: large.triangles,
+        colors: None,
         polygons: Vec::new(),
         cylinder: None,
         hidden_edges: HashSet::new(),
@@ -571,4 +575,193 @@ fn a_failed_export_leaves_the_destination_as_it_was() {
         }
     }
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 3);
+}
+
+/// A grid whose left part is red and whose right part is blue below and
+/// green above, with mixed colours on the triangles across the borders.
+fn coloured_grid(side: u32) -> MeshGeometry {
+    let mut mesh = grid(side);
+    let half = side / 2;
+    mesh.colors = Some(
+        (0..side * side)
+            .map(|index| {
+                let (x, y) = (index % side, index / side);
+                match (x < half, y < half) {
+                    (true, _) => [200, 30, 20],
+                    (false, true) => [20, 40, 210],
+                    (false, false) => [30, 180, 60],
+                }
+            })
+            .collect(),
+    );
+    mesh
+}
+
+fn position_key(position: [f64; 3]) -> [i64; 3] {
+    position.map(|value| (value * 1e4).round() as i64)
+}
+
+#[test]
+fn a_coloured_mesh_is_written_as_an_entity_per_colour_in_dxf_and_dwg() {
+    // 2 * 259 * 259 = 134,162 triangles, of which the red part alone is
+    // more than one entity holds.
+    let mesh = coloured_grid(260);
+    let colours =
+        palette::face_colours(mesh.colors.as_deref(), mesh.vertices.len(), &mesh.triangles)
+            .unwrap();
+    let groups = colours.groups();
+    assert!(groups.iter().any(|group| group.len() > MAX_MESH_FACES));
+    let expected_entities: usize = groups
+        .iter()
+        .map(|group| group.len().div_ceil(MAX_MESH_FACES))
+        .sum();
+    let directory = tempfile::tempdir().unwrap();
+    for format in [MeshFormat::Dxf, MeshFormat::Dwg] {
+        // The colour every triangle should be drawn in, by its corners.
+        let mut expected = std::collections::HashMap::new();
+        for (triangle, entry) in mesh.triangles.iter().zip(&colours.of_triangle) {
+            let key: Vec<[i64; 3]> = triangle
+                .iter()
+                .map(|&index| position_key(mesh.vertices[index as usize]))
+                .collect();
+            expected.insert(key, colours.palette[usize::from(*entry)]);
+        }
+        let path = directory
+            .path()
+            .join(format!("coloured.{}", format.extension()));
+        write_mesh(&mesh, &path, format, &[]).unwrap();
+        let drawing = if format == MeshFormat::Dxf {
+            DrawingFormat::Dxf
+        } else {
+            DrawingFormat::Dwg
+        };
+        let document = read_cad(&path, drawing);
+        assert_eq!(
+            document.layers.get(CAD_LAYER_MESH).unwrap().color,
+            Color::from_rgb(MESH_RGB[0], MESH_RGB[1], MESH_RGB[2])
+        );
+        let mut entities = 0;
+        let mut faces = 0;
+        let mut seen_colours = HashSet::new();
+        for entity in document.entities() {
+            let EntityType::Mesh(part) = entity else {
+                panic!("unexpected {entity:?}")
+            };
+            entities += 1;
+            assert_eq!(part.common.layer, CAD_LAYER_MESH);
+            let Color::Rgb { r, g, b } = part.common.color else {
+                panic!("not a true colour: {:?}", part.common.color)
+            };
+            seen_colours.insert([r, g, b]);
+            assert!(part.faces.len() <= MAX_MESH_FACES);
+            assert!(part.vertices.len() <= MAX_MESH_VERTICES);
+            faces += part.faces.len();
+            let used: HashSet<usize> = part
+                .faces
+                .iter()
+                .flat_map(|face| face.vertices.clone())
+                .collect();
+            assert_eq!(used.len(), part.vertices.len());
+            for face in &part.faces {
+                let key: Vec<[i64; 3]> = face
+                    .vertices
+                    .iter()
+                    .map(|index| {
+                        let vertex = part.vertices[*index];
+                        position_key([vertex.x, vertex.y, vertex.z])
+                    })
+                    .collect();
+                assert_eq!(expected.remove(&key), Some([r, g, b]), "{format:?}");
+            }
+        }
+        assert!(expected.is_empty(), "{format:?}");
+        assert_eq!(entities, expected_entities, "{format:?}");
+        assert_eq!(faces, mesh.triangles.len(), "{format:?}");
+        for rgb in [[200, 30, 20], [20, 40, 210], [30, 180, 60]] {
+            assert!(seen_colours.contains(&rgb), "{format:?} {rgb:?}");
+        }
+    }
+}
+
+#[test]
+fn a_coloured_mesh_has_a_colour_per_triangle_in_ifc() {
+    let mut mesh = tetrahedron(FAR);
+    mesh.colors = Some(vec![[255, 0, 0], [255, 0, 0], [255, 0, 0], [0, 0, 255]]);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("coloured.ifc");
+    write_mesh(&mesh, &path, MeshFormat::Ifc, &[]).unwrap();
+    let instances = check::read(&fs::read_to_string(&path).unwrap()).unwrap();
+    let of = |name: &str| -> Vec<(u64, &check::Instance)> {
+        instances
+            .iter()
+            .filter(|(_, instance)| instance.name == name)
+            .map(|(number, instance)| (*number, instance))
+            .collect()
+    };
+    let [(set, _)] = of("IFCTRIANGULATEDFACESET")[..] else {
+        panic!("one triangulated set")
+    };
+    let [(list, rgb_list)] = of("IFCCOLOURRGBLIST")[..] else {
+        panic!("one colour list")
+    };
+    let [(_, map)] = of("IFCINDEXEDCOLOURMAP")[..] else {
+        panic!("one colour map")
+    };
+    assert_eq!(map.attributes[0], format!("#{set}"));
+    assert_eq!(map.attributes[1], "$");
+    assert_eq!(map.attributes[2], format!("#{list}"));
+    let palette = check::members(&rgb_list.attributes[0]).unwrap();
+    assert_eq!(palette.len(), 2);
+    let indices = check::members(&map.attributes[3]).unwrap();
+    assert_eq!(indices.len(), mesh.triangles.len());
+    let colour = |triangle: usize| -> &str {
+        let index: usize = indices[triangle].parse().unwrap();
+        &palette[index - 1]
+    };
+    // The first triangle has red corners only; the others one blue one.
+    assert_eq!(colour(0), "(1.0,0.,0.)");
+    assert_eq!(colour(1), "(0.6667,0.,0.3333)");
+    assert_eq!(colour(1), colour(2));
+    assert_eq!(colour(1), colour(3));
+    // The surface style stays as the colour of the whole.
+    assert_eq!(of("IFCSTYLEDITEM").len(), 1);
+
+    // A mesh without colours has no colour map.
+    let path = directory.path().join("plain.ifc");
+    write_mesh(&tetrahedron(FAR), &path, MeshFormat::Ifc, &[]).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("IFCINDEXEDCOLOURMAP") && !text.contains("IFCCOLOURRGBLIST"));
+}
+
+#[test]
+fn a_mesh_of_many_vertices_is_split_into_entities_a_dwg_reads_back_whole() {
+    // 40,000 triangles that share no corners: 120,000 vertices, more than
+    // one entity holds.
+    let mut mesh = MeshGeometry::default();
+    for triangle in 0..40_000u32 {
+        let (x, y) = (f64::from(triangle % 200), f64::from(triangle / 200));
+        let first = mesh.vertices.len() as u32;
+        mesh.vertices
+            .extend([[x, y, 0.0], [x + 0.5, y, 0.0], [x, y + 0.5, 0.0]]);
+        mesh.triangles.push([first, first + 1, first + 2]);
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("soup.dwg");
+    write_mesh(&mesh, &path, MeshFormat::Dwg, &[]).unwrap();
+    let document = read_cad(&path, DrawingFormat::Dwg);
+    let parts: Vec<(usize, usize)> = document
+        .entities()
+        .map(|entity| match entity {
+            EntityType::Mesh(part) => (part.vertices.len(), part.faces.len()),
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(parts.len(), 2);
+    assert!(parts
+        .iter()
+        .all(|(vertices, _)| *vertices <= MAX_MESH_VERTICES));
+    assert_eq!(
+        parts.iter().map(|(_, faces)| faces).sum::<usize>(),
+        mesh.triangles.len()
+    );
 }

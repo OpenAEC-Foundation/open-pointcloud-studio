@@ -567,6 +567,7 @@ pub(crate) fn faces_model(
             rgb: face_color(face),
             vertices,
             triangles,
+            colors: None,
             polygons,
             cylinder: None,
             hidden_edges,
@@ -608,6 +609,7 @@ pub(crate) fn faces_model(
                 .iter()
                 .map(|triangle| triangle.map(|index| index as u32))
                 .collect(),
+            colors: None,
             polygons: Vec::new(),
             cylinder: Some(Cylinder {
                 start: face.axis_start,

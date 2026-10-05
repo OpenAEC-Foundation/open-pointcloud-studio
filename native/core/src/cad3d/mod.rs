@@ -10,15 +10,18 @@
 //!   it shows as its outline with its openings; a cylinder is a polyface
 //!   mesh of its scanned part with its axis as a line; a mesh is one or more
 //!   `MESH` entities. No ACIS solids: a recipient can turn a mesh into a
-//!   solid or a surface itself where its program offers that.
+//!   solid or a surface itself where its program offers that. A mesh with
+//!   colours is split by colour into entities of a true colour each.
 //! - [`ifc`]: IFC4 as a STEP physical file. Flat faces are polygonal face
 //!   sets with their openings, a cylinder seen from outside is an extruded
-//!   circle along its axis, a mesh is a triangulated face set.
+//!   circle along its axis, a mesh is a triangulated face set, with a
+//!   colour per triangle where the mesh has colours.
 //!
 //! All positions are scene coordinates in metres.
 
 pub(crate) mod cad;
 pub(crate) mod ifc;
+pub(crate) mod palette;
 pub(crate) mod step;
 
 pub use cad::plane_layer;
@@ -94,6 +97,9 @@ pub(crate) struct Object3d {
     pub vertices: Vec<[f64; 3]>,
     /// Counter-clockwise seen from the side the object faces.
     pub triangles: Vec<[u32; 3]>,
+    /// The colour of every vertex of a mesh from a coloured scan; nothing
+    /// for an object in one colour.
+    pub colors: Option<Vec<[u8; 3]>>,
     /// The outline of a flat face; empty for anything else.
     pub polygons: Vec<Polygon>,
     pub cylinder: Option<Cylinder>,
@@ -190,6 +196,7 @@ pub(crate) fn mesh_model(mesh: &MeshGeometry, source: &str, notes: &[&str]) -> M
             rgb: MESH_RGB,
             vertices: mesh.vertices.clone(),
             triangles: mesh.triangles.clone(),
+            colors: mesh.colors.clone(),
             polygons: Vec::new(),
             cylinder: None,
             hidden_edges: HashSet::new(),

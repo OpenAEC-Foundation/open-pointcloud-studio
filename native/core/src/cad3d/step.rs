@@ -315,6 +315,8 @@ pub(crate) mod check {
             "IFCSURFACESTYLE" => 3,
             "IFCSURFACESTYLESHADING" => 2,
             "IFCCOLOURRGB" => 4,
+            "IFCCOLOURRGBLIST" => 1,
+            "IFCINDEXEDCOLOURMAP" => 4,
             _ => return None,
         })
     }

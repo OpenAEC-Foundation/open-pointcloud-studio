@@ -16,7 +16,11 @@
 //!   `Curve3D` representation beside it; a cylinder seen from inside, a
 //!   shaft, has no solid to fill and is the triangulated scanned surface;
 //! - a mesh: an `IfcTriangulatedFaceSet`, closed when every edge has two
-//!   triangles.
+//!   triangles. A mesh with colours has an `IfcIndexedColourMap` with a
+//!   colour per triangle from a palette of at most
+//!   [`super::palette::MAX_COLOURS`] in an `IfcColourRgbList`; the surface
+//!   style of the object stays as the colour of a program that reads no
+//!   colour map.
 //!
 //! Coordinates: scans are often in national grid coordinates, hundreds of
 //! kilometres from zero, where a program that works in single precision
@@ -32,6 +36,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use super::palette::face_colours;
 use super::step::{guid, length, real, string, time_stamp};
 use super::{Kind, Model3d, Object3d, PropertyValue};
 use crate::LoadError;
@@ -327,6 +332,7 @@ fn write_object(
             }
             step.out.write_all(b"),$")?;
             step.end()?;
+            write_face_colours(object, set, step)?;
             (set, "Tessellation")
         } else {
             let ring = |ring: &[u32]| -> String {
@@ -438,4 +444,38 @@ fn write_object(
         )?;
     }
     Ok(element)
+}
+
+/// A colour per triangle of a face set, for a mesh with colours.
+fn write_face_colours(object: &Object3d, set: u64, step: &mut Step) -> std::io::Result<()> {
+    let Some(colours) = face_colours(
+        object.colors.as_deref(),
+        object.vertices.len(),
+        &object.triangles,
+    ) else {
+        return Ok(());
+    };
+    let ratio = |value: u8| real((f64::from(value) / 255.0 * 1e4).round() / 1e4);
+    let list = step.begin("IFCCOLOURRGBLIST")?;
+    step.out.write_all(b"(")?;
+    for (index, rgb) in colours.palette.iter().enumerate() {
+        if index > 0 {
+            step.out.write_all(b",")?;
+        }
+        let [r, g, b] = rgb.map(ratio);
+        write!(step.out, "({r},{g},{b})")?;
+    }
+    step.out.write_all(b")")?;
+    step.end()?;
+    step.begin("IFCINDEXEDCOLOURMAP")?;
+    write!(step.out, "#{set},$,#{list},(")?;
+    for (index, entry) in colours.of_triangle.iter().enumerate() {
+        if index > 0 {
+            step.out.write_all(b",")?;
+        }
+        // Colour list entries count from 1.
+        write!(step.out, "{}", u16::from(*entry) + 1)?;
+    }
+    step.out.write_all(b")")?;
+    step.end()
 }

@@ -1,7 +1,9 @@
 //! A [`Model3d`] as DXF or DWG: polyface meshes, `MESH` entities and lines
-//! on a layer per kind of object, in metres and scene coordinates.
+//! on a layer per kind of object, in metres and scene coordinates. A
+//! `MESH` entity has one colour, so a mesh with colours is written as an
+//! entity per colour of its palette, each in that true colour.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
@@ -9,6 +11,7 @@ use cadcodec::entities::{EntityType, Line, Mesh, PolyfaceFace, PolyfaceMesh, Pol
 use cadcodec::tables::{Layer, TableEntry};
 use cadcodec::{CadDocument, Color, DwgWriter, DxfWriter, Vector3};
 
+use super::palette::face_colours;
 use super::{
     edge, Kind, Model3d, Object3d, CAD_LAYER_CYLINDERS, CAD_LAYER_CYLINDER_AXES, CAD_LAYER_MESH,
     CAD_LAYER_PLANES,
@@ -25,6 +28,12 @@ pub(crate) const MAX_POLYFACE_FACES: usize = i16::MAX as usize;
 /// single entity of 179,000 triangles in a DWG and lost one of 318,000, so a
 /// larger mesh is split well below that.
 pub(crate) const MAX_MESH_FACES: usize = 65_536;
+/// The most vertices of one `MESH` entity. The codec reads no list of more
+/// than 100,000 items from a DWG, and a mesh of more vertices comes back
+/// without its faces. A mesh in one colour stays well below this; the
+/// entities of a mesh with colours, whose vertices on the border of two
+/// colours are in both, can reach it.
+pub(crate) const MAX_MESH_VERTICES: usize = 65_536;
 /// Colour of the axis of a cylinder: black or white, after the background.
 const AXIS_RGB: [u8; 3] = [0, 0, 0];
 /// Colour of the scanned surface of a cylinder.
@@ -137,14 +146,17 @@ fn build(model: &Model3d) -> Result<CadDocument, LoadError> {
             Kind::Mesh => (CAD_LAYER_MESH.to_owned(), object.rgb),
         };
         add_layer(&mut document, &layer, rgb)?;
-        let entities: Vec<EntityType> = match object.kind {
+        let entities: Vec<(EntityType, Color)> = match object.kind {
             Kind::Mesh => mesh_entities(object),
-            Kind::Plane(_) | Kind::Cylinder => polyface_entities(object),
+            Kind::Plane(_) | Kind::Cylinder => polyface_entities(object)
+                .into_iter()
+                .map(|entity| (entity, Color::ByLayer))
+                .collect(),
         };
-        for mut entity in entities {
+        for (mut entity, color) in entities {
             let common = entity.common_mut();
             common.layer = layer.clone();
-            common.color = Color::ByLayer;
+            common.color = color;
             document.add_entity(entity).map_err(codec_error)?;
         }
         if let (Kind::Cylinder, Some(shape)) = (object.kind, object.cylinder) {
@@ -168,44 +180,82 @@ fn vector(position: [f64; 3]) -> Vector3 {
 /// `MAX_POLYFACE_VERTICES` vertices and `MAX_POLYFACE_FACES` faces, with
 /// the edges the object hides made invisible.
 fn polyface_entities(object: &Object3d) -> Vec<EntityType> {
-    chunks(object, MAX_POLYFACE_VERTICES, MAX_POLYFACE_FACES)
-        .into_iter()
-        .map(|(vertices, triangles)| {
-            let mut mesh = PolyfaceMesh::new();
-            for &original in &vertices {
-                mesh.add_vertex(PolyfaceVertex::new(vector(
-                    object.vertices[original as usize],
-                )));
-            }
-            for (local, original) in triangles {
-                // Polyface vertices count from 1.
-                let [a, b, c] = local.map(|index| index as i16 + 1);
-                let mut face = PolyfaceFace::triangle(a, b, c);
-                for (slot, (from, to)) in [
-                    (original[0], original[1]),
-                    (original[1], original[2]),
-                    (original[2], original[0]),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    if object.hidden_edges.contains(&edge(from, to)) {
-                        face.set_edge_visibility(slot, false);
-                    }
+    chunks(
+        object.vertices.len(),
+        object.triangles.iter().copied(),
+        MAX_POLYFACE_VERTICES,
+        MAX_POLYFACE_FACES,
+    )
+    .into_iter()
+    .map(|(vertices, triangles)| {
+        let mut mesh = PolyfaceMesh::new();
+        for &original in &vertices {
+            mesh.add_vertex(PolyfaceVertex::new(vector(
+                object.vertices[original as usize],
+            )));
+        }
+        for (local, original) in triangles {
+            // Polyface vertices count from 1.
+            let [a, b, c] = local.map(|index| index as i16 + 1);
+            let mut face = PolyfaceFace::triangle(a, b, c);
+            for (slot, (from, to)) in [
+                (original[0], original[1]),
+                (original[1], original[2]),
+                (original[2], original[0]),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if object.hidden_edges.contains(&edge(from, to)) {
+                    face.set_edge_visibility(slot, false);
                 }
-                mesh.add_face(face);
             }
-            EntityType::PolyfaceMesh(mesh)
-        })
-        .collect()
+            mesh.add_face(face);
+        }
+        EntityType::PolyfaceMesh(mesh)
+    })
+    .collect()
 }
 
 /// The triangles of a mesh as `MESH` entities of at most `MAX_MESH_FACES`
-/// faces each.
-fn mesh_entities(object: &Object3d) -> Vec<EntityType> {
-    chunks(object, usize::MAX, MAX_MESH_FACES)
+/// faces and `MAX_MESH_VERTICES` vertices each, with the colour each is
+/// drawn in. A mesh in one colour takes the colour of its layer. A mesh with colours gets an entity of a true
+/// colour per palette entry, and more where that entry has more triangles
+/// than one entity holds; a vertex on the border of two colours is in the
+/// entities of both.
+fn mesh_entities(object: &Object3d) -> Vec<(EntityType, Color)> {
+    let count = object.vertices.len();
+    let groups: Vec<(Vec<Chunk>, Color)> =
+        match face_colours(object.colors.as_deref(), count, &object.triangles) {
+            None => vec![(
+                chunks(
+                    count,
+                    object.triangles.iter().copied(),
+                    MAX_MESH_VERTICES,
+                    MAX_MESH_FACES,
+                ),
+                Color::ByLayer,
+            )],
+            Some(colours) => colours
+                .groups()
+                .into_iter()
+                .zip(&colours.palette)
+                .filter(|(group, _)| !group.is_empty())
+                .map(|(group, &[r, g, b])| {
+                    let triangles = group
+                        .iter()
+                        .map(|&triangle| object.triangles[triangle as usize]);
+                    (
+                        chunks(count, triangles, MAX_MESH_VERTICES, MAX_MESH_FACES),
+                        Color::Rgb { r, g, b },
+                    )
+                })
+                .collect(),
+        };
+    groups
         .into_iter()
-        .map(|(vertices, triangles)| {
+        .flat_map(|(parts, color)| parts.into_iter().map(move |part| (part, color)))
+        .map(|((vertices, triangles), color)| {
             let mut mesh = Mesh::new();
             mesh.vertices = vertices
                 .iter()
@@ -215,7 +265,7 @@ fn mesh_entities(object: &Object3d) -> Vec<EntityType> {
                 mesh.add_triangle(local[0] as usize, local[1] as usize, local[2] as usize);
             }
             mesh.compute_edges();
-            EntityType::Mesh(mesh)
+            (EntityType::Mesh(mesh), color)
         })
         .collect()
 }
@@ -224,41 +274,53 @@ fn mesh_entities(object: &Object3d) -> Vec<EntityType> {
 /// local and in original vertices.
 type Chunk = (Vec<u32>, Vec<([u32; 3], [u32; 3])>);
 
-/// The triangles of an object in order, cut into chunks of at most
-/// `max_vertices` vertices and `max_faces` triangles. Every chunk of a cut
-/// object holds the vertices of its own triangles only.
-fn chunks(object: &Object3d, max_vertices: usize, max_faces: usize) -> Vec<Chunk> {
-    // An object that fits keeps its vertices as they are.
-    if object.vertices.len() <= max_vertices && object.triangles.len() <= max_faces {
-        let vertices = (0..object.vertices.len() as u32).collect();
-        let triangles = object
-            .triangles
-            .iter()
-            .map(|triangle| (*triangle, *triangle))
-            .collect();
-        return vec![(vertices, triangles)];
+/// Triangles over `vertex_count` vertices in order, cut into chunks of at
+/// most `max_vertices` vertices and `max_faces` triangles. Triangles that
+/// fit as a whole and use every vertex keep their vertices as they are;
+/// otherwise every chunk holds the vertices of its own triangles only.
+fn chunks(
+    vertex_count: usize,
+    triangles: impl ExactSizeIterator<Item = [u32; 3]> + Clone,
+    max_vertices: usize,
+    max_faces: usize,
+) -> Vec<Chunk> {
+    const UNSET: u32 = u32::MAX;
+    if vertex_count <= max_vertices && triangles.len() <= max_faces {
+        let mut used = vec![false; vertex_count];
+        for corner in triangles.clone().flatten() {
+            used[corner as usize] = true;
+        }
+        if used.iter().all(|used| *used) {
+            let vertices = (0..vertex_count as u32).collect();
+            let triangles = triangles.map(|triangle| (triangle, triangle)).collect();
+            return vec![(vertices, triangles)];
+        }
     }
     let mut done = Vec::new();
-    let mut local_of: HashMap<u32, u32> = HashMap::new();
+    let mut local_of = vec![UNSET; vertex_count];
     let mut current: Chunk = (Vec::new(), Vec::new());
-    for triangle in &object.triangles {
+    for triangle in triangles {
         let new = (0..3)
             .filter(|&slot| {
-                !local_of.contains_key(&triangle[slot])
+                local_of[triangle[slot] as usize] == UNSET
                     && !triangle[..slot].contains(&triangle[slot])
             })
             .count();
         if current.1.len() + 1 > max_faces || current.0.len() + new > max_vertices {
+            for &original in &current.0 {
+                local_of[original as usize] = UNSET;
+            }
             done.push(std::mem::take(&mut current));
-            local_of.clear();
         }
         let local = triangle.map(|original| {
-            *local_of.entry(original).or_insert_with(|| {
+            let slot = &mut local_of[original as usize];
+            if *slot == UNSET {
                 current.0.push(original);
-                (current.0.len() - 1) as u32
-            })
+                *slot = (current.0.len() - 1) as u32;
+            }
+            *slot
         });
-        current.1.push((local, *triangle));
+        current.1.push((local, triangle));
     }
     if !current.1.is_empty() {
         done.push(current);
