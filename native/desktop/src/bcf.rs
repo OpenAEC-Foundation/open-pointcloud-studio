@@ -119,8 +119,10 @@ pub struct Plane {
     pub direction: Xyz,
 }
 
-/// The six faces of a section box, each facing outwards.
+/// The six faces of a section box, each facing outwards. The faces of a
+/// turned box are turned with it.
 pub fn clipping_planes(section: &SectionBox) -> Vec<Plane> {
+    let turned = section.oriented();
     let centre: Xyz = std::array::from_fn(|axis| (section.min[axis] + section.max[axis]) * 0.5);
     let mut planes = Vec::with_capacity(6);
     for axis in 0..3 {
@@ -129,6 +131,10 @@ pub fn clipping_planes(section: &SectionBox) -> Vec<Plane> {
             location[axis] = limit;
             let mut direction = [0.0; 3];
             direction[axis] = outwards;
+            if turned.is_turned() && axis < 2 {
+                location = turned.to_scene(location);
+                direction = turned.axes()[axis].map(|value| value * outwards);
+            }
             planes.push(Plane {
                 location,
                 direction,
@@ -1096,6 +1102,7 @@ mod tests {
             enabled: true,
             min: [207_440.0, 474_015.5, 0.25],
             max: [207_452.5, 474_021.0, 3.0],
+            rotation: 0.0,
         };
         let planes = clipping_planes(&section);
         assert_eq!(planes.len(), 6);
@@ -1156,6 +1163,43 @@ mod tests {
     }
 
     #[test]
+    fn the_clipping_planes_of_a_turned_box_keep_what_the_turned_box_holds() {
+        let section = SectionBox {
+            enabled: true,
+            min: [207_440.0, 474_015.5, 0.25],
+            max: [207_452.5, 474_021.0, 3.0],
+            rotation: 30.0,
+        };
+        let turned = section.oriented();
+        let planes = clipping_planes(&section);
+        assert_eq!(planes.len(), 6);
+        let kept = |point: Xyz| {
+            planes.iter().all(|plane| {
+                let offset: Xyz = std::array::from_fn(|axis| point[axis] - plane.location[axis]);
+                dot(offset, plane.direction) <= 1e-9
+            })
+        };
+        let around = turned.aabb();
+        let mut checked = [0, 0];
+        for step in 0..1_000u32 {
+            let point: Xyz = std::array::from_fn(|axis| {
+                let fraction = f64::from(step / 10u32.pow(axis as u32) % 10) / 9.0;
+                around.min[axis] + (around.max[axis] - around.min[axis]) * (fraction * 1.2 - 0.1)
+            });
+            assert_eq!(kept(point), turned.contains(point), "{point:?}");
+            checked[usize::from(turned.contains(point))] += 1;
+        }
+        assert!(checked[0] > 100 && checked[1] > 100, "{checked:?}");
+        // Every plane has a direction of unit length and lies on a face.
+        for plane in &planes {
+            assert!((dot(plane.direction, plane.direction) - 1.0).abs() < 1e-12);
+            let local = turned.to_box(plane.location);
+            assert!((0..3).all(|axis| local[axis] >= section.min[axis] - 1e-6
+                && local[axis] <= section.max[axis] + 1e-6));
+        }
+    }
+
+    #[test]
     fn dates_are_written_as_utc_date_times() {
         assert_eq!(timestamp(0), "1970-01-01T00:00:00Z");
         assert_eq!(timestamp(951_782_400), "2000-02-29T00:00:00Z");
@@ -1190,6 +1234,7 @@ mod tests {
             enabled: true,
             min: [207_440.0, 474_015.5, 0.25],
             max: [207_452.5, 474_021.0, 3.0],
+            rotation: 0.0,
         });
         view.annotations = vec![
             Annotation::Note {

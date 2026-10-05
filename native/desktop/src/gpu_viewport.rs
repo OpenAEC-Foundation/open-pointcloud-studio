@@ -15,7 +15,7 @@ use iced::widget::shader::{self, Shader};
 use iced::Rectangle;
 use iced_wgpu::primitive::{Primitive, Storage};
 use iced_wgpu::wgpu;
-use pointcloud_core::{Bounds, IndexedPoint, MeshGeometry, PointCloud};
+use pointcloud_core::{Bounds, IndexedPoint, MeshGeometry, OrientedBox, PointCloud};
 
 // Keep each upload below conservative WGPU adapter buffer limits. The full
 // viewport budget can span multiple draw calls without losing detail.
@@ -140,7 +140,7 @@ impl MeshKey {
 struct SceneKey {
     clouds: Vec<CloudKey>,
     bounds: Option<Bounds>,
-    section: Option<Bounds>,
+    section: Option<OrientedBox>,
     color_mode: ColorMode,
     budget: usize,
     filters: [bool; 4],
@@ -548,19 +548,28 @@ impl shader::Program<Message> for GpuViewport<'_> {
             camera.clip_enabled[1] = if self.overlay.eye_dome { 1.0 } else { 0.0 };
             camera.clip_enabled[2] = self.overlay.eye_dome_strength;
             if let Some(section) = self.overlay.section {
+                let (min, max) = (section.bounds.min, section.bounds.max);
+                // A turned box carries the sine and cosine of its turn in
+                // the spare components; the shader turns each fragment into
+                // the frame of the box before it tests the limits.
+                let (sin, cos) = if section.is_turned() {
+                    section.rotation_degrees.to_radians().sin_cos()
+                } else {
+                    (0.0, 1.0)
+                };
                 camera.clip_min = [
-                    (section.min[0] - center[0]) as f32,
-                    (section.min[1] - center[1]) as f32,
-                    (section.min[2] - center[2]) as f32,
-                    0.0,
+                    (min[0] - center[0]) as f32,
+                    (min[1] - center[1]) as f32,
+                    (min[2] - center[2]) as f32,
+                    sin as f32,
                 ];
                 camera.clip_max = [
-                    (section.max[0] - center[0]) as f32,
-                    (section.max[1] - center[1]) as f32,
-                    (section.max[2] - center[2]) as f32,
-                    0.0,
+                    (max[0] - center[0]) as f32,
+                    (max[1] - center[1]) as f32,
+                    (max[2] - center[2]) as f32,
+                    cos as f32,
                 ];
-                camera.clip_enabled[0] = 1.0;
+                camera.clip_enabled[0] = if section.is_turned() { 2.0 } else { 1.0 };
             }
         }
         let mut photos = PhotoFrame {

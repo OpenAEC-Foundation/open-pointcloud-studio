@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use pointcloud_core::{Bounds, IndexedNode};
+use pointcloud_core::{Bounds, IndexedNode, OrientedBox};
 
 use crate::selection::Projection;
 
@@ -214,16 +214,14 @@ impl ScreenFill {
         items: &[T],
         position: impl Fn(&T) -> [f64; 3],
         projection: Projection,
-        section: Option<Bounds>,
+        section: Option<OrientedBox>,
     ) {
         let mut sweep = |step: usize| {
             let (mut probes, mut hits) = (0u128, 0u128);
             for item in items.iter().step_by(step) {
                 probes += 1;
                 let xyz = position(item);
-                if section.is_some_and(|clip| {
-                    (0..3).any(|axis| xyz[axis] < clip.min[axis] || xyz[axis] > clip.max[axis])
-                }) {
+                if section.is_some_and(|clip| !clip.contains(xyz)) {
                     continue;
                 }
                 if let Some(cell) = projection.grid_cell(xyz, LOD_FILL_GRID) {
@@ -516,10 +514,10 @@ mod tests {
 
         let half = fill(
             framed,
-            Some(Bounds {
+            Some(OrientedBox::from(Bounds {
                 min: [0.0; 3],
                 max: [100.0, 50.0, 100.0],
-            }),
+            })),
         );
         assert!(
             (4_000..=6_000).contains(&half.points),
@@ -533,10 +531,10 @@ mod tests {
             max: [100.0; 3],
         };
         let mut both = half;
-        both.add(&points, |xyz| *xyz, framed, Some(other_half));
+        both.add(&points, |xyz| *xyz, framed, Some(other_half.into()));
         assert_eq!(
             both.points,
-            half.points + fill(framed, Some(other_half)).points
+            half.points + fill(framed, Some(other_half.into())).points
         );
         assert_eq!(both.cell_count(), whole.cell_count());
         let before = both.points;

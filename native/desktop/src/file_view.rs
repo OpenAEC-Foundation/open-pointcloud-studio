@@ -75,7 +75,8 @@ pub enum FileAction {
     ExportSelection,
     ExportWithoutSelection,
     ExportSection,
-    /// Ask where to save what the section box cuts as a 2D drawing.
+    /// Draw what the section box cuts as a 2D drawing: the block of the
+    /// Section drawing tool opens first, so that the view can be chosen.
     ExportDrawing,
     ExportDecimated,
     ExportMesh,
@@ -102,7 +103,9 @@ impl Studio {
             FileAction::ExportSelection => Message::ExportSelection,
             FileAction::ExportWithoutSelection => Message::RemoveSelection,
             FileAction::ExportSection => Message::ExportSection,
-            FileAction::ExportDrawing => Message::Drawing(crate::drawing::DrawingAction::Export),
+            FileAction::ExportDrawing => {
+                Message::Drawing(crate::drawing::DrawingAction::ExportFromFile)
+            }
             FileAction::ExportDecimated => Message::Decimate,
             FileAction::ExportMesh => Message::ExportMesh,
             FileAction::ExportFaces => Message::Faces(crate::faces::FaceAction::Export),

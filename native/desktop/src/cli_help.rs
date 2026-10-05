@@ -76,13 +76,13 @@ pub const MODES: &[Mode] = &[
     Mode {
         flag: "--section",
         short: None,
-        arguments: "INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT",
+        arguments: "INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]",
         description: key("Exports the points of a scan that lie inside a box."),
     },
     Mode {
         flag: "--drawing",
         short: None,
-        arguments: "INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf|.dwg [--view plan|front|back|left|right] [--thickness METRES] [--units mm|m] [--fill on|off]",
+        arguments: "INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf|.dwg [--view plan|front|back|left|right] [--rotation DEGREES] [--thickness METRES] [--units mm|m] [--fill on|off]",
         description: key(
             "Draws the slab behind one face of a box in a scan as a 2D drawing in DXF or DWG.",
         ),
@@ -108,7 +108,7 @@ pub const MODES: &[Mode] = &[
     Mode {
         flag: "--closed-mesh",
         short: None,
-        arguments: "INPUT OUTPUT.obj|.ply|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]",
+        arguments: "INPUT OUTPUT.obj|.ply|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]",
         description: key(
             "Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY or STL.",
         ),
@@ -116,7 +116,7 @@ pub const MODES: &[Mode] = &[
     Mode {
         flag: "--faces",
         short: None,
-        arguments: "INPUT OUTPUT.json|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]",
+        arguments: "INPUT OUTPUT.json|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]",
         description: key(
             "Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON or OBJ.",
         ),

@@ -62,7 +62,7 @@ use lod_pace::{
 };
 use pointcloud_core::{
     BagBounds, BagLod, Bounds, ExportFormat, IndexConfig, IndexProgress, IndexStage, IndexedPoint,
-    MeshGeometry, OctreeIndex, Point, PointCloud, SurfaceMeshConfig,
+    MeshGeometry, OctreeIndex, OrientedBox, Point, PointCloud, SurfaceMeshConfig,
 };
 use preferences::{MAX_POINT_BUDGET, MIN_POINT_BUDGET};
 use rayon::prelude::*;
@@ -272,7 +272,7 @@ fn export_edited_section(
     destination: &Path,
     format: ExportFormat,
     transform: CloudTransform,
-    section: Bounds,
+    section: OrientedBox,
     deleted: Option<&DeletionMask>,
 ) -> Result<u64, pointcloud_core::LoadError> {
     if transform.is_identity() {
@@ -295,10 +295,7 @@ fn export_edited_section(
                 transform.offset,
                 |ordinal, point| {
                     let xyz = transform.xyz(point.xyz);
-                    deleted.is_none_or(|mask| !mask.contains(ordinal))
-                        && (0..3).all(|axis| {
-                            xyz[axis] >= section.min[axis] && xyz[axis] <= section.max[axis]
-                        })
+                    deleted.is_none_or(|mask| !mask.contains(ordinal)) && section.contains(xyz)
                 },
             )?;
             if let Some(count) = translated {
@@ -310,13 +307,57 @@ fn export_edited_section(
                 return None;
             }
             let point = transform.point(point);
-            (0..3)
-                .all(|axis| {
-                    point.xyz[axis] >= section.min[axis] && point.xyz[axis] <= section.max[axis]
-                })
-                .then_some(point)
+            section.contains(point.xyz).then_some(point)
         })
     }
+}
+
+/// The reference of a section box turned by `rotation` degrees: the box
+/// around the clouds in the frame of that turn about the vertical through
+/// their centre. Without a turn, the box around the clouds.
+fn section_frame_reference(clouds: &[CloudEntry], rotation: f64) -> Option<Bounds> {
+    let overall = combined_bounds(clouds)?;
+    if rotation == 0.0 {
+        return Some(overall);
+    }
+    let center = overall.center();
+    OrientedBox::frame_bounds(
+        pointcloud_core::bounds_corners(overall),
+        rotation,
+        [center[0], center[1]],
+    )
+}
+
+/// The turn of the frame a reference is given in: about the vertical through
+/// the centre of the reference.
+fn section_pivot_frame(reference: Bounds, rotation: f64) -> OrientedBox {
+    let center = reference.center();
+    OrientedBox::new(
+        Bounds {
+            min: center,
+            max: center,
+        },
+        rotation,
+    )
+}
+
+/// A turn in degrees as the Properties field shows it: no more digits than
+/// it has, up to four.
+fn format_rotation(degrees: f64) -> String {
+    let text = format!("{degrees:.4}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    match text {
+        "-0" | "" => "0".into(),
+        text => text.into(),
+    }
+}
+
+/// Parse a turn typed in degrees.
+fn parse_rotation(text: &str) -> Option<f64> {
+    let text = text.trim().trim_end_matches('°').trim().replace(',', ".");
+    text.parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && value.abs() <= 3_600.0)
 }
 
 fn section_within_model(requested: Bounds, model: Bounds) -> Option<Bounds> {
@@ -688,13 +729,29 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--section")) {
-        let (Some(source), Some(limits), Some(destination), None) =
-            (args.next(), args.next(), args.next(), args.next())
-        else {
+        let usage = || {
             eprintln!(
-                "Usage: open-pointcloud-studio --section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT"
+                "Usage: open-pointcloud-studio --section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]"
             );
             std::process::exit(2);
+        };
+        let (Some(source), Some(limits), Some(destination)) =
+            (args.next(), args.next(), args.next())
+        else {
+            usage()
+        };
+        let rotation = match (args.next(), args.next(), args.next()) {
+            (None, _, _) => 0.0,
+            (Some(flag), Some(value), None) if flag == "--rotation" => {
+                match value.to_str().and_then(parse_rotation) {
+                    Some(rotation) => rotation,
+                    None => {
+                        eprintln!("--rotation must be a number of degrees");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            _ => usage(),
         };
         let source = PathBuf::from(source);
         let destination = PathBuf::from(destination);
@@ -716,10 +773,13 @@ fn main() -> iced::Result {
             eprintln!("Section limits must be six comma-separated numbers");
             std::process::exit(2);
         }
-        let section = Bounds {
-            min: [values[0], values[1], values[2]],
-            max: [values[3], values[4], values[5]],
-        };
+        let section = OrientedBox::new(
+            Bounds {
+                min: [values[0], values[1], values[2]],
+                max: [values[3], values[4], values[5]],
+            },
+            rotation,
+        );
         match open_for_export(&source).and_then(|cloud| {
             pointcloud_core::export_section(&cloud, &destination, format, section)
         }) {
@@ -743,7 +803,7 @@ fn main() -> iced::Result {
             Err((code, line)) => {
                 if line.is_empty() {
                     eprintln!(
-                        "Usage: open-pointcloud-studio --drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf|.dwg [--view plan|front|back|left|right] [--thickness METRES] [--units mm|m] [--fill on|off]"
+                        "Usage: open-pointcloud-studio --drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf|.dwg [--view plan|front|back|left|right] [--rotation DEGREES] [--thickness METRES] [--units mm|m] [--fill on|off]"
                     );
                 } else {
                     eprintln!("{line}");
@@ -762,7 +822,7 @@ fn main() -> iced::Result {
             Err((code, line)) => {
                 if line.is_empty() {
                     eprintln!(
-                        "Usage: open-pointcloud-studio --closed-mesh INPUT OUTPUT.obj|.ply|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]"
+                        "Usage: open-pointcloud-studio --closed-mesh INPUT OUTPUT.obj|.ply|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]"
                     );
                 } else {
                     eprintln!("{line}");
@@ -781,7 +841,7 @@ fn main() -> iced::Result {
             Err((code, line)) => {
                 if line.is_empty() {
                     eprintln!(
-                        "Usage: open-pointcloud-studio --faces INPUT OUTPUT.json|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]"
+                        "Usage: open-pointcloud-studio --faces INPUT OUTPUT.json|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]"
                     );
                 } else {
                     eprintln!("{line}");
@@ -1534,7 +1594,7 @@ enum Message {
     ExportSection,
     SectionExportPathChosen(
         Arc<PointCloud>,
-        Bounds,
+        OrientedBox,
         ExportFormat,
         CloudTransform,
         Option<Arc<DeletionMask>>,
@@ -1669,6 +1729,14 @@ enum Message {
     SectionHandleDelta(usize, bool, f32),
     SectionCoordinate(usize, bool, String),
     ApplySectionCoordinates,
+    SectionRotationInput(String),
+    ApplySectionRotation,
+    AlignSectionToWalls,
+    /// The direction of the walls found for the section box as it was set.
+    SectionWallsFound(
+        OrientedBox,
+        Result<Option<pointcloud_core::WallDirection>, String>,
+    ),
     ResetSectionBox,
     ZoomToSection,
     FitSectionToSelection,
@@ -1815,10 +1883,19 @@ struct Studio {
     merge_job: Option<MergeJob>,
     merge_dialog_pending: bool,
     selection_bounds_pending: bool,
+    /// The reference the percentages of the section box are taken of, in
+    /// the frame of its turn: a turn of `section_rotation` about the
+    /// vertical through the centre of the reference.
     section_reference_bounds: Option<Bounds>,
     section_min_percent: [f64; 3],
     section_max_percent: [f64; 3],
     section_coordinate_inputs: [[String; 2]; 3],
+    /// The turn of the section box about the vertical, in degrees
+    /// counter-clockwise from above, between -180 and 180.
+    section_rotation: f64,
+    section_rotation_input: String,
+    /// Whether the walls in the section box are being looked for.
+    section_align_pending: bool,
     yaw: f32,
     pitch: f32,
     zoom: f32,
@@ -1910,7 +1987,7 @@ struct LodRefinement {
     requested: Vec<usize>,
     sampled_limits: Vec<usize>,
     samples: Vec<Vec<IndexedPoint>>,
-    section: Option<Bounds>,
+    section: Option<OrientedBox>,
     projection: Projection,
     cancel: Arc<AtomicBool>,
     budget: usize,
@@ -1945,11 +2022,8 @@ impl LodRefinement {
                         |bounds| projected(bounds).is_some(),
                         |record| {
                             let xyz = transform.xyz(record.point.xyz);
-                            section.is_none_or(|clip| {
-                                (0..3).all(|axis| {
-                                    xyz[axis] >= clip.min[axis] && xyz[axis] <= clip.max[axis]
-                                })
-                            }) && projection.project(xyz).is_some()
+                            section.is_none_or(|clip| clip.contains(xyz))
+                                && projection.project(xyz).is_some()
                         },
                         || self.cancel.load(Ordering::Relaxed),
                     )
@@ -2257,6 +2331,9 @@ impl Default for Studio {
             section_coordinate_inputs: std::array::from_fn(|_| {
                 std::array::from_fn(|_| String::new())
             }),
+            section_rotation: 0.0,
+            section_rotation_input: "0".into(),
+            section_align_pending: false,
             yaw: -0.8,
             pitch: 0.6,
             zoom: 1.0,
@@ -2327,7 +2404,7 @@ impl Studio {
             buildings: self.filter_buildings,
             other: self.filter_other,
             classes: self.class_visibility,
-            section: self.section_bounds(),
+            section: self.section_box(),
         }
     }
 
@@ -2384,7 +2461,7 @@ impl Studio {
         self.revision += 1;
         self.active = Some(self.clouds.len() - 1);
         if self.section_enabled && self.section_reference_bounds.is_none() {
-            self.section_reference_bounds = combined_bounds(&self.clouds);
+            self.reset_section_reference();
             self.sync_section_coordinate_inputs();
         }
         self.frame_new_scene();
@@ -3047,9 +3124,7 @@ impl Studio {
                         })
                     })
                     .collect();
-                let section = self
-                    .section_bounds()
-                    .map(|bounds| json!({"min": bounds.min, "max": bounds.max}));
+                let section = self.section_box().map(|_| self.section_value());
                 let active_source = self.active_camera_source();
                 let camera_views: Vec<_> = self
                     .views
@@ -3131,6 +3206,8 @@ impl Studio {
                 answer.0["result"]["mesh_export_pending"] = Value::Bool(self.mesh_export_pending);
                 answer.0["result"]["file_view"] = self.file_view_value();
                 answer.0["result"]["drawing"] = self.drawing.value();
+                answer.0["result"]["section_align_pending"] =
+                    Value::Bool(self.section_align_pending);
                 answer.0["result"]["closed_mesh"] = self.closed_mesh.value();
                 answer.0["result"]["faces"] = self.faces_value();
                 answer
@@ -3455,9 +3532,42 @@ impl Studio {
                     (json!({"ok": true, "budget": points}), task)
                 }
             }
-            ApiCommand::SetSection { min, max } => {
-                if let Some(overall) = combined_bounds(&self.clouds) {
+            ApiCommand::SetSection { min, max, rotation } => {
+                let turned = OrientedBox::new(Bounds { min, max }, rotation.unwrap_or(0.0));
+                if turned.is_turned() || !turned.rotation_degrees.is_finite() {
+                    let overall = combined_bounds(&self.clouds);
+                    let reaches = overall.is_some_and(|overall| {
+                        let around = turned.aabb();
+                        (0..3).all(|axis| {
+                            around.min[axis] <= overall.max[axis]
+                                && around.max[axis] >= overall.min[axis]
+                        })
+                    });
+                    if overall.is_none() {
+                        (
+                            json!({"ok": false, "error": "open a cloud before setting a section"}),
+                            Task::none(),
+                        )
+                    } else if !turned.is_valid()
+                        || (0..2).any(|axis| turned.bounds.min[axis] >= turned.bounds.max[axis])
+                        || !reaches
+                        || !self.place_section(turned)
+                    {
+                        (
+                            json!({"ok": false, "error": "a turned section box must be finite, ordered, have a width and length, and reach the model"}),
+                            Task::none(),
+                        )
+                    } else {
+                        self.section_enabled = true;
+                        self.sync_section_coordinate_inputs();
+                        self.revision += 1;
+                        self.status = "Section box updated through native API".into();
+                        let task = self.schedule_detail();
+                        (json!({"ok": true, "section": self.section_value()}), task)
+                    }
+                } else if let Some(overall) = combined_bounds(&self.clouds) {
                     if let Some(section) = section_within_model(Bounds { min, max }, overall) {
+                        self.set_section_rotation_value(0.0);
                         self.section_reference_bounds = Some(overall);
                         for axis in 0..3 {
                             let span = overall.max[axis] - overall.min[axis];
@@ -3474,7 +3584,7 @@ impl Studio {
                         self.status = "Section box updated through native API".into();
                         let task = self.schedule_detail();
                         (
-                            json!({"ok": true, "section": {"min": section.min, "max": section.max}}),
+                            json!({"ok": true, "section": {"min": section.min, "max": section.max, "rotation": 0.0}}),
                             task,
                         )
                     } else {
@@ -3493,6 +3603,22 @@ impl Studio {
             ApiCommand::ClearSection => {
                 let task = self.update(Message::SetSectionEnabled(false));
                 (json!({"ok": true}), task)
+            }
+            ApiCommand::AlignSectionToWalls => {
+                if self.section_box().is_none() {
+                    (
+                        json!({"ok": false, "error": "section box is not enabled"}),
+                        Task::none(),
+                    )
+                } else if self.section_align_pending {
+                    (
+                        json!({"ok": false, "error": "the walls are already being looked for"}),
+                        Task::none(),
+                    )
+                } else {
+                    let task = self.update(Message::AlignSectionToWalls);
+                    (json!({"ok": true, "started": true}), task)
+                }
             }
             ApiCommand::SelectWorld { min, max } => {
                 if !(0..3).all(|axis| {
@@ -3539,7 +3665,7 @@ impl Studio {
                             buildings: self.filter_buildings,
                             other: self.filter_other,
                             classes: self.class_visibility,
-                            section: self.section_bounds(),
+                            section: self.section_box(),
                         };
                         self.selection_pending = true;
                         let cancel = Arc::new(AtomicBool::new(false));
@@ -4076,7 +4202,7 @@ impl Studio {
         let deleted = entry.deleted.as_ref().map(Arc::clone);
         let transform = entry.transform;
         let section = if mode == ApiExportMode::Section {
-            let Some(section) = self.section_bounds() else {
+            let Some(section) = self.section_box() else {
                 return (
                     json!({"ok": false, "error": "section box is not enabled"}),
                     Task::none(),
@@ -4448,7 +4574,7 @@ impl Studio {
         };
         entry.transform = next;
         if !self.section_enabled {
-            self.section_reference_bounds = combined_bounds(&self.clouds);
+            self.reset_section_reference();
             self.sync_section_coordinate_inputs();
         }
         self.preserve_camera_for_scene_change(old_scene);
@@ -4619,7 +4745,7 @@ impl Studio {
                     self.revision += 1;
                     self.active = Some(self.clouds.len() - 1);
                     if self.section_enabled && self.section_reference_bounds.is_none() {
-                        self.section_reference_bounds = combined_bounds(&self.clouds);
+                        self.reset_section_reference();
                         self.sync_section_coordinate_inputs();
                     }
                     let identity = Arc::clone(&header_cloud);
@@ -4846,7 +4972,7 @@ impl Studio {
             buildings: self.filter_buildings,
             other: self.filter_other,
             classes: self.class_visibility,
-            section: self.section_bounds(),
+            section: self.section_box(),
         };
         let revision = self.revision;
         self.pending_delete = false;
@@ -5540,7 +5666,7 @@ impl Studio {
                     self.revision += 1;
                     self.active = Some(self.clouds.len() - 1);
                     if self.section_enabled && self.section_reference_bounds.is_none() {
-                        self.section_reference_bounds = combined_bounds(&self.clouds);
+                        self.reset_section_reference();
                         self.sync_section_coordinate_inputs();
                     }
                     self.frame_new_scene();
@@ -5635,7 +5761,7 @@ impl Studio {
             }
             Message::ExportSection => {
                 if let (Some(section), Some(entry)) = (
-                    self.section_bounds(),
+                    self.section_box(),
                     self.active.and_then(|index| self.clouds.get(index)),
                 ) {
                     let format = self.export_format;
@@ -6397,7 +6523,7 @@ impl Studio {
                         {
                             entry.transform = next;
                             if !self.section_enabled {
-                                self.section_reference_bounds = combined_bounds(&self.clouds);
+                                self.reset_section_reference();
                                 self.sync_section_coordinate_inputs();
                             }
                             self.preserve_camera_for_scene_change(old_scene);
@@ -6577,7 +6703,7 @@ impl Studio {
                 if let Some(entry) = self.active.and_then(|index| self.clouds.get_mut(index)) {
                     entry.transform = CloudTransform::default();
                     if reset_section || !self.section_enabled {
-                        self.section_reference_bounds = combined_bounds(&self.clouds);
+                        self.reset_section_reference();
                         if reset_section {
                             self.section_min_percent = [0.0; 3];
                             self.section_max_percent = [100.0; 3];
@@ -6744,7 +6870,7 @@ impl Studio {
                 let Some(bounds) = combined_bounds(&self.clouds) else {
                     return Task::none();
                 };
-                let section = self.section_bounds();
+                let section = self.section_box();
                 let size = self.scene_size();
                 let projection = self.projection(bounds, size.width, size.height);
                 let indexed_sources: Vec<_> = self
@@ -7244,7 +7370,7 @@ impl Studio {
             }
             Message::SetSectionEnabled(enabled) => {
                 if enabled && self.section_reference_bounds.is_none() {
-                    self.section_reference_bounds = combined_bounds(&self.clouds);
+                    self.reset_section_reference();
                 }
                 self.section_enabled = enabled;
                 if enabled {
@@ -7323,6 +7449,42 @@ impl Studio {
                     min: limits.map(|pair| pair[0]),
                     max: limits.map(|pair| pair[1]),
                 };
+                let Some(rotation) = parse_rotation(&self.section_rotation_input) else {
+                    self.status = "The rotation must be a number of degrees".into();
+                    return Task::none();
+                };
+                let turned = OrientedBox::new(requested, rotation);
+                if turned.is_turned() {
+                    // A turned box reaches past the model in its corners; it
+                    // only has to be a box that reaches the model.
+                    let around = turned.aabb();
+                    let model = combined_bounds(&self.clouds).unwrap_or(overall);
+                    let reaches = (0..3).all(|axis| {
+                        around.min[axis] <= model.max[axis] && around.max[axis] >= model.min[axis]
+                    });
+                    if !turned.is_valid()
+                        || (0..2).any(|axis| requested.min[axis] >= requested.max[axis])
+                        || !reaches
+                        || !self.place_section(turned)
+                    {
+                        self.status =
+                            "Section limits must be ordered and the box must reach the model"
+                                .into();
+                        return Task::none();
+                    }
+                    self.section_enabled = true;
+                    self.sync_section_coordinate_inputs();
+                    self.revision += 1;
+                    self.status = "Section box updated from XYZ coordinates and rotation".into();
+                    return self.schedule_detail();
+                }
+                // Back from a turned box to one along the model axes: the
+                // reference is the model again, not the frame of the turn.
+                let overall = if self.section_rotation != 0.0 {
+                    combined_bounds(&self.clouds).unwrap_or(overall)
+                } else {
+                    overall
+                };
                 let Some(section) = section_within_model(requested, overall) else {
                     self.status =
                         "Section limits must be ordered and inside the model bounds".into();
@@ -7339,6 +7501,7 @@ impl Studio {
                                 .clamp(0.0, 100.0);
                     }
                 }
+                self.set_section_rotation_value(0.0);
                 self.section_reference_bounds = Some(overall);
                 self.section_enabled = true;
                 self.sync_section_coordinate_inputs();
@@ -7347,12 +7510,59 @@ impl Studio {
                 return self.schedule_detail();
             }
             Message::ResetSectionBox => {
-                self.section_reference_bounds = combined_bounds(&self.clouds);
+                // Around the whole model again, in the turn the box has.
+                self.reset_section_reference();
                 self.section_min_percent = [0.0; 3];
                 self.section_max_percent = [100.0; 3];
                 self.sync_section_coordinate_inputs();
                 self.revision += 1;
                 return self.schedule_detail();
+            }
+            Message::SectionRotationInput(value) => {
+                self.section_rotation_input = value;
+            }
+            Message::ApplySectionRotation => {
+                let Some(rotation) = parse_rotation(&self.section_rotation_input) else {
+                    self.status = "The rotation must be a number of degrees".into();
+                    return Task::none();
+                };
+                if !self.turn_section(rotation) {
+                    self.status = "Open a point cloud before turning the section box".into();
+                    return Task::none();
+                }
+                self.section_enabled = true;
+                self.sync_section_coordinate_inputs();
+                self.revision += 1;
+                self.status = format!(
+                    "Section box turned to {}° about its centre",
+                    format_rotation(self.section_rotation)
+                );
+                return self.schedule_detail();
+            }
+            Message::AlignSectionToWalls => return self.align_section_to_walls(),
+            Message::SectionWallsFound(asked, result) => {
+                self.section_align_pending = false;
+                if self.section_box() != Some(asked) {
+                    self.status = "The section box changed while the walls were looked for".into();
+                    return Task::none();
+                }
+                match result {
+                    Ok(Some(found)) => {
+                        self.turn_section(found.rotation_degrees);
+                        self.sync_section_coordinate_inputs();
+                        self.revision += 1;
+                        self.status = format!(
+                            "Section box turned to {}° along the walls, {}° from before",
+                            format_rotation(self.section_rotation),
+                            format_rotation(found.change_degrees)
+                        );
+                        return self.schedule_detail();
+                    }
+                    Ok(None) => {
+                        self.status = "No walls found in the middle of the section box; put the box around a few walls and try again".into();
+                    }
+                    Err(error) => self.status = format!("Could not find the walls: {error}"),
+                }
             }
             Message::ZoomToSection => {
                 let (Some(scene), Some(section)) =
@@ -7409,11 +7619,16 @@ impl Studio {
                     .map(|source| (source.index, Arc::clone(&source.selection)))
                     .collect();
                 let revision = self.revision;
+                // A turned box is fitted in the frame of its turn.
+                let frame = (!focus_camera && self.section_rotation != 0.0)
+                    .then(|| section_frame_reference(&self.clouds, self.section_rotation))
+                    .flatten()
+                    .map(|reference| section_pivot_frame(reference, self.section_rotation));
                 self.selection_bounds_pending = true;
                 self.status = "Finding exact bounds of selected source points…".into();
                 return Task::perform(
                     async move {
-                        tokio::task::spawn_blocking(move || selected_source_bounds(&sources))
+                        tokio::task::spawn_blocking(move || selected_source_bounds(&sources, frame))
                             .await
                             .map_err(|error| error.to_string())?
                     },
@@ -7474,7 +7689,12 @@ impl Studio {
                     self.status = format!("Framed {count} selected points");
                     return self.schedule_detail();
                 }
-                let Some(reference) = loaded_bounds(&self.clouds) else {
+                let reference = if self.section_rotation != 0.0 {
+                    section_frame_reference(&self.clouds, self.section_rotation)
+                } else {
+                    loaded_bounds(&self.clouds)
+                };
+                let Some(reference) = reference else {
                     return Task::none();
                 };
                 self.section_reference_bounds = Some(reference);
@@ -7774,7 +7994,7 @@ impl Studio {
                     buildings: self.filter_buildings,
                     other: self.filter_other,
                     classes: self.class_visibility,
-                    section: self.section_bounds(),
+                    section: self.section_box(),
                 };
                 let revision = self.revision;
                 let rectangle = ScreenRect::from_corners(start, end);
@@ -7913,30 +8133,149 @@ impl Studio {
         status
     }
 
+    /// The section box while it is on: its limits before the turn and the
+    /// turn about the vertical through its centre.
+    fn section_box(&self) -> Option<OrientedBox> {
+        self.section_enabled.then(|| self.section_shape()).flatten()
+    }
+
+    /// The axis-aligned box around the section box while it is on, for what
+    /// only needs to know where the box can hold points.
     fn section_bounds(&self) -> Option<Bounds> {
-        if !self.section_enabled {
-            return None;
-        }
-        let overall = self
+        self.section_box().map(|section| section.aabb())
+    }
+
+    /// The section box as it is set, also while it is off.
+    fn section_shape(&self) -> Option<OrientedBox> {
+        let reference = self
             .section_reference_bounds
-            .or_else(|| combined_bounds(&self.clouds))?;
-        let mut bounds = overall;
+            .or_else(|| section_frame_reference(&self.clouds, self.section_rotation))?;
+        let mut local = reference;
         for axis in 0..3 {
-            let span = overall.max[axis] - overall.min[axis];
-            bounds.min[axis] = overall.min[axis] + span * self.section_min_percent[axis] / 100.0;
-            bounds.max[axis] = overall.min[axis] + span * self.section_max_percent[axis] / 100.0;
+            let span = reference.max[axis] - reference.min[axis];
+            local.min[axis] = reference.min[axis] + span * self.section_min_percent[axis] / 100.0;
+            local.max[axis] = reference.min[axis] + span * self.section_max_percent[axis] / 100.0;
         }
-        Some(bounds)
+        if self.section_rotation == 0.0 {
+            return Some(local.into());
+        }
+        let center = section_pivot_frame(reference, self.section_rotation).to_scene(local.center());
+        let half: [f64; 3] = std::array::from_fn(|axis| (local.max[axis] - local.min[axis]) * 0.5);
+        Some(OrientedBox::new(
+            Bounds {
+                min: std::array::from_fn(|axis| center[axis] - half[axis]),
+                max: std::array::from_fn(|axis| center[axis] + half[axis]),
+            },
+            self.section_rotation,
+        ))
+    }
+
+    /// Put a section box in place, turned as it is: its turn becomes the
+    /// turn of the box and its limits the percentages of a reference in the
+    /// frame of that turn, around the clouds and the box. Nothing happens
+    /// without a cloud or with a box that is not one.
+    fn place_section(&mut self, section: OrientedBox) -> bool {
+        if !section.is_valid() {
+            return false;
+        }
+        let rotation = if section.is_turned() {
+            pointcloud_core::normalized_degrees(section.rotation_degrees)
+        } else {
+            0.0
+        };
+        let Some(mut reference) = section_frame_reference(&self.clouds, rotation) else {
+            return false;
+        };
+        let local = if rotation == 0.0 {
+            section.bounds
+        } else {
+            let center = section_pivot_frame(reference, rotation).to_box(section.center());
+            let half = section.size().map(|size| size * 0.5);
+            Bounds {
+                min: std::array::from_fn(|axis| center[axis] - half[axis]),
+                max: std::array::from_fn(|axis| center[axis] + half[axis]),
+            }
+        };
+        // The reference grows to hold the box: about its centre across, so
+        // that the turn keeps its pivot, and up and down as far as needed.
+        for (axis, pivot) in reference.center().into_iter().enumerate() {
+            if axis < 2 && rotation != 0.0 {
+                let reach = [
+                    reference.min[axis],
+                    reference.max[axis],
+                    local.min[axis],
+                    local.max[axis],
+                ]
+                .iter()
+                .map(|value| (value - pivot).abs())
+                .fold(0.0, f64::max);
+                reference.min[axis] = pivot - reach;
+                reference.max[axis] = pivot + reach;
+            } else {
+                reference.min[axis] = reference.min[axis].min(local.min[axis]);
+                reference.max[axis] = reference.max[axis].max(local.max[axis]);
+            }
+        }
+        for axis in 0..3 {
+            let span = reference.max[axis] - reference.min[axis];
+            if span > 0.0 {
+                self.section_min_percent[axis] =
+                    ((local.min[axis] - reference.min[axis]) / span * 100.0).clamp(0.0, 100.0);
+                self.section_max_percent[axis] =
+                    ((local.max[axis] - reference.min[axis]) / span * 100.0).clamp(0.0, 100.0);
+            } else {
+                self.section_min_percent[axis] = 0.0;
+                self.section_max_percent[axis] = 100.0;
+            }
+        }
+        self.section_reference_bounds = Some(reference);
+        self.set_section_rotation_value(rotation);
+        true
+    }
+
+    /// Turn the section box about the vertical through its centre, keeping
+    /// its size.
+    fn turn_section(&mut self, degrees: f64) -> bool {
+        let Some(shape) = self.section_shape() else {
+            return false;
+        };
+        self.place_section(OrientedBox::new(shape.bounds, degrees))
+    }
+
+    fn set_section_rotation_value(&mut self, rotation: f64) {
+        self.section_rotation = rotation;
+        self.section_rotation_input = format_rotation(rotation);
+    }
+
+    /// The reference of the section box for the clouds as they are now, in
+    /// the frame of its turn: the box that a reset gives.
+    fn reset_section_reference(&mut self) {
+        self.section_reference_bounds =
+            section_frame_reference(&self.clouds, self.section_rotation);
+    }
+
+    /// The section box as the local API reports it: its limits before the
+    /// turn and the turn in degrees.
+    fn section_value(&self) -> Value {
+        match self.section_box() {
+            Some(section) => json!({
+                "min": section.bounds.min,
+                "max": section.bounds.max,
+                "rotation": self.section_rotation,
+            }),
+            None => Value::Null,
+        }
     }
 
     fn sync_section_coordinate_inputs(&mut self) {
-        if let Some(section) = self.section_bounds() {
+        if let Some(section) = self.section_box() {
             for axis in 0..3 {
                 self.section_coordinate_inputs[axis] = [
-                    format!("{:.6}", section.min[axis]),
-                    format!("{:.6}", section.max[axis]),
+                    format!("{:.6}", section.bounds.min[axis]),
+                    format!("{:.6}", section.bounds.max[axis]),
                 ];
             }
+            self.section_rotation_input = format_rotation(self.section_rotation);
         }
     }
 
@@ -8021,7 +8360,7 @@ impl Studio {
         &self,
         sources: &[(usize, Arc<OctreeIndex>, CloudTransform, f32)],
         projection: Projection,
-        section: Option<Bounds>,
+        section: Option<OrientedBox>,
     ) -> ScreenFill {
         let mut shown = ScreenFill::default();
         for entry in sources
@@ -8062,7 +8401,7 @@ impl Studio {
         &self,
         sources: &[(usize, Arc<OctreeIndex>, CloudTransform, f32)],
         projection: Projection,
-        section: Option<Bounds>,
+        section: Option<OrientedBox>,
         deep_zoom: bool,
     ) -> usize {
         // A union over the clouds: overlapping scans reach the same part of
@@ -8081,9 +8420,10 @@ impl Studio {
                     projection,
                     section,
                 );
-            } else if let Some(bounds) =
-                section_clipped(transform.bounds(tree.root.bounds), section)
-            {
+            } else if let Some(bounds) = section_clipped(
+                transform.bounds(tree.root.bounds),
+                section.map(|clip| clip.aabb()),
+            ) {
                 reach.add_box(projection, bounds);
             }
         }
@@ -8098,7 +8438,7 @@ impl Studio {
         sources: &[(usize, Arc<OctreeIndex>, CloudTransform, f32)],
         source_weights: &[(f32, usize)],
         projection: Projection,
-        section: Option<Bounds>,
+        section: Option<OrientedBox>,
         deep_zoom: bool,
         shown: ScreenFill,
     ) -> Vec<usize> {
@@ -8823,7 +9163,7 @@ impl Studio {
             filter_buildings: self.filter_buildings,
             filter_other: self.filter_other,
             class_visibility: self.class_visibility,
-            section: self.section_bounds(),
+            section: self.section_box(),
             section_reference: self.section_reference_bounds,
             yaw: self.yaw,
             pitch: self.pitch,
@@ -8834,6 +9174,7 @@ impl Studio {
             pick_mode: self.pick_mode,
             measure: &self.measure,
             drawing: self.drawing.overlay(),
+            drawing_slab: self.drawing_slab(),
             annotate: self.views_overlay(),
             drag_rectangle: self.drag_rectangle,
             context_menu: self.context_menu,
@@ -9390,6 +9731,33 @@ impl Studio {
             properties = properties.push(
                 container(
                     row![
+                        text(i18n::tr("Rotation (°)")).size(11).width(78),
+                        text_input("0", &self.section_rotation_input)
+                            .on_input(Message::SectionRotationInput)
+                            .on_submit(Message::ApplySectionRotation)
+                            .size(11)
+                            .width(Fill),
+                    ]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+                )
+                .padding([2, 8]),
+            );
+            if self.section_rotation != 0.0 {
+                properties = properties.push(
+                    container(
+                        text(i18n::tr(
+                            "The limits are those of the box before it is turned about its centre.",
+                        ))
+                        .size(10)
+                        .color(self.ui_theme.colors().muted),
+                    )
+                    .padding([2, 8]),
+                );
+            }
+            properties = properties.push(
+                container(
+                    row![
                         button(i18n::tr("Apply XYZ limits"))
                             .on_press(Message::ApplySectionCoordinates)
                             .style(flat_tool_style),
@@ -9398,6 +9766,20 @@ impl Studio {
                             .style(flat_tool_style),
                     ]
                     .spacing(3),
+                )
+                .padding([3, 8]),
+            );
+            properties = properties.push(
+                container(
+                    button(i18n::tr(if self.section_align_pending {
+                        i18n::key("Looking for walls…")
+                    } else {
+                        i18n::key("Align to walls")
+                    }))
+                    .on_press_maybe(
+                        (!self.section_align_pending).then_some(Message::AlignSectionToWalls),
+                    )
+                    .style(flat_tool_style),
                 )
                 .padding([3, 8]),
             );
@@ -10023,12 +10405,13 @@ fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
 /// told it: `None` when the section box or the camera leaves the node out.
 fn lod_node_span(
     transform: CloudTransform,
-    section: Option<Bounds>,
+    section: Option<OrientedBox>,
     projection: Projection,
     node_bounds: Bounds,
 ) -> Option<f32> {
     let node_bounds = transform.bounds(node_bounds);
     if section.is_some_and(|clip| {
+        let clip = clip.aabb();
         (0..3).any(|axis| {
             node_bounds.max[axis] < clip.min[axis] || node_bounds.min[axis] > clip.max[axis]
         })
@@ -10056,9 +10439,9 @@ fn section_clipped(bounds: Bounds, section: Option<Bounds>) -> Option<Bounds> {
 fn source_lod_coverage(
     projection: Projection,
     bounds: Bounds,
-    section: Option<Bounds>,
+    section: Option<OrientedBox>,
 ) -> Option<f32> {
-    projection.screen_coverage(section_clipped(bounds, section)?)
+    projection.screen_coverage(section_clipped(bounds, section.map(|clip| clip.aabb()))?)
 }
 
 /// Reserve a small sample for each visible scan, then share the remaining
@@ -10328,7 +10711,15 @@ struct SelectedSource {
     transform: CloudTransform,
 }
 
-fn selected_source_bounds(sources: &[SelectedSource]) -> Result<(Bounds, u64), String> {
+/// The box around the selected points of every source, and their count. In
+/// the frame of a turn when `frame` is given: each point is turned into it
+/// with `OrientedBox::to_box`, so the box is the one a turned section box
+/// fits the points with.
+fn selected_source_bounds(
+    sources: &[SelectedSource],
+    frame: Option<OrientedBox>,
+) -> Result<(Bounds, u64), String> {
+    let frame = frame.filter(OrientedBox::is_turned);
     let mut bounds = None;
     let mut count = 0u64;
     for source in sources {
@@ -10336,9 +10727,11 @@ fn selected_source_bounds(sources: &[SelectedSource]) -> Result<(Bounds, u64), S
         let selection = &source.selection;
         let deleted = &source.deleted;
         cloud.validate_source().map_err(|error| error.to_string())?;
-        if deleted
-            .as_ref()
-            .is_none_or(|mask| !mask.overlaps_selection(selection))
+        // The kept bounds of a selection are along the model axes.
+        if frame.is_none()
+            && deleted
+                .as_ref()
+                .is_none_or(|mask| !mask.overlaps_selection(selection))
         {
             if let Some(source_bounds) = selection.source_bounds {
                 let world_bounds = source.transform.bounds(source_bounds);
@@ -10353,7 +10746,8 @@ fn selected_source_bounds(sources: &[SelectedSource]) -> Result<(Bounds, u64), S
             if selection.contains(ordinal)
                 && deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
             {
-                include_bounds(&mut bounds, source.transform.xyz(point.xyz));
+                let xyz = source.transform.xyz(point.xyz);
+                include_bounds(&mut bounds, frame.map_or(xyz, |frame| frame.to_box(xyz)));
                 count += 1;
             }
             ordinal += 1;
@@ -10390,7 +10784,7 @@ struct PointViewport<'a> {
     filter_buildings: bool,
     filter_other: bool,
     class_visibility: ClassVisibility,
-    section: Option<Bounds>,
+    section: Option<OrientedBox>,
     section_reference: Option<Bounds>,
     yaw: f32,
     pitch: f32,
@@ -10402,6 +10796,8 @@ struct PointViewport<'a> {
     measure: &'a measure::MeasureTool,
     /// The filled cut of a section drawing that is previewed.
     drawing: Option<&'a pointcloud_core::CutPreview>,
+    /// The slab the Section drawing tool cuts, while its block is open.
+    drawing_slab: Option<OrientedBox>,
     annotate: views::Overlay<'a>,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
@@ -10724,19 +11120,21 @@ fn draw_context_menu(
     }
 }
 
-fn section_handle_world(section: Bounds, axis: usize, is_min: bool) -> [f64; 3] {
+/// The handle in the middle of a face of the section box, in the scene. The
+/// faces of a turned box are those along its own axes.
+fn section_handle_world(section: OrientedBox, axis: usize, is_min: bool) -> [f64; 3] {
     let mut point = section.center();
     point[axis] = if is_min {
-        section.min[axis]
+        section.bounds.min[axis]
     } else {
-        section.max[axis]
+        section.bounds.max[axis]
     };
-    point
+    section.to_scene(point)
 }
 
 fn section_handle_at(
     pointer: UiPoint,
-    section: Bounds,
+    section: OrientedBox,
     projection: Projection,
 ) -> Option<(usize, bool)> {
     let mut nearest: Option<(usize, bool, f32)> = None;
@@ -10758,17 +11156,24 @@ fn section_handle_at(
     nearest.map(|(axis, is_min, _)| (axis, is_min))
 }
 
+/// How far a drag moves a handle, in percent of the reference along the own
+/// axis of the box that the handle moves on. `overall` is the reference,
+/// whose sizes are along the axes of the box.
 fn section_handle_delta(
     axis: usize,
     is_min: bool,
-    section: Bounds,
+    section: OrientedBox,
     overall: Bounds,
     projection: Projection,
     movement: [f32; 2],
 ) -> Option<f32> {
     let world = section_handle_world(section, axis, is_min);
-    let mut shifted = world;
-    shifted[axis] += (overall.max[axis] - overall.min[axis]) * 0.01;
+    let step = (overall.max[axis] - overall.min[axis]) * 0.01;
+    let direction = match axis {
+        2 => [0.0, 0.0, 1.0],
+        _ => section.axes()[axis],
+    };
+    let shifted: [f64; 3] = std::array::from_fn(|index| world[index] + direction[index] * step);
     let before = projection.project_unclipped(world)?;
     let after = projection.project_unclipped(shifted)?;
     let direction = [after.0 - before.0, after.1 - before.1];
@@ -11175,16 +11580,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
             }
         }
         if let Some(section) = self.section {
-            let vertices = [
-                [section.min[0], section.min[1], section.min[2]],
-                [section.max[0], section.min[1], section.min[2]],
-                [section.max[0], section.max[1], section.min[2]],
-                [section.min[0], section.max[1], section.min[2]],
-                [section.min[0], section.min[1], section.max[2]],
-                [section.max[0], section.min[1], section.max[2]],
-                [section.max[0], section.max[1], section.max[2]],
-                [section.min[0], section.max[1], section.max[2]],
-            ];
+            let vertices = section.corners();
             for (start, end) in [
                 (0, 1),
                 (1, 2),
@@ -11755,9 +12151,7 @@ impl PointViewport<'_> {
 
     fn accepts(&self, point: &Point) -> bool {
         if let Some(section) = self.section {
-            if (0..3).any(|axis| {
-                point.xyz[axis] < section.min[axis] || point.xyz[axis] > section.max[axis]
-            }) {
+            if !section.contains(point.xyz) {
                 return false;
             }
         }
@@ -11822,16 +12216,16 @@ mod surface_settings_tests {
             buildings: true,
             other: true,
             classes: ClassVisibility::default(),
-            section: Some(Bounds {
+            section: Some(OrientedBox::from(Bounds {
                 min: [11.0, 1.0, 2.0],
                 max: [13.0, 3.0, 4.0],
-            }),
+            })),
         };
         assert!(mesh_accepts(0, &point, None, filter, transform));
-        filter.section = Some(Bounds {
+        filter.section = Some(OrientedBox::from(Bounds {
             min: [0.0, 1.0, 2.0],
             max: [2.0, 3.0, 4.0],
-        });
+        }));
         assert!(!mesh_accepts(0, &point, None, filter, transform));
         filter.section = None;
         filter.ground = false;
@@ -11902,7 +12296,7 @@ mod section_box_tests {
             deleted: Some(Arc::new(deleted)),
             transform: CloudTransform::default(),
         };
-        let cached = selected_source_bounds(&[source(deleted.clone())]).unwrap();
+        let cached = selected_source_bounds(&[source(deleted.clone())], None).unwrap();
         assert_eq!(
             (cached.0.min[0], cached.0.max[0], cached.1),
             (10.0, 20.0, 2)
@@ -11916,7 +12310,7 @@ mod section_box_tests {
         )
         .unwrap();
         deleted.apply(&middle).unwrap();
-        let remaining = selected_source_bounds(&[source(deleted.clone())]).unwrap();
+        let remaining = selected_source_bounds(&[source(deleted.clone())], None).unwrap();
         assert_eq!(
             (remaining.0.min[0], remaining.0.max[0], remaining.1),
             (20.0, 20.0, 1)
@@ -11930,7 +12324,7 @@ mod section_box_tests {
         )
         .unwrap();
         deleted.apply(&last).unwrap();
-        assert!(selected_source_bounds(&[source(deleted)]).is_err());
+        assert!(selected_source_bounds(&[source(deleted)], None).is_err());
     }
 
     #[test]
@@ -11949,13 +12343,16 @@ mod section_box_tests {
         studio.clouds[0].selection = Some(Arc::clone(&selection));
         let _ = studio.update(Message::ZoomToSelection);
         assert!(studio.selection_bounds_pending);
-        let bounds = selected_source_bounds(&[SelectedSource {
-            index: 0,
-            cloud: Arc::clone(&studio.clouds[0].cloud),
-            selection: Arc::clone(&selection),
-            deleted: None,
-            transform: studio.clouds[0].transform,
-        }])
+        let bounds = selected_source_bounds(
+            &[SelectedSource {
+                index: 0,
+                cloud: Arc::clone(&studio.clouds[0].cloud),
+                selection: Arc::clone(&selection),
+                deleted: None,
+                transform: studio.clouds[0].transform,
+            }],
+            None,
+        )
         .unwrap();
         let _ = studio.update(Message::SelectionBoundsReady(
             true,
@@ -12063,13 +12460,16 @@ mod section_box_tests {
             highlights_source: true,
             source_bounds: None,
         });
-        let selected = selected_source_bounds(&[SelectedSource {
-            index: 0,
-            cloud: Arc::clone(&cloud),
-            selection: Arc::clone(&selection),
-            deleted: None,
-            transform: CloudTransform::default(),
-        }])
+        let selected = selected_source_bounds(
+            &[SelectedSource {
+                index: 0,
+                cloud: Arc::clone(&cloud),
+                selection: Arc::clone(&selection),
+                deleted: None,
+                transform: CloudTransform::default(),
+            }],
+            None,
+        )
         .unwrap();
         assert_eq!(selected.0.min, [2.0, 4.0, 6.0]);
         assert_eq!(selected.0.max, [9_999.0, 19_998.0, 29_997.0]);
@@ -12140,6 +12540,300 @@ mod section_box_tests {
         studio.section_coordinate_inputs[0] = ["208100".into(), "208200".into()];
         let _ = studio.update(Message::ApplySectionCoordinates);
         assert_eq!(studio.section_bounds(), Some(section));
+    }
+
+    fn send(studio: &mut Studio, command: native_api::ApiCommand) -> Value {
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.update(Message::ApiRequest(native_api::ApiRequest {
+            command,
+            reply,
+        }));
+        receive.recv().unwrap()
+    }
+
+    /// A grid of points 20 by 10 m at RD New coordinates, 3 m high.
+    fn studio_with_grid(directory: &Path) -> Studio {
+        let path = directory.join("grid.xyz");
+        let mut text = String::new();
+        for x in 0..=40 {
+            for y in 0..=20 {
+                for z in 0..=3 {
+                    text.push_str(&format!(
+                        "{} {} {z}\n",
+                        207_000.0 + f64::from(x) * 0.5,
+                        474_000.0 + f64::from(y) * 0.5
+                    ));
+                }
+            }
+        }
+        std::fs::write(&path, text).unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 100_000).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        studio
+    }
+
+    fn near(a: [f64; 3], b: [f64; 3], slack: f64) -> bool {
+        (0..3).all(|axis| (a[axis] - b[axis]).abs() <= slack)
+    }
+
+    #[test]
+    fn a_turned_box_keeps_its_limits_and_rotation_through_the_api_and_the_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = studio_with_grid(directory.path());
+        let (min, max) = ([207_004.0, 474_002.0, 0.5], [207_012.0, 474_006.0, 2.5]);
+        let answer = send(
+            &mut studio,
+            native_api::ApiCommand::SetSection {
+                min,
+                max,
+                rotation: Some(390.0),
+            },
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        // A turn is kept between -180 and 180 degrees.
+        assert_eq!(answer["section"]["rotation"], 30.0);
+        let turned = studio.section_box().unwrap();
+        assert_eq!(turned.rotation_degrees, 30.0);
+        assert!(near(turned.bounds.min, min, 1e-6) && near(turned.bounds.max, max, 1e-6));
+        let status = send(&mut studio, native_api::ApiCommand::Status);
+        assert_eq!(status["result"]["section"]["rotation"], 30.0);
+        assert_eq!(studio.section_rotation_input, "30");
+        assert_eq!(studio.section_coordinate_inputs[0][0], "207004.000000");
+
+        // The filters keep what lies inside the turned box only: along its
+        // own X axis 3.9 m from the centre is in, the corner of the limits
+        // before the turn is out.
+        let filter = studio.mesh_filter();
+        let center = turned.center();
+        let along = |distance: f64| Point {
+            xyz: [
+                center[0] + distance * 30f64.to_radians().cos(),
+                center[1] + distance * 30f64.to_radians().sin(),
+                1.0,
+            ],
+            rgb: None,
+            intensity: None,
+            classification: None,
+        };
+        assert!(filter.accepts(&along(3.9)));
+        assert!(!filter.accepts(&along(4.1)));
+        let corner = Point {
+            xyz: [max[0], max[1], 1.0],
+            ..along(0.0)
+        };
+        assert!(!filter.accepts(&corner));
+
+        // A turn typed in the field turns the box about its centre and keeps
+        // its size.
+        let _ = studio.update(Message::SectionRotationInput("north".into()));
+        let _ = studio.update(Message::ApplySectionRotation);
+        assert_eq!(studio.status, "The rotation must be a number of degrees");
+        assert_eq!(studio.section_box(), Some(turned));
+        // A comma is read as the decimal mark, and a degree sign is left out.
+        let _ = studio.update(Message::SectionRotationInput("-15,5°".into()));
+        let _ = studio.update(Message::ApplySectionRotation);
+        let again = studio.section_box().unwrap();
+        assert_eq!(again.rotation_degrees, -15.5);
+        assert!(near(again.center(), turned.center(), 1e-6));
+        assert!(near(again.size(), turned.size(), 1e-6));
+
+        // A box that does not reach the model, or has no width, is refused
+        // and changes nothing.
+        for (min, max) in [
+            ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+            ([207_004.0, 474_002.0, 0.5], [207_004.0, 474_006.0, 2.5]),
+        ] {
+            let refused = send(
+                &mut studio,
+                native_api::ApiCommand::SetSection {
+                    min,
+                    max,
+                    rotation: Some(10.0),
+                },
+            );
+            assert_eq!(refused["ok"], false, "{refused}");
+        }
+        assert_eq!(studio.section_box(), Some(again));
+
+        // Back to a box along the axes with the fields: limits inside the
+        // model and no turn, exactly as before boxes could turn.
+        studio.section_rotation_input = "0".into();
+        studio.section_coordinate_inputs = [
+            ["207004".into(), "207012".into()],
+            ["474002".into(), "474006".into()],
+            ["0.5".into(), "2.5".into()],
+        ];
+        let _ = studio.update(Message::ApplySectionCoordinates);
+        let plain = studio.section_box().unwrap();
+        assert!(!plain.is_turned());
+        assert_eq!(studio.section_rotation, 0.0);
+        assert_eq!(
+            studio.section_reference_bounds,
+            combined_bounds(&studio.clouds)
+        );
+        assert!(near(plain.bounds.min, min, 1e-6) && near(plain.bounds.max, max, 1e-6));
+    }
+
+    #[test]
+    fn handles_reset_and_fit_follow_the_axes_of_a_turned_box() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = studio_with_grid(directory.path());
+        let model = combined_bounds(&studio.clouds).unwrap();
+        let answer = send(
+            &mut studio,
+            native_api::ApiCommand::SetSection {
+                min: [207_004.0, 474_002.0, 0.5],
+                max: [207_012.0, 474_006.0, 2.5],
+                rotation: Some(30.0),
+            },
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        let before = studio.section_box().unwrap();
+
+        // Dragging the handle at the own X max of the box moves that face
+        // along the axis of the box; the face at X min stays.
+        let x_min_face = section_handle_world(before, 0, true);
+        let x_max_face = section_handle_world(before, 0, false);
+        let _ = studio.update(Message::SectionHandleDelta(0, false, 2.0));
+        let after = studio.section_box().unwrap();
+        assert!(near(section_handle_world(after, 0, true), x_min_face, 1e-6));
+        let moved = section_handle_world(after, 0, false);
+        let step: [f64; 3] = std::array::from_fn(|axis| moved[axis] - x_max_face[axis]);
+        let [along, _] = before.axes();
+        let length = step[0].hypot(step[1]);
+        assert!(length > 0.1);
+        assert!((step[0] / length - along[0]).abs() < 1e-6);
+        assert!((step[1] / length - along[1]).abs() < 1e-6);
+        assert_eq!(after.rotation_degrees, 30.0);
+
+        // The turned box is drawn with its own corners, and its handles are
+        // found where they are drawn.
+        let projection = Projection::new(model, 0.0, 1.5, 1.0, [0.0; 2], 800.0, 600.0);
+        let (x, y, _) = projection
+            .project_unclipped(section_handle_world(after, 1, false))
+            .unwrap();
+        assert_eq!(
+            section_handle_at(UiPoint::new(x, y), after, projection),
+            Some((1, false))
+        );
+
+        // Reset keeps the turn and holds the whole model.
+        let _ = studio.update(Message::ResetSectionBox);
+        let reset = studio.section_box().unwrap();
+        assert_eq!(reset.rotation_degrees, 30.0);
+        for corner in pointcloud_core::bounds_corners(model) {
+            let local = reset.to_box(corner);
+            assert!((0..3).all(|axis| {
+                local[axis] >= reset.bounds.min[axis] - 1e-6
+                    && local[axis] <= reset.bounds.max[axis] + 1e-6
+            }));
+        }
+
+        // Fit selection measures the selected points in the frame of the
+        // turn: two points along the own X axis of the box give a box that
+        // is long along that axis and thin across it.
+        let cloud = Arc::clone(&studio.clouds[0].cloud);
+        let ordinal = |x: usize, y: usize, z: usize| (x * 21 + y) * 4 + z;
+        let mut bits = vec![0u64; (cloud.total_points as usize).div_ceil(64)];
+        // (207 002, 474 001) and (207 012.5, 474 007): 30 degrees apart along
+        // the grid within half a millimetre.
+        for at in [ordinal(4, 2, 1), ordinal(25, 14, 2)] {
+            bits[at / 64] |= 1u64 << (at % 64);
+        }
+        let selection = Arc::new(SelectionMask {
+            bits,
+            count: 2,
+            highlights: Vec::new(),
+            highlights_source: true,
+            source_bounds: None,
+        });
+        studio.clouds[0].selection = Some(Arc::clone(&selection));
+        let reference = section_frame_reference(&studio.clouds, 30.0).unwrap();
+        let frame = section_pivot_frame(reference, 30.0);
+        let selected = selected_source_bounds(
+            &[SelectedSource {
+                index: 0,
+                cloud,
+                selection: Arc::clone(&selection),
+                deleted: None,
+                transform: CloudTransform::default(),
+            }],
+            Some(frame),
+        )
+        .unwrap();
+        let _ = studio.update(Message::SelectionBoundsReady(
+            false,
+            studio.revision,
+            vec![(0, selection)],
+            Ok(selected),
+        ));
+        let fitted = studio.section_box().unwrap();
+        assert_eq!(fitted.rotation_degrees, 30.0);
+        let size = fitted.size();
+        assert!((size[0] - 12.1).abs() < 0.05, "{size:?}");
+        assert!(size[1] < 0.1, "{size:?}");
+        for xyz in [[207_002.0, 474_001.0, 1.0], [207_012.5, 474_007.0, 2.0]] {
+            let local = fitted.to_box(xyz);
+            assert!(
+                (0..3).all(|axis| local[axis] >= fitted.bounds.min[axis] - 1e-6
+                    && local[axis] <= fitted.bounds.max[axis] + 1e-6)
+            );
+        }
+    }
+
+    #[test]
+    fn a_turned_section_is_exported_with_the_points_inside_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let studio = studio_with_grid(directory.path());
+        let cloud = &studio.clouds[0].cloud;
+        let turned = OrientedBox::new(
+            Bounds {
+                min: [207_004.0, 474_004.0, 0.5],
+                max: [207_012.0, 474_005.0, 2.5],
+            },
+            30.0,
+        );
+        let destination = directory.path().join("turned.ply");
+        let count = export_edited_section(
+            cloud,
+            &destination,
+            ExportFormat::PlyBinary,
+            CloudTransform::default(),
+            turned,
+            None,
+        )
+        .unwrap();
+        let truth = pointcloud_core::open(&cloud.path, 100_000)
+            .unwrap()
+            .points
+            .iter()
+            .filter(|point| turned.contains(point.xyz))
+            .count() as u64;
+        assert!(truth > 20, "{truth}");
+        assert_eq!(count, truth);
+        // Moved by a metre in Z the layer keeps the same points out of the
+        // box as its scene positions say.
+        let moved = CloudTransform {
+            scale: [1.0; 3],
+            offset: [0.0, 0.0, 1.0],
+        };
+        let shifted = export_edited_section(
+            cloud,
+            &directory.path().join("moved.ply"),
+            ExportFormat::PlyBinary,
+            moved,
+            turned,
+            None,
+        )
+        .unwrap();
+        let truth = pointcloud_core::open(&cloud.path, 100_000)
+            .unwrap()
+            .points
+            .iter()
+            .filter(|point| turned.contains(moved.xyz(point.xyz)))
+            .count() as u64;
+        assert_eq!(shifted, truth);
     }
 }
 
@@ -12227,13 +12921,16 @@ mod editing_tests {
         let selected_x = |studio: &Studio| {
             let entry = &studio.clouds[0];
             assert!(Arc::ptr_eq(entry.selection.as_ref().unwrap(), &selection));
-            let bounds = selected_source_bounds(&[SelectedSource {
-                index: 0,
-                cloud: Arc::clone(&entry.cloud),
-                selection: Arc::clone(&selection),
-                deleted: None,
-                transform: entry.transform,
-            }])
+            let bounds = selected_source_bounds(
+                &[SelectedSource {
+                    index: 0,
+                    cloud: Arc::clone(&entry.cloud),
+                    selection: Arc::clone(&selection),
+                    deleted: None,
+                    transform: entry.transform,
+                }],
+                None,
+            )
             .unwrap()
             .0;
             assert_eq!(bounds.min[0], bounds.max[0]);
@@ -12351,31 +13048,37 @@ mod editing_tests {
                 offset: std::array::from_fn(|axis| entry.transform.offset[axis] + 5.0),
                 ..entry.transform
             };
-            let moved_bounds = selected_source_bounds(&[SelectedSource {
-                index: 0,
-                cloud: Arc::clone(&cloud),
-                selection: Arc::clone(&selected[0].1),
-                deleted: None,
-                transform: moved,
-            }])
+            let moved_bounds = selected_source_bounds(
+                &[SelectedSource {
+                    index: 0,
+                    cloud: Arc::clone(&cloud),
+                    selection: Arc::clone(&selected[0].1),
+                    deleted: None,
+                    transform: moved,
+                }],
+                None,
+            )
             .unwrap();
             assert!((moved_bounds.0.min[0] - (expected_x_max + 5.0)).abs() < 1e-10);
             assert_eq!(moved_bounds.0.min[1..], [205.0, 5.0]);
             assert_eq!(moved_bounds.0.max[1..], [215.0, 15.0]);
         }
-        let selected_bounds = selected_source_bounds(&[SelectedSource {
-            index: 0,
-            cloud: Arc::clone(&cloud),
-            selection: Arc::new(SelectionMask {
-                bits: vec![0b110],
-                count: 2,
-                highlights: Vec::new(),
-                highlights_source: true,
-                source_bounds: None,
-            }),
-            deleted: None,
-            transform: entry.transform,
-        }])
+        let selected_bounds = selected_source_bounds(
+            &[SelectedSource {
+                index: 0,
+                cloud: Arc::clone(&cloud),
+                selection: Arc::new(SelectionMask {
+                    bits: vec![0b110],
+                    count: 2,
+                    highlights: Vec::new(),
+                    highlights_source: true,
+                    source_bounds: None,
+                }),
+                deleted: None,
+                transform: entry.transform,
+            }],
+            None,
+        )
         .unwrap();
         assert!((selected_bounds.0.min[0] - expected_x_max).abs() < 1e-10);
         assert!((selected_bounds.0.max[0] - expected_x_max).abs() < 1e-10);
@@ -12401,7 +13104,7 @@ mod editing_tests {
                 &section,
                 ExportFormat::PlyBinary,
                 entry.transform,
-                select_bounds,
+                select_bounds.into(),
                 None,
             )
             .unwrap(),
@@ -12528,7 +13231,7 @@ mod lod_budget_tests {
             min: [200.0; 3],
             max: [300.0; 3],
         };
-        assert!(source_lod_coverage(projection, scene, Some(outside)).is_none());
+        assert!(source_lod_coverage(projection, scene, Some(outside.into())).is_none());
     }
 }
 

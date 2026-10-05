@@ -566,6 +566,7 @@ fn region_estimate_warns_before_the_limits_of_a_mesh_are_hit() {
         ApiCommand::SetSection {
             min: [0.0, 0.0, 0.0],
             max: [0.8, 1.2, 1.0],
+            rotation: None,
         },
     );
     assert_eq!(answer["ok"], true, "{answer}");
@@ -926,6 +927,7 @@ fn a_cancelled_or_failed_job_leaves_the_mesh_and_the_file_as_they_were() {
         ApiCommand::SetSection {
             min: [0.3, 0.3, 0.3],
             max: [0.6, 0.6, 0.6],
+            rotation: None,
         },
     );
     assert_eq!(answer["ok"], true, "{answer}");
@@ -1062,6 +1064,7 @@ fn all_visible_scans_are_the_scans_that_reach_the_section_box() {
         ApiCommand::SetSection {
             min: [0.0; 3],
             max: [2.0, ROOM[1], ROOM[2]],
+            rotation: None,
         },
     );
     assert_eq!(answer["ok"], true, "{answer}");
@@ -1092,6 +1095,7 @@ fn all_visible_scans_are_the_scans_that_reach_the_section_box() {
         ApiCommand::SetSection {
             min: [50.0, 0.0, 0.0],
             max: [51.0, ROOM[1], ROOM[2]],
+            rotation: None,
         },
     );
     assert_eq!(answer["ok"], true, "{answer}");
@@ -1449,6 +1453,7 @@ fn stations_a_job_found_are_kept_when_the_job_fails_after_finding_them() {
         ApiCommand::SetSection {
             min: [0.3, 0.3, 0.3],
             max: [0.6, 0.6, 0.6],
+            rotation: None,
         },
     );
     assert_eq!(answer["ok"], true, "{answer}");

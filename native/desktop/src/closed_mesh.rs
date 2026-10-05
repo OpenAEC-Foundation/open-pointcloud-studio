@@ -22,8 +22,8 @@ use pointcloud_core::region_source::{resident_points, RegionSource, SourceTransf
 use pointcloud_core::surfels::{SurfelSource, MAX_VOXEL, MIN_VOXEL};
 use pointcloud_core::{
     Bounds, ClosedMeshConfig, ClosedMeshReport, ClosedMeshStage, IndexConfig, IndexedPoint,
-    LoadError, MeshFormat, MeshGeometry, MeshOrientation, OctreeIndex, OrientationUsed, Point,
-    PointCloud, MAX_CLOSED_MESH_HOLE, MAX_MESH_TRIANGLES, MAX_MESH_VERTICES,
+    LoadError, MeshFormat, MeshGeometry, MeshOrientation, OctreeIndex, OrientationUsed,
+    OrientedBox, Point, PointCloud, MAX_CLOSED_MESH_HOLE, MAX_MESH_TRIANGLES, MAX_MESH_VERTICES,
 };
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
@@ -399,7 +399,9 @@ struct SceneLayer {
 /// deleted points, the classes shown, the section box, and the scan that
 /// gets the mesh.
 struct Scene {
-    section: Option<Bounds>,
+    /// The section box, turned or not. The core is given the box around it
+    /// and the filter leaves out what lies in its corners.
+    section: Option<OrientedBox>,
     filter: ClassFilter,
     layers: Vec<SceneLayer>,
     /// The scan the mesh is attached to, and where it stood when the job
@@ -714,10 +716,13 @@ fn run(input: &JobInput, control: &Control) -> Result<Finished, LoadError> {
             .as_ref()
             .is_none_or(|mask| !mask.contains(ordinal))
             && filter.accepts(point)
+            && scene
+                .section
+                .is_none_or(|section| !section.is_turned() || section.contains(point.xyz))
     };
     let (mesh, report) = pointcloud_core::mesh_closed(
         &sources,
-        scene.section,
+        scene.section.map(|section| section.aabb()),
         &accept,
         &input.config,
         &mut |step| control.report(Stage::of(step.stage), step.completed, step.total),
@@ -1429,9 +1434,10 @@ impl Studio {
         if active.transform.source_xyz([0.0; 3]).is_none() {
             return Err(Refusal::FlatTarget(name(&active.cloud)));
         }
-        let section = self.section_bounds();
+        let section = self.section_box();
+        let around = section.map(|section| section.aabb());
         let reaches = |entry: &CloudEntry| {
-            section.is_none_or(|section| {
+            around.is_none_or(|section| {
                 let bounds = entry.bounds();
                 (0..3).all(|axis| {
                     bounds.min[axis] <= section.max[axis] && bounds.max[axis] >= section.min[axis]
@@ -1523,7 +1529,7 @@ impl Studio {
         }
         let data = data.ok_or(Problem::Refused(Refusal::NoLayer))?;
         // As the core does: only the part of the box that can hold points.
-        let bounds = match scene.section {
+        let bounds = match scene.section.map(|section| section.aabb()) {
             Some(section) => Bounds {
                 min: std::array::from_fn(|axis| section.min[axis].max(data.min[axis])),
                 max: std::array::from_fn(|axis| section.max[axis].min(data.max[axis])),
@@ -2057,6 +2063,25 @@ pub(crate) fn box_limits(limits: &str) -> Result<Bounds, &'static str> {
     Ok(bounds)
 }
 
+/// The value of `--rotation`: degrees about the vertical through the centre
+/// of the box.
+pub(crate) fn rotation_option(value: &str) -> Result<f64, &'static str> {
+    crate::parse_rotation(value).ok_or("--rotation must be a number of degrees")
+}
+
+/// The box of `--box` turned by `--rotation`; a turn needs a box.
+pub(crate) fn turned_box(
+    section: Option<Bounds>,
+    rotation: Option<f64>,
+) -> Result<Option<OrientedBox>, &'static str> {
+    match (section, rotation) {
+        (None, Some(_)) => Err("--rotation turns the box of --box, which is missing"),
+        (section, rotation) => {
+            Ok(section.map(|bounds| OrientedBox::new(bounds, rotation.unwrap_or(0.0))))
+        }
+    }
+}
+
 /// The `--closed-mesh` mode of the command line: make a closed mesh of a
 /// scan file, or of a box in it, and write it as OBJ, PLY or STL.
 /// `arguments` are what follows the flag. Returns the lines to print, or the
@@ -2080,10 +2105,12 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
     }
     let mut settings = ClosedMeshSettings::default();
     let mut section = None;
+    let mut rotation = None;
     for at in (0..options.len()).step_by(2) {
         let value = option_value(options, at + 1).unwrap_or_default();
         match options[at].to_str() {
             Some("--box") => section = Some(box_limits(value).map_err(wrong)?),
+            Some("--rotation") => rotation = Some(rotation_option(value).map_err(wrong)?),
             Some("--voxel") => settings.voxel = value.to_owned(),
             Some("--max-hole") => settings.max_hole = value.to_owned(),
             Some("--simplify") => settings.simplify = value.to_owned(),
@@ -2094,6 +2121,7 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
             _ => return Err(usage()),
         }
     }
+    let section = turned_box(section, rotation).map_err(wrong)?;
     let config = settings
         .config()
         .map_err(|problem| (2, problem.english()))?;

@@ -418,6 +418,13 @@ plane is one face of the box, and the drawing holds the slab behind that face,
 | The face at X min, looking along +X | `left` | -Y | +Z |
 | The face at X max, looking along -X | `right` | +Y | +Z |
 
+A section box that is turned about the vertical (`rotation` of
+`set_section`) takes its faces along: X and Y in this table are then the own
+axes of the box, so a box turned along the walls gives a plan with the walls
+along the axes of the drawing and vertical sections parallel to a wall. A plan
+of a turned box with `origin` `model` has the model X and Y turned with the
+box about the model origin.
+
 The other fields are the choices of the Section drawing block in Properties.
 A field that is left out keeps what the block has, and a field that is given
 is put in the block as well, so the window shows what was drawn:
@@ -490,7 +497,9 @@ is `null`) and `writing` (counted in entities). The complete job has:
   the surfaces in the slab span more than 16 million cells.
 
 A job that fails has `error`; a slab without points fails with `the slab
-holds no points` and writes nothing. `cancel_drawing` stops the job once the
+holds no points`, followed by the face of the box that is the cut plane and
+what to do about it, and writes nothing. With a box around a whole building
+the face a vertical view cuts at often lies outside the walls. `cancel_drawing` stops the job once the
 step under way has ended; the job becomes `cancelled`. The file is written to
 a temporary file first, so a failed or cancelled job leaves an existing
 destination as it was. Writing costs about 2.8 kB of memory per point of the
@@ -659,7 +668,8 @@ A saved view holds the orbit camera (`yaw`, `pitch`, `zoom`, `pan`), the
 walking camera in `walk` when it was saved while walking, the scene bounds and
 viewport size the camera was relative to in `frame`, the section box in
 `section` (`enabled`, `min`, `max` in model coordinates, also while it is
-off), the `color_mode`, its `guid`, its `created` time in seconds since 1970,
+off, and `rotation` in degrees when the box is turned; a view without it has a
+box along the axes), the `color_mode`, its `guid`, its `created` time in seconds since 1970,
 `snapshot_due: true` while its snapshot is missing or older than the view,
 and its `annotations`. An annotation is `{"kind":"note","point":[x,y,z],
 "text":…,"guid":…,"created":…}` or `{"kind":"line","from":[x,y,z],
@@ -749,8 +759,9 @@ when the view is restored.
 | `set_eye_dome` | `enabled` | Enables or disables the depth-based shading pass |
 | `set_eye_dome_strength` | `strength` | Sets depth-shading strength from 0 to 5; 1 is the default |
 | `set_budget` | `points` | Sets visible point budget from 1,000 to 10,000,000 |
-| `set_section` | `min`, `max` | Enables an XYZ section box using two three-number arrays inside the visible model bounds |
+| `set_section` | `min`, `max`, optional `rotation` | Enables an XYZ section box using two three-number arrays inside the visible model bounds. With `rotation`, degrees counter-clockwise seen from above, the box `min`..`max` is turned about the vertical through its centre; it must then have a width and a length and reach the model, and may reach past it in its corners. `status.result.section` and the answer hold `min`, `max` and `rotation`; exports, selections, drawings, Closed mesh and Detect faces keep what lies inside the turned box |
 | `clear_section` | — | Disables the section box |
+| `align_section_to_walls` | — | Turns the section box along the main direction of the walls inside it, found in the middle half of its height as the filled cut of a plan finds it; the box keeps its size and centre and turns at most 45 degrees. Answers `started`; `status.result.section_align_pending` is true while the walls are looked for, and afterwards `status.result.section.rotation` holds the new turn and `status.result.status` says the box was turned, or that no walls were found. Refused while the box is off or a search runs |
 | `select_world` | `min`, `max` | Selects all exact source points in an inclusive XYZ box, returning a job ID |
 | `pick_screen` | `pointer`, optional `radius` | Picks a drawn source point near viewport pixel `[x, y]` when possible, then falls back to the full source; returns a job ID |
 | `cancel_selection` | — | Stops a running full-resolution box selection or point-pick source scan |

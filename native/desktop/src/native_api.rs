@@ -147,8 +147,13 @@ pub enum ApiCommand {
     SetSection {
         min: [f64; 3],
         max: [f64; 3],
+        /// Degrees counter-clockwise from above about the vertical through
+        /// the centre of the box; absent for an axis-aligned box.
+        rotation: Option<f64>,
     },
     ClearSection,
+    /// Turn the section box along the walls inside it.
+    AlignSectionToWalls,
     SelectWorld {
         min: [f64; 3],
         max: [f64; 3],

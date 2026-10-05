@@ -151,13 +151,14 @@ Walking starts from the current orbit view, or from inside a station. Walking ou
 - Drag one of the six handles on its faces to move that face.
 - While the box is on, Properties has a **Section box** section with a slider for each of the six limits, **Min** and **Max** fields for X, Y and Z in model coordinates with **Apply XYZ limits**, and **Zoom box**, which frames the clipped volume.
 - **Fit selection** fits the box around the selected points, using the selected source points themselves, also those that are not on screen.
-- **Reset box** opens the box to the whole model again.
+- **Reset box** opens the box to the whole model again, keeping its rotation.
+- **Rotation (°)** turns the box about the vertical line through its centre, counter-clockwise as seen from above; type the angle and press Enter, or choose **Apply XYZ limits**. **Align to walls** turns it for you: it looks for the main direction of the walls in the middle half of the height of the box, as the filled cut of a plan does, and turns the box by at most 45 degrees so that its sides run along them. Put the box around a few walls first; with only the floor or ceiling in its middle, no walls are found and the box stays as it is.
 
-The limits are coordinates in the model. They stay where they are when another layer is shown or hidden.
+The limits are coordinates in the model. They stay where they are when another layer is shown or hidden. In a turned box the **Min** and **Max** fields are the limits of the box before it is turned about its centre; the sliders and the handles move its faces along its own axes.
 
 The box also limits box selection, point picking, the three meshers and **Detect faces**. **Section box…** among the exports of the File view writes every source point of the active scan inside the box; see [Exporting and merging](#exporting-and-merging). **Section drawing** makes a 2D drawing of what the box cuts; see [Section drawings](#section-drawings).
 
-The box is aligned to the X, Y and Z axes of the model and cannot be rotated. A vertical cut through a building that stands at an angle to those axes is therefore a cut at that angle, not one along its walls.
+A turned box clips the points, the exports, the selections, the meshers and **Detect faces** to what lies inside it, and a saved view and a BCF file keep its rotation. A view saved before boxes could turn has a box along the axes. The octree reads the part of the scan around the turned box, so a box turned 45 degrees reads somewhat more than one along the axes. Meshes and the faces found are clipped with the same box.
 
 ## Selecting and editing
 
@@ -276,7 +277,9 @@ The command line does the same without a window: `--export`, `--section` and `--
 
 *The Section drawing block (Snedetekening) and the preview of the filled cut on a plan of two generated rooms, in the Dutch interface.*
 
-**Section drawing** in the SECTION BOX group makes a 2D drawing at scale 1:1 of what the section box cuts, and saves it as DXF or DWG for a drawing program. The button needs the section box to be on. It opens the **Section drawing** block at the top of Properties, and closes it again. **Section drawing…** among the exports of the File view asks for the file name at once, with the choices the block has.
+**Section drawing** in the SECTION BOX group makes a 2D drawing at scale 1:1 of what the section box cuts, and saves it as DXF or DWG for a drawing program. The button needs the section box to be on. It opens the **Section drawing** block at the top of Properties, and closes it again. **Section drawing…** among the exports of the File view opens the block first when it is closed, so that the view can be chosen there; with the block open it asks for the file name at once, with the choices the block has.
+
+While the block is open, the slab of the chosen view is outlined in blue in the scene, and the block says which face of the box is the cut plane. That face is easy to miss for a vertical section: with the box drawn around a whole building for a plan, its front face lies in front of the building, and a slab of 0.10 m there holds no points.
 
 A section drawing is flat: it shows one slab of the building, and what it fills of a wall is traced from the points in that slab. For the floors, ceilings and walls of a room as planes in 3D, each with its area and with how far the points lie from it, use **Detect faces**; see [Detected faces](#detected-faces). Detected faces are saved as JSON or OBJ and not as a drawing, and a drawing does not use them.
 
@@ -291,6 +294,8 @@ The cut plane is one face of the section box. The drawing holds the slab behind 
 | **Section, back** | The face at Y max | Along -Y | X to the left, Z up |
 | **Section, left** | The face at X min | Along +X | Y to the left, Z up |
 | **Section, right** | The face at X max | Along -X | Y to the right, Z up |
+
+In a turned box, X and Y in this table are the own axes of the box. A box turned along the walls of a building that stands at an angle to the model axes therefore gives a plan with the walls along the axes of the drawing, and the four vertical views are sections parallel to the walls. A plan of a turned box with **Model coordinates** has model X and Y turned with the box about the model origin; the line of text in the drawing gives the model position of drawing zero.
 
 The drawing holds:
 
@@ -309,13 +314,13 @@ The drawing holds:
 
 ### A vertical section, step by step
 
-1. Switch on **Section box** and put one of its four sides where the cut should be. For a section that looks along +Y, that is the face at Y min: type the position as Y **Min** and choose **Apply XYZ limits**. Set the other faces around the part to draw, the top and bottom faces above the roof and under the floor.
+1. Switch on **Section box**. When the walls stand at an angle to the model axes, choose **Align to walls** first, or type the **Rotation (°)**, so that the sides of the box run along the walls. Then put one of its four sides where the cut should be. For a section that looks along +Y, that is the face at Y min: type the position as Y **Min** and choose **Apply XYZ limits**. Set the other faces around the part to draw, the top and bottom faces above the roof and under the floor.
 2. Choose **Section drawing** and the **View** that stands at that face: **Section, front** for Y min, **back** for Y max, **left** for X min, **right** for X max.
 3. Set **Slab thickness (m)**. With 0.10 the drawing shows only what the cut plane goes through. A thicker slab, up to 5 m, also shows what lies behind the cut, as an elevation does. The slab is never deeper than the box: in a box that is shallower than the thickness asked, the slab is the whole box, and the result says so.
 4. A vertical section starts with **Filled cut** off: points only. Switch it on to get the floors and walls that are cut as filled regions.
-5. Preview and export as for a plan. A front or side view of the VIEW group looks at the cut plane.
+5. Preview and export as for a plan. A front or side view of the VIEW group looks at the cut plane of a box along the axes.
 
-The section box is aligned to the X, Y and Z axes of the model and cannot be rotated. A vertical section of a building that stands at an angle to those axes is therefore a skewed cut through its walls, not one along them.
+The blue outline in the scene shows where the slab lies. When the job ends with "the slab holds no points", the face of the box that is the cut plane lies where there is nothing to cut, such as in front of the building: the message names the face. Move that face onto the walls, or make the slab thicker.
 
 ### The choices of a drawing
 
@@ -359,10 +364,10 @@ When a job is done, the status bar says what was drawn, and the block keeps it u
 - **Points drawn** and **Point spacing**: the points in the drawing and the spacing they were thinned to. "(raised)" means the point limit made the spacing larger than 5 mm; the status bar names both spacings.
 - **Regions**: the filled regions, and how many small ones were dropped because they are smaller than a wall of 50 mm by 0.30 m.
 - **Grid cell**: the cell the filled cut was traced with. "(coarser)" means it is larger than the grid size asked for, because the points are too sparse for that cell or the surfaces in the slab span more than the grid holds.
-- **Main direction**: the direction of the walls, in degrees from the X axis, between -45 and 45. A vertical section always has zero.
+- **Main direction**: the direction of the walls, in degrees from the X axis of the drawing, between -45 and 45. A vertical section always has zero, and a plan of a box turned along the walls about zero.
 - The size of the file.
 
-A slab without points gives no drawing: the job fails with "the slab holds no points" and nothing is written.
+A slab without points gives no drawing: the job fails with "the slab holds no points", followed by the face of the box that is the cut plane, and nothing is written.
 
 ### The filled cut and its limits
 
@@ -380,7 +385,7 @@ Measured on generated rooms with a scanner noise of 2 mm, not on scans of real b
 - **Sparse points.** A cell counts from 3 points. For a sparse cloud the cells are doubled, at most twice (to 80 mm), and the accuracy falls to one cell; below 3 points per 80 mm cell nothing is drawn.
 - **Large extents.** The grid has at most 16 million cells over the part of the cut plane where the scans have points: 80 by 80 m at 20 mm. A larger extent gets larger cells. Tracing a grid of that size takes about half a gigabyte of memory and a second or two.
 - **A plan whose slab holds the floor** fills the floor: keep the slab above it.
-- **In a vertical section** floors are taken as level, and the section box follows the model axes, as said above.
+- **In a vertical section** floors are taken as level. Walls are cut square only when the box is turned along them, as said above.
 
 ### Other limits of a section drawing
 
@@ -395,9 +400,10 @@ Without a window, `--drawing` draws a box of one scan file:
 ```bash
 open-pointcloud-studio --drawing scan.laz 0,0,0,20,15,1.1 plan.dxf
 open-pointcloud-studio --drawing scan.laz 0,6,-1,20,15,8 section.dwg --view front --thickness 0.1 --units m --fill on
+open-pointcloud-studio --drawing scan.laz 0,6,-1,20,15,8 along-wall.dxf --view front --rotation 30
 ```
 
-The six numbers are the section box: X, Y and Z min, then X, Y and Z max. `--view` is `plan`, `front`, `back`, `left` or `right`, `--thickness` the slab in metres, `--units` `mm` or `m`, and `--fill` `on` or `off`; without them the drawing is a plan with a slab of 0.10 m in millimetres, filled for a plan and not for a vertical section. Limits that do not run from the minimum to the maximum and an output folder that does not exist are refused before the scan is read. The file is read through its index when `--index` or the window built one, and from start to end otherwise.
+The six numbers are the section box: X, Y and Z min, then X, Y and Z max. `--rotation` turns it that many degrees counter-clockwise about the vertical through its centre. `--view` is `plan`, `front`, `back`, `left` or `right`, `--thickness` the slab in metres, `--units` `mm` or `m`, and `--fill` `on` or `off`; without them the drawing is a plan with a slab of 0.10 m in millimetres, filled for a plan and not for a vertical section. Limits that do not run from the minimum to the maximum and an output folder that does not exist are refused before the scan is read. The file is read through its index when `--index` or the window built one, and from start to end otherwise.
 
 ## Meshing
 
@@ -539,7 +545,7 @@ open-pointcloud-studio --closed-mesh scan.e57 room.ply --box 0,0,-0.1,5.1,4.1,2.
 open-pointcloud-studio --closed-mesh merged.laz room.obj --box 0,0,-0.1,5.1,4.1,2.7 --voxel 0.03 --max-hole 0.1 --simplify 0 --sides centre
 ```
 
-The extension of the output chooses OBJ, PLY or STL. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
+The extension of the output chooses OBJ, PLY or STL. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--rotation` turns that box that many degrees about the vertical through its centre. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
 
 ## Detected faces
 
@@ -729,7 +735,7 @@ open-pointcloud-studio --faces scan.e57 room-faces.json --box -0.1,-0.1,-0.1,5.1
 open-pointcloud-studio --faces merged.laz faces.obj --distance 0.03 --angle 12 --min-area 0.5 --cylinders off
 ```
 
-The extension of the output chooses JSON or OBJ. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is searched. `--distance` is the distance tolerance in metres, `--angle` the angle tolerance in degrees, `--min-area` the smallest face in square metres and `--cylinders` `on` or `off`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory and a larger one is read from start to end twice. The mode prints the number of faces per type, the time and the voxel size, and one line per face with its type, area, normal, openings, coverage and residuals; when no face is found it writes nothing and ends with an error.
+The extension of the output chooses JSON or OBJ. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is searched. `--rotation` turns that box that many degrees about the vertical through its centre. `--distance` is the distance tolerance in metres, `--angle` the angle tolerance in degrees, `--min-area` the smallest face in square metres and `--cylinders` `on` or `off`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory and a larger one is read from start to end twice. The mode prints the number of faces per type, the time and the voxel size, and one line per face with its type, area, normal, openings, coverage and residuals; when no face is found it writes nothing and ends with an error.
 
 ## 3D BAG buildings
 

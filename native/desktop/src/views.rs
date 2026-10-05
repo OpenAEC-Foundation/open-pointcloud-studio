@@ -12,7 +12,7 @@ use iced::widget::canvas::{self, Frame};
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::window::Screenshot;
 use iced::{Color, Element, Fill, Point as UiPoint, Rectangle, Size, Task};
-use pointcloud_core::{Bounds, IndexedPoint};
+use pointcloud_core::{Bounds, IndexedPoint, OrientedBox};
 use serde_json::{json, Value};
 
 use crate::camera_views::{
@@ -66,7 +66,7 @@ struct Shown {
     guid: String,
     orbit: (f32, f32, f32, [f32; 2]),
     walk: Option<WalkView>,
-    section: Option<Bounds>,
+    section: Option<OrientedBox>,
     color_mode: ColorMode,
     scene: Option<Bounds>,
     viewport: Size,
@@ -524,7 +524,7 @@ impl Studio {
             guid: guid.to_owned(),
             orbit: (self.yaw, self.pitch, self.zoom, self.pan),
             walk: self.walk,
-            section: self.section_bounds(),
+            section: self.section_box(),
             color_mode: self.color_mode,
             scene: combined_bounds(&self.clouds),
             viewport: self.drawn_viewport(),
@@ -573,12 +573,12 @@ impl Studio {
     fn holds_what_view_holds(&self, view: &SavedView) -> bool {
         let section = view.section.is_none_or(|section| {
             section.enabled == self.section_enabled
-                && self.section_bounds().is_none_or(|shown| {
+                && self.section_box().is_none_or(|shown| {
                     (0..3).all(|axis| {
                         let slack = (section.max[axis] - section.min[axis]).max(1.0) * 1e-6;
-                        (shown.min[axis] - section.min[axis]).abs() <= slack
-                            && (shown.max[axis] - section.max[axis]).abs() <= slack
-                    })
+                        (shown.bounds.min[axis] - section.min[axis]).abs() <= slack
+                            && (shown.bounds.max[axis] - section.max[axis]).abs() <= slack
+                    }) && (shown.rotation_degrees - section.rotation).abs() <= 1e-6
                 })
         });
         section
@@ -593,18 +593,12 @@ impl Studio {
 
     /// The section box as a view keeps it: its limits also while it is off.
     fn section_state(&self) -> Option<SectionBox> {
-        let overall = self
-            .section_reference_bounds
-            .or_else(|| combined_bounds(&self.clouds))?;
-        let limit = |percent: [f64; 3]| -> Xyz {
-            std::array::from_fn(|axis| {
-                overall.min[axis] + (overall.max[axis] - overall.min[axis]) * percent[axis] / 100.0
-            })
-        };
+        let shape = self.section_shape()?;
         Some(SectionBox {
             enabled: self.section_enabled,
-            min: limit(self.section_min_percent),
-            max: limit(self.section_max_percent),
+            min: shape.bounds.min,
+            max: shape.bounds.max,
+            rotation: self.section_rotation,
         })
     }
 
@@ -683,7 +677,19 @@ impl Studio {
     /// Put the limits of a saved section box back, as far as they lie inside
     /// the model, and switch the box on or off as the view had it.
     fn apply_section(&mut self, section: SectionBox) {
-        if let Some(overall) = combined_bounds(&self.clouds) {
+        let turned = section.oriented();
+        if turned.is_turned() {
+            // As far as the box reaches the model; one beside it is left.
+            let reaches = combined_bounds(&self.clouds).is_some_and(|overall| {
+                let around = turned.aabb();
+                (0..3).all(|axis| {
+                    around.min[axis] <= overall.max[axis] && around.max[axis] >= overall.min[axis]
+                })
+            });
+            if reaches {
+                self.place_section(turned);
+            }
+        } else if let Some(overall) = combined_bounds(&self.clouds) {
             let mut low = [0.0; 3];
             let mut high = [100.0; 3];
             let mut inside = true;
@@ -698,6 +704,7 @@ impl Studio {
                 }
             }
             if inside {
+                self.set_section_rotation_value(0.0);
                 self.section_reference_bounds = Some(overall);
                 self.section_min_percent = low;
                 self.section_max_percent = high;
@@ -2203,6 +2210,39 @@ mod tests {
     }
 
     #[test]
+    fn a_view_keeps_the_turn_of_its_section_box() {
+        let (mut studio, _directory) = studio_with_scan();
+        let section = send(
+            &mut studio,
+            command(
+                r#"{"command":"set_section","min":[1,0.5,0.25],"max":[3,2.5,1.5],"rotation":30}"#,
+            ),
+        );
+        assert_eq!(section["ok"], true, "{section}");
+        act(&mut studio, ViewAction::Name("Along the wall".into()));
+        act(&mut studio, ViewAction::Save);
+        let view = studio.views.list[0].clone();
+        let kept = view.section.unwrap();
+        assert_eq!(kept.rotation, 30.0);
+        assert!(close(kept.min, [1.0, 0.5, 0.25]) && close(kept.max, [3.0, 2.5, 1.5]));
+        assert!(studio.shows_view(&view.guid));
+
+        // Another box along the axes; the view puts the turned one back.
+        let plain = send(
+            &mut studio,
+            command(r#"{"command":"set_section","min":[0,0,0],"max":[2,2,1]}"#),
+        );
+        assert_eq!(plain["ok"], true, "{plain}");
+        assert_eq!(studio.section_rotation, 0.0);
+        assert!(!studio.holds_what_view_holds(&view));
+        act(&mut studio, ViewAction::Restore(view.guid.clone()));
+        let restored = studio.section_box().unwrap();
+        assert_eq!(restored.rotation_degrees, 30.0);
+        assert!(close(restored.bounds.min, kept.min) && close(restored.bounds.max, kept.max));
+        assert!(studio.holds_what_view_holds(&view));
+    }
+
+    #[test]
     fn a_view_saved_while_walking_restores_the_walking_camera() {
         let (mut studio, _directory) = studio_with_scan();
         let walked = send(
@@ -2922,6 +2962,7 @@ mod tests {
             enabled: true,
             min: [40.0, 40.0, 40.0],
             max: [50.0, 50.0, 50.0],
+            rotation: 0.0,
         });
         act(&mut studio, ViewAction::Restore(guid.clone()));
         assert_eq!(studio.active_view().unwrap().guid, guid);

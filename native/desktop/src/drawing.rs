@@ -18,12 +18,12 @@ use std::time::{Duration, Instant};
 use iced::widget::canvas::{self, Frame};
 use iced::widget::{button, checkbox, column, container, pick_list, row, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Size, Task};
-use pointcloud_core::region_source::{RegionSource, SourceTransform};
+use pointcloud_core::region_source::{RegionFilter, RegionSource, SourceTransform};
 use pointcloud_core::{
     Bounds, CutPreview, DrawingFormat, DrawingOrigin, DrawingProgress, DrawingRequest,
     DrawingSource, DrawingStage, DrawingStats, DrawingUnits, DrawingVersion, DrawingView,
-    IndexConfig, LoadError, OctreeIndex, Point, PointCloud, PointColor, PointLayers,
-    DEFAULT_MIN_WALL_THICKNESS,
+    IndexConfig, LoadError, OctreeIndex, OrientedBox, Point, PointCloud, PointColor, PointLayers,
+    WallDirection, DEFAULT_MIN_WALL_THICKNESS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -431,9 +431,49 @@ struct SceneLayer {
 /// What of the scene a drawing is made from: the section box, the visible
 /// layers where they stand, their deleted points and the classes shown.
 struct Scene {
-    section: Bounds,
+    section: OrientedBox,
     filter: ClassFilter,
     layers: Vec<SceneLayer>,
+}
+
+impl Scene {
+    /// Hand the layers, as the core reads them, and the filter of deleted
+    /// points and hidden classes to `read`.
+    fn read<R>(&self, read: impl FnOnce(&[DrawingSource<'_>], &RegionFilter<'_>) -> R) -> R {
+        let sources: Vec<DrawingSource<'_>> = self
+            .layers
+            .iter()
+            .map(|layer| DrawingSource {
+                source: RegionSource::new(
+                    &layer.cloud,
+                    layer.index.as_deref(),
+                    SourceTransform {
+                        scale: layer.transform.scale,
+                        offset: layer.transform.offset,
+                    },
+                ),
+                name: &layer.name,
+            })
+            .collect();
+        let filter = self.filter;
+        let accept = |position: usize, ordinal: u64, point: &Point| {
+            self.layers[position]
+                .deleted
+                .as_ref()
+                .is_none_or(|mask| !mask.contains(ordinal))
+                && filter.accepts(point)
+        };
+        read(&sources, &accept)
+    }
+
+    /// An index is read without a look at the file it was built from, so
+    /// that the file is still the one that was opened is checked first.
+    fn validate(&self) -> Result<(), LoadError> {
+        for layer in self.layers.iter().filter(|layer| layer.index.is_some()) {
+            layer.cloud.validate_source()?;
+        }
+        Ok(())
+    }
 }
 
 enum Target {
@@ -461,7 +501,7 @@ pub(crate) struct JobInput {
 /// What a finished job hands back.
 enum Done {
     Exported(DrawingStats),
-    Preview(CutPreview),
+    Preview(Box<CutPreview>),
 }
 
 /// Read the slab and write the drawing or trace the preview. This runs on a
@@ -471,53 +511,74 @@ fn run(
     progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
 ) -> Result<Done, LoadError> {
     let scene = &input.scene;
-    // An index is read without a look at the file it was built from, so
-    // that the file is still the one that was opened is checked here.
-    for layer in scene.layers.iter().filter(|layer| layer.index.is_some()) {
-        layer.cloud.validate_source()?;
-    }
-    let sources: Vec<DrawingSource<'_>> = scene
-        .layers
-        .iter()
-        .map(|layer| DrawingSource {
-            source: RegionSource::new(
-                &layer.cloud,
-                layer.index.as_deref(),
-                SourceTransform {
-                    scale: layer.transform.scale,
-                    offset: layer.transform.offset,
-                },
-            ),
-            name: &layer.name,
+    scene.validate()?;
+    scene
+        .read(|sources, accept| match &input.target {
+            Target::Export(path, _) => pointcloud_core::export_section_drawing(
+                sources,
+                scene.section,
+                &input.request,
+                path,
+                accept,
+                progress,
+            )
+            .map(Done::Exported),
+            Target::Preview => pointcloud_core::preview_cut_regions(
+                sources,
+                scene.section,
+                &input.request,
+                accept,
+                progress,
+            )
+            .map(|preview| Done::Preview(Box::new(preview))),
         })
-        .collect();
-    let filter = scene.filter;
-    let accept = |position: usize, ordinal: u64, point: &Point| {
-        scene.layers[position]
-            .deleted
-            .as_ref()
-            .is_none_or(|mask| !mask.contains(ordinal))
-            && filter.accepts(point)
-    };
-    match &input.target {
-        Target::Export(path, _) => pointcloud_core::export_section_drawing(
-            &sources,
-            scene.section,
-            &input.request,
-            path,
-            &accept,
-            progress,
-        )
-        .map(Done::Exported),
-        Target::Preview => pointcloud_core::preview_cut_regions(
-            &sources,
-            scene.section,
-            &input.request,
-            &accept,
-            progress,
-        )
-        .map(Done::Preview),
+        .map_err(|error| hint_empty_slab(error, input.request.view))
+}
+
+/// The reason of a slab without points says which face of the box the cut
+/// plane is, and what to do about it: with a box drawn around a whole
+/// building, the face that a vertical view cuts at often lies outside it.
+fn hint_empty_slab(error: LoadError, view: DrawingView) -> LoadError {
+    match error {
+        LoadError::InvalidData(reason) if reason == EMPTY_SLAB => {
+            LoadError::InvalidData(format!("{EMPTY_SLAB}: {}", empty_slab_hint(view)))
+        }
+        other => other,
     }
+}
+
+/// The reason the core gives for a slab without points.
+const EMPTY_SLAB: &str = "the slab holds no points";
+
+fn empty_slab_hint(view: DrawingView) -> &'static str {
+    match view {
+        DrawingView::Plan => "the cut plane is the top face of the section box; move it down into the walls or make the slab thicker",
+        DrawingView::Front => "the cut plane is the front face of the section box (Y min); move that face onto the building or make the slab thicker",
+        DrawingView::Back => "the cut plane is the back face of the section box (Y max); move that face onto the building or make the slab thicker",
+        DrawingView::Left => "the cut plane is the left face of the section box (X min); move that face onto the building or make the slab thicker",
+        DrawingView::Right => "the cut plane is the right face of the section box (X max); move that face onto the building or make the slab thicker",
+    }
+}
+
+/// Where the cut plane of a view lies, for the note under the choice of view.
+fn cut_plane_text(view: DrawingView) -> &'static str {
+    match view {
+        DrawingView::Plan => key("Cuts at the top face of the section box, looking down. The slab is outlined in blue."),
+        DrawingView::Front => key("Cuts at the front face of the section box (Y min), looking along +Y. The slab is outlined in blue."),
+        DrawingView::Back => key("Cuts at the back face of the section box (Y max), looking along -Y. The slab is outlined in blue."),
+        DrawingView::Left => key("Cuts at the left face of the section box (X min), looking along +X. The slab is outlined in blue."),
+        DrawingView::Right => key("Cuts at the right face of the section box (X max), looking along -X. The slab is outlined in blue."),
+    }
+}
+
+/// Find the direction of the walls in the section box of a scene.
+fn find_walls(scene: &Scene) -> Result<Option<WallDirection>, String> {
+    let found = scene.validate().and_then(|()| {
+        scene.read(|sources, accept| {
+            pointcloud_core::wall_direction(sources, scene.section, accept, &mut |_| Ok(()))
+        })
+    });
+    found.map_err(|error| plain_reason(&error.to_string()).to_owned())
 }
 
 /// How a job ended, as the worker tells the window.
@@ -533,7 +594,7 @@ impl DrawingEnd {
     fn of(result: Result<Done, LoadError>) -> Self {
         match result {
             Ok(Done::Exported(stats)) => Self::Exported(stats),
-            Ok(Done::Preview(preview)) => Self::Preview(Arc::new(preview)),
+            Ok(Done::Preview(preview)) => Self::Preview(Arc::from(preview)),
             Err(LoadError::Cancelled) => Self::Cancelled,
             Err(error) => Self::Failed(plain_reason(&error.to_string()).to_owned()),
         }
@@ -691,7 +752,7 @@ fn grid_raised(stats: &DrawingStats, request: &DrawingRequest) -> bool {
 /// How deep the slab of a drawing is. The core keeps the slab within the
 /// section box, so in a box that is shallower than the thickness asked this
 /// is the depth of the box.
-fn slab_depth(section: Bounds, request: &DrawingRequest) -> f64 {
+fn slab_depth(section: OrientedBox, request: &DrawingRequest) -> f64 {
     pointcloud_core::slab_from_section(section, request.view, request.thickness, request.origin)
         .map(|slab| slab.thickness)
         .ok()
@@ -995,6 +1056,9 @@ pub enum DrawingAction {
     ClearPreview,
     /// Ask where to save the drawing.
     Export,
+    /// The entry of the File view: with the block closed it opens the block
+    /// first, so that the view is chosen there; with it open it exports.
+    ExportFromFile,
     PathChosen(Option<PathBuf>),
     Poll,
     Cancel,
@@ -1026,7 +1090,7 @@ fn drawn(entry: &CloudEntry) -> bool {
 impl Studio {
     /// The section box and the visible layers, as a job reads them.
     fn drawing_scene(&self) -> Result<Scene, Refusal> {
-        let section = self.section_bounds().ok_or(Refusal::NoSection)?;
+        let section = self.section_box().ok_or(Refusal::NoSection)?;
         // A layer that is still being read holds a cloud that was not checked
         // against its source. The core refuses it only when the read reaches
         // it, after every layer before it was read in full, and leaves it out
@@ -1077,12 +1141,57 @@ impl Studio {
         })
     }
 
+    /// The slab the tool would draw with its settings as they are, while
+    /// its block is open and the section box is on: where the cut plane
+    /// lies is then in sight.
+    pub(crate) fn drawing_slab(&self) -> Option<OrientedBox> {
+        if !self.drawing.open {
+            return None;
+        }
+        let section = self.section_box()?;
+        let request = self.drawing.settings.request().ok()?;
+        pointcloud_core::slab_from_section(section, request.view, request.thickness, request.origin)
+            .ok()
+            .map(|slab| slab.region)
+    }
+
+    /// Look for the direction of the walls in the section box on a worker
+    /// thread. The answer turns the box along them, when the box is still
+    /// the one that was looked in.
+    pub(crate) fn align_section_to_walls(&mut self) -> Task<Message> {
+        if self.section_align_pending {
+            return Task::none();
+        }
+        if self.section_box().is_none() {
+            self.status = "Switch on the section box before aligning it to the walls".into();
+            return Task::none();
+        }
+        let scene = match self.drawing_scene() {
+            Ok(scene) => scene,
+            Err(refusal) => {
+                self.status = refusal.status();
+                return Task::none();
+            }
+        };
+        let asked = scene.section;
+        self.section_align_pending = true;
+        self.status = "Looking for the walls in the section box…".into();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || find_walls(&scene))
+                    .await
+                    .map_err(|error| error.to_string())?
+            },
+            move |result| Message::SectionWallsFound(asked, result),
+        )
+    }
+
     /// Whether what a job was started with is still what the window shows:
     /// the same section box, the same visible layers where they stood, the
     /// same deleted points and classes, and the same settings of the cut.
     fn drawing_scene_current(&self, input: &JobInput) -> bool {
         let scene = &input.scene;
-        if self.section_bounds() != Some(scene.section) {
+        if self.section_box() != Some(scene.section) {
             return false;
         }
         let filter = self.mesh_filter();
@@ -1241,7 +1350,16 @@ impl Studio {
                     self.status = "Preview of the filled cut cleared".into();
                 }
             }
-            DrawingAction::Export => {
+            DrawingAction::ExportFromFile if !self.drawing.open || self.bag_panel => {
+                if let Err(problem) = self.drawing_start() {
+                    self.status = problem;
+                    return Task::none();
+                }
+                self.drawing.open = true;
+                let _ = self.set_bag_panel(false);
+                self.status = "Section drawing: choose the view, a plan or a vertical section, and the slab in Properties, then Export drawing…".into();
+            }
+            DrawingAction::Export | DrawingAction::ExportFromFile => {
                 let request = match self.drawing_start() {
                     Ok((_, request)) => request,
                     Err(problem) => {
@@ -1567,6 +1685,7 @@ impl Studio {
                     DrawingAction::View
                 ),
             ),
+            note(tr(cut_plane_text(settings.view))),
             opencad_properties::property_input(
                 "Slab thickness (m)",
                 "0.10",
@@ -1903,11 +2022,16 @@ impl PointViewport<'_> {
     /// It is drawn on top of the points without a depth test, so it reads
     /// best looking straight at the cut plane.
     pub fn draw_drawing(&self, frame: &mut Frame, size: Size) {
-        let (Some(preview), Some(scene)) = (self.drawing, crate::combined_bounds(self.clouds))
-        else {
+        let Some(scene) = crate::combined_bounds(self.clouds) else {
             return;
         };
         let projection = self.projection(scene, size.width, size.height);
+        if let Some(slab) = self.drawing_slab {
+            draw_slab(frame, projection, slab, size);
+        }
+        let Some(preview) = self.drawing else {
+            return;
+        };
         let outline = canvas::Stroke::default()
             .with_color(Color::from_rgb8(245, 158, 11))
             .with_width(1.2);
@@ -1954,6 +2078,44 @@ impl PointViewport<'_> {
     }
 }
 
+/// The colour of the slab outline, apart from the amber of the section box.
+const SLAB_RGB: [u8; 3] = [59, 130, 246];
+
+/// Outline the slab of the Section drawing tool: its twelve edges, cut off
+/// where they leave the view.
+fn draw_slab(frame: &mut Frame, projection: Projection, slab: OrientedBox, size: Size) {
+    let corners = slab.corners();
+    let edges = canvas::Path::new(|path| {
+        for (from, to) in [
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
+        ] {
+            if let Some([start, end]) =
+                measure::project_edge(projection, corners[from], corners[to], size)
+            {
+                path.move_to(start);
+                path.line_to(end);
+            }
+        }
+    });
+    frame.stroke(
+        &edges,
+        canvas::Stroke::default()
+            .with_color(Color::from_rgb8(SLAB_RGB[0], SLAB_RGB[1], SLAB_RGB[2]))
+            .with_width(1.8),
+    );
+}
+
 /// The value that follows an option of the command line, by its position.
 fn option_value(arguments: &[OsString], at: usize) -> Option<&str> {
     arguments.get(at).and_then(|value| value.to_str())
@@ -1988,12 +2150,12 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
     let [x0, y0, z0, x1, y1, z1] = values[..] else {
         return Err(wrong("Section limits must be six comma-separated numbers"));
     };
-    let section = Bounds {
+    let mut section = OrientedBox::from(Bounds {
         min: [x0, y0, z0],
         max: [x1, y1, z1],
-    };
+    });
     // "nan" and "inf" are read as numbers too.
-    let ordered = (0..3).all(|axis| section.min[axis] <= section.max[axis]);
+    let ordered = (0..3).all(|axis| section.bounds.min[axis] <= section.bounds.max[axis]);
     if !ordered || values.iter().any(|value| !value.is_finite()) {
         return Err(wrong(
             "Section limits must be finite numbers that run from the minimum to the maximum",
@@ -2018,6 +2180,10 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
         let value = option_value(options, at + 1).unwrap_or_default();
         match options[at].to_str() {
             Some("--view") => {}
+            Some("--rotation") => {
+                section.rotation_degrees = crate::parse_rotation(value)
+                    .ok_or_else(|| wrong("--rotation must be a number of degrees"))?;
+            }
             Some("--thickness") => settings.thickness = value.to_owned(),
             Some("--units") => {
                 settings.units = DrawingUnits::from_key(value)
@@ -2225,6 +2391,7 @@ mod tests {
             ApiCommand::SetSection {
                 min: PLAN_BOX.min,
                 max: PLAN_BOX.max,
+                rotation: None,
             },
         );
         assert_eq!(answer["ok"], true, "{answer}");
@@ -2840,6 +3007,7 @@ mod tests {
             ApiCommand::SetSection {
                 min: [PLAN_BOX.min[0], PLAN_BOX.min[1], 1.05],
                 max: PLAN_BOX.max,
+                rotation: None,
             },
         );
         assert_eq!(answer["ok"], true, "{answer}");
@@ -3102,6 +3270,7 @@ mod tests {
             ApiCommand::SetSection {
                 min: PLAN_BOX.min,
                 max: [14.5, PLAN_BOX.max[1], PLAN_BOX.max[2]],
+                rotation: None,
             },
         );
         assert_eq!(around_both["ok"], true, "{around_both}");
@@ -3192,10 +3361,13 @@ mod tests {
         finish(&mut studio);
         let failed = job(&mut studio, &id);
         assert_eq!(failed["state"], "failed");
-        assert_eq!(failed["error"], "the slab holds no points");
+        // The reason names the face that is the cut plane of a plan.
+        let reason = format!("{EMPTY_SLAB}: {}", empty_slab_hint(DrawingView::Plan));
+        assert_eq!(failed["error"], reason.as_str());
+        assert!(reason.contains("the top face of the section box"));
         assert_eq!(
             studio.status,
-            "Preview of the filled cut failed: the slab holds no points"
+            format!("Preview of the filled cut failed: {reason}")
         );
         // The block says why the last job gave nothing.
         assert!(matches!(studio.drawing.last, Some(Last::Failed { .. })));
@@ -3653,6 +3825,167 @@ mod tests {
         assert!(!studio.drawing_button_enabled());
     }
 
+    /// The room turned `degrees` about its own centre (2, 1.5) as a scan.
+    fn studio_with_turned_room(directory: &Path, degrees: f64) -> Studio {
+        let (points, _) = room_points();
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let text: String = points
+            .iter()
+            .map(|[x, y, z]| {
+                let (dx, dy) = (x - 2.0, y - 1.5);
+                format!(
+                    "{:.4} {:.4} {z:.3}\n",
+                    2.0 + cos * dx - sin * dy,
+                    1.5 + sin * dx + cos * dy
+                )
+            })
+            .collect();
+        let path = directory.join("turned.xyz");
+        std::fs::write(&path, text).unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 1_000).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        studio
+    }
+
+    #[test]
+    fn a_box_turned_along_the_walls_draws_a_square_plan_and_a_section_parallel_to_a_wall() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = studio_with_turned_room(directory.path(), 30.0);
+        let (room, in_slab) = room_points();
+
+        // Around the whole model, Align to walls finds the walls at 30
+        // degrees and turns the box about its centre to them.
+        let _ = studio.update(Message::SetSectionEnabled(true));
+        let before = studio.section_box().unwrap();
+        let scene = studio.drawing_scene().unwrap();
+        let asked = scene.section;
+        let found = find_walls(&scene).unwrap().unwrap();
+        let _ = studio.update(Message::SectionWallsFound(asked, Ok(Some(found))));
+        assert!((studio.section_rotation - 30.0).abs() < 0.1, "{found:?}");
+        assert!(
+            studio.status.starts_with("Section box turned to "),
+            "{}",
+            studio.status
+        );
+        let turned = studio.section_box().unwrap();
+        for axis in 0..3 {
+            assert!((turned.center()[axis] - before.center()[axis]).abs() < 1e-6);
+            assert!((turned.size()[axis] - before.size()[axis]).abs() < 1e-6);
+        }
+        let state = send(&mut studio, ApiCommand::Status)["result"]["section"].clone();
+        assert!((state["rotation"].as_f64().unwrap() - studio.section_rotation).abs() < 1e-12);
+        // An answer for a box that has changed since is not used.
+        let _ = studio.update(Message::ResetSectionBox);
+        let rotation = studio.section_rotation;
+        let _ = studio.update(Message::SectionWallsFound(asked, Ok(Some(found))));
+        assert_eq!(studio.section_rotation, rotation);
+        assert_eq!(
+            studio.status,
+            "The section box changed while the walls were looked for"
+        );
+
+        // A box of 4.6 by 3.4 m turned 30 degrees about the centre of the
+        // room holds the whole room, which a plan draws along its axes.
+        // Centred on the room, so that the frame of the box is that of the
+        // room before it was turned.
+        let turned_box = |half: f64, z: [f64; 2]| ApiCommand::SetSection {
+            min: [2.0 - 2.3, 1.5 - half, z[0]],
+            max: [2.0 + 2.3, 1.5 + half, z[1]],
+            rotation: Some(30.0),
+        };
+        let answer = send(&mut studio, turned_box(1.7, [0.9, 1.1]));
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["section"]["rotation"], 30.0);
+        assert!((answer["section"]["min"][0].as_f64().unwrap() + 0.3).abs() < 1e-9);
+        let draw = |studio: &mut Studio, name: &str, view: &str, thickness: f64| {
+            let accepted = send(
+                studio,
+                ApiCommand::ExportDrawing {
+                    path: directory.path().join(name),
+                    options: DrawingOptions {
+                        view: Some(view.into()),
+                        thickness: Some(thickness),
+                        fill: Some(true),
+                        ..DrawingOptions::default()
+                    },
+                },
+            );
+            assert_eq!(accepted["ok"], true, "{accepted}");
+            let id = accepted["job_id"].as_str().unwrap().to_owned();
+            finish(studio);
+            job(studio, &id)
+        };
+        let plan = draw(&mut studio, "plan.dxf", "plan", 0.1);
+        assert_eq!(plan["state"], "complete", "{plan}");
+        assert_eq!(plan["slab_points"], in_slab);
+        let direction = plan["direction_degrees"].as_f64().unwrap();
+        assert!(direction.abs() < 0.05, "{direction}");
+
+        // The front face of the box 0.155 m in front of the inner face of the
+        // wall at y = 0 of the room: a slab of 0.1 m holds the outer face of
+        // that wall and the ends of the walls beside it.
+        let answer = send(&mut studio, turned_box(1.655, [0.9, 1.1]));
+        assert_eq!(answer["ok"], true, "{answer}");
+        let front = draw(&mut studio, "front.dxf", "front", 0.1);
+        assert_eq!(front["state"], "complete", "{front}");
+        let truth = room
+            .iter()
+            .filter(|[x, y, z]| {
+                (-0.155..=-0.055).contains(y) && (-0.3..=4.3).contains(x) && (0.9..=1.1).contains(z)
+            })
+            .count();
+        assert!(truth > 1_000, "{truth}");
+        assert_eq!(front["slab_points"], truth as u64);
+
+        // With the face farther out the slab is empty, and the reason says
+        // which face of the box the cut plane is.
+        let _ = send(&mut studio, turned_box(2.5, [0.9, 1.1]));
+        let empty = draw(&mut studio, "empty.dxf", "front", 0.1);
+        assert_eq!(empty["state"], "failed");
+        let error = empty["error"].as_str().unwrap();
+        assert!(
+            error.starts_with("the slab holds no points: the cut plane is the front face"),
+            "{error}"
+        );
+        assert!(!directory.path().join("empty.dxf").exists());
+    }
+
+    #[test]
+    fn the_open_block_shows_its_slab_and_the_file_view_opens_the_block_first() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, _) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        assert_eq!(studio.drawing_slab(), None);
+
+        // The File view entry opens the block, where the view is chosen,
+        // instead of saving a plan at once; the next time it saves.
+        let _ = studio.update(Message::FileAction(FileAction::ExportDrawing));
+        assert!(studio.drawing.open);
+        assert!(!studio.drawing.dialog_pending);
+        assert!(studio
+            .status
+            .starts_with("Section drawing: choose the view"));
+        let _ = studio.update(Message::FileAction(FileAction::ExportDrawing));
+        assert!(studio.drawing.dialog_pending);
+        let _ = studio.update(Message::Drawing(DrawingAction::PathChosen(None)));
+
+        // The slab of the plan lies under the top face of the box, that of
+        // a front view behind its face at Y min.
+        let plan = studio.drawing_slab().unwrap();
+        assert_eq!(plan.bounds.max[2], PLAN_BOX.max[2]);
+        assert!((plan.bounds.min[2] - (PLAN_BOX.max[2] - 0.1)).abs() < 1e-12);
+        let _ = studio.update(Message::Drawing(DrawingAction::View(DrawingView::Front)));
+        let front = studio.drawing_slab().unwrap();
+        assert_eq!(front.bounds.min[1], PLAN_BOX.min[1]);
+        assert!((front.bounds.max[1] - (PLAN_BOX.min[1] + 0.1)).abs() < 1e-12);
+        assert!(tr(cut_plane_text(DrawingView::Front)).contains("Y min"));
+        let _ = studio.view();
+        // Without a number for the slab there is no slab to show.
+        let _ = studio.update(Message::Drawing(DrawingAction::Thickness("x".into())));
+        assert_eq!(studio.drawing_slab(), None);
+    }
+
     #[test]
     fn block_is_translated() {
         let _language = TestLanguage::hold(Language::Table(0));
@@ -3853,7 +4186,13 @@ mod tests {
         beside[1] = "100,100,0,101,101,1".into();
         assert_eq!(
             command_line(&beside).unwrap_err(),
-            (1, "Drawing failed: the slab holds no points".to_owned())
+            (
+                1,
+                format!(
+                    "Drawing failed: {EMPTY_SLAB}: {}",
+                    empty_slab_hint(DrawingView::Plan)
+                )
+            )
         );
         assert!(!directory.path().join("empty.dxf").exists());
         // The scan itself is never the output.

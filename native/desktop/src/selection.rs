@@ -5,7 +5,7 @@ use std::sync::{
 
 use crate::CloudTransform;
 use pointcloud_core::{
-    visit_points, Bounds, IndexedPoint, LoadError, OctreeIndex, Point, PointCloud,
+    visit_points, Bounds, IndexedPoint, LoadError, OctreeIndex, OrientedBox, Point, PointCloud,
 };
 
 const HIGHLIGHT_LIMIT: usize = 8_000;
@@ -260,7 +260,8 @@ pub struct ClassFilter {
     pub buildings: bool,
     pub other: bool,
     pub classes: ClassVisibility,
-    pub section: Option<Bounds>,
+    /// The section box, turned or not; a point outside it is left out.
+    pub section: Option<OrientedBox>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,12 +294,11 @@ impl ClassVisibility {
 
 impl ClassFilter {
     pub fn accepts(self, point: &Point) -> bool {
-        if let Some(section) = self.section {
-            if (0..3).any(|axis| {
-                point.xyz[axis] < section.min[axis] || point.xyz[axis] > section.max[axis]
-            }) {
-                return false;
-            }
+        if self
+            .section
+            .is_some_and(|section| !section.contains(point.xyz))
+        {
+            return false;
         }
         if !self.classes.allows(point.classification) {
             return false;
@@ -1051,9 +1051,9 @@ fn select_one_world(
             |node| {
                 !cancel.load(Ordering::Relaxed)
                     && bounds_overlap(transform.bounds(node), bounds)
-                    && filter
-                        .section
-                        .is_none_or(|section| bounds_overlap(transform.bounds(node), section))
+                    && filter.section.is_none_or(|section| {
+                        bounds_overlap(transform.bounds(node), section.aabb())
+                    })
             },
             |record| {
                 visited += 1;
@@ -1125,6 +1125,7 @@ fn select_one(
                     return false;
                 }
                 if filter.section.is_some_and(|section| {
+                    let section = section.aabb();
                     (0..3).any(|axis| {
                         transform.bounds(bounds).max[axis] < section.min[axis]
                             || transform.bounds(bounds).min[axis] > section.max[axis]
@@ -1546,10 +1547,10 @@ mod tests {
             buildings: true,
             other: true,
             classes: ClassVisibility::default(),
-            section: Some(Bounds {
+            section: Some(OrientedBox::from(Bounds {
                 min: [35.0, 0.0, 0.0],
                 max: [45.0, 0.0, 0.0],
-            }),
+            })),
         };
         let stream = select_world(
             vec![selection_source(
@@ -1721,10 +1722,10 @@ mod tests {
                 buildings: true,
                 other: true,
                 classes: ClassVisibility::default(),
-                section: Some(Bounds {
+                section: Some(OrientedBox::from(Bounds {
                     min: [30.0, -1.0, -1.0],
                     max: [49.0, 1.0, 1.0],
-                }),
+                })),
             },
         )
         .unwrap();
@@ -1974,10 +1975,10 @@ mod tests {
             .unwrap();
         assert_eq!(picked.ordinal, 1);
         let section = ClassFilter {
-            section: Some(Bounds {
+            section: Some(OrientedBox::from(Bounds {
                 min: [0.0, -1.0, -1.0],
                 max: [5.0, 1.0, 1.0],
-            }),
+            })),
             ..filter
         };
         assert_eq!(

@@ -168,7 +168,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 
 - A box with six draggable faces limits what is shown, selected, meshed and searched for faces, and its content can be exported on its own or drawn as a [2D drawing](#section-drawing).
 - Its limits can be typed as X, Y and Z coordinates in the Properties panel, fitted to the selection, or reset.
-- The box is aligned to the X, Y and Z axes of the scan and cannot be rotated. A building that stands at an angle to those axes is cut at that angle.
+- The box can be turned about the vertical: type a **Rotation (°)** in Properties, or press **Align to walls** to turn it along the main direction of the walls inside it. Its faces, the cut planes of a [2D drawing](#section-drawing) and what it keeps then follow the walls of a building that stands at an angle to the axes of the scan.
 
 ### Select and edit
 
@@ -200,6 +200,8 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 ### Section drawing
 
 - **Section drawing** in the SECTION BOX group makes a 2D drawing at scale 1:1 of what the section box cuts and saves it as DXF or DWG: a plan from the slab under the top face of the box, or a vertical section from the slab behind one of its four sides.
+- While its block in Properties is open, the slab of the chosen view is outlined in blue in the scene, so that the cut plane of a vertical section is in sight. A slab of 0.10 m behind a face that lies outside the building holds no points; move that face onto a wall or make the slab thicker.
+- In a box that is turned along the walls, the plan shows the walls along the axes of the drawing and the four sides are vertical sections parallel to the walls.
 - The drawing holds the points of the slab, thinned to one per 5 mm, from every visible scan with its move and scale, without deleted points and hidden classes.
 - **Filled cut** adds the walls, columns and floors that the slab goes through as filled regions with outlines, and leaves door and window openings open. **Preview** shows these regions over the points before a file is saved.
 - The choices are millimetres or metres, model coordinates or the corner of the box as zero, a layer per scan or per class, layer colours or the colours of the scan, and the file versions R2004 to R2018.
@@ -320,13 +322,13 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--scans INPUT` | Prints the scanner positions stored in a scan |
 | `--photos INPUT OUTPUT_DIRECTORY` | Saves the station photos of a scan as image files |
 | `--export INPUT OUTPUT` | Converts a scan; the extension of `OUTPUT` chooses the format (`.ply`, `.xyz`, `.pts`, `.csv`, `.las`, `.laz`, `.e57`) |
-| `--section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT` | Exports the points of a scan that lie inside a box |
-| `--drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf\|.dwg [--view plan\|front\|back\|left\|right] [--thickness METRES] [--units mm\|m] [--fill on\|off]` | Draws the slab behind one face of a box in a scan as a 2D drawing in DXF or DWG: a plan with a slab of 0.10 m in millimetres unless the options say otherwise |
+| `--section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]` | Exports the points of a scan that lie inside a box; with `--rotation` the box is turned that many degrees counter-clockwise about the vertical through its centre |
+| `--drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf\|.dwg [--view plan\|front\|back\|left\|right] [--rotation DEGREES] [--thickness METRES] [--units mm\|m] [--fill on\|off]` | Draws the slab behind one face of a box in a scan as a 2D drawing in DXF or DWG: a plan with a slab of 0.10 m in millimetres unless the options say otherwise |
 | `--merge OUTPUT.laz INPUT1.las INPUT2.laz [...]` | Merges LAS and LAZ scans into one file |
 | `--mesh INPUT OUTPUT.obj` | Writes a terrain mesh of a scan |
 | `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N]` | Writes a 3D surface mesh of a scan |
-| `--closed-mesh INPUT OUTPUT.obj\|.ply\|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic\|centre\|upward]` | Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY or STL: with an automatic voxel, gaps closed up to 0.25 m and the sides from the scanner stations unless the options say otherwise |
-| `--faces INPUT OUTPUT.json\|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on\|off]` | Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON or OBJ: with a distance tolerance of 0.02 m, an angle tolerance of 10 degrees, faces from 0.25 m² and cylinders on unless the options say otherwise |
+| `--closed-mesh INPUT OUTPUT.obj\|.ply\|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic\|centre\|upward]` | Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY or STL: with an automatic voxel, gaps closed up to 0.25 m and the sides from the scanner stations unless the options say otherwise |
+| `--faces INPUT OUTPUT.json\|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on\|off]` | Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON or OBJ: with a distance tolerance of 0.02 m, an angle tolerance of 10 degrees, faces from 0.25 m² and cylinders on unless the options say otherwise |
 | `--mesh-export INPUT OUTPUT` | Writes the faces of a mesh file as OBJ, PLY or STL; the extension of `OUTPUT` chooses the format (`.obj`, `.ply`, `.stl`) |
 | `--bag3d XMIN,YMIN,XMAX,YMAX 1.2\|1.3\|2.2 OUTPUT.obj` | Downloads the 3D BAG buildings inside an RD New box as OBJ |
 | `--version`, `-V` | Prints the version |
@@ -340,6 +342,7 @@ open-pointcloud-studio --section scan.laz 207440,474000,-100,208000,475000,1000 
 open-pointcloud-studio --merge merged.laz north.laz south.laz
 open-pointcloud-studio --drawing scan.laz 0,0,0,20,15,1.1 plan.dxf
 open-pointcloud-studio --drawing scan.laz 0,6,-1,20,15,8 section.dwg --view front --units m
+open-pointcloud-studio --drawing scan.laz 0,6,-1,20,15,8 along-wall.dxf --view front --rotation 30
 open-pointcloud-studio --closed-mesh scan.e57 room.ply --box 0,0,-0.1,5.1,4.1,2.7
 open-pointcloud-studio --faces scan.e57 room-faces.json --box -0.1,-0.1,-0.1,5.1,4.1,2.7
 ```

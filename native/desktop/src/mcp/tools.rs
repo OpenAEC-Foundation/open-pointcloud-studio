@@ -352,11 +352,13 @@ fn table() -> Vec<Tool> {
         tool("set_budget", Command, "Sets how many points the viewport draws at most.", vec![
             required("points", integer_in("Point budget, from 1000 to 10000000", 1_000, 10_000_000)),
         ]),
-        tool("set_section", Command, "Switches on a section box that clips the view, exports and selections to an axis-aligned box inside the model bounds.", vec![
-            required("min", xyz("Lowest corner [x, y, z] in scene coordinates")),
-            required("max", xyz("Highest corner [x, y, z] in scene coordinates")),
+        tool("set_section", Command, "Switches on a section box that clips the view, exports, selections and drawings. Without rotation it is an axis-aligned box inside the model bounds; with rotation it is the box min..max turned that many degrees about the vertical through its centre, so that it can follow walls at an angle to the axes. status.result.section reports min, max and rotation.", vec![
+            required("min", xyz("Lowest corner [x, y, z] in scene coordinates, before the turn")),
+            required("max", xyz("Highest corner [x, y, z] in scene coordinates, before the turn")),
+            optional("rotation", number_in("Degrees counter-clockwise seen from above, about the vertical through the centre of the box; 0 or absent for a box along the axes", -3_600.0, 3_600.0)),
         ]),
         tool("clear_section", Command, "Switches the section box off.", vec![]),
+        tool("align_section_to_walls", Command, "Turns the section box along the main direction of the walls inside it, found in the middle half of its height; the box turns at most 45 degrees and keeps its size and centre. Answers when the search has started; wait_until_idle, then status.result.section.rotation holds the turn and status.result.status says what was found.", vec![]),
         tool("select_world", Job, "Selects every exact source point inside an inclusive box across the visible layers, honouring class filters, the section box and deleted points. Answers with a job_id; the job reports the number of points.", vec![
             required("min", xyz("Lowest corner [x, y, z] in scene coordinates")),
             required("max", xyz("Highest corner [x, y, z] in scene coordinates")),
@@ -698,6 +700,7 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
     for (key, name) in [
         ("selection_pending", "selection"),
         ("selection_bounds_pending", "selection_bounds"),
+        ("section_align_pending", "section_align"),
         ("thin_pending", "thin"),
         ("mesh_export_pending", "mesh_export"),
         ("detail_pending", "points"),

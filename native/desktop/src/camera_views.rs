@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pointcloud_core::{Bounds, OrientedBox};
 use serde::{Deserialize, Serialize};
 
 use crate::ColorMode;
@@ -61,17 +62,40 @@ impl ViewFrame {
     }
 }
 
-/// The section box of a view, with its limits in model coordinates.
+/// The section box of a view, with its limits in model coordinates before
+/// the box is turned, and the turn about the vertical through its centre.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SectionBox {
     pub enabled: bool,
     pub min: Xyz,
     pub max: Xyz,
+    /// Degrees counter-clockwise from above; a view saved before the box
+    /// could turn has none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rotation: f64,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 impl SectionBox {
     fn valid(&self) -> bool {
-        finite(self.min) && finite(self.max) && (0..3).all(|axis| self.min[axis] <= self.max[axis])
+        finite(self.min)
+            && finite(self.max)
+            && self.rotation.is_finite()
+            && (0..3).all(|axis| self.min[axis] <= self.max[axis])
+    }
+
+    /// The box with its turn.
+    pub fn oriented(&self) -> OrientedBox {
+        OrientedBox::new(
+            Bounds {
+                min: self.min,
+                max: self.max,
+            },
+            self.rotation,
+        )
     }
 }
 
@@ -476,6 +500,7 @@ mod tests {
             enabled: true,
             min: [1.0, 1.0, 0.0],
             max: [4.0, 5.0, 2.5],
+            rotation: 0.0,
         });
         view.color_mode = Some(ColorMode::Intensity);
         view.annotations = vec![
@@ -507,6 +532,49 @@ mod tests {
         ));
         assert!(is_guid(&repaired[0].guid));
         assert_eq!(repaired[0].color_mode, Some(ColorMode::Intensity));
+    }
+
+    #[test]
+    fn the_turn_of_a_section_box_is_kept_and_an_old_view_has_none() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("camera-views.json");
+        let mut view = SavedView::camera(
+            PathBuf::from("scan.e57"),
+            "Along the wall",
+            0.1,
+            0.2,
+            1.0,
+            [0.0; 2],
+        );
+        let section = SectionBox {
+            enabled: true,
+            min: [1.0, 1.0, 0.0],
+            max: [4.0, 5.0, 2.5],
+            rotation: 30.0,
+        };
+        view.section = Some(section);
+        save_to(&path, std::slice::from_ref(&view)).unwrap();
+        assert_eq!(load_from(&path)[0].section, Some(section));
+        assert_eq!(section.oriented().rotation_degrees, 30.0);
+
+        // A box without a turn is written as before, without the field, and
+        // a view written before boxes could turn reads as not turned.
+        let mut stored = serde_json::to_value(vec![view]).unwrap();
+        stored[0]["section"]
+            .as_object_mut()
+            .unwrap()
+            .remove("rotation");
+        fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let old = load_from(&path);
+        assert_eq!(old[0].section.unwrap().rotation, 0.0);
+        let written = serde_json::to_value(&old).unwrap();
+        assert!(written[0]["section"].get("rotation").is_none());
+        // A turn that is no number makes the box unusable.
+        stored[0]["section"]["rotation"] = serde_json::json!("north");
+        fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        assert!(load_from(&path)
+            .first()
+            .is_none_or(|view| view.section.is_none()));
     }
 
     #[test]

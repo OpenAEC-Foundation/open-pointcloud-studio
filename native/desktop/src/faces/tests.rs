@@ -805,6 +805,7 @@ fn faces_are_out_of_date_when_their_points_are_no_longer_those_of_the_scene() {
         ApiCommand::SetSection {
             min: [0.0; 3],
             max: [1.0; 3],
+            rotation: None,
         },
     );
     let _ = send(&mut studio, ApiCommand::ClearSection);
@@ -1047,6 +1048,7 @@ fn all_visible_scans_take_part_and_the_active_one_keeps_the_faces() {
         ApiCommand::SetSection {
             min: [1.0, 0.0, 0.0],
             max: ROOM,
+            rotation: None,
         },
     );
     assert_eq!(boxed["ok"], true, "{boxed}");
@@ -1659,6 +1661,7 @@ fn block_says_what_a_job_would_search_and_what_voxel_the_budget_gives() {
         ApiCommand::SetSection {
             min: [0.0; 3],
             max: [0.8, ROOM[1], ROOM[2]],
+            rotation: None,
         },
     );
     assert_eq!(boxed["ok"], true, "{boxed}");

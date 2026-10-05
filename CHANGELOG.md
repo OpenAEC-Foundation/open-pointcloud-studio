@@ -14,6 +14,12 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- The section box can be turned about the vertical, for cuts parallel to the walls of a building that stands at an angle to the axes of the scan. Type a **Rotation (°)** under **Section box** in Properties, or choose **Align to walls** to turn the box along the main direction of the walls inside it. The turned box clips the view, exports, selections, Closed mesh and Detect faces, and a saved view and a BCF file keep its rotation.
+- A section drawing of a turned box follows the box: the plan shows the walls along the axes of the drawing, and the four vertical views are sections parallel to the walls.
+- While the Section drawing block is open, the slab of the chosen view is outlined in blue in the scene and the block names the face of the box that is the cut plane, so that the place of a vertical section is in sight. A slab without points now says which face that was and what to do about it.
+- **Section drawing…** in the File view opens the Section drawing block first when it is closed, so that a vertical section can be chosen before the file is saved.
+- `--section`, `--drawing`, `--closed-mesh` and `--faces` take `--rotation DEGREES` to turn their box, and the local API and the MCP server take an optional `rotation` in `set_section`, report it in the status, and have `align_section_to_walls`.
+
 - Double-click a point to orbit about it: from then on the view turns about that point, which keeps its place on the screen and its size, and a small target marks it while the view turns. Setting the point does not move the view. A double click where no point is drawn, or Zoom all, turns the view about the centre of the model again.
 - The command API and the MCP server can set the orbit point with `set_camera` (`orbit_point`), pick it at a viewport pixel with `pick_orbit_point` and turn the camera about it with `orbit`; `status` reports it with the camera.
 - Zoomed in far, the points at the left and right edges of the view are loaded as well when the 3D view changed size without the pointer passing over it.

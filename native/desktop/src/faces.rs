@@ -27,15 +27,16 @@ use pointcloud_core::surfaces::{
     DEFAULT_DEVIATION_CELLS,
 };
 use pointcloud_core::{
-    Bounds, IndexConfig, IndexedPoint, LoadError, MeshGeometry, OctreeIndex, Point, PointCloud,
+    Bounds, IndexConfig, IndexedPoint, LoadError, MeshGeometry, OctreeIndex, OrientedBox, Point,
+    PointCloud,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::bag_panel::plain_reason;
 use crate::closed_mesh::{
-    box_limits, choice_list, lacks_scan_ranges, number, option_value, uncapitalised,
-    with_scan_ranges, Layers, Learned, Sentence, UNINDEXED_LIMIT,
+    box_limits, choice_list, lacks_scan_ranges, number, option_value, rotation_option, turned_box,
+    uncapitalised, with_scan_ranges, Layers, Learned, Sentence, UNINDEXED_LIMIT,
 };
 use crate::cloud_transform::CloudTransform;
 use crate::i18n::{key, tr, tr_args};
@@ -338,7 +339,9 @@ impl SceneLayer {
 /// deleted points, the classes shown, the section box, and the scan that
 /// keeps the faces.
 struct Scene {
-    section: Option<Bounds>,
+    /// The section box, turned or not. The core is given the box around it
+    /// and the filter leaves out what lies in its corners.
+    section: Option<OrientedBox>,
     filter: ClassFilter,
     layers: Vec<SceneLayer>,
     /// The place in `layers` of the scan that keeps the faces. The result
@@ -599,11 +602,14 @@ fn run(input: &JobInput, control: &Control) -> Result<Finished, LoadError> {
             .as_ref()
             .is_none_or(|mask| !mask.contains(ordinal))
             && filter.accepts(point)
+            && scene
+                .section
+                .is_none_or(|section| !section.is_turned() || section.contains(point.xyz))
     };
     let surfaces = detect_surfaces(
         &sources,
         scene.anchor,
-        scene.section.unwrap_or(EVERYWHERE),
+        scene.section.map_or(EVERYWHERE, |section| section.aabb()),
         &input.config,
         &accept,
         &mut |step| control.report(Stage::of(step.stage), step.completed, step.total),
@@ -1675,9 +1681,10 @@ impl Studio {
         if active.transform.source_xyz([0.0; 3]).is_none() {
             return Err(Refusal::FlatTarget(name(active)));
         }
-        let section = self.section_bounds();
+        let section = self.section_box();
+        let around = section.map(|section| section.aabb());
         let reaches = |entry: &CloudEntry| {
-            section.is_none_or(|section| {
+            around.is_none_or(|section| {
                 let bounds = entry.bounds();
                 (0..3).all(|axis| {
                     bounds.min[axis] <= section.max[axis] && bounds.max[axis] >= section.min[axis]
@@ -1773,7 +1780,7 @@ impl Studio {
         }
         let data = data.ok_or(Problem::Refused(Refusal::NoLayer))?;
         // As the core does: only the part of the box that can hold points.
-        let bounds = match scene.section {
+        let bounds = match scene.section.map(|section| section.aabb()) {
             Some(section) => Bounds {
                 min: std::array::from_fn(|axis| section.min[axis].max(data.min[axis])),
                 max: std::array::from_fn(|axis| section.max[axis].min(data.max[axis])),
@@ -2900,10 +2907,12 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
     }
     let mut settings = FaceSettings::default();
     let mut section = None;
+    let mut rotation = None;
     for at in (0..options.len()).step_by(2) {
         let value = option_value(options, at + 1).unwrap_or_default();
         match options[at].to_str() {
             Some("--box") => section = Some(box_limits(value).map_err(wrong)?),
+            Some("--rotation") => rotation = Some(rotation_option(value).map_err(wrong)?),
             // The command line takes metres, as the local API does; the
             // block shows millimetres, and so does its sentence about the
             // range.
@@ -2929,6 +2938,7 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
             _ => return Err(usage()),
         }
     }
+    let section = turned_box(section, rotation).map_err(wrong)?;
     let config = settings
         .config()
         .map_err(|problem| (2, problem.english()))?;

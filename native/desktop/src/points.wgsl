@@ -9,7 +9,7 @@ struct Camera {
     surface: vec4<f32>,     // widget x, y, target physical width, height
     clip_min: vec4<f32>,
     clip_max: vec4<f32>,
-    clip_enabled: vec4<f32>, // section on, eye-dome on, eye-dome strength, sRGB target
+    clip_enabled: vec4<f32>, // section on (2 when turned), eye-dome on, eye-dome strength, sRGB target
     splat: vec4<f32>,        // walking: point radius in the scene, largest radius in pixels
 };
 
@@ -32,6 +32,28 @@ struct VertexOutput {
     @location(4) point_depth: f32,
     @location(5) point_world_radius: f32,
 };
+
+// Whether a position lies outside the section box. A turned box holds the
+// sine of its turn in clip_min.w and the cosine in clip_max.w; the position is
+// turned back about the centre of the box before the limits are tested.
+fn outside_section(relative: vec3<f32>) -> bool {
+    if camera.clip_enabled.x < 0.5 {
+        return false;
+    }
+    var at = relative;
+    if camera.clip_enabled.x > 1.5 {
+        let center = (camera.clip_min.xyz + camera.clip_max.xyz) * 0.5;
+        let offset = relative.xy - center.xy;
+        let sine = camera.clip_min.w;
+        let cosine = camera.clip_max.w;
+        at = vec3<f32>(
+            center.x + cosine * offset.x + sine * offset.y,
+            center.y - sine * offset.x + cosine * offset.y,
+            relative.z
+        );
+    }
+    return any(at < camera.clip_min.xyz) || any(at > camera.clip_max.xyz);
+}
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
@@ -119,8 +141,7 @@ fn vs_mesh(input: MeshInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    if camera.clip_enabled.x > 0.5 &&
-       (any(input.relative < camera.clip_min.xyz) || any(input.relative > camera.clip_max.xyz)) {
+    if outside_section(input.relative) {
         discard;
     }
     if dot(input.normal, input.normal) <= 0.000001 {
@@ -138,8 +159,7 @@ struct PointFragment {
 
 @fragment
 fn fs_point(input: VertexOutput) -> PointFragment {
-    if camera.clip_enabled.x > 0.5 &&
-       (any(input.relative < camera.clip_min.xyz) || any(input.relative > camera.clip_max.xyz)) {
+    if outside_section(input.relative) {
         discard;
     }
     let radius_squared = dot(input.local, input.local);

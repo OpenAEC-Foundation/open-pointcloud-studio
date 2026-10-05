@@ -148,10 +148,7 @@ impl OrientedBox {
             max: corners[0],
         };
         for corner in &corners[1..] {
-            for axis in 0..3 {
-                around.min[axis] = around.min[axis].min(corner[axis]);
-                around.max[axis] = around.max[axis].max(corner[axis]);
-            }
+            around.include(*corner);
         }
         around
     }
@@ -191,12 +188,7 @@ impl OrientedBox {
         for corner in corners {
             let at = frame.to_box(corner);
             match &mut around {
-                Some(around) => {
-                    for axis in 0..3 {
-                        around.min[axis] = around.min[axis].min(at[axis]);
-                        around.max[axis] = around.max[axis].max(at[axis]);
-                    }
-                }
+                Some(around) => around.include(at),
                 None => around = Some(Bounds { min: at, max: at }),
             }
         }
