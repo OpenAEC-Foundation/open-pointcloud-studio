@@ -37,6 +37,11 @@ struct VertexOutput {
 // sine of its turn in clip_min.w and the cosine in clip_max.w; the position is
 // turned back about the centre of the box before the limits are tested.
 fn outside_section(relative: vec3<f32>) -> bool {
+    return outside_section_by(relative, 0.0);
+}
+
+// The same with a margin outside the limits that still counts as inside.
+fn outside_section_by(relative: vec3<f32>, slack: f32) -> bool {
     if camera.clip_enabled.x < 0.5 {
         return false;
     }
@@ -52,7 +57,18 @@ fn outside_section(relative: vec3<f32>) -> bool {
             relative.z
         );
     }
-    return any(at < camera.clip_min.xyz) || any(at > camera.clip_max.xyz);
+    return any(at < camera.clip_min.xyz - vec3<f32>(slack)) ||
+        any(at > camera.clip_max.xyz + vec3<f32>(slack));
+}
+
+// A mesh fragment's position is interpolated, and rounds a little to either
+// side of a face of the box that its triangle lies in, such as the outside
+// of a wall at the edge of the model when the box spans it. It is tested with
+// a margin far below a millimetre in a building, so that such a face is
+// kept whole.
+fn mesh_slack() -> f32 {
+    let reach = max(abs(camera.clip_min.xyz), abs(camera.clip_max.xyz));
+    return 1e-5 * max(max(reach.x, reach.y), max(reach.z, 1.0));
 }
 
 @vertex
@@ -130,32 +146,41 @@ fn vs_mesh(input: MeshInput) -> VertexOutput {
     let local_y = camera.projection.y * 0.5 + camera.view.y
         - (dot(input.relative.xyz, camera.up.xyz) - camera.up.w) * camera.projection.z / depth;
     let physical = (camera.surface.xy + vec2<f32>(local_x, local_y)) * camera.view.w;
+    // The distance along the view is the w of the position, so that what
+    // the fragments receive is interpolated in perspective: the depth and
+    // the position stay exact inside a large triangle, as in a cap over a
+    // cut wall or a wall of a few triangles.
     output.position = vec4<f32>(
-        physical.x / camera.surface.z * 2.0 - 1.0,
-        1.0 - physical.y / camera.surface.w * 2.0,
-        clamp(depth / (camera.projection.w * 4.0), 0.0, 1.0),
-        1.0
+        (physical.x / camera.surface.z * 2.0 - 1.0) * depth,
+        (1.0 - physical.y / camera.surface.w * 2.0) * depth,
+        clamp(depth / (camera.projection.w * 4.0), 0.0, 1.0) * depth,
+        depth
     );
     return output;
-}
-
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    if outside_section(input.relative) {
-        discard;
-    }
-    if dot(input.normal, input.normal) <= 0.000001 {
-        return input.color;
-    }
-    let light = normalize(vec3<f32>(-0.35, -0.25, 0.90));
-    let shade = 0.76 + 0.24 * max(dot(normalize(input.normal), light), 0.0);
-    return vec4<f32>(input.color.rgb * shade, input.color.a);
 }
 
 struct PointFragment {
     @location(0) color: vec4<f32>,
     @builtin(frag_depth) depth: f32,
 };
+
+@fragment
+fn fs_main(input: VertexOutput) -> PointFragment {
+    if outside_section_by(input.relative, mesh_slack()) {
+        discard;
+    }
+    var output: PointFragment;
+    // Depth grows with the distance as for the points, not as one over it.
+    output.depth = clamp(input.point_depth / (camera.projection.w * 4.0), 0.0, 1.0);
+    if dot(input.normal, input.normal) <= 0.000001 {
+        output.color = input.color;
+        return output;
+    }
+    let light = normalize(vec3<f32>(-0.35, -0.25, 0.90));
+    let shade = 0.76 + 0.24 * max(dot(normalize(input.normal), light), 0.0);
+    output.color = vec4<f32>(input.color.rgb * shade, input.color.a);
+    return output;
+}
 
 @fragment
 fn fs_point(input: VertexOutput) -> PointFragment {
