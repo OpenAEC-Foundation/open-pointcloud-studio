@@ -875,6 +875,38 @@ fn cut_height_for(
     })
 }
 
+/// The floor that the slab over the level at `place` carries: the next
+/// whole floor or the roof above it, a partial floor in between left out.
+/// The levels are sorted from the lowest up with the roof last.
+pub fn floor_above(levels: &[Level], place: usize) -> Option<f64> {
+    levels
+        .get(place + 1..)?
+        .iter()
+        .find(|level| level.is_storey() || level.kind == LevelKind::Roof)
+        .map(|level| level.floor_z)
+}
+
+/// Set the thickness of the slab over every whole floor again, from its
+/// ceiling, or the underside of the slab above a suspended ceiling, to the
+/// floor above, as after levels were moved, added or removed by hand. A
+/// thickness outside `config.slab`, as between a ceiling and a floor that is
+/// no longer the one above it, is none.
+pub fn slab_thicknesses(levels: &mut [Level], config: &LevelConfig) {
+    let above: Vec<Option<f64>> = (0..levels.len())
+        .map(|place| floor_above(levels, place))
+        .collect();
+    for (level, next) in levels.iter_mut().zip(above) {
+        let upper = level.slab_underside.or(level.ceiling_z);
+        level.slab_thickness = match (level.is_storey(), upper, next) {
+            (true, Some(upper), Some(next)) => {
+                let thickness = next - upper;
+                (thickness >= config.slab[0] && thickness <= config.slab[1]).then_some(thickness)
+            }
+            _ => None,
+        };
+    }
+}
+
 /// Read the points near every floor of `levels` once more and set its
 /// height, its slope and the height of its cut from them, in a box per
 /// floor. The roof gets its height and slope; the rest keeps what it had.
@@ -1059,12 +1091,13 @@ pub fn refine_levels(
         }
     }
     // The slabs between a ceiling and the refined floor above it.
-    let floors: Vec<f64> = detection.levels.iter().map(|level| level.floor_z).collect();
-    for (place, level) in detection.levels.iter_mut().enumerate() {
+    let above: Vec<Option<f64>> = (0..detection.levels.len())
+        .map(|place| floor_above(&detection.levels, place))
+        .collect();
+    for (level, next) in detection.levels.iter_mut().zip(above) {
         if level.slab_thickness.is_none() || level.kind == LevelKind::Partial {
             continue;
         }
-        let next = floors[place + 1..].iter().copied().next();
         if let (Some(upper), Some(next)) = (level.slab_underside.or(level.ceiling_z), next) {
             level.slab_thickness = Some(next - upper);
         }
@@ -1255,6 +1288,49 @@ mod tests {
             let tilt = flat.tilt_mm_per_m.unwrap();
             assert!(tilt[0].abs() < 0.3 && tilt[1].abs() < 0.3, "{tilt:?}");
         }
+    }
+
+    #[test]
+    fn a_slab_reaches_from_the_ceiling_to_the_next_whole_floor() {
+        let level = |id: &str, kind: LevelKind, floor_z: f64, ceiling: Option<f64>| Level {
+            id: id.into(),
+            name: id.into(),
+            kind,
+            floor_z,
+            ceiling_z: ceiling,
+            slab_underside: None,
+            slab_thickness: ceiling.map(|_| 0.25),
+            cut_height: 1.2,
+            tilt_mm_per_m: None,
+            share: 1.0,
+            is_peil: false,
+            confidence: Confidence::certain(),
+            status: LevelStatus::Found,
+        };
+        let mut levels = vec![
+            level("00", LevelKind::Ground, 0.0, Some(2.95)),
+            level("00M", LevelKind::Partial, 1.5, None),
+            level("01", LevelKind::Storey, 3.4, Some(6.15)),
+            level("R", LevelKind::Roof, 6.4, None),
+        ];
+        // The mezzanine carries no slab of the storey it stands in.
+        assert_eq!(floor_above(&levels, 0), Some(3.4));
+        assert_eq!(floor_above(&levels, 2), Some(6.4));
+        assert_eq!(floor_above(&levels, 3), None);
+        levels[2].slab_underside = Some(6.35);
+        slab_thicknesses(&mut levels, &LevelConfig::default());
+        let thickness: Vec<Option<f64>> = levels.iter().map(|level| level.slab_thickness).collect();
+        assert!((thickness[0].unwrap() - 0.45).abs() < 1e-9, "{thickness:?}");
+        // 5 cm from the underside of the slab to the roof is no slab.
+        assert_eq!(thickness[1..], [None, None, None]);
+        levels[2].slab_underside = None;
+        slab_thicknesses(&mut levels, &LevelConfig::default());
+        assert!((levels[2].slab_thickness.unwrap() - 0.25).abs() < 1e-9);
+        // Without the first floor, the ceiling of the ground floor lies far
+        // below the floor above it.
+        levels.remove(2);
+        slab_thicknesses(&mut levels, &LevelConfig::default());
+        assert_eq!(levels[0].slab_thickness, None);
     }
 
     #[test]

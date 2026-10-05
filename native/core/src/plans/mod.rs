@@ -23,8 +23,8 @@ pub use frame::{
     RobustBounds, RobustBoundsConfig, StrayConfig, StraysBelow, STRAY_DEPTH,
 };
 pub use levels::{
-    detect_levels, refine_levels, Facing, Level, LevelConfig, LevelDetection, LevelKind, LevelPeak,
-    LevelRefinement, LevelStatus, PeakRole, RefineConfig,
+    detect_levels, floor_above, refine_levels, slab_thicknesses, Facing, Level, LevelConfig,
+    LevelDetection, LevelKind, LevelPeak, LevelRefinement, LevelStatus, PeakRole, RefineConfig,
 };
 pub use survey::{
     survey_scene, Footprint, FootprintConfig, PlanRegion, SceneSurvey, SurveyConfig, SurveyGrid,

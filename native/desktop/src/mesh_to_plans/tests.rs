@@ -1149,6 +1149,41 @@ fn levels_are_moved_named_added_merged_removed_and_renumbered_from_p() {
 }
 
 #[test]
+fn slabs_follow_the_floors_when_levels_move_come_and_go() {
+    let mut studio = studio_with_levels();
+    let slabs = |studio: &Studio| -> Vec<Option<f64>> {
+        studio
+            .mesh_to_plans
+            .prepare
+            .levels
+            .iter()
+            .map(|level| {
+                level
+                    .slab_thickness
+                    .map(|thickness| (thickness * 1000.0).round())
+            })
+            .collect()
+    };
+    assert_eq!(slabs(&studio), [Some(250.0), Some(250.0), None]);
+    // The first floor 20 cm up: the slab below it is 20 cm thicker, and its
+    // ceiling, which went along, lies 5 cm under the roof.
+    act(&mut studio, PrepareAction::Move(1, 3.2));
+    assert_eq!(slabs(&studio), [Some(450.0), None, None]);
+    act(&mut studio, PrepareAction::Move(1, 3.0));
+    assert_eq!(slabs(&studio), [Some(250.0), Some(250.0), None]);
+    // Without the first floor the ground floor carries no slab under the
+    // roof; a level added above it has no ceiling.
+    act(&mut studio, PrepareAction::Select(1));
+    act(&mut studio, PrepareAction::Remove);
+    assert_eq!(slabs(&studio), [None, None]);
+    act(&mut studio, PrepareAction::Select(0));
+    act(&mut studio, PrepareAction::Add);
+    let levels = &studio.mesh_to_plans.prepare.levels;
+    assert!((levels[1].floor_z - 3.0).abs() < 1e-12);
+    assert_eq!(slabs(&studio), [Some(250.0), None, None]);
+}
+
+#[test]
 fn show_in_model_puts_the_section_box_on_a_storey_and_back_to_wizard_takes_it_away() {
     let directory = tempfile::tempdir().unwrap();
     let (mut studio, _) = studio_with_building(directory.path());

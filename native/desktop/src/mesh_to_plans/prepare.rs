@@ -21,10 +21,10 @@ use iced::{
     keyboard, mouse, Border, Color, Element, Fill, Point, Rectangle, Renderer, Size, Task, Theme,
 };
 use pointcloud_core::plans::{
-    building_frame, detect_levels, refine_levels, robust_bounds, second_direction, stray_limit,
-    strays_below, survey_scene, BuildingFrame, Confidence, FootprintConfig, Level, LevelConfig,
-    LevelKind, LevelStatus, PlanRegion, RefineConfig, RobustBoundsConfig, SceneSurvey, StrayConfig,
-    SurveyConfig,
+    building_frame, detect_levels, refine_levels, robust_bounds, second_direction,
+    slab_thicknesses, stray_limit, strays_below, survey_scene, BuildingFrame, Confidence,
+    FootprintConfig, Level, LevelConfig, LevelKind, LevelStatus, PlanRegion, RefineConfig,
+    RobustBoundsConfig, SceneSurvey, StrayConfig, SurveyConfig,
 };
 use pointcloud_core::region_source::{resident_points, RegionSource};
 use pointcloud_core::{Bounds, IndexedPoint, LoadError, OrientedBox};
@@ -740,6 +740,7 @@ impl Studio {
                     level.slab_underside = level.slab_underside.map(|underside| underside + rise);
                     level.status = LevelStatus::Edited;
                     let followed = renumber(&mut prepare.levels, Some(place));
+                    slab_thicknesses(&mut prepare.levels, &LevelConfig::default());
                     prepare.select(followed);
                 }
             }
@@ -824,6 +825,7 @@ impl Studio {
                 });
                 let added = prepare.levels.len() - 1;
                 let followed = renumber(&mut prepare.levels, Some(added));
+                slab_thicknesses(&mut prepare.levels, &LevelConfig::default());
                 prepare.select(followed);
             }
             PrepareAction::Merge => {
@@ -842,6 +844,7 @@ impl Studio {
                 level.is_peil |= upper.is_peil;
                 level.status = LevelStatus::Edited;
                 let followed = renumber(&mut prepare.levels, Some(place));
+                slab_thicknesses(&mut prepare.levels, &LevelConfig::default());
                 prepare.select(followed);
             }
             PrepareAction::Remove => {
@@ -853,6 +856,7 @@ impl Studio {
                 };
                 prepare.levels.remove(place);
                 renumber(&mut prepare.levels, None);
+                slab_thicknesses(&mut prepare.levels, &LevelConfig::default());
                 let next = place.min(prepare.levels.len().saturating_sub(1));
                 prepare.select((!prepare.levels.is_empty()).then_some(next));
             }
