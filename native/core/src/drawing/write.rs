@@ -96,6 +96,11 @@ fn build_document(
             Vector3::new(min[0] * factor, min[1] * factor, 0.0);
         document.header.model_space_extents_max =
             Vector3::new(max[0] * factor, max[1] * factor, 0.0);
+        frame_active_view(
+            &mut document,
+            [min[0] * factor, min[1] * factor],
+            [max[0] * factor, max[1] * factor],
+        );
     }
 
     // A DXF before R2007 is text in the code page its header names, but the
@@ -197,6 +202,30 @@ fn build_document(
         document.add_entity(built).map_err(codec_error)?;
     }
     Ok(document)
+}
+
+/// The width over the height of the window a CAD program is assumed to
+/// show the active view in.
+const VIEW_ASPECT: f64 = 1.6;
+
+/// Point the active view of the model space at what the drawing holds, seen
+/// from above with a tenth around it. A CAD program opens a drawing in that
+/// saved view, so without it the drawing lies outside the window around the
+/// origin, which is far away for scans in national grid coordinates.
+pub(crate) fn frame_active_view(document: &mut CadDocument, min: [f64; 2], max: [f64; 2]) {
+    let Some(view) = document.vports.get_mut("*Active") else {
+        return;
+    };
+    let width = (max[0] - min[0]).abs();
+    let height = (max[1] - min[1]).abs();
+    let fit = height.max(width / VIEW_ASPECT) * 1.1;
+    view.view_center = Vector2::new(0.5 * (min[0] + max[0]), 0.5 * (min[1] + max[1]));
+    view.view_height = if fit.is_finite() && fit > 0.0 {
+        fit
+    } else {
+        1.0
+    };
+    view.aspect_ratio = VIEW_ASPECT;
 }
 
 pub(crate) fn codec_version(version: DrawingVersion) -> DxfVersion {
@@ -359,6 +388,12 @@ mod tests {
         assert_near(document.header.model_space_extents_min.y, -1.75 * factor);
         assert_near(document.header.model_space_extents_max.x, 4.5 * factor);
         assert_near(document.header.model_space_extents_max.y, 3.5 * factor);
+        // The saved view shows the drawing: its centre, and its height of
+        // 5.25 m with a tenth around it.
+        let view = document.vports.get("*Active").unwrap();
+        assert_near(view.view_center.x, 2.0 * factor);
+        assert_near(view.view_center.y, 0.875 * factor);
+        assert_near(view.view_height, 5.775 * factor);
 
         // The fill is the first entity, so that nothing lies under it.
         assert!(matches!(

@@ -181,6 +181,12 @@ fn the_model_reads_back_from_dxf_and_dwg_with_layers_and_coordinates() {
             let document = read_cad(&path, format);
             assert_eq!(document.version, codec_version(CAD_VERSION));
             assert_eq!(document.header.insertion_units, 6, "metres");
+            // The saved view looks down at the model from above.
+            let [min, max] = model.extents().unwrap();
+            let view = document.vports.get("*Active").unwrap();
+            assert!((view.view_center.x - 0.5 * (min[0] + max[0])).abs() < 1e-6);
+            assert!((view.view_center.y - 0.5 * (min[1] + max[1])).abs() < 1e-6);
+            assert!(view.view_height >= max[1] - min[1] && view.view_height > 0.0);
             for (layer, rgb) in [
                 (plane_layer(FaceClass::Wall), [226, 192, 132]),
                 (CAD_LAYER_CYLINDERS.to_owned(), [176, 152, 206]),

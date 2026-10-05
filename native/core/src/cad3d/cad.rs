@@ -13,7 +13,7 @@ use super::{
     edge, Kind, Model3d, Object3d, CAD_LAYER_CYLINDERS, CAD_LAYER_CYLINDER_AXES, CAD_LAYER_MESH,
     CAD_LAYER_PLANES,
 };
-use crate::drawing::{codec_error, codec_version, layer_color};
+use crate::drawing::{codec_error, codec_version, frame_active_view, layer_color};
 use crate::surfaces::{class_color, FaceClass};
 use crate::{DrawingFormat, DrawingUnits, DrawingVersion, LoadError};
 
@@ -115,6 +115,7 @@ fn build(model: &Model3d) -> Result<CadDocument, LoadError> {
     if let Some([min, max]) = model.extents() {
         document.header.model_space_extents_min = Vector3::new(min[0], min[1], min[2]);
         document.header.model_space_extents_max = Vector3::new(max[0], max[1], max[2]);
+        frame_active_view(&mut document, [min[0], min[1]], [max[0], max[1]]);
     }
     let mut layers: HashSet<String> = HashSet::new();
     let mut add_layer = |document: &mut CadDocument, name: &str, rgb: [u8; 3]| {
