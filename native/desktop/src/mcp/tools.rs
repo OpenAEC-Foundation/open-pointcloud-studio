@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Map, Value};
 
 use super::schema::{
-    boolean, choice, integer_in, list, number_from, number_in, number_or_null, numbers, object,
-    optional, ordinal, path, pixel, positive, positive_up_to, required, text, validate_arguments,
-    whole_numbers_as_integers, xyz, xyz_or_null, Argument,
+    boolean, choice, integer_in, list, number, number_from, number_in, number_or_null, numbers,
+    object, optional, ordinal, path, pixel, positive, positive_up_to, required, text,
+    validate_arguments, whole_numbers_as_integers, xyz, xyz_or_null, Argument,
 };
 
 /// Where tool calls go: the command API of a running window, and the
@@ -58,6 +58,7 @@ impl Tool {
             "status"
                 | "job"
                 | "list_camera_views"
+                | "list_drawings"
                 | "list_faces"
                 | "list_extensions"
                 | "list_instances"
@@ -289,7 +290,7 @@ fn table() -> Vec<Tool> {
         ]),
         tool("close_panorama", Command, "Leaves the walking camera and returns to the orbit view.", vec![]),
         tool("list_camera_views", Command, "Lists the saved views of the active scan with their camera, section box, colour mode and annotations, and the name of the active view.", vec![]),
-        tool("save_camera_view", Command, "Saves what the viewport shows of the active scan (camera, section box, colour mode) as a view and makes it the active view. A snapshot image follows shortly after; wait_until_idle waits for it.", vec![
+        tool("save_camera_view", Command, "Saves what the viewport shows of the active scan (camera, the section box while it is on, colour mode) as a view and makes it the active view. A snapshot image follows shortly after; wait_until_idle waits for it.", vec![
             optional("name", text("Name of the new view, unique within the scan; without it the first free \"View N\" is used", 1, 64)),
         ]),
         tool("update_camera_view", Command, "Overwrites a saved view with what the viewport shows now, keeping its name, identifier and annotations, and makes it the active view.", vec![
@@ -299,7 +300,7 @@ fn table() -> Vec<Tool> {
             required("name", view_name()),
             required("new_name", text("New name, unique within the scan", 1, 64)),
         ]),
-        tool("restore_camera_view", Command, "Shows a saved view again (camera, section box, colour mode) and makes it the active view with its annotations.", vec![
+        tool("restore_camera_view", Command, "Shows a saved view again (camera, its section box or the box switched off when it has none, colour mode) in the 3D scene and makes it the active view with its annotations.", vec![
             required("name", view_name()),
         ]),
         tool("delete_camera_view", Command, "Deletes a saved view of the active scan with its snapshot.", vec![
@@ -461,6 +462,26 @@ fn table() -> Vec<Tool> {
         tool("set_drawing_layer", Command, "Shows or hides a layer of the drawing in the Drawing view, by its name as status.result.drawing_view.drawing.layers lists it (any case), or every layer with *.", vec![
             required("layer", text("Layer name, or * for all layers", 1, 255)),
             required("visible", boolean("Whether the layer is shown")),
+        ]),
+        tool("create_drawing", Job, "Makes a plan, an elevation or a section as Create 2D plan / elevation / section in the Project Browser does, from every visible layer with the other settings of the Section drawing block, and shows it in the Drawing view. It is listed under VIEWS, and how it was made (the box, the face, the slab, the settings and the scans) is kept, so that show_drawing makes it again in a later session. Answers with a job_id; the complete job reports its name, guid and kind and the regions of the filled cut.", vec![
+            required("kind", choice("What to make", &crate::sheet_dialog::SheetKind::ALL.map(crate::sheet_dialog::SheetKind::key))),
+            optional("basis", text("model for the whole 3D model (the default), section_box for the section box while it is on, or the name of a saved view of the active scan with a section box", 1, 64)),
+            optional("side", choice("The side an elevation or a section looks at: front looks along +Y, back along -Y, left along +X and right along -X", &["front", "back", "left", "right"])),
+            optional("height", number("Height of the cut of a plan made from the model, in scene units; by default 1.20 above the floor of the model")),
+            optional("position", number("Where a section made from the model cuts, along the axis it looks along, in scene units; by default the middle of the model")),
+            optional("thickness", positive_up_to("Depth of the slab behind the cut of a plan or a section in metres, 0.005 to 5; 0.10 by default", 5.0)),
+            optional("name", text("Name of the drawing; without it the drawing is named after its kind and what it was made from", 1, 96)),
+        ]),
+        tool("list_drawings", Command, "Lists the drawings of create_drawing made from an open scan, with how each was made and whether it is made and shown in this session, and the previews, exports and opened files of this session.", vec![]),
+        tool("show_drawing", Command, "Shows a drawing of create_drawing in the Drawing view by its name, any case. A drawing that is not made in this session yet is made again from how it was made, from its scans, which must be open; the answer then has accepted and a job_id to wait for.", vec![
+            required("name", text("Name of the drawing as list_drawings gives it", 1, 96)),
+        ]),
+        tool("delete_drawing", Command, "Deletes a drawing of create_drawing by its name, any case, with how it was made.", vec![
+            required("name", text("Name of the drawing as list_drawings gives it", 1, 96)),
+        ]),
+        tool("set_browser_group", Command, "Opens or collapses a group of the Project Browser: scans, classes, views or bcf, a kind under views (3d, plans, elevations, sections, files), or the scans of one folder as folder: followed by the path of the folder. Collapsing changes nothing that is loaded or shown; the window keeps the choice. status.result.project_browser reports the groups.", vec![
+            required("group", text("The group", 1, 4096)),
+            required("open", boolean("true to open the group, false to collapse it")),
         ]),
         tool("open_in_cad_viewer", Command, "Opens a DXF or DWG file in the CAD viewer: the program chosen in Settings, else an installed Open CAD Studio, started read-only and without waiting for it; without either the file goes to the program the system has for it. Without a path it opens the last file that a drawing, faces or mesh export wrote. Answers with the path, the viewer program (null for the system program) and read_only. status.result.cad_viewer tells which viewer was found.", vec![
             optional("path", path("Absolute path of an existing .dxf or .dwg file; without it the last exported one")),

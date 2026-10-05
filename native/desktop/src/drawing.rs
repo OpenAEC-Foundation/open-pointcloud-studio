@@ -33,10 +33,12 @@ use crate::drawing_view::{DrawScene, DrawingSource as ViewSource, DrawingViewAct
 use crate::i18n::{key, tr, tr_args};
 use crate::job_scene::{JobLayer, JobScene};
 use crate::open_progress::{Line, Phase};
+use crate::saved_drawings::SavedDrawing;
 use crate::selection::{ClassFilter, ClassVisibility, Projection};
 // The tests delete points of a layer.
 #[cfg(test)]
 use crate::selection::DeletionMask;
+use crate::sheet_dialog::SheetJob;
 use crate::{
     camera_views, compact_count, flat_tool_style, format_count, measure, muted_checkbox_style,
     opencad_properties, opencad_ribbon, same_deletion_mask, themed_pick_list_style, CloudEntry,
@@ -470,9 +472,9 @@ impl Scene {
 enum Target {
     Export(PathBuf, DrawingFormat),
     Preview,
-    /// A drawing for the Project Browser under this name: made as a preview
-    /// is, not written, and shown in the Drawing view.
-    Sheet(String),
+    /// A drawing for the Project Browser, made as it says: as a preview is,
+    /// not written, shown in the Drawing view and kept under VIEWS.
+    Sheet(Box<SavedDrawing>),
 }
 
 impl Target {
@@ -480,7 +482,7 @@ impl Target {
         match self {
             Self::Export(..) => "export_drawing",
             Self::Preview => "preview_drawing",
-            Self::Sheet(_) => "create_sheet",
+            Self::Sheet(_) => "create_drawing",
         }
     }
 }
@@ -1115,6 +1117,20 @@ fn cut_of(request: &DrawingRequest) -> CutSettings {
 }
 
 /// Whether a layer takes part in a drawing: its points are shown.
+/// Names for a status line: all of a few, the first of many with how many
+/// more there are.
+fn named_briefly(names: &[String]) -> String {
+    const SHOWN: usize = 3;
+    if names.len() <= SHOWN + 1 {
+        return names.join(", ");
+    }
+    format!(
+        "{} and {} more scans",
+        names[..SHOWN].join(", "),
+        names.len() - SHOWN
+    )
+}
+
 fn drawn(entry: &CloudEntry) -> bool {
     entry.visible && entry.cloud.total_points > 0
 }
@@ -1128,6 +1144,16 @@ impl Studio {
 
     /// The visible layers read through a box of its own.
     fn drawing_scene_for(&self, section: OrientedBox) -> Result<Scene, Refusal> {
+        self.drawing_scene_with(section, drawn)
+    }
+
+    /// The layers that `keep` takes, read through a box of its own.
+    fn drawing_scene_with(
+        &self,
+        section: OrientedBox,
+        keep: impl Fn(&CloudEntry) -> bool,
+    ) -> Result<Scene, Refusal> {
+        let drawn = |entry: &CloudEntry| keep(entry) && entry.cloud.total_points > 0;
         // A layer that is still being read holds a cloud that was not checked
         // against its source. The core refuses it only when the read reaches
         // it, after every layer before it was read in full, and leaves it out
@@ -1324,39 +1350,101 @@ impl Studio {
 
     /// Make a drawing for the Project Browser from a box that Create 2D
     /// plan / elevation / section worked out, with the other settings of the
-    /// Section drawing block. It shows in the Drawing view under its name.
+    /// Section drawing block, from the visible scans. It shows in the
+    /// Drawing view under its name and is kept under VIEWS with how it was
+    /// made. Answers why it cannot start.
     pub(crate) fn create_sheet(
         &mut self,
-        section: OrientedBox,
-        view: DrawingView,
-        thickness: Option<f64>,
-        name: String,
-    ) -> Task<Message> {
+        job: SheetJob,
+        api_job_id: Option<String>,
+    ) -> Result<Task<Message>, String> {
         if self.drawing.busy() {
-            self.status = BUSY.into();
-            return Task::none();
+            return Err(BUSY.into());
         }
-        let scene = match self.drawing_scene_for(section) {
-            Ok(scene) => scene,
-            Err(refusal) => {
-                self.status = refusal.status();
-                return Task::none();
+        let scene = self
+            .drawing_scene_for(job.section)
+            .map_err(|refusal| refusal.status())?;
+        let mut request = self.drawing.settings.request()?;
+        request.view = job.view;
+        request.thickness = job.thickness;
+        request.fill = DrawingRequest::for_view(job.view).fill;
+        let mut sources: Vec<PathBuf> = Vec::new();
+        for entry in self.clouds.iter().filter(|entry| drawn(entry)) {
+            let source = self.views.source_of(&entry.cloud.path);
+            if !sources.contains(&source) {
+                sources.push(source);
             }
-        };
-        let mut request = match self.drawing.settings.request() {
-            Ok(request) => request,
-            Err(reason) => {
-                self.status = reason;
-                return Task::none();
-            }
-        };
-        request.view = view;
-        request.thickness = thickness;
-        request.fill = DrawingRequest::for_view(view).fill;
+        }
+        let name = crate::saved_drawings::free_name(&self.drawing_view.saved, &sources, &job.name);
+        let definition = SavedDrawing::new(&name, job.kind, job.section, &request, sources);
+        Ok(self.start_sheet_job(scene, request, definition, api_job_id))
+    }
+
+    /// Make a drawing of the Project Browser again from how it was made,
+    /// from the scans it was made from. Answers why it cannot start.
+    pub(crate) fn remake_sheet(
+        &mut self,
+        definition: SavedDrawing,
+        api_job_id: Option<String>,
+    ) -> Result<Task<Message>, String> {
+        let open: Vec<PathBuf> = self
+            .clouds
+            .iter()
+            .map(|entry| self.views.source_of(&entry.cloud.path))
+            .collect();
+        let missing: Vec<String> = definition
+            .sources
+            .iter()
+            .filter(|source| !open.contains(source))
+            .map(|source| {
+                source.file_name().map_or_else(
+                    || source.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "Open {} to make the drawing {}",
+                named_briefly(&missing),
+                definition.name
+            ));
+        }
+        if self.drawing.busy() {
+            return Err(BUSY.into());
+        }
+        let request = definition.request().ok_or_else(|| {
+            format!(
+                "The settings of the drawing {} cannot be used by this version",
+                definition.name
+            )
+        })?;
+        let scene = self
+            .drawing_scene_with(definition.oriented(), |entry| {
+                definition.uses(&self.views.source_of(&entry.cloud.path))
+            })
+            .map_err(|refusal| refusal.status())?;
+        Ok(self.start_sheet_job(scene, request, definition, api_job_id))
+    }
+
+    fn start_sheet_job(
+        &mut self,
+        scene: Scene,
+        request: DrawingRequest,
+        definition: SavedDrawing,
+        api_job_id: Option<String>,
+    ) -> Task<Message> {
         // The block of the tool stays as it was: the dialog is the tool here.
         let was_open = self.drawing.open;
-        let task = self.start_drawing_job(scene, request, Target::Sheet(name), None);
+        let name = definition.name.clone();
+        let task = self.start_drawing_job(
+            scene,
+            request,
+            Target::Sheet(Box::new(definition)),
+            api_job_id,
+        );
         self.drawing.open = was_open;
+        self.status = format!("Making the drawing {name}…");
         task
     }
 
@@ -1560,9 +1648,12 @@ impl Studio {
                     }
                 }
             }
-            (DrawingEnd::Preview(cut, scene), Target::Sheet(name)) => {
+            (DrawingEnd::Preview(cut, scene), Target::Sheet(definition)) => {
                 let mut named = (*scene).clone();
-                named.source = ViewSource::Sheet(name.clone());
+                named.source = ViewSource::Sheet {
+                    guid: definition.guid.clone(),
+                    name: definition.name.clone(),
+                };
                 built = Some((Arc::new(named), true));
                 Last::Previewed {
                     request,
@@ -1578,23 +1669,47 @@ impl Studio {
                 error: "the job answered with another result than was asked".into(),
             },
         };
+        let sheet = match &job.input.target {
+            Target::Sheet(definition) => Some(definition.as_ref().clone()),
+            _ => None,
+        };
+        let mut value = last.value();
+        self.status = last.status();
+        if let Some(definition) = &sheet {
+            // A drawing of the Project Browser reports as one.
+            value["operation"] = "create_drawing".into();
+            value["name"] = definition.name.clone().into();
+            value["guid"] = definition.guid.clone().into();
+            value["kind"] = definition.kind.key().into();
+            self.status = match &last {
+                Last::Previewed { .. } => {
+                    format!("Drawing {} made; it is listed under VIEWS", definition.name)
+                }
+                Last::Cancelled { .. } => format!("Drawing {} cancelled", definition.name),
+                Last::Failed { error, .. } => {
+                    format!("The drawing {} could not be made: {error}", definition.name)
+                }
+                Last::Exported { .. } => self.status.clone(),
+            };
+        }
         if let Some(entry) = job
             .api_job_id
             .as_ref()
             .and_then(|id| self.api_jobs.get_mut(id))
         {
-            *entry = last.value();
+            *entry = value;
         }
-        self.status = last.status();
         let written = match &last {
             Last::Exported { path, .. } => Some(path.clone()),
             _ => None,
         };
         self.drawing.last = Some(last);
-        let sheet = matches!(job.input.target, Target::Sheet(_));
         if let Some((scene, exported)) = built {
+            if let Some(definition) = sheet {
+                self.keep_saved_drawing(definition);
+            }
             self.section_drawing_built(scene, exported);
-            if sheet {
+            if matches!(job.input.target, Target::Sheet(_)) {
                 self.drawing_view.shown = true;
                 self.file_open = false;
             }
@@ -2532,6 +2647,166 @@ mod tests {
         assert_eq!(accepted["ok"], true, "{accepted}");
         finish(studio);
         status(studio)
+    }
+
+    #[test]
+    fn drawings_of_create_2d_are_kept_listed_after_a_restart_and_made_again() {
+        use crate::drawing_view::DrawingViewAction;
+        use crate::project_browser::{ViewKind, ViewRow};
+        use crate::views::ViewAction;
+
+        // The names are made in the language in use.
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        // A saved view with the box of a plan, to make a section from.
+        set_plan_box(&mut studio);
+        let _ = studio.update(Message::Views(ViewAction::Name("Room".into())));
+        let _ = studio.update(Message::Views(ViewAction::Save));
+        let _ = studio.update(Message::SetSectionEnabled(false));
+
+        // A plan from the model, a section from the view and an elevation.
+        let commands = [
+            r#"{"command":"create_drawing","kind":"plan","height":1.05}"#,
+            r#"{"command":"create_drawing","kind":"section","basis":"room","side":"left","thickness":0.6}"#,
+            r#"{"command":"create_drawing","kind":"elevation","side":"back","name":"North face"}"#,
+        ];
+        for command in commands {
+            let answer = send(&mut studio, serde_json::from_str(command).unwrap());
+            assert_eq!(answer["ok"], true, "{answer}");
+            finish(&mut studio);
+            let made = job(&mut studio, answer["job_id"].as_str().unwrap());
+            assert_eq!(made["state"], "complete", "{made}");
+            assert_eq!(made["operation"], "create_drawing");
+            assert!(studio.drawing_view.shown);
+            assert_eq!(
+                studio.drawing_view.shown_guid(),
+                made["guid"].as_str(),
+                "the drawing made is shown"
+            );
+        }
+        let listed = send(&mut studio, ApiCommand::ListDrawings);
+        let names: Vec<&str> = listed["drawings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|drawing| drawing["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Plan +1.05", "Section Left · Room", "North face"]);
+        assert_eq!(listed["drawings"][1]["kind"], "section");
+        assert_eq!(listed["drawings"][1]["view"], "left");
+        assert_eq!(listed["drawings"][1]["thickness"], 0.6);
+        assert_eq!(listed["drawings"][2]["shown"], true);
+        assert!(listed["drawings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|drawing| drawing["made"] == true));
+        // The section keeps the box of the view it was made from, and the
+        // plan the cut at its height.
+        let saved = studio.drawing_view.saved.clone();
+        assert_eq!(saved[1].section.min, PLAN_BOX.min);
+        assert_eq!(saved[1].section.max, PLAN_BOX.max);
+        assert!((saved[0].section.max[2] - 1.05).abs() < 1e-9);
+        assert_eq!(saved[0].request().unwrap().view, DrawingView::Plan);
+        let source = camera_views::source_key(&studio.clouds[0].cloud.path);
+        assert!(saved
+            .iter()
+            .all(|drawing| drawing.sources == [source.clone()]));
+        assert_eq!(crate::saved_drawings::load(), saved, "kept on disk");
+
+        // Previews, exports and files are limited; the drawings stay.
+        for number in 0..20 {
+            studio
+                .drawing_view
+                .set_scene(Arc::new(DrawScene::from_drawing(
+                    &Drawing2d::new(DrawingUnits::Metres),
+                    ViewSource::File(directory.path().join(format!("{number}.dxf"))),
+                )));
+        }
+        assert_eq!(studio.drawing_view.sheets().len(), 16);
+        assert!(saved
+            .iter()
+            .all(|drawing| studio.drawing_view.made(&drawing.guid).is_some()));
+        let groups = studio.view_groups();
+        assert_eq!(
+            groups.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+            [
+                ViewKind::ThreeD,
+                ViewKind::Plans,
+                ViewKind::Elevations,
+                ViewKind::Sections,
+                ViewKind::Files,
+            ]
+        );
+        assert_eq!(groups[0].1[0], ViewRow::Model);
+        let _ = studio.view();
+
+        // After a restart the drawings are kept but not made. Without their
+        // scan they are not listed, and making one says what is missing.
+        let plan = saved[0].guid.clone();
+        let mut restarted = Studio::default();
+        assert_eq!(restarted.drawing_view.saved, saved);
+        assert!(restarted.listed_drawings().is_empty());
+        let Err(refused) = restarted.show_saved_drawing(&plan, None) else {
+            panic!("the drawing is made without its scan");
+        };
+        assert_eq!(refused, "Open room.xyz to make the drawing Plan +1.05");
+        let cloud = Arc::new(pointcloud_core::open(&studio.clouds[0].cloud.path, 1_000).unwrap());
+        let _ = restarted.update(Message::Loaded(Ok(cloud)));
+        assert_eq!(restarted.listed_drawings().len(), 3);
+        assert!(restarted.drawing_view.made(&plan).is_none());
+        // A click makes it again from how it was made, also with the scan
+        // hidden.
+        let _ = restarted.update(Message::LayerVisible(0, false));
+        let _ = restarted.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+            plan.clone(),
+        )));
+        assert!(restarted.drawing.job.is_some(), "{}", restarted.status);
+        finish(&mut restarted);
+        assert_eq!(restarted.drawing_view.shown_guid(), Some(plan.as_str()));
+        let again = restarted.drawing_view.made(&plan).unwrap().totals();
+        assert_eq!(again, studio.drawing_view.made(&plan).unwrap().totals());
+        assert_eq!(restarted.drawing_view.saved, saved, "nothing new is kept");
+        // A second click shows the drawing made.
+        restarted.drawing_view.shown = false;
+        let _ = restarted.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+            plan.clone(),
+        )));
+        assert!(restarted.drawing.job.is_none() && restarted.drawing_view.shown);
+
+        // Deleted, it is gone from the list, the view and the disk.
+        let deleted = send(
+            &mut restarted,
+            serde_json::from_str(r#"{"command":"delete_drawing","name":"plan +1.05"}"#).unwrap(),
+        );
+        assert_eq!(deleted["ok"], true, "{deleted}");
+        assert!(!restarted.drawing_view.shown);
+        assert_eq!(crate::saved_drawings::load().len(), 2);
+        let missing = send(
+            &mut restarted,
+            serde_json::from_str(r#"{"command":"show_drawing","name":"Plan +1.05"}"#).unwrap(),
+        );
+        assert_eq!(missing["ok"], false);
+        let section = send(
+            &mut restarted,
+            serde_json::from_str(r#"{"command":"show_drawing","name":"section left · room"}"#)
+                .unwrap(),
+        );
+        assert_eq!(section["accepted"], true, "{section}");
+        finish(&mut restarted);
+        let made = job(&mut restarted, section["job_id"].as_str().unwrap());
+        assert_eq!(made["name"], "Section Left · Room", "{made}");
+        let _ = restarted.view();
+
+        // Many missing scans are named briefly.
+        let names: Vec<String> = (1..=6).map(|number| format!("s{number}.e57")).collect();
+        assert_eq!(named_briefly(&names[..4]), "s1.e57, s2.e57, s3.e57, s4.e57");
+        assert_eq!(
+            named_briefly(&names),
+            "s1.e57, s2.e57, s3.e57 and 3 more scans"
+        );
     }
 
     /// The entities of an ASCII DXF: how many of each kind there are, and

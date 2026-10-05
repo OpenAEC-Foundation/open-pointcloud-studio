@@ -452,7 +452,7 @@ mod tests {
         ("station_photos.rs", include_str!("station_photos.rs")),
         ("ui_theme.rs", include_str!("ui_theme.rs")),
         ("view_cube.rs", include_str!("view_cube.rs")),
-        ("sections.rs", include_str!("sections.rs")),
+        ("project_browser.rs", include_str!("project_browser.rs")),
         ("sheet_dialog.rs", include_str!("sheet_dialog.rs")),
         ("views.rs", include_str!("views.rs")),
     ];

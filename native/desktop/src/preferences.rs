@@ -42,6 +42,26 @@ pub(crate) struct Preferences {
     pub cap_max_thickness: f64,
     /// The project files of Mesh to Plans worked on last, newest first.
     pub recent_mesh_to_plans: Vec<PathBuf>,
+    /// The groups of the Project Browser that are collapsed. A value that
+    /// is no list of texts reads as none, and leaves the other settings.
+    #[serde(deserialize_with = "texts_or_none")]
+    pub browser_collapsed: Vec<String>,
+}
+
+/// The texts of a list, or none when the value is no list.
+fn texts_or_none<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 impl Default for Preferences {
@@ -66,6 +86,7 @@ impl Default for Preferences {
             cap_color: crate::section_fill::DEFAULT_CAP_COLOR,
             cap_max_thickness: pointcloud_core::DEFAULT_CAP_MAX_THICKNESS,
             recent_mesh_to_plans: Vec::new(),
+            browser_collapsed: Vec::new(),
         }
     }
 }
@@ -164,6 +185,35 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_groups_are_read_from_older_and_damaged_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        // A file of a version without the groups.
+        fs::write(&path, r#"{"budget": 3000000, "auto_index": false}"#).unwrap();
+        let older = load_from(&path);
+        assert!(older.browser_collapsed.is_empty());
+        assert_eq!(older.budget, 3_000_000);
+        // A value that is no list of texts leaves the other settings.
+        fs::write(
+            &path,
+            r#"{"budget": 3000000, "browser_collapsed": "scans"}"#,
+        )
+        .unwrap();
+        let damaged = load_from(&path);
+        assert!(damaged.browser_collapsed.is_empty());
+        assert_eq!(damaged.budget, 3_000_000);
+        fs::write(
+            &path,
+            r#"{"browser_collapsed": ["views", 7, null, "folder:C:/scans"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_from(&path).browser_collapsed,
+            ["views", "folder:C:/scans"]
+        );
+    }
+
+    #[test]
     fn settings_round_trip_and_invalid_values_use_safe_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config/settings.json");
@@ -181,6 +231,7 @@ mod tests {
             cap_color: [40, 50, 60],
             cap_max_thickness: 0.35,
             recent_mesh_to_plans: vec![PathBuf::from("/projects/office/project.ops-m2p.json")],
+            browser_collapsed: vec!["scans".into(), "views.plans".into()],
             ..Preferences::default()
         };
         save_to(&path, &settings).unwrap();

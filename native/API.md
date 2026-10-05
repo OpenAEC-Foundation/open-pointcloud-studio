@@ -610,12 +610,58 @@ case, or every layer with `*`; both fail without a drawing.
 
 `status.result.drawing_view` holds `shown`, `show_after_export`, `reading`
 (the file being read, or `null`), `error` (why the last file could not be
-read, or `null`), `drawing` (`null`, or its `source`: `preview`, `export` or
-`file`, its `path`, `units`, `units_named`, the totals above, `extents` in
+read, or `null`), `drawing` (`null`, or its `source`: `preview`, `export`,
+`file` or `sheet` for a drawing of `create_drawing`, its `path`, `units`,
+`units_named`, the totals above, `extents` in
 drawing units, `inserts`, `skipped`, `skipped_3d` and `layers`, each with
 `name`, `visible`, `color` and its `points`, `polylines`, `fills` and
 `texts`), `camera` (`center` in drawing units and `pixels_per_unit`) and the
 `viewport_size` of the sheet.
+
+## Drawings of the Project Browser
+
+`create_drawing` makes a plan, an elevation or a section as **Create 2D plan /
+elevation / section…** under VIEWS in the Project Browser does. `kind` is
+`plan`, `elevation` or `section`; `basis` is `model` (the whole 3D model, the
+default), `section_box` (the section box while it is on) or the name of a
+saved view of the active scan that has a section box, in any case. `side`
+(`front`, `back`, `left` or `right`) is the side an elevation or a section
+looks at, front by default. From the model a plan is cut at `height` (1.20
+above the floor of the model by default) and a section at `position` along
+the axis it looks along (the middle of the model by default); an elevation
+takes the whole depth. `thickness` is the slab behind the cut of a plan or a
+section in metres, 0.10 by default. The other settings are those of the
+Section drawing block, and the drawing is made from every visible layer.
+Without `name` the drawing is named after its kind and what it was made from;
+a name that a drawing of the same scans has gets a number after it. The
+answer has a `job_id`; the complete job has `operation: "create_drawing"`,
+the `name`, `guid` and `kind` of the drawing and the figures of a preview.
+The drawing is shown in the Drawing view and listed under VIEWS by its kind.
+
+How each drawing was made is kept beside the saved views in `drawings.json`:
+its `name`, `guid`, `kind`, the `box` it was cut from (`min`, `max` and
+`rotation`), the `view` (the face drawn), the slab `thickness`, the other
+`settings` and the `sources`, the scans it was made from as the saved views
+name them. `list_drawings` lists the drawings made from an open scan, each
+with those and with `made` (true once it is made in this session) and
+`shown`, and the `files` of this session: the last preview, the exports and
+the opened DXF and DWG files, each with `name`, `source`, `path` and `shown`.
+`show_drawing` shows a drawing by its name in any case; one that is not made
+in this session yet is made again from how it was made, from its scans,
+which must all be open, and the answer then has `accepted: true` and a
+`job_id`. `delete_drawing` forgets a drawing by its name. The previews,
+exports and files are limited to the 16 newest; the drawings of
+`create_drawing` stay, however many there are.
+
+`set_browser_group` opens (`open: true`) or collapses (`open: false`) a
+group of the Project Browser: `scans`, `classes`, `views` or `bcf`, a kind
+under VIEWS (`3d`, `plans`, `elevations`, `sections` or `files`), or the
+scans of one folder as `folder:` followed by the path of the folder as the
+scans lie in it. Collapsing changes nothing that is loaded or shown, and the
+window keeps the choice for the next session. `status.result.project_browser`
+reports which groups are `open`, the `collapsed` groups, and under `views`
+each kind VIEWS lists with its `group`, whether it is `open` and the names in
+its `rows`, the 3D model first.
 
 ## CAD viewer
 
@@ -904,13 +950,19 @@ viewport: `distance`, `area` or `null`. Points picked there appear in
 A saved view holds the orbit camera (`yaw`, `pitch`, `zoom`, `pan`), the
 walking camera in `walk` when it was saved while walking, the scene bounds and
 viewport size the camera was relative to in `frame`, the section box in
-`section` (`enabled`, `min`, `max` in model coordinates, also while it is
-off, and `rotation` in degrees when the box is turned; a view without it has a
-box along the axes), the `color_mode`, its `guid`, its `created` time in seconds since 1970,
+`section` when it was on (`enabled: true`, `min`, `max` in model
+coordinates, and `rotation` in degrees when the box is turned; a view
+without it has a box along the axes), the `color_mode`, its `guid`, its `created` time in seconds since 1970,
 `snapshot_due: true` while its snapshot is missing or older than the view,
 and its `annotations`. An annotation is `{"kind":"note","point":[x,y,z],
 "text":…,"guid":…,"created":…}` or `{"kind":"line","from":[x,y,z],
-"to":[x,y,z]}`. The view last saved or restored is the active view:
+"to":[x,y,z]}`. Restoring a view puts its section box back, switched on with
+its limits and its turn, and switches the box off for a view that has none
+(or one saved by an earlier version while the box was off). Section boxes
+that an earlier version kept under a name in `section-boxes.json` are taken
+over once as views, one per box, named as the box and framing it; that file
+is left as it is, and a scan may then have more views than the limit until
+some are deleted. The view last saved or restored is the active view:
 `add_note` and `add_line` add to it, and first save the current view as
 "View N" when no view is active. `status.result.views` reports the `active`
 view with its annotations (or `null`), the `annotation_tool` in use in the
@@ -968,7 +1020,7 @@ when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge, 3D BAG download or Mesh to Plans task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -985,10 +1037,10 @@ when the view is restored.
 | `walk` | `eye`, `yaw`, `pitch` | Places the walking camera at a position in scene coordinates, looking along the heading `yaw` and elevation `pitch`; inside a station ball it shows that station's photos |
 | `close_panorama` | — | Leaves the walking camera and returns to the orbit view |
 | `list_camera_views` | — | Lists the saved views of the active scan with everything they hold, and the name of the `active` view |
-| `save_camera_view` | optional `name` | Saves the current view of the active scan (camera, section box, colour mode) and makes it the active view; returns its `name` and `guid`. The name must be unique within that scan and 1–64 characters long; without a name the first free "View 1", "View 2", … is used (maximum 32 views per scan) |
+| `save_camera_view` | optional `name` | Saves the current view of the active scan (camera, the section box while it is on, colour mode) and makes it the active view; returns its `name` and `guid`. The name must be unique within that scan and 1–64 characters long; without a name the first free "View 1", "View 2", … is used (maximum 64 views per scan) |
 | `update_camera_view` | `name` | Overwrites a named view with the current view, keeping its name, identifier, time and annotations, and makes it the active view |
 | `rename_camera_view` | `name`, `new_name` | Renames a view of the active scan |
-| `restore_camera_view` | `name` | Restores a named view of the active scan, ignoring name case: its camera, section box and colour mode. It becomes the active view and its annotations are shown; a snapshot that is due is taken |
+| `restore_camera_view` | `name` | Restores a named view of the active scan, ignoring name case: its camera, its section box (switched off when the view has none) and colour mode, in the 3D scene also when a drawing was shown. It becomes the active view and its annotations are shown; a snapshot that is due is taken |
 | `delete_camera_view` | `name` | Deletes a named view of the active scan with its snapshot, ignoring name case |
 | `add_note` | `point`, `text` | Adds a note of 1–240 characters at an `[x, y, z]` scene position to the active view and returns the view's `annotations`. The snapshot is renewed when the viewport shows the view, otherwise when the view is next restored |
 | `add_line` | `from`, `to` | Adds a line (drawn as an arrow from the first to the second `[x, y, z]` scene position) to the active view and returns the view's `annotations` |
@@ -1059,6 +1111,11 @@ when the view is restored.
 | `cancel_drawing` | — | Requests cancellation of the running section drawing or preview |
 | `drawing_view` | `show` | Shows the Drawing view in the main area in place of the 3D scene (`true`) or the 3D scene again (`false`); answers with `drawing_view` |
 | `open_drawing` | `path` | Reads an absolute `.dxf` or `.dwg` file into the Drawing view and shows it; returns a job ID whose complete job reports units, layers, entities drawn and skipped |
+| `create_drawing` | `kind`, optional `basis`, `side`, `height`, `position`, `thickness`, `name` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; returns a job ID. See [Drawings of the Project Browser](#drawings-of-the-project-browser) |
+| `list_drawings` | — | Lists the drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |
+| `show_drawing` | `name` | Shows a drawing of `create_drawing`, made again from how it was made when it is not made in this session yet (then with a job ID) |
+| `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
+| `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view; answers with the `camera` |
 | `set_drawing_layer` | `layer`, `visible` | Shows or hides a layer of the drawing in the Drawing view by its name, or every layer with `*` |
 | `open_in_cad_viewer` | optional `path` | Opens a `.dxf` or `.dwg` file, by default the last one exported, read-only in Open CAD Studio or the program chosen in Settings, else in the system program; returns `path`, `viewer` and `read_only` |

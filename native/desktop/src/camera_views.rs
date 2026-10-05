@@ -1,6 +1,7 @@
 //! Views saved per source scan, stored outside the scan files: the camera,
 //! the section box, the colour mode and the annotations placed on the view,
-//! with one snapshot image per view beside the list.
+//! with one snapshot image per view beside the list. Section boxes that an
+//! earlier version kept under a name are taken over as views once.
 
 use std::fs;
 use std::io;
@@ -12,7 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ColorMode;
 
-pub const MAX_VIEWS_PER_SOURCE: usize = 32;
+/// A scan keeps this many views; section boxes taken over from an earlier
+/// version may bring it past that, and then only saving a new view waits.
+pub const MAX_VIEWS_PER_SOURCE: usize = 64;
 pub const MAX_NAME_CHARS: usize = 64;
 pub const MAX_ANNOTATIONS: usize = 64;
 pub const MAX_NOTE_CHARS: usize = 240;
@@ -194,6 +197,12 @@ impl SavedView {
         }
     }
 
+    /// The section box the view switches on when it is applied; a view
+    /// without one switches the box off.
+    pub fn section_box(&self) -> Option<SectionBox> {
+        self.section.filter(|section| section.enabled)
+    }
+
     fn valid(&self) -> bool {
         !self.source.as_os_str().is_empty()
             && !self.name.trim().is_empty()
@@ -276,8 +285,17 @@ pub fn source_key(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// The saved views, with the section boxes of an earlier version that were
+/// not taken over yet added as views.
 pub fn load() -> Vec<SavedView> {
-    config_path().map_or_else(Vec::new, |path| load_from(&path))
+    let Some(path) = config_path() else {
+        return Vec::new();
+    };
+    let mut views = load_from(&path);
+    if let (Some(sections), Some(taken)) = (sections_path(), taken_over_path()) {
+        take_over_from(&path, &mut views, &sections, &taken);
+    }
+    views
 }
 
 pub fn save(views: &[SavedView]) -> io::Result<()> {
@@ -299,12 +317,14 @@ pub fn use_test_directory(directory: &Path) {
 }
 
 #[cfg(test)]
-fn directory() -> Option<PathBuf> {
+pub(crate) fn directory() -> Option<PathBuf> {
     TEST_DIRECTORY.with(|slot| slot.borrow().clone())
 }
 
+/// The folder that holds the views, their snapshots and the drawings made
+/// beside them.
 #[cfg(not(test))]
-fn directory() -> Option<PathBuf> {
+pub(crate) fn directory() -> Option<PathBuf> {
     crate::preferences::config_directory()
 }
 
@@ -312,28 +332,182 @@ fn config_path() -> Option<PathBuf> {
     directory().map(|directory| directory.join("camera-views.json"))
 }
 
+/// Where an earlier version kept section boxes under a name. The file is
+/// read, never written.
 fn sections_path() -> Option<PathBuf> {
     directory().map(|directory| directory.join("section-boxes.json"))
 }
 
-/// The named section boxes, as `save_sections` left them.
-pub fn load_sections() -> Vec<crate::sections::SavedSection> {
-    sections_path()
-        .and_then(|path| fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+/// The identifiers of the section boxes that were taken over as views.
+fn taken_over_path() -> Option<PathBuf> {
+    directory().map(|directory| directory.join("section-boxes-taken-over.json"))
 }
 
-pub fn save_sections(sections: &[crate::sections::SavedSection]) -> io::Result<()> {
-    let path = sections_path().ok_or_else(|| io::Error::other("no user config directory"))?;
-    let directory = path
-        .parent()
-        .ok_or_else(|| io::Error::other("section box path has no parent"))?;
-    fs::create_dir_all(directory)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-    serde_json::to_writer_pretty(temporary.as_file_mut(), sections).map_err(io::Error::other)?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    Ok(())
+/// A section box that an earlier version kept under a name: its limits
+/// before the turn, and the turn about the vertical through its centre in
+/// degrees.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedSection {
+    /// The scan the box belongs to, as the saved views name it.
+    pub source: PathBuf,
+    pub name: String,
+    pub min: Xyz,
+    pub max: Xyz,
+    #[serde(default)]
+    pub rotation: f64,
+}
+
+impl SavedSection {
+    fn shape(&self) -> SectionBox {
+        SectionBox {
+            enabled: true,
+            min: self.min,
+            max: self.max,
+            rotation: self.rotation,
+        }
+    }
+
+    /// The identifier of the view the box becomes: the same for the same
+    /// box on every start.
+    fn view_guid(&self) -> String {
+        let numbers: Vec<u8> = self
+            .min
+            .iter()
+            .chain(&self.max)
+            .chain(std::iter::once(&self.rotation))
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        stable_guid(&[
+            b"section box",
+            self.source.to_string_lossy().as_bytes(),
+            self.name.as_bytes(),
+            &numbers,
+        ])
+    }
+}
+
+/// The camera a view starts with when it is made from a section box: from
+/// the corner the window starts with, framed the way zoom all frames a
+/// scene of the size of the box in a viewport of the size the window starts
+/// with.
+const BOX_VIEW_YAW: f32 = -0.8;
+const BOX_VIEW_PITCH: f32 = 0.6;
+const BOX_VIEW_VIEWPORT: [f32; 2] = [915.0, 743.0];
+
+/// The view a named section box becomes: the box, switched on, and a camera
+/// that frames it.
+pub fn section_view(section: &SavedSection, name: &str) -> SavedView {
+    let shape = section.shape();
+    let around = shape.oriented().aabb();
+    let mut view = SavedView::camera(
+        section.source.clone(),
+        name,
+        BOX_VIEW_YAW,
+        BOX_VIEW_PITCH,
+        1.0,
+        [0.0; 2],
+    );
+    view.guid = section.view_guid();
+    view.frame = Some(ViewFrame {
+        scene_min: around.min,
+        scene_max: around.max,
+        viewport: BOX_VIEW_VIEWPORT,
+    });
+    view.section = Some(shape);
+    view.snapshot_due = true;
+    view
+}
+
+/// A name for a view of a scan that no other view of that scan has, without
+/// regard to case: the name itself, else the name with a number after it.
+pub fn free_view_name(views: &[SavedView], source: &Path, name: &str) -> String {
+    let base: String = name
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_NAME_CHARS - 4)
+        .collect();
+    let base = if base.is_empty() {
+        "Section".to_owned()
+    } else {
+        base
+    };
+    let taken = |candidate: &str| {
+        views
+            .iter()
+            .any(|view| view.source == source && view.name.eq_ignore_ascii_case(candidate))
+    };
+    std::iter::once(base.clone())
+        .chain((2..1000).map(|number| format!("{base} {number}")))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or(base)
+}
+
+/// Take over the section boxes that were not taken over yet, a view each,
+/// named as the box unless its scan has a view of that name already. The
+/// boxes in `taken` are left alone, so that a view the user deleted does
+/// not come back. Returns the identifiers of the boxes taken over now,
+/// including those whose view is already in the list.
+pub fn take_over_sections(
+    views: &mut Vec<SavedView>,
+    sections: &[SavedSection],
+    taken: &[String],
+) -> Vec<String> {
+    let mut now: Vec<String> = Vec::new();
+    for section in sections {
+        if !section.shape().valid() || section.source.as_os_str().is_empty() {
+            continue;
+        }
+        let guid = section.view_guid();
+        if taken.contains(&guid) || now.contains(&guid) {
+            continue;
+        }
+        if !views.iter().any(|view| view.guid == guid) {
+            let name = free_view_name(views, &section.source, &section.name);
+            views.push(section_view(section, &name));
+        }
+        now.push(guid);
+    }
+    now
+}
+
+/// The section boxes of an earlier version, each read on its own.
+fn load_sections_from(path: &Path) -> Vec<SavedSection> {
+    match read_entries(path) {
+        Entries::Read(entries) => entries
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value(entry).ok())
+            .collect(),
+        Entries::Missing | Entries::Unreadable => Vec::new(),
+    }
+}
+
+/// Add the section boxes that are not taken over yet to the views and store
+/// both lists. When the views cannot be stored, nothing is taken over and
+/// the next start tries again; the file of the boxes is never written.
+fn take_over_from(views_path: &Path, views: &mut Vec<SavedView>, sections: &Path, marker: &Path) {
+    let boxes = load_sections_from(sections);
+    if boxes.is_empty() {
+        return;
+    }
+    let mut taken: Vec<String> = match read_entries(marker) {
+        Entries::Read(entries) => entries
+            .into_iter()
+            .filter_map(|entry| entry.as_str().map(str::to_owned))
+            .collect(),
+        Entries::Missing | Entries::Unreadable => Vec::new(),
+    };
+    let before = views.len();
+    let now = take_over_sections(views, &boxes, &taken);
+    if now.is_empty() {
+        return;
+    }
+    if views.len() > before && save_to(views_path, views).is_err() {
+        views.truncate(before);
+        return;
+    }
+    taken.extend(now);
+    let _ = write_json(marker, &taken);
 }
 
 /// Where the snapshot image of a view is kept.
@@ -381,19 +555,54 @@ fn unreadable_path(path: &Path) -> PathBuf {
     path.with_extension("unreadable.json")
 }
 
-fn load_from(path: &Path) -> Vec<SavedView> {
+/// What a list file held.
+pub(crate) enum Entries {
+    Missing,
+    /// Too large, or not a JSON list.
+    Unreadable,
+    Read(Vec<serde_json::Value>),
+}
+
+/// The entries of a JSON list file, each to be read on its own. A byte
+/// order mark that a text editor put in front is skipped.
+pub(crate) fn read_entries(path: &Path) -> Entries {
     let Ok(metadata) = fs::metadata(path) else {
-        return Vec::new();
+        return Entries::Missing;
     };
-    // Every view is read on its own, so one that this version cannot read
-    // does not take the others with it.
     let entries = (metadata.len() <= 8 * 1_048_576)
         .then(|| fs::read(path).ok())
         .flatten()
-        .and_then(|bytes| serde_json::from_slice::<Vec<serde_json::Value>>(&bytes).ok());
-    let Some(entries) = entries else {
-        let _ = fs::copy(path, unreadable_path(path));
-        return Vec::new();
+        .and_then(|bytes| {
+            let json = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+            serde_json::from_slice::<Vec<serde_json::Value>>(json).ok()
+        });
+    entries.map_or(Entries::Unreadable, Entries::Read)
+}
+
+/// Write a value as JSON in place of a file, all at once: a reader finds
+/// the old file or the new one, never a part.
+pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::other("the path has no parent"))?;
+    fs::create_dir_all(directory)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    serde_json::to_writer_pretty(temporary.as_file_mut(), value).map_err(io::Error::other)?;
+    temporary.as_file_mut().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn load_from(path: &Path) -> Vec<SavedView> {
+    // Every view is read on its own, so one that this version cannot read
+    // does not take the others with it.
+    let entries = match read_entries(path) {
+        Entries::Missing => return Vec::new(),
+        Entries::Unreadable => {
+            let _ = fs::copy(path, unreadable_path(path));
+            return Vec::new();
+        }
+        Entries::Read(entries) => entries,
     };
     let mut views: Vec<SavedView> = entries
         .into_iter()
@@ -414,15 +623,7 @@ fn load_from(path: &Path) -> Vec<SavedView> {
 }
 
 fn save_to(path: &Path, views: &[SavedView]) -> io::Result<()> {
-    let directory = path
-        .parent()
-        .ok_or_else(|| io::Error::other("camera view path has no parent"))?;
-    fs::create_dir_all(directory)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-    serde_json::to_writer_pretty(temporary.as_file_mut(), views).map_err(io::Error::other)?;
-    temporary.as_file_mut().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    Ok(())
+    write_json(path, &views)
 }
 
 #[cfg(test)]
@@ -676,6 +877,135 @@ mod tests {
         // A text that is no identifier names no file.
         assert!(snapshot_path("../outside").is_none());
         assert!(write_snapshot("../outside", b"image").is_err());
+    }
+
+    fn named_box(source: &str, name: &str, rotation: f64) -> SavedSection {
+        SavedSection {
+            source: PathBuf::from(source),
+            name: name.into(),
+            min: [1.0, 2.0, 0.0],
+            max: [6.0, 5.0, 2.5],
+            rotation,
+        }
+    }
+
+    #[test]
+    fn named_section_boxes_become_views_that_frame_them() {
+        let mut views = vec![SavedView::camera(
+            PathBuf::from("C:/scans/hall.e57"),
+            "Hall",
+            0.1,
+            0.2,
+            1.0,
+            [0.0; 2],
+        )];
+        let boxes = [
+            named_box("C:/scans/hall.e57", "Hall", 30.0),
+            named_box("C:/scans/hall.e57", "Stairs", 0.0),
+            named_box("C:/scans/annex.e57", "Hall", 0.0),
+            // A box that is no box is left out, and an exact copy is one.
+            SavedSection {
+                min: [9.0, 0.0, 0.0],
+                ..named_box("C:/scans/hall.e57", "Broken", 0.0)
+            },
+            named_box("C:/scans/hall.e57", "Stairs", 0.0),
+        ];
+        let taken = take_over_sections(&mut views, &boxes, &[]);
+        assert_eq!(taken.len(), 3);
+        let names: Vec<(&str, &str)> = views
+            .iter()
+            .map(|view| (view.source.to_str().unwrap(), view.name.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("C:/scans/hall.e57", "Hall"),
+                ("C:/scans/hall.e57", "Hall 2"),
+                ("C:/scans/hall.e57", "Stairs"),
+                ("C:/scans/annex.e57", "Hall"),
+            ]
+        );
+        // Each view switches its box on, turned as it was, and frames it.
+        let turned = &views[1];
+        assert_eq!(
+            turned.section,
+            Some(SectionBox {
+                enabled: true,
+                min: [1.0, 2.0, 0.0],
+                max: [6.0, 5.0, 2.5],
+                rotation: 30.0,
+            })
+        );
+        let around = turned.section.unwrap().oriented().aabb();
+        let frame = turned.frame.unwrap();
+        assert_eq!((frame.scene_min, frame.scene_max), (around.min, around.max));
+        assert_eq!((turned.zoom, turned.pan), (1.0, [0.0; 2]));
+        assert!(turned.snapshot_due && turned.valid());
+
+        // Taken over once: neither again, nor after its view was deleted.
+        views.remove(1);
+        assert!(take_over_sections(&mut views, &boxes, &taken).is_empty());
+        assert_eq!(views.len(), 3);
+    }
+
+    #[test]
+    fn saved_section_boxes_are_taken_over_once_and_their_file_stays() {
+        let directory = tempfile::tempdir().unwrap();
+        let views_path = directory.path().join("camera-views.json");
+        let sections = directory.path().join("section-boxes.json");
+        let marker = directory.path().join("section-boxes-taken-over.json");
+        let earlier = SavedView::camera(
+            PathBuf::from("C:/scans/hall.e57"),
+            "Entrance",
+            0.1,
+            0.2,
+            1.0,
+            [0.0; 2],
+        );
+        save_to(&views_path, std::slice::from_ref(&earlier)).unwrap();
+        // As an earlier version wrote it, with a byte order mark in front.
+        let mut written = b"\xEF\xBB\xBF".to_vec();
+        written.extend(
+            serde_json::to_vec(&[
+                named_box("C:/scans/hall.e57", "Hall", 15.0),
+                named_box("C:/scans/hall.e57", "Entrance", 0.0),
+            ])
+            .unwrap(),
+        );
+        fs::write(&sections, &written).unwrap();
+
+        let mut views = load_from(&views_path);
+        take_over_from(&views_path, &mut views, &sections, &marker);
+        let names: Vec<&str> = views.iter().map(|view| view.name.as_str()).collect();
+        assert_eq!(names, ["Entrance", "Hall", "Entrance 2"]);
+        assert_eq!(load_from(&views_path), views, "the views are stored");
+        assert_eq!(fs::read(&sections).unwrap(), written, "the boxes stay");
+
+        // Without its record of what was taken over, a view that is still
+        // there is not made twice.
+        fs::remove_file(&marker).unwrap();
+        let mut once = load_from(&views_path);
+        take_over_from(&views_path, &mut once, &sections, &marker);
+        assert_eq!(once, views);
+        assert!(marker.is_file());
+
+        // The next start leaves the views as they are, also when one of the
+        // views made from a box was deleted.
+        views.retain(|view| view.name != "Hall");
+        save_to(&views_path, &views).unwrap();
+        let mut again = load_from(&views_path);
+        take_over_from(&views_path, &mut again, &sections, &marker);
+        assert_eq!(again, views);
+
+        // No file of boxes, nothing to take over.
+        let mut none = load_from(&views_path);
+        take_over_from(
+            &views_path,
+            &mut none,
+            &directory.path().join("missing.json"),
+            &marker,
+        );
+        assert_eq!(none, views);
     }
 
     #[test]

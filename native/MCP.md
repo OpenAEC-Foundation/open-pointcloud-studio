@@ -142,10 +142,10 @@ follows when that view is restored.
 | `walk` | `eye` (`[x, y, z]`), `yaw`, `pitch` | Places the walking camera |
 | `close_panorama` | — | Returns to the orbit view |
 | `list_camera_views` | — | Saved views of the active scan |
-| `save_camera_view` | optional `name` | Saves the current view and makes it active |
+| `save_camera_view` | optional `name` | Saves the current view, with the section box while it is on, and makes it active |
 | `update_camera_view` | `name` | Overwrites a view with the current view |
 | `rename_camera_view` | `name`, `new_name` | Renames a view |
-| `restore_camera_view` | `name` | Shows a saved view |
+| `restore_camera_view` | `name` | Shows a saved view: its camera and its section box, or the box off when it has none |
 | `delete_camera_view` | `name` | Deletes a view |
 | `add_note` | `point`, `text` | Adds a note to the active view |
 | `add_line` | `from`, `to` | Adds a line to the active view |
@@ -207,6 +207,11 @@ follows when that view is restored.
 | `open_drawing` | `path` (`.dxf` or `.dwg`), optional `wait_seconds` | Reads a DXF or DWG file into the Drawing view and shows it; job |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view |
 | `set_drawing_layer` | `layer` (name or `*`), `visible` | Shows or hides a layer of the drawing in the Drawing view |
+| `create_drawing` | `kind` (`plan`, `elevation` or `section`), optional `basis` (`model`, `section_box` or the name of a saved view with a section box), `side` (`front`, `back`, `left` or `right`), `height`, `position`, `thickness` (0.005–5 m), `name`, `wait_seconds` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; job |
+| `list_drawings` | — | The drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |
+| `show_drawing` | `name` | Shows a drawing of `create_drawing`; one not made in this session yet is made again from its scans, with a job to wait for |
+| `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
+| `set_browser_group` | `group` (`scans`, `classes`, `views`, `bcf`, `3d`, `plans`, `elevations`, `sections`, `files` or `folder:` and a path), `open` | Opens or collapses a group of the Project Browser |
 | `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, in Open CAD Studio or the program chosen in Settings, read-only; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |

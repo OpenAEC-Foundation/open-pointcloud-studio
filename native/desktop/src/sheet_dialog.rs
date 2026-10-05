@@ -1,8 +1,9 @@
 //! The dialog behind "Create 2D plan / elevation / section…" in the Project
 //! Browser: choose a plan, an elevation or a section, made from the whole 3D
-//! model, the section box or a saved section box. The dialog works out the
-//! box the drawing is cut from and hands it to the Section drawing job,
-//! which shows the result in the Drawing view and lists it under DRAWINGS.
+//! model, the section box or a saved view with a section box. The dialog
+//! works out the box the drawing is cut from and hands it to the Section
+//! drawing job, which shows the result in the Drawing view and lists it
+//! under VIEWS; how it was made is kept, so it can be made again.
 
 use std::fmt;
 
@@ -11,7 +12,8 @@ use iced::widget::{
     text_input,
 };
 use iced::{Border, Color, Element, Task};
-use pointcloud_core::{Bounds, DrawingView, OrientedBox};
+use pointcloud_core::{DrawingView, OrientedBox};
+use serde::{Deserialize, Serialize};
 
 use crate::i18n::{key, tr};
 use crate::{
@@ -23,7 +25,8 @@ use crate::{
 /// from.
 const CUT_ABOVE_FLOOR: f64 = 1.20;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SheetKind {
     Plan,
     Elevation,
@@ -31,14 +34,26 @@ pub enum SheetKind {
 }
 
 impl SheetKind {
-    const ALL: [Self; 3] = [Self::Plan, Self::Elevation, Self::Section];
+    pub const ALL: [Self; 3] = [Self::Plan, Self::Elevation, Self::Section];
 
     fn label(self) -> &'static str {
         match self {
             Self::Plan => key("Plan"),
-            Self::Elevation => key("Elevation"),
+            Self::Elevation => key("Elevation view"),
             Self::Section => key("Section"),
         }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Elevation => "elevation",
+            Self::Section => "section",
+        }
+    }
+
+    pub fn from_key(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.key() == value)
     }
 }
 
@@ -47,8 +62,9 @@ impl SheetKind {
 pub enum SheetBasis {
     Model,
     SectionBox,
-    /// A section box saved in the Project Browser, by its place in the list.
-    Saved(usize, String),
+    /// A saved view of the active scan with a section box, by its
+    /// identifier and its name.
+    View(String, String),
 }
 
 impl fmt::Display for SheetBasis {
@@ -56,9 +72,24 @@ impl fmt::Display for SheetBasis {
         match self {
             Self::Model => f.write_str(tr("3D model")),
             Self::SectionBox => f.write_str(tr("Section box")),
-            Self::Saved(_, name) => f.write_str(name),
+            Self::View(_, name) => f.write_str(name),
         }
     }
+}
+
+/// The face of the box a side drawing looks at, by its key.
+pub fn side_from_key(value: &str) -> Option<DrawingView> {
+    DrawingView::from_key(value).filter(|view| *view != DrawingView::Plan)
+}
+
+/// What the Create 2D dialog hands to the drawing job: the box it cuts, the
+/// face it draws, the slab behind that face and the name of the drawing.
+pub struct SheetJob {
+    pub kind: SheetKind,
+    pub section: OrientedBox,
+    pub view: DrawingView,
+    pub thickness: Option<f64>,
+    pub name: String,
 }
 
 /// The side a vertical drawing looks at.
@@ -166,10 +197,13 @@ impl Studio {
             SheetAction::Thickness(value) => dialog.thickness = value,
             SheetAction::Create => {
                 let dialog = dialog.clone();
-                match self.sheet_job(&dialog) {
-                    Ok((section, view, thickness, name)) => {
+                match self
+                    .sheet_job(&dialog)
+                    .and_then(|job| self.create_sheet(job, None))
+                {
+                    Ok(task) => {
                         self.sheet_dialog = None;
-                        return self.create_sheet(section, view, thickness, name);
+                        return task;
                     }
                     Err(reason) => self.status = reason,
                 }
@@ -178,12 +212,21 @@ impl Studio {
         Task::none()
     }
 
+    /// The saved views of the active scan that have a section box, as the
+    /// dialog offers them to make a drawing from.
+    fn views_with_a_box(&self) -> Vec<SheetBasis> {
+        let source = self.active_camera_source();
+        self.views
+            .list
+            .iter()
+            .filter(|view| Some(&view.source) == source.as_ref() && view.section_box().is_some())
+            .map(|view| SheetBasis::View(view.guid.clone(), view.name.clone()))
+            .collect()
+    }
+
     /// The box, the view, the slab and the name of the drawing the dialog
     /// asks for, or why it cannot be made.
-    fn sheet_job(
-        &self,
-        dialog: &SheetDialog,
-    ) -> Result<(OrientedBox, DrawingView, Option<f64>, String), String> {
+    fn sheet_job(&self, dialog: &SheetDialog) -> Result<SheetJob, String> {
         let base = match &dialog.basis {
             SheetBasis::Model => combined_bounds(&self.clouds)
                 .map(|bounds| OrientedBox::new(bounds, 0.0))
@@ -191,20 +234,15 @@ impl Studio {
             SheetBasis::SectionBox => self.section_box().ok_or_else(|| {
                 "Switch on the section box, or make the drawing from the 3D model".to_owned()
             })?,
-            SheetBasis::Saved(place, _) => {
-                let saved = self
-                    .sections
-                    .list
-                    .get(*place)
-                    .ok_or_else(|| "That section box is no longer saved".to_owned())?;
-                OrientedBox::new(
-                    Bounds {
-                        min: saved.min,
-                        max: saved.max,
-                    },
-                    saved.rotation,
-                )
-            }
+            SheetBasis::View(guid, name) => self
+                .views
+                .list
+                .iter()
+                .find(|view| view.guid == *guid)
+                .ok_or_else(|| format!("The view {name} is no longer saved"))?
+                .section_box()
+                .ok_or_else(|| format!("The view {name} has no section box"))?
+                .oriented(),
         };
         let thickness = parse(&dialog.thickness)
             .filter(|value| *value > 0.0)
@@ -231,7 +269,7 @@ impl Studio {
             SheetKind::Elevation => (
                 dialog.side.0,
                 None,
-                format!("{} {} · {basis}", tr("Elevation"), dialog.side),
+                format!("{} {} · {basis}", tr("Elevation view"), dialog.side),
             ),
             SheetKind::Section => {
                 let mut name = format!("{} {} · {basis}", tr("Section"), dialog.side);
@@ -265,12 +303,94 @@ impl Studio {
                 (dialog.side.0, Some(thickness), name)
             }
         };
-        Ok((
-            OrientedBox::new(bounds, base.rotation_degrees),
+        Ok(SheetJob {
+            kind: dialog.kind,
+            section: OrientedBox::new(bounds, base.rotation_degrees),
             view,
-            slab,
+            thickness: slab,
             name,
-        ))
+        })
+    }
+
+    /// The `create_drawing` command of the local API: the choices of the
+    /// dialog, each left out keeping what the dialog starts with. `basis` is
+    /// `model`, `section_box` or the name of a saved view of the active scan
+    /// with a section box. Answers with the job that makes the drawing.
+    pub(crate) fn api_create_drawing(
+        &mut self,
+        options: &crate::native_api::CreateDrawingOptions,
+    ) -> (serde_json::Value, Task<Message>) {
+        use serde_json::json;
+        let refuse = |error: String| (json!({"ok": false, "error": error}), Task::none());
+        let Some(kind) = SheetKind::from_key(&options.kind.to_ascii_lowercase()) else {
+            return refuse("kind must be plan, elevation or section".into());
+        };
+        let basis = match options.basis.as_deref().map(str::trim) {
+            None | Some("model") => SheetBasis::Model,
+            Some("section_box") => SheetBasis::SectionBox,
+            Some(name) => match self.views_with_a_box().into_iter().find(
+                |basis| matches!(basis, SheetBasis::View(_, view) if view.eq_ignore_ascii_case(name)),
+            ) {
+                Some(basis) => basis,
+                None => {
+                    return refuse(format!(
+                        "basis must be model, section_box or the name of a saved view of the active scan with a section box; {name} is none of these"
+                    ))
+                }
+            },
+        };
+        let side = match options.side.as_deref() {
+            None => None,
+            Some(side) => match side_from_key(&side.to_ascii_lowercase()) {
+                Some(side) => Some(Side(side)),
+                None => return refuse("side must be front, back, left or right".into()),
+            },
+        };
+        let was_open = self.sheet_dialog.take();
+        let _ = self.update_sheet_dialog(SheetAction::Open);
+        let mut actions = vec![SheetAction::Kind(kind), SheetAction::Basis(basis)];
+        actions.extend(side.map(SheetAction::Side));
+        actions.extend(
+            options
+                .height
+                .map(|value| SheetAction::Height(value.to_string())),
+        );
+        actions.extend(
+            options
+                .position
+                .map(|value| SheetAction::Position(value.to_string())),
+        );
+        actions.extend(
+            options
+                .thickness
+                .map(|value| SheetAction::Thickness(value.to_string())),
+        );
+        for action in actions {
+            let _ = self.update_sheet_dialog(action);
+        }
+        let dialog = self.sheet_dialog.take();
+        self.sheet_dialog = was_open;
+        let Some(dialog) = dialog else {
+            return refuse("the dialog could not be opened".into());
+        };
+        let mut job = match self.sheet_job(&dialog) {
+            Ok(job) => job,
+            Err(reason) => return refuse(reason),
+        };
+        if let Some(name) = options.name.as_deref().map(str::trim) {
+            if name.is_empty() || name.chars().any(char::is_control) {
+                return refuse("name must hold a visible character".into());
+            }
+            job.name = name.to_owned();
+        }
+        let id = self.record_api_job(json!({"state": "running", "operation": "create_drawing"}));
+        match self.create_sheet(job, Some(id.clone())) {
+            Ok(task) => (json!({"ok": true, "accepted": true, "job_id": id}), task),
+            Err(reason) => {
+                self.forget_api_job(&id);
+                refuse(reason)
+            }
+        }
     }
 
     /// The dialog over the dimmed window, while it is open.
@@ -296,12 +416,7 @@ impl Studio {
         if self.section_box().is_some() {
             bases.push(SheetBasis::SectionBox);
         }
-        let source = self.active_camera_source();
-        for (place, saved) in self.sections.list.iter().enumerate() {
-            if Some(&saved.source) == source.as_ref() {
-                bases.push(SheetBasis::Saved(place, saved.name.clone()));
-            }
-        }
+        bases.extend(self.views_with_a_box());
         let field = |value: &str, on: fn(String) -> SheetAction| {
             text_input("", value)
                 .on_input(move |value| Message::Sheet(on(value)))
@@ -453,7 +568,13 @@ mod tests {
         let _ = studio.view();
 
         // A plan from the model: the top of the box is the cut.
-        let (section, view, slab, name) = studio.sheet_job(&dialog).unwrap();
+        let SheetJob {
+            section,
+            view,
+            thickness: slab,
+            name,
+            ..
+        } = studio.sheet_job(&dialog).unwrap();
         assert_eq!(view, DrawingView::Plan);
         assert_eq!(slab, Some(0.10));
         assert!((section.bounds.max[2] - 1.20).abs() < 1e-9);
@@ -463,7 +584,7 @@ mod tests {
         let mut section_dialog = dialog.clone();
         section_dialog.kind = SheetKind::Section;
         section_dialog.position = "4".into();
-        let (section, view, _, _) = studio.sheet_job(&section_dialog).unwrap();
+        let SheetJob { section, view, .. } = studio.sheet_job(&section_dialog).unwrap();
         assert_eq!(view, DrawingView::Front);
         assert!((section.bounds.min[1] - 4.0).abs() < 1e-9);
 
@@ -471,7 +592,11 @@ mod tests {
         let mut elevation = dialog.clone();
         elevation.kind = SheetKind::Elevation;
         elevation.side = Side(DrawingView::Left);
-        let (_, view, slab, _) = studio.sheet_job(&elevation).unwrap();
+        let SheetJob {
+            view,
+            thickness: slab,
+            ..
+        } = studio.sheet_job(&elevation).unwrap();
         assert_eq!(view, DrawingView::Left);
         assert_eq!(slab, None);
 

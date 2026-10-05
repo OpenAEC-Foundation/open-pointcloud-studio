@@ -51,6 +51,11 @@ pub fn number_in(description: &str, minimum: f64, maximum: f64) -> Value {
     json!({"type": "number", "minimum": minimum, "maximum": maximum, "description": description})
 }
 
+/// A number without limits, such as a coordinate.
+pub fn number(description: &str) -> Value {
+    json!({"type": "number", "description": description})
+}
+
 /// A number with a lower limit only.
 pub fn number_from(description: &str, minimum: f64) -> Value {
     json!({"type": "number", "minimum": minimum, "description": description})

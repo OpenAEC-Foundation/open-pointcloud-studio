@@ -33,6 +33,7 @@ use serde_json::{json, Value};
 
 use crate::bag_panel::plain_reason;
 use crate::i18n::{tr, tr_args};
+use crate::saved_drawings::SavedDrawing;
 use crate::ui_theme::UiTheme;
 use crate::{
     flat_tool_style, format_count, muted_checkbox_style, opencad_properties, Message, Studio,
@@ -73,8 +74,9 @@ pub(crate) enum DrawingSource {
     Export(PathBuf),
     /// A DXF or DWG file that was opened.
     File(PathBuf),
-    /// A drawing made with Create 2D plan / elevation / section, by name.
-    Sheet(String),
+    /// A drawing made with Create 2D plan / elevation / section, by the
+    /// identifier of how it was made and its name.
+    Sheet { guid: String, name: String },
 }
 
 impl DrawingSource {
@@ -83,20 +85,28 @@ impl DrawingSource {
             Self::Preview => "preview",
             Self::Export(_) => "export",
             Self::File(_) => "file",
-            Self::Sheet(_) => "sheet",
+            Self::Sheet { .. } => "sheet",
         }
     }
 
     fn path(&self) -> Option<&Path> {
         match self {
-            Self::Preview | Self::Sheet(_) => None,
+            Self::Preview | Self::Sheet { .. } => None,
             Self::Export(path) | Self::File(path) => Some(path),
         }
     }
 
-    /// What the header of the view says it shows.
-    fn caption(&self) -> String {
-        if let Self::Sheet(name) = self {
+    /// The identifier of how a drawing of the Project Browser was made.
+    pub(crate) fn sheet_guid(&self) -> Option<&str> {
+        match self {
+            Self::Sheet { guid, .. } => Some(guid),
+            _ => None,
+        }
+    }
+
+    /// What the header of the view and the Project Browser say it shows.
+    pub(crate) fn caption(&self) -> String {
+        if let Self::Sheet { name, .. } = self {
             return name.clone();
         }
         match self.path().and_then(Path::file_name) {
@@ -446,12 +456,20 @@ pub(crate) struct DrawingViewTool {
     pub(crate) show_after_export: bool,
     /// Why the last file could not be read.
     last_error: Option<String>,
-    /// The drawings of this session that the project browser lists, the
-    /// newest first: the last preview, every export and every opened file.
+    /// The drawings of this session that the project browser lists under
+    /// Files, the newest first: the last preview, every export and every
+    /// opened file.
     sheets: Vec<Arc<DrawScene>>,
+    /// How each drawing made with Create 2D plan / elevation / section was
+    /// made, kept across sessions, in the order they were made.
+    pub(crate) saved: Vec<SavedDrawing>,
+    /// The drawings of `saved` that have been made in this session.
+    made: Vec<Arc<DrawScene>>,
 }
 
-/// The project browser keeps this many drawings of a session.
+/// The project browser keeps this many previews, exports and opened files
+/// of a session. Drawings made with Create 2D plan / elevation / section
+/// stay, however many there are.
 const MAX_SHEETS: usize = 16;
 
 impl Default for DrawingViewTool {
@@ -479,6 +497,8 @@ impl DrawingViewTool {
             show_after_export,
             last_error: None,
             sheets: Vec::new(),
+            saved: crate::saved_drawings::load(),
+            made: Vec::new(),
         }
     }
 
@@ -525,6 +545,15 @@ impl DrawingViewTool {
     /// takes the place of the last one, and a file the place of an earlier
     /// drawing of the same file.
     pub(crate) fn set_scene(&mut self, scene: Arc<DrawScene>) {
+        if let Some(guid) = scene.source.sheet_guid() {
+            // A drawing of Create 2D takes the place of the one made before
+            // in the same way, and is never dropped for want of room.
+            self.made
+                .retain(|earlier| earlier.source.sheet_guid() != Some(guid));
+            self.made.push(Arc::clone(&scene));
+            self.show_scene(scene);
+            return;
+        }
         let same = |earlier: &Arc<DrawScene>| match (scene.source.path(), earlier.source.path()) {
             (Some(path), Some(other)) => path == other,
             (None, None) => earlier.source == scene.source,
@@ -536,16 +565,43 @@ impl DrawingViewTool {
         self.show_scene(scene);
     }
 
-    /// The drawings the project browser lists, the newest first.
+    /// The previews, exports and opened files the project browser lists,
+    /// the newest first.
     pub(crate) fn sheets(&self) -> &[Arc<DrawScene>] {
         &self.sheets
     }
 
+    /// The drawing made in this session from how a drawing was made.
+    pub(crate) fn made(&self, guid: &str) -> Option<&Arc<DrawScene>> {
+        self.made
+            .iter()
+            .find(|scene| scene.source.sheet_guid() == Some(guid))
+    }
+
     /// Whether this listed drawing is the one in the view.
-    fn is_current(&self, sheet: &Arc<DrawScene>) -> bool {
+    pub(crate) fn is_current(&self, sheet: &Arc<DrawScene>) -> bool {
         self.scene
             .as_ref()
             .is_some_and(|scene| Arc::ptr_eq(scene, sheet))
+    }
+
+    /// The identifier of the drawing of Create 2D the view shows, while it
+    /// is shown.
+    pub(crate) fn shown_guid(&self) -> Option<&str> {
+        self.scene
+            .as_ref()
+            .filter(|_| self.shown)
+            .and_then(|scene| scene.source.sheet_guid())
+    }
+
+    /// Take a drawing out of the view when it is the one shown.
+    fn drop_scene(&mut self, sheet: &Arc<DrawScene>) {
+        if self.is_current(sheet) {
+            self.scene = None;
+            self.visible.clear();
+            self.shown = false;
+            self.invalidate();
+        }
     }
 
     /// Show a drawing: every layer the file has on is shown, and the view
@@ -1195,6 +1251,10 @@ pub enum DrawingViewAction {
     ShowSheet(usize),
     /// Take the drawing at this place out of the project browser.
     RemoveSheet(usize),
+    /// Show a drawing of Create 2D, made again when it is not made yet.
+    ShowDrawing(String),
+    /// Forget a drawing of Create 2D.
+    DeleteDrawing(String),
 }
 
 impl Studio {
@@ -1266,16 +1326,88 @@ impl Studio {
             DrawingViewAction::RemoveSheet(place) => {
                 if place < view.sheets.len() {
                     let sheet = view.sheets.remove(place);
-                    if view.is_current(&sheet) {
-                        view.scene = None;
-                        view.visible.clear();
-                        view.shown = false;
-                        view.invalidate();
-                    }
+                    view.drop_scene(&sheet);
+                }
+            }
+            DrawingViewAction::ShowDrawing(guid) => match self.show_saved_drawing(&guid, None) {
+                Ok(task) => return task.unwrap_or_else(Task::none),
+                Err(reason) => self.status = reason,
+            },
+            DrawingViewAction::DeleteDrawing(guid) => {
+                if let Err(reason) = self.delete_saved_drawing(&guid) {
+                    self.status = reason;
                 }
             }
         }
         Task::none()
+    }
+
+    /// Show a drawing of Create 2D: the one made in this session, or, when
+    /// it has not been made yet, make it from how it was made. Answers the
+    /// job that makes it, or why it cannot be shown.
+    pub(crate) fn show_saved_drawing(
+        &mut self,
+        guid: &str,
+        api_job_id: Option<String>,
+    ) -> Result<Option<Task<Message>>, String> {
+        let definition = self
+            .drawing_view
+            .saved
+            .iter()
+            .find(|drawing| drawing.guid == guid)
+            .cloned()
+            .ok_or_else(|| "That drawing is no longer kept".to_owned())?;
+        if let Some(scene) = self.drawing_view.made(guid).cloned() {
+            if !self.drawing_view.is_current(&scene) {
+                self.drawing_view.show_scene(scene);
+            }
+            self.drawing_view.shown = true;
+            self.file_open = false;
+            self.status = format!("Drawing {}", definition.name);
+            return Ok(None);
+        }
+        self.remake_sheet(definition, api_job_id).map(Some)
+    }
+
+    /// Forget how a drawing of Create 2D was made, and the drawing.
+    pub(crate) fn delete_saved_drawing(&mut self, guid: &str) -> Result<String, String> {
+        let view = &mut self.drawing_view;
+        let place = view
+            .saved
+            .iter()
+            .position(|drawing| drawing.guid == guid)
+            .ok_or_else(|| "That drawing is no longer kept".to_owned())?;
+        let removed = view.saved.remove(place);
+        if let Err(error) = crate::saved_drawings::save(&view.saved) {
+            view.saved.insert(place, removed);
+            return Err(format!("The drawings could not be stored: {error}"));
+        }
+        if let Some(scene) = view.made(guid).cloned() {
+            view.made
+                .retain(|made| made.source.sheet_guid() != Some(guid));
+            view.drop_scene(&scene);
+        }
+        self.status = format!("Drawing {} deleted", removed.name);
+        Ok(removed.name)
+    }
+
+    /// Keep how a drawing of Create 2D was made, in place of what was kept
+    /// for it before.
+    pub(crate) fn keep_saved_drawing(&mut self, definition: SavedDrawing) {
+        let saved = &mut self.drawing_view.saved;
+        match saved
+            .iter_mut()
+            .find(|drawing| drawing.guid == definition.guid)
+        {
+            Some(kept) => *kept = definition,
+            None => saved.push(definition),
+        }
+        if let Err(error) = crate::saved_drawings::save(saved) {
+            self.status = format!(
+                "{}; it could not be kept for a next session: {error}",
+                self.status
+            );
+        }
     }
 
     /// Read a DXF or DWG file into the view on a worker thread.
@@ -1463,53 +1595,94 @@ impl Studio {
         json!({"ok": true, "layer": name, "visible": visible})
     }
 
-    /// The drawings part of the project browser: the 3D model, and every
-    /// drawing of this session; a click shows it in the main area.
-    pub(crate) fn drawings_browser(&self) -> Element<'_, Message> {
-        let colors = self.ui_theme.colors();
-        let entry = |label: String, active: bool, message: Message| {
-            button(text(label).size(11))
-                .on_press(message)
-                .style(move |theme, status| {
-                    crate::opencad_ribbon::tool_btn_style(theme, active, status)
+    /// The `list_drawings` command of the local API: the drawings of Create
+    /// 2D made from an open scan, with how each was made and whether it is
+    /// made in this session, and the previews, exports and files.
+    pub(crate) fn api_list_drawings(&self) -> Value {
+        let shown = self.drawing_view.shown_guid();
+        let drawings: Vec<Value> = self
+            .listed_drawings()
+            .into_iter()
+            .map(|drawing| {
+                json!({
+                    "name": drawing.name,
+                    "guid": drawing.guid,
+                    "kind": drawing.kind.key(),
+                    "view": drawing.view,
+                    "thickness": drawing.thickness,
+                    "box": drawing.section,
+                    "settings": drawing.request,
+                    "sources": drawing.sources,
+                    "created": drawing.created,
+                    "made": self.drawing_view.made(&drawing.guid).is_some(),
+                    "shown": shown == Some(drawing.guid.as_str()),
                 })
-                .padding([3, 5])
-                .width(Fill)
-        };
-        let mut list = column![
-            text(tr("DRAWINGS")).size(11).color(colors.muted),
-            entry(
-                tr("3D model").to_owned(),
-                !self.drawing_view.shown,
-                Message::DrawingView(DrawingViewAction::Show(false)),
-            ),
-        ]
-        .spacing(2);
-        for (place, sheet) in self.drawing_view.sheets().iter().enumerate() {
-            let active = self.drawing_view.shown && self.drawing_view.is_current(sheet);
-            list = list.push(
-                row![
-                    entry(
-                        sheet.source.caption(),
-                        active,
-                        Message::DrawingView(DrawingViewAction::ShowSheet(place)),
-                    ),
-                    button(text("×").size(11))
-                        .on_press(Message::DrawingView(DrawingViewAction::RemoveSheet(place)))
-                        .style(crate::flat_tool_style)
-                        .padding([3, 6]),
-                ]
-                .spacing(2)
-                .align_y(iced::Alignment::Center),
+            })
+            .collect();
+        let files: Vec<Value> = self
+            .drawing_view
+            .sheets()
+            .iter()
+            .map(|sheet| {
+                json!({
+                    "name": sheet.source.caption(),
+                    "source": sheet.source.kind(),
+                    "path": sheet.source.path(),
+                    "shown": self.drawing_view.shown && self.drawing_view.is_current(sheet),
+                })
+            })
+            .collect();
+        json!({"ok": true, "drawings": drawings, "files": files})
+    }
+
+    /// A drawing of Create 2D made from an open scan, by its name without
+    /// regard to case.
+    fn drawing_named(&self, name: &str) -> Option<String> {
+        self.listed_drawings()
+            .into_iter()
+            .find(|drawing| drawing.name.eq_ignore_ascii_case(name.trim()))
+            .map(|drawing| drawing.guid.clone())
+    }
+
+    /// The `show_drawing` command of the local API.
+    pub(crate) fn api_show_drawing(&mut self, name: &str) -> (Value, Task<Message>) {
+        let Some(guid) = self.drawing_named(name) else {
+            return (
+                json!({"ok": false, "error": format!("no drawing {name} of an open scan")}),
+                Task::none(),
             );
+        };
+        if self.drawing_view.made(&guid).is_some() {
+            return match self.show_saved_drawing(&guid, None) {
+                Ok(_) => (
+                    json!({"ok": true, "shown": true, "guid": guid}),
+                    Task::none(),
+                ),
+                Err(error) => (json!({"ok": false, "error": error}), Task::none()),
+            };
         }
-        list.push(
-            button(text(tr("Open drawing…")).size(11))
-                .on_press(Message::DrawingView(DrawingViewAction::OpenFile))
-                .style(crate::flat_tool_style)
-                .width(Fill),
-        )
-        .into()
+        let id = self.record_api_job(json!({"state": "running", "operation": "create_drawing"}));
+        match self.show_saved_drawing(&guid, Some(id.clone())) {
+            Ok(task) => (
+                json!({"ok": true, "accepted": true, "job_id": id, "guid": guid}),
+                task.unwrap_or_else(Task::none),
+            ),
+            Err(error) => {
+                self.forget_api_job(&id);
+                (json!({"ok": false, "error": error}), Task::none())
+            }
+        }
+    }
+
+    /// The `delete_drawing` command of the local API.
+    pub(crate) fn api_delete_drawing(&mut self, name: &str) -> Value {
+        let Some(guid) = self.drawing_named(name) else {
+            return json!({"ok": false, "error": format!("no drawing {name} of an open scan")});
+        };
+        match self.delete_saved_drawing(&guid) {
+            Ok(name) => json!({"ok": true, "name": name}),
+            Err(error) => json!({"ok": false, "error": error}),
+        }
     }
 
     /// What the header of the main area says beside the tabs while the

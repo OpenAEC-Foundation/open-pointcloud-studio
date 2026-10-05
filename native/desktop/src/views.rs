@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use iced::widget::canvas::{self, Frame};
-use iced::widget::{button, column, container, row, text, text_input};
+use iced::widget::{button, column, container, row, text, text_input, tooltip};
 use iced::window::Screenshot;
 use iced::{Color, Element, Fill, Point as UiPoint, Rectangle, Size, Task};
 use pointcloud_core::{Bounds, IndexedPoint, OrientedBox};
@@ -571,16 +571,16 @@ impl Studio {
     /// the ones a view holds. They are not after a restore in a scene that
     /// the saved section box lies outside of, or that lacks the colours.
     fn holds_what_view_holds(&self, view: &SavedView) -> bool {
-        let section = view.section.is_none_or(|section| {
-            section.enabled == self.section_enabled
-                && self.section_box().is_none_or(|shown| {
-                    (0..3).all(|axis| {
-                        let slack = (section.max[axis] - section.min[axis]).max(1.0) * 1e-6;
-                        (shown.bounds.min[axis] - section.min[axis]).abs() <= slack
-                            && (shown.bounds.max[axis] - section.max[axis]).abs() <= slack
-                    }) && (shown.rotation_degrees - section.rotation).abs() <= 1e-6
-                })
-        });
+        let section = match view.section_box() {
+            None => !self.section_enabled,
+            Some(section) => self.section_box().is_some_and(|shown| {
+                (0..3).all(|axis| {
+                    let slack = (section.max[axis] - section.min[axis]).max(1.0) * 1e-6;
+                    (shown.bounds.min[axis] - section.min[axis]).abs() <= slack
+                        && (shown.bounds.max[axis] - section.max[axis]).abs() <= slack
+                }) && (shown.rotation_degrees - section.rotation).abs() <= 1e-6
+            }),
+        };
         section
             && view.color_mode.is_none_or(|mode| mode == self.color_mode)
             && view.walk.is_some() == self.walk.is_some()
@@ -591,11 +591,13 @@ impl Studio {
             .map_err(|error| format!("the views could not be stored: {error}"))
     }
 
-    /// The section box as a view keeps it: its limits also while it is off.
+    /// The section box as a view keeps it: its limits and its turn while it
+    /// is on. A view saved while the box is off has none, and switches the
+    /// box off when it is applied.
     fn section_state(&self) -> Option<SectionBox> {
-        let shape = self.section_shape()?;
+        let shape = self.section_box()?;
         Some(SectionBox {
-            enabled: self.section_enabled,
+            enabled: true,
             min: shape.bounds.min,
             max: shape.bounds.max,
             rotation: self.section_rotation,
@@ -721,6 +723,8 @@ impl Studio {
     fn restore_view(&mut self, index: usize) -> Task<Message> {
         let view = self.views.list[index].clone();
         let mut tasks = Vec::new();
+        // A view is of the 3D scene, also when a drawing was shown.
+        self.drawing_view.shown = false;
         self.yaw = view.yaw;
         self.pitch = view.pitch;
         self.zoom = view.zoom;
@@ -756,8 +760,9 @@ impl Studio {
             });
             tasks.push(self.sync_walk_station());
         }
-        if let Some(section) = view.section {
-            self.apply_section(section);
+        match view.section {
+            Some(section) => self.apply_section(section),
+            None => self.section_enabled = false,
         }
         if let Some(mode) = view.color_mode.filter(|mode| *mode != self.color_mode) {
             tasks.push(self.update(Message::ColorMode(mode)));
@@ -1600,80 +1605,32 @@ impl Studio {
         .into()
     }
 
-    /// The views and sections part of the Project Browser: one name field
-    /// with Save view and Save section, the views and the section boxes of
-    /// the active scan, and the annotations of the active view.
-    pub fn views_browser(&self) -> Element<'_, Message> {
-        let flat = crate::flat_tool_style;
-        let small = |label: &'static str, action: ViewAction| {
-            button(text(i18n::tr(label)).size(10))
-                .on_press(Message::Views(action))
-                .style(flat)
-                .padding([3, 4])
-        };
-        let muted = self.ui_theme.colors().muted;
-        let can_save_section = self.active.is_some() && self.section_box().is_some();
-        let mut section = column![
-            text(i18n::tr("VIEWS AND SECTIONS")).size(11).color(muted),
-            container(
-                text_input(i18n::tr("Name"), &self.views.name)
-                    .on_input(|name| Message::Views(ViewAction::Name(name)))
-                    .on_submit(Message::Views(ViewAction::Save))
-                    .size(11)
-                    .padding([3, 5])
-                    .width(Fill),
-            )
-            .padding(iced::Padding {
-                top: 5.0,
-                ..iced::Padding::ZERO
-            }),
-            container(
-                row![
-                    button(text(i18n::tr("Save view")).size(11))
-                        .on_press_maybe(
-                            self.active
-                                .is_some()
-                                .then_some(Message::Views(ViewAction::Save)),
-                        )
-                        .style(flat),
-                    button(text(i18n::tr("Save section")).size(11))
-                        .on_press_maybe(
-                            can_save_section
-                                .then_some(Message::Sections(crate::sections::SectionAction::Save)),
-                        )
-                        .style(flat),
-                ]
-                .spacing(4),
-            ),
-            button(text(i18n::tr("Create 2D plan / elevation / section…")).size(11))
-                .on_press_maybe(
-                    self.active
-                        .is_some()
-                        .then_some(Message::Sheet(crate::sheet_dialog::SheetAction::Open)),
-                )
-                .style(flat)
-                .width(Fill),
-            container(iced::widget::Space::new(Fill, 4)),
-        ]
-        .spacing(0);
+    /// The saved views of the active scan, in the order they were saved, as
+    /// VIEWS lists them under 3D views.
+    pub fn listed_views(&self) -> Vec<&SavedView> {
         let source = self.active_camera_source();
-        if source.is_none() {
-            section = section.push(
-                text(i18n::tr("Open a scan to save views of it"))
-                    .size(10)
-                    .color(muted),
-            );
-        }
-        let active = self.active_view();
-        for view in self
-            .views
+        self.views
             .list
             .iter()
             .filter(|view| Some(&view.source) == source.as_ref())
-        {
-            let guid = || view.guid.clone();
-            let line = match &self.views.renaming {
-                Some((renamed, name)) if *renamed == view.guid => row![
+            .collect()
+    }
+
+    /// The row of a saved view under 3D views: a click shows it in the 3D
+    /// scene, highlighted while it is the active view there. A view with a
+    /// section box carries a mark for it. Rename, Update and × act on it.
+    pub fn saved_view_row(&self, view: &SavedView) -> Element<'_, Message> {
+        let small = |label: &'static str, action: ViewAction| -> Element<'static, Message> {
+            button(text(i18n::tr(label)).size(10))
+                .on_press(Message::Views(action))
+                .style(crate::flat_tool_style)
+                .padding([3, 4])
+                .into()
+        };
+        let guid = || view.guid.clone();
+        if let Some((renamed, name)) = &self.views.renaming {
+            if *renamed == view.guid {
+                return row![
                     text_input(i18n::tr("View name"), name)
                         .id(rename_input_id())
                         .on_input(|name| Message::Views(ViewAction::RenameText(name)))
@@ -1683,99 +1640,185 @@ impl Studio {
                         .width(Fill),
                     small("OK", ViewAction::FinishRename),
                     small("Cancel", ViewAction::CancelRename),
-                ],
-                _ => {
-                    let is_active = active.is_some_and(|active| active.guid == view.guid);
-                    row![
-                        button(text(view.name.as_str()).size(11))
-                            .on_press(Message::Views(ViewAction::Restore(guid())))
-                            .style(move |theme, status| {
-                                opencad_ribbon::tool_btn_style(theme, is_active, status)
-                            })
-                            .padding([3, 5])
-                            .width(Fill),
-                        small("Rename", ViewAction::StartRename(guid())),
-                        small("Update", ViewAction::Update(guid())),
-                        button("×")
-                            .on_press(Message::Views(ViewAction::Delete(guid())))
-                            .style(flat)
-                            .padding([3, 6]),
-                    ]
-                }
-            };
-            section = section
-                .push(container(line.spacing(2).align_y(iced::Alignment::Center)).padding([2, 0]));
+                ]
+                .spacing(2)
+                .align_y(iced::Alignment::Center)
+                .into();
+            }
         }
-        section = section.push(self.section_rows());
-        if let Some(view) = active {
-            section = section.push(
-                container(
-                    row![
-                        text(format!(
-                            "{} · {}",
-                            i18n::tr("Annotations"),
-                            shortened(&view.name, 22)
-                        ))
-                        .size(10)
-                        .width(Fill),
-                        small("Hide", ViewAction::Deactivate),
-                    ]
-                    .spacing(4)
-                    .align_y(iced::Alignment::Center),
+        let active = self
+            .active_view()
+            .is_some_and(|active| active.guid == view.guid);
+        let shown = active && !self.drawing_view.shown;
+        let mut controls: Vec<Element<'_, Message>> = Vec::new();
+        if view.section_box().is_some() {
+            controls.push(
+                tooltip(
+                    crate::icon_svg(ToolIcon::SectionBox, 12.0),
+                    container(text(i18n::tr("Has a section box")).size(11))
+                        .padding([4, 7])
+                        .style(|theme| {
+                            let colors = crate::ui_theme::colors(theme);
+                            container::Style::default()
+                                .background(colors.panel_alt)
+                                .color(colors.text)
+                        }),
+                    tooltip::Position::Bottom,
                 )
-                .padding([6, 0]),
+                .into(),
             );
-            if view.annotations.is_empty() {
-                section = section.push(
-                    container(text(i18n::tr("Place a Note or a Line from the ribbon")).size(10))
-                        .padding([2, 0]),
-                );
-            }
-            for (place, annotation) in view.annotations.iter().enumerate() {
-                let label = match annotation {
-                    Annotation::Note { text, .. } => {
-                        format!("{} · {}", i18n::tr("Note"), shortened(text, 30))
-                    }
-                    Annotation::Line { from, to } => format!(
-                        "{} · {}",
-                        i18n::tr("Line"),
-                        measure::format_length(measure::distance(*from, *to))
-                    ),
-                };
-                section = section.push(
-                    container(
-                        row![
-                            text(label).size(11).width(Fill),
-                            button("×")
-                                .on_press(Message::Views(ViewAction::DeleteAnnotation(place)))
-                                .style(flat)
-                                .padding([3, 6]),
-                        ]
-                        .spacing(3)
-                        .align_y(iced::Alignment::Center),
-                    )
-                    .padding([1, 0]),
-                );
-            }
         }
-        section.into()
+        controls.push(crate::project_browser::remove_button(Message::Views(
+            ViewAction::Delete(guid()),
+        )));
+        let line = crate::project_browser::view_row(
+            ToolIcon::SavedView,
+            view.name.clone(),
+            shown,
+            false,
+            Message::Views(ViewAction::Restore(guid())),
+            controls,
+        );
+        if !active {
+            return line;
+        }
+        // The active view has its name to itself on the first line and
+        // Rename and Update under it.
+        column![
+            line,
+            crate::project_browser::indented(
+                row![
+                    small("Rename", ViewAction::StartRename(guid())),
+                    small("Update", ViewAction::Update(guid())),
+                ]
+                .spacing(2),
+                20.0,
+            ),
+        ]
+        .spacing(0)
+        .into()
     }
 
-    /// The BCF part of the project browser: what a BCF file of the active
-    /// scan would hold, and the button that writes it.
-    pub fn bcf_browser(&self) -> Element<'_, Message> {
+    /// Under the rows of VIEWS: the name field with Save view, which keeps
+    /// the camera and the section box while it is on, and the actions that
+    /// make or open a drawing.
+    pub fn view_actions(&self) -> Element<'_, Message> {
+        let flat = crate::flat_tool_style;
+        let has_scan = self.active.is_some();
+        let mut actions = column![
+            row![
+                text_input(i18n::tr("Name"), &self.views.name)
+                    .on_input(|name| Message::Views(ViewAction::Name(name)))
+                    .on_submit(Message::Views(ViewAction::Save))
+                    .size(11)
+                    .padding([3, 5])
+                    .width(Fill),
+                button(text(i18n::tr("Save view")).size(11))
+                    .on_press_maybe(has_scan.then_some(Message::Views(ViewAction::Save)))
+                    .style(flat),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center),
+            button(text(i18n::tr("Create 2D plan / elevation / section…")).size(11))
+                .on_press_maybe(
+                    has_scan.then_some(Message::Sheet(crate::sheet_dialog::SheetAction::Open)),
+                )
+                .style(flat)
+                .width(Fill),
+            button(text(i18n::tr("Open drawing…")).size(11))
+                .on_press(Message::DrawingView(
+                    crate::drawing_view::DrawingViewAction::OpenFile,
+                ))
+                .style(flat)
+                .width(Fill),
+        ]
+        .spacing(2)
+        .padding(iced::Padding {
+            top: 4.0,
+            ..iced::Padding::ZERO
+        });
+        if !has_scan {
+            actions = actions.push(
+                text(i18n::tr("Open a scan to save views of it"))
+                    .size(10)
+                    .color(self.ui_theme.colors().muted),
+            );
+        }
+        actions.into()
+    }
+
+    /// The annotations of the active view, each with × to delete it, while
+    /// a view is active.
+    pub fn annotation_list(&self) -> Option<Element<'_, Message>> {
+        let view = self.active_view()?;
+        let small = |label: &'static str, action: ViewAction| {
+            button(text(i18n::tr(label)).size(10))
+                .on_press(Message::Views(action))
+                .style(crate::flat_tool_style)
+                .padding([3, 4])
+        };
+        let mut list = column![container(
+            row![
+                text(format!(
+                    "{} · {}",
+                    i18n::tr("Annotations"),
+                    shortened(&view.name, 22)
+                ))
+                .size(10)
+                .width(Fill),
+                small("Hide", ViewAction::Deactivate),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([4, 0])]
+        .spacing(0);
+        if view.annotations.is_empty() {
+            list = list.push(
+                container(text(i18n::tr("Place a Note or a Line from the ribbon")).size(10))
+                    .padding([2, 0]),
+            );
+        }
+        for (place, annotation) in view.annotations.iter().enumerate() {
+            let label = match annotation {
+                Annotation::Note { text, .. } => {
+                    format!("{} · {}", i18n::tr("Note"), shortened(text, 30))
+                }
+                Annotation::Line { from, to } => format!(
+                    "{} · {}",
+                    i18n::tr("Line"),
+                    measure::format_length(measure::distance(*from, *to))
+                ),
+            };
+            list = list.push(
+                container(
+                    row![
+                        text(label).size(11).width(Fill),
+                        crate::project_browser::remove_button(Message::Views(
+                            ViewAction::DeleteAnnotation(place),
+                        )),
+                    ]
+                    .spacing(3)
+                    .align_y(iced::Alignment::Center),
+                )
+                .padding([1, 0]),
+            );
+        }
+        Some(list.into())
+    }
+
+    /// What BCF holds in the Project Browser: what a BCF file of the active
+    /// scan would hold, and the button that writes it. A view with a section
+    /// box takes it along as the clipping planes of its viewpoint.
+    pub fn bcf_body(&self) -> Element<'_, Message> {
         let muted = self.ui_theme.colors().muted;
-        let source = self.active_camera_source();
         let (views, notes) = self
-            .views
-            .list
+            .listed_views()
             .iter()
-            .filter(|view| Some(&view.source) == source.as_ref())
             .fold((0usize, 0usize), |(views, notes), view| {
                 (views + 1, notes + view.annotations.len())
             });
         column![
-            text("BCF").size(11).color(muted),
             text(i18n::tr_args(
                 "{views} views with {notes} annotations become topics of a BCF file",
                 &[("views", &views), ("notes", &notes)],
@@ -2302,6 +2345,70 @@ mod tests {
         assert_eq!(restored.rotation_degrees, 30.0);
         assert!(close(restored.bounds.min, kept.min) && close(restored.bounds.max, kept.max));
         assert!(studio.holds_what_view_holds(&view));
+    }
+
+    #[test]
+    fn one_save_view_keeps_the_section_box_only_while_it_is_on() {
+        let (mut studio, _directory) = studio_with_scan();
+        let section = send(
+            &mut studio,
+            command(
+                r#"{"command":"set_section","min":[1,0.5,0.25],"max":[3,2.5,1.5],"rotation":20}"#,
+            ),
+        );
+        assert_eq!(section["ok"], true, "{section}");
+        act(&mut studio, ViewAction::Name("Boxed".into()));
+        act(&mut studio, ViewAction::Save);
+        let boxed = studio.views.list[0].clone();
+        let kept = boxed.section_box().unwrap();
+        assert_eq!(kept.rotation, 20.0);
+        assert!(close(kept.min, [1.0, 0.5, 0.25]) && close(kept.max, [3.0, 2.5, 1.5]));
+
+        // With the box off the view has none.
+        let _ = studio.update(Message::SetSectionEnabled(false));
+        act(&mut studio, ViewAction::Name("Open".into()));
+        act(&mut studio, ViewAction::Save);
+        let open = studio.views.list[1].clone();
+        assert!(open.section.is_none() && open.section_box().is_none());
+        let listed = send(&mut studio, ApiCommand::ListCameraViews);
+        assert!(listed["views"][1]["section"].is_null(), "{listed}");
+        assert_eq!(listed["views"][0]["section"]["rotation"], 20.0);
+
+        // Applying the first switches its box on, turned as it was saved,
+        // also over a drawing in the main area.
+        studio.drawing_view.shown = true;
+        act(&mut studio, ViewAction::Restore(boxed.guid.clone()));
+        assert!(!studio.drawing_view.shown);
+        let shown = studio.section_box().unwrap();
+        assert_eq!(shown.rotation_degrees, 20.0);
+        assert!(close(shown.bounds.min, kept.min) && close(shown.bounds.max, kept.max));
+        assert!(studio.holds_what_view_holds(&boxed));
+        assert!(!studio.holds_what_view_holds(&open));
+
+        // Applying the second switches it off, and the first on again.
+        act(&mut studio, ViewAction::Restore(open.guid.clone()));
+        assert!(!studio.section_enabled);
+        assert!(studio.holds_what_view_holds(&open));
+        let restored = send(
+            &mut studio,
+            command(r#"{"command":"restore_camera_view","name":"boxed"}"#),
+        );
+        assert_eq!(restored["ok"], true);
+        assert!(studio.section_enabled);
+
+        // A view an earlier version saved with the box off switches it off.
+        let mut older = boxed.clone();
+        older.guid = camera_views::new_guid();
+        older.name = "Older".into();
+        older.section = Some(SectionBox {
+            enabled: false,
+            ..kept
+        });
+        assert!(older.section_box().is_none());
+        studio.views.list.push(older.clone());
+        act(&mut studio, ViewAction::Restore(older.guid.clone()));
+        assert!(!studio.section_enabled);
+        let _ = studio.view();
     }
 
     #[test]

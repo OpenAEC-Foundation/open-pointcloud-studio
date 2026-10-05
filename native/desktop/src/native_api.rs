@@ -295,6 +295,28 @@ pub enum ApiCommand {
         layer: String,
         visible: bool,
     },
+    /// Make a plan, an elevation or a section as Create 2D plan /
+    /// elevation / section does.
+    CreateDrawing {
+        #[serde(flatten)]
+        options: CreateDrawingOptions,
+    },
+    /// The drawings of Create 2D made from an open scan, and the previews,
+    /// exports and files of this session.
+    ListDrawings,
+    /// Show a drawing of Create 2D by its name, made again when it is not
+    /// made yet in this session.
+    ShowDrawing {
+        name: String,
+    },
+    DeleteDrawing {
+        name: String,
+    },
+    /// Open or collapse a group of the Project Browser.
+    SetBrowserGroup {
+        group: String,
+        open: bool,
+    },
     OpenInCadViewer {
         /// Absolute `.dxf` or `.dwg` file; without it the last one a drawing,
         /// faces or mesh export wrote.
@@ -369,6 +391,33 @@ pub enum ApiCommand {
         /// Longest edge of the image in pixels.
         max_edge: Option<u32>,
     },
+}
+
+/// The choices of `create_drawing`, those of the Create 2D dialog. Each one
+/// left out keeps what the dialog starts with.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CreateDrawingOptions {
+    /// `plan`, `elevation` or `section`.
+    pub kind: String,
+    /// `model`, `section_box` or the name of a saved view of the active scan
+    /// with a section box.
+    #[serde(default)]
+    pub basis: Option<String>,
+    /// `front`, `back`, `left` or `right`, for an elevation or a section.
+    #[serde(default)]
+    pub side: Option<String>,
+    /// The height of the cut of a plan made from the model.
+    #[serde(default)]
+    pub height: Option<f64>,
+    /// Where a section made from the model cuts, along the axis it looks.
+    #[serde(default)]
+    pub position: Option<f64>,
+    #[serde(default)]
+    pub thickness: Option<f64>,
+    /// The name of the drawing; without one it is named as the dialog
+    /// names it.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug)]

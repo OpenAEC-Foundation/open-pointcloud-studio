@@ -39,10 +39,11 @@ mod opencad_properties;
 mod opencad_ribbon;
 mod orbit_point;
 mod preferences;
+mod project_browser;
 mod project_open;
+mod saved_drawings;
 mod screenshot;
 mod section_fill;
-mod sections;
 mod selection;
 mod settings_dialog;
 mod sheet_dialog;
@@ -62,7 +63,6 @@ use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
 use iced::widget::{
     button, checkbox, column, container, row, scrollable, slider, stack, svg, text, text_input,
-    tooltip,
 };
 use iced::{Color, Element, Fill, Font, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 use lod_pace::{
@@ -1825,7 +1825,7 @@ enum Message {
     /// A double click at a pixel of the scene: the drawn point there becomes
     /// the orbit point.
     PickOrbitPoint([f32; 2], Size),
-    Sections(sections::SectionAction),
+    Browser(project_browser::BrowserAction),
     Sheet(sheet_dialog::SheetAction),
     OrbitPointPicked(Option<[f64; 3]>),
     /// A single click at a pixel of the scene with no tool on: the point
@@ -1991,7 +1991,8 @@ struct Studio {
     orbit_point: Option<[f64; 3]>,
     view_label: &'static str,
     views: views::ViewTool,
-    sections: sections::SectionsTool,
+    /// Which groups of the Project Browser are collapsed.
+    browser: project_browser::BrowserState,
     sheet_dialog: Option<sheet_dialog::SheetDialog>,
     viewport_size: Size,
     ribbon_viewport: Option<(f32, f32, f32)>,
@@ -2442,7 +2443,7 @@ impl Default for Studio {
             orbit_point: None,
             view_label: "ISOMETRIC",
             views: views::ViewTool::load(),
-            sections: sections::SectionsTool::load(),
+            browser: project_browser::BrowserState::new(settings.browser_collapsed.clone()),
             sheet_dialog: None,
             viewport_size: Size::new(915.0, 743.0),
             ribbon_viewport: None,
@@ -2510,6 +2511,7 @@ impl Studio {
             cap_color: self.section_fill.color,
             cap_max_thickness: self.section_fill.max_thickness,
             recent_mesh_to_plans: self.mesh_to_plans.recent.clone(),
+            browser_collapsed: self.browser.collapsed().to_vec(),
         }
     }
 
@@ -3096,7 +3098,8 @@ impl Studio {
     }
 
     /// Cloud indices in the order the project list shows them: by name,
-    /// whatever order their imports finished in.
+    /// whatever order their imports finished in, and by folder first when
+    /// the scans come from more than one.
     fn layer_order(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.clouds.len()).collect();
         order.sort_by(|a, b| {
@@ -3106,6 +3109,12 @@ impl Studio {
             )
             .then(a.cmp(b))
         });
+        let folders = project_browser::by_folder(&order, |index| {
+            project_browser::folder_of(&self.clouds[index])
+        });
+        if folders.len() > 1 {
+            order = folders.into_iter().flat_map(|(_, rows)| rows).collect();
+        }
         order
     }
 
@@ -3331,6 +3340,7 @@ impl Studio {
                 answer.0["result"]["cad_viewer"] = self.cad_viewer.value();
                 answer.0["result"]["drawing"] = self.drawing.value();
                 answer.0["result"]["drawing_view"] = self.drawing_view.value();
+                answer.0["result"]["project_browser"] = self.browser_value();
                 answer.0["result"]["section_align_pending"] =
                     Value::Bool(self.section_align_pending);
                 answer.0["result"]["closed_mesh"] = self.closed_mesh.value();
@@ -4263,6 +4273,11 @@ impl Studio {
             ApiCommand::SetDrawingLayer { layer, visible } => {
                 (self.api_set_drawing_layer(&layer, visible), Task::none())
             }
+            ApiCommand::CreateDrawing { options } => self.api_create_drawing(&options),
+            ApiCommand::ListDrawings => (self.api_list_drawings(), Task::none()),
+            ApiCommand::ShowDrawing { name } => self.api_show_drawing(&name),
+            ApiCommand::DeleteDrawing { name } => (self.api_delete_drawing(&name), Task::none()),
+            ApiCommand::SetBrowserGroup { group, open } => self.api_set_browser_group(&group, open),
             ApiCommand::OpenInCadViewer { path } => (
                 self.open_in_cad_viewer(path)
                     .unwrap_or_else(|error| json!({"ok": false, "error": error})),
@@ -4351,6 +4366,12 @@ impl Studio {
         };
         let _ = request.reply.send(response);
         task
+    }
+
+    /// Forget a job of the local API that did not start after all.
+    fn forget_api_job(&mut self, id: &str) {
+        self.api_jobs.remove(id);
+        self.api_job_order.retain(|known| known != id);
     }
 
     fn record_api_job(&mut self, initial: Value) -> String {
@@ -8079,7 +8100,7 @@ impl Studio {
                 return self.schedule_detail();
             }
             Message::Views(action) => return self.update_views(action),
-            Message::Sections(action) => return self.update_sections(action),
+            Message::Browser(action) => return self.update_browser(action),
             Message::Sheet(action) => return self.update_sheet_dialog(action),
             Message::ShowContextMenu(point) => self.context_menu = Some(point),
             Message::DismissContextMenu => self.context_menu = None,
@@ -9183,207 +9204,6 @@ impl Studio {
         .width(Fill)
         .style(ribbon_style)
         .into()
-    }
-
-    fn project_panel(&self) -> Element<'_, Message> {
-        let mut cloud_count = match self.clouds.len() {
-            1 => "1 point cloud".to_owned(),
-            count => format!("{count} point clouds"),
-        };
-        let picked = self.clouds.iter().filter(|entry| entry.picked).count();
-        if picked > 1 {
-            cloud_count.push_str(&format!("  ·  {picked} selected"));
-        }
-        let mut files = column![
-            text(i18n::tr("Project Browser"))
-                .size(14)
-                .font(Font::with_name("Space Grotesk")),
-            text(cloud_count)
-                .size(11)
-                .color(self.ui_theme.colors().muted),
-            button(i18n::tr("+  Add point cloud"))
-                .on_press(Message::Open)
-                .style(flat_tool_style)
-                .width(Fill),
-            button(i18n::tr("+  Open scan folder…"))
-                .on_press(Message::OpenFolder)
-                .style(flat_tool_style)
-                .width(Fill),
-        ]
-        .spacing(9);
-        let mut layers = column![].spacing(2);
-        for index in self.layer_order() {
-            let entry = &self.clouds[index];
-            let name = display_name(&entry.cloud.path);
-            let readable_name = name.replace('_', "_\u{200b}");
-            let remaining = entry.remaining_count();
-            let file_button = tooltip(
-                button(
-                    text(readable_name)
-                        .size(12)
-                        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
-                        .width(Fill),
-                )
-                .on_press(Message::LayerClick(index))
-                .style(flat_tool_style)
-                .width(Fill)
-                .padding([2, 2]),
-                container(
-                    text(format!(
-                        "{}\n{} points",
-                        entry.cloud.path.display(),
-                        format_count(remaining)
-                    ))
-                    .size(11),
-                )
-                .padding([4, 7])
-                .style(|theme| {
-                    let colors = ui_theme::colors(theme);
-                    container::Style::default()
-                        .background(colors.panel_alt)
-                        .color(colors.text)
-                }),
-                tooltip::Position::FollowCursor,
-            )
-            .gap(5);
-            let mut item = column![row![
-                checkbox("", entry.visible)
-                    .on_toggle(move |value| Message::LayerVisible(index, value))
-                    .style(muted_checkbox_style)
-                    .size(14),
-                file_button,
-                text(compact_count(remaining))
-                    .size(10)
-                    .color(self.ui_theme.colors().muted),
-                button(text("×").size(12))
-                    .on_press(Message::LayerRemove(index))
-                    .style(flat_tool_style)
-                    .padding([1, 5]),
-            ]
-            .spacing(3)
-            .align_y(iced::Alignment::Center)]
-            .spacing(1);
-            // Only what needs attention gets a second line.
-            let progress = self.layer_progress(entry);
-            let mut notes: Vec<String> = progress.iter().map(|(note, _)| note.clone()).collect();
-            let selected = entry.selection.as_ref().map_or(0, |mask| mask.count);
-            if selected > 0 {
-                notes.push(format!("{} selected", format_count(selected)));
-            }
-            let deleted = entry.deleted_count();
-            if deleted > 0 {
-                notes.push(format!("{} deleted", format_count(deleted)));
-            }
-            if !notes.is_empty() {
-                item = item.push(
-                    container(
-                        text(notes.join("  ·  "))
-                            .size(10)
-                            .color(self.ui_theme.colors().muted),
-                    )
-                    .padding(iced::Padding {
-                        left: 20.0,
-                        ..iced::Padding::ZERO
-                    }),
-                );
-            }
-            if let Some(fraction) = progress.and_then(|(_, fraction)| fraction) {
-                item = item.push(
-                    container(
-                        iced::widget::progress_bar(0.0..=1.0, fraction)
-                            .height(2)
-                            .style(|theme| {
-                                let colors = ui_theme::colors(theme);
-                                iced::widget::progress_bar::Style {
-                                    background: colors.border.into(),
-                                    bar: colors.accent.into(),
-                                    border: iced::Border::default(),
-                                }
-                            }),
-                    )
-                    .padding(iced::Padding {
-                        left: 20.0,
-                        right: 4.0,
-                        ..iced::Padding::ZERO
-                    }),
-                );
-            }
-            if entry.mesh.is_some() {
-                item = item.push(
-                    checkbox(i18n::tr("Surface"), entry.mesh_visible)
-                        .on_toggle(move |value| Message::SetMeshVisible(index, value))
-                        .style(muted_checkbox_style)
-                        .text_size(11)
-                        .size(12),
-                );
-            }
-            if let Some(switch) = faces::layer_switch(index, entry) {
-                item = item.push(switch);
-            }
-            let active = self.active == Some(index);
-            let picked = entry.picked;
-            layers = layers.push(
-                container(item)
-                    .padding([1, 4])
-                    .width(Fill)
-                    .style(move |theme| {
-                        let colors = ui_theme::colors(theme);
-                        container::Style::default()
-                            .background(if active || picked {
-                                colors.panel_alt
-                            } else {
-                                colors.panel
-                            })
-                            .border(iced::Border {
-                                color: if active {
-                                    colors.accent
-                                } else {
-                                    Color::TRANSPARENT
-                                },
-                                width: 1.0,
-                                radius: 2.0.into(),
-                            })
-                    }),
-            );
-        }
-        files = files.push(layers);
-        // Classes that occur in the open clouds, each shown or hidden like a layer.
-        let classes = self.class_codes();
-        if !classes.is_empty() {
-            let mut list = column![text(i18n::tr("CLASSES"))
-                .size(11)
-                .color(self.ui_theme.colors().muted)]
-            .spacing(3);
-            for code in classes {
-                let label = ASPRS_CLASSIFICATIONS
-                    .iter()
-                    .find(|(known, _)| *known == code)
-                    .map_or_else(
-                        || format!("{code:02}  {} {code}", i18n::tr("Class")),
-                        |(_, label)| format!("{code:02}  {}", i18n::tr(label)),
-                    );
-                list = list.push(
-                    checkbox(label, self.class_visibility.allows(Some(code)))
-                        .on_toggle(move |visible| Message::FilterClass(code, visible))
-                        .style(muted_checkbox_style)
-                        .text_size(11)
-                        .size(13),
-                );
-            }
-            files = files.push(list);
-        }
-        files = files
-            .push(self.drawings_browser())
-            .push(self.views_browser())
-            .push(self.bcf_browser());
-        if let Some(resume) = self.mesh_to_plans_browser() {
-            files = files.push(resume);
-        }
-        container(scrollable(files.padding(14)).height(Fill))
-            .width(255)
-            .height(Fill)
-            .style(sidebar_style)
-            .into()
     }
 
     fn point_viewport(&self) -> PointViewport<'_> {
@@ -10712,6 +10532,22 @@ enum ToolIcon {
     ClosedMesh,
     Faces,
     MeshToPlans,
+    /// The kinds of the Project Browser: a scan, the classes, the views
+    /// and the 3D model, a saved view, a plan, an elevation, a section, a
+    /// drawing file and BCF.
+    Scan,
+    Classes,
+    Views,
+    Model,
+    SavedView,
+    PlanSheet,
+    ElevationSheet,
+    SectionSheet,
+    DrawingFile,
+    Bcf,
+    /// The chevron of an open and of a collapsed group.
+    ChevronOpen,
+    ChevronClosed,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -10765,6 +10601,22 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Faces => include_bytes!("../../assets/opencad-icons/detect_faces.svg"),
         // And so is the icon of the Mesh to Plans wizard.
         ToolIcon::MeshToPlans => include_bytes!("../../assets/opencad-icons/mesh_to_plans.svg"),
+        // The icons of the Project Browser are drawn for this app in the
+        // same style: grey with amber for scans and with blue for views.
+        ToolIcon::Scan => include_bytes!("../../assets/opencad-icons/browser_scan.svg"),
+        ToolIcon::Classes => include_bytes!("../../assets/opencad-icons/browser_classes.svg"),
+        ToolIcon::Views => include_bytes!("../../assets/opencad-icons/browser_views.svg"),
+        ToolIcon::Model => include_bytes!("../../assets/opencad-icons/browser_model.svg"),
+        ToolIcon::SavedView => include_bytes!("../../assets/opencad-icons/browser_saved_view.svg"),
+        ToolIcon::PlanSheet => include_bytes!("../../assets/opencad-icons/browser_plan.svg"),
+        ToolIcon::ElevationSheet => {
+            include_bytes!("../../assets/opencad-icons/browser_elevation.svg")
+        }
+        ToolIcon::SectionSheet => include_bytes!("../../assets/opencad-icons/browser_section.svg"),
+        ToolIcon::DrawingFile => include_bytes!("../../assets/opencad-icons/browser_file.svg"),
+        ToolIcon::Bcf => include_bytes!("../../assets/opencad-icons/browser_bcf.svg"),
+        ToolIcon::ChevronOpen => include_bytes!("../../assets/opencad-icons/chevron_open.svg"),
+        ToolIcon::ChevronClosed => include_bytes!("../../assets/opencad-icons/chevron_closed.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)
