@@ -14,6 +14,9 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- The left mouse button selects by default: a click selects the point under the pointer and a drag draws a rectangle that selects the points inside it. The middle button orbits, Alt with the left button orbits as well, and the right button, or Shift with the middle button, pans.
+- The VIEW group keeps Zoom all, Fit stations and Isometric; the six directions are on the view cube.
+
 - A mesh with colours keeps them in DXF, DWG and IFC. In DXF and DWG the triangles are grouped by colour into `MESH` entities of a true colour each, from a palette of at most 256 colours; in IFC every triangle gets its colour from a colour map. A mesh without colours is written as before.
 - A mesh saved as DXF or DWG whose triangles share few corners, such as one opened from an STL file, no longer loses triangles when read back: a `MESH` entity now also holds at most 65,536 corners.
 - The outlines of detected faces have straight edges: a wall, floor or ceiling whose edge or opening runs at an angle to the grid of 5 cm is no longer drawn as a staircase of cells. Edges within a few degrees of the main direction of a face, or square to it, are put exactly on it, and a truly slanted edge, such as that of a sloped roof, stays slanted but straight.

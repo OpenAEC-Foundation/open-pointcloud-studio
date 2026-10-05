@@ -91,12 +91,13 @@ The percentage needs a known total: an E57 file states its record count, and an 
 
 ## Looking around
 
-- Drag with the left button to orbit. Shift with the middle button orbits as well.
+- The left button selects: a click selects the point under the pointer and a drag draws a rectangle that selects the points inside it (see **Select** under Selecting).
+- Drag with the middle button to orbit, or with the left button while Alt is held.
 - Double-click a point to orbit about it: from then on the view turns about that point, which stays where it is on the screen, and a small target marks it while the view turns. Double-click where no point is drawn, or use Zoom all, to orbit about the centre of the model again. The view does not move when the point is set. While the section box is on and no point is set, the view turns about the centre of the box.
-- Drag with the middle or the right button to pan.
+- Drag with the right button, or with the middle button while Shift is held, to pan.
 - Turn the wheel to zoom at the pointer.
 - `F` or **Zoom all** returns to the isometric overview of the whole model: it resets the direction, the zoom and the pan.
-- The **VIEW** group has **Isometric**, **Top**, **Front**, **Right**, **Bottom**, **Back** and **Left**.
+- The **VIEW** group has **Zoom all**, **Fit stations** and **Isometric**; the six directions are on the view cube.
 - The **view cube** follows the camera. Click a face, a visible corner or its ISO button to turn the view; the zoom and the pan stay as they are.
 - A right click without dragging opens a menu with Orbit, Box select, Pick point, Section box, Zoom all and Clear selection.
 
@@ -167,7 +168,7 @@ A turned box clips the points, the exports, the selections, the meshers and **De
 
 - **Select** is the plain mouse, and what Escape returns to: a click selects the nearest point of the active scan within eight pixels, as Pick point does, a drag orbits and a double-click sets the orbit point. The button is lit while no other tool is on.
 - **Box select**: draw a rectangle in the scene. Every source point of every visible scan inside it is selected, not only the points on screen. With an index the search visits only the parts of the index that the rectangle touches; without one it reads the whole source. While a search runs, **Cancel selection** takes the place of Zoom selection; a cancelled search leaves the previous selection as it was.
-- **Pick point**: click a point. The nearest point of the active scan within eight pixels of the pointer is selected, and Properties shows its coordinates, colour, intensity and class under **Selected point**. A left drag does not orbit while Pick point is on: the point under the pointer is picked when the button is released. Pan with a middle or right drag, or orbit with Shift and a middle drag.
+- **Pick point**: click a point. The nearest point of the active scan within eight pixels of the pointer is selected, and Properties shows its coordinates, colour, intensity and class under **Selected point**. While Pick point is on, the point under the pointer is picked when the left button is released, also after a drag. Orbit with a middle drag and pan with a right drag.
 - **Clear** drops the selection. Escape leaves the active tool for Select and drops the selection as well.
 - **Zoom selection** frames the selected points without changing the section box.
 
@@ -311,7 +312,7 @@ The drawing holds:
 1. Open the scans of the storey and hide the layers that should stay out of the drawing.
 2. Switch on **Section box**. Put its top face at the height of the cut: under **Section box** in Properties, type the height as Z **Max** and choose **Apply XYZ limits**. With a top face at 1.10 m above a floor that lies at zero and a slab of 0.10 m, the plan shows what lies between 1.00 and 1.10 m: above most furniture, through the doors and under the sills of most windows. Pull the four sides in to the part of the building that is wanted. Where the bottom face lies does not matter, as long as the box is deeper than the slab.
 3. Choose **Section drawing**. Leave **View** on **Plan** and **Slab thickness (m)** on 0.10.
-4. Choose **Preview**. The filled cut appears over the points on the cut plane; **Top** in the VIEW group looks straight at it. Where a cupboard or a person shows up as a region, select those points with **Box select**, **Delete** them and preview again. **Clear preview** takes the preview away.
+4. Choose **Preview**. The filled cut appears over the points on the cut plane; the top face of the view cube looks straight at it. Where a cupboard or a person shows up as a region, select those points with **Box select**, **Delete** them and preview again. **Clear preview** takes the preview away.
 5. Choose **Export drawing…** and give a file name that ends in `.dxf` or `.dwg`. The strip above the scene shows the job with a **Cancel** button; a cancelled job leaves an existing file as it was. When the job is done, the status bar and the block say what was drawn.
 
 ### A vertical section, step by step
@@ -320,7 +321,7 @@ The drawing holds:
 2. Choose **Section drawing** and the **View** that stands at that face: **Section, front** for Y min, **back** for Y max, **left** for X min, **right** for X max.
 3. Set **Slab thickness (m)**. With 0.10 the drawing shows only what the cut plane goes through. A thicker slab, up to 5 m, also shows what lies behind the cut, as an elevation does. The slab is never deeper than the box: in a box that is shallower than the thickness asked, the slab is the whole box, and the result says so.
 4. A vertical section starts with **Filled cut** off: points only. Switch it on to get the floors and walls that are cut as filled regions.
-5. Preview and export as for a plan. A front or side view of the VIEW group looks at the cut plane of a box along the axes.
+5. Preview and export as for a plan. A front or side face of the view cube looks at the cut plane of a box along the axes.
 
 The blue outline in the scene shows where the slab lies. When the job ends with "the slab holds no points", the face of the box that is the cut plane lies where there is nothing to cut, such as in front of the building: the message names the face. Move that face onto the walls, or make the slab thicker.
 
@@ -479,7 +480,7 @@ The points are reduced, per cell of half a voxel, to small pieces of surface wit
 ### One room, step by step
 
 1. Open the scan or the scans of the room and wait until they are indexed; the strip above the scene shows that. A scan of one million points or more gets its index by itself. A scan without an index is read into memory for the job when it has at most 5,000,000 points; a larger one is refused until **Build index** in the INDEX group has run.
-2. Switch on **Section box** and put it around the room: choose **Top** in the VIEW group and bring the four sides to the middle of the walls around the room, so that the faces of the walls on the room side lie inside the box and those of the rooms next door do not. Put the top face just above the ceiling and the bottom face just under the floor. The mesh is made of what lies inside the box.
+2. Switch on **Section box** and put it around the room: click the top face of the view cube and bring the four sides to the middle of the walls around the room, so that the faces of the walls on the room side lie inside the box and those of the rooms next door do not. Put the top face just above the ceiling and the bottom face just under the floor. The mesh is made of what lies inside the box.
 3. Choose **Closed mesh**. Under the settings the block says what a job would mesh: the active scan or the visible scans, inside the section box or as a whole, the size of that region in metres, the voxel that will be used, and about how many triangles the faces of that box give before simplification. Furniture and inner walls add to that number. When the region is too large for the limits of a mesh, or may be, the block says so in the accent colour before anything is started. With simplification the warning comes when the faces of the box alone give more triangles than a mesh holds, and the job then fits only when simplification takes most of them away. Without simplification (**Simplify within** at 0) it comes from about two thirds of the limit, because a scanned surface has more triangles than the faces of its box: a generated room with a noise of 2 mm, a column and the reveals of a door and a window gave about 1.4 times as many.
 4. When the room was scanned from several stations that are separate files, set **Scans** to **All visible scans** and hide the layers that should stay out. With the section box on, only the visible layers that reach the box take part: a layer that lies outside it is not read and does not count for the size of the region. Layers of 3D BAG buildings are left out. The mesh goes to the active scan either way, so make one of the scans the active layer first: a layer of 3D BAG buildings does not take a mesh of the scans, and the block says so.
 5. Choose **Start**. The strip above the scene shows the job step by step, with a **Cancel** button: reading (only for a scan without an index), finding the blocks that hold points, meshing block after block, simplifying across the blocks, and measuring the result. A cancelled job leaves the mesh the scan had as it was.
@@ -572,7 +573,7 @@ The second pass measures every point of the region against the plane or the cyli
 ### The faces of one room, step by step
 
 1. Open the scan or the scans of the room and wait until they are indexed; the strip above the scene shows that. A scan with an index is read through it, and only the parts of it that touch the section box are read. A scan without an index is read into memory for the job when it has at most 5,000,000 points; a larger one is read from its file twice, which the block says, and **Build index** in the INDEX group makes the job faster.
-2. Switch on **Section box** and put it around the room: choose **Top** in the VIEW group and bring the four sides to the middle of the walls around the room, so that the faces of those walls on the room side lie inside the box and those of the rooms next door do not. Put the top face just above the ceiling and the bottom face just under the floor. Only what lies inside the box is searched.
+2. Switch on **Section box** and put it around the room: click the top face of the view cube and bring the four sides to the middle of the walls around the room, so that the faces of those walls on the room side lie inside the box and those of the rooms next door do not. Put the top face just above the ceiling and the bottom face just under the floor. Only what lies inside the box is searched.
 3. Choose **Detect faces**. Under the settings the block says what a job would search: the active scan or the visible scans, inside the section box or as a whole, and the size of that region in metres, which is the box cut back to where the scans have points. Below that it gives the voxel size the working budget allows. It is 30 mm as long as the six faces of the region fit in 1,500,000 voxels, which holds up to about 1,350 m² of faces: a box of 20 by 20 by 6.8 m. For a larger region the block warns, in the accent colour, with the voxel size the job will at least need. Walls and objects inside the region take voxels too, so the job can end with larger voxels than the block expects.
 4. When the room was scanned from several stations that are separate files, set **Scans** to **All visible scans** and hide the layers that should stay out. With the section box on, only the visible layers that reach the box take part. Layers of 3D BAG buildings are left out. The faces are kept with the active scan, which has to be one of the scans that take part: the block says so when it is hidden or lies outside the box.
 5. Choose **Start**. The strip above the scene shows the job step by step, with a **Cancel** button: finding the station of every point (only for a scan whose index does not say), reading a scan without an index, reading the points, finding flat regions, measuring the points against the faces, tracing the outlines and building the faces for the viewer. A cancelled job, and a job that finds nothing, leave the faces the scan had as they were.
@@ -856,10 +857,11 @@ Nothing is written beside the scans, and the scans themselves are never changed.
 
 | Input | What it does |
 | --- | --- |
-| Left drag | Orbit; in Box select, draw the rectangle; in Pick point, the view does not turn and the point under the pointer is picked on release |
-| Left click | Pick a point in Pick point, Distance, Area, Note and Line; click a station marker, a station ball or the view cube |
-| Middle or right drag | Pan |
-| Shift + middle drag | Orbit |
+| Left drag | Draw a rectangle that selects the points inside it; in Distance, Area, Note and Line, orbit; in Pick point, the point under the pointer is picked on release |
+| Alt + left drag | Orbit |
+| Left click | Select the point under the pointer; pick a point in Pick point, Distance, Area, Note and Line; click a station marker, a station ball or the view cube |
+| Middle drag | Orbit |
+| Right drag, Shift + middle drag | Pan |
 | Double click | Orbit about the point under the pointer; where no point is, about the centre of the model |
 | Wheel | Zoom at the pointer |
 | Right click | Menu of the scene |

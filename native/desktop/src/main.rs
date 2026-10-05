@@ -8711,13 +8711,8 @@ impl Studio {
                         .iter()
                         .any(|entry| entry.visible && !entry.cloud.scan_poses.is_empty()),
                 )),
+                // The six directions are on the view cube.
                 preset("Isometric", CameraPreset::Isometric, "ISOMETRIC"),
-                preset("Top", CameraPreset::Top, "TOP"),
-                preset("Front", CameraPreset::Front, "FRONT"),
-                preset("Right", CameraPreset::Right, "RIGHT"),
-                preset("Bottom", CameraPreset::Bottom, "BOTTOM"),
-                preset("Back", CameraPreset::Back, "BACK"),
-                preset("Left", CameraPreset::Left, "LEFT"),
             ],
         );
         let display = ribbon_group(
@@ -10974,9 +10969,10 @@ fn push_scan_marker(
 #[derive(Debug, Clone, Copy)]
 enum DragMode {
     Orbit,
-    /// Orbit whose horizontal sense is reversed: the view turns with the pointer.
-    Turn,
     Pan,
+    /// Left press with no tool on: a click selects the point under the
+    /// pointer, a drag draws a selection rectangle.
+    PlainPending,
     Select,
     RightPending,
     /// Left press while measuring: a click picks a point, a drag orbits.
@@ -11003,20 +10999,20 @@ struct ViewportState {
 }
 
 /// What the status line says when the mouse is back to selecting.
-const SELECT_MODE_STATUS: &str =
-    "Select: click a point to select it, drag to orbit, double-click to orbit about a point";
+const SELECT_MODE_STATUS: &str = "Select: click a point or drag a rectangle to select, middle drag or Alt + left drag to orbit, right drag to pan, double-click to orbit about a point";
 
+/// The middle button orbits; with Shift it pans, as the right button does.
 fn middle_drag_mode(modifiers: iced::keyboard::Modifiers) -> DragMode {
     if modifiers.shift() {
-        DragMode::Turn
-    } else {
         DragMode::Pan
+    } else {
+        DragMode::Orbit
     }
 }
 
-/// A left release in the orbit mode: a click selects the point there and
-/// the second click of a double click asks for the orbit point there. A
-/// release after a drag is no click.
+/// A left release with no tool on: a click selects the point there and the
+/// second click of a double click asks for the orbit point there. A release
+/// after a drag is no click.
 fn orbit_click(
     last_click: &mut Option<(Instant, UiPoint)>,
     drag: DragState,
@@ -11025,7 +11021,7 @@ fn orbit_click(
     size: Size,
 ) -> Option<Message> {
     let moved = (position.x - drag.start.x).hypot(position.y - drag.start.y);
-    if !matches!(drag.mode, DragMode::Orbit) || moved > orbit_point::DOUBLE_CLICK_REACH {
+    if !matches!(drag.mode, DragMode::PlainPending) || moved > orbit_point::DOUBLE_CLICK_REACH {
         *last_click = None;
         return None;
     }
@@ -11057,7 +11053,9 @@ fn finish_viewport_drag(
         (mouse::Button::Middle | mouse::Button::Right, DragMode::Pan) if total > 0.5 => {
             Some(Message::FinishPan(dx, dy))
         }
-        (mouse::Button::Left, DragMode::Orbit) if total > 0.5 => Some(Message::FinishOrbit(dx, dy)),
+        (mouse::Button::Left | mouse::Button::Middle, DragMode::Orbit) if total > 0.5 => {
+            Some(Message::FinishOrbit(dx, dy))
+        }
         (mouse::Button::Left, DragMode::MeasurePending | DragMode::AnnotatePending)
             if total >= 5.0 =>
         {
@@ -11072,9 +11070,6 @@ fn finish_viewport_drag(
         (mouse::Button::Left, DragMode::AnnotatePending) => Some(Message::Views(
             views::ViewAction::Click([position.x, position.y], size),
         )),
-        (mouse::Button::Middle, DragMode::Turn) if total > 0.5 => {
-            Some(Message::FinishOrbit(-dx, dy))
-        }
         (mouse::Button::Left, DragMode::Select) => Some(Message::BoxSelect {
             start: [drag.start.x, drag.start.y],
             end: [position.x, position.y],
@@ -11396,8 +11391,10 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         DragMode::MeasurePending
                     } else if self.annotate.tool.is_some() {
                         DragMode::AnnotatePending
-                    } else {
+                    } else if modifiers.alt() {
                         DragMode::Orbit
+                    } else {
+                        DragMode::PlainPending
                     },
                 });
                 (
@@ -11462,16 +11459,17 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         DragMode::RightPending
                             | DragMode::MeasurePending
                             | DragMode::AnnotatePending
+                            | DragMode::PlainPending
                     ) {
                         if (position.x - previous.start.x).hypot(position.y - previous.start.y)
                             < 5.0
                         {
                             return (event::Status::Captured, None);
                         }
-                        previous.mode = if matches!(previous.mode, DragMode::RightPending) {
-                            DragMode::Pan
-                        } else {
-                            DragMode::Orbit
+                        previous.mode = match previous.mode {
+                            DragMode::RightPending => DragMode::Pan,
+                            DragMode::PlainPending => DragMode::Select,
+                            _ => DragMode::Orbit,
                         };
                         dx = position.x - previous.start.x;
                         dy = position.y - previous.start.y;
@@ -11480,11 +11478,11 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         event::Status::Captured,
                         Some(match previous.mode {
                             DragMode::Orbit => Message::Orbit(dx, dy),
-                            DragMode::Turn => Message::Orbit(-dx, dy),
                             DragMode::Pan => Message::Pan(dx, dy),
                             DragMode::RightPending
                             | DragMode::MeasurePending
-                            | DragMode::AnnotatePending => unreachable!(),
+                            | DragMode::AnnotatePending
+                            | DragMode::PlainPending => unreachable!(),
                             DragMode::Section(axis, is_min) => {
                                 let (Some(section), Some(scene_bounds)) =
                                     (self.section, combined_bounds(self.clouds))
@@ -11513,7 +11511,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
                                 Message::SectionHandleDelta(axis, is_min, delta)
                             }
                             DragMode::Select => {
-                                if self.box_select {
+                                // Pick point picks on release; a box from
+                                // the tool or from a plain drag is drawn.
+                                if !self.pick_mode {
                                     Message::SelectionDrag(
                                         [previous.start.x, previous.start.y],
                                         [position.x, position.y],
@@ -11860,7 +11860,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
         self.draw_annotations(&mut frame, bounds.size());
         // While the camera turns about the orbit point, the point is marked.
         let turning = _state.drag.is_some_and(|drag| {
-            matches!(drag.mode, DragMode::Orbit | DragMode::Turn) && drag.position != drag.start
+            matches!(drag.mode, DragMode::Orbit) && drag.position != drag.start
         });
         if let Some((x, y, _)) = self
             .orbit_point
@@ -13862,18 +13862,18 @@ mod viewport_drag_tests {
     }
 
     #[test]
-    fn shift_middle_drag_orbits_while_plain_middle_drag_pans() {
+    fn middle_drag_orbits_while_shift_middle_drag_pans() {
         assert!(matches!(
             middle_drag_mode(iced::keyboard::Modifiers::SHIFT),
-            DragMode::Turn
+            DragMode::Pan
         ));
         assert!(matches!(
             middle_drag_mode(iced::keyboard::Modifiers::default()),
-            DragMode::Pan
+            DragMode::Orbit
         ));
         assert!(matches!(
             middle_drag_mode(iced::keyboard::Modifiers::CTRL),
-            DragMode::Pan
+            DragMode::Orbit
         ));
 
         let start = UiPoint::new(10.0, 20.0);
@@ -13881,7 +13881,7 @@ mod viewport_drag_tests {
         let orbit = DragState {
             start,
             position: UiPoint::new(25.0, 25.0),
-            mode: middle_drag_mode(iced::keyboard::Modifiers::SHIFT),
+            mode: middle_drag_mode(iced::keyboard::Modifiers::default()),
         };
         let message = finish_viewport_drag(
             mouse::Button::Middle,
@@ -13890,13 +13890,12 @@ mod viewport_drag_tests {
             Size::new(800.0, 600.0),
         )
         .unwrap();
-        // The Shift + middle drag turns sideways the opposite way to the
-        // left-button orbit and tilts the same way.
-        assert!(matches!(message, Message::FinishOrbit(-10.0, 5.0)));
+        // The middle drag orbits as the left drag did before it selected.
+        assert!(matches!(message, Message::FinishOrbit(10.0, 5.0)));
         let yaw = studio.yaw;
         let pitch = studio.pitch;
         let _ = studio.update(message);
-        assert!((studio.yaw - yaw + 0.1).abs() < 0.0001);
+        assert!((studio.yaw - yaw - 0.1).abs() < 0.0001);
         assert!((studio.pitch - pitch - 0.05).abs() < 0.0001);
         assert_eq!(studio.pan, [0.0, 0.0]);
     }
@@ -14598,7 +14597,7 @@ mod camera_api_tests {
         let click = DragState {
             start,
             position: start,
-            mode: DragMode::Orbit,
+            mode: DragMode::PlainPending,
         };
         let first = Instant::now();
         let mut last = None;
