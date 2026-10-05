@@ -848,6 +848,12 @@ fn closed_mesh_is_a_mode_of_the_mesh_job_with_settings_of_its_own() {
         pointcloud_core::MAX_CLOSED_MESH_HOLE
     );
     assert_eq!(fields["simplify_mm"]["type"], json!(["number", "null"]));
+    assert_eq!(fields["sample_percent"]["type"], "number");
+    assert_eq!(
+        fields["sample_percent"]["minimum"],
+        pointcloud_core::MIN_CLOSED_MESH_SAMPLE_PERCENT
+    );
+    assert_eq!(fields["sample_percent"]["maximum"], 100.0);
     let mut shared = fields.as_object().unwrap().clone();
     for other in ["mode", "path", "wait_seconds"] {
         assert!(shared.remove(other).is_some(), "{other}");
@@ -866,7 +872,7 @@ fn closed_mesh_is_a_mode_of_the_mesh_job_with_settings_of_its_own() {
 
     let arguments = json!({
         "mode": "closed", "voxel": null, "max_hole": 0.3, "simplify_mm": 0,
-        "sides": "centre", "layers": "visible",
+        "sample_percent": 10, "sides": "centre", "layers": "visible",
     });
     schema::validate_arguments(&mesh.schema, &arguments).unwrap();
     schema::validate_arguments(&set.schema, &json!({})).unwrap();
@@ -880,6 +886,9 @@ fn closed_mesh_is_a_mode_of_the_mesh_job_with_settings_of_its_own() {
         json!({"mode": "closed", "max_hole": 3.3}),
         json!({"mode": "closed", "max_hole": null}),
         json!({"mode": "closed", "simplify_mm": -1}),
+        json!({"mode": "closed", "sample_percent": 0}),
+        json!({"mode": "closed", "sample_percent": 100.5}),
+        json!({"mode": "closed", "sample_percent": null}),
         json!({"mode": "closed", "sides": "inward"}),
         json!({"mode": "closed", "layers": "all"}),
         json!({"mode": "closed", "selection_only": true}),
@@ -934,7 +943,7 @@ fn closed_mesh_is_a_mode_of_the_mesh_job_with_settings_of_its_own() {
             json!({"command": "set_closed_mesh_settings", "voxel": 0.03}),
             json!({
                 "command": "mesh", "mode": "closed", "voxel": null, "max_hole": 0.3,
-                "simplify_mm": 0, "sides": "centre", "layers": "visible",
+                "simplify_mm": 0, "sample_percent": 10, "sides": "centre", "layers": "visible",
             }),
             json!({"command": "job", "id": "c-1"}),
             json!({"command": "cancel_mesh"}),
@@ -942,7 +951,7 @@ fn closed_mesh_is_a_mode_of_the_mesh_job_with_settings_of_its_own() {
     );
     // The window reads that command as the tool sent it.
     let read: crate::native_api::ApiCommand = serde_json::from_value(json!({
-        "command": "mesh", "mode": "closed", "voxel": null, "simplify_mm": 0,
+        "command": "mesh", "mode": "closed", "voxel": null, "simplify_mm": 0, "sample_percent": 10,
     }))
     .unwrap();
     let crate::native_api::ApiCommand::Mesh {
@@ -956,7 +965,64 @@ fn closed_mesh_is_a_mode_of_the_mesh_job_with_settings_of_its_own() {
     assert_eq!((mode.as_str(), path), ("closed", None));
     assert_eq!(options.voxel, Some(None), "null is automatic");
     assert_eq!(options.simplify_mm, Some(Some(0.0)));
+    assert_eq!(options.sample_percent, Some(10.0));
     assert_eq!(options.max_hole, None, "left out keeps the block's value");
+}
+
+#[test]
+fn surface_settings_are_optional_and_include_the_mesh_size() {
+    let set = tools::find("set_surface_settings").unwrap();
+    assert_eq!(set.kind, Kind::Command);
+    // A field that is left out keeps its value in the window.
+    assert!(set.schema.get("required").is_none());
+    let fields = &set.schema["properties"];
+    let mut names: Vec<&str> = fields
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        ["edge_factor", "max_vertices", "mesh_size", "neighbors"]
+    );
+    assert_eq!(fields["mesh_size"]["minimum"], 0.0);
+    for accepted in [
+        json!({}),
+        json!({"mesh_size": 0.05}),
+        json!({"max_vertices": 20000, "neighbors": 8, "edge_factor": 3.5, "mesh_size": 0}),
+    ] {
+        schema::validate_arguments(&set.schema, &accepted).unwrap();
+    }
+    for refused in [
+        json!({"max_vertices": 2}),
+        json!({"neighbors": 33}),
+        json!({"edge_factor": 0}),
+        json!({"mesh_size": -0.1}),
+        json!({"sample_percent": 10}),
+    ] {
+        assert!(
+            schema::validate_arguments(&set.schema, &refused).is_err(),
+            "{refused}"
+        );
+    }
+    // The window reads a command with one field as that field alone.
+    let read: crate::native_api::ApiCommand = serde_json::from_value(json!({
+        "command": "set_surface_settings", "mesh_size": 0.05,
+    }))
+    .unwrap();
+    let crate::native_api::ApiCommand::SetSurfaceSettings {
+        max_vertices,
+        neighbors,
+        edge_factor,
+        mesh_size,
+    } = read
+    else {
+        panic!("not a surface settings command");
+    };
+    assert_eq!((max_vertices, neighbors, edge_factor), (None, None, None));
+    assert_eq!(mesh_size, Some(0.05));
 }
 
 #[test]

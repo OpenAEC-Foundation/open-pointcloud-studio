@@ -188,12 +188,13 @@ pub enum ApiCommand {
     SetAutoIndex {
         enabled: bool,
     },
+    /// The settings of the 3D surface; a field that is left out keeps what
+    /// Properties has.
     SetSurfaceSettings {
-        max_vertices: usize,
-        neighbors: usize,
-        edge_factor: f64,
-        #[serde(default)]
-        mesh_size: f64,
+        max_vertices: Option<usize>,
+        neighbors: Option<usize>,
+        edge_factor: Option<f64>,
+        mesh_size: Option<f64>,
     },
     ResetTransform,
     Mesh {

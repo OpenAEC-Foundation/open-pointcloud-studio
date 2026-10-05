@@ -1322,6 +1322,35 @@ struct MeshStart {
     api_job_id: Option<String>,
 }
 
+/// The settings of the 3D surface as Properties holds them: the text typed
+/// for the most vertices, the neighbours, the edge factor and the mesh size.
+fn surface_mesh_config_of(settings: &[String; 4]) -> Result<SurfaceMeshConfig, String> {
+    let max_vertices = settings[0]
+        .trim()
+        .parse()
+        .map_err(|_| "3D surface vertices must be a whole number".to_string())?;
+    let neighbors = settings[1]
+        .trim()
+        .parse()
+        .map_err(|_| "3D surface neighbors must be a whole number".to_string())?;
+    let max_edge_factor = settings[2]
+        .trim()
+        .parse()
+        .map_err(|_| "3D surface edge factor must be a number".to_string())?;
+    let mesh_size = settings[3]
+        .trim()
+        .parse()
+        .map_err(|_| "3D surface mesh size must be a number".to_string())?;
+    let config = SurfaceMeshConfig {
+        max_vertices,
+        neighbors,
+        max_edge_factor,
+        mesh_size,
+    };
+    config.validate().map_err(|error| error.to_string())?;
+    Ok(config)
+}
+
 /// The name of a layer that is still being read: its cloud was not checked
 /// against its source and its count is not final, so it gives no mesh yet.
 fn still_loading(cloud: &PointCloud) -> Option<&str> {
@@ -3115,30 +3144,7 @@ impl Studio {
     }
 
     fn surface_mesh_config(&self) -> Result<SurfaceMeshConfig, String> {
-        let max_vertices = self.surface_settings[0]
-            .trim()
-            .parse()
-            .map_err(|_| "3D surface vertices must be a whole number".to_string())?;
-        let neighbors = self.surface_settings[1]
-            .trim()
-            .parse()
-            .map_err(|_| "3D surface neighbors must be a whole number".to_string())?;
-        let max_edge_factor = self.surface_settings[2]
-            .trim()
-            .parse()
-            .map_err(|_| "3D surface edge factor must be a number".to_string())?;
-        let mesh_size = self.surface_settings[3]
-            .trim()
-            .parse()
-            .map_err(|_| "3D surface mesh size must be a number".to_string())?;
-        let config = SurfaceMeshConfig {
-            max_vertices,
-            neighbors,
-            max_edge_factor,
-            mesh_size,
-        };
-        config.validate().map_err(|error| error.to_string())?;
-        Ok(config)
+        surface_mesh_config_of(&self.surface_settings)
     }
 
     fn set_surface_mesh_config(&mut self, config: SurfaceMeshConfig) {
@@ -4011,29 +4017,33 @@ impl Studio {
                 edge_factor,
                 mesh_size,
             } => {
-                let config = SurfaceMeshConfig {
-                    max_vertices,
-                    neighbors,
-                    max_edge_factor: edge_factor,
-                    mesh_size,
-                };
-                match config.validate() {
-                    Ok(()) => {
+                // A field that is left out keeps what Properties has; the
+                // fields are checked together and taken only all at once.
+                let mut next = self.surface_settings.clone();
+                for (field, value) in next.iter_mut().zip([
+                    max_vertices.map(|value| value.to_string()),
+                    neighbors.map(|value| value.to_string()),
+                    edge_factor.map(|value| value.to_string()),
+                    mesh_size.map(|value| value.to_string()),
+                ]) {
+                    if let Some(value) = value {
+                        *field = value;
+                    }
+                }
+                match surface_mesh_config_of(&next) {
+                    Ok(config) => {
                         self.set_surface_mesh_config(config);
                         (
                             json!({"ok": true, "surface_settings": {
-                                "max_vertices": max_vertices,
-                                "neighbors": neighbors,
-                                "edge_factor": edge_factor,
-                                "mesh_size": mesh_size,
+                                "max_vertices": config.max_vertices,
+                                "neighbors": config.neighbors,
+                                "edge_factor": config.max_edge_factor,
+                                "mesh_size": config.mesh_size,
                             }}),
                             Task::none(),
                         )
                     }
-                    Err(error) => (
-                        json!({"ok": false, "error": error.to_string()}),
-                        Task::none(),
-                    ),
+                    Err(error) => (json!({"ok": false, "error": error}), Task::none()),
                 }
             }
             ApiCommand::ResetTransform => {
@@ -12411,6 +12421,51 @@ mod surface_settings_tests {
         let _ = studio.update(Message::SurfaceSetting(1, "12".into()));
         let _ = studio.update(Message::SurfaceSetting(2, "NaN".into()));
         assert!(studio.surface_mesh_config().is_err());
+    }
+
+    #[test]
+    fn surface_settings_left_out_of_a_command_keep_their_values() {
+        let mut studio = Studio::default();
+        let set = |studio: &mut Studio, body: Value| {
+            let mut body = body;
+            body["command"] = "set_surface_settings".into();
+            let (reply, answer) = std::sync::mpsc::channel();
+            let _ = studio.update(Message::ApiRequest(native_api::ApiRequest {
+                command: serde_json::from_value(body).unwrap(),
+                reply,
+            }));
+            answer.recv().unwrap()
+        };
+        let answer = set(
+            &mut studio,
+            json!({"max_vertices": 20000, "neighbors": 8, "edge_factor": 3.5}),
+        );
+        let expected = json!({
+            "max_vertices": 20000, "neighbors": 8, "edge_factor": 3.5, "mesh_size": 0.0,
+        });
+        assert_eq!(answer, json!({"ok": true, "surface_settings": expected}));
+        // One field changes that field only.
+        let answer = set(&mut studio, json!({"mesh_size": 0.05}));
+        assert_eq!(answer["surface_settings"]["mesh_size"], 0.05);
+        assert_eq!(answer["surface_settings"]["max_vertices"], 20000);
+        assert_eq!(answer["surface_settings"]["edge_factor"], 3.5);
+        assert_eq!(studio.surface_mesh_config().unwrap().mesh_size, 0.05);
+        // Nothing named reports the settings.
+        assert_eq!(
+            set(&mut studio, json!({}))["surface_settings"],
+            answer["surface_settings"]
+        );
+        // When one field is refused, none is taken.
+        let before = studio.surface_settings.clone();
+        for body in [
+            json!({"max_vertices": 2, "mesh_size": 0.1}),
+            json!({"neighbors": 33}),
+            json!({"edge_factor": 0}),
+            json!({"neighbors": 6, "mesh_size": -1}),
+        ] {
+            assert_eq!(set(&mut studio, body.clone())["ok"], false, "{body}");
+            assert_eq!(studio.surface_settings, before, "{body}");
+        }
     }
 
     #[test]
