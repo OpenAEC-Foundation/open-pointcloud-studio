@@ -801,11 +801,15 @@ that is moved or edited is `Edited`. While the levels are confirmed only
 are refused.
 
 A project is the file `project.ops-m2p.json` in its folder, written whole
-through a temporary file a moment after every change once step 0 ran. It
-keeps the scans with their size, time of change, transform, deleted points
-and hidden classes, the frame of the building, the boxes, the NAP height of
-P and the north direction when known, the status of every step with the
-basis it ran on, what the survey found and the levels. Step 0 also writes
+through a temporary file a moment after every change once step 0 ran, and at
+once when the window closes or another project is resumed. It keeps the
+scans with their size, time of change, transform, deleted points and hidden
+classes, the frame of the building, the boxes, the NAP height of P and the
+north direction when known, the status of every step with the basis it ran
+on, what the survey found and the levels. A step that runs is kept as it was
+before it started. The steps after step 0 compute nothing yet: of them only
+`skipped` is kept, and a result without the basis it ran on reads as
+`not_run`. Step 0 also writes
 `survey/profile.csv` (the horizontal area per height) and `survey/top.png`
 (the view from above) in the folder. The newest eight project files are kept
 in the preferences; the Project Browser offers **Resume Mesh to Plans (step

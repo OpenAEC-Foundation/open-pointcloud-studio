@@ -194,6 +194,12 @@ impl WizardStep {
             .and_then(|place| Self::ALL.get(place).copied())
     }
 
+    /// Whether the step does its work in this version; the others stand in
+    /// for theirs, and what they did is not kept in the project.
+    pub(crate) fn built(self) -> bool {
+        self == Self::Prepare
+    }
+
     /// Whether the wizard can do without the step: a plan needs no mesh.
     fn optional(self) -> bool {
         self == Self::Mesh
@@ -371,6 +377,8 @@ pub(crate) struct Wizard {
     pub(crate) recent: Vec<PathBuf>,
     pub(crate) recent_projects: Vec<RecentProject>,
     save_revision: u64,
+    /// A change waits to be written.
+    save_waiting: bool,
 }
 
 impl Wizard {
@@ -608,7 +616,8 @@ impl Studio {
             WizardAction::Finished(serial, end) => return self.mesh_to_plans_finished(serial, end),
             WizardAction::Prepare(action) => return self.update_prepare(action),
             WizardAction::Save(revision) => {
-                if revision == self.mesh_to_plans.save_revision {
+                let wizard = &self.mesh_to_plans;
+                if revision == wizard.save_revision && wizard.save_waiting {
                     return self.save_project_now();
                 }
             }
@@ -746,6 +755,7 @@ impl Studio {
             return Task::none();
         }
         wizard.save_revision = wizard.save_revision.wrapping_add(1);
+        wizard.save_waiting = true;
         let revision = wizard.save_revision;
         Task::perform(
             async move {
@@ -780,13 +790,20 @@ impl Studio {
         project.survey = prepare.survey.clone();
         project.levels = prepare.levels.clone();
         for (place, step) in WizardStep::ALL.into_iter().enumerate() {
-            let status = wizard.status(step);
-            // A step under way is kept as it was before it started.
-            let status = match status {
-                StepStatus::Running => StepStatus::NotRun,
+            // A step under way is kept as it was before it started; its run
+            // is the one before as well until it ends.
+            let status = match wizard.status(step) {
+                StepStatus::Running => wizard
+                    .job
+                    .as_ref()
+                    .and_then(|job| job.before(step))
+                    .cloned()
+                    .unwrap_or_default(),
                 other => other.clone(),
             };
-            if status == StepStatus::NotRun {
+            // A step that only stands in for its work keeps nothing but
+            // being skipped.
+            if status == StepStatus::NotRun || (!step.built() && status != StepStatus::Skipped) {
                 continue;
             }
             let run = wizard.runs[place];
@@ -810,6 +827,7 @@ impl Studio {
     /// Write the project now, to its file or, the first time, to the
     /// project folder, and put it first in the list of recent projects.
     fn save_project_now(&mut self) -> Task<Message> {
+        self.mesh_to_plans.save_waiting = false;
         let Some(folder) = self.project_folder() else {
             self.status = tr("Choose a project folder to save the project").into();
             return Task::none();
@@ -862,6 +880,15 @@ impl Studio {
                 return Task::none();
             }
         };
+        // What waits to be written goes to the project it belongs to, and a
+        // save that was asked for does not write the one opened now.
+        let written = if self.mesh_to_plans.save_waiting {
+            self.save_project_now()
+        } else {
+            Task::none()
+        };
+        let wizard = &mut self.mesh_to_plans;
+        wizard.save_revision = wizard.save_revision.wrapping_add(1);
         let current = self.current_sources(&project);
         let wizard = &mut self.mesh_to_plans;
         let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -938,7 +965,7 @@ impl Studio {
             "Mesh to Plans project {name} opened",
             &[("name", &project.name)],
         );
-        self.queue_preferences_save()
+        Task::batch([written, self.queue_preferences_save()])
     }
 
     /// The scans of a project as they are open now, or none when one of

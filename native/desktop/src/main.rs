@@ -5441,6 +5441,9 @@ impl Studio {
                 }
             }
             Message::Exit => {
+                // A change of the Mesh to Plans project that waits for its
+                // moment is written before the window goes.
+                self.flush_mesh_to_plans();
                 self.stop_background_work();
                 return iced::exit();
             }

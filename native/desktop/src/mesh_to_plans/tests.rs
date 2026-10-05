@@ -981,6 +981,118 @@ fn a_project_that_appears_in_the_folder_meanwhile_is_not_written_over() {
     );
 }
 
+/// A window with three confirmed levels in step 0, as a run on scans with
+/// this basis left them, whose project goes to `folder`.
+fn studio_with_confirmed_levels(folder: &std::path::Path) -> Studio {
+    let mut studio = studio_with_levels();
+    let wizard = &mut studio.mesh_to_plans;
+    wizard.set_status(WizardStep::Prepare, StepStatus::Confirmed);
+    wizard.runs[WizardStep::Prepare.place()] = StepRun {
+        basis: Some(0x1234),
+        finished: Some(1_759_700_100),
+        seconds: Some(11.0),
+    };
+    wizard.project_folder = folder.display().to_string();
+    studio
+}
+
+#[test]
+fn a_step_that_runs_is_written_as_it_was_and_exit_writes_what_waits() {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join("Office");
+    let file = folder.join(project::FILE_NAME);
+    let mut studio = studio_with_confirmed_levels(&folder);
+    studio.mesh_to_plans.work = Work::Placeholder {
+        ticks: 1_000,
+        tick: std::time::Duration::from_millis(5),
+    };
+    // Step 0 runs again; meanwhile a change of NAP is written.
+    let _ = studio.update(wizard(WizardAction::Run));
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Running
+    );
+    act(&mut studio, PrepareAction::NapOffset("1.85".into()));
+    let revision = studio.mesh_to_plans.save_revision;
+    let _ = studio.update(wizard(WizardAction::Save(revision)));
+    let saved = project::load(&file).unwrap();
+    assert_eq!(saved.status(WizardStep::Prepare), StepStatus::Confirmed);
+    let record = &saved.steps["prepare"];
+    assert_eq!(record.basis, Some(project::basis_text(0x1234)));
+    assert_eq!(record.seconds, Some(11.0));
+    assert_eq!(saved.datum.nap_offset, Some(1.85));
+
+    // North typed, and the window closed before the change came to rest:
+    // Exit writes it, and the step that ran is as it was.
+    let control = std::sync::Arc::clone(&studio.mesh_to_plans.job.as_ref().unwrap().control);
+    act(&mut studio, PrepareAction::North("12".into()));
+    let _ = studio.update(Message::Exit);
+    assert!(control.cancelling());
+    let saved = project::load(&file).unwrap();
+    assert_eq!(saved.datum.north_deg, Some(12.0));
+    assert_eq!(saved.status(WizardStep::Prepare), StepStatus::Confirmed);
+    assert_eq!(saved.levels, studio.mesh_to_plans.prepare.levels);
+}
+
+#[test]
+fn resuming_another_project_writes_the_change_that_waits_to_the_first() {
+    let _language = TestLanguage::hold(Language::English);
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("First");
+    let second = directory.path().join("Second");
+    let mut other = studio_with_confirmed_levels(&second);
+    other.mesh_to_plans.project_name = "Second".into();
+    let revision = {
+        let _ = other.update(wizard(WizardAction::Prepare(PrepareAction::Unlock)));
+        other.mesh_to_plans.save_revision
+    };
+    let _ = other.update(wizard(WizardAction::Save(revision)));
+    let second_file = second.join(project::FILE_NAME);
+    assert!(second_file.is_file());
+
+    let mut studio = studio_with_confirmed_levels(&first);
+    let _ = studio.update(wizard(WizardAction::Prepare(PrepareAction::Unlock)));
+    let revision = studio.mesh_to_plans.save_revision;
+    let _ = studio.update(wizard(WizardAction::Save(revision)));
+    let first_file = first.join(project::FILE_NAME);
+    // A level renamed, and another project resumed at once.
+    act(&mut studio, PrepareAction::Select(1));
+    act(&mut studio, PrepareAction::Name("Office floor".into()));
+    let waiting = studio.mesh_to_plans.save_revision;
+    let _ = studio.update(wizard(WizardAction::Resume(second_file.clone())));
+    let saved = project::load(&first_file).unwrap();
+    assert_eq!(saved.levels[1].name, "Office floor");
+    assert_eq!(studio.mesh_to_plans.project_name, "Second");
+    // The save asked for before writes nothing now.
+    let before = std::fs::read(&second_file).unwrap();
+    let _ = studio.update(wizard(WizardAction::Save(waiting)));
+    assert_eq!(std::fs::read(&second_file).unwrap(), before);
+}
+
+#[test]
+fn steps_that_only_stand_in_for_their_work_are_not_kept() {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join("Office");
+    let mut studio = studio_with_confirmed_levels(&folder);
+    studio.mesh_to_plans.work = QUICK;
+    let _ = studio.update(wizard(WizardAction::Step(WizardStep::Mesh)));
+    let _ = studio.update(wizard(WizardAction::Skip));
+    let _ = studio.update(wizard(WizardAction::RunAll));
+    finish(&mut studio);
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Result),
+        StepStatus::Confirmed
+    );
+    let revision = studio.mesh_to_plans.save_revision;
+    let _ = studio.update(wizard(WizardAction::Save(revision)));
+    let saved = project::load(&folder.join(project::FILE_NAME)).unwrap();
+    let kept: Vec<&str> = saved.steps.keys().map(String::as_str).collect();
+    assert_eq!(kept, ["mesh", "prepare"]);
+    assert_eq!(saved.status(WizardStep::Mesh), StepStatus::Skipped);
+    assert_eq!(saved.status(WizardStep::Views), StepStatus::NotRun);
+    assert_eq!(saved.resume_step(), WizardStep::Views);
+}
+
 #[test]
 fn a_project_resumes_on_its_next_step_and_finds_a_changed_scan() {
     let _language = TestLanguage::hold(Language::English);

@@ -283,12 +283,21 @@ impl MeshToPlansProject {
         }
     }
 
-    /// The status of a step as the file keeps it.
+    /// The status of a step as the file keeps it. A result without the
+    /// basis it was computed on is no result: it was made by a version that
+    /// did not compute it, or stood in for the work.
     pub(crate) fn status(&self, step: WizardStep) -> StepStatus {
         self.steps
             .get(step.id())
             .map_or(StepStatus::NotRun, |record| {
-                StepStatus::from_key(&record.status, record.reason.as_deref())
+                match StepStatus::from_key(&record.status, record.reason.as_deref()) {
+                    StepStatus::Done | StepStatus::Confirmed | StepStatus::Stale
+                        if record.basis.is_none() =>
+                    {
+                        StepStatus::NotRun
+                    }
+                    status => status,
+                }
             })
     }
 
@@ -683,6 +692,30 @@ mod tests {
             read_recent(&[file.clone(), directory.path().join("gone.json")]),
             [recent]
         );
+    }
+
+    #[test]
+    fn a_result_without_its_basis_counts_as_not_run() {
+        let mut project = sample();
+        let record = |status: &str| StepRecord {
+            status: status.into(),
+            reason: None,
+            basis: None,
+            finished: Some(1_759_700_200),
+            seconds: Some(1.0),
+        };
+        // As an earlier build kept the steps that only stood in for theirs.
+        for step in ["mesh", "views", "walls"] {
+            project.steps.insert(step.into(), record("confirmed"));
+        }
+        project.steps.insert("sheet".into(), record("skipped"));
+        assert_eq!(project.status(WizardStep::Prepare), StepStatus::Confirmed);
+        assert_eq!(project.status(WizardStep::Mesh), StepStatus::NotRun);
+        assert_eq!(project.status(WizardStep::Sheet), StepStatus::Skipped);
+        assert_eq!(project.resume_step(), WizardStep::Mesh);
+        project.steps.get_mut("prepare").unwrap().basis = None;
+        assert_eq!(project.status(WizardStep::Prepare), StepStatus::NotRun);
+        assert_eq!(project.resume_step(), WizardStep::Prepare);
     }
 
     #[test]

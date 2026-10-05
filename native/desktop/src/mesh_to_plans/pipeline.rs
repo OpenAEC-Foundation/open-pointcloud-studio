@@ -231,6 +231,12 @@ pub(crate) struct PipelineJob {
 }
 
 impl PipelineJob {
+    /// What a step of the job was before the job started.
+    pub(crate) fn before(&self, step: WizardStep) -> Option<&StepStatus> {
+        let place = self.input.steps.iter().position(|known| *known == step)?;
+        self.before.get(place)
+    }
+
     /// The step under way: the first that did not end yet.
     pub(crate) fn current(&self) -> Option<WizardStep> {
         self.input.steps.get(self.control.finished_count()).copied()
@@ -555,6 +561,17 @@ impl Studio {
             self.status = text;
         }
         Task::batch([save, Self::mesh_to_plans_poll_task()])
+    }
+
+    /// Before the window closes: take the steps the worker finished since
+    /// the last look, and write the project now when a change waits.
+    pub(crate) fn flush_mesh_to_plans(&mut self) {
+        if self.mesh_to_plans_follow() {
+            let _ = self.queue_project_save();
+        }
+        if self.mesh_to_plans.save_waiting {
+            let _ = self.save_project_now();
+        }
     }
 
     /// Ask the worker of a running job to stop; Exit does too.
