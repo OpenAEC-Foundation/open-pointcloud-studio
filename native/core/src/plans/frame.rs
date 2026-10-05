@@ -9,6 +9,10 @@
 //! points any farther out than that. The margin covers what that may leave
 //! out, so the box never reaches farther than the margin beyond the points
 //! that are kept, while a leaf larger than the margin may cut into them.
+//!
+//! `strays_below` counts the stray points below a height one by one, and
+//! the clusters among them, such as the reflections of a puddle metres under
+//! the ground.
 
 use std::collections::BTreeMap;
 
@@ -18,7 +22,7 @@ use super::survey::SceneSurvey;
 use crate::drawing::{wall_direction, DrawingProgress, DrawingSource};
 use crate::grid2d::Mask;
 use crate::region_source::{
-    overlaps, visit_region, RegionFilter, RegionReader, RegionSource, EVERYWHERE,
+    overlaps, visit_region, RegionFilter, RegionProgress, RegionReader, RegionSource, EVERYWHERE,
 };
 use crate::{normalized_degrees, Bounds, LoadError, OrientedBox};
 
@@ -151,10 +155,6 @@ pub struct RobustBounds {
     /// The groups those parts form: parts less than a margin apart are one
     /// group.
     pub outside_groups: u32,
-    /// Of those, the points in the parts wholly below the box, such as the
-    /// reflections of a puddle metres under the ground, and their groups.
-    pub below_points: u64,
-    pub below_groups: u32,
 }
 
 /// A part of a scene: the box of an octree leaf with its number of points,
@@ -276,20 +276,138 @@ pub fn robust_bounds(
         .collect();
     let outside_points = outside.iter().map(|piece| piece.weight).sum();
     let outside_groups = groups(&outside, margin);
-    let below: Vec<&Piece> = outside
-        .iter()
-        .copied()
-        .filter(|piece| piece.bounds.max[2] < bounds.min[2])
-        .collect();
     Ok(Some(RobustBounds {
         bounds,
         all,
         points: pieces.iter().map(|piece| piece.weight).sum(),
         outside_points,
         outside_groups,
-        below_points: below.iter().map(|piece| piece.weight).sum(),
-        below_groups: groups(&below, margin),
     }))
+}
+
+/// How `strays_below` finds the clusters among the stray points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StrayConfig {
+    /// Points this near to each other belong to one group, in metres.
+    pub reach: f64,
+    /// A group of at least this many points is a cluster; the others are
+    /// points on their own.
+    pub min_cluster: u64,
+}
+
+impl Default for StrayConfig {
+    /// Points within 0.5 m of each other, and 25 of them for a cluster.
+    fn default() -> Self {
+        Self {
+            reach: 0.5,
+            min_cluster: 25,
+        }
+    }
+}
+
+/// The stray points below a height.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct StraysBelow {
+    /// The scene height they lie below.
+    pub limit_z: f64,
+    pub points: u64,
+    /// The clusters among them: groups of at least `min_cluster` points,
+    /// each within `reach` of the next.
+    pub clusters: u32,
+    /// The points in those clusters; the others lie on their own or in small
+    /// groups.
+    pub clustered: u64,
+}
+
+/// Points this far below the lowest floor are strays.
+pub const STRAY_DEPTH: f64 = 2.0;
+
+/// The scene height below which points are strays: `STRAY_DEPTH` below the
+/// lowest of `floors`, or the bottom of the box of the scene from
+/// `robust_bounds` where that lies lower, as it does under a sloping site.
+pub fn stray_limit(scene_bottom: f64, floors: impl IntoIterator<Item = f64>) -> f64 {
+    let lowest = floors.into_iter().fold(f64::INFINITY, f64::min);
+    if lowest.is_finite() {
+        scene_bottom.min(lowest - STRAY_DEPTH)
+    } else {
+        scene_bottom
+    }
+}
+
+/// Count the points below the scene height `limit_z` one by one, and the
+/// clusters they form. Only the leaves of an index that reach below the
+/// height are read, and of those only the points below it count, so that a
+/// leaf that also holds the ground adds none of the ground. `accept` is as
+/// in `visit_region`. The points are counted in cells of `reach`, and
+/// occupied cells that touch, also at a corner, are one group; the result
+/// does not depend on the order in which the points arrive.
+pub fn strays_below(
+    sources: &[RegionSource<'_>],
+    limit_z: f64,
+    accept: &RegionFilter<'_>,
+    config: &StrayConfig,
+    progress: &mut dyn FnMut(RegionProgress) -> Result<(), LoadError>,
+) -> Result<StraysBelow, LoadError> {
+    let reach = config.reach.max(1e-3);
+    let region = Bounds {
+        min: [f64::NEG_INFINITY; 3],
+        max: [f64::INFINITY, f64::INFINITY, limit_z],
+    };
+    let below = |source: usize, ordinal: u64, point: &crate::Point| {
+        point.xyz[2] < limit_z && accept(source, ordinal, point)
+    };
+    let mut cells: BTreeMap<[i64; 3], u64> = BTreeMap::new();
+    let mut points = 0u64;
+    visit_region(sources, region, &below, progress, &mut |_, batch| {
+        for record in batch {
+            let cell = record.point.xyz.map(|value| (value / reach).floor() as i64);
+            *cells.entry(cell).or_insert(0) += 1;
+        }
+        points += batch.len() as u64;
+        Ok(())
+    })?;
+    let place: BTreeMap<[i64; 3], usize> = cells
+        .keys()
+        .enumerate()
+        .map(|(index, cell)| (*cell, index))
+        .collect();
+    let counts: Vec<u64> = cells.values().copied().collect();
+    let mut parent: Vec<usize> = (0..counts.len()).collect();
+    for (cell, index) in &place {
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(other) = place.get(&[cell[0] + dx, cell[1] + dy, cell[2] + dz]) {
+                        let (a, b) = (root(&mut parent, *index), root(&mut parent, *other));
+                        parent[a.max(b)] = a.min(b);
+                    }
+                }
+            }
+        }
+    }
+    let mut sizes: BTreeMap<usize, u64> = BTreeMap::new();
+    for (index, count) in counts.iter().enumerate() {
+        *sizes.entry(root(&mut parent, index)).or_insert(0) += count;
+    }
+    let clusters: Vec<u64> = sizes
+        .into_values()
+        .filter(|size| *size >= config.min_cluster)
+        .collect();
+    Ok(StraysBelow {
+        limit_z,
+        points,
+        clusters: clusters.len() as u32,
+        clustered: clusters.iter().sum(),
+    })
+}
+
+/// The root of a member of a union of sets, halving the path on the way.
+fn root(parent: &mut [usize], mut at: usize) -> usize {
+    while parent[at] != at {
+        parent[at] = parent[parent[at]];
+        at = parent[at];
+    }
+    at
 }
 
 /// How many groups pieces form when those in neighbouring cells of a grid
@@ -305,13 +423,6 @@ fn groups(pieces: &[&Piece], reach: f64) -> u32 {
     let cell = reach.max(largest / 32.0).max(1e-3);
     let cell_of = |value: f64| (value / cell).floor() as i64;
     let mut parent: Vec<usize> = (0..pieces.len()).collect();
-    fn root(parent: &mut [usize], mut at: usize) -> usize {
-        while parent[at] != at {
-            parent[at] = parent[parent[at]];
-            at = parent[at];
-        }
-        at
-    }
     let mut owner: BTreeMap<[i64; 3], usize> = BTreeMap::new();
     for (index, piece) in pieces.iter().enumerate() {
         let low: [i64; 3] = std::array::from_fn(|axis| cell_of(piece.bounds.min[axis]));
@@ -596,10 +707,6 @@ mod tests {
         assert!(found.outside_points as f64 >= 0.7 * strays.len() as f64);
         assert!(found.outside_points as usize <= strays.len());
         assert!(found.outside_groups >= 1);
-        // The strays far below are the parts below the box.
-        assert!(found.below_points as f64 >= 0.7 * strays.len() as f64);
-        assert!(found.below_points <= found.outside_points);
-        assert!(found.below_groups >= 1 && found.below_groups <= found.outside_groups);
         assert!(found.all.min[2] <= strays.iter().map(|at| at[2]).fold(f64::INFINITY, f64::min));
     }
 
@@ -637,8 +744,112 @@ mod tests {
         assert_eq!((found.bounds.min[1], found.bounds.max[1]), (0.0, 0.0));
         assert_eq!(found.outside_points, 4);
         assert_eq!(found.outside_groups, 4);
-        assert_eq!((found.below_points, found.below_groups), (0, 0));
         assert_eq!(robust_bounds(&[], &config).unwrap(), None);
+    }
+
+    /// A cluster of `count` stray points in a box of the plan of `spec`,
+    /// in scene coordinates, with what else `like` carries.
+    fn cluster(
+        spec: &BuildingSpec,
+        like: Point,
+        [min, max]: [[f64; 3]; 2],
+        count: usize,
+    ) -> Vec<Point> {
+        crate::test_shapes::stray_points(Bounds { min, max }, count, 11 + count as u64)
+            .points
+            .iter()
+            .map(|at| Point {
+                xyz: spec.to_scene(*at),
+                ..like
+            })
+            .collect()
+    }
+
+    #[test]
+    fn stray_points_below_are_counted_one_by_one_in_their_clusters() {
+        // The building with its own cluster far below and points spread under
+        // the site, and two clusters more: one under the street and one
+        // under the far corner. Eight points together are too few for a
+        // cluster.
+        let spec = BuildingSpec::default();
+        let scan = building(&spec);
+        let mut points = scan.cloud_points();
+        let like = points[0];
+        for (corners, count) in [
+            ([[-3.0, -3.0, -4.2], [-2.0, -2.0, -3.9]], 150),
+            ([[13.0, 9.0, -6.3], [14.0, 10.0, -6.0]], 90),
+            ([[16.0, -3.0, -3.0], [16.2, -2.8, -2.9]], 8),
+        ] {
+            points.extend(cluster(&spec, like, corners, count));
+        }
+        let ground = spec.ground_z() + spec.translation[2];
+        let limit = ground - 2.0;
+        let truth = points.iter().filter(|point| point.xyz[2] < limit).count() as u64;
+        assert!(truth > 500, "{truth}");
+
+        let indexed = indexed_cloud(&points, 512);
+        let source = RegionSource::new(
+            &indexed.cloud,
+            Some(&indexed.index),
+            SourceTransform::default(),
+        );
+        let found = strays_below(
+            &[source],
+            limit,
+            &everything,
+            &StrayConfig::default(),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        // Every point below, one by one, also where a leaf reaches above the
+        // height; three clusters, and the points spread out are no cluster.
+        assert_eq!(found.points, truth);
+        assert_eq!(found.limit_z, limit);
+        assert_eq!(found.clusters, 3, "{found:?}");
+        assert!(found.clustered >= 150 + 90 + scan.points.len() as u64 / 2000);
+        assert!(found.clustered < found.points);
+
+        // Points in memory give the same, and the filter leaves points out.
+        let resident: Vec<IndexedPoint> = points
+            .iter()
+            .enumerate()
+            .map(|(ordinal, point)| IndexedPoint {
+                point: *point,
+                ordinal: ordinal as u64,
+            })
+            .collect();
+        let source = RegionSource::resident(&resident, SourceTransform::default());
+        let run = |accept: &RegionFilter<'_>| {
+            strays_below(
+                &[source],
+                limit,
+                accept,
+                &StrayConfig::default(),
+                &mut |_| Ok(()),
+            )
+            .unwrap()
+        };
+        assert_eq!(run(&everything), found);
+        let shallow = run(&|_, _, point: &Point| point.xyz[2] > limit - 5.0);
+        assert!(
+            shallow.points < found.points && shallow.clusters == 2,
+            "{shallow:?}"
+        );
+        // Nothing below the lowest point.
+        let none = strays_below(
+            &[source],
+            limit - 100.0,
+            &everything,
+            &StrayConfig::default(),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!((none.points, none.clusters, none.clustered), (0, 0, 0));
+        // Two metres below the lowest floor, or lower where the box of the
+        // scene reaches lower.
+        assert_eq!(stray_limit(-1.5, [3.2, 0.0, 6.4]), -2.0);
+        assert_eq!(stray_limit(-4.5, [0.0, 3.2]), -4.5);
+        assert_eq!(stray_limit(-1.5, []), -1.5);
     }
 
     /// The distance from a position to the nearest edge of a closed ring.

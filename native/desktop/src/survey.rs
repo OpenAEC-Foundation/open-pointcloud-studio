@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use pointcloud_core::plans::{
-    building_frame, detect_levels, refine_levels, robust_bounds, second_direction, survey_scene,
-    BuildingFrame, Footprint, FootprintConfig, LevelConfig, LevelDetection, RefineConfig,
-    RobustBounds, RobustBoundsConfig, SceneSurvey, SurveyConfig,
+    building_frame, detect_levels, refine_levels, robust_bounds, second_direction, stray_limit,
+    strays_below, survey_scene, BuildingFrame, Footprint, FootprintConfig, LevelConfig,
+    LevelDetection, RefineConfig, RobustBounds, RobustBoundsConfig, SceneSurvey, StrayConfig,
+    StraysBelow, SurveyConfig,
 };
 use pointcloud_core::region_source::{resident_points, RegionSource, SourceTransform};
 use pointcloud_core::{Bounds, IndexConfig, IndexedPoint, LoadError, OctreeIndex, OrientedBox};
@@ -32,6 +33,7 @@ struct Found {
     survey: SceneSurvey,
     footprint: Footprint,
     levels: LevelDetection,
+    strays: StraysBelow,
     seconds: Vec<(&'static str, f64)>,
 }
 
@@ -85,11 +87,24 @@ fn survey(sources: &[RegionSource<'_>]) -> Result<Found, LoadError> {
         survey.frame.peil_z = peil;
     }
     lap("levels", &mut seconds);
+    let limit = stray_limit(
+        robust.bounds.min[2],
+        levels.levels.iter().map(|level| level.floor_z),
+    );
+    let strays = strays_below(
+        sources,
+        limit,
+        &|_, _, _| true,
+        &StrayConfig::default(),
+        &mut |_| Ok(()),
+    )?;
+    lap("strays", &mut seconds);
     Ok(Found {
         robust,
         survey,
         footprint,
         levels,
+        strays,
         seconds,
     })
 }
@@ -114,8 +129,13 @@ fn file_json(source: &Path, points: u64, found: &Found) -> Value {
             "all": bounds_json(robust.all),
             "outside_points": robust.outside_points,
             "outside_groups": robust.outside_groups,
-            "below_points": robust.below_points,
-            "below_groups": robust.below_groups,
+        },
+        "strays": {
+            "below_z": found.strays.limit_z,
+            "below_above_p": found.strays.limit_z - found.levels.peil_z.unwrap_or(0.0),
+            "points": found.strays.points,
+            "clusters": found.strays.clusters,
+            "clustered": found.strays.clustered,
         },
         "frame": found.survey.frame,
         "survey": found.survey.summary(Some(&found.footprint)),
@@ -144,7 +164,7 @@ fn summary_lines(found: &Found, destination: &Path) -> String {
     let mut lines = vec![format!(
         "Survey written: {} of {} points in a grid of {} by {} by {} cells of {:.3} by {:.3} by {:.3} m, \
          {} occupied, {} noise cells in {} groups taken out, {} MB; {} points outside the box in {} groups; \
-         {:.1} s -> {}",
+         {} stray points below {:+.2} m with {} clusters among them; {:.1} s -> {}",
         stats.points,
         found.robust.points,
         survey.grid.size[0],
@@ -159,6 +179,9 @@ fn summary_lines(found: &Found, destination: &Path) -> String {
         stats.bytes.div_ceil(1 << 20),
         found.robust.outside_points,
         found.robust.outside_groups,
+        found.strays.points,
+        found.strays.limit_z - found.levels.peil_z.unwrap_or(0.0),
+        found.strays.clusters,
         total,
         destination.display()
     )];
@@ -387,8 +410,14 @@ pub(crate) mod tests {
         assert!((6.0..7.0).contains(&high), "{high}");
         assert!(written["bounds"]["all"]["min"][2].as_f64().unwrap() < -9.0);
         assert_eq!(written["bounds"]["outside_points"], 12);
-        assert_eq!(written["bounds"]["below_points"], 12);
-        assert_eq!(written["bounds"]["below_groups"], 1);
+        // The twelve strays one by one, too few together for a cluster, 2 m
+        // below the ground floor or lower.
+        let strays = &written["strays"];
+        assert_eq!(strays["points"], 12);
+        assert_eq!(strays["clusters"], 0);
+        assert_eq!(strays["clustered"], 0);
+        assert!(strays["below_above_p"].as_f64().unwrap() <= -2.0);
+        assert!(line.contains("12 stray points below "), "{line}");
         let survey = &written["survey"];
         assert_eq!(survey["grid"]["cell_xy"], 0.05);
         assert_eq!(survey["grid"]["cell_z"], 0.02);

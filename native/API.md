@@ -727,8 +727,10 @@ written), `project_name`, `project_folder` and `prepare`: `null` before step
 0 ran, and after it `rotation_deg` and `second_direction_deg` (the main
 directions of the walls, in degrees), `origin` and `peil_z` (the height of P
 in the scene), `footprint_area`, `footprint_parts`, `ground_z`,
-`below_points` and `below_groups` (the stray points left out below the
-scene), `grid` (the cells of the survey), `seconds`, `chosen_core`,
+`below_above_p`, `below_points` and `below_clusters` (the stray points left
+out below that height above P, which lies 2 m below the lowest floor or
+lower under a sloping site, counted one by one, and the clusters of at
+least 25 points among them), `grid` (the cells of the survey), `seconds`, `chosen_core`,
 `chosen_rotation`, `selected` (the place of the selected level) and
 `levels`: per level its `id` (`00` for the floor that is P, `01` and up
 above it, `-01` and down below it, `00M` for a mezzanine, `R` for the

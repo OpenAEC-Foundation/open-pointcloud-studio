@@ -221,10 +221,13 @@ pub(crate) struct SurveyRecord {
     pub(crate) footprint: Vec<PlanRegion>,
     pub(crate) footprint_area: f64,
     pub(crate) ground_z: Option<f64>,
-    /// The stray points in the parts of the scene wholly below the box that
-    /// was read, and the groups they form.
+    /// The scene height below which points are strays, the stray points
+    /// below it and the clusters among them.
+    #[serde(default)]
+    pub(crate) below_z: Option<f64>,
     pub(crate) below_points: u64,
-    pub(crate) below_groups: u32,
+    #[serde(default)]
+    pub(crate) below_clusters: u32,
     pub(crate) stats: SurveyStats,
     pub(crate) seconds: f64,
 }
@@ -551,8 +554,9 @@ mod tests {
             }],
             footprint_area: 336.0,
             ground_z: Some(-0.16),
+            below_z: Some(-2.0),
             below_points: 3652,
-            below_groups: 3,
+            below_clusters: 3,
             stats: SurveyStats::default(),
             seconds: 11.1,
         });

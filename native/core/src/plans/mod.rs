@@ -5,7 +5,8 @@
 //! and every list is sorted completely.
 //!
 //! - `frame`: the box around what was scanned, without stray points far
-//!   away, and the frame that every drawing of the building shares.
+//!   away, the stray points far below, and the frame that every drawing of
+//!   the building shares.
 //! - `survey`: one read of the whole scene into a volume of occupied cells
 //!   in that frame, and the footprint it suggests.
 //! - `levels`: the floors, ceilings, slabs and roof found in the survey,
@@ -18,8 +19,8 @@ pub mod levels;
 pub mod survey;
 
 pub use frame::{
-    building_frame, robust_bounds, second_direction, BuildingFrame, RobustBounds,
-    RobustBoundsConfig,
+    building_frame, robust_bounds, second_direction, stray_limit, strays_below, BuildingFrame,
+    RobustBounds, RobustBoundsConfig, StrayConfig, StraysBelow, STRAY_DEPTH,
 };
 pub use levels::{
     detect_levels, refine_levels, Facing, Level, LevelConfig, LevelDetection, LevelKind, LevelPeak,

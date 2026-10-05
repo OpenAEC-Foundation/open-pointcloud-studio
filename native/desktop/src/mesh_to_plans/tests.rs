@@ -752,6 +752,9 @@ fn step_0_surveys_the_scans_finds_the_levels_and_writes_the_project() {
     assert!((frame.rotation_deg - 25.0).abs() < 0.05, "{frame:?}");
     let survey = prepare.survey.as_ref().unwrap();
     assert!((survey.footprint_area - 40.0).abs() < 1.5);
+    // The twelve stray points far below, one by one: too few for a cluster.
+    assert_eq!((survey.below_points, survey.below_clusters), (12, 0));
+    assert!(survey.below_z.unwrap() <= peil - 2.0 + 1e-9);
     assert!(prepare.regions.building.is_some() && prepare.regions.core.is_some());
     assert_eq!(prepare.selected, Some(0), "P is selected");
     assert!(folder.join("survey").join("profile.csv").is_file());
@@ -777,6 +780,8 @@ fn step_0_surveys_the_scans_finds_the_levels_and_writes_the_project() {
     );
     let status = status(&mut studio);
     assert_eq!(status["prepare"]["levels"][1]["id"], "01");
+    assert_eq!(status["prepare"]["below_points"], 12);
+    assert_eq!(status["prepare"]["below_clusters"], 0);
     let height = status["prepare"]["levels"][1]["floor_above_p"]
         .as_f64()
         .unwrap();
@@ -947,8 +952,9 @@ fn found_levels() -> (project::SurveyRecord, Vec<pointcloud_core::plans::Level>)
         footprint: Vec::new(),
         footprint_area: 20.0,
         ground_z: Some(-0.3),
+        below_z: Some(-2.0),
         below_points: 0,
-        below_groups: 0,
+        below_clusters: 0,
         stats: pointcloud_core::plans::SurveyStats::default(),
         seconds: 1.0,
     };

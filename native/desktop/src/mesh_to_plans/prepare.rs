@@ -21,9 +21,10 @@ use iced::{
     keyboard, mouse, Border, Color, Element, Fill, Point, Rectangle, Renderer, Size, Task, Theme,
 };
 use pointcloud_core::plans::{
-    building_frame, detect_levels, refine_levels, robust_bounds, second_direction, survey_scene,
-    BuildingFrame, Confidence, FootprintConfig, Level, LevelConfig, LevelKind, LevelStatus,
-    PlanRegion, RefineConfig, RobustBoundsConfig, SceneSurvey, SurveyConfig,
+    building_frame, detect_levels, refine_levels, robust_bounds, second_direction, stray_limit,
+    strays_below, survey_scene, BuildingFrame, Confidence, FootprintConfig, Level, LevelConfig,
+    LevelKind, LevelStatus, PlanRegion, RefineConfig, RobustBoundsConfig, SceneSurvey, StrayConfig,
+    SurveyConfig,
 };
 use pointcloud_core::region_source::{resident_points, RegionSource};
 use pointcloud_core::{Bounds, IndexedPoint, LoadError, OrientedBox};
@@ -116,7 +117,8 @@ const AFTER_READING: u64 = 50;
 const AFTER_BOUNDS: u64 = 60;
 const AFTER_FRAME: u64 = 120;
 const AFTER_SURVEY: u64 = 800;
-const AFTER_LEVELS: u64 = 980;
+const AFTER_LEVELS: u64 = 960;
+const AFTER_STRAYS: u64 = 980;
 
 /// The part of the step between `from` and `to` that a fraction is.
 fn between(from: u64, to: u64, fraction: f32) -> u64 {
@@ -201,6 +203,19 @@ pub(crate) fn run(
     if let Some(peil) = detection.peil_z {
         survey.frame.peil_z = peil;
     }
+    report(AFTER_LEVELS)?;
+    // The stray points below the scene, one by one.
+    let limit = stray_limit(
+        robust.bounds.min[2],
+        detection.levels.iter().map(|level| level.floor_z),
+    );
+    let strays = strays_below(
+        &sources,
+        limit,
+        &keeps,
+        &StrayConfig::default(),
+        &mut |progress| report(between(AFTER_LEVELS, AFTER_STRAYS, progress.fraction())),
+    )?;
     let top = top_image(&survey, &walls);
     let building = building_box(&survey.frame, &footprint.regions, &detection.levels);
     let record = SurveyRecord {
@@ -210,12 +225,13 @@ pub(crate) fn run(
         footprint: footprint.regions.clone(),
         footprint_area: footprint.area(),
         ground_z: detection.ground_z,
-        below_points: robust.below_points,
-        below_groups: robust.below_groups,
+        below_z: Some(strays.limit_z),
+        below_points: strays.points,
+        below_clusters: strays.clusters,
         stats: survey.stats,
         seconds: started.elapsed().as_secs_f64(),
     };
-    report(AFTER_LEVELS)?;
+    report(AFTER_STRAYS)?;
     let mut prepared = Prepared {
         survey: record,
         core,
@@ -1294,18 +1310,24 @@ impl Studio {
             input(key("unknown"), &prepare.north, PrepareAction::North).into(),
         ));
         if let Some(survey) = &prepare.survey {
-            if survey.below_points > 0 {
+            if let (Some(below), true) = (survey.below_z, survey.below_points > 0) {
                 let points = crate::format_count(survey.below_points);
-                page = page.push(note(if survey.below_groups == 1 {
-                    tr_args(
-                        "{points} stray points below the scene in one group left out",
-                        &[("points", &points)],
-                    )
-                } else {
-                    tr_args(
-                        "{points} stray points below the scene in {groups} groups left out",
-                        &[("points", &points), ("groups", &survey.below_groups)],
-                    )
+                let height = format!("{:+.2}", below - prepare.peil_z());
+                let values = [
+                    ("points", &points as &dyn std::fmt::Display),
+                    ("height", &height),
+                    ("clusters", &survey.below_clusters),
+                ];
+                page = page.push(note(match survey.below_clusters {
+                    0 => tr_args("{points} stray points below {height} m left out", &values),
+                    1 => tr_args(
+                        "{points} stray points below {height} m left out, among them one cluster",
+                        &values,
+                    ),
+                    _ => tr_args(
+                        "{points} stray points below {height} m left out, among them {clusters} clusters",
+                        &values,
+                    ),
                 }));
             }
         }

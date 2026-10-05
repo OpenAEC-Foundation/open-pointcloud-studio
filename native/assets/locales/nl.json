@@ -683,6 +683,7 @@
   "no index": "geen index",
   "unknown": "onbekend",
   "{name}: {points} points, {index}": "{name}: {points} punten, {index}",
-  "{points} stray points below the scene in {groups} groups left out": "{points} losse punten onder de scène in {groups} groepen genegeerd",
-  "{points} stray points below the scene in one group left out": "{points} losse punten onder de scène in één groep genegeerd"
+  "{points} stray points below {height} m left out": "{points} losse punten onder {height} m genegeerd",
+  "{points} stray points below {height} m left out, among them one cluster": "{points} losse punten onder {height} m genegeerd, waaronder één cluster",
+  "{points} stray points below {height} m left out, among them {clusters} clusters": "{points} losse punten onder {height} m genegeerd, waaronder {clusters} clusters"
 }
