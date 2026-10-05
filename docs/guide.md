@@ -91,7 +91,7 @@ The percentage needs a known total: an E57 file states its record count, and an 
 ## Looking around
 
 - Drag with the left button to orbit. Shift with the middle button orbits as well.
-- Double-click a point to orbit about it: from then on the view turns about that point, which stays where it is on the screen, and a small target marks it while the view turns. Double-click where no point is drawn, or use Zoom all, to orbit about the centre of the model again. The view does not move when the point is set.
+- Double-click a point to orbit about it: from then on the view turns about that point, which stays where it is on the screen, and a small target marks it while the view turns. Double-click where no point is drawn, or use Zoom all, to orbit about the centre of the model again. The view does not move when the point is set. While the section box is on and no point is set, the view turns about the centre of the box.
 - Drag with the middle or the right button to pan.
 - Turn the wheel to zoom at the pointer.
 - `F` or **Zoom all** returns to the isometric overview of the whole model: it resets the direction, the zoom and the pan.

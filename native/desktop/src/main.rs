@@ -2723,7 +2723,7 @@ impl Studio {
             - std::f32::consts::PI;
         let pitch = (self.pitch + pitch).clamp(-1.56, 1.56);
         let about = self
-            .orbit_point
+            .orbit_pivot()
             .zip(combined_bounds(&self.clouds))
             .and_then(|(point, scene)| {
                 orbit_point::turn_about(
@@ -2743,6 +2743,14 @@ impl Studio {
         self.pitch = pitch;
         self.view_label = i18n::key("CUSTOM");
         self.revision += 1;
+    }
+
+    /// What the orbit camera turns about: the point set with a double click,
+    /// else the centre of the section box while it is on. `None` turns the
+    /// view about the centre of the model.
+    fn orbit_pivot(&self) -> Option<[f64; 3]> {
+        self.orbit_point
+            .or_else(|| self.section_box().map(|section| section.center()))
     }
 
     /// The drawn point nearest to the eye under a pixel of the scene.
@@ -9210,7 +9218,7 @@ impl Studio {
             pitch: self.pitch,
             zoom: self.zoom,
             pan: self.pan,
-            orbit_point: self.orbit_point,
+            orbit_point: self.orbit_pivot(),
             box_select: self.box_select,
             pick_mode: self.pick_mode,
             measure: &self.measure,
@@ -14422,6 +14430,60 @@ mod camera_api_tests {
         assert_eq!(studio.view_label, "ISOMETRIC");
         // Zoom all turns about the centre of the model again.
         assert_eq!(fitted["camera"]["orbit_point"], Value::Null);
+    }
+
+    #[test]
+    fn the_camera_turns_about_the_section_box_while_it_is_on() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("floor.xyz");
+        let lines: String = (0..41 * 21)
+            .map(|index| {
+                format!(
+                    "{} {} {}
+",
+                    index % 41,
+                    index / 41,
+                    index % 3
+                )
+            })
+            .collect();
+        std::fs::write(&source, lines).unwrap();
+        let cloud = pointcloud_core::open(&source, 10_000).unwrap();
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::new(cloud))));
+        studio.viewport_size = Size::new(800.0, 600.0);
+        let scene = combined_bounds(&studio.clouds).unwrap();
+        let set = send(
+            &mut studio,
+            native_api::ApiCommand::SetSection {
+                min: [26.0, 10.0, 0.0],
+                max: [36.0, 18.0, 2.0],
+                rotation: Some(20.0),
+            },
+        );
+        assert_eq!(set["ok"], true);
+        let centre = [31.0, 14.0, 1.0];
+        let on_screen = |studio: &Studio| {
+            let (x, y, _) = studio
+                .projection(scene, 800.0, 600.0)
+                .project(centre)
+                .unwrap();
+            [x, y]
+        };
+        let before = on_screen(&studio);
+        for (yaw, pitch) in [(0.4, 0.0), (-1.2, 0.3), (2.0, -0.5)] {
+            let turned = send(&mut studio, native_api::ApiCommand::Orbit { yaw, pitch });
+            assert_eq!(turned["ok"], true);
+            let now = on_screen(&studio);
+            assert!(
+                (now[0] - before[0]).abs() < 0.05 && (now[1] - before[1]).abs() < 0.05,
+                "{now:?} {before:?}"
+            );
+        }
+        // A point set with a double click goes before the box.
+        assert_eq!(studio.orbit_pivot(), Some(centre));
+        studio.orbit_point = Some([1.0, 1.0, 0.0]);
+        assert_eq!(studio.orbit_pivot(), Some([1.0, 1.0, 0.0]));
     }
 
     #[test]
