@@ -14,6 +14,7 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- The outlines of detected faces have straight edges: a wall, floor or ceiling whose edge or opening runs at an angle to the grid of 5 cm is no longer drawn as a staircase of cells. Edges within a few degrees of the main direction of a face, or square to it, are put exactly on it, and a truly slanted edge, such as that of a sloped roof, stays slanted but straight.
 - A section drawing, detected faces or a mesh saved as DXF or DWG can be viewed straight away in Open CAD Studio, the open-source CAD application: **Open in CAD viewer** in their blocks opens the last exported file read-only, and **Open after export** opens every export as soon as it is written. Open CAD Studio is found where it is installed; another program can be chosen under **CAD viewer** in Settings, and without one the file opens in the program the system has for it. The local API and the MCP server have `open_in_cad_viewer`, and `status` reports the viewer found.
 - A section drawing, faces or a mesh saved as DXF or DWG opens in a CAD program around what it holds. Before, the view saved in the file looked at the origin, so a program that opens a file in its saved view showed an empty window until zoomed to the extents; for scans in national grid coordinates the drawing lay hundreds of kilometres away.
 

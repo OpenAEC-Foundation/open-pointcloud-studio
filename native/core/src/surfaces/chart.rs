@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU8, Ordering};
 use super::cylinder::Cylinder;
 use super::edges::rings_meet;
 use super::segment::{Normals, Segmentation, NO_LABEL};
+use super::straight::{straightened, Traced, STRAIGHT_CELLS};
 use super::voxel_cloud::VoxelCloud;
 use super::{Residuals, SurfaceDetectConfig, FLAT_ANGLE_DEG, MEASURE_WINDOW, MIN_EDGE_ANGLE_DEG};
 use crate::grid2d::{CellRegion, Connectivity, GridFrame, Mask, Region};
@@ -790,7 +791,9 @@ impl Measured {
     /// holes below `min_hole_area` are filled and parts below
     /// `min_region_area` are dropped; what remains is traced along the
     /// outermost points of its border cells and reduced to straight
-    /// segments within half a cell. `proceed` may stop the work.
+    /// segments within half a cell. Where that is sound, every ring is then
+    /// drawn with straight edges, see `straight`. `proceed` may stop the
+    /// work.
     pub(crate) fn outline(
         &self,
         config: &SurfaceDetectConfig,
@@ -819,9 +822,9 @@ impl Measured {
             .count();
         let covered_share = holding as f64 / mask.count().max(1) as f64;
         proceed()?;
-        let mut patches = Vec::new();
+        let mut parts = Vec::new();
         for traced in mask.trace(Connectivity::Four) {
-            let region = self.tightened(&traced);
+            let (region, straighten) = self.tightened(&traced);
             let kept = region.kept_corners(grid.cell * 0.5, proceed)?;
             let ring = |ring: &[[f64; 2]], kept: &[usize]| -> Vec<[f64; 2]> {
                 kept.iter().map(|index| ring[*index]).collect()
@@ -830,17 +833,30 @@ impl Measured {
             if outer.len() < 3 {
                 continue;
             }
-            patches.push(Region {
-                outer,
-                holes: region
-                    .holes
-                    .iter()
-                    .zip(&kept[1..])
-                    .map(|(hole, kept)| ring(hole, kept))
-                    .filter(|hole| hole.len() >= 3)
-                    .collect(),
+            // The holes that keep three corners, each with its traced ring.
+            let holes: Vec<(Vec<[f64; 2]>, Vec<[f64; 2]>)> = region
+                .holes
+                .iter()
+                .zip(&kept[1..])
+                .map(|(hole, kept)| (ring(hole, kept), hole.clone()))
+                .filter(|(hole, _)| hole.len() >= 3)
+                .collect();
+            let dense = Region {
+                outer: region.outer,
+                holes: holes.iter().map(|(_, traced)| traced.clone()).collect(),
+            };
+            let coarse = dense.kept_corners(grid.cell * STRAIGHT_CELLS, proceed)?;
+            parts.push(Traced {
+                dense,
+                coarse,
+                plain: Region {
+                    outer,
+                    holes: holes.into_iter().map(|(hole, _)| hole).collect(),
+                },
+                straighten,
             });
         }
+        let patches = straightened(&parts, &grid);
         Ok(Outline {
             patches,
             mask,
@@ -851,8 +867,9 @@ impl Measured {
     /// The rings of a traced part, moved in to the outermost points. The
     /// two sides of a strip one cell wide are moved by the points of
     /// different cells and can pass each other; the part then keeps its
-    /// rings along the cell edges, which bound an area.
-    fn tightened(&self, traced: &CellRegion) -> Region {
+    /// rings along the cell edges, which bound an area, and says so with
+    /// `false`.
+    fn tightened(&self, traced: &CellRegion) -> (Region, bool) {
         let region = Region {
             outer: self.tightened_ring(&traced.outer),
             holes: traced
@@ -866,9 +883,9 @@ impl Measured {
             .map(Vec::as_slice)
             .collect();
         if rings_meet(&rings) {
-            traced.to_plane(&self.grid)
+            (traced.to_plane(&self.grid), false)
         } else {
-            region
+            (region, true)
         }
     }
 
@@ -953,6 +970,7 @@ impl Measured {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid2d::ring_signed_area;
 
     fn length(v: [f64; 3]) -> f64 {
         dot(v, v).sqrt()
@@ -1158,6 +1176,155 @@ mod tests {
         // The extent of the first cell is that of its two outlining points:
         // from 0.2 to 0.8 of the cell along u, 0.4 to 0.6 along v.
         assert_eq!(measured.extents[first], [51, 204, 102, 153]);
+    }
+
+    /// A face scanned with a point every `spacing` over a grid of cells of
+    /// 5 cm from `origin`, `size` cells large, in the plane z = 0: the
+    /// points where `holds` says so of a lattice from the origin up to
+    /// `extent`, turned by `degrees`.
+    fn scanned(
+        origin: [f64; 2],
+        size: [u32; 2],
+        spacing: f64,
+        degrees: f64,
+        extent: [f64; 2],
+        holds: impl Fn([f64; 2]) -> bool,
+    ) -> Measured {
+        let grid = GridFrame::new(origin, 0.05, size[0], size[1]).unwrap();
+        let cells = Cells::new(grid);
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let steps = extent.map(|extent| (extent / spacing).ceil() as i64);
+        for i in -1..=steps[0] {
+            for j in -1..=steps[1] {
+                let local = [(i as f64 + 0.5) * spacing, (j as f64 + 0.5) * spacing];
+                if holds(local) {
+                    let uv = [
+                        cos * local[0] - sin * local[1],
+                        sin * local[0] + cos * local[1],
+                    ];
+                    assert!(cells.add(uv, 0, true), "{uv:?}");
+                }
+            }
+        }
+        let filled = cells.finish();
+        Measured {
+            frame: Frame::new([0.0; 3], [0.0, 0.0, 1.0]),
+            grid,
+            counts: filled.counts,
+            means: filled.means,
+            extents: filled.extents,
+        }
+    }
+
+    fn small_parts() -> SurfaceDetectConfig {
+        SurfaceDetectConfig {
+            min_region_area: 0.01,
+            ..SurfaceDetectConfig::default()
+        }
+    }
+
+    /// The angle in degrees at every corner of a ring.
+    fn angles(ring: &[[f64; 2]]) -> Vec<f64> {
+        let n = ring.len();
+        (0..n)
+            .map(|index| {
+                let (a, b, c) = (
+                    ring[(index + n - 1) % n],
+                    ring[index],
+                    ring[(index + 1) % n],
+                );
+                let (p, q) = ([a[0] - b[0], a[1] - b[1]], [c[0] - b[0], c[1] - b[1]]);
+                (p[0] * q[1] - p[1] * q[0])
+                    .abs()
+                    .atan2(p[0] * q[0] + p[1] * q[1])
+                    .to_degrees()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_free_edge_at_seven_degrees_to_the_grid_is_one_straight_edge() {
+        // A wall 3 m long whose top rises at 7 degrees from 1 m: on a grid
+        // along u it is a stair of cells, eight cells to a step.
+        let slope = 7f64.to_radians().tan();
+        let truth = |u: f64| 1.0 + slope * u;
+        let wall = scanned([-0.2, -0.2], [80, 40], 0.002, 0.0, [3.1, 1.5], |[u, v]| {
+            (0.0..3.0).contains(&u) && v >= 0.0 && v < truth(u)
+        });
+        let outline = wall.outline(&small_parts(), &mut || Ok(())).unwrap();
+        assert_eq!(outline.patches.len(), 1);
+        let ring = &outline.patches[0].outer;
+        assert_eq!(ring.len(), 4, "{ring:?}");
+        let top: Vec<&[f64; 2]> = ring.iter().filter(|corner| corner[1] > 0.5).collect();
+        assert_eq!(top.len(), 2, "{ring:?}");
+        for corner in top {
+            // Within a few millimetres of the true edge, at the ends of the
+            // wall: the outermost points lie up to 2 mm inside it.
+            let off = (corner[1] - truth(corner[0])) / (1.0 + slope * slope).sqrt();
+            assert!(off.abs() < 0.003, "{corner:?}: {off}");
+            assert!(corner[0].abs() < 0.003 || (corner[0] - 3.0).abs() < 0.003);
+        }
+        for corner in ring.iter().filter(|corner| corner[1] < 0.5) {
+            assert!(corner[1].abs() < 0.003, "{corner:?}");
+        }
+    }
+
+    #[test]
+    fn a_door_and_a_window_in_a_wall_turned_to_the_grid_are_rectangles() {
+        // A wall of 4 by 3 m with a door of 0.9 by 2.1 m and a window of
+        // 1.2 by 1.2 m, turned 30 degrees to the grid it is traced on.
+        let within = |[u, v]: [f64; 2], low: [f64; 2], high: [f64; 2]| {
+            u >= low[0] && u < high[0] && v >= low[1] && v < high[1]
+        };
+        let wall = scanned([-1.7, -0.2], [118, 100], 0.01, 30.0, [4.0, 3.0], |at| {
+            within(at, [0.0, 0.0], [4.0, 3.0])
+                && !within(at, [0.8, -1.0], [1.7, 2.1])
+                && !within(at, [2.2, 0.9], [3.4, 2.1])
+        });
+        let outline = wall.outline(&small_parts(), &mut || Ok(())).unwrap();
+        assert_eq!(outline.patches.len(), 1);
+        let patch = &outline.patches[0];
+        assert_eq!(patch.outer.len(), 8, "{:?}", patch.outer);
+        assert_eq!(patch.holes.len(), 1);
+        assert_eq!(patch.holes[0].len(), 4, "{:?}", patch.holes[0]);
+        for ring in std::iter::once(&patch.outer).chain(&patch.holes) {
+            for angle in angles(ring) {
+                assert!((angle - 90.0).abs() < 0.5, "{angle}: {ring:?}");
+            }
+        }
+        // Every edge runs along the wall or across it.
+        let (sin, cos) = 30f64.to_radians().sin_cos();
+        for (a, b) in patch.outer.iter().zip(patch.outer.iter().cycle().skip(1)) {
+            let side = [b[0] - a[0], b[1] - a[1]];
+            let along = (side[0] * cos + side[1] * sin) / side[0].hypot(side[1]);
+            assert!(
+                along.abs() < 0.5f64.to_radians().sin() || along.abs() > 0.5f64.to_radians().cos(),
+                "{a:?} {b:?}"
+            );
+        }
+        // The window, found half a point spacing larger all round.
+        let hole_area = -ring_signed_area(&patch.holes[0]);
+        assert!((hole_area - 1.21 * 1.21).abs() < 0.03, "{hole_area}");
+    }
+
+    #[test]
+    fn a_stair_of_cells_along_a_straight_slanted_edge_is_one_segment() {
+        // Every cell whose middle lies below a line that rises one in three:
+        // a stair of three cells to a step.
+        let stair = measured(|x, y| {
+            let (u, v) = ((f64::from(x) + 0.5) * 0.05, (f64::from(y) + 0.5) * 0.05);
+            v <= 0.3 + u / 3.0
+        });
+        let outline = stair.outline(&small_parts(), &mut || Ok(())).unwrap();
+        let ring = &outline.patches[0].outer;
+        assert_eq!(ring.len(), 4, "{ring:?}");
+        let top: Vec<&[f64; 2]> = ring.iter().filter(|corner| corner[1] > 0.2).collect();
+        assert_eq!(top.len(), 2, "{ring:?}");
+        let rise = (top[1][1] - top[0][1]) / (top[1][0] - top[0][0]);
+        assert!(
+            (rise.atan().to_degrees() - (1f64 / 3.0).atan().to_degrees()).abs() < 1.0,
+            "{ring:?}"
+        );
     }
 
     #[test]

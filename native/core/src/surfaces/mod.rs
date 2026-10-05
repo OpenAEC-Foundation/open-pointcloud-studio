@@ -31,6 +31,7 @@ mod cylinder;
 mod edges;
 mod export;
 mod segment;
+mod straight;
 mod voxel_cloud;
 
 #[cfg(test)]
