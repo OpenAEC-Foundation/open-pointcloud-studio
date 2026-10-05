@@ -18,6 +18,7 @@ mod closed_mesh;
 mod cloud_centroid;
 mod cloud_transform;
 mod drawing;
+mod drawing_view;
 mod extensions;
 mod faces;
 mod file_view;
@@ -1781,6 +1782,7 @@ enum Message {
     TogglePickSelect,
     Measure(measure::MeasureAction),
     Drawing(drawing::DrawingAction),
+    DrawingView(drawing_view::DrawingViewAction),
     ClosedMesh(closed_mesh::ClosedMeshAction),
     Faces(faces::FaceAction),
     ClearSelection,
@@ -1930,6 +1932,9 @@ struct Studio {
     measure: measure::MeasureTool,
     /// The Section drawing tool: its choices, its job and its preview.
     drawing: drawing::DrawingTool,
+    /// The Drawing view: the 2D drawing the main area shows in place of the
+    /// 3D scene when it is switched on.
+    drawing_view: drawing_view::DrawingViewTool,
     /// The Closed mesh tool: its settings, its job and its last result.
     closed_mesh: closed_mesh::ClosedMeshTool,
     /// The Detect faces tool: its settings and its job. The faces it finds
@@ -2367,6 +2372,7 @@ impl Default for Studio {
             pick_mode: false,
             measure: measure::MeasureTool::default(),
             drawing: drawing::DrawingTool::default(),
+            drawing_view: drawing_view::DrawingViewTool::new(settings.show_drawing_after_export),
             closed_mesh: closed_mesh::ClosedMeshTool::default(),
             faces: faces::FaceTool::default(),
             drag_rectangle: None,
@@ -2405,6 +2411,7 @@ impl Studio {
             filter_other: self.filter_other,
             cad_viewer: self.cad_viewer.chosen(),
             open_after_export: self.cad_viewer.open_after_export,
+            show_drawing_after_export: self.drawing_view.show_after_export,
         }
     }
 
@@ -3232,6 +3239,7 @@ impl Studio {
                 answer.0["result"]["file_view"] = self.file_view_value();
                 answer.0["result"]["cad_viewer"] = self.cad_viewer.value();
                 answer.0["result"]["drawing"] = self.drawing.value();
+                answer.0["result"]["drawing_view"] = self.drawing_view.value();
                 answer.0["result"]["section_align_pending"] =
                     Value::Bool(self.section_align_pending);
                 answer.0["result"]["closed_mesh"] = self.closed_mesh.value();
@@ -4129,6 +4137,12 @@ impl Studio {
             ApiCommand::PreviewDrawing { options } => self.api_preview_drawing(&options),
             ApiCommand::ClearDrawingPreview => (self.api_clear_drawing_preview(), Task::none()),
             ApiCommand::CancelDrawing => (self.api_cancel_drawing(), Task::none()),
+            ApiCommand::DrawingView { show } => (self.api_drawing_view(show), Task::none()),
+            ApiCommand::OpenDrawing { path } => self.api_open_drawing(path),
+            ApiCommand::DrawingZoomExtents => (self.api_drawing_zoom_extents(), Task::none()),
+            ApiCommand::SetDrawingLayer { layer, visible } => {
+                (self.api_set_drawing_layer(&layer, visible), Task::none())
+            }
             ApiCommand::OpenInCadViewer { path } => (
                 self.open_in_cad_viewer(path)
                     .unwrap_or_else(|error| json!({"ok": false, "error": error})),
@@ -7984,6 +7998,7 @@ impl Studio {
             }
             Message::Measure(action) => return self.update_measure(action),
             Message::Drawing(action) => return self.update_drawing(action),
+            Message::DrawingView(action) => return self.update_drawing_view(action),
             Message::ClosedMesh(action) => return self.update_closed_mesh(action),
             Message::Faces(action) => return self.update_faces(action),
             Message::ClearSelection => {
@@ -9322,19 +9337,23 @@ impl Studio {
             .height(Fill)
             .into();
         }
-        let point_view = self.point_viewport();
-        let canvas = stack![
-            gpu_viewport::GpuViewport {
-                overlay: point_view
-            }
-            .widget()
+        let canvas = if self.drawing_view.shown {
+            stack![self.drawing_sheet()].width(Fill).height(Fill)
+        } else {
+            let point_view = self.point_viewport();
+            stack![
+                gpu_viewport::GpuViewport {
+                    overlay: point_view
+                }
+                .widget()
+                .width(Fill)
+                .height(Fill),
+                Canvas::new(point_view).width(Fill).height(Fill),
+            ]
             .width(Fill)
-            .height(Fill),
-            Canvas::new(point_view).width(Fill).height(Fill),
-        ]
-        .width(Fill)
-        .height(Fill);
-        let canvas = if self.walk.is_some() {
+            .height(Fill)
+        };
+        let canvas = if self.walk.is_some() && !self.drawing_view.shown {
             canvas.push(
                 container(
                     button(text(i18n::tr("Back to 3D view (Esc)")).size(12))
@@ -9366,7 +9385,7 @@ impl Studio {
         } else {
             canvas
         };
-        let canvas = match self.note_prompt() {
+        let canvas = match self.note_prompt().filter(|_| !self.drawing_view.shown) {
             Some(prompt) => canvas.push(prompt),
             None => canvas,
         };
@@ -9397,7 +9416,11 @@ impl Studio {
         ]
         .spacing(0)
         .width(270);
-        // The block of the Section drawing tool comes first: it is opened
+        // The block of the Drawing view comes first while the view is shown.
+        if let Some(view) = self.drawing_view_properties() {
+            properties = properties.push(view);
+        }
+        // The block of the Section drawing tool comes next: it is opened
         // from the ribbon and stands in view without scrolling.
         if let Some(drawing) = self.drawing_properties() {
             properties = properties.push(drawing);
@@ -9874,17 +9897,25 @@ impl Studio {
             properties.into()
         };
 
+        let (title, caption) = if self.drawing_view.shown {
+            (i18n::tr("DRAWING"), self.drawing_view_caption())
+        } else {
+            (i18n::tr("MODEL SPACE"), self.view_caption().to_owned())
+        };
         let viewport_header = row![
-            text(i18n::tr("MODEL SPACE"))
+            text(title)
                 .size(12)
                 .font(Font::with_name("Space Grotesk"))
                 .color(Color::from_rgb8(250, 250, 249)),
-            text(self.view_caption())
+            text(caption)
                 .size(11)
                 .color(Color::from_rgb8(161, 161, 170)),
+            iced::widget::horizontal_space(),
+            self.drawing_view_tabs(),
         ]
         .spacing(16)
-        .padding([8, 14]);
+        .align_y(iced::Alignment::Center)
+        .padding([5, 14]);
         let mut viewport = column![viewport_header].height(Fill).width(Fill);
         if let Some(progress) = self.progress_strip() {
             viewport = viewport.push(progress);

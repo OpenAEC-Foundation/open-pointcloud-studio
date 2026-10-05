@@ -106,11 +106,12 @@ They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
 edits, meshing (a closed mesh included), mesh export, a face detection, a
-faces export, a section drawing or its preview, merging, a 3D BAG download,
+faces export, a section drawing or its preview, a drawing file being read, merging, a 3D BAG download,
 point loading for the camera and view snapshots have finished; call it after
 `open`, before `screenshot` when the camera changed, and before `export_bcf`. `screenshot` returns MCP image content (`type: "image"`,
 `mimeType: "image/png"`, base64 data) followed by a text part with the image
-size. While the File view or Settings covers the model, `screenshot` answers
+size. While the Drawing view is shown, `screenshot` captures the drawing
+instead of the 3D viewport. While the File view or Settings covers the model, `screenshot` answers
 with an error; `file_view` with `open: false` returns to the model. While the
 window is minimised there is no picture to take: `screenshot`
 then answers with an error, and the snapshot of a view saved meanwhile
@@ -122,7 +123,7 @@ follows when that view is restored.
 | `job` | `id` | Reads a background job once |
 | `wait_for_job` | `id`, optional `timeout_seconds` (default 60) | Waits until the job no longer runs |
 | `wait_until_idle` | optional `timeout_seconds` (default 60) | Waits until no work is under way; reports what is still busy |
-| `screenshot` | optional `path` (`.png`), `max_edge` (16–8192, default 1920) | Image of the 3D viewport |
+| `screenshot` | optional `path` (`.png`), `max_edge` (16–8192, default 1920) | Image of the 3D viewport, or of the drawing while the Drawing view is shown |
 | `open` | `path` | Opens a file, every supported file in a folder, or a scan project file |
 | `cancel_import` | `id` | Cancels a full-stream import |
 | `remove` | `index` | Removes a layer |
@@ -198,6 +199,10 @@ follows when that view is restored.
 | `export_drawing` | `path` (`.dxf` or `.dwg`), optional `view` (`plan`, `front`, `back`, `left` or `right`), `thickness` (0.005–5 m), `units` (`mm` or `m`), `origin` (`model` or `box`), `fill`, `square`, `grid` (at least 0.005 m), `max_wall_thickness` (above 0, at most 2 m), `color` (`layer` or `rgb`), `point_layers` (`scan` or `class`), `max_points` (1–400,000), `version` (`r2004`, `r2010`, `r2013` or `r2018`), `wait_seconds` | Draws the slab behind one face of the section box as a 2D drawing in DXF or DWG; job. Choices left out keep what the Section drawing block has |
 | `preview_drawing` | the choices of `export_drawing` without `path`, optional `wait_seconds` | Traces the filled cut of that slab and lays it over the points in the viewport; job |
 | `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
+| `drawing_view` | `show` | Shows the Drawing view in place of the 3D scene, or the 3D scene again |
+| `open_drawing` | `path` (`.dxf` or `.dwg`), optional `wait_seconds` | Reads a DXF or DWG file into the Drawing view and shows it; job |
+| `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view |
+| `set_drawing_layer` | `layer` (name or `*`), `visible` | Shows or hides a layer of the drawing in the Drawing view |
 | `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, in Open CAD Studio or the program chosen in Settings, read-only; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |

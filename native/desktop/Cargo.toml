@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 pointcloud-core = { path = "../core" }
-iced = { version = "0.13.1", features = ["canvas", "image", "svg", "tokio"] }
+iced = { version = "0.13.1", features = ["advanced", "canvas", "image", "svg", "tokio"] }
 iced_wgpu = "0.13.5"
 bytemuck = { version = "1", features = ["derive"] }
 rfd = "0.15"

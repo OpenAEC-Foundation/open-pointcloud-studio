@@ -30,6 +30,9 @@ pub(crate) struct Preferences {
     pub cad_viewer: Option<PathBuf>,
     /// Whether every exported DXF or DWG file opens in that program.
     pub open_after_export: bool,
+    /// Whether the Drawing view is shown when a section drawing has been
+    /// exported.
+    pub show_drawing_after_export: bool,
 }
 
 impl Default for Preferences {
@@ -48,6 +51,7 @@ impl Default for Preferences {
             filter_other: true,
             cad_viewer: None,
             open_after_export: false,
+            show_drawing_after_export: true,
         }
     }
 }
@@ -152,6 +156,7 @@ mod tests {
             filter_ground: false,
             cad_viewer: Some(PathBuf::from("/opt/viewer/OpenCADStudio")),
             open_after_export: true,
+            show_drawing_after_export: false,
             ..Preferences::default()
         };
         save_to(&path, &settings).unwrap();

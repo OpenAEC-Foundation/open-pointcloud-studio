@@ -20,7 +20,7 @@ use iced::widget::{button, checkbox, column, container, pick_list, row, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Size, Task};
 use pointcloud_core::region_source::{RegionFilter, RegionSource, SourceTransform};
 use pointcloud_core::{
-    Bounds, CutPreview, DrawingFormat, DrawingOrigin, DrawingProgress, DrawingRequest,
+    Bounds, CutPreview, Drawing2d, DrawingFormat, DrawingOrigin, DrawingProgress, DrawingRequest,
     DrawingSource, DrawingStage, DrawingStats, DrawingUnits, DrawingVersion, DrawingView,
     IndexConfig, LoadError, OctreeIndex, OrientedBox, Point, PointCloud, PointColor, PointLayers,
     WallDirection, DEFAULT_MIN_WALL_THICKNESS,
@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 
 use crate::bag_panel::plain_reason;
 use crate::cloud_transform::CloudTransform;
+use crate::drawing_view::{DrawScene, DrawingSource as ViewSource, DrawingViewAction};
 use crate::i18n::{key, tr, tr_args};
 use crate::open_progress::{Line, Phase};
 use crate::selection::{ClassFilter, ClassVisibility, DeletionMask, Projection};
@@ -498,10 +499,15 @@ pub(crate) struct JobInput {
     target: Target,
 }
 
-/// What a finished job hands back.
+/// What a finished job hands back: with the drawing it made, which the
+/// Drawing view shows without making it again.
 enum Done {
-    Exported(DrawingStats),
-    Preview(Box<CutPreview>),
+    Exported {
+        stats: DrawingStats,
+        drawing: Box<Drawing2d>,
+        path: PathBuf,
+    },
+    Preview(Box<CutPreview>, Box<Drawing2d>),
 }
 
 /// Read the slab and write the drawing or trace the preview. This runs on a
@@ -514,23 +520,42 @@ fn run(
     scene.validate()?;
     scene
         .read(|sources, accept| match &input.target {
-            Target::Export(path, _) => pointcloud_core::export_section_drawing(
+            Target::Export(path, format) => {
+                let (drawing, mut stats) = pointcloud_core::section_drawing(
+                    sources,
+                    scene.section,
+                    &input.request,
+                    accept,
+                    &mut *progress,
+                )?;
+                let total = drawing.entities.len() as u64;
+                stats.bytes = pointcloud_core::write_drawing_progress(
+                    &drawing,
+                    path,
+                    *format,
+                    input.request.version,
+                    |done| {
+                        progress(DrawingProgress {
+                            stage: DrawingStage::Writing,
+                            done: done as u64,
+                            total,
+                        })
+                    },
+                )?;
+                Ok(Done::Exported {
+                    stats,
+                    drawing: Box::new(drawing),
+                    path: path.clone(),
+                })
+            }
+            Target::Preview => pointcloud_core::preview_section_drawing(
                 sources,
                 scene.section,
                 &input.request,
-                path,
                 accept,
                 progress,
             )
-            .map(Done::Exported),
-            Target::Preview => pointcloud_core::preview_cut_regions(
-                sources,
-                scene.section,
-                &input.request,
-                accept,
-                progress,
-            )
-            .map(|preview| Done::Preview(Box::new(preview))),
+            .map(|(preview, drawing)| Done::Preview(Box::new(preview), Box::new(drawing))),
         })
         .map_err(|error| hint_empty_slab(error, input.request.view))
 }
@@ -581,20 +606,33 @@ fn find_walls(scene: &Scene) -> Result<Option<WallDirection>, String> {
     found.map_err(|error| plain_reason(&error.to_string()).to_owned())
 }
 
-/// How a job ended, as the worker tells the window.
+/// How a job ended, as the worker tells the window, with the drawing it
+/// made as the Drawing view shows it.
 #[derive(Debug, Clone)]
 pub enum DrawingEnd {
-    Exported(DrawingStats),
-    Preview(Arc<CutPreview>),
+    Exported(DrawingStats, Arc<DrawScene>),
+    Preview(Arc<CutPreview>, Arc<DrawScene>),
     Cancelled,
     Failed(String),
 }
 
 impl DrawingEnd {
+    /// Runs on the worker thread too, so that the window gets the drawing
+    /// ready to show.
     fn of(result: Result<Done, LoadError>) -> Self {
         match result {
-            Ok(Done::Exported(stats)) => Self::Exported(stats),
-            Ok(Done::Preview(preview)) => Self::Preview(Arc::from(preview)),
+            Ok(Done::Exported {
+                stats,
+                drawing,
+                path,
+            }) => Self::Exported(
+                stats,
+                Arc::new(DrawScene::from_drawing(&drawing, ViewSource::Export(path))),
+            ),
+            Ok(Done::Preview(preview, drawing)) => Self::Preview(
+                Arc::from(preview),
+                Arc::new(DrawScene::from_drawing(&drawing, ViewSource::Preview)),
+            ),
             Err(LoadError::Cancelled) => Self::Cancelled,
             Err(error) => Self::Failed(plain_reason(&error.to_string()).to_owned()),
         }
@@ -1471,21 +1509,26 @@ impl Studio {
         let request = job.input.request;
         // What is reported is the slab that was drawn, not the one asked.
         let slab = slab_depth(job.input.scene.section, &request);
+        let mut built = None;
         let last = match (end, &job.input.target) {
-            (DrawingEnd::Exported(stats), Target::Export(path, format)) => Last::Exported {
-                path: path.clone(),
-                format: *format,
-                request,
-                slab,
-                stats,
-            },
-            (DrawingEnd::Preview(cut), Target::Preview) => {
+            (DrawingEnd::Exported(stats, scene), Target::Export(path, format)) => {
+                built = Some((scene, true));
+                Last::Exported {
+                    path: path.clone(),
+                    format: *format,
+                    request,
+                    slab,
+                    stats,
+                }
+            }
+            (DrawingEnd::Preview(cut, scene), Target::Preview) => {
                 let stats = cut.stats;
                 if self.drawing_scene_current(&job.input) {
                     self.drawing.preview = Some(ShownPreview {
                         cut,
                         input: Arc::clone(&job.input),
                     });
+                    built = Some((scene, false));
                     Last::Previewed {
                         request,
                         slab,
@@ -1503,7 +1546,7 @@ impl Studio {
             (DrawingEnd::Cancelled, _) => Last::Cancelled { operation },
             (DrawingEnd::Failed(error), _) => Last::Failed { operation, error },
             // A worker answers in the kind it was asked for.
-            (DrawingEnd::Exported(_) | DrawingEnd::Preview(_), _) => Last::Failed {
+            (DrawingEnd::Exported(..) | DrawingEnd::Preview(..), _) => Last::Failed {
                 operation,
                 error: "the job answered with another result than was asked".into(),
             },
@@ -1521,6 +1564,9 @@ impl Studio {
             _ => None,
         };
         self.drawing.last = Some(last);
+        if let Some((scene, exported)) = built {
+            self.section_drawing_built(scene, exported);
+        }
         if let Some(path) = written {
             self.cad_file_written(&path);
         }
@@ -1830,6 +1876,29 @@ impl Studio {
                     .padding([3, 8]),
                 );
         }
+        block = block.push(
+            container(
+                row![
+                    button(text(tr("Show drawing")).size(11))
+                        .on_press_maybe(
+                            self.drawing_view
+                                .has_section_drawing()
+                                .then_some(Message::DrawingView(DrawingViewAction::Show(true))),
+                        )
+                        .style(flat_tool_style),
+                    checkbox(tr("Show after export"), self.drawing_view.show_after_export)
+                        .on_toggle(|on| {
+                            Message::DrawingView(DrawingViewAction::ShowAfterExport(on))
+                        })
+                        .style(muted_checkbox_style)
+                        .text_size(11)
+                        .size(12),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([3, 8]),
+        );
 
         match &tool.last {
             Some(Last::Exported {
@@ -2268,14 +2337,14 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
         target: Target::Export(destination.clone(), format),
     };
     match run(&input, &mut |_| Ok(())).map_err(failed)? {
-        Done::Exported(stats) => Ok(format!(
+        Done::Exported { stats, .. } => Ok(format!(
             "Drawing written as {format}, view {}: {}; {} -> {}",
             request.view.key(),
             summary(&stats, &request, slab, &|count| count.to_string()),
             size_text(stats.bytes),
             destination.display()
         )),
-        Done::Preview(_) => Err((1, "Drawing failed: nothing was written".into())),
+        Done::Preview(..) => Err((1, "Drawing failed: nothing was written".into())),
     }
 }
 
@@ -3426,8 +3495,17 @@ mod tests {
         assert_eq!(shown["last"]["operation"], "preview_drawing");
         assert_eq!(shown["last"]["state"], "complete");
         assert_eq!(shown["last"]["slab_points"], in_slab);
-        // A preview collects no points for a drawing.
-        assert_eq!(shown["last"]["drawn_points"], 0);
+        // A preview also builds the drawing an export would write, for the
+        // Drawing view, without switching to it.
+        let drawn = shown["last"]["drawn_points"].as_u64().unwrap();
+        assert!(drawn > 0);
+        let view = studio
+            .drawing_view
+            .scene()
+            .expect("the preview is in the view");
+        assert_eq!(view.totals()[0] as u64, drawn);
+        assert_eq!(view.totals()[2], 1, "a plan holds its filled cut");
+        assert!(!studio.drawing_view.shown);
         assert!(studio.status.starts_with("Filled cut previewed: "));
 
         // The regions lie on the top face of the box, around the room.
@@ -3666,7 +3744,7 @@ mod tests {
         assert!(running.cancelling());
         let (serial, input) = (running.serial, Arc::clone(&running.input));
         let late = DrawingEnd::of(run(&input, &mut |_| Ok(())));
-        assert!(matches!(late, DrawingEnd::Preview(_)));
+        assert!(matches!(late, DrawingEnd::Preview(..)));
         let _ = studio.update(Message::Drawing(DrawingAction::Finished(serial, late)));
         assert!(studio.drawing.overlay().is_none());
         assert_eq!(job(&mut studio, &id)["state"], "failed");

@@ -542,7 +542,9 @@ drawing: about 0.4 GB at 150,000 points and 1.1 GB at 400,000.
 `preview_drawing` takes the same fields without `path`. It traces the filled
 cut as `export_drawing` would draw it, whatever `fill` says, writes nothing
 and lays the regions over the points in the viewport, on the cut plane. Its
-complete job has the figures above without the file, with `drawn_points` 0.
+complete job has the figures above without the file; `drawn_points` are the
+points of the drawing that the preview also builds for the Drawing view (see
+below), as an export with the same choices would write it.
 The preview goes away when what it was made from changes: the section box,
 the visible layers, a layer transform, the deleted points, the classes shown,
 or the `view`, `thickness`, `square`, `grid` or `max_wall_thickness` of the
@@ -566,6 +568,49 @@ for it or hide it), and while another drawing or preview runs or the save
 dialog of the window is open. A refused command changes nothing
 in the block. One drawing or preview runs at a time; it can run beside a mesh
 job.
+
+## Drawing view
+
+The Drawing view shows a 2D drawing in the main area in place of the 3D
+scene, on a light sheet: points as dots in their colour or that of their
+layer, filled cuts with their holes, polylines, the frame and the texts, with
+a switch per layer, pan by dragging, zoom about the pointer with the wheel,
+a scale bar and the coordinates under the pointer in the units of the
+drawing. It shows the drawing that the last `preview_drawing` or
+`export_drawing` made, without making it again, or a DXF or DWG file read by
+`open_drawing`. A finished export switches to the view when **Show after
+export** is on in the Section drawing block, as it is by default; a preview
+only puts its drawing in the view.
+
+`drawing_view` with `show: true` shows the view and with `show: false` the 3D
+scene again; it answers with `drawing_view` as the status reports it. It is
+refused while Settings is open. `open_drawing` reads an absolute `.dxf` or
+`.dwg` file that exists into the view and shows it. It answers with a
+`job_id`; the complete job has `path`, `units` (`mm` or `m`), `units_named`
+(false for a file without units, which is read as millimetres), the numbers
+of `layers`, `points`, `polylines`, `fills`, `texts` and `inserts` (block
+references drawn), `skipped` (entities that are not shown, by type) and
+`skipped_3d` (meshes, polyface meshes, 3D faces and solids, which are not
+shown). Points, lines, polylines with their arcs, circles, arcs, ellipses,
+solid fills with their holes, 2D solids, texts, multiline texts, attributes
+and block references with their nested blocks are read; splines, leaders and
+dimensions are drawn as the lines they consist of. Curves become polylines,
+a fill with a pattern is drawn by its boundary, and an entity that is not
+shown never makes the read fail. Layers that the file has switched off or
+frozen start hidden. Units other than millimetres are shown in metres.
+
+`drawing_zoom_extents` fits the whole drawing in the view and answers with
+the `camera`. `set_drawing_layer` shows or hides a layer by its name, in any
+case, or every layer with `*`; both fail without a drawing.
+
+`status.result.drawing_view` holds `shown`, `show_after_export`, `reading`
+(the file being read, or `null`), `error` (why the last file could not be
+read, or `null`), `drawing` (`null`, or its `source`: `preview`, `export` or
+`file`, its `path`, `units`, `units_named`, the totals above, `extents` in
+drawing units, `inserts`, `skipped`, `skipped_3d` and `layers`, each with
+`name`, `visible`, `color` and its `points`, `polylines`, `fills` and
+`texts`), `camera` (`center` in drawing units and `pixels_per_unit`) and the
+`viewport_size` of the sheet.
 
 ## CAD viewer
 
@@ -761,7 +806,9 @@ the views whose snapshot is missing or older than the view.
 ## Screenshots
 
 `screenshot` captures the scene part of the window, without ribbon, panels and
-status bar, the way view snapshots are taken. It first waits until the
+status bar, the way view snapshots are taken. While the Drawing view is shown
+it captures the drawing instead, once the sheet has been drawn, and the
+answer has `view`: `drawing`, else `model`. It first waits until the
 viewport has read the points for the current camera, at most about 4
 seconds; `status.result.detail_pending` is true while those points are still
 being read, which starts about 0.2 seconds after the camera changed. The answer has the `width` and `height` of the PNG image in
@@ -782,7 +829,7 @@ when the view is restored.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, whether the File view covers the model (`file_view`), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box, auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), whether the File view covers the model (`file_view`), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge or 3D BAG download task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -867,8 +914,12 @@ when the view is restored.
 | `preview_drawing` | optional `view`, `thickness`, `units`, `origin`, `fill`, `square`, `grid`, `max_wall_thickness`, `color`, `point_layers`, `max_points`, `version` | Traces the filled cut of that slab and lays it over the points in the viewport without writing a file; returns a job ID |
 | `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
 | `cancel_drawing` | — | Requests cancellation of the running section drawing or preview |
+| `drawing_view` | `show` | Shows the Drawing view in the main area in place of the 3D scene (`true`) or the 3D scene again (`false`); answers with `drawing_view` |
+| `open_drawing` | `path` | Reads an absolute `.dxf` or `.dwg` file into the Drawing view and shows it; returns a job ID whose complete job reports units, layers, entities drawn and skipped |
+| `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view; answers with the `camera` |
+| `set_drawing_layer` | `layer`, `visible` | Shows or hides a layer of the drawing in the Drawing view by its name, or every layer with `*` |
 | `open_in_cad_viewer` | optional `path` | Opens a `.dxf` or `.dwg` file, by default the last one exported, read-only in Open CAD Studio or the program chosen in Settings, else in the system program; returns `path`, `viewer` and `read_only` |
-| `screenshot` | optional `path`, `base64`, `max_edge` | Captures the 3D viewport as a PNG image: written atomically to an absolute `.png` path, replacing a file there, and/or returned as base64 in `png_base64` |
+| `screenshot` | optional `path`, `base64`, `max_edge` | Captures the 3D viewport, or the drawing while the Drawing view is shown, as a PNG image: written atomically to an absolute `.png` path, replacing a file there, and/or returned as base64 in `png_base64` |
 
 ## Exports, stored settings and the server
 

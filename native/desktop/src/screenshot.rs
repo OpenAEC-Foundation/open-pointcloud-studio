@@ -1,5 +1,6 @@
 //! The `screenshot` command of the command API: a PNG image of the scene
 //! part of the window, cut from a window screenshot as view snapshots are.
+//! While the Drawing view is shown it is the drawing that is captured.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -97,6 +98,16 @@ fn settle_timer(request: Request, remaining: u8, quiet: u8) -> Task<Message> {
 }
 
 impl Studio {
+    /// Where the part of the window that a screenshot captures lies: the
+    /// sheet of the Drawing view while it is shown, else the 3D scene.
+    pub(crate) fn shown_canvas_bounds(&self) -> Option<Rectangle> {
+        if self.drawing_view.shown {
+            self.drawing_view.canvas_bounds()
+        } else {
+            self.views.canvas_bounds()
+        }
+    }
+
     /// Start a screenshot for the command API; the answer is sent once the
     /// image has been taken and encoded.
     pub fn api_screenshot(
@@ -120,7 +131,7 @@ impl Studio {
         if self.file_open || self.settings.is_some() {
             return failed("the File view or Settings covers the viewport");
         }
-        if self.views.canvas_bounds().is_none() {
+        if self.shown_canvas_bounds().is_none() && !self.drawing_view.shown {
             return failed("the viewport has not been drawn yet");
         }
         let request = Request {
@@ -139,7 +150,14 @@ impl Studio {
                 remaining,
                 quiet,
             } => {
-                let quiet = if self.detail_pending { 0 } else { quiet + 1 };
+                // The drawing has no points to wait for, only its first
+                // frame after it was switched on.
+                let waiting = if self.drawing_view.shown {
+                    self.shown_canvas_bounds().is_none()
+                } else {
+                    self.detail_pending
+                };
+                let quiet = if waiting { 0 } else { quiet + 1 };
                 if quiet < QUIET_STEPS && remaining > 0 {
                     return settle_timer(request, remaining - 1, quiet);
                 }
@@ -157,7 +175,12 @@ impl Studio {
                         return Task::none();
                     }
                 };
-                let canvas = self.views.canvas_bounds();
+                let canvas = self.shown_canvas_bounds();
+                let view = if self.drawing_view.shown {
+                    "drawing"
+                } else {
+                    "model"
+                };
                 let (Some(canvas), false) = (canvas, self.file_open || self.settings.is_some())
                 else {
                     let _ = request
@@ -165,11 +188,15 @@ impl Studio {
                         .send(json!({"ok": false, "error": Uncaptured::NoWindow.message()}));
                     return Task::none();
                 };
-                let detail_pending = self.detail_pending;
+                let detail_pending = self.detail_pending && !self.drawing_view.shown;
                 Task::future(async move {
                     let reply = request.reply.clone();
                     let answer = tokio::task::spawn_blocking(move || {
-                        answer(&request, &screenshot, canvas, detail_pending)
+                        let mut value = answer(&request, &screenshot, canvas, detail_pending);
+                        if value["ok"] == true {
+                            value["view"] = view.into();
+                        }
+                        value
                     })
                     .await
                     .unwrap_or_else(|error| json!({"ok": false, "error": error.to_string()}));

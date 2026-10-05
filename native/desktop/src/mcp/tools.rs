@@ -231,10 +231,10 @@ fn table() -> Vec<Tool> {
             required("id", text("The job_id", 1, 64)),
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, merging, 3D BAG download, station photos, view snapshots or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
+        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, a drawing file being read, merging, 3D BAG download, station photos, view snapshots or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load. The text part gives the width and height in pixels. Fails while the window is minimised, and while the File view or Settings covers the viewport; file_view with open false returns to the model.", vec![
+        tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load; while the Drawing view is shown it captures the drawing instead, and the answer says which in view (model or drawing). The text part gives the width and height in pixels. Fails while the window is minimised, and while the File view or Settings covers the viewport; file_view with open false returns to the model.", vec![
             optional("path", path("Absolute path ending in .png where the image is also written")),
             optional("max_edge", integer_in("Longest edge of the image in pixels, from 16 to 8192; default 1920. A larger viewport is scaled down", 16, 8192)),
         ]),
@@ -444,6 +444,17 @@ fn table() -> Vec<Tool> {
         }),
         tool("preview_drawing", Job, "Traces the filled cut of the section box as export_drawing would draw it and lays it over the points in the viewport, on the cut plane; nothing is written. The cut is traced whatever fill says. Answers with a job_id; the complete job reports the regions. status.result.drawing.preview_shown tells whether it is on screen: it goes away when the section box, the visible layers, a layer transform, the deleted points, the classes shown or the view, slab thickness, squaring, grid or wall thickness change.", drawing_choices()),
         tool("clear_drawing_preview", Command, "Takes the preview of the filled cut off the viewport.", vec![]),
+        tool("drawing_view", Command, "Shows the Drawing view in the main area in place of the 3D scene, or the 3D scene again. The view shows the drawing that preview_drawing or export_drawing made last, or the file open_drawing read. Answers with drawing_view as status.result.drawing_view reports it: shown, the source, units, counts, layers with their visibility, extents and the camera. A screenshot while it is shown captures the drawing.", vec![
+            required("show", boolean("true to show the drawing, false to return to the 3D scene")),
+        ]),
+        tool("open_drawing", Job, "Reads a DXF or DWG file into the Drawing view and shows it: points, lines, polylines with their arcs, circles, arcs, ellipses, solid fills with holes, 2D solids, texts and block references. Other entities are counted by type in skipped, 3D content such as meshes in skipped_3d; neither is shown. A file without units is read as millimetres. Answers with a job_id; the complete job reports the units, layers, points, polylines, fills, texts, inserts and what was skipped.", vec![
+            required("path", path("Absolute path of an existing .dxf or .dwg file")),
+        ]),
+        tool("drawing_zoom_extents", Command, "Zooms the Drawing view so that the whole drawing fits; answers with the camera (center in drawing units, pixels_per_unit). Fails without a drawing.", vec![]),
+        tool("set_drawing_layer", Command, "Shows or hides a layer of the drawing in the Drawing view, by its name as status.result.drawing_view.drawing.layers lists it (any case), or every layer with *.", vec![
+            required("layer", text("Layer name, or * for all layers", 1, 255)),
+            required("visible", boolean("Whether the layer is shown")),
+        ]),
         tool("open_in_cad_viewer", Command, "Opens a DXF or DWG file in the CAD viewer: the program chosen in Settings, else an installed Open CAD Studio, started read-only and without waiting for it; without either the file goes to the program the system has for it. Without a path it opens the last file that a drawing, faces or mesh export wrote. Answers with the path, the viewer program (null for the system program) and read_only. status.result.cad_viewer tells which viewer was found.", vec![
             optional("path", path("Absolute path of an existing .dxf or .dwg file; without it the last exported one")),
         ]),
@@ -729,6 +740,9 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
     }
     if result["drawing"]["job"].is_object() {
         busy.push("drawing");
+    }
+    if !result["drawing_view"]["reading"].is_null() {
+        busy.push("drawing_view");
     }
     if result["closed_mesh"]["job"].is_object() {
         busy.push("closed_mesh");

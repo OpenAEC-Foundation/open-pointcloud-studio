@@ -269,6 +269,20 @@ pub enum ApiCommand {
     },
     ClearDrawingPreview,
     CancelDrawing,
+    /// Show the Drawing view in the main area, or the 3D scene again.
+    DrawingView {
+        show: bool,
+    },
+    /// Read a DXF or DWG file into the Drawing view and show it.
+    OpenDrawing {
+        path: PathBuf,
+    },
+    DrawingZoomExtents,
+    SetDrawingLayer {
+        /// The name of a layer of the drawing, any case, or `*` for all.
+        layer: String,
+        visible: bool,
+    },
     OpenInCadViewer {
         /// Absolute `.dxf` or `.dwg` file; without it the last one a drawing,
         /// faces or mesh export wrote.

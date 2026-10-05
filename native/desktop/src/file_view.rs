@@ -103,6 +103,8 @@ pub enum FileAction {
     ImportFolder,
     /// Show the panel that downloads buildings of the 3D BAG.
     Bag3d,
+    /// Look at a DXF or DWG file in the Drawing view.
+    OpenDrawing,
     Activate(usize),
     ExportFull,
     ExportSelection,
@@ -138,6 +140,9 @@ impl Studio {
             FileAction::Import => Message::Open,
             FileAction::ImportFolder => Message::OpenFolder,
             FileAction::Bag3d => Message::ShowBagPanel,
+            FileAction::OpenDrawing => {
+                Message::DrawingView(crate::drawing_view::DrawingViewAction::OpenFile)
+            }
             FileAction::Activate(index) => Message::Select(index),
             FileAction::ExportFull => Message::Export,
             FileAction::ExportSelection => Message::ExportSelection,
@@ -398,6 +403,12 @@ impl Studio {
                     key("Scan folder…"),
                     key("Every scan file in a folder"),
                     FileAction::ImportFolder,
+                    true,
+                ),
+                self.file_tile(
+                    key("Drawing (DXF/DWG)…"),
+                    key("Look at a plan or section drawing in the Drawing view"),
+                    FileAction::OpenDrawing,
                     true,
                 ),
             ]),
