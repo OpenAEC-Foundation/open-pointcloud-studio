@@ -766,7 +766,7 @@ fn step_0_surveys_the_scans_finds_the_levels_and_writes_the_project() {
     assert_eq!(saved.status(WizardStep::Prepare), StepStatus::Done);
     assert_eq!(saved.sources.len(), 1);
     assert!(saved.steps["prepare"].basis.is_some());
-    assert_eq!(studio.mesh_to_plans.recent, [file.clone()]);
+    assert_eq!(studio.mesh_to_plans.recent, std::slice::from_ref(&file));
     assert_eq!(
         studio
             .mesh_to_plans
@@ -833,7 +833,7 @@ fn a_project_resumes_on_its_next_step_and_finds_a_changed_scan() {
         "no recent project"
     );
     second.mesh_to_plans.recent = vec![file.clone()];
-    second.mesh_to_plans.recent_projects = project::read_recent(&[file.clone()]);
+    second.mesh_to_plans.recent_projects = project::read_recent(std::slice::from_ref(&file));
     assert_eq!(
         second.mesh_to_plans.recent_projects[0].step,
         WizardStep::Mesh
@@ -870,7 +870,13 @@ fn a_project_resumes_on_its_next_step_and_finds_a_changed_scan() {
     let mut third = Studio::default();
     let cloud = std::sync::Arc::new(pointcloud_core::open(&path, 1_000_000).unwrap());
     let _ = third.update(Message::Loaded(Ok(cloud)));
-    let _ = third.update(wizard(WizardAction::Resume(file.clone())));
+    // Through the local API, by the folder of the project.
+    let answer = send(
+        &mut third,
+        command(json!({"command": "mesh_to_plans_action", "action": "resume", "folder": folder})),
+    );
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["mesh_to_plans"]["steps"][0]["status"], "stale");
     assert_eq!(
         *third.mesh_to_plans.status(WizardStep::Prepare),
         StepStatus::Stale
@@ -883,9 +889,21 @@ fn a_project_resumes_on_its_next_step_and_finds_a_changed_scan() {
     // A file that is no project is refused and changes nothing.
     let other = directory.path().join("other.json");
     std::fs::write(&other, "{}").unwrap();
-    let _ = third.update(wizard(WizardAction::Resume(other)));
-    assert!(third.status.starts_with("Could not open the project: "));
+    let answer = send(
+        &mut third,
+        command(json!({"command": "mesh_to_plans_action", "action": "resume", "folder": other})),
+    );
+    assert_eq!(answer["ok"], false);
+    assert!(answer["error"]
+        .as_str()
+        .unwrap()
+        .starts_with("Could not open the project: "));
     assert_eq!(third.mesh_to_plans.project.as_ref().unwrap().file, file);
+    let answer = send(
+        &mut third,
+        command(json!({"command": "mesh_to_plans_action", "action": "resume"})),
+    );
+    assert_eq!(answer["error"], "resume needs the folder of the project");
 }
 
 /// Three levels as step 0 finds them, on a survey whose grid runs from 1 m
@@ -1159,6 +1177,25 @@ fn show_in_model_puts_the_section_box_on_a_storey_and_back_to_wizard_takes_it_aw
     assert!(studio.mesh_to_plans.prepare.regions.chosen_core.is_some());
     act(&mut studio, PrepareAction::CoreWhole);
     assert!(studio.mesh_to_plans.prepare.regions.chosen_core.is_none());
+
+    // The card opened again from the strip puts the box back as well, here
+    // around the building; closed from the strip, the box stays.
+    act(&mut studio, PrepareAction::Show(0));
+    assert!(!studio.mesh_to_plans.covers_model());
+    assert_ne!(studio.section_box(), Some(building));
+    let _ = studio.update(wizard(WizardAction::Open));
+    assert!(studio.mesh_to_plans.covers_model());
+    let back = studio.section_box().expect("the box is on");
+    let corners = back.corners().into_iter().zip(building.corners());
+    for (corner, before) in corners {
+        let apart = (0..3).map(|axis| (corner[axis] - before[axis]).abs());
+        assert!(apart.fold(0.0, f64::max) < 1e-9, "{back:?}");
+    }
+    act(&mut studio, PrepareAction::Show(1));
+    let storey = studio.section_box();
+    let _ = studio.update(wizard(WizardAction::Close));
+    assert_eq!(studio.section_box(), storey);
+    assert_eq!(studio.mesh_to_plans.prepare.put_back, None);
 }
 
 #[test]
@@ -1168,7 +1205,7 @@ fn api_runs_and_confirms_steps_and_refuses_what_cannot_be_done() {
     for (body, error) in [
         (
             json!({"command": "mesh_to_plans_action", "action": "fly"}),
-            "unknown action; use run, run_all, confirm, skip, cancel, back, next",
+            "unknown action; use run, run_all, confirm, skip, cancel, back, next, resume",
         ),
         (
             json!({"command": "mesh_to_plans_action", "action": "confirm"}),
@@ -1246,4 +1283,115 @@ fn api_runs_and_confirms_steps_and_refuses_what_cannot_be_done() {
         command(json!({"command": "mesh_to_plans_action", "action": "run", "folder": folder})),
     );
     assert_eq!(answer["error"], "the project already has its folder");
+}
+
+#[test]
+fn api_selects_renames_moves_and_numbers_the_levels_of_step_0() {
+    let _language = TestLanguage::hold(Language::English);
+    let mut empty = Studio::default();
+    let answer = send(
+        &mut empty,
+        command(json!({"command": "mesh_to_plans_level", "level": "00"})),
+    );
+    assert_eq!(answer["error"], "there are no levels yet: run step 0 first");
+
+    let mut studio = studio_with_levels();
+    let level = |body: Value| {
+        let mut body = body;
+        body["command"] = json!("mesh_to_plans_level");
+        command(body)
+    };
+    for (body, error) in [
+        (
+            json!({"level": "07"}),
+            "no level 07; the levels are 00, 01, R",
+        ),
+        (json!({"action": "select"}), "level is required"),
+        (
+            json!({"level": "01", "action": "jump"}),
+            "unknown action; use select, show, set_peil, add, merge, remove",
+        ),
+        (
+            json!({"level": "01", "cut_height": 4.0}),
+            "cut_height must lie between 0.3 and 3.0 m",
+        ),
+        (
+            json!({"level": "01", "name": " "}),
+            "name must not be empty",
+        ),
+        (
+            json!({"level": "R", "action": "set_peil"}),
+            "only a whole floor can be P",
+        ),
+        (
+            json!({"level": "R", "action": "merge"}),
+            "the level has no level above it to merge with",
+        ),
+    ] {
+        let answer = send(&mut studio, level(body));
+        assert_eq!(answer["ok"], false, "{answer}");
+        assert_eq!(answer["error"], error);
+    }
+
+    // The first floor renamed, cut higher and moved 20 cm up.
+    let answer = send(
+        &mut studio,
+        level(
+            json!({"level": "01", "name": "Office floor", "cut_height": 1.35, "floor_above_p": 3.2}),
+        ),
+    );
+    assert_eq!(answer["ok"], true, "{answer}");
+    let levels = &answer["mesh_to_plans"]["prepare"]["levels"];
+    assert_eq!(levels[1]["name"], "Office floor");
+    assert_eq!(levels[1]["cut_height"], 1.35);
+    assert!((levels[1]["floor_above_p"].as_f64().unwrap() - 3.2).abs() < 1e-9);
+    assert_eq!(levels[1]["status"], "Edited");
+    assert_eq!(answer["mesh_to_plans"]["prepare"]["selected"], 1);
+
+    // P on the first floor; a level added above it; the ground floor gone.
+    let answer = send(
+        &mut studio,
+        level(json!({"level": "01", "action": "set_peil"})),
+    );
+    let ids: Vec<&str> = answer["mesh_to_plans"]["prepare"]["levels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|level| level["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["-01", "00", "R"]);
+    let answer = send(&mut studio, level(json!({"level": "00", "action": "add"})));
+    assert_eq!(answer["mesh_to_plans"]["prepare"]["levels"][2]["id"], "01");
+    let answer = send(
+        &mut studio,
+        level(json!({"level": "-01", "action": "remove"})),
+    );
+    let levels = answer["mesh_to_plans"]["prepare"]["levels"]
+        .as_array()
+        .unwrap();
+    assert_eq!(levels.len(), 3);
+    assert_eq!(levels[0]["name"], "Office floor");
+    assert_eq!(levels[0]["is_peil"], true);
+    let answer = send(
+        &mut studio,
+        level(json!({"level": "01", "action": "merge"})),
+    );
+    assert_eq!(
+        answer["mesh_to_plans"]["prepare"]["levels"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // Confirmed levels are only selected.
+    let _ = studio.update(wizard(WizardAction::Confirm));
+    let answer = send(&mut studio, level(json!({"level": "01", "name": "Top"})));
+    assert_eq!(
+        answer["error"],
+        "the levels are confirmed: use Edit levels first"
+    );
+    let answer = send(&mut studio, level(json!({"level": "00"})));
+    assert_eq!(answer["ok"], true);
+    assert_eq!(answer["mesh_to_plans"]["prepare"]["selected"], 0);
 }

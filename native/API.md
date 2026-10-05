@@ -771,7 +771,29 @@ disabled is refused with the reason, for example `next` before the step is
 confirmed or `run` while a job runs. `folder` sets the absolute folder of a
 new project before it is first written; by default that is
 `Documents/OPS Mesh to Plans/<name>`, named after the first shown scan. `run`
-and `run_all` answer with the `job_id` of the job.
+and `run_all` answer with the `job_id` of the job. `resume` opens the project
+in the absolute `folder`, or the project file `folder` names, as **Resume
+Mesh to Plans** in the Project Browser does: on the first step that is not
+confirmed or skipped, or on step 0 when that is `stale`. A file that is no
+project, or one made by a newer version, is refused with the reason.
+
+`mesh_to_plans_level` does what the page of step 0 does with a level once step
+0 has run. `level` is its id as `prepare.levels` lists it: `00` for the floor
+that is P, `01` and up above it, `-01` and down below it, `00M` for a
+mezzanine and `R` for the roof. The level is selected; then `name`,
+`cut_height` (the cut of its plan above its floor, 0.3 to 3 m) and
+`floor_above_p` (where its floor goes; its ceiling and slab go along, and the
+levels are numbered again) are applied when they are given, and then
+`action`: `select` (nothing more, the default), `show` (**Show in model**:
+the card becomes the strip, the section box takes the storey from just below
+its floor to the next floor and the camera frames it; `mesh_to_plans_view`
+with `open: true` puts the box back as it was), `set_peil` (a whole floor becomes P), `merge`
+(the level takes the one above it in), `remove`, or `add` (a level 3 m above
+the selected level or the highest floor; `level` may be left out). A level
+that is moved or edited is `Edited`. While the levels are confirmed only
+`select` and `show` are accepted; an unknown level, a cut outside its range,
+`set_peil` on a level that is no whole floor and `merge` on the highest level
+are refused.
 
 A project is the file `project.ops-m2p.json` in its folder, written whole
 through a temporary file a moment after every change once step 0 ran. It
@@ -1009,7 +1031,8 @@ when the view is restored.
 | `set_extension_enabled` | `id`, `enabled` | Switches a built-in optional feature (`bag3d`) on or off and persists that; `saved` in the answer is false, with `save_error`, when it could not be persisted |
 | `file_view` | `open`, optional `page` | Opens the File view, on the page `new`, `open`, `import`, `export`, `workspace`, `extensions` or `about` when one is named, or closes it and returns to the model |
 | `mesh_to_plans_view` | `open`, optional `step`, `minimized` | Shows the Mesh to Plans wizard as its card, on a step when one is named, or with `minimized: true` as a strip above the scene, or takes it away; answers with `mesh_to_plans` |
-| `mesh_to_plans_action` | `action`, optional `folder` | Does what a button of the Mesh to Plans wizard does on the step it shows: `run`, `run_all`, `confirm`, `skip`, `cancel`, `back` or `next`; `folder` is the absolute folder of a new project. `run` and `run_all` return a job ID; answers with `mesh_to_plans` |
+| `mesh_to_plans_action` | `action`, optional `folder` | Does what a button of the Mesh to Plans wizard does on the step it shows: `run`, `run_all`, `confirm`, `skip`, `cancel`, `back` or `next`; `folder` is the absolute folder of a new project. `resume` opens the project in the absolute `folder` instead. `run` and `run_all` return a job ID; answers with `mesh_to_plans` |
+| `mesh_to_plans_level` | optional `level`, `action`, `name`, `cut_height`, `floor_above_p` | Does what the page of step 0 of the Mesh to Plans wizard does with the level whose id is `level`: selects it, gives it `name`, `cut_height` (0.3 to 3 m above its floor) and `floor_above_p`, then does `action`: `select` (the default), `show`, `set_peil`, `add`, `merge` or `remove`; answers with `mesh_to_plans` |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |

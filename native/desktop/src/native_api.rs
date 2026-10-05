@@ -344,6 +344,23 @@ pub enum ApiCommand {
         #[serde(default)]
         folder: Option<PathBuf>,
     },
+    MeshToPlansLevel {
+        /// The id of a level of step 0, as `status` lists it; not for `add`.
+        #[serde(default)]
+        level: Option<String>,
+        /// `select` (the default), `show`, `set_peil`, `add`, `merge` or
+        /// `remove`.
+        #[serde(default)]
+        action: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        /// The cut of its plan above its floor, in metres.
+        #[serde(default)]
+        cut_height: Option<f64>,
+        /// Where its floor goes, in metres above P.
+        #[serde(default)]
+        floor_above_p: Option<f64>,
+    },
     Screenshot {
         /// Absolute `.png` path to write the image to.
         path: Option<PathBuf>,

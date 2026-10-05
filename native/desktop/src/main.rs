@@ -4333,6 +4333,19 @@ impl Studio {
             ApiCommand::MeshToPlansAction { action, folder } => {
                 self.api_mesh_to_plans_action(&action, folder)
             }
+            ApiCommand::MeshToPlansLevel {
+                level,
+                action,
+                name,
+                cut_height,
+                floor_above_p,
+            } => self.api_mesh_to_plans_level(
+                level.as_deref(),
+                action.as_deref(),
+                name,
+                cut_height,
+                floor_above_p,
+            ),
             ApiCommand::Screenshot {
                 path,
                 base64,
@@ -9078,13 +9091,21 @@ impl Studio {
                 )),
             ],
         );
+        // The group is as wide as its name, which is wider than its one
+        // button.
         let mesh_to_plans = opencad_ribbon::render_group_items(
             "MESH TO PLANS",
-            vec![RibbonItem::Large(large_tool_button(
-                "Mesh to Plans",
-                Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
-                self.mesh_to_plans.is_open(),
-            ))],
+            vec![RibbonItem::Large(
+                container(large_tool_button(
+                    "Mesh to Plans",
+                    Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
+                    self.mesh_to_plans.is_open(),
+                ))
+                .width(96)
+                .height(Fill)
+                .align_x(iced::alignment::Horizontal::Center)
+                .into(),
+            )],
         );
         let groups = row![
             view,

@@ -25,10 +25,11 @@ use crate::{Message, Studio};
 pub(crate) const POLL: Duration = Duration::from_millis(250);
 
 /// What the steps of a job do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Work {
     /// Every step that is built does its work, and the others stand in for
     /// theirs as `PLACEHOLDER` does.
+    #[default]
     Steps,
     /// Stands in for the work of every step, as the tests do: it counts to
     /// `ticks`, one tick at a time, and looks for a cancel at each tick.
@@ -44,12 +45,6 @@ pub(crate) const PLACEHOLDER: Work = Work::Placeholder {
 };
 const STAND_IN_TICKS: u32 = 20;
 const STAND_IN_TICK: Duration = Duration::from_millis(50);
-
-impl Default for Work {
-    fn default() -> Self {
-        Self::Steps
-    }
-}
 
 /// A step that a job finished, and how long it took.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -264,12 +259,9 @@ impl PipelineJob {
             step.number(),
             step.label()
         );
-        if progress.total > 0 {
-            detail.push_str(&format!(
-                "  ·  {} of {}",
-                progress.done.min(progress.total),
-                progress.total
-            ));
+        if let Some(percent) = (progress.done.min(progress.total) * 100).checked_div(progress.total)
+        {
+            detail.push_str(&format!("  ·  {percent}%"));
         }
         detail
     }

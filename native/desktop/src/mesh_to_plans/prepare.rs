@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use iced::alignment;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
-use iced::widget::{button, column, container, image, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, image, row, scrollable, stack, text, text_input};
 use iced::{
     keyboard, mouse, Border, Color, Element, Fill, Point, Rectangle, Renderer, Size, Task, Theme,
 };
@@ -28,12 +28,18 @@ use pointcloud_core::plans::{
 use pointcloud_core::region_source::{resident_points, RegionSource};
 use pointcloud_core::{Bounds, IndexedPoint, LoadError, OrientedBox};
 
+use serde_json::{json, Value};
+
 use super::project::{BoxRecord, Regions, SurveyRecord};
 use super::{StepStatus, WizardAction, WizardStep};
 use crate::closed_mesh::{Sentence, UNINDEXED_LIMIT};
 use crate::i18n::{key, tr, tr_args};
 use crate::job_scene::{JobLayer, JobScene};
 use crate::{opencad_ribbon, Message, Studio};
+
+/// What `mesh_to_plans_level` of the local API does with a level.
+pub(crate) const LEVEL_ACTIONS: [&str; 6] =
+    ["select", "show", "set_peil", "add", "merge", "remove"];
 
 /// Levels snap to heights of this step above P while they are dragged.
 pub(crate) const SNAP: f64 = 0.05;
@@ -921,6 +927,110 @@ impl Studio {
         }
     }
 
+    /// The `mesh_to_plans_level` command of the local API: what the page of
+    /// step 0 does with a level. The level named by its id is selected, then
+    /// given its name, its cut and the height of its floor when they are
+    /// given, and then `action` is done: `select` (nothing more), `show`
+    /// (Show in model), `set_peil`, `merge` (with the level above it),
+    /// `remove`, or `add` (a level above the selected or highest floor, for
+    /// which no level is needed). Confirmed levels are only selected and
+    /// shown.
+    pub(crate) fn api_mesh_to_plans_level(
+        &mut self,
+        level: Option<&str>,
+        action: Option<&str>,
+        name: Option<String>,
+        cut_height: Option<f64>,
+        floor_above_p: Option<f64>,
+    ) -> (Value, Task<Message>) {
+        let refuse = |error: String| (json!({"ok": false, "error": error}), Task::none());
+        let action = action.unwrap_or("select").to_ascii_lowercase();
+        if !LEVEL_ACTIONS.contains(&action.as_str()) {
+            return refuse(format!("unknown action; use {}", LEVEL_ACTIONS.join(", ")));
+        }
+        let prepare = &self.mesh_to_plans.prepare;
+        if prepare.survey.is_none() {
+            return refuse("there are no levels yet: run step 0 first".into());
+        }
+        let edits = name.is_some()
+            || cut_height.is_some()
+            || floor_above_p.is_some()
+            || !matches!(action.as_str(), "select" | "show");
+        if edits && self.levels_locked() {
+            let running = *self.mesh_to_plans.status(WizardStep::Prepare) == StepStatus::Running;
+            return refuse(if running {
+                "step 0 is running".into()
+            } else {
+                "the levels are confirmed: use Edit levels first".into()
+            });
+        }
+        let place = match level {
+            Some(id) => match prepare.levels.iter().position(|known| known.id == id) {
+                Some(place) => Some(place),
+                None => {
+                    let ids: Vec<&str> = prepare
+                        .levels
+                        .iter()
+                        .map(|known| known.id.as_str())
+                        .collect();
+                    return refuse(format!("no level {id}; the levels are {}", ids.join(", ")));
+                }
+            },
+            None if action == "add" => None,
+            None => return refuse("level is required".into()),
+        };
+        if name.as_deref().is_some_and(|name| name.trim().is_empty()) {
+            return refuse("name must not be empty".into());
+        }
+        if cut_height.is_some_and(|height| !(0.3..=3.0).contains(&height)) {
+            return refuse("cut_height must lie between 0.3 and 3.0 m".into());
+        }
+        if floor_above_p.is_some_and(|height| !height.is_finite() || height.abs() > 1000.0) {
+            return refuse("floor_above_p must be a height within 1000 m of P".into());
+        }
+        if let Some(place) = place {
+            let found = &prepare.levels[place];
+            if action == "set_peil" && !found.is_storey() {
+                return refuse("only a whole floor can be P".into());
+            }
+            if action == "merge" && place + 1 >= prepare.levels.len() {
+                return refuse("the level has no level above it to merge with".into());
+            }
+        }
+        let mut tasks = Vec::new();
+        if let Some(place) = place {
+            tasks.push(self.update_prepare(PrepareAction::Select(place)));
+            if let Some(name) = name {
+                tasks.push(self.update_prepare(PrepareAction::Name(name)));
+            }
+            if let Some(height) = cut_height {
+                tasks.push(self.update_prepare(PrepareAction::Cut(format!("{height}"))));
+            }
+            if let Some(above) = floor_above_p {
+                let prepare = &self.mesh_to_plans.prepare;
+                let z = prepare.peil_z() + above;
+                let place = prepare.selected.unwrap_or(place);
+                tasks.push(self.update_prepare(PrepareAction::Move(place, z)));
+            }
+        }
+        let selected = self.mesh_to_plans.prepare.selected;
+        let done = match (action.as_str(), selected) {
+            ("show", Some(place)) => Some(PrepareAction::Show(place)),
+            ("set_peil", Some(_)) => Some(PrepareAction::SetPeil),
+            ("merge", Some(_)) => Some(PrepareAction::Merge),
+            ("remove", Some(_)) => Some(PrepareAction::Remove),
+            ("add", _) => Some(PrepareAction::Add),
+            _ => None,
+        };
+        if let Some(done) = done {
+            tasks.push(self.update_prepare(done));
+        }
+        (
+            json!({"ok": true, "mesh_to_plans": self.mesh_to_plans.value()}),
+            Task::batch(tasks),
+        )
+    }
+
     /// Put the section box around a box, or switch it off.
     pub(crate) fn put_section_box(&mut self, section: Option<OrientedBox>) -> Task<Message> {
         let Some(section) = section else {
@@ -948,9 +1058,9 @@ impl Studio {
         task
     }
 
-    /// Show in model for a level: the card becomes the strip and the section
-    /// box takes the storey, from just below its floor to the next floor;
-    /// Back to wizard puts the box back as it was.
+    /// Show in model for a level: the card becomes the strip, the section
+    /// box takes the storey, from just below its floor to the next floor,
+    /// and the camera frames it; Back to wizard puts the box back as it was.
     fn show_level_in_model(&mut self, place: usize) -> Task<Message> {
         let prepare = &self.mesh_to_plans.prepare;
         let (Some(frame), Some(building), Some(level)) = (
@@ -983,7 +1093,26 @@ impl Studio {
         }
         self.mesh_to_plans.prepare.select(Some(place));
         self.mesh_to_plans.minimize();
-        self.put_section_box(Some(storey))
+        let placed = self.put_section_box(Some(storey));
+        // The camera keeps its direction and frames the storey.
+        let framed = crate::combined_bounds(&self.clouds).and_then(|scene| {
+            crate::camera_to_frame_bounds(
+                scene,
+                storey.aabb(),
+                self.yaw,
+                self.pitch,
+                self.viewport_size,
+            )
+        });
+        match framed {
+            Some((zoom, pan)) => {
+                self.zoom = zoom;
+                self.pan = pan;
+                self.revision += 1;
+                Task::batch([placed, self.schedule_detail()])
+            }
+            None => placed,
+        }
     }
 
     /// The settings and lists of step 0, in the middle column.
@@ -1166,13 +1295,18 @@ impl Studio {
         ));
         if let Some(survey) = &prepare.survey {
             if survey.below_points > 0 {
-                page = page.push(note(tr_args(
-                    "{points} stray points below the scene in {groups} groups left out",
-                    &[
-                        ("points", &crate::format_count(survey.below_points)),
-                        ("groups", &survey.below_groups),
-                    ],
-                )));
+                let points = crate::format_count(survey.below_points);
+                page = page.push(note(if survey.below_groups == 1 {
+                    tr_args(
+                        "{points} stray points below the scene in one group left out",
+                        &[("points", &points)],
+                    )
+                } else {
+                    tr_args(
+                        "{points} stray points below the scene in {groups} groups left out",
+                        &[("points", &points), ("groups", &survey.below_groups)],
+                    )
+                }));
             }
         }
 
@@ -1216,15 +1350,14 @@ impl Studio {
             page = page.push(
                 row![
                     plain(key("Add level"), open.then_some(send(PrepareAction::Add))),
-                    plain(
-                        key("Merge with above"),
-                        (open && place + 1 < prepare.levels.len())
-                            .then_some(send(PrepareAction::Merge)),
-                    ),
                     plain(key("Remove"), open.then_some(send(PrepareAction::Remove))),
                 ]
                 .spacing(4),
             );
+            page = page.push(plain(
+                key("Merge with above"),
+                (open && place + 1 < prepare.levels.len()).then_some(send(PrepareAction::Merge)),
+            ));
         } else if prepare.survey.is_some() {
             page = page.push(plain(
                 key("Add level"),
@@ -1262,14 +1395,22 @@ impl Studio {
         })
         .width(300)
         .height(Fill);
-        let top = Canvas::new(TopView {
-            survey,
-            frame: prepare.frame().unwrap_or(survey.frame),
-            top: prepare.top_handle.as_ref(),
-            regions: &prepare.regions,
-        })
-        .width(Fill)
-        .height(Fill);
+        // The picture and the lines over it are two canvases in a stack: an
+        // image in a canvas would be drawn over the lines of the same one.
+        let top = |part: TopPart| {
+            Canvas::new(TopView {
+                survey,
+                frame: prepare.frame().unwrap_or(survey.frame),
+                top: prepare.top_handle.as_ref(),
+                regions: &prepare.regions,
+                part,
+            })
+            .width(Fill)
+            .height(Fill)
+        };
+        let top = stack![top(TopPart::Picture), top(TopPart::Lines)]
+            .width(Fill)
+            .height(Fill);
         column![
             row![histogram, top].spacing(8).height(Fill),
             self.level_table(),
@@ -1284,7 +1425,7 @@ impl Studio {
         let prepare = &self.mesh_to_plans.prepare;
         let peil = prepare.peil_z();
         let cell = |content: String, width: f32| text(content).size(11).color(INK).width(width);
-        let widths = [150.0, 64.0, 64.0, 60.0, 52.0, 44.0, 84.0, 74.0, 56.0];
+        let widths = [170.0, 68.0, 68.0, 76.0, 56.0, 48.0, 124.0, 104.0, 70.0];
         let header_names = [
             key("Level"),
             key("Floor"),
@@ -1645,6 +1786,15 @@ struct TopView<'a> {
     frame: BuildingFrame,
     top: Option<&'a image::Handle>,
     regions: &'a Regions,
+    part: TopPart,
+}
+
+/// What a canvas of the view from above draws: the picture of the heights,
+/// or the lines and labels that go over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopPart {
+    Picture,
+    Lines,
 }
 
 impl TopView<'_> {
@@ -1719,13 +1869,16 @@ impl canvas::Program<Message> for TopView<'_> {
                 centre.y - ((uv[1] - middle[1]) * scale) as f32,
             )
         };
-        if let Some(top) = self.top {
-            let corner = at([grid_min[0], grid_max[1]]);
-            let far = at([grid_max[0], grid_min[1]]);
-            frame.draw_image(
-                Rectangle::new(corner, Size::new(far.x - corner.x, far.y - corner.y)),
-                top,
-            );
+        if self.part == TopPart::Picture {
+            if let Some(top) = self.top {
+                let corner = at([grid_min[0], grid_max[1]]);
+                let far = at([grid_max[0], grid_min[1]]);
+                frame.draw_image(
+                    Rectangle::new(corner, Size::new(far.x - corner.x, far.y - corner.y)),
+                    top,
+                );
+            }
+            return vec![frame.into_geometry()];
         }
         let ring = |frame: &mut Frame, corners: &[[f64; 2]], color: Color, width: f32| {
             if corners.len() < 2 {
@@ -1745,6 +1898,9 @@ impl canvas::Program<Message> for TopView<'_> {
                     .with_width(width),
             );
         };
+        // Boxes that coincide, as the core and the site do when the whole
+        // scan is read, get their labels one under the other.
+        let mut labels: Vec<Point> = Vec::new();
         for (corners, color, name) in &boxes {
             ring(&mut frame, corners, *color, 1.5);
             let top_left = corners
@@ -1752,9 +1908,16 @@ impl canvas::Program<Message> for TopView<'_> {
                 .map(|corner| at(*corner))
                 .min_by(|a, b| (a.x + a.y).total_cmp(&(b.x + b.y)))
                 .unwrap_or(Point::ORIGIN);
+            let mut position = Point::new(top_left.x + 3.0, top_left.y + 2.0);
+            while labels.iter().any(|label| {
+                (label.x - position.x).abs() < 60.0 && (label.y - position.y).abs() < 12.0
+            }) {
+                position.y += 12.0;
+            }
+            labels.push(position);
             frame.fill_text(canvas::Text {
                 content: tr(name).to_owned(),
-                position: Point::new(top_left.x + 3.0, top_left.y + 2.0),
+                position,
                 size: iced::Pixels(10.0),
                 color: *color,
                 ..canvas::Text::default()
@@ -1785,8 +1948,15 @@ impl canvas::Program<Message> for TopView<'_> {
             let mut arrow = |degrees: f64, content: String| {
                 let turn = (degrees - self.frame.rotation_deg).to_radians();
                 let to = [from[0] + reach * turn.cos(), from[1] + reach * turn.sin()];
+                let line = canvas::Path::line(at(from), at(to));
                 frame.stroke(
-                    &canvas::Path::line(at(from), at(to)),
+                    &line,
+                    canvas::Stroke::default()
+                        .with_color(Color::WHITE)
+                        .with_width(4.0),
+                );
+                frame.stroke(
+                    &line,
                     canvas::Stroke::default().with_color(INK).with_width(2.0),
                 );
                 frame.fill_text(canvas::Text {

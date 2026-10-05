@@ -8,27 +8,29 @@ use iced::{Background, Border, Color, Element, Fill};
 
 use super::WizardAction;
 use crate::i18n::{key, tr};
-use crate::{opencad_ribbon, Message, Studio};
+use crate::{opencad_ribbon, ui_theme, Message, Studio};
 
-/// Light text on the dark background of the scene, whatever the theme.
-const INK: Color = Color::from_rgb(0.98, 0.98, 0.976);
-const MUTED: Color = Color::from_rgb(0.745, 0.745, 0.776);
+/// The colour of the text of the scene with this much of it.
+fn faded(color: Color, alpha: f32) -> Color {
+    Color { a: alpha, ..color }
+}
 
-/// A button of the strip: light text on the scene, a light hover.
-fn strip_button_style(_: &iced::Theme, status: button::Status) -> button::Style {
+/// A button of the strip: the text colour of the scene, light on the dark
+/// scene of a dark theme and dark on the white one of the light theme.
+fn strip_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
+    let ink = ui_theme::colors(theme).scene_text;
     let (background, text_color) = match status {
-        button::Status::Disabled => (None, Color::from_rgba(0.98, 0.98, 0.976, 0.35)),
-        button::Status::Hovered | button::Status::Pressed => (
-            Some(Background::Color(Color::from_rgba(1.0, 1.0, 1.0, 0.12))),
-            INK,
-        ),
-        button::Status::Active => (None, INK),
+        button::Status::Disabled => (None, faded(ink, 0.35)),
+        button::Status::Hovered | button::Status::Pressed => {
+            (Some(Background::Color(faded(ink, 0.10))), ink)
+        }
+        button::Status::Active => (None, ink),
     };
     button::Style {
         background,
         text_color,
         border: Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.25),
+            color: faded(ink, 0.25),
             width: 1.0,
             radius: 3.0.into(),
         },
@@ -45,6 +47,8 @@ impl Studio {
             return None;
         }
         let send = Message::MeshToPlans;
+        let colors = self.ui_theme.colors();
+        let (ink, muted) = (colors.scene_text, colors.scene_muted);
         let step = wizard.step;
         let ready = wizard.step_ready();
         let reason = ready
@@ -59,7 +63,7 @@ impl Studio {
                 .padding([2, 10])
         };
         let line = row![
-            text(tr("Mesh to Plans")).size(12).color(INK),
+            text(tr("Mesh to Plans")).size(12).color(ink),
             text(format!(
                 "{}  {}  ·  {}",
                 step.number(),
@@ -67,9 +71,9 @@ impl Studio {
                 wizard.status(step).text()
             ))
             .size(11)
-            .color(MUTED),
+            .color(muted),
             horizontal_space(),
-            text(reason).size(11).color(MUTED),
+            text(reason).size(11).color(muted),
             plain(
                 key("Previous"),
                 step.previous().map(|_| send(WizardAction::Back))

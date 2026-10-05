@@ -389,8 +389,8 @@ fn find_peaks(
             },
         );
         let (mut weighted, mut total) = (0u64, 0u64);
-        for bin in first..=last {
-            let above = (histogram[bin] as u64).saturating_sub(base);
+        for (bin, count) in histogram.iter().enumerate().take(last + 1).skip(first) {
+            let above = (*count as u64).saturating_sub(base);
             weighted += above * (2 * bin as u64 + 1);
             total += above;
         }
@@ -660,11 +660,10 @@ pub fn detect_levels(
         });
     }
     // Partial floors after the storey they stand in.
-    for index in 0..peaks.len() {
-        if peaks[index].role != PeakRole::PartialFloor {
+    for peak in peaks.iter() {
+        if peak.role != PeakRole::PartialFloor {
             continue;
         }
-        let peak = &peaks[index];
         let storey = levels
             .iter()
             .rposition(|level| level.kind != LevelKind::Partial && level.floor_z < peak.z);

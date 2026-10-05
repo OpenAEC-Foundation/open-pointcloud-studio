@@ -33,14 +33,15 @@ mod tests;
 pub use pipeline::PipelineEnd;
 use pipeline::{Last, PipelineJob, Work};
 pub use prepare::PrepareAction;
+pub(crate) use prepare::LEVEL_ACTIONS;
 use project::{MeshToPlansProject, RecentProject, SourceRef, StepRecord};
 
 /// How many projects the list of recent ones keeps.
 pub(crate) const MAX_RECENT_PROJECTS: usize = project::MAX_RECENT;
 
 /// What `mesh_to_plans_action` of the local API takes.
-const API_ACTIONS: [&str; 7] = [
-    "run", "run_all", "confirm", "skip", "cancel", "back", "next",
+const API_ACTIONS: [&str; 8] = [
+    "run", "run_all", "confirm", "skip", "cancel", "back", "next", "resume",
 ];
 
 /// The share of the window the card takes, and the least it takes when the
@@ -50,7 +51,7 @@ const CARD_MIN: Size = Size::new(960.0, 640.0);
 /// The width of the sidebar with the steps and of the column with the
 /// settings of a step.
 const SIDEBAR_W: f32 = 210.0;
-const SETTINGS_W: f32 = 320.0;
+const SETTINGS_W: f32 = 340.0;
 
 /// A step of the wizard, in the order of the sidebar. The plans of step 3
 /// are made in four parts.
@@ -518,13 +519,21 @@ impl Studio {
                 // The card lies over the window; the File view it may have
                 // been opened from steps aside.
                 self.file_open = false;
+                let from_strip = wizard.open && wizard.minimized;
                 wizard.open = true;
                 wizard.minimized = false;
+                // Show in model of a level moved the section box.
+                let put_back = from_strip.then(|| wizard.prepare.put_back.take()).flatten();
                 self.default_project_place();
+                if let Some(before) = put_back {
+                    return self.put_section_box(before.section);
+                }
             }
             WizardAction::Close => {
                 wizard.open = false;
                 wizard.minimized = false;
+                // The section box stays where Show in model put it.
+                wizard.prepare.put_back = None;
             }
             WizardAction::Minimize => {
                 wizard.minimize();
@@ -975,6 +984,9 @@ impl Studio {
         if !API_ACTIONS.contains(&action.as_str()) {
             return refuse(format!("unknown action; use {}", API_ACTIONS.join(", ")));
         }
+        if action == "resume" {
+            return self.api_resume_project(folder);
+        }
         if let Some(folder) = folder {
             if self.mesh_to_plans.project.is_some() {
                 return refuse("the project already has its folder".into());
@@ -1029,6 +1041,39 @@ impl Studio {
                 "job_id": job_id,
                 "mesh_to_plans": self.mesh_to_plans.value(),
             }),
+            task,
+        )
+    }
+
+    /// `resume` of `mesh_to_plans_action`: open the project in a folder, or
+    /// the project file named, as Resume in the Project Browser does.
+    fn api_resume_project(&mut self, folder: Option<PathBuf>) -> (Value, Task<Message>) {
+        let refuse = |error: String| (json!({"ok": false, "error": error}), Task::none());
+        let Some(folder) = folder else {
+            return refuse("resume needs the folder of the project".into());
+        };
+        if !folder.is_absolute() {
+            return refuse("folder must be an absolute path".into());
+        }
+        if self.mesh_to_plans.is_running() {
+            return refuse("Mesh to Plans is already running a step".into());
+        }
+        let file = if folder.is_file() {
+            folder
+        } else {
+            project::project_file(&folder)
+        };
+        let task = self.resume_project(&file);
+        let opened = self
+            .mesh_to_plans
+            .project
+            .as_ref()
+            .is_some_and(|place| place.file == file);
+        if !opened {
+            return (json!({"ok": false, "error": self.status.clone()}), task);
+        }
+        (
+            json!({"ok": true, "mesh_to_plans": self.mesh_to_plans.value()}),
             task,
         )
     }
@@ -1183,6 +1228,11 @@ impl Studio {
             .spacing(8),
         ]
         .spacing(12)
+        // Room for the scroll bar at the right.
+        .padding(iced::Padding {
+            right: 14.0,
+            ..iced::Padding::ZERO
+        })
         .width(Fill);
         if let StepStatus::Failed(reason) = wizard.status(step) {
             page = page.push(text(reason.clone()).size(11).color(colors.muted));
