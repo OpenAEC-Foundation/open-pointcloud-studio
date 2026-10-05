@@ -772,7 +772,10 @@ shows, whether the wizard is shown or not: `run` (Run this step), `run_all`
 disabled is refused with the reason, for example `next` before the step is
 confirmed or `run` while a job runs. `folder` sets the absolute folder of a
 new project before it is first written; by default that is
-`Documents/OPS Mesh to Plans/<name>`, named after the first shown scan. `run`
+`Documents/OPS Mesh to Plans/<name>`, named after the first shown scan, or
+`<name> 2` and so on when a project is there. A folder that holds another
+project is refused by `run` and `run_all` with the reason, and `folder` is
+refused while a job runs. `run`
 and `run_all` answer with the `job_id` of the job. `resume` opens the project
 in the absolute `folder`, or the project file `folder` names, as **Resume
 Mesh to Plans** in the Project Browser does: on the first step that is not

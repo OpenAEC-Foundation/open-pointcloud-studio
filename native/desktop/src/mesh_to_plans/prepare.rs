@@ -886,27 +886,17 @@ impl Studio {
             }
             PrepareAction::Show(place) => return self.show_level_in_model(place),
             PrepareAction::ProjectName(name) => {
-                let wizard = &mut self.mesh_to_plans;
-                let before = super::project::folder_name(&wizard.project_name);
-                wizard.project_name = name.chars().take(80).collect();
-                // The folder follows the name while it is the default one.
-                if wizard.project.is_none() {
-                    if let Some(root) = super::project::default_root() {
-                        if wizard.project_folder.is_empty()
-                            || Path::new(&wizard.project_folder) == root.join(&before)
-                        {
-                            wizard.project_folder = root
-                                .join(super::project::folder_name(&wizard.project_name))
-                                .display()
-                                .to_string();
-                        }
-                    }
-                }
+                self.mesh_to_plans.project_name = name.chars().take(80).collect();
+                // The folder follows the name while it is the proposed one.
+                self.follow_project_name();
                 save = self.mesh_to_plans.project.is_some();
             }
             PrepareAction::ProjectFolder(folder) => {
-                if self.mesh_to_plans.project.is_none() {
-                    self.mesh_to_plans.project_folder = folder;
+                // A running job writes to the folder it started with.
+                let wizard = &mut self.mesh_to_plans;
+                if wizard.project.is_none() && !wizard.is_running() {
+                    wizard.project_folder = folder;
+                    self.find_existing_project();
                 }
             }
             PrepareAction::ChooseFolder => {
@@ -926,9 +916,11 @@ impl Studio {
                 );
             }
             PrepareAction::FolderChosen(folder) => {
+                let wizard = &mut self.mesh_to_plans;
                 if let Some(folder) = folder {
-                    if self.mesh_to_plans.project.is_none() {
-                        self.mesh_to_plans.project_folder = folder.display().to_string();
+                    if wizard.project.is_none() && !wizard.is_running() {
+                        wizard.project_folder = folder.display().to_string();
+                        self.find_existing_project();
                     }
                 }
             }
@@ -1178,12 +1170,12 @@ impl Studio {
             )
             .into(),
         ));
+        // The folder is fixed once the project is written, and while a job
+        // writes to it.
+        let folder_open = wizard.project.is_none() && !wizard.is_running();
         let folder_input = text_input(tr("Folder"), &wizard.project_folder)
             .on_input_maybe(
-                wizard
-                    .project
-                    .is_none()
-                    .then_some(|typed| send(PrepareAction::ProjectFolder(typed))),
+                folder_open.then_some(|typed| send(PrepareAction::ProjectFolder(typed))),
             )
             .size(11)
             .padding([3, 5])
@@ -1194,20 +1186,31 @@ impl Studio {
                 folder_input,
                 plain(
                     key("Choose…"),
-                    wizard
-                        .project
-                        .is_none()
-                        .then_some(send(PrepareAction::ChooseFolder)),
+                    folder_open.then_some(send(PrepareAction::ChooseFolder)),
                 ),
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
             .into(),
         ));
-        page = page.push(note(match &wizard.project {
-            Some(project) => tr_args("Saved in {file}", &[("file", &project.file.display())]),
-            None => tr("The project is written there when this step runs.").to_owned(),
+        page = page.push(note(match (&wizard.project, self.folder_taken_as_seen()) {
+            (Some(project), _) => tr_args("Saved in {file}", &[("file", &project.file.display())]),
+            (None, Some(taken)) => taken.translated(),
+            (None, None) => tr("The project is written there when this step runs.").to_owned(),
         }));
+        // A project of that name, or in that folder, can be gone on with.
+        if let Some((file, name)) = &wizard.existing {
+            let folder = file.parent().unwrap_or(file);
+            page = page.push(note(tr_args(
+                "There is a project {name} in {folder}",
+                &[("name", name), ("folder", &folder.display())],
+            )));
+            page = page.push(plain(
+                key("Resume that project"),
+                (!wizard.is_running())
+                    .then(|| Message::MeshToPlans(WizardAction::Resume(file.clone()))),
+            ));
+        }
 
         // The scans.
         page = page.push(heading(key("Scans")));

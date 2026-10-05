@@ -358,6 +358,12 @@ pub(crate) struct Wizard {
     pub(crate) project_name: String,
     pub(crate) project_folder: String,
     pub(crate) project: Option<ProjectPlace>,
+    /// The folder the wizard proposed for a new project: the folder is the
+    /// user's own choice once it is another.
+    default_folder: String,
+    /// A project that is already in the folder of a new project, or in the
+    /// folder named after it, with its name, for Resume on the page.
+    pub(crate) existing: Option<(PathBuf, String)>,
     /// The scans step 0 ran on.
     sources: Vec<SourceRef>,
     /// The project files that were worked on last, newest first, and what
@@ -641,14 +647,82 @@ impl Studio {
                     .unwrap_or_default();
             }
         }
-        if wizard.project_folder.trim().is_empty() && !wizard.project_name.trim().is_empty() {
+        self.follow_project_name();
+    }
+
+    /// While the folder of a new project is the one the wizard proposed, it
+    /// follows the name: the folder named after it in the folder of the
+    /// projects, or the next free one beside it when a project is there.
+    /// Not while a job runs, as the job writes to the folder it started with.
+    pub(crate) fn follow_project_name(&mut self) {
+        let wizard = &mut self.mesh_to_plans;
+        let proposed = wizard.project_folder.trim().is_empty()
+            || wizard.project_folder == wizard.default_folder;
+        if wizard.project.is_none()
+            && proposed
+            && !wizard.is_running()
+            && !wizard.project_name.trim().is_empty()
+        {
             if let Some(root) = project::default_root() {
-                wizard.project_folder = root
-                    .join(project::folder_name(&wizard.project_name))
+                let folder = project::free_folder(&root, &wizard.project_name)
                     .display()
                     .to_string();
+                wizard.project_folder.clone_from(&folder);
+                wizard.default_folder = folder;
             }
         }
+        self.find_existing_project();
+    }
+
+    /// Whether the folder of a new project is one the user chose.
+    fn folder_chosen(&self) -> bool {
+        let wizard = &self.mesh_to_plans;
+        !wizard.project_folder.trim().is_empty() && wizard.project_folder != wizard.default_folder
+    }
+
+    /// Note the project that is in the folder of a new project already, or
+    /// in the folder named after it that the wizard passed by.
+    pub(crate) fn find_existing_project(&mut self) {
+        let wizard = &self.mesh_to_plans;
+        let folder = if wizard.project.is_some() {
+            None
+        } else if self.folder_chosen() {
+            self.project_folder()
+        } else {
+            project::default_root()
+                .filter(|_| !wizard.project_name.trim().is_empty())
+                .map(|root| root.join(project::folder_name(&wizard.project_name)))
+        };
+        let existing = folder
+            .map(|folder| project::project_file(&folder))
+            .filter(|file| file.exists())
+            .map(|file| {
+                let name = project::load(&file).map_or_else(
+                    |_| crate::display_name(&file).to_owned(),
+                    |project| project.name,
+                );
+                (file, name)
+            });
+        self.mesh_to_plans.existing = existing;
+    }
+
+    /// Why a new project cannot be written to the folder chosen for it: a
+    /// project is there already.
+    pub(crate) fn folder_taken(&self) -> Option<Sentence> {
+        if self.mesh_to_plans.project.is_some() {
+            return None;
+        }
+        let folder = self.project_folder()?;
+        project::project_file(&folder)
+            .exists()
+            .then(|| taken_sentence(&folder))
+    }
+
+    /// `folder_taken` as far as the wizard last looked, for the page.
+    pub(crate) fn folder_taken_as_seen(&self) -> Option<Sentence> {
+        let (file, _) = self.mesh_to_plans.existing.as_ref()?;
+        let folder = self.project_folder()?;
+        (file.parent() == Some(folder.as_path())).then(|| taken_sentence(&folder))
     }
 
     /// The folder the project is written to: the one it is in, or the one
@@ -740,16 +814,14 @@ impl Studio {
             self.status = tr("Choose a project folder to save the project").into();
             return Task::none();
         };
-        let Some(mut project) = self.project_snapshot() else {
+        let Some(project) = self.project_snapshot() else {
             return Task::none();
         };
         let file = project::project_file(&folder);
-        // A project already in that folder keeps its id.
-        if self.mesh_to_plans.project.is_none() {
-            if let Ok(existing) = project::load(&file) {
-                project.id = existing.id;
-                project.created = existing.created;
-            }
+        // Another project in that folder stays as it is.
+        if let Some(taken) = self.folder_taken() {
+            self.status = taken.translated();
+            return Task::none();
         }
         if let Err(error) = project::save(&file, &project) {
             self.status = tr_args("Could not save the project: {error}", &[("error", &error)]);
@@ -767,6 +839,7 @@ impl Studio {
         wizard.recent_projects.retain(|known| known.file != file);
         wizard.recent_projects.insert(0, entry);
         wizard.recent_projects.truncate(project::MAX_RECENT);
+        wizard.existing = None;
         if first {
             project::remember(&mut wizard.recent, &file);
             return self.queue_preferences_save();
@@ -799,6 +872,7 @@ impl Studio {
         });
         wizard.project_name = project.name.clone();
         wizard.project_folder = folder.display().to_string();
+        wizard.existing = None;
         wizard.sources = project.sources.clone();
         let prepare = &mut wizard.prepare;
         *prepare = prepare::Prepare::default();
@@ -1010,7 +1084,11 @@ impl Studio {
             if !folder.is_absolute() {
                 return refuse("folder must be an absolute path".into());
             }
+            if self.mesh_to_plans.is_running() {
+                return refuse("Mesh to Plans is already running a step".into());
+            }
             self.mesh_to_plans.project_folder = folder.display().to_string();
+            self.find_existing_project();
         }
         let wizard = &self.mesh_to_plans;
         let step = wizard.step;
@@ -1365,6 +1443,14 @@ impl Studio {
         .align_y(iced::Alignment::Center)
         .into()
     }
+}
+
+/// That a folder holds another project, and what to do.
+fn taken_sentence(folder: &Path) -> Sentence {
+    Sentence::with(
+        key("{folder} holds another project: resume it, or choose another folder"),
+        &[("folder", folder.display().to_string())],
+    )
 }
 
 /// The dot that tells the status of a step.

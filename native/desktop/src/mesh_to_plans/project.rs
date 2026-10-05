@@ -315,9 +315,19 @@ pub(crate) fn now_seconds() -> u64 {
 }
 
 /// The folder that holds the projects by default: `OPS Mesh to Plans` in the
-/// Documents folder of the user.
+/// Documents folder of the user. The tests give one of their own, or none.
 pub(crate) fn default_root() -> Option<PathBuf> {
+    if cfg!(test) {
+        return TEST_ROOT.with(|root| root.borrow().clone());
+    }
     Some(documents_folder()?.join(PROJECTS_FOLDER))
+}
+
+thread_local! {
+    /// The folder of the projects of a test, which runs on a thread of its
+    /// own: the Documents folder of the user stays out of the tests.
+    pub(crate) static TEST_ROOT: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The Documents folder of the user: where Windows keeps it, also when it
@@ -421,6 +431,23 @@ pub(crate) fn folder_name(name: &str) -> String {
 /// The file of the project in a folder.
 pub(crate) fn project_file(folder: &Path) -> PathBuf {
     folder.join(FILE_NAME)
+}
+
+/// The folder for a new project of this name in `root`: the one named after
+/// it, or, when a project is there already, the first of `<name> 2`,
+/// `<name> 3` and so on without one.
+pub(crate) fn free_folder(root: &Path, name: &str) -> PathBuf {
+    let base = folder_name(name);
+    (1..1000)
+        .map(|number| {
+            root.join(if number == 1 {
+                base.clone()
+            } else {
+                format!("{base} {number}")
+            })
+        })
+        .find(|folder| !project_file(folder).exists())
+        .unwrap_or_else(|| root.join(base))
 }
 
 /// Write a project whole, through a temporary file in its folder.
@@ -706,10 +733,10 @@ mod tests {
 
     #[test]
     fn projects_go_to_the_documents_folder_that_windows_knows() {
-        let root = default_root().expect("a Documents folder");
-        assert!(root.ends_with(PROJECTS_FOLDER));
-        let documents = root.parent().unwrap();
-        assert!(documents.is_absolute(), "{root:?}");
+        let documents = documents_folder().expect("a Documents folder");
+        assert!(documents.is_absolute(), "{documents:?}");
+        // The tests keep their projects elsewhere.
+        assert_eq!(default_root(), None);
         #[cfg(windows)]
         {
             // Where Explorer shows it, which need not be in the profile.
@@ -717,6 +744,23 @@ mod tests {
             assert_eq!(documents, known);
             assert!(known.is_dir(), "{known:?}");
         }
+    }
+
+    #[test]
+    fn a_new_project_takes_a_folder_without_a_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        assert_eq!(
+            free_folder(root, "Office: north"),
+            root.join("Office_ north")
+        );
+        save(&project_file(&root.join("Office")), &sample()).unwrap();
+        assert_eq!(free_folder(root, "Office"), root.join("Office 2"));
+        // A folder without a project file is free.
+        fs::create_dir_all(root.join("Office 2").join("survey")).unwrap();
+        assert_eq!(free_folder(root, "Office"), root.join("Office 2"));
+        save(&project_file(&root.join("Office 2")), &sample()).unwrap();
+        assert_eq!(free_folder(root, "Office"), root.join("Office 3"));
     }
 
     #[test]

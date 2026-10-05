@@ -410,6 +410,11 @@ impl Studio {
         let (mut prepare, mut sources, mut prepare_basis) = (None, Vec::new(), None);
         if work == Work::Steps && steps.contains(&WizardStep::Prepare) {
             self.default_project_place();
+            // What step 0 writes never goes over another project.
+            if let Some(taken) = self.folder_taken() {
+                self.status = format!("Mesh to Plans cannot prepare: {}", taken.translated());
+                return Task::none();
+            }
             match self.prepare_input(self.project_folder()) {
                 Ok(input) => {
                     let filter = input.scene.filter;

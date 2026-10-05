@@ -850,6 +850,137 @@ fn step_0_surveys_the_scans_finds_the_levels_and_writes_the_project() {
     );
 }
 
+/// Let the tests of this thread keep their projects in `root`.
+fn projects_in(root: &std::path::Path) {
+    project::TEST_ROOT.with(|test_root| *test_root.borrow_mut() = Some(root.to_path_buf()));
+}
+
+#[test]
+fn a_new_project_never_takes_the_folder_of_another() {
+    let _language = TestLanguage::hold(Language::English);
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("Projects");
+    projects_in(&root);
+    let (mut first, scan) = studio_with_building(directory.path());
+    let _ = first.update(wizard(WizardAction::Open));
+    let folder = root.join("building");
+    assert_eq!(
+        first.mesh_to_plans.project_folder,
+        folder.display().to_string()
+    );
+    prepare_and_save(&mut first);
+    let _ = first.update(wizard(WizardAction::Confirm));
+    let revision = first.mesh_to_plans.save_revision;
+    let _ = first.update(wizard(WizardAction::Save(revision)));
+    let file = folder.join(project::FILE_NAME);
+    let before = std::fs::read(&file).unwrap();
+
+    // The same scan opened again: the proposed folder is the next free one,
+    // and the page offers the project that is there.
+    let cloud = std::sync::Arc::new(pointcloud_core::open(&scan, 1_000_000).unwrap());
+    let mut second = Studio::default();
+    let _ = second.update(Message::Loaded(Ok(cloud)));
+    second.index_pending = false;
+    let _ = second.update(wizard(WizardAction::Open));
+    assert_eq!(
+        second.mesh_to_plans.project_folder,
+        root.join("building 2").display().to_string()
+    );
+    assert_eq!(
+        second.mesh_to_plans.existing,
+        Some((file.clone(), "building".to_owned()))
+    );
+    assert!(second.folder_taken_as_seen().is_none());
+    let _ = second.view();
+    // Renamed, the folder follows the name, and back.
+    act(&mut second, PrepareAction::ProjectName("Office".into()));
+    assert_eq!(
+        second.mesh_to_plans.project_folder,
+        root.join("Office").display().to_string()
+    );
+    assert_eq!(second.mesh_to_plans.existing, None);
+    act(&mut second, PrepareAction::ProjectName("building".into()));
+    assert!(second.mesh_to_plans.project_folder.ends_with("building 2"));
+
+    // The folder of the first project typed by hand: the run is refused and
+    // the project there stays as it was.
+    act(
+        &mut second,
+        PrepareAction::ProjectFolder(folder.display().to_string()),
+    );
+    let reason = format!(
+        "{} holds another project: resume it, or choose another folder",
+        folder.display()
+    );
+    assert_eq!(
+        second
+            .folder_taken_as_seen()
+            .map(|sentence| sentence.english()),
+        Some(reason.clone())
+    );
+    let _ = second.view();
+    let _ = second.update(wizard(WizardAction::Run));
+    assert!(!second.mesh_to_plans.is_running());
+    assert_eq!(
+        second.status,
+        format!("Mesh to Plans cannot prepare: {reason}")
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    let answer = send(
+        &mut second,
+        command(json!({"command": "mesh_to_plans_action", "action": "run", "folder": folder})),
+    );
+    assert_eq!(answer["ok"], false);
+    assert_eq!(
+        answer["error"],
+        format!("Mesh to Plans cannot prepare: {reason}")
+    );
+
+    // Resume that project goes on with it.
+    let (resume, _) = second.mesh_to_plans.existing.clone().unwrap();
+    let _ = second.update(wizard(WizardAction::Resume(resume)));
+    assert_eq!(
+        second
+            .mesh_to_plans
+            .project
+            .as_ref()
+            .map(|place| &place.file),
+        Some(&file)
+    );
+    assert_eq!(
+        *second.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Confirmed
+    );
+    assert_eq!(second.mesh_to_plans.existing, None);
+}
+
+#[test]
+fn a_project_that_appears_in_the_folder_meanwhile_is_not_written_over() {
+    let _language = TestLanguage::hold(Language::English);
+    let directory = tempfile::tempdir().unwrap();
+    projects_in(&directory.path().join("Projects"));
+    let (mut studio, _) = studio_with_building(directory.path());
+    let folder = directory.path().join("Office");
+    studio.mesh_to_plans.project_folder = folder.display().to_string();
+    let _ = studio.update(wizard(WizardAction::Run));
+    finish(&mut studio);
+    // Another window writes its project there before this one is written.
+    let file = folder.join(project::FILE_NAME);
+    let other = project::MeshToPlansProject::new("Other");
+    project::save(&file, &other).unwrap();
+    let revision = studio.mesh_to_plans.save_revision;
+    let _ = studio.update(wizard(WizardAction::Save(revision)));
+    assert_eq!(project::load(&file).unwrap(), other);
+    assert!(studio.mesh_to_plans.project.is_none());
+    assert_eq!(
+        studio.status,
+        format!(
+            "{} holds another project: resume it, or choose another folder",
+            folder.display()
+        )
+    );
+}
+
 #[test]
 fn a_project_resumes_on_its_next_step_and_finds_a_changed_scan() {
     let _language = TestLanguage::hold(Language::English);
