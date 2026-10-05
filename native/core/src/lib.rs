@@ -35,6 +35,7 @@ pub mod region_source;
 mod scan_image;
 mod section_caps;
 mod snapshots;
+pub mod stable_hash;
 mod surface_mesh;
 pub mod surfaces;
 pub mod surfels;
