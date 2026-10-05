@@ -2465,7 +2465,9 @@ impl Default for Studio {
             },
             closed_mesh: closed_mesh::ClosedMeshTool::default(),
             faces: faces::FaceTool::default(),
-            mesh_to_plans: mesh_to_plans::Wizard::default(),
+            mesh_to_plans: mesh_to_plans::Wizard::with_recent(
+                settings.recent_mesh_to_plans.clone(),
+            ),
             drag_rectangle: None,
             context_menu: None,
             selection_pending: false,
@@ -2507,6 +2509,7 @@ impl Studio {
             fill_cut: self.section_fill.fill_cut,
             cap_color: self.section_fill.color,
             cap_max_thickness: self.section_fill.max_thickness,
+            recent_mesh_to_plans: self.mesh_to_plans.recent.clone(),
         }
     }
 
@@ -4327,6 +4330,9 @@ impl Studio {
                 self.api_mesh_to_plans_view(open, step.as_deref(), minimized),
                 Task::none(),
             ),
+            ApiCommand::MeshToPlansAction { action, folder } => {
+                self.api_mesh_to_plans_action(&action, folder)
+            }
             ApiCommand::Screenshot {
                 path,
                 base64,
@@ -9348,6 +9354,9 @@ impl Studio {
             .push(self.drawings_browser())
             .push(self.views_browser())
             .push(self.bcf_browser());
+        if let Some(resume) = self.mesh_to_plans_browser() {
+            files = files.push(resume);
+        }
         container(scrollable(files.padding(14)).height(Fill))
             .width(255)
             .height(Fill)

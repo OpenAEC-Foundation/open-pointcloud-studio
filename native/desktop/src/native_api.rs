@@ -336,6 +336,14 @@ pub enum ApiCommand {
         #[serde(default)]
         minimized: Option<bool>,
     },
+    MeshToPlansAction {
+        /// `run`, `run_all`, `confirm`, `skip`, `cancel`, `back` or `next`:
+        /// what the buttons of the card do, on the step it shows.
+        action: String,
+        /// The folder of a new project, before step 0 first ran.
+        #[serde(default)]
+        folder: Option<PathBuf>,
+    },
     Screenshot {
         /// Absolute `.png` path to write the image to.
         path: Option<PathBuf>,

@@ -430,6 +430,14 @@ mod tests {
             include_str!("mesh_to_plans/pipeline.rs"),
         ),
         (
+            "mesh_to_plans/prepare.rs",
+            include_str!("mesh_to_plans/prepare.rs"),
+        ),
+        (
+            "mesh_to_plans/project.rs",
+            include_str!("mesh_to_plans/project.rs"),
+        ),
+        (
             "mesh_to_plans/strip.rs",
             include_str!("mesh_to_plans/strip.rs"),
         ),

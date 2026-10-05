@@ -215,6 +215,19 @@ impl DeletionMask {
             .is_some_and(|bits| bits & (1u64 << (ordinal % 64)) != 0)
     }
 
+    /// Which points are deleted, in one number: FNV-1a over the words of the
+    /// mask. Equal masks have equal digests on every machine.
+    pub fn digest(&self) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for word in &self.bits {
+            for byte in word.to_le_bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        hash
+    }
+
     /// A selection can reuse its exact cached bounds when no selected source
     /// ordinal has since been hidden. Compare masks without rereading points.
     pub fn overlaps_selection(&self, selection: &SelectionMask) -> bool {

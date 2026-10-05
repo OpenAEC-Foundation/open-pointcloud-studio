@@ -40,6 +40,8 @@ pub(crate) struct Preferences {
     pub cap_color: [u8; 3],
     /// Two faces farther apart than this, in metres, are not filled.
     pub cap_max_thickness: f64,
+    /// The project files of Mesh to Plans worked on last, newest first.
+    pub recent_mesh_to_plans: Vec<PathBuf>,
 }
 
 impl Default for Preferences {
@@ -63,6 +65,7 @@ impl Default for Preferences {
             fill_cut: true,
             cap_color: crate::section_fill::DEFAULT_CAP_COLOR,
             cap_max_thickness: pointcloud_core::DEFAULT_CAP_MAX_THICKNESS,
+            recent_mesh_to_plans: Vec::new(),
         }
     }
 }
@@ -82,6 +85,8 @@ impl Preferences {
         if !crate::section_fill::valid_thickness(self.cap_max_thickness) {
             self.cap_max_thickness = defaults.cap_max_thickness;
         }
+        self.recent_mesh_to_plans
+            .truncate(crate::mesh_to_plans::MAX_RECENT_PROJECTS);
         self
     }
 }
@@ -175,6 +180,7 @@ mod tests {
             fill_cut: false,
             cap_color: [40, 50, 60],
             cap_max_thickness: 0.35,
+            recent_mesh_to_plans: vec![PathBuf::from("/projects/office/project.ops-m2p.json")],
             ..Preferences::default()
         };
         save_to(&path, &settings).unwrap();

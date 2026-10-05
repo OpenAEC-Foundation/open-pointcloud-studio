@@ -490,6 +490,10 @@ fn table() -> Vec<Tool> {
             optional("step", choice("Step to show, only with open true; without it the wizard keeps the step it shows", &crate::mesh_to_plans::WizardStep::ids())),
             optional("minimized", boolean("Only with open true: true shows the wizard as the strip above the scene, false or absent as the card")),
         ]),
+        tool("mesh_to_plans_action", Command, "Does what a button of the Mesh to Plans wizard does on the step it shows, whether the wizard is shown or not: run starts a job for that step and run_all one for every step not yet confirmed or skipped (answering with its job_id for job and wait_for_job), confirm accepts a step that waits for confirmation (for step 0, prepare, this is Confirm levels), skip skips an optional step, cancel stops the running job, back and next go to the step before or after it. Step 0 reads the shown scans: it finds the box around the building, the main direction of its walls, the footprint and the levels with their heights to the millimetre, and writes the project file and survey/profile.csv and survey/top.png in the project folder. Refused when the button would be disabled, with the reason. Answers with mesh_to_plans as status.result.mesh_to_plans reports it, including the project file and, after step 0, prepare with the frame and the levels above P.", vec![
+            required("action", choice("What to do", &["run", "run_all", "confirm", "skip", "cancel", "back", "next"])),
+            optional("folder", path("Absolute path of the folder of a new project, before it was first written; by default Documents/OPS Mesh to Plans/<name of the first scan>")),
+        ]),
         tool("list_instances", ListInstances, "Lists the running Open Pointcloud Studio windows (process ID, port, version, start time) and which one the tools drive.", vec![]),
         at_least_one(tool("select_instance", SelectInstance, "Chooses the running window that the other tools drive, by process ID or port (at least one of them) as list_instances gives them.", vec![
             optional("pid", integer_in("Process ID", 1, u64::from(u32::MAX))),

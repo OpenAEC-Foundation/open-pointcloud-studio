@@ -286,7 +286,7 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A box-shaped building of two storeys of 3 m on a plot, turned by 25
@@ -295,7 +295,7 @@ mod tests {
     /// and a few stray points far below. A point every 4 cm: closer than the
     /// columns of a survey, so that a face is one group of cells and no
     /// noise.
-    pub(super) fn building_xyz() -> String {
+    pub(crate) fn building_xyz() -> String {
         let spacing = 0.04;
         let (length, width, wall) = (8.0, 5.0, 0.25);
         let mut points: Vec<[f64; 3]> = Vec::new();

@@ -447,6 +447,9 @@ fn a_cancelled_job_stops_within_one_poll() {
         steps: WizardStep::ALL.to_vec(),
         work: pipeline::PLACEHOLDER,
         confirm: false,
+        prepare: None,
+        sources: Vec::new(),
+        prepare_basis: None,
     };
     let control = pipeline::Control::default();
     std::thread::scope(|scope| {
@@ -685,4 +688,562 @@ fn a_job_waits_for_other_heavy_work() {
         studio.status,
         "Mesh to Plans waits: an octree is being made; wait for it or cancel it first"
     );
+}
+
+/// A window with the generated building of the survey tests open: two
+/// storeys of 3 m and a roof, turned by 25 degrees.
+fn studio_with_building(directory: &std::path::Path) -> (Studio, std::path::PathBuf) {
+    let path = directory.join("building.xyz");
+    std::fs::write(&path, crate::survey::tests::building_xyz()).unwrap();
+    let cloud = std::sync::Arc::new(pointcloud_core::open(&path, 1_000_000).unwrap());
+    let mut studio = Studio::default();
+    let _ = studio.update(Message::Loaded(Ok(cloud)));
+    // An index built on its own would make the wizard wait.
+    studio.index_pending = false;
+    (studio, path)
+}
+
+/// Run step 0 of a window on the worker, as Run this step does, and write
+/// the project as the window does once the changes have come to rest.
+fn prepare_and_save(studio: &mut Studio) {
+    let _ = studio.update(wizard(WizardAction::Step(WizardStep::Prepare)));
+    let _ = studio.update(wizard(WizardAction::Run));
+    assert!(studio.mesh_to_plans.is_running(), "{}", studio.status);
+    finish(studio);
+    let revision = studio.mesh_to_plans.save_revision;
+    let _ = studio.update(wizard(WizardAction::Save(revision)));
+}
+
+#[test]
+fn step_0_surveys_the_scans_finds_the_levels_and_writes_the_project() {
+    let _language = TestLanguage::hold(Language::English);
+    let directory = tempfile::tempdir().unwrap();
+    let (mut studio, _) = studio_with_building(directory.path());
+    let _ = studio.update(wizard(WizardAction::Open));
+    // The scan names a new project; the folder is chosen here.
+    assert_eq!(studio.mesh_to_plans.project_name, "building");
+    let folder = directory.path().join("Office");
+    studio.mesh_to_plans.project_folder = folder.display().to_string();
+    prepare_and_save(&mut studio);
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Done,
+        "{}",
+        studio.status
+    );
+    let prepare = &studio.mesh_to_plans.prepare;
+    let peil = prepare.peil_z();
+    let found: Vec<(String, String, f64)> = prepare
+        .levels
+        .iter()
+        .map(|level| (level.id.clone(), level.name.clone(), level.floor_z - peil))
+        .collect();
+    assert_eq!(found.len(), 3, "{found:?}");
+    for ((id, name, height), (truth_id, truth_name, truth)) in found.iter().zip([
+        ("00", "Ground floor", 0.0),
+        ("01", "Floor 1", 3.0),
+        ("R", "Roof", 6.0),
+    ]) {
+        assert_eq!((id.as_str(), name.as_str()), (truth_id, truth_name));
+        assert!((height - truth).abs() < 0.003, "{found:?}");
+    }
+    assert!(peil.abs() < 0.003);
+    let frame = prepare.frame().unwrap();
+    assert!((frame.rotation_deg - 25.0).abs() < 0.05, "{frame:?}");
+    let survey = prepare.survey.as_ref().unwrap();
+    assert!((survey.footprint_area - 40.0).abs() < 1.5);
+    assert!(prepare.regions.building.is_some() && prepare.regions.core.is_some());
+    assert_eq!(prepare.selected, Some(0), "P is selected");
+    assert!(folder.join("survey").join("profile.csv").is_file());
+    assert!(folder.join("survey").join("top.png").is_file());
+    let _ = studio.view();
+
+    // The project is in its folder, first in the list of recent ones.
+    let file = folder.join(project::FILE_NAME);
+    let saved = project::load(&file).unwrap();
+    assert_eq!(saved.name, "building");
+    assert_eq!(saved.levels, studio.mesh_to_plans.prepare.levels);
+    assert_eq!(saved.status(WizardStep::Prepare), StepStatus::Done);
+    assert_eq!(saved.sources.len(), 1);
+    assert!(saved.steps["prepare"].basis.is_some());
+    assert_eq!(studio.mesh_to_plans.recent, [file.clone()]);
+    assert_eq!(
+        studio
+            .mesh_to_plans
+            .project
+            .as_ref()
+            .map(|place| &place.file),
+        Some(&file)
+    );
+    let status = status(&mut studio);
+    assert_eq!(status["prepare"]["levels"][1]["id"], "01");
+    let height = status["prepare"]["levels"][1]["floor_above_p"]
+        .as_f64()
+        .unwrap();
+    assert!((height - 3.0).abs() < 0.003);
+    assert_eq!(status["project"], file.display().to_string());
+
+    // Confirm levels locks them; Edit levels opens them again.
+    let _ = studio.update(wizard(WizardAction::Confirm));
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Confirmed
+    );
+    let _ = studio.update(wizard(WizardAction::Prepare(PrepareAction::Remove)));
+    assert_eq!(studio.mesh_to_plans.prepare.levels.len(), 3);
+    assert_eq!(studio.status, "Edit levels first: they are confirmed");
+    let _ = studio.update(wizard(WizardAction::Prepare(PrepareAction::Unlock)));
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Done
+    );
+    let _ = studio.update(wizard(WizardAction::Confirm));
+    let revision = studio.mesh_to_plans.save_revision;
+    let _ = studio.update(wizard(WizardAction::Save(revision)));
+    assert_eq!(
+        project::load(&file).unwrap().status(WizardStep::Prepare),
+        StepStatus::Confirmed
+    );
+}
+
+#[test]
+fn a_project_resumes_on_its_next_step_and_finds_a_changed_scan() {
+    let _language = TestLanguage::hold(Language::English);
+    let directory = tempfile::tempdir().unwrap();
+    let (mut first, scan) = studio_with_building(directory.path());
+    let folder = directory.path().join("Office");
+    first.mesh_to_plans.project_folder = folder.display().to_string();
+    prepare_and_save(&mut first);
+    let _ = first.update(wizard(WizardAction::Prepare(PrepareAction::Select(1))));
+    let _ = first.update(wizard(WizardAction::Prepare(PrepareAction::Name(
+        "First floor".into(),
+    ))));
+    let _ = first.update(wizard(WizardAction::Confirm));
+    let revision = first.mesh_to_plans.save_revision;
+    let _ = first.update(wizard(WizardAction::Save(revision)));
+    let file = folder.join(project::FILE_NAME);
+
+    // Another window with the same scan open offers to go on with it.
+    let path = scan.clone();
+    let cloud = std::sync::Arc::new(pointcloud_core::open(&path, 1_000_000).unwrap());
+    let mut second = Studio::default();
+    let _ = second.update(Message::Loaded(Ok(cloud)));
+    assert!(
+        second.mesh_to_plans_browser().is_none(),
+        "no recent project"
+    );
+    second.mesh_to_plans.recent = vec![file.clone()];
+    second.mesh_to_plans.recent_projects = project::read_recent(&[file.clone()]);
+    assert_eq!(
+        second.mesh_to_plans.recent_projects[0].step,
+        WizardStep::Mesh
+    );
+    assert!(second.mesh_to_plans_browser().is_some());
+    let _ = second.view();
+    let _ = second.update(wizard(WizardAction::Resume(file.clone())));
+    let wizard_state = &second.mesh_to_plans;
+    assert!(wizard_state.covers_model());
+    assert_eq!(wizard_state.step, WizardStep::Mesh);
+    assert_eq!(
+        *wizard_state.status(WizardStep::Prepare),
+        StepStatus::Confirmed
+    );
+    assert_eq!(
+        wizard_state.prepare.levels,
+        first.mesh_to_plans.prepare.levels
+    );
+    assert_eq!(wizard_state.prepare.levels[1].name, "First floor");
+    assert!(wizard_state.prepare.top.is_some(), "the view from above");
+    assert_eq!(wizard_state.project_name, "building");
+    assert_eq!(second.status, "Mesh to Plans project building opened");
+    let _ = second.update(wizard(WizardAction::Step(WizardStep::Prepare)));
+    let _ = second.view();
+
+    // The scan changed since: step 0 is out of date and the wizard shows it.
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&scan)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    let mut third = Studio::default();
+    let cloud = std::sync::Arc::new(pointcloud_core::open(&path, 1_000_000).unwrap());
+    let _ = third.update(Message::Loaded(Ok(cloud)));
+    let _ = third.update(wizard(WizardAction::Resume(file.clone())));
+    assert_eq!(
+        *third.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Stale
+    );
+    assert_eq!(third.mesh_to_plans.step, WizardStep::Prepare);
+    assert_eq!(
+        third.mesh_to_plans.step_ready().unwrap_err().english(),
+        "The scans or the choices changed since this step ran: run it again"
+    );
+    // A file that is no project is refused and changes nothing.
+    let other = directory.path().join("other.json");
+    std::fs::write(&other, "{}").unwrap();
+    let _ = third.update(wizard(WizardAction::Resume(other)));
+    assert!(third.status.starts_with("Could not open the project: "));
+    assert_eq!(third.mesh_to_plans.project.as_ref().unwrap().file, file);
+}
+
+/// Three levels as step 0 finds them, on a survey whose grid runs from 1 m
+/// below P to 11 m above.
+fn found_levels() -> (project::SurveyRecord, Vec<pointcloud_core::plans::Level>) {
+    use pointcloud_core::plans::{BuildingFrame, Confidence, LevelKind, LevelStatus, SurveyGrid};
+    let level = |id: &str, kind: LevelKind, floor_z: f64| pointcloud_core::plans::Level {
+        id: id.into(),
+        name: id.into(),
+        kind,
+        floor_z,
+        ceiling_z: (kind != LevelKind::Roof).then_some(floor_z + 2.75),
+        slab_underside: None,
+        slab_thickness: (kind != LevelKind::Roof).then_some(0.25),
+        cut_height: 1.2,
+        tilt_mm_per_m: Some([0.0, 0.0]),
+        share: 0.8,
+        is_peil: floor_z == 0.0,
+        confidence: Confidence::certain(),
+        status: LevelStatus::Found,
+    };
+    let mut levels = vec![
+        level("00", LevelKind::Ground, 0.0),
+        level("01", LevelKind::Storey, 3.0),
+        level("R", LevelKind::Roof, 6.0),
+    ];
+    for level in &mut levels {
+        level.name = prepare::default_name(level);
+    }
+    let survey = project::SurveyRecord {
+        grid: SurveyGrid {
+            origin: [0.0, 0.0, -1.0],
+            cell_xy: 0.05,
+            cell_z: 0.02,
+            size: [100, 100, 600],
+        },
+        frame: BuildingFrame::new(0.0, [0.0, 0.0]),
+        level_histogram: (0..600)
+            .map(|bin| if bin % 150 == 50 { 3000 } else { 40 })
+            .collect(),
+        footprint: Vec::new(),
+        footprint_area: 20.0,
+        ground_z: Some(-0.3),
+        below_points: 0,
+        below_groups: 0,
+        stats: pointcloud_core::plans::SurveyStats::default(),
+        seconds: 1.0,
+    };
+    (survey, levels)
+}
+
+#[test]
+fn a_level_line_snaps_to_five_centimetres_and_moves_freely_with_shift() {
+    use iced::mouse::{Button, Cursor, Event as MouseEvent};
+    use iced::widget::canvas::{self, Program};
+    use iced::{keyboard, Point};
+    let (survey, levels) = found_levels();
+    let program = prepare::Histogram {
+        survey: &survey,
+        levels: &levels,
+        selected: None,
+        peil: 0.0,
+        locked: false,
+    };
+    let size = Size::new(300.0, 600.0);
+    let bounds = Rectangle::new(Point::ORIGIN, size);
+    let at = |z: f64| Cursor::Available(Point::new(120.0, program.screen_y(size, z)));
+    let press = canvas::Event::Mouse(MouseEvent::ButtonPressed(Button::Left));
+    let moved = canvas::Event::Mouse(MouseEvent::CursorMoved {
+        position: Point::ORIGIN,
+    });
+    let release = canvas::Event::Mouse(MouseEvent::ButtonReleased(Button::Left));
+    let place_of = |message: Option<Message>| match message {
+        Some(Message::MeshToPlans(WizardAction::Prepare(PrepareAction::Move(place, z)))) => {
+            Some((place, z))
+        }
+        _ => None,
+    };
+
+    // Taken at its line, the first floor follows the pointer and lands on a
+    // height of 5 cm steps above P.
+    let mut state = prepare::HistogramState::default();
+    let (_, selected) = program.update(&mut state, press.clone(), bounds, at(3.0));
+    assert!(matches!(
+        selected,
+        Some(Message::MeshToPlans(WizardAction::Prepare(
+            PrepareAction::Select(1)
+        )))
+    ));
+    let _ = program.update(&mut state, moved.clone(), bounds, at(3.137));
+    let (_, message) = program.update(&mut state, release.clone(), bounds, at(3.137));
+    let (place, z) = place_of(message).expect("the line moved");
+    assert_eq!(place, 1);
+    assert!((z - 3.15).abs() < 1e-9, "{z}");
+    assert_eq!(state.drag, None);
+
+    // With Shift it lands where it was let go, to the millimetre.
+    let shift = canvas::Event::Keyboard(keyboard::Event::ModifiersChanged(
+        keyboard::Modifiers::SHIFT,
+    ));
+    let _ = program.update(&mut state, shift, bounds, Cursor::Unavailable);
+    let _ = program.update(&mut state, press.clone(), bounds, at(3.0));
+    let _ = program.update(&mut state, moved.clone(), bounds, at(3.137));
+    let (_, message) = program.update(&mut state, release.clone(), bounds, at(3.137));
+    let (_, z) = place_of(message).unwrap();
+    let pixel = 1.0 / (program.screen_y(size, 0.0) - program.screen_y(size, 1.0)) as f64;
+    assert!((z - 3.137).abs() <= pixel + 1e-3, "{z}");
+    assert_eq!(z, (z * 1000.0).round() / 1000.0);
+
+    // A click that does not move the line leaves it, and away from every
+    // line the pointer takes none.
+    let _ = program.update(&mut state, press.clone(), bounds, at(6.0));
+    let (_, message) = program.update(&mut state, release.clone(), bounds, at(6.0));
+    assert!(message.is_none());
+    let (status, message) = program.update(&mut state, press.clone(), bounds, at(1.5));
+    assert!(message.is_none() && status == canvas::event::Status::Ignored);
+
+    // Confirmed levels are only selected.
+    let locked = prepare::Histogram {
+        locked: true,
+        ..program
+    };
+    let mut state = prepare::HistogramState::default();
+    let (_, message) = locked.update(&mut state, press, bounds, at(3.0));
+    assert!(message.is_some());
+    assert_eq!(state.drag, None);
+    let _ = locked.update(&mut state, moved, bounds, at(3.5));
+    let (_, message) = locked.update(&mut state, release, bounds, at(3.5));
+    assert!(message.is_none());
+    assert!((prepare::snap(3.137, 0.02, false) - 3.12).abs() < 1e-9);
+    assert!(prepare::snap(-0.024, 0.0, false).abs() < 1e-9);
+    assert!((prepare::snap(3.1374, 0.0, true) - 3.137).abs() < 1e-9);
+}
+
+/// A window with three levels in step 0, as a run would leave them.
+fn studio_with_levels() -> Studio {
+    let mut studio = Studio::default();
+    let (survey, levels) = found_levels();
+    let prepare = &mut studio.mesh_to_plans.prepare;
+    prepare.survey = Some(survey);
+    prepare.levels = levels;
+    prepare.select(Some(0));
+    studio
+        .mesh_to_plans
+        .set_status(WizardStep::Prepare, StepStatus::Done);
+    studio
+}
+
+fn act(studio: &mut Studio, action: PrepareAction) {
+    let _ = studio.update(wizard(WizardAction::Prepare(action)));
+}
+
+fn codes(studio: &Studio) -> Vec<(String, String, bool)> {
+    studio
+        .mesh_to_plans
+        .prepare
+        .levels
+        .iter()
+        .map(|level| (level.id.clone(), level.name.clone(), level.is_peil))
+        .collect()
+}
+
+#[test]
+fn levels_are_moved_named_added_merged_removed_and_renumbered_from_p() {
+    use pointcloud_core::plans::LevelStatus;
+    let _language = TestLanguage::hold(Language::English);
+    let mut studio = studio_with_levels();
+    let _ = studio.update(wizard(WizardAction::Open));
+    let _ = studio.view();
+
+    // The first floor dragged 20 cm up takes its ceiling along.
+    act(&mut studio, PrepareAction::Move(1, 3.2));
+    let prepare = &studio.mesh_to_plans.prepare;
+    assert_eq!(prepare.levels[1].floor_z, 3.2);
+    assert_eq!(prepare.levels[1].ceiling_z, Some(3.2 + 2.75));
+    assert_eq!(prepare.levels[1].status, LevelStatus::Edited);
+    assert_eq!(prepare.selected, Some(1));
+
+    // P on the first floor makes the ground floor a basement.
+    act(&mut studio, PrepareAction::SetPeil);
+    assert_eq!(
+        codes(&studio),
+        [
+            ("-01".into(), "Basement 1".into(), false),
+            ("00".into(), "Ground floor".into(), true),
+            ("R".into(), "Roof".into(), false),
+        ]
+    );
+    assert!((studio.mesh_to_plans.prepare.peil_z() - 3.2).abs() < 1e-12);
+    // A name given by hand stays when the codes change.
+    act(&mut studio, PrepareAction::Select(0));
+    act(&mut studio, PrepareAction::Name("Cellar".into()));
+    act(&mut studio, PrepareAction::Select(1));
+    act(&mut studio, PrepareAction::Add);
+    assert_eq!(
+        codes(&studio),
+        [
+            ("-01".into(), "Cellar".into(), false),
+            ("00".into(), "Ground floor".into(), true),
+            ("01".into(), "Floor 1".into(), false),
+            ("R".into(), "Roof".into(), false),
+        ]
+    );
+    let added = &studio.mesh_to_plans.prepare.levels[2];
+    assert!((added.floor_z - 6.2).abs() < 1e-12);
+    assert_eq!(studio.mesh_to_plans.prepare.selected, Some(2));
+
+    // The cut height of the selected level, typed with a comma.
+    act(&mut studio, PrepareAction::Cut("1,35".into()));
+    assert_eq!(studio.mesh_to_plans.prepare.levels[2].cut_height, 1.35);
+    act(&mut studio, PrepareAction::Cut("9".into()));
+    assert_eq!(studio.mesh_to_plans.prepare.levels[2].cut_height, 1.35);
+
+    // Merged with the roof above it, the new floor takes in the roof.
+    act(&mut studio, PrepareAction::Merge);
+    assert_eq!(studio.mesh_to_plans.prepare.levels.len(), 3);
+    act(&mut studio, PrepareAction::Select(0));
+    act(&mut studio, PrepareAction::Remove);
+    assert_eq!(
+        codes(&studio),
+        [
+            ("00".into(), "Ground floor".into(), true),
+            ("01".into(), "Floor 1".into(), false),
+        ]
+    );
+    // P moves up a floor, and the names given by default follow.
+    act(&mut studio, PrepareAction::Select(1));
+    act(&mut studio, PrepareAction::SetPeil);
+    assert_eq!(
+        codes(&studio),
+        [
+            ("-01".into(), "Basement 1".into(), false),
+            ("00".into(), "Ground floor".into(), true),
+        ]
+    );
+    let _ = studio.view();
+}
+
+#[test]
+fn show_in_model_puts_the_section_box_on_a_storey_and_back_to_wizard_takes_it_away() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut studio, _) = studio_with_building(directory.path());
+    studio.mesh_to_plans.project_folder = directory.path().join("Office").display().to_string();
+    let _ = studio.update(wizard(WizardAction::Open));
+    prepare_and_save(&mut studio);
+    assert!(studio.section_box().is_none());
+    act(&mut studio, PrepareAction::Show(1));
+    assert!(studio.mesh_to_plans.is_open() && !studio.mesh_to_plans.covers_model());
+    let section = studio.section_box().expect("the box is on");
+    let frame = studio.mesh_to_plans.prepare.frame().unwrap();
+    assert!(
+        (section.rotation_degrees - frame.rotation_deg).abs() < 1e-6,
+        "{section:?}"
+    );
+    let floor = studio.mesh_to_plans.prepare.levels[1].floor_z;
+    assert!(
+        (section.bounds.min[2] - (floor - 0.1)).abs() < 0.01,
+        "{section:?}"
+    );
+    assert_eq!(studio.mesh_to_plans.prepare.selected, Some(1));
+    let _ = studio.view();
+    let _ = studio.update(wizard(WizardAction::Restore));
+    assert!(studio.mesh_to_plans.covers_model());
+    assert!(studio.section_box().is_none(), "the box was off before");
+
+    // The section box around the building, and the core from it.
+    act(&mut studio, PrepareAction::SectionToBuilding);
+    let building = studio.section_box().expect("the box is on");
+    assert!(building.contains(frame.to_scene([1.0, 1.0, 1.0])));
+    act(&mut studio, PrepareAction::CoreFromSection);
+    assert!(studio.mesh_to_plans.prepare.regions.chosen_core.is_some());
+    act(&mut studio, PrepareAction::CoreWhole);
+    assert!(studio.mesh_to_plans.prepare.regions.chosen_core.is_none());
+}
+
+#[test]
+fn api_runs_and_confirms_steps_and_refuses_what_cannot_be_done() {
+    let _language = TestLanguage::hold(Language::English);
+    let mut studio = Studio::default();
+    for (body, error) in [
+        (
+            json!({"command": "mesh_to_plans_action", "action": "fly"}),
+            "unknown action; use run, run_all, confirm, skip, cancel, back, next",
+        ),
+        (
+            json!({"command": "mesh_to_plans_action", "action": "confirm"}),
+            "the step shown waits for no confirmation",
+        ),
+        (
+            json!({"command": "mesh_to_plans_action", "action": "skip"}),
+            "the step shown cannot be skipped",
+        ),
+        (
+            json!({"command": "mesh_to_plans_action", "action": "cancel"}),
+            "no job is running",
+        ),
+        (
+            json!({"command": "mesh_to_plans_action", "action": "back"}),
+            "this is the first step",
+        ),
+        (
+            json!({"command": "mesh_to_plans_action", "action": "next"}),
+            "Run this step first",
+        ),
+        (
+            json!({"command": "mesh_to_plans_action", "action": "run", "folder": "relative"}),
+            "folder must be an absolute path",
+        ),
+        (
+            json!({"command": "mesh_to_plans_action", "action": "run"}),
+            "Open a scan of the building first",
+        ),
+    ] {
+        let answer = send(&mut studio, command(body));
+        assert_eq!(answer["ok"], false, "{answer}");
+        assert_eq!(answer["error"], error);
+    }
+    assert_eq!(
+        *studio.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Failed("Open a scan of the building first".into())
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let (mut studio, _) = studio_with_building(directory.path());
+    let folder = directory.path().join("Api");
+    let answer = send(
+        &mut studio,
+        command(json!({"command": "mesh_to_plans_action", "action": "run", "folder": folder})),
+    );
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert!(answer["job_id"].is_string());
+    assert_eq!(
+        answer["mesh_to_plans"]["project_folder"],
+        folder.display().to_string()
+    );
+    finish(&mut studio);
+    let answer = send(
+        &mut studio,
+        command(json!({"command": "mesh_to_plans_action", "action": "confirm"})),
+    );
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["mesh_to_plans"]["steps"][0]["status"], "confirmed");
+    let answer = send(
+        &mut studio,
+        command(json!({"command": "mesh_to_plans_action", "action": "next"})),
+    );
+    assert_eq!(answer["mesh_to_plans"]["step"], "mesh");
+    let answer = send(
+        &mut studio,
+        command(json!({"command": "mesh_to_plans_action", "action": "skip"})),
+    );
+    assert_eq!(answer["mesh_to_plans"]["steps"][1]["status"], "skipped");
+    let revision = studio.mesh_to_plans.save_revision;
+    let _ = studio.update(wizard(WizardAction::Save(revision)));
+    assert!(folder.join(project::FILE_NAME).is_file());
+    let answer = send(
+        &mut studio,
+        command(json!({"command": "mesh_to_plans_action", "action": "run", "folder": folder})),
+    );
+    assert_eq!(answer["error"], "the project already has its folder");
 }

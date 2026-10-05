@@ -2,7 +2,9 @@
 //! it was given one after the other on a thread of its own, so that the
 //! machine is not swamped and the window stays free to look at other steps.
 //! The window reads how far it is four times a second, and a cancel stops it
-//! at the next look the worker takes, well within one of those.
+//! at the next look the worker takes, well within one of those. Step 0, the
+//! preparation, does its work; the steps after it are not built yet and
+//! stand in for theirs for about a second.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -12,7 +14,9 @@ use iced::Task;
 use pointcloud_core::LoadError;
 use serde_json::{json, Value};
 
-use super::{StepStatus, WizardAction, WizardStep};
+use super::prepare::{PrepareInput, Prepared};
+use super::project::{now_seconds, SourceRef};
+use super::{StepRun, StepStatus, WizardAction, WizardStep};
 use crate::bag_panel::plain_reason;
 use crate::open_progress::{Line, Phase};
 use crate::{Message, Studio};
@@ -23,20 +27,27 @@ pub(crate) const POLL: Duration = Duration::from_millis(250);
 /// What the steps of a job do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Work {
-    /// Stands in for the work of the steps until they are built: it counts
-    /// to `ticks`, one tick at a time, and looks for a cancel at each tick.
+    /// Every step that is built does its work, and the others stand in for
+    /// theirs as `PLACEHOLDER` does.
+    Steps,
+    /// Stands in for the work of every step, as the tests do: it counts to
+    /// `ticks`, one tick at a time, and looks for a cancel at each tick.
+    #[cfg_attr(not(test), allow(dead_code))]
     Placeholder { ticks: u32, tick: Duration },
 }
 
-/// The work of a step while the steps compute nothing yet: a second each.
+/// The work of a step that is not built yet: a second each.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const PLACEHOLDER: Work = Work::Placeholder {
-    ticks: 20,
-    tick: Duration::from_millis(50),
+    ticks: STAND_IN_TICKS,
+    tick: STAND_IN_TICK,
 };
+const STAND_IN_TICKS: u32 = 20;
+const STAND_IN_TICK: Duration = Duration::from_millis(50);
 
 impl Default for Work {
     fn default() -> Self {
-        PLACEHOLDER
+        Self::Steps
     }
 }
 
@@ -72,6 +83,8 @@ pub(crate) struct Control {
     /// The steps that ended, kept here and not in the end of the job, so
     /// that a job that is cancelled or fails keeps what it finished.
     finished: Mutex<Vec<StepDone>>,
+    /// What the preparation found, until the window takes it.
+    prepared: Mutex<Option<Prepared>>,
 }
 
 impl Control {
@@ -117,6 +130,18 @@ impl Control {
             .clone()
     }
 
+    fn keep_prepared(&self, prepared: Prepared) {
+        *self.prepared.lock().unwrap_or_else(PoisonError::into_inner) = Some(prepared);
+    }
+
+    /// What the preparation found, once.
+    pub(crate) fn take_prepared(&self) -> Option<Prepared> {
+        self.prepared
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+
     fn finished_count(&self) -> usize {
         self.finished
             .lock()
@@ -134,6 +159,21 @@ pub(crate) struct JobInput {
     /// Whether a step that ends is confirmed at once, as Run all
     /// automatically does, or waits for the user.
     pub(crate) confirm: bool,
+    /// What the preparation reads, the scans as they were when the job
+    /// started and the basis of the step on them.
+    pub(crate) prepare: Option<PrepareInput>,
+    pub(crate) sources: Vec<SourceRef>,
+    pub(crate) prepare_basis: Option<u128>,
+}
+
+/// Count to `ticks` for a step, looking for a cancel at each tick.
+fn stand_in(place: usize, ticks: u32, tick: Duration, control: &Control) -> Result<(), LoadError> {
+    let total = u64::from(ticks);
+    for count in 0..total {
+        control.report(place, count, total)?;
+        std::thread::sleep(tick);
+    }
+    control.report(place, total, total)
 }
 
 /// Run the steps of a job one after the other. This runs on a worker
@@ -141,15 +181,18 @@ pub(crate) struct JobInput {
 pub(crate) fn run(input: &JobInput, control: &Control) -> Result<(), LoadError> {
     for (place, step) in input.steps.iter().enumerate() {
         let started = Instant::now();
-        match input.work {
-            Work::Placeholder { ticks, tick } => {
-                let total = u64::from(ticks);
-                for count in 0..total {
-                    control.report(place, count, total)?;
-                    std::thread::sleep(tick);
-                }
-                control.report(place, total, total)?;
+        match (input.work, step) {
+            (Work::Placeholder { ticks, tick }, _) => stand_in(place, ticks, tick, control)?,
+            (Work::Steps, WizardStep::Prepare) => {
+                let prepare = input
+                    .prepare
+                    .as_ref()
+                    .ok_or_else(|| LoadError::InvalidData("there is no scan to prepare".into()))?;
+                let report = |done: u64| control.report(place, done, 1000);
+                let prepared = super::prepare::run(prepare, &report)?;
+                control.keep_prepared(prepared);
             }
+            (Work::Steps, _) => stand_in(place, STAND_IN_TICKS, STAND_IN_TICK, control)?,
         }
         control.finish(StepDone {
             step: *step,
@@ -371,10 +414,47 @@ impl Studio {
             self.status = "Every step of Mesh to Plans is confirmed or skipped".into();
             return Task::none();
         };
+        let work = self.mesh_to_plans.work;
+        let (mut prepare, mut sources, mut prepare_basis) = (None, Vec::new(), None);
+        if work == Work::Steps && steps.contains(&WizardStep::Prepare) {
+            self.default_project_place();
+            match self.prepare_input(self.project_folder()) {
+                Ok(input) => {
+                    let filter = input.scene.filter;
+                    sources = self
+                        .clouds
+                        .iter()
+                        .filter(|entry| {
+                            input
+                                .scene
+                                .layers
+                                .iter()
+                                .any(|layer| Arc::ptr_eq(&layer.identity, &entry.load_identity))
+                        })
+                        .map(|entry| SourceRef::of(entry, &filter))
+                        .collect();
+                    prepare_basis = Some(super::project::prepare_basis(
+                        &sources,
+                        &self.mesh_to_plans.prepare.regions,
+                    ));
+                    prepare = Some(input);
+                }
+                Err(reason) => {
+                    let reason = reason.translated();
+                    self.status = format!("Mesh to Plans cannot prepare: {reason}");
+                    self.mesh_to_plans
+                        .set_status(WizardStep::Prepare, StepStatus::Failed(reason));
+                    return Task::none();
+                }
+            }
+        }
         let input = Arc::new(JobInput {
             steps,
-            work: self.mesh_to_plans.work,
+            work,
             confirm,
+            prepare,
+            sources,
+            prepare_basis,
         });
         let control = Arc::new(Control::default());
         let serial = self.mesh_to_plans.next_serial;
@@ -409,33 +489,65 @@ impl Studio {
         Task::batch([worker, Self::mesh_to_plans_poll_task()])
     }
 
-    /// Mark the steps a job finished, and the step under way as running.
-    fn mesh_to_plans_follow(&mut self) {
+    /// Mark the steps a job finished, and the step under way as running,
+    /// and take what the preparation found. Returns whether a step ended
+    /// since the last look, so that the project is written.
+    fn mesh_to_plans_follow(&mut self) -> bool {
         let Some(job) = &self.mesh_to_plans.job else {
-            return;
+            return false;
         };
         let finished = job.control.finished();
         let confirm = job.input.confirm;
         let current = job.input.steps.get(finished.len()).copied();
-        for done in finished {
+        let prepared = job.control.take_prepared();
+        let (sources, basis) = (job.input.sources.clone(), job.input.prepare_basis);
+        let mut ended = false;
+        for done in &finished {
             let status = if confirm {
                 StepStatus::Confirmed
             } else {
                 StepStatus::Done
             };
-            self.mesh_to_plans.set_status(done.step, status);
+            let wizard = &mut self.mesh_to_plans;
+            if *wizard.status(done.step) == StepStatus::Running {
+                ended = true;
+                wizard.runs[done.step.place()] = StepRun {
+                    basis: if done.step == WizardStep::Prepare {
+                        basis
+                    } else {
+                        None
+                    },
+                    finished: Some(now_seconds()),
+                    seconds: Some(done.seconds),
+                };
+            }
+            wizard.set_status(done.step, status);
         }
         if let Some(step) = current {
             self.mesh_to_plans.set_status(step, StepStatus::Running);
         }
+        if let Some(prepared) = prepared {
+            self.mesh_to_plans.prepare.take(&prepared);
+            self.mesh_to_plans.sources = sources;
+            if let Some(error) = &prepared.write_error {
+                self.status = format!("The survey could not be written: {error}");
+            }
+            ended = true;
+        }
+        ended
     }
 
     /// Four times a second while a job runs: its steps in the sidebar, the
     /// status bar and the job of the local API.
     pub(crate) fn mesh_to_plans_poll(&mut self) -> Task<Message> {
-        self.mesh_to_plans_follow();
+        let ended = self.mesh_to_plans_follow();
+        let save = if ended {
+            self.queue_project_save()
+        } else {
+            Task::none()
+        };
         let Some(job) = &self.mesh_to_plans.job else {
-            return Task::none();
+            return save;
         };
         let text = job.status_text();
         let value = job.progress_value();
@@ -445,7 +557,7 @@ impl Studio {
         if self.status != text {
             self.status = text;
         }
-        Self::mesh_to_plans_poll_task()
+        Task::batch([save, Self::mesh_to_plans_poll_task()])
     }
 
     /// Ask the worker of a running job to stop; Exit does too.
@@ -459,18 +571,22 @@ impl Studio {
     /// A job ended: its finished steps keep their result, the step it
     /// stopped in goes back to what it was or is marked failed, and the job
     /// of the local API says how it went.
-    pub(crate) fn mesh_to_plans_finished(&mut self, serial: u64, end: PipelineEnd) {
+    pub(crate) fn mesh_to_plans_finished(
+        &mut self,
+        serial: u64,
+        end: PipelineEnd,
+    ) -> Task<Message> {
         if self
             .mesh_to_plans
             .job
             .as_ref()
             .is_none_or(|job| job.serial != serial)
         {
-            return;
+            return Task::none();
         }
         self.mesh_to_plans_follow();
         let Some(job) = self.mesh_to_plans.job.take() else {
-            return;
+            return Task::none();
         };
         let finished = job.control.finished();
         let stopped = job.input.steps.get(finished.len()).copied();
@@ -500,6 +616,8 @@ impl Studio {
         self.status = last.status();
         self.mesh_to_plans.last = Some(last);
         self.mesh_to_plans.last_job_id = Some(job.api_job_id);
+        // Every job ends with the project written, also one that failed.
+        self.queue_project_save()
     }
 
     /// The line of the strip above the scene while a job runs.

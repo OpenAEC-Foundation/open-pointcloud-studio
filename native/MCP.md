@@ -217,6 +217,7 @@ follows when that view is restored.
 | `set_extension_enabled` | `id` (`bag3d`), `enabled` | Switches a built-in optional feature on or off; kept for later sessions, unless the answer has `saved: false` with `save_error` |
 | `file_view` | `open`, optional `page` (`new`, `open`, `import`, `export`, `workspace`, `extensions` or `about`) | Opens the File view, on a page, or returns to the model |
 | `mesh_to_plans_view` | `open`, optional `step` (`prepare`, `mesh`, `views`, `walls`, `openings`, `rooms`, `sheet`, `site` or `result`) and `minimized` | Shows the Mesh to Plans wizard as its card or as a strip above the scene, on a step, or takes it away |
+| `mesh_to_plans_action` | `action` (`run`, `run_all`, `confirm`, `skip`, `cancel`, `back` or `next`), optional `folder` (absolute, for a new project) | Does what a button of the Mesh to Plans wizard does on the step it shows; `run` and `run_all` answer with a `job_id` |
 | `list_instances` | — | Running windows and the one in use |
 | `select_instance` | `pid` or `port`, at least one | Chooses the window to drive |
 | `start_instance` | optional `files` | Starts a new window and chooses it |

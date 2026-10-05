@@ -7,6 +7,8 @@
 //! moved while the wizard waits. The steps run on the worker of
 //! `pipeline`, one job at a time.
 
+use std::path::{Path, PathBuf};
+
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{tree, Tree, Widget};
 use iced::advanced::{overlay, renderer, Clipboard, Shell};
@@ -18,16 +20,28 @@ use iced::{Theme, Vector};
 use serde_json::{json, Value};
 
 use crate::closed_mesh::Sentence;
-use crate::i18n::{key, tr};
+use crate::i18n::{key, tr, tr_args};
 use crate::{drawing_view, flat_tool_style, opencad_ribbon, ui_theme, Message, Studio};
 
 mod pipeline;
+mod prepare;
+mod project;
 mod strip;
 #[cfg(test)]
 mod tests;
 
 pub use pipeline::PipelineEnd;
 use pipeline::{Last, PipelineJob, Work};
+pub use prepare::PrepareAction;
+use project::{MeshToPlansProject, RecentProject, SourceRef, StepRecord};
+
+/// How many projects the list of recent ones keeps.
+pub(crate) const MAX_RECENT_PROJECTS: usize = project::MAX_RECENT;
+
+/// What `mesh_to_plans_action` of the local API takes.
+const API_ACTIONS: [&str; 7] = [
+    "run", "run_all", "confirm", "skip", "cancel", "back", "next",
+];
 
 /// The share of the window the card takes, and the least it takes when the
 /// window is large enough for that.
@@ -203,6 +217,9 @@ pub enum StepStatus {
     Done,
     Confirmed,
     Skipped,
+    /// Run on scans that have changed since, or with other choices: what it
+    /// made stays, but it is to be run again.
+    Stale,
     /// Failed for this reason.
     Failed(String),
 }
@@ -216,7 +233,21 @@ impl StepStatus {
             Self::Done => "done",
             Self::Confirmed => "confirmed",
             Self::Skipped => "skipped",
+            Self::Stale => "stale",
             Self::Failed(_) => "failed",
+        }
+    }
+
+    /// The status a file keeps under `key`; a step that was running when
+    /// the file was written did not end.
+    pub(crate) fn from_key(key: &str, reason: Option<&str>) -> Self {
+        match key {
+            "done" => Self::Done,
+            "confirmed" => Self::Confirmed,
+            "skipped" => Self::Skipped,
+            "stale" => Self::Stale,
+            "failed" => Self::Failed(reason.unwrap_or_default().to_owned()),
+            _ => Self::NotRun,
         }
     }
 
@@ -228,6 +259,7 @@ impl StepStatus {
             Self::Done => tr("Waiting for confirmation").into(),
             Self::Confirmed => tr("Confirmed").into(),
             Self::Skipped => tr("Skipped").into(),
+            Self::Stale => tr("Out of date").into(),
             Self::Failed(_) => tr("Failed").into(),
         }
     }
@@ -243,6 +275,7 @@ impl StepStatus {
             Self::Done => (palette.success, false),
             Self::Confirmed => (palette.success, true),
             Self::Skipped => (colors.muted, true),
+            Self::Stale => (Color::from_rgb8(217, 119, 6), true),
             Self::Failed(_) => (palette.danger, true),
         }
     }
@@ -275,6 +308,28 @@ pub enum WizardAction {
     Poll,
     Cancel,
     Finished(u64, PipelineEnd),
+    /// What the page of step 0 does.
+    Prepare(PrepareAction),
+    /// Write the project, if nothing changed since this revision was asked.
+    Save(u64),
+    /// Open the project of this file and go on with it.
+    Resume(PathBuf),
+}
+
+/// Where the project of the wizard is kept.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ProjectPlace {
+    pub(crate) file: PathBuf,
+    pub(crate) id: String,
+    pub(crate) created: u64,
+}
+
+/// When a step ended and how long it took, with the basis it ran on.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct StepRun {
+    pub(crate) basis: Option<u128>,
+    pub(crate) finished: Option<u64>,
+    pub(crate) seconds: Option<f64>,
 }
 
 /// The wizard: whether it is shown, as a card or as a strip, the step it
@@ -286,6 +341,7 @@ pub(crate) struct Wizard {
     minimized: bool,
     step: WizardStep,
     states: [StepStatus; WizardStep::ALL.len()],
+    runs: [StepRun; WizardStep::ALL.len()],
     /// The job under way, how the last one ended and what the steps of a
     /// job do.
     job: Option<PipelineJob>,
@@ -294,9 +350,37 @@ pub(crate) struct Wizard {
     /// The job of the local API that reports the last job.
     last_job_id: Option<String>,
     work: Work,
+    /// Step 0: the survey, the levels and the fields of its page.
+    pub(crate) prepare: prepare::Prepare,
+    /// The name and the folder of the project, as typed, and where it is
+    /// kept once it was written.
+    pub(crate) project_name: String,
+    pub(crate) project_folder: String,
+    pub(crate) project: Option<ProjectPlace>,
+    /// The scans step 0 ran on.
+    sources: Vec<SourceRef>,
+    /// The project files that were worked on last, newest first, and what
+    /// they hold as far as the Project Browser needs it.
+    pub(crate) recent: Vec<PathBuf>,
+    pub(crate) recent_projects: Vec<RecentProject>,
+    save_revision: u64,
 }
 
 impl Wizard {
+    /// A wizard with the list of recent projects of the preferences. The
+    /// tests start without one.
+    pub(crate) fn with_recent(recent: Vec<PathBuf>) -> Self {
+        if cfg!(test) {
+            return Self::default();
+        }
+        let recent_projects = project::read_recent(&recent);
+        Self {
+            recent,
+            recent_projects,
+            ..Self::default()
+        }
+    }
+
     /// Whether the wizard is shown, as a card or as a strip.
     pub(crate) fn is_open(&self) -> bool {
         self.open
@@ -351,6 +435,54 @@ impl Wizard {
                 .as_ref()
                 .map(|job| job.api_job_id.as_str())
                 .or(self.last_job_id.as_deref()),
+            "project": self.project.as_ref().map(|project| project.file.display().to_string()),
+            "project_name": self.project_name,
+            "project_folder": self.project_folder,
+            "prepare": self.prepare_value(),
+        })
+    }
+
+    /// What step 0 found and holds, for the local API: the frame, the
+    /// footprint and the levels with their heights above P.
+    fn prepare_value(&self) -> Value {
+        let prepare = &self.prepare;
+        let Some(survey) = &prepare.survey else {
+            return Value::Null;
+        };
+        let frame = prepare.frame().unwrap_or(survey.frame);
+        let peil = prepare.peil_z();
+        json!({
+            "rotation_deg": frame.rotation_deg,
+            "second_direction_deg": frame.second_direction_deg,
+            "origin": frame.origin,
+            "peil_z": peil,
+            "footprint_area": survey.footprint_area,
+            "footprint_parts": survey.footprint.len(),
+            "ground_z": survey.ground_z,
+            "below_points": survey.below_points,
+            "below_groups": survey.below_groups,
+            "grid": survey.grid,
+            "seconds": survey.seconds,
+            "chosen_core": prepare.regions.chosen_core.is_some(),
+            "chosen_rotation": prepare.regions.chosen_rotation,
+            "selected": prepare.selected,
+            "levels": prepare.levels.iter().enumerate().map(|(place, level)| json!({
+                "id": level.id,
+                "name": level.name,
+                "kind": level.kind,
+                "floor_z": level.floor_z,
+                "floor_above_p": level.floor_z - peil,
+                "ceiling_above_p": level.ceiling_z.map(|ceiling| ceiling - peil),
+                "slab_underside_above_p": level.slab_underside.map(|underside| underside - peil),
+                "slab_thickness": level.slab_thickness,
+                "storey_height": prepare::storey_height(&prepare.levels, place),
+                "cut_height": level.cut_height,
+                "tilt_mm_per_m": level.tilt_mm_per_m,
+                "share": level.share,
+                "is_peil": level.is_peil,
+                "confidence": level.confidence.score,
+                "status": level.status,
+            })).collect::<Vec<_>>(),
         })
     }
 
@@ -366,6 +498,9 @@ impl Wizard {
             StepStatus::Running => Err(Sentence::plain(key("Wait until this step has finished"))),
             StepStatus::Done => Err(Sentence::plain(key(
                 "Confirm the result of this step first",
+            ))),
+            StepStatus::Stale => Err(Sentence::plain(key(
+                "The scans or the choices changed since this step ran: run it again",
             ))),
             StepStatus::Failed(reason) => Err(Sentence::with(
                 key("This step failed: {reason}"),
@@ -385,6 +520,7 @@ impl Studio {
                 self.file_open = false;
                 wizard.open = true;
                 wizard.minimized = false;
+                self.default_project_place();
             }
             WizardAction::Close => {
                 wizard.open = false;
@@ -397,6 +533,10 @@ impl Studio {
                 if wizard.open {
                     self.file_open = false;
                     wizard.minimized = false;
+                    // Show in model of a level moved the section box.
+                    if let Some(before) = wizard.prepare.put_back.take() {
+                        return self.put_section_box(before.section);
+                    }
                 }
             }
             WizardAction::Step(step) => wizard.step = step,
@@ -417,6 +557,7 @@ impl Studio {
                 let running = *wizard.status(wizard.step) == StepStatus::Running;
                 if wizard.step.optional() && !running {
                     wizard.set_status(wizard.step, StepStatus::Skipped);
+                    return self.queue_project_save();
                 }
             }
             WizardAction::Run => {
@@ -438,13 +579,345 @@ impl Studio {
             WizardAction::Confirm => {
                 if *wizard.status(wizard.step) == StepStatus::Done {
                     wizard.set_status(wizard.step, StepStatus::Confirmed);
+                    if wizard.step == WizardStep::Prepare {
+                        self.status = tr("Levels confirmed").into();
+                    }
+                    return self.queue_project_save();
                 }
             }
             WizardAction::Poll => return self.mesh_to_plans_poll(),
             WizardAction::Cancel => self.cancel_mesh_to_plans(),
-            WizardAction::Finished(serial, end) => self.mesh_to_plans_finished(serial, end),
+            WizardAction::Finished(serial, end) => return self.mesh_to_plans_finished(serial, end),
+            WizardAction::Prepare(action) => return self.update_prepare(action),
+            WizardAction::Save(revision) => {
+                if revision == self.mesh_to_plans.save_revision {
+                    return self.save_project_now();
+                }
+            }
+            WizardAction::Resume(file) => return self.resume_project(&file),
         }
         Task::none()
+    }
+
+    /// The name and the folder of a new project, while none is chosen: the
+    /// name of the first scan shown, in the folder of the projects in
+    /// Documents.
+    fn default_project_place(&mut self) {
+        let wizard = &mut self.mesh_to_plans;
+        if wizard.project.is_some() {
+            return;
+        }
+        if wizard.project_name.trim().is_empty() {
+            if let Some(entry) = self
+                .clouds
+                .iter()
+                .find(|entry| entry.visible && !entry.bag_source)
+            {
+                wizard.project_name = entry
+                    .cloud
+                    .path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+            }
+        }
+        if wizard.project_folder.trim().is_empty() && !wizard.project_name.trim().is_empty() {
+            if let Some(root) = project::default_root() {
+                wizard.project_folder = root
+                    .join(project::folder_name(&wizard.project_name))
+                    .display()
+                    .to_string();
+            }
+        }
+    }
+
+    /// The folder the project is written to: the one it is in, or the one
+    /// typed; none without one.
+    pub(crate) fn project_folder(&self) -> Option<PathBuf> {
+        let wizard = &self.mesh_to_plans;
+        match &wizard.project {
+            Some(project) => project.file.parent().map(Path::to_path_buf),
+            None => {
+                let typed = wizard.project_folder.trim();
+                (!typed.is_empty()).then(|| PathBuf::from(typed))
+            }
+        }
+    }
+
+    /// Write the project a moment from now, once the changes have come to
+    /// rest; nothing before step 0 ran.
+    pub(crate) fn queue_project_save(&mut self) -> Task<Message> {
+        let wizard = &mut self.mesh_to_plans;
+        if wizard.prepare.survey.is_none() && wizard.project.is_none() {
+            return Task::none();
+        }
+        wizard.save_revision = wizard.save_revision.wrapping_add(1);
+        let revision = wizard.save_revision;
+        Task::perform(
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                revision
+            },
+            |revision| Message::MeshToPlans(WizardAction::Save(revision)),
+        )
+    }
+
+    /// The project as the file keeps it.
+    pub(crate) fn project_snapshot(&self) -> Option<MeshToPlansProject> {
+        let wizard = &self.mesh_to_plans;
+        let prepare = &wizard.prepare;
+        let name = if wizard.project_name.trim().is_empty() {
+            "Project".to_owned()
+        } else {
+            wizard.project_name.trim().to_owned()
+        };
+        let mut project = MeshToPlansProject::new(&name);
+        if let Some(place) = &wizard.project {
+            project.id = place.id.clone();
+            project.created = place.created;
+        }
+        project.sources = wizard.sources.clone();
+        project.frame = prepare.frame();
+        project.datum = project::Datum {
+            nap_offset: prepare::parse_number(&prepare.nap_offset),
+            north_deg: prepare::parse_number(&prepare.north),
+        };
+        project.regions = prepare.regions;
+        project.survey = prepare.survey.clone();
+        project.levels = prepare.levels.clone();
+        for (place, step) in WizardStep::ALL.into_iter().enumerate() {
+            let status = wizard.status(step);
+            // A step under way is kept as it was before it started.
+            let status = match status {
+                StepStatus::Running => StepStatus::NotRun,
+                other => other.clone(),
+            };
+            if status == StepStatus::NotRun {
+                continue;
+            }
+            let run = wizard.runs[place];
+            project.steps.insert(
+                step.id().to_owned(),
+                StepRecord {
+                    status: status.key().to_owned(),
+                    reason: match &status {
+                        StepStatus::Failed(reason) => Some(reason.clone()),
+                        _ => None,
+                    },
+                    basis: run.basis.map(project::basis_text),
+                    finished: run.finished,
+                    seconds: run.seconds,
+                },
+            );
+        }
+        Some(project)
+    }
+
+    /// Write the project now, to its file or, the first time, to the
+    /// project folder, and put it first in the list of recent projects.
+    fn save_project_now(&mut self) -> Task<Message> {
+        let Some(folder) = self.project_folder() else {
+            self.status = tr("Choose a project folder to save the project").into();
+            return Task::none();
+        };
+        let Some(mut project) = self.project_snapshot() else {
+            return Task::none();
+        };
+        let file = project::project_file(&folder);
+        // A project already in that folder keeps its id.
+        if self.mesh_to_plans.project.is_none() {
+            if let Ok(existing) = project::load(&file) {
+                project.id = existing.id;
+                project.created = existing.created;
+            }
+        }
+        if let Err(error) = project::save(&file, &project) {
+            self.status = tr_args("Could not save the project: {error}", &[("error", &error)]);
+            return Task::none();
+        }
+        let wizard = &mut self.mesh_to_plans;
+        let first = wizard.project.is_none() || wizard.recent.first() != Some(&file);
+        wizard.project = Some(ProjectPlace {
+            file: file.clone(),
+            id: project.id.clone(),
+            created: project.created,
+        });
+        wizard.project_folder = folder.display().to_string();
+        let entry = RecentProject::of(&file, &project);
+        wizard.recent_projects.retain(|known| known.file != file);
+        wizard.recent_projects.insert(0, entry);
+        wizard.recent_projects.truncate(project::MAX_RECENT);
+        if first {
+            project::remember(&mut wizard.recent, &file);
+            return self.queue_preferences_save();
+        }
+        Task::none()
+    }
+
+    /// Open a project file and go on with it on the step after the last
+    /// one confirmed. Step 0 is out of date when the scans are not as they
+    /// were.
+    fn resume_project(&mut self, file: &Path) -> Task<Message> {
+        if self.mesh_to_plans.is_running() {
+            self.status = tr("Mesh to Plans is already running a step").into();
+            return Task::none();
+        }
+        let project = match project::load(file) {
+            Ok(project) => project,
+            Err(error) => {
+                self.status = tr_args("Could not open the project: {error}", &[("error", &error)]);
+                return Task::none();
+            }
+        };
+        let current = self.current_sources(&project);
+        let wizard = &mut self.mesh_to_plans;
+        let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
+        wizard.project = Some(ProjectPlace {
+            file: file.to_path_buf(),
+            id: project.id.clone(),
+            created: project.created,
+        });
+        wizard.project_name = project.name.clone();
+        wizard.project_folder = folder.display().to_string();
+        wizard.sources = project.sources.clone();
+        let prepare = &mut wizard.prepare;
+        *prepare = prepare::Prepare::default();
+        prepare.regions = project.regions;
+        prepare.levels = project.levels.clone();
+        prepare.survey = project.survey.clone();
+        if let Some(frame) = project.frame {
+            if let Some(survey) = &mut prepare.survey {
+                survey.frame.second_direction_deg = frame.second_direction_deg;
+            }
+        }
+        prepare.top = prepare::read_top(&folder);
+        prepare.top_handle = prepare.top.as_ref().map(prepare::TopImage::handle);
+        prepare.rotation = project
+            .regions
+            .chosen_rotation
+            .map(|degrees| format!("{degrees}"))
+            .unwrap_or_default();
+        prepare.nap_offset = project
+            .datum
+            .nap_offset
+            .map(|offset| format!("{offset}"))
+            .unwrap_or_default();
+        prepare.north = project
+            .datum
+            .north_deg
+            .map(|degrees| format!("{degrees}"))
+            .unwrap_or_default();
+        prepare.select(prepare.levels.iter().position(|level| level.is_peil));
+        for (place, step) in WizardStep::ALL.into_iter().enumerate() {
+            wizard.states[place] = project.status(step);
+            let record = project.steps.get(step.id());
+            wizard.runs[place] = StepRun {
+                basis: record
+                    .and_then(|record| record.basis.as_deref())
+                    .and_then(pointcloud_core::stable_hash::parse_hash_hex),
+                finished: record.and_then(|record| record.finished),
+                seconds: record.and_then(|record| record.seconds),
+            };
+        }
+        // Step 0 is out of date on other scans, or on scans that changed.
+        let saved = wizard.runs[WizardStep::Prepare.place()].basis;
+        let now = current.map(|sources| project::prepare_basis(&sources, &project.regions));
+        let ran = !matches!(
+            wizard.status(WizardStep::Prepare),
+            StepStatus::NotRun | StepStatus::Failed(_)
+        );
+        if ran && (now.is_none() || now != saved) {
+            wizard.set_status(WizardStep::Prepare, StepStatus::Stale);
+        }
+        wizard.step = project.resume_step();
+        if *wizard.status(WizardStep::Prepare) == StepStatus::Stale {
+            wizard.step = WizardStep::Prepare;
+        }
+        project::remember(&mut wizard.recent, file);
+        let entry = RecentProject::of(file, &project);
+        wizard.recent_projects.retain(|known| known.file != file);
+        wizard.recent_projects.insert(0, entry);
+        wizard.open = true;
+        wizard.minimized = false;
+        self.file_open = false;
+        self.status = tr_args(
+            "Mesh to Plans project {name} opened",
+            &[("name", &project.name)],
+        );
+        self.queue_preferences_save()
+    }
+
+    /// The scans of a project as they are open now, or none when one of
+    /// them is not open.
+    fn current_sources(&self, project: &MeshToPlansProject) -> Option<Vec<SourceRef>> {
+        let mut filter = self.mesh_filter();
+        filter.section = None;
+        project
+            .sources
+            .iter()
+            .map(|source| {
+                self.clouds
+                    .iter()
+                    .find(|entry| entry.cloud.path == source.path)
+                    .map(|entry| SourceRef::of(entry, &filter))
+            })
+            .collect()
+    }
+
+    /// The Mesh to Plans part of the Project Browser: the recent projects
+    /// made from the scans that are open, each with the step to go on with.
+    /// Nothing when there is none.
+    pub(crate) fn mesh_to_plans_browser(&self) -> Option<Element<'_, Message>> {
+        let open: Vec<&Path> = self
+            .clouds
+            .iter()
+            .map(|entry| entry.cloud.path.as_path())
+            .collect();
+        let resumable: Vec<&RecentProject> = self
+            .mesh_to_plans
+            .recent_projects
+            .iter()
+            .filter(|recent| {
+                !recent.sources.is_empty()
+                    && recent
+                        .sources
+                        .iter()
+                        .all(|source| open.contains(&source.as_path()))
+            })
+            .collect();
+        if resumable.is_empty() {
+            return None;
+        }
+        let muted = self.ui_theme.colors().muted;
+        let mut list = column![text(tr("MESH TO PLANS")).size(11).color(muted)].spacing(2);
+        for recent in resumable {
+            let current = self
+                .mesh_to_plans
+                .project
+                .as_ref()
+                .is_some_and(|project| project.file == recent.file);
+            list = list.push(
+                button(
+                    column![
+                        text(tr_args(
+                            "Resume Mesh to Plans (step {number})",
+                            &[("number", &recent.step.number())],
+                        ))
+                        .size(11),
+                        text(recent.name.clone()).size(10).color(muted),
+                    ]
+                    .spacing(1),
+                )
+                .on_press(Message::MeshToPlans(if current {
+                    WizardAction::Open
+                } else {
+                    WizardAction::Resume(recent.file.clone())
+                }))
+                .style(flat_tool_style)
+                .width(Fill),
+            );
+        }
+        Some(list.into())
     }
 
     /// The `mesh_to_plans_view` command of the local API: show the wizard,
@@ -487,6 +960,77 @@ impl Studio {
             self.mesh_to_plans.minimize();
         }
         json!({"ok": true, "mesh_to_plans": self.mesh_to_plans.value()})
+    }
+
+    /// The `mesh_to_plans_action` command of the local API: what a button of
+    /// the card does, on the step it shows, with the folder of a new project
+    /// first when one is given. The wizard need not be shown.
+    pub(crate) fn api_mesh_to_plans_action(
+        &mut self,
+        action: &str,
+        folder: Option<PathBuf>,
+    ) -> (Value, Task<Message>) {
+        let refuse = |error: String| (json!({"ok": false, "error": error}), Task::none());
+        let action = action.to_ascii_lowercase();
+        if !API_ACTIONS.contains(&action.as_str()) {
+            return refuse(format!("unknown action; use {}", API_ACTIONS.join(", ")));
+        }
+        if let Some(folder) = folder {
+            if self.mesh_to_plans.project.is_some() {
+                return refuse("the project already has its folder".into());
+            }
+            if !folder.is_absolute() {
+                return refuse("folder must be an absolute path".into());
+            }
+            self.mesh_to_plans.project_folder = folder.display().to_string();
+        }
+        let wizard = &self.mesh_to_plans;
+        let step = wizard.step;
+        let refused = match action.as_str() {
+            "run" | "run_all" if wizard.is_running() => {
+                Some("Mesh to Plans is already running a step".to_owned())
+            }
+            "confirm" if *wizard.status(step) != StepStatus::Done => {
+                Some("the step shown waits for no confirmation".to_owned())
+            }
+            "skip" if !step.optional() => Some("the step shown cannot be skipped".to_owned()),
+            "cancel" if !wizard.is_running() => Some("no job is running".to_owned()),
+            "next" => wizard.step_ready().err().map(|reason| reason.english()),
+            "back" if step.previous().is_none() => Some("this is the first step".to_owned()),
+            _ => None,
+        };
+        if let Some(error) = refused {
+            return refuse(error);
+        }
+        let task = self.update_mesh_to_plans(match action.as_str() {
+            "run" => WizardAction::Run,
+            "run_all" => WizardAction::RunAll,
+            "confirm" => WizardAction::Confirm,
+            "skip" => WizardAction::Skip,
+            "cancel" => WizardAction::Cancel,
+            "back" => WizardAction::Back,
+            _ => WizardAction::Next,
+        });
+        if matches!(action.as_str(), "run" | "run_all") && !self.mesh_to_plans.is_running() {
+            let error = match self.mesh_to_plans.status(step) {
+                StepStatus::Failed(reason) => reason.clone(),
+                _ => self.status.clone(),
+            };
+            return (json!({"ok": false, "error": error}), task);
+        }
+        let job_id = self
+            .mesh_to_plans
+            .job
+            .as_ref()
+            .map(|job| job.api_job_id.clone());
+        (
+            json!({
+                "ok": true,
+                "job_id": job_id,
+                "mesh_to_plans": self.mesh_to_plans.value(),
+            }),
+            task,
+        )
     }
 
     /// The card over the dimmed window, while it is shown as a card.
@@ -637,12 +1181,12 @@ impl Studio {
                 text(wizard.status(step).text()).size(12),
             ]
             .spacing(8),
-            text(tr("The settings of this step come in a later version."))
-                .size(11)
-                .color(colors.muted),
         ]
         .spacing(12)
         .width(Fill);
+        if let StepStatus::Failed(reason) = wizard.status(step) {
+            page = page.push(text(reason.clone()).size(11).color(colors.muted));
+        }
         if let Some(line) = self.mesh_to_plans_progress_line() {
             page = page.push(
                 column![
@@ -653,11 +1197,25 @@ impl Studio {
             );
         }
         if *wizard.status(step) == StepStatus::Done {
+            let label = if step == WizardStep::Prepare {
+                key("Confirm levels")
+            } else {
+                key("Confirm")
+            };
             page = page.push(
-                button(text(tr("Confirm")).size(12))
+                button(text(tr(label)).size(12))
                     .on_press(Message::MeshToPlans(WizardAction::Confirm))
                     .style(|theme, status| opencad_ribbon::file_tab_style(theme, false, status))
                     .padding([5, 16]),
+            );
+        }
+        if step == WizardStep::Prepare {
+            page = page.push(self.prepare_settings());
+        } else {
+            page = page.push(
+                text(tr("The settings of this step come in a later version."))
+                    .size(11)
+                    .color(colors.muted),
             );
         }
         let running = *wizard.status(step) == StepStatus::Running;
@@ -675,22 +1233,26 @@ impl Studio {
     /// The preview of the shown step, on the paper of the Drawing view.
     fn mesh_to_plans_preview(&self) -> Element<'_, Message> {
         let paper = drawing_view::paper(self.ui_theme);
-        container(
+        let content: Element<'_, Message> = if self.mesh_to_plans.step == WizardStep::Prepare {
+            self.prepare_preview()
+        } else {
             text(tr("The preview of this step appears here."))
                 .size(12)
-                .color(Color::from_rgb8(120, 113, 108)),
-        )
-        .center(Fill)
-        .style(move |theme| {
-            container::Style::default()
-                .background(paper)
-                .border(Border {
-                    color: ui_theme::colors(theme).border,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                })
-        })
-        .into()
+                .color(Color::from_rgb8(120, 113, 108))
+                .into()
+        };
+        container(content)
+            .center(Fill)
+            .style(move |theme| {
+                container::Style::default()
+                    .background(paper)
+                    .border(Border {
+                        color: ui_theme::colors(theme).border,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    })
+            })
+            .into()
     }
 
     /// Close, Previous, Run, Next and Run all, with the reason Next waits for.

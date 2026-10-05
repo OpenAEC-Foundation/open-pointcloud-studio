@@ -38,7 +38,7 @@ fn strip_button_style(_: &iced::Theme, status: button::Status) -> button::Style 
 
 impl Studio {
     /// The strip, while the wizard is shown as one: its step and where that
-    /// stands, with Back, Next and Back to wizard.
+    /// stands, with Previous, Next and Back to wizard.
     pub(crate) fn mesh_to_plans_strip(&self) -> Option<Element<'_, Message>> {
         let wizard = &self.mesh_to_plans;
         if !wizard.open || !wizard.minimized {
@@ -71,7 +71,7 @@ impl Studio {
             horizontal_space(),
             text(reason).size(11).color(MUTED),
             plain(
-                key("Back"),
+                key("Previous"),
                 step.previous().map(|_| send(WizardAction::Back))
             ),
             plain(

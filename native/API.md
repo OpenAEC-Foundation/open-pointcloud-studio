@@ -720,16 +720,37 @@ The answer holds `mesh_to_plans` as `status.result.mesh_to_plans` does:
 `open`, `minimized`, `step` (the id of the step shown), `next_ready` (whether
 Next may leave that step), `next_reason` (why not, or `null`) and `steps`,
 for every step its `id`, `number`, English `name` and `status`: `not_run`,
-`running`, `done` (run, waiting for confirmation), `confirmed`, `skipped` or
-`failed`.
+`running`, `done` (run, waiting for confirmation), `confirmed`, `skipped`,
+`stale` (run on scans that changed since, or with other choices) or `failed`.
+It also holds `project` (the project file, or `null` before it was first
+written), `project_name`, `project_folder` and `prepare`: `null` before step
+0 ran, and after it `rotation_deg` and `second_direction_deg` (the main
+directions of the walls, in degrees), `origin` and `peil_z` (the height of P
+in the scene), `footprint_area`, `footprint_parts`, `ground_z`,
+`below_points` and `below_groups` (the stray points left out below the
+scene), `grid` (the cells of the survey), `seconds`, `chosen_core`,
+`chosen_rotation`, `selected` (the place of the selected level) and
+`levels`: per level its `id` (`00` for the floor that is P, `01` and up
+above it, `-01` and down below it, `00M` for a mezzanine, `R` for the
+roof), `name`, `kind` (`Basement`, `Ground`, `Storey`, `Partial` or
+`Roof`), `floor_z` in the scene, `floor_above_p`, `ceiling_above_p`,
+`slab_underside_above_p` (the slab above a suspended ceiling),
+`slab_thickness`, `storey_height`, `cut_height` (the cut of its plan above
+the floor), `tilt_mm_per_m` (its slope along the two main directions),
+`share` (the part of the footprint it covers), `is_peil`, `confidence` and
+`status` (`Found` or `Edited`).
 
 **Run this step** and **Run all automatically** start a job that runs steps
 one after the other on a worker thread; Run all automatically takes every
 step that is not confirmed or skipped and confirms each one as it ends. One
 job runs at a time, and it waits while a section drawing, a mesh, a face
-detection, a merge or an octree build is under way. The steps compute nothing
-yet: each one stands in for its work for about a second. While a job runs,
-`job` in the status holds `state` (`running`), `operation`
+detection, a merge or an octree build is under way. Step 0, `prepare`, reads
+every shown scan once (an indexed one through its index; one of more than
+5,000,000 points without an index is refused until its index is built): it
+finds the box around the building without the stray points far out, the main
+direction of the walls, the footprint and the levels, and reads every floor
+again to the millimetre. The later steps are not built yet and stand in for
+their work for about a second. While a job runs, `job` in the status holds `state` (`running`), `operation`
 (`mesh_to_plans`), `steps` (their ids, in order), `step` (the one under
 way), `place`, `completed`, `total`, `fraction`, `confirm`,
 `cancel_requested` and `elapsed_seconds`; it is `null` otherwise. `last`
@@ -741,6 +762,28 @@ or the last job. A step that ended keeps its result when the job is
 cancelled; the step under way goes back to what it was. The progress strip
 above the scene has a line for the job with Cancel, and Exit cancels it;
 Escape and Close leave it running.
+
+`mesh_to_plans_action` does what a button of the wizard does on the step it
+shows, whether the wizard is shown or not: `run` (Run this step), `run_all`
+(Run all automatically), `confirm` (Confirm, or Confirm levels on step 0),
+`skip`, `cancel`, `back` and `next`. An action whose button would be
+disabled is refused with the reason, for example `next` before the step is
+confirmed or `run` while a job runs. `folder` sets the absolute folder of a
+new project before it is first written; by default that is
+`Documents/OPS Mesh to Plans/<name>`, named after the first shown scan. `run`
+and `run_all` answer with the `job_id` of the job.
+
+A project is the file `project.ops-m2p.json` in its folder, written whole
+through a temporary file a moment after every change once step 0 ran. It
+keeps the scans with their size, time of change, transform, deleted points
+and hidden classes, the frame of the building, the boxes, the NAP height of
+P and the north direction when known, the status of every step with the
+basis it ran on, what the survey found and the levels. Step 0 also writes
+`survey/profile.csv` (the horizontal area per height) and `survey/top.png`
+(the view from above) in the folder. The newest eight project files are kept
+in the preferences; the Project Browser offers **Resume Mesh to Plans (step
+n)** for those whose scans are all open. A resumed project whose scans
+changed since step 0 ran has step 0 `stale`.
 
 ## Editing
 
@@ -966,6 +1009,7 @@ when the view is restored.
 | `set_extension_enabled` | `id`, `enabled` | Switches a built-in optional feature (`bag3d`) on or off and persists that; `saved` in the answer is false, with `save_error`, when it could not be persisted |
 | `file_view` | `open`, optional `page` | Opens the File view, on the page `new`, `open`, `import`, `export`, `workspace`, `extensions` or `about` when one is named, or closes it and returns to the model |
 | `mesh_to_plans_view` | `open`, optional `step`, `minimized` | Shows the Mesh to Plans wizard as its card, on a step when one is named, or with `minimized: true` as a strip above the scene, or takes it away; answers with `mesh_to_plans` |
+| `mesh_to_plans_action` | `action`, optional `folder` | Does what a button of the Mesh to Plans wizard does on the step it shows: `run`, `run_all`, `confirm`, `skip`, `cancel`, `back` or `next`; `folder` is the absolute folder of a new project. `run` and `run_all` return a job ID; answers with `mesh_to_plans` |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |
