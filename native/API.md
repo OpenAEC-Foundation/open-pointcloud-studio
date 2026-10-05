@@ -97,6 +97,8 @@ refused, none is taken.
   open.
 - `simplify_mm`: how far simplification may move the surface, in millimetres,
   0 (none) to 1000, or `null` for automatic, as the block starts: 0.15 voxel.
+- `sample_percent`: deterministic share of source points used for surface
+  fitting, above 0 through 100; the default 100 uses all eligible points.
 - `sides`: which side of a surface is its front. `automatic` (the start)
   takes the scanner station that measured it where the layer knows its
   stations, and the centre of the region elsewhere. `centre` takes the centre
@@ -886,10 +888,10 @@ when the view is restored.
 | `build_index` | — | Starts an octree build for the active unindexed cloud |
 | `cancel_index` | — | Cancels a running octree build without publishing a partial index |
 | `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
-| `set_surface_settings` | `max_vertices`, `neighbors`, `edge_factor` | Sets the native GUI's 3D surface reconstruction limits atomically: 3–1,000,000 vertices, 3–32 neighbors and a finite positive edge factor |
+| `set_surface_settings` | `max_vertices`, `neighbors`, `edge_factor`, optional `sample_percent`, `mesh_size` | Sets the native GUI's 3D surface reconstruction limits atomically: 3–1,000,000 vertices, 3–32 neighbors, a finite positive edge factor, source share above 0 through 100 percent (default 100), and a nonnegative minimum 3D voxel size (`0` automatic) |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
-| `mesh` | `mode`, `path` (optional for `closed`), and for `closed` optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path, or a `closed` mesh that is shown and, with a `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path, also written, using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings, closed mode the Closed mesh settings with the fields given. Returns a job ID. The complete job reports the open edges and the connected parts of the mesh, and for `closed` the distance between points and mesh |
-| `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers` | Sets the settings of the Closed mesh block atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
+| `mesh` | `mode`, `path` (optional for `closed`), and for `closed` optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path, or a `closed` mesh that is shown and, with a `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path, also written, using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings, closed mode the Closed mesh settings with the fields given. Returns a job ID. The complete job reports the open edges and the connected parts of the mesh, and for `closed` the distance between points and mesh |
+| `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Sets the settings of the Closed mesh block atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, source share above 0 through 100 percent (default 100), sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task, of whatever mode |
 | `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
 | `set_face_settings` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Sets the settings of the Detect faces block atomically: a distance tolerance of 0.001–0.5 m, an angle tolerance of 1–45 degrees, a smallest face of 0.01–10000 m², cylinders on or off, layers `active` or `visible`, and the colouring `face` or `deviation` of the faces that are shown. Returns the `settings` |

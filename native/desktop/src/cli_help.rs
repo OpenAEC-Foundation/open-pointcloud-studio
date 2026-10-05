@@ -102,13 +102,13 @@ pub const MODES: &[Mode] = &[
     Mode {
         flag: "--surface",
         short: None,
-        arguments: "INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N]",
+        arguments: "INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--sample-percent P] [--mesh-size SIZE]",
         description: key("Writes a 3D surface mesh of a scan."),
     },
     Mode {
         flag: "--closed-mesh",
         short: None,
-        arguments: "INPUT OUTPUT.obj|.ply|.stl|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]",
+        arguments: "INPUT OUTPUT.obj|.ply|.stl|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic|centre|upward]",
         description: key(
             "Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY, STL, DXF, DWG or IFC.",
         ),

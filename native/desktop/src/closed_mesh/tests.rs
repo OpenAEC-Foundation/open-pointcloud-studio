@@ -192,7 +192,7 @@ fn block_starts_with_the_defaults_of_the_core() {
     assert_eq!(
         settings.value(),
         json!({
-            "voxel": null, "max_hole": 0.25, "simplify_mm": null,
+            "voxel": null, "max_hole": 0.25, "simplify_mm": null, "sample_percent": 100.0,
             "sides": "automatic", "layers": "active",
         })
     );
@@ -358,7 +358,7 @@ fn fields_of_a_command_go_into_the_block_and_wrong_ones_change_nothing() {
         }),
     );
     let expected = json!({
-        "voxel": 0.05, "max_hole": 0.1, "simplify_mm": 0.0,
+        "voxel": 0.05, "max_hole": 0.1, "simplify_mm": 0.0, "sample_percent": 100.0,
         "sides": "centre", "layers": "visible",
     });
     assert_eq!(answer, json!({"ok": true, "settings": expected}));
@@ -373,6 +373,10 @@ fn fields_of_a_command_go_into_the_block_and_wrong_ones_change_nothing() {
     assert_eq!(answer["settings"]["sides"], "centre");
     // Nothing named changes nothing and reports the settings.
     assert_eq!(set(&mut studio, json!({}))["settings"], answer["settings"]);
+    assert_eq!(
+        set(&mut studio, json!({"sample_percent": 10.0}))["settings"]["sample_percent"],
+        10.0
+    );
 
     // When one field is refused, none is taken.
     let before = studio.closed_mesh.settings.clone();
@@ -390,6 +394,10 @@ fn fields_of_a_command_go_into_the_block_and_wrong_ones_change_nothing() {
             "sides must be automatic, centre or upward",
         ),
         (json!({"layers": "all"}), "layers must be active or visible"),
+        (
+            json!({"sample_percent": 101.0}),
+            "a setting lies outside its limits",
+        ),
     ] {
         let answer = set(&mut studio, body);
         assert_eq!(answer, json!({"ok": false, "error": problem}));
@@ -404,7 +412,7 @@ fn fields_of_a_command_go_into_the_block_and_wrong_ones_change_nothing() {
     );
     assert_eq!(
         terrain["error"],
-        "voxel, max_hole, simplify_mm, sides and layers go with the mesh mode closed only"
+        "voxel, max_hole, simplify_mm, sample_percent, sides and layers go with the mesh mode closed only"
     );
     let no_file = send(
         &mut studio,
@@ -1782,7 +1790,7 @@ fn block_shows_the_region_the_job_and_the_result_in_the_language_in_use() {
     assert_eq!(
         studio.closed_mesh.settings.value(),
         json!({
-            "voxel": 0.04, "max_hole": 0.2, "simplify_mm": 2.0,
+            "voxel": 0.04, "max_hole": 0.2, "simplify_mm": 2.0, "sample_percent": 100.0,
             "sides": "upward", "layers": "visible",
         })
     );

@@ -138,6 +138,9 @@ pub enum MeshOrientation {
 /// The settings of a closed mesh job.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClosedMeshConfig {
+    /// Share of the source points used for surface fitting. 100 keeps every
+    /// point; smaller values use a deterministic sample over all indexed tiles.
+    pub sample_percent: f64,
     /// Edge of a voxel in metres, between 0.005 and 0.5. Detail smaller
     /// than about two voxels is lost. A wall with openings needs about
     /// three voxels of thickness: at two voxels it gets extra holes and
@@ -189,6 +192,7 @@ pub struct ClosedMeshConfig {
 impl Default for ClosedMeshConfig {
     fn default() -> Self {
         Self {
+            sample_percent: 100.0,
             voxel: None,
             max_hole: 0.25,
             simplify_tolerance: None,
@@ -209,6 +213,12 @@ impl ClosedMeshConfig {
     /// not.
     pub fn validate(&self) -> Result<(), LoadError> {
         let invalid = |reason: &str| Err(LoadError::InvalidData(reason.into()));
+        if !self.sample_percent.is_finite()
+            || self.sample_percent <= 0.0
+            || self.sample_percent > 100.0
+        {
+            return invalid("the source sample must be above 0 and at most 100 percent");
+        }
         if self
             .voxel
             .is_some_and(|voxel| !(MIN_VOXEL..=MAX_VOXEL).contains(&voxel))
@@ -484,10 +494,16 @@ pub fn mesh_closed(
         .num_threads(threads)
         .build()
         .map_err(|error| LoadError::InvalidData(format!("no worker threads: {error}")))?;
+    let sampled_accept = |source: usize, ordinal: u64, point: &crate::Point| {
+        crate::surface_mesh::sampled_ordinal(
+            ordinal ^ (source as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+            config.sample_percent,
+        ) && accept(source, ordinal, point)
+    };
     let job = Job {
         lattice: &lattice,
         sources,
-        accept,
+        accept: &sampled_accept,
         orientation: SurfelOrientation {
             stations: config.use_stations,
             fallback: match config.orientation {
@@ -3913,6 +3929,23 @@ mod tests {
                 assert_eq!(report.tiles_side_by_side, 1);
             }
         }
+    }
+
+    #[test]
+    fn ten_percent_source_sample_is_repeatable_across_thread_counts() {
+        let room = room();
+        let cloud = layer(&room);
+        let config = |threads| ClosedMeshConfig {
+            sample_percent: 10.0,
+            voxel: Some(0.05),
+            threads,
+            ..ClosedMeshConfig::default()
+        };
+        let (first, report) = mesh_of(&cloud, &room, &config(1));
+        assert!(!first.triangles.is_empty());
+        let (again, repeated) = mesh_of(&cloud, &room, &config(3));
+        assert!(same(&first, &again));
+        assert_eq!(report.surfels, repeated.surfels);
     }
 
     #[test]

@@ -192,6 +192,10 @@ pub enum ApiCommand {
         max_vertices: usize,
         neighbors: usize,
         edge_factor: f64,
+        #[serde(default = "default_sample_percent")]
+        sample_percent: f64,
+        #[serde(default)]
+        mesh_size: f64,
     },
     ResetTransform,
     Mesh {
@@ -321,6 +325,10 @@ pub enum ApiCommand {
         /// Longest edge of the image in pixels.
         max_edge: Option<u32>,
     },
+}
+
+fn default_sample_percent() -> f64 {
+    100.0
 }
 
 #[derive(Clone, Debug)]
