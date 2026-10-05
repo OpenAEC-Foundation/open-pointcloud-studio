@@ -841,26 +841,26 @@ impl Measured {
             // The holes that keep three corners, each with its ring moved in
             // to the points: straightening starts from those, also where
             // they would pass each other, and keeps only a sound result.
-            let holes: Vec<(Vec<[f64; 2]>, Vec<[f64; 2]>)> = region
-                .holes
-                .iter()
-                .zip(&kept[1..])
-                .zip(tight.holes)
-                .map(|((hole, kept), tight)| (ring(hole, kept), tight))
-                .filter(|(hole, _)| hole.len() >= 3)
-                .collect();
-            let dense = Region {
-                outer: tight.outer,
-                holes: holes.iter().map(|(_, tight)| tight.clone()).collect(),
+            let mut plain = Region {
+                outer,
+                holes: Vec::new(),
             };
+            let mut dense = Region {
+                outer: tight.outer,
+                holes: Vec::new(),
+            };
+            for ((hole, kept), tight) in region.holes.iter().zip(&kept[1..]).zip(tight.holes) {
+                let hole = ring(hole, kept);
+                if hole.len() >= 3 {
+                    plain.holes.push(hole);
+                    dense.holes.push(tight);
+                }
+            }
             let coarse = dense.kept_corners(grid.cell * STRAIGHT_CELLS, proceed)?;
             parts.push(Traced {
                 dense,
                 coarse,
-                plain: Region {
-                    outer,
-                    holes: holes.into_iter().map(|(hole, _)| hole).collect(),
-                },
+                plain,
             });
         }
         let patches = straightened(&parts, &grid);
