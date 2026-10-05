@@ -430,7 +430,8 @@ pub enum SurfacePoints<'a> {
     /// This index of the cloud.
     Index(&'a OctreeIndex),
     /// The index a cache with these settings holds for the cloud when it
-    /// holds a valid one, and the source file otherwise.
+    /// holds a valid one, and the source file otherwise. A provisional cloud
+    /// is always read from its file and leaves the cache as it is.
     Cached(&'a IndexConfig),
 }
 
@@ -554,6 +555,10 @@ fn mesh_surface_obj_inner(
     let index = match points {
         SurfacePoints::Source => None,
         SurfacePoints::Index(index) => Some(index),
+        // Opening a cache writes the bounds of the cloud into it, and those
+        // of a provisional cloud are loose: such a cloud is read from its
+        // file.
+        SurfacePoints::Cached(_) if cloud.provisional => None,
         SurfacePoints::Cached(config) => {
             cached = OctreeIndex::open_cached_if_present(cloud, config.clone())
                 .ok()
@@ -1611,6 +1616,47 @@ mod tests {
                 from_source
             );
         }
+    }
+
+    #[test]
+    fn a_provisional_cloud_leaves_the_index_cache_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("corner.xyz");
+        corner_of_a_room(&source);
+        let cloud = open(&source, 1).unwrap();
+        let cache = IndexConfig {
+            leaf_points: 256,
+            scratch_dir: Some(dir.path().join("cache")),
+            ..IndexConfig::default()
+        };
+        OctreeIndex::build_cached(&cloud, cache.clone()).unwrap();
+        let header = fs::read_dir(dir.path().join("cache"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path().join("cloud.json"))
+            .find(|path| path.exists())
+            .unwrap();
+        let written = fs::read(&header).unwrap();
+        // Shown before the full pass over its file: the bounds are loose.
+        let mut loading = cloud.clone();
+        loading.provisional = true;
+        loading.bounds.max = [100.0; 3];
+        let surface = |cloud: &PointCloud, name: &str| {
+            let target = dir.path().join(name);
+            mesh_surface_obj_from(
+                cloud,
+                SurfacePoints::Cached(&cache),
+                &target,
+                SurfaceMeshConfig::default(),
+                |_, _| true,
+                |_| Ok(()),
+            )
+            .unwrap();
+            fs::read(target).unwrap()
+        };
+        let from_file = surface(&loading, "loading.obj");
+        assert_eq!(fs::read(&header).unwrap(), written);
+        assert_eq!(surface(&cloud, "checked.obj"), from_file);
+        assert_eq!(fs::read(&header).unwrap(), written);
     }
 
     #[test]

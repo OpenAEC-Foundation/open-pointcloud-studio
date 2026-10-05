@@ -1328,6 +1328,12 @@ struct MeshStart {
     api_job_id: Option<String>,
 }
 
+/// The name of a layer that is still being read: its cloud was not checked
+/// against its source and its count is not final, so it gives no mesh yet.
+fn still_loading(cloud: &PointCloud) -> Option<&str> {
+    cloud.provisional.then(|| display_name(&cloud.path))
+}
+
 fn mesh_accepts(
     ordinal: u64,
     point: &Point,
@@ -4105,7 +4111,13 @@ impl Studio {
                     (json!({"ok": false, "error": error}), Task::none())
                 } else if let Some(mode) = mode {
                     let config = config.expect("validated surface settings");
-                    if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
+                    let active = self.active.and_then(|index| self.clouds.get(index));
+                    if let Some(name) = active.and_then(|entry| still_loading(&entry.cloud)) {
+                        (
+                            json!({"ok": false, "error": format!("a point cloud is still loading: {name}")}),
+                            Task::none(),
+                        )
+                    } else if let Some(entry) = active {
                         let cloud = Arc::clone(&entry.cloud);
                         let deleted = entry.deleted.as_ref().map(Arc::clone);
                         let transform = entry.transform;
@@ -5953,6 +5965,11 @@ impl Studio {
                     SurfaceMeshConfig::default()
                 };
                 if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
+                    if let Some(name) = still_loading(&entry.cloud) {
+                        self.status =
+                            format!("{name} is still loading; wait for it before meshing");
+                        return Task::none();
+                    }
                     let stem = entry
                         .cloud
                         .path
@@ -12417,6 +12434,45 @@ mod surface_settings_tests {
         let _ = studio.update(Message::SurfaceSetting(1, "12".into()));
         let _ = studio.update(Message::SurfaceSetting(2, "NaN".into()));
         assert!(studio.surface_mesh_config().is_err());
+    }
+
+    #[test]
+    fn a_scan_that_is_still_loading_gives_no_mesh_yet() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scan.xyz");
+        std::fs::write(&path, "0 0 0\n1 0 0\n0 1 0\n1 1 0\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 4).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&cloud))));
+        studio.active = Some(0);
+        let mut loading = (*cloud).clone();
+        loading.provisional = true;
+        studio.clouds[0].cloud = Arc::new(loading);
+
+        let target = directory.path().join("scan.obj");
+        for mode in ["terrain", "surface"] {
+            let (reply, answer) = std::sync::mpsc::channel();
+            let _ = studio.update(Message::ApiRequest(native_api::ApiRequest {
+                command: native_api::ApiCommand::Mesh {
+                    mode: mode.into(),
+                    path: Some(target.clone()),
+                    options: closed_mesh::ClosedMeshOptions::default(),
+                },
+                reply,
+            }));
+            assert_eq!(
+                answer.recv().unwrap(),
+                json!({"ok": false, "error": "a point cloud is still loading: scan.xyz"})
+            );
+            assert!(studio.mesh_job.is_none());
+        }
+        let _ = studio.update(Message::MeshRequest(MeshMode::Surface));
+        assert!(!studio.mesh_dialog_pending);
+        assert_eq!(
+            studio.status,
+            "scan.xyz is still loading; wait for it before meshing"
+        );
+        assert!(!target.exists());
     }
 }
 
