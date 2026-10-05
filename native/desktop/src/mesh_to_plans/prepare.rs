@@ -1113,6 +1113,8 @@ impl Studio {
         }
         self.mesh_to_plans.prepare.select(Some(place));
         self.mesh_to_plans.minimize();
+        // The storey is shown in the model, also from the Drawing view.
+        self.show_model();
         let placed = self.put_section_box(Some(storey));
         // The camera keeps its direction and frames the storey.
         let framed = crate::combined_bounds(&self.clouds).and_then(|scene| {

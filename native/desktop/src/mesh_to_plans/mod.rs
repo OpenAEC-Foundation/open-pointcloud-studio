@@ -537,7 +537,9 @@ impl Studio {
                 wizard.prepare.put_back = None;
             }
             WizardAction::Minimize => {
-                wizard.minimize();
+                if wizard.minimize() {
+                    self.show_model();
+                }
             }
             WizardAction::Restore => {
                 if wizard.open {
@@ -607,6 +609,14 @@ impl Studio {
             WizardAction::Resume(file) => return self.resume_project(&file),
         }
         Task::none()
+    }
+
+    /// The model in the main area instead of a drawing: what the strip of
+    /// the wizard lies above.
+    pub(crate) fn show_model(&mut self) {
+        if self.drawing_view.shown {
+            let _ = self.update_drawing_view(drawing_view::DrawingViewAction::Show(false));
+        }
     }
 
     /// The name and the folder of a new project, while none is chosen: the
@@ -938,8 +948,8 @@ impl Studio {
         open: bool,
         step: Option<&str>,
         minimized: Option<bool>,
-    ) -> Value {
-        let refuse = |error: String| json!({"ok": false, "error": error});
+    ) -> (Value, Task<Message>) {
+        let refuse = |error: String| (json!({"ok": false, "error": error}), Task::none());
         let step = match step.map(|id| WizardStep::from_id(&id.to_ascii_lowercase())) {
             Some(None) => {
                 return refuse(format!(
@@ -962,14 +972,19 @@ impl Studio {
         } else {
             WizardAction::Close
         };
-        let _ = self.update_mesh_to_plans(action);
+        // Opened from the strip, the section box goes back as it was, and
+        // the model reads its detail anew.
+        let mut tasks = vec![self.update_mesh_to_plans(action)];
         if let Some(step) = step {
             self.mesh_to_plans.step = step;
         }
         if minimized == Some(true) {
-            self.mesh_to_plans.minimize();
+            tasks.push(self.update_mesh_to_plans(WizardAction::Minimize));
         }
-        json!({"ok": true, "mesh_to_plans": self.mesh_to_plans.value()})
+        (
+            json!({"ok": true, "mesh_to_plans": self.mesh_to_plans.value()}),
+            Task::batch(tasks),
+        )
     }
 
     /// The `mesh_to_plans_action` command of the local API: what a button of
@@ -1256,7 +1271,7 @@ impl Studio {
             page = page.push(
                 button(text(tr(label)).size(12))
                     .on_press(Message::MeshToPlans(WizardAction::Confirm))
-                    .style(|theme, status| opencad_ribbon::file_tab_style(theme, false, status))
+                    .style(opencad_ribbon::primary_btn_style)
                     .padding([5, 16]),
             );
         }
@@ -1339,7 +1354,7 @@ impl Studio {
             },
             button(text(tr("Next")).size(12))
                 .on_press_maybe(ready.is_ok().then_some(send(WizardAction::Next)))
-                .style(|theme, status| opencad_ribbon::file_tab_style(theme, false, status))
+                .style(opencad_ribbon::primary_btn_style)
                 .padding([5, 16]),
             plain(
                 key("Run all automatically"),

@@ -45,3 +45,6 @@ winresource = "0.1"
 # version is the one iced already brings in, so the lock file gains no package.
 [dev-dependencies]
 iced_tiny_skia = "0.13"
+# Tests look whether a task holds work; iced keeps that part of its runtime
+# to itself. The version is the one iced brings in.
+iced_runtime = "0.13"

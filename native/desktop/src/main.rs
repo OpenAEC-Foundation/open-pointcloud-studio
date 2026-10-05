@@ -4326,10 +4326,7 @@ impl Studio {
                 open,
                 step,
                 minimized,
-            } => (
-                self.api_mesh_to_plans_view(open, step.as_deref(), minimized),
-                Task::none(),
-            ),
+            } => self.api_mesh_to_plans_view(open, step.as_deref(), minimized),
             ApiCommand::MeshToPlansAction { action, folder } => {
                 self.api_mesh_to_plans_action(&action, folder)
             }

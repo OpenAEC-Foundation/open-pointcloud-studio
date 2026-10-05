@@ -116,6 +116,45 @@ fn the_strip_goes_back_and_on_and_back_to_the_card() {
 }
 
 #[test]
+fn next_looks_ready_only_when_it_is() {
+    let studio = Studio::default();
+    let theme = studio.ui_theme.iced();
+    let colors = studio.ui_theme.colors();
+    let ready = opencad_ribbon::primary_btn_style(&theme, button::Status::Active);
+    let waiting = opencad_ribbon::primary_btn_style(&theme, button::Status::Disabled);
+    assert_eq!(
+        ready.background,
+        Some(iced::Background::Color(colors.accent))
+    );
+    assert_eq!(waiting.background, None);
+    assert_eq!(waiting.text_color, colors.muted);
+    assert_ne!(waiting.text_color, ready.text_color);
+}
+
+#[test]
+fn show_in_model_leaves_the_drawing_view_for_the_model() {
+    let mut studio = Studio::default();
+    let _ = studio.update(wizard(WizardAction::Open));
+    let _ = studio.update(Message::DrawingView(drawing_view::DrawingViewAction::Show(
+        true,
+    )));
+    assert!(studio.drawing_view.shown);
+    let _ = studio.update(wizard(WizardAction::Minimize));
+    assert!(!studio.drawing_view.shown, "the strip lies above the model");
+    // Through the local API as well.
+    let _ = studio.update(wizard(WizardAction::Restore));
+    let _ = studio.update(Message::DrawingView(drawing_view::DrawingViewAction::Show(
+        true,
+    )));
+    let strip = send(
+        &mut studio,
+        command(json!({"command": "mesh_to_plans_view", "open": true, "minimized": true})),
+    );
+    assert_eq!(strip["mesh_to_plans"]["minimized"], true);
+    assert!(!studio.drawing_view.shown);
+}
+
+#[test]
 fn keys_leave_the_model_alone_under_the_card_and_act_beside_the_strip() {
     let mut studio = Studio::default();
     let _ = studio.update(wizard(WizardAction::Open));
@@ -1204,6 +1243,14 @@ fn show_in_model_puts_the_section_box_on_a_storey_and_back_to_wizard_takes_it_aw
         (section.bounds.min[2] - (floor - 0.1)).abs() < 0.01,
         "{section:?}"
     );
+    // From the Drawing view the storey is shown in the model.
+    let _ = studio.update(wizard(WizardAction::Restore));
+    let _ = studio.update(Message::DrawingView(drawing_view::DrawingViewAction::Show(
+        true,
+    )));
+    act(&mut studio, PrepareAction::Show(1));
+    assert!(!studio.drawing_view.shown);
+    assert_eq!(studio.section_box(), Some(section));
     assert_eq!(studio.mesh_to_plans.prepare.selected, Some(1));
     let _ = studio.view();
     let _ = studio.update(wizard(WizardAction::Restore));
@@ -1237,6 +1284,39 @@ fn show_in_model_puts_the_section_box_on_a_storey_and_back_to_wizard_takes_it_aw
     let _ = studio.update(wizard(WizardAction::Close));
     assert_eq!(studio.section_box(), storey);
     assert_eq!(studio.mesh_to_plans.prepare.put_back, None);
+}
+
+/// Whether a task holds work for the runtime.
+fn has_work(task: Task<Message>) -> bool {
+    iced_runtime::task::into_stream(task).is_some()
+}
+
+#[test]
+fn opened_from_the_strip_through_the_api_the_model_reads_its_detail_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut studio, _) = studio_with_building(directory.path());
+    studio.mesh_to_plans.project_folder = directory.path().join("Office").display().to_string();
+    let _ = studio.update(wizard(WizardAction::Open));
+    prepare_and_save(&mut studio);
+    // The model reads its detail from the index of a scan.
+    let index = pointcloud_core::OctreeIndex::build(
+        &studio.clouds[0].cloud,
+        pointcloud_core::IndexConfig::default(),
+    )
+    .unwrap();
+    studio.clouds[0].index = Some(std::sync::Arc::new(index));
+    act(&mut studio, PrepareAction::Show(1));
+    assert!(studio.section_box().is_some() && !studio.mesh_to_plans.covers_model());
+    // The section box goes back, off here, and the task that reads the
+    // detail of the model for it reaches the runtime.
+    let (reply, answer) = std::sync::mpsc::channel();
+    let task = studio.handle_api(crate::native_api::ApiRequest {
+        command: command(json!({"command": "mesh_to_plans_view", "open": true})),
+        reply,
+    });
+    assert_eq!(answer.recv().unwrap()["ok"], true);
+    assert!(studio.section_box().is_none());
+    assert!(has_work(task));
 }
 
 #[test]

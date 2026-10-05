@@ -88,6 +88,36 @@ pub fn tool_btn_style(theme: &Theme, is_active: bool, status: button::Status) ->
     }
 }
 
+/// The button that goes on, such as Next or Confirm in a wizard: filled with
+/// the accent colour, and only outlined with muted text while it cannot be
+/// pressed, so that it does not look ready while it waits.
+pub fn primary_btn_style(theme: &Theme, status: button::Status) -> button::Style {
+    let colors = ui_theme::colors(theme);
+    let (background, text_color, border) = match status {
+        button::Status::Disabled => (None, colors.muted, colors.border),
+        button::Status::Hovered | button::Status::Pressed => (
+            Some(colors.file_tab_hover),
+            colors.file_tab_text,
+            Color::TRANSPARENT,
+        ),
+        button::Status::Active => (
+            Some(colors.accent),
+            colors.file_tab_text,
+            Color::TRANSPARENT,
+        ),
+    };
+    button::Style {
+        background: background.map(Background::Color),
+        text_color,
+        border: Border {
+            radius: 3.0.into(),
+            color: border,
+            width: 1.0,
+        },
+        shadow: iced::Shadow::default(),
+    }
+}
+
 /// OpenCADStudio's panel structure: tools above a centered muted title.
 pub fn render_group<'a>(title: &'static str, tools: Element<'a, Message>) -> Element<'a, Message> {
     render_group_items(title, vec![RibbonItem::Large(tools)])
