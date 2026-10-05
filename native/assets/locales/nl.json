@@ -469,6 +469,7 @@
   "Smallest face must be a number of square metres": "Kleinste vlak moet een getal in vierkante meters zijn",
   "The smallest face must lie between {min} and {max} m²": "Het kleinste vlak moet tussen {min} en {max} m² liggen",
   "Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON, OBJ, DXF, DWG or IFC.": "Herkent de vlakken en de cilinders van een scan, of van een box daarin, en schrijft ze als JSON, OBJ, DXF, DWG of IFC.",
+  "Surveys a scanned building for Mesh to Plans and writes what was found as JSON.": "Verkent een gescand gebouw voor Mesh to Plans en schrijft wat gevonden is als JSON.",
   "Scanned from": "Gescand vanaf",
   "The inside": "De binnenkant",
   "The outside": "De buitenkant",

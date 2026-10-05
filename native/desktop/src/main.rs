@@ -47,6 +47,7 @@ mod sheet_dialog;
 #[cfg(test)]
 mod shell_tests;
 mod station_photos;
+mod survey;
 mod ui_theme;
 mod view_cube;
 mod views;
@@ -848,6 +849,23 @@ fn main() -> iced::Result {
                     eprintln!(
                         "Usage: open-pointcloud-studio --faces INPUT OUTPUT.json|.obj|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]"
                     );
+                } else {
+                    eprintln!("{line}");
+                }
+                std::process::exit(code);
+            }
+        }
+    }
+    if first.as_deref() == Some(OsStr::new("--survey")) {
+        let arguments: Vec<_> = args.collect();
+        match survey::command_line(&arguments) {
+            Ok(line) => {
+                println!("{line}");
+                return Ok(());
+            }
+            Err((code, line)) => {
+                if line.is_empty() {
+                    eprintln!("Usage: open-pointcloud-studio --survey INPUT OUTPUT.json");
                 } else {
                     eprintln!("{line}");
                 }

@@ -122,6 +122,14 @@ pub const MODES: &[Mode] = &[
         ),
     },
     Mode {
+        flag: "--survey",
+        short: None,
+        arguments: "INPUT OUTPUT.json",
+        description: key(
+            "Surveys a scanned building for Mesh to Plans and writes what was found as JSON.",
+        ),
+    },
+    Mode {
         flag: "--mesh-export",
         short: None,
         arguments: "INPUT OUTPUT",
