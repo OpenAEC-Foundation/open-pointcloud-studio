@@ -105,7 +105,12 @@ fn load_from(path: &Path) -> Preferences {
     }
     fs::read(path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<Preferences>(&bytes).ok())
+        .and_then(|bytes| {
+            // A file saved by a text editor may start with a byte order mark,
+            // which the JSON reader refuses.
+            let json = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+            serde_json::from_slice::<Preferences>(json).ok()
+        })
         .unwrap_or_default()
         .validated()
 }
@@ -126,6 +131,14 @@ fn save_to(path: &Path, preferences: &Preferences) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_with_a_byte_order_mark_is_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(&path, b"\xEF\xBB\xBF{\"budget\": 3000000}").unwrap();
+        assert_eq!(load_from(&path).budget, 3_000_000);
+    }
 
     #[test]
     fn settings_round_trip_and_invalid_values_use_safe_defaults() {
