@@ -14,31 +14,27 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-05
+
 - The left mouse button selects by default: a click selects the point under the pointer and a drag draws a rectangle that selects the points inside it. The middle button orbits, Alt with the left button orbits as well, and the right button, or Shift with the middle button, pans.
 - The VIEW group keeps Zoom all, Fit stations and Isometric; the six directions are on the view cube.
-
 - A mesh with colours keeps them in DXF, DWG and IFC. In DXF and DWG the triangles are grouped by colour into `MESH` entities of a true colour each, from a palette of at most 256 colours; in IFC every triangle gets its colour from a colour map. A mesh without colours is written as before.
 - A mesh saved as DXF or DWG whose triangles share few corners, such as one opened from an STL file, no longer loses triangles when read back: a `MESH` entity now also holds at most 65,536 corners.
 - The outlines of detected faces have straight edges: a wall, floor or ceiling whose edge or opening runs at an angle to the grid of 5 cm is no longer drawn as a staircase of cells. Edges within a few degrees of the main direction of a face, or square to it, are put exactly on it, and a truly slanted edge, such as that of a sloped roof, stays slanted but straight.
 - A section drawing, detected faces or a mesh saved as DXF or DWG can be viewed straight away in Open CAD Studio, the open-source CAD application: **Open in CAD viewer** in their blocks opens the last exported file read-only, and **Open after export** opens every export as soon as it is written. Open CAD Studio is found where it is installed; another program can be chosen under **CAD viewer** in Settings, and without one the file opens in the program the system has for it. The local API and the MCP server have `open_in_cad_viewer`, and `status` reports the viewer found.
 - A section drawing, faces or a mesh saved as DXF or DWG opens in a CAD program around what it holds. Before, the view saved in the file looked at the origin, so a program that opens a file in its saved view showed an empty window until zoomed to the extents; for scans in national grid coordinates the drawing lay hundreds of kilometres away.
-
 - The File view is laid out as pages New, Open, Import and Export, followed by Workspace, Extensions and About. Every task is a tile that says what it writes or what it needs and is greyed while it cannot run; the Export page groups the point cloud exports with their format, the drawings and models, the BCF views and the merge. **New** closes every open scan. The local API knows the pages as `new`, `open`, `import` and `export` as well.
 - While the section box is on, the view turns about the centre of the box, unless a point was set with a double click.
-- Escape returns the mouse to **Select**, a new button in the SELECTION group: with no other tool on, a click selects the point under the pointer, a drag orbits and a double-click sets the orbit point.
-
+- Escape returns the mouse to **Select**, a new button in the SELECTION group: with no other tool on, a click selects the point under the pointer, a drag selects with a rectangle and a double-click sets the orbit point.
 - The section box can be turned about the vertical, for cuts parallel to the walls of a building that stands at an angle to the axes of the scan. Type a **Rotation (°)** under **Section box** in Properties, or choose **Align to walls** to turn the box along the main direction of the walls inside it. The turned box clips the view, exports, selections, Closed mesh and Detect faces, and a saved view and a BCF file keep its rotation.
 - A section drawing of a turned box follows the box: the plan shows the walls along the axes of the drawing, and the four vertical views are sections parallel to the walls.
 - While the Section drawing block is open, the slab of the chosen view is outlined in blue in the scene and the block names the face of the box that is the cut plane, so that the place of a vertical section is in sight. A slab without points now says which face that was and what to do about it.
 - **Section drawing…** in the File view opens the Section drawing block first when it is closed, so that a vertical section can be chosen before the file is saved.
 - `--section`, `--drawing`, `--closed-mesh` and `--faces` take `--rotation DEGREES` to turn their box, and the local API and the MCP server take an optional `rotation` in `set_section`, report it in the status, and have `align_section_to_walls`.
-
 - Double-click a point to orbit about it: from then on the view turns about that point, which keeps its place on the screen and its size, and a small target marks it while the view turns. Setting the point does not move the view. A double click where no point is drawn, or Zoom all, turns the view about the centre of the model again.
 - The command API and the MCP server can set the orbit point with `set_camera` (`orbit_point`), pick it at a viewport pixel with `pick_orbit_point` and turn the camera about it with `orbit`; `status` reports it with the camera.
 - Zoomed in far, the points at the left and right edges of the view are loaded as well when the 3D view changed size without the pointer passing over it.
-
 - Walking close to a floor, wall or other surface keeps loading its points. Before, the parts of a scan that reach behind the camera could be taken for out of view, so looking down at a floor from close by showed nothing, and parts wholly behind the camera were read in their place.
-
 - Detected faces can be saved as 3D geometry for CAD and BIM programs. **Export faces…** and **Detected faces…** now also offer DXF, DWG and IFC. In DXF and DWG every flat face is a polyface mesh on a layer per type (`OPS-PLANES-WALL` and so on) that shows its outline and its openings, and every cylinder is its scanned surface on `OPS-CYLINDERS` with its axis as a line. The meshes are editable in a CAD program; true ACIS solids are not written.
 - In IFC4 every detected face is a building element with its measured values (type, area, coverage, residuals): a flat face as a polygonal face set with its openings, and a column or pipe as a circle extruded along its axis that a BIM program can edit. Scans in national grid coordinates are placed relative to a local origin that the site carries, so the elements keep their place and their precision.
 - A mesh, also a closed mesh, can be saved as DXF, DWG and IFC: **Export mesh…** and **Surface mesh…** offer them beside OBJ, PLY and STL, as `MESH` entities in a drawing or as one IFC element with a triangulated face set. The command line (`--faces`, `--closed-mesh`, `--mesh-export`) and the local API and MCP tools take the new extensions too.
