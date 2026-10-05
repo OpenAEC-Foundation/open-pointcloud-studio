@@ -120,6 +120,8 @@ pub enum FileAction {
     ExportBcf,
     MergeVisible,
     CancelMerge,
+    /// Open the Mesh to Plans wizard.
+    MeshToPlans,
 }
 
 /// The height of a menu row that leads to a page.
@@ -157,6 +159,9 @@ impl Studio {
             FileAction::ExportBcf => Message::Views(views::ViewAction::ExportBcf),
             FileAction::MergeVisible => Message::MergeVisible,
             FileAction::CancelMerge => Message::CancelMerge,
+            FileAction::MeshToPlans => {
+                Message::MeshToPlans(crate::mesh_to_plans::WizardAction::Open)
+            }
         };
         self.update(message)
     }
@@ -359,6 +364,17 @@ impl Studio {
         .into()
     }
 
+    /// The tile that opens the Mesh to Plans wizard, on the New page and
+    /// among the drawings and models of the Export page.
+    fn mesh_to_plans_tile(&self) -> Element<'_, Message> {
+        self.file_tile(
+            key("Mesh to Plans…"),
+            key("Plans, sections, elevations, a site plan and a model of a building from its scan, step by step"),
+            FileAction::MeshToPlans,
+            true,
+        )
+    }
+
     /// A column of tiles that does not grow wider than reads well.
     fn tiles<'a>(tiles: impl IntoIterator<Item = Element<'a, Message>>) -> Element<'a, Message> {
         container(Column::with_children(tiles).spacing(8).width(Fill))
@@ -374,12 +390,15 @@ impl Studio {
                 key("Start again with an empty workspace. The files on disk are not changed."),
             ),
             Space::new(Fill, 18),
-            Self::tiles([self.file_tile(
-                key("Empty workspace"),
-                key("Closes every open scan and mesh"),
-                FileAction::NewWorkspace,
-                !self.clouds.is_empty(),
-            )]),
+            Self::tiles([
+                self.file_tile(
+                    key("Empty workspace"),
+                    key("Closes every open scan and mesh"),
+                    FileAction::NewWorkspace,
+                    !self.clouds.is_empty(),
+                ),
+                self.mesh_to_plans_tile(),
+            ]),
         ]
         .width(Fill)
         .into()
@@ -534,6 +553,7 @@ impl Studio {
                     FileAction::ExportFaces,
                     self.faces_entry_enabled(),
                 ),
+                self.mesh_to_plans_tile(),
             ]),
             self.group_caption(key("COORDINATION")),
             Self::tiles([self.file_tile(

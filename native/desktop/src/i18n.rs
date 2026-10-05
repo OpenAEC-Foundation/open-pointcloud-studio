@@ -424,6 +424,7 @@ mod tests {
         ("i18n.rs", include_str!("i18n.rs")),
         ("measure.rs", include_str!("measure.rs")),
         ("mesh_export.rs", include_str!("mesh_export.rs")),
+        ("mesh_to_plans/mod.rs", include_str!("mesh_to_plans/mod.rs")),
         ("open_progress.rs", include_str!("open_progress.rs")),
         (
             "opencad_properties.rs",

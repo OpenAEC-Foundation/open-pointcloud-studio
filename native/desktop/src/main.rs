@@ -30,6 +30,7 @@ mod macos_open;
 mod mcp;
 mod measure;
 mod mesh_export;
+mod mesh_to_plans;
 mod native_api;
 mod native_chrome;
 mod open_progress;
@@ -1855,6 +1856,8 @@ enum Message {
     DrawingView(drawing_view::DrawingViewAction),
     ClosedMesh(closed_mesh::ClosedMeshAction),
     Faces(faces::FaceAction),
+    /// The Mesh to Plans wizard.
+    MeshToPlans(mesh_to_plans::WizardAction),
     ClearSelection,
     SelectionDrag([f32; 2], [f32; 2]),
     BoxSelect {
@@ -2013,6 +2016,8 @@ struct Studio {
     /// The Detect faces tool: its settings and its job. The faces it finds
     /// are kept with their scan.
     faces: faces::FaceTool,
+    /// The Mesh to Plans wizard: its card and where its steps stand.
+    mesh_to_plans: mesh_to_plans::Wizard,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     selection_pending: bool,
@@ -2459,6 +2464,7 @@ impl Default for Studio {
             },
             closed_mesh: closed_mesh::ClosedMeshTool::default(),
             faces: faces::FaceTool::default(),
+            mesh_to_plans: mesh_to_plans::Wizard::default(),
             drag_rectangle: None,
             context_menu: None,
             selection_pending: false,
@@ -8078,6 +8084,10 @@ impl Studio {
                 if self.sheet_dialog.take().is_some() {
                     return Task::none();
                 }
+                // The wizard comes next; a job it runs goes on.
+                if self.mesh_to_plans.close() {
+                    return Task::none();
+                }
                 if self.file_open {
                     self.file_open = false;
                     return Task::none();
@@ -8143,6 +8153,7 @@ impl Studio {
             Message::DrawingView(action) => return self.update_drawing_view(action),
             Message::ClosedMesh(action) => return self.update_closed_mesh(action),
             Message::Faces(action) => return self.update_faces(action),
+            Message::MeshToPlans(action) => return self.update_mesh_to_plans(action),
             Message::ClearSelection => {
                 self.pending_delete = false;
                 if self.selection_pending {
@@ -9040,6 +9051,14 @@ impl Studio {
                 )),
             ],
         );
+        let mesh_to_plans = opencad_ribbon::render_group_items(
+            "MESH TO PLANS",
+            vec![RibbonItem::Large(large_tool_button(
+                "Mesh to Plans",
+                Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
+                self.mesh_to_plans.is_open(),
+            ))],
+        );
         let groups = row![
             view,
             display,
@@ -9048,6 +9067,7 @@ impl Studio {
             self.measure.ribbon(),
             self.views_ribbon(),
             opencad_ribbon::render_group_items("SURFACE", surface_tools),
+            mesh_to_plans,
             index,
         ]
         .spacing(2);
@@ -9494,13 +9514,15 @@ impl Studio {
 
     fn view(&self) -> Element<'_, Message> {
         if self.file_open {
-            return column![
-                self.ribbon(),
-                self.file_view(),
-                self.status_bar(self.status.clone()),
-            ]
-            .height(Fill)
-            .into();
+            return self.with_dialogs(
+                column![
+                    self.ribbon(),
+                    self.file_view(),
+                    self.status_bar(self.status.clone()),
+                ]
+                .height(Fill)
+                .into(),
+            );
         }
         let canvas = if self.drawing_view.shown {
             stack![self.drawing_sheet()].width(Fill).height(Fill)
@@ -10134,10 +10156,21 @@ impl Studio {
             self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
         ]
         .height(Fill);
-        match self.settings_view().or_else(|| self.sheet_dialog_view()) {
-            Some(dialog) => stack![window, dialog].into(),
-            None => window.into(),
+        self.with_dialogs(window.into())
+    }
+
+    /// The window with the card of the Mesh to Plans wizard over it, and the
+    /// dialog of a 2D drawing or the Settings dialog over both, while they
+    /// are shown.
+    fn with_dialogs<'a>(&'a self, window: Element<'a, Message>) -> Element<'a, Message> {
+        let mut layers = stack![window].width(Fill).height(Fill);
+        if let Some(wizard) = self.mesh_to_plans_view() {
+            layers = layers.push(wizard);
         }
+        if let Some(dialog) = self.settings_view().or_else(|| self.sheet_dialog_view()) {
+            layers = layers.push(dialog);
+        }
+        layers.into()
     }
 }
 
@@ -10298,6 +10331,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::Drawing(_) => ToolIcon::Drawing,
         Message::ClosedMesh(_) => ToolIcon::ClosedMesh,
         Message::Faces(_) => ToolIcon::Faces,
+        Message::MeshToPlans(_) => ToolIcon::MeshToPlans,
         Message::ClearSelection => ToolIcon::Clear,
         Message::SetEyeDome(_) => ToolIcon::Shading,
         Message::ShowScanPoses(_) => ToolIcon::Pick,
@@ -10620,6 +10654,7 @@ enum ToolIcon {
     Drawing,
     ClosedMesh,
     Faces,
+    MeshToPlans,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -10671,6 +10706,8 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::ClosedMesh => include_bytes!("../../assets/opencad-icons/closed_mesh.svg"),
         // And so is the icon of the Detect faces tool.
         ToolIcon::Faces => include_bytes!("../../assets/opencad-icons/detect_faces.svg"),
+        // And so is the icon of the Mesh to Plans wizard.
+        ToolIcon::MeshToPlans => include_bytes!("../../assets/opencad-icons/mesh_to_plans.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)

@@ -21,6 +21,7 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 - [Meshing](#meshing)
 - [Closed mesh](#closed-mesh)
 - [Detected faces](#detected-faces)
+- [Mesh to Plans](#mesh-to-plans)
 - [Viewing a drawing in Open CAD Studio](#viewing-a-drawing-in-open-cad-studio)
 - [3D BAG buildings](#3d-bag-buildings)
 - [Index and level of detail](#index-and-level-of-detail)
@@ -33,7 +34,7 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 ## The window
 
 - The **top strip** starts with the application logo, the **File** button and the **Home** tab. At its right end are five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo delete and Redo delete), and the **Settings** button. Actions that are not available are shown muted.
-- The **ribbon** holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE and INDEX. The ribbon is wider than the default window of 1440 pixels. The groups that do not fit scroll sideways, with the wheel, the scrollbar or the arrow buttons that appear at both ends; in a window wide enough for all groups the arrows go away.
+- The **ribbon** holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE, MESH TO PLANS and INDEX. The ribbon is wider than the default window of 1440 pixels. The groups that do not fit scroll sideways, with the wheel, the scrollbar or the arrow buttons that appear at both ends; in a window wide enough for all groups the arrows go away.
 - The **Project Browser** at the left lists the open clouds in name order, one row each with a visibility switch, the point count and a button to close the cloud. A second line appears only while a cloud is loading or indexing, or when it has selected or deleted points. Below the clouds, the classes that occur in them are listed.
 - The **scene** in the middle is the 3D view, with the view cube in a corner. The tabs **Model** and **Drawing** in its header switch it for the [Drawing view](#the-drawing-view), which shows a 2D drawing in its place.
 - The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the camera, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the Drawing view block while that view is shown, the Section drawing, Closed mesh and Detect faces blocks while those tools are open, the strength of eye-dome lighting while that is on, the 3D surface settings, the size of the mesh of the active scan with its open edges and connected parts, and the progress of mesh, merge and scale jobs with their cancel buttons.
@@ -792,6 +793,19 @@ open-pointcloud-studio --faces merged.laz faces.obj --distance 0.03 --angle 12 -
 ```
 
 The extension of the output chooses JSON, OBJ, DXF, DWG or IFC. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is searched. `--rotation` turns that box that many degrees about the vertical through its centre. `--distance` is the distance tolerance in metres, `--angle` the angle tolerance in degrees, `--min-area` the smallest face in square metres and `--cylinders` `on` or `off`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory and a larger one is read from start to end twice. The mode prints the number of faces per type, the time and the voxel size, and one line per face with its type, area, normal, openings, coverage and residuals; when no face is found it writes nothing and ends with an error.
+
+## Mesh to Plans
+
+**Mesh to Plans** in the MESH TO PLANS group of the ribbon, or the tile **Mesh to Plans…** on the New page and among the drawings and models of the Export page of the File view, opens a wizard that is to make plans, sections, elevations, a site plan and a model of a building from its scan, one step at a time. The wizard is being built: this version has its frame, and the steps do not compute anything yet.
+
+The wizard is a card over the window, nine tenths of its size and at least 960 by 640 pixels where the window has room for that.
+
+- The **sidebar** at the left lists the steps: 0 Preparation, 1 Mesh, 2 Sections, elevations and raw plans, 3 Plans in four parts (3a Walls, 3b Openings, 3c Stairs, rooms, voids and lines, 3d Sheet), 4 Terrain and site plan, and 5 Result and IFC. A click shows a step. The dot behind a step tells where it stands: an open grey ring for a step that has not run and a grey dot for a step that was skipped.
+- The **middle column** has what the step makes, its state and, in a later version, its settings and lists. A plan needs no mesh: **Skip this step** under 1 Mesh goes on without it.
+- The **preview** at the right is to show the drawing of the step on paper.
+- The **buttons** at the bottom are **Close**, **Back**, **Run this step**, **Next** and **Run all automatically**; the two that run steps are greyed while the steps compute nothing. **Next** moves on once the step is confirmed or skipped; until then the sentence beside it says what the step waits for.
+
+**Close** or the × takes the card away; the wizard keeps the step it showed and the state of every step, and opens on that step again. Escape closes Settings first when that is open over the wizard, and the wizard after that.
 
 ## Viewing a drawing in Open CAD Studio
 
