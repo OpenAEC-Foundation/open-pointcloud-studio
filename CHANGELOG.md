@@ -23,6 +23,12 @@ drops those that begin with the name of an operating system or with
 - **Drawing (DXF/DWG)…** on the Open page of the File view shows any DXF or DWG file in the Drawing view: points, lines, polylines, circles, arcs, ellipses, solid fills with holes, texts and blocks. Entities that are not shown, and 3D content such as meshes, are counted and named instead of stopping the file from opening.
 - The local API and the MCP server have `drawing_view`, `open_drawing`, `drawing_zoom_extents` and `set_drawing_layer`, `status` reports the Drawing view, and `screenshot` captures the drawing while it is shown.
 
+- A 3D surface reads the points of a scan from its index when the scan has one, instead of decoding the file again: for a large compressed E57 it is ready in seconds instead of more than a minute. The points are chosen by a fixed rule on their place in the file, so a scan gives the same surface every time, with or without its index.
+- The 3D surface has a **Mesh size** setting: the width of a voxel within which one point is kept before the vertices are thinned, so that no two vertices lie much closer together. 0, the default, leaves the spacing to the number of vertices. The command line has `--mesh-size`.
+- **Closed mesh** has a **Source points (%)** setting, from 0.01 to 100: 100, the default, fits the surface to every point, and a lower share takes the same points on every run for a faster preview, at the cost of sparse detail. A share that leaves no point in the region says so. The command line has `--sample-percent`.
+- **Terrain mesh** and **3D surface** no longer start on a scan that is still loading, as Closed mesh, Detect faces and Section drawing already did: the status bar names the scan, and the mesh can be made once it has loaded.
+- The local API and the MCP server take the source share of a closed mesh as `sample_percent` and the mesh size of a 3D surface as `mesh_size`. Every field of `set_surface_settings` is optional: one that is left out keeps its value.
+
 ## 0.9.0 - 2026-10-05
 
 - The left mouse button selects by default: a click selects the point under the pointer and a drag draws a rectangle that selects the points inside it. The middle button orbits, Alt with the left button orbits as well, and the right button, or Shift with the middle button, pans.
