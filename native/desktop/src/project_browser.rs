@@ -9,7 +9,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use iced::widget::{button, checkbox, column, container, progress_bar, row, text, tooltip, Column};
+use iced::widget::{
+    button, checkbox, column, container, mouse_area, progress_bar, row, text, tooltip, Column,
+};
 use iced::{Color, Element, Fill, Font, Task};
 use serde_json::{json, Value};
 
@@ -1006,12 +1008,22 @@ impl Studio {
                         || format!("{code:02}  {} {code}", tr("Class")),
                         |(_, label)| format!("{code:02}  {}", tr(label)),
                     );
+                // The switch, the icon of a class and its name, which
+                // switches it as well.
+                let shown = self.class_visibility.allows(Some(code));
                 list = list.push(
-                    checkbox(label, self.class_visibility.allows(Some(code)))
-                        .on_toggle(move |visible| Message::FilterClass(code, visible))
-                        .style(muted_checkbox_style)
-                        .text_size(11)
-                        .size(13),
+                    row![
+                        checkbox("", shown)
+                            .on_toggle(move |visible| Message::FilterClass(code, visible))
+                            .style(muted_checkbox_style)
+                            .spacing(0)
+                            .size(13),
+                        icon_svg(ToolIcon::Classes, 12.0),
+                        mouse_area(text(label).size(11))
+                            .on_press(Message::FilterClass(code, !shown)),
+                    ]
+                    .spacing(5)
+                    .align_y(iced::Alignment::Center),
                 );
             }
             group = group.push(indented(list, 7.0));
