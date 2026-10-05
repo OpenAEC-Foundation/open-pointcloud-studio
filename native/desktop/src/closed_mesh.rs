@@ -1733,7 +1733,17 @@ impl Studio {
             *entry = last.value();
         }
         self.status = last.status();
+        let written = match &last {
+            Last::Done {
+                written: Some(written),
+                ..
+            } => Some(written.path.clone()),
+            _ => None,
+        };
         self.closed_mesh.last = Some(last);
+        if let Some(path) = written {
+            self.cad_file_written(&path);
+        }
     }
 
     /// Whether a destination is the source file of an open layer.
@@ -1966,6 +1976,7 @@ impl Studio {
             }
             None => {}
         }
+        block = block.push(self.cad_viewer_controls());
         Some(block.into())
     }
 }

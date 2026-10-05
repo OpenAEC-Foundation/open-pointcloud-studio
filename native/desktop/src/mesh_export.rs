@@ -404,10 +404,13 @@ impl Studio {
                 }),
             };
         }
-        self.status = match result {
-            Ok(done) => done.summary(),
-            Err(error) => format!("Mesh export failed: {error}"),
-        };
+        match result {
+            Ok(done) => {
+                self.status = done.summary();
+                self.cad_file_written(&done.path);
+            }
+            Err(error) => self.status = format!("Mesh export failed: {error}"),
+        }
     }
 
     /// The `export_mesh` command of the local API: save the mesh of the
@@ -494,6 +497,7 @@ impl Studio {
                 )
                 .padding([4, 8]),
             )
+            .push(self.cad_viewer_controls())
             .into(),
         )
     }

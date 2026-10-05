@@ -21,6 +21,7 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 - [Meshing](#meshing)
 - [Closed mesh](#closed-mesh)
 - [Detected faces](#detected-faces)
+- [Viewing a drawing in Open CAD Studio](#viewing-a-drawing-in-open-cad-studio)
 - [3D BAG buildings](#3d-bag-buildings)
 - [Index and level of detail](#index-and-level-of-detail)
 - [Settings, language and extensions](#settings-language-and-extensions)
@@ -764,6 +765,18 @@ open-pointcloud-studio --faces merged.laz faces.obj --distance 0.03 --angle 12 -
 
 The extension of the output chooses JSON, OBJ, DXF, DWG or IFC. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is searched. `--rotation` turns that box that many degrees about the vertical through its centre. `--distance` is the distance tolerance in metres, `--angle` the angle tolerance in degrees, `--min-area` the smallest face in square metres and `--cylinders` `on` or `off`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory and a larger one is read from start to end twice. The mode prints the number of faces per type, the time and the voxel size, and one line per face with its type, area, normal, openings, coverage and residuals; when no face is found it writes nothing and ends with an error.
 
+## Viewing a drawing in Open CAD Studio
+
+A drawing, faces or a mesh saved as DXF or DWG can be looked at in Open CAD Studio, the open-source CAD application, without leaving the scan.
+
+- **Open in CAD viewer** in the blocks Section drawing, Detect faces, Closed mesh and Surface mesh opens the last DXF or DWG file that was exported. The line under it names that file. The button is greyed until a DXF or DWG file was written in this session.
+- **Open after export** beside it opens every DXF or DWG export as soon as it is written. The switch is kept for later sessions and is off in a new installation.
+- Open CAD Studio shows the file read-only: it can be looked at, measured and changed on screen, but not saved over. An Open CAD Studio that is already running takes the file as a further tab.
+- The application finds Open CAD Studio where its installer puts it: `C:\Program Files\Open CAD Studio` or `%LOCALAPPDATA%\Programs\Open CAD Studio` on Windows, `/Applications/OpenCADStudio.app` or `~/Applications` on macOS, `/snap/bin` on Linux, or a folder on the search path. Another program, or an Open CAD Studio somewhere else, is chosen under **CAD viewer** on the **General** page of Settings, by typing its path or with **Browse…**. The page says which program was found.
+- Without Open CAD Studio and without a chosen program, the file opens in the program the system has for DXF or DWG files, and the status bar says so. A message there also tells when the file no longer exists or the program cannot be started.
+
+The local API and the MCP server have `open_in_cad_viewer` for the same, and `status` reports the viewer that was found.
+
 ## 3D BAG buildings
 
 **3D BAG buildings…** in the File view opens a panel in the place of Properties that downloads building models of the Netherlands from the public 3D BAG register and shows them as a mesh layer.
@@ -799,11 +812,11 @@ While the camera moves, the points on screen stay. Shortly after it stops, the d
 
 The **Settings** button at the right of the top strip, **Settings…** in the File view and Ctrl+, (Command+, on macOS) open the same dialog:
 
-- **General** has the language: Auto-detect, English or Nederlands. With Auto-detect the language is that of the system: the first of the user's preferred languages on macOS, the locale of the user on Windows and of the environment on Linux.
+- **General** has the language and the CAD viewer: the program that opens exported DXF and DWG files, see [Viewing a drawing in Open CAD Studio](#viewing-a-drawing-in-open-cad-studio). The language is Auto-detect, English or Nederlands. With Auto-detect the language is that of the system: the first of the user's preferred languages on macOS, the locale of the user on Windows and of the environment on Linux.
 - **Appearance** has the theme: Deep Forge, Blueprint Light, Night Build, Blueprint Blue or High Contrast. A new installation starts in Blueprint Light. The scene stays dark in every theme.
 - **About** has the name, the version, what the application is built with, the licences and a link to the source code.
 
-A choice shows at once. **Save** keeps it, **Cancel** or Escape puts back what was in use, and **Reset to Defaults** chooses Auto-detect and Blueprint Light.
+A choice shows at once. **Save** keeps it, **Cancel** or Escape puts back what was in use, and **Reset to Defaults** chooses Auto-detect, Blueprint Light and the Open CAD Studio that is found.
 
 A text without a Dutch translation stays English. That holds for the messages in the status bar and for most texts with a count in them.
 

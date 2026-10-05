@@ -507,5 +507,18 @@
   "Planes and cylinders as JSON, OBJ, DXF, DWG or IFC": "Vlakken en cilinders als JSON, OBJ, DXF, DWG of IFC",
   "The saved views with their notes, for issue tracking": "De opgeslagen views met hun notities, voor issuebeheer",
   "One LAZ file from every visible LAS or LAZ scan": "Eén LAZ-bestand uit alle zichtbare LAS- en LAZ-scans",
-  "Select": "Selecteren"
+  "Select": "Selecteren",
+  "CAD viewer": "CAD-viewer",
+  "The program that opens exported DXF and DWG drawings. Leave it empty to use Open CAD Studio where it is installed.": "Het programma dat geëxporteerde DXF- en DWG-tekeningen opent. Laat het leeg om Open CAD Studio te gebruiken waar het is geïnstalleerd.",
+  "Find Open CAD Studio": "Open CAD Studio zoeken",
+  "Browse…": "Bladeren…",
+  "Choose the CAD viewer": "Kies de CAD-viewer",
+  "Programs": "Programma's",
+  "Open in CAD viewer": "Openen in CAD-viewer",
+  "Open after export": "Openen na export",
+  "Last export: {name}": "Laatste export: {name}",
+  "The chosen program opens exported drawings.": "Het gekozen programma opent geëxporteerde tekeningen.",
+  "Found: {path}": "Gevonden: {path}",
+  "The chosen program does not exist: exported drawings open in the program the system has for DXF and DWG files.": "Het gekozen programma bestaat niet: geëxporteerde tekeningen openen in het programma dat het systeem voor DXF- en DWG-bestanden heeft.",
+  "No CAD viewer found: exported drawings open in the program the system has for DXF and DWG files. Install Open CAD Studio or choose a program.": "Geen CAD-viewer gevonden: geëxporteerde tekeningen openen in het programma dat het systeem voor DXF- en DWG-bestanden heeft. Installeer Open CAD Studio of kies een programma."
 }

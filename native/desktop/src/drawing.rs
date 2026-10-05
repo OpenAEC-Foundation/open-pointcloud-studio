@@ -1516,7 +1516,14 @@ impl Studio {
             *entry = last.value();
         }
         self.status = last.status();
+        let written = match &last {
+            Last::Exported { path, .. } => Some(path.clone()),
+            _ => None,
+        };
         self.drawing.last = Some(last);
+        if let Some(path) = written {
+            self.cad_file_written(&path);
+        }
     }
 
     /// Start a job for a command of the local API: put the fields it names
@@ -1874,6 +1881,7 @@ impl Studio {
             }
             None => {}
         }
+        block = block.push(self.cad_viewer_controls());
         Some(block.into())
     }
 }

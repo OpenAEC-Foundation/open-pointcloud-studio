@@ -567,6 +567,31 @@ dialog of the window is open. A refused command changes nothing
 in the block. One drawing or preview runs at a time; it can run beside a mesh
 job.
 
+## CAD viewer
+
+`open_in_cad_viewer` opens a DXF or DWG file in the CAD viewer, as the button
+Open in CAD viewer of the Section drawing, Detect faces, Closed mesh and
+Surface mesh blocks does. Without `path` it opens the last file that a section
+drawing, faces export, closed mesh or mesh export wrote, through the window or
+through this API; `path` is an absolute `.dxf` or `.dwg` file that exists.
+The viewer is the program chosen in Settings, otherwise Open CAD Studio where
+it is installed: `%ProgramFiles%\Open CAD Studio` or
+`%LOCALAPPDATA%\Programs\Open CAD Studio` on Windows,
+`/Applications/OpenCADStudio.app` or `~/Applications` on macOS, `/snap/bin`
+on Linux, or the search path. It is started with `--read-only` and the file,
+without waiting for it; a running Open CAD Studio takes the file as a further
+tab. Without a viewer the file goes to the program the system has for it.
+The answer has `path`, `viewer` (the program, or `null` for the system
+program) and `read_only`. It is refused when no file was exported yet, for a
+path that is not absolute, has another extension or does not exist, and when
+the program cannot be started.
+
+`status.result.cad_viewer` holds `path` (the program found, or `null`),
+`source` (`setting`, `installed` or `system_default`), `chosen` (the program
+chosen in Settings, or `null`), `chosen_missing`, `open_after_export` (whether
+every DXF or DWG export opens by itself, the switch Open after export of the
+blocks) and `last_export`.
+
 ## 3D BAG download
 
 `bag3d` downloads the buildings of the Dutch 3D BAG register inside a box and
@@ -842,6 +867,7 @@ when the view is restored.
 | `preview_drawing` | optional `view`, `thickness`, `units`, `origin`, `fill`, `square`, `grid`, `max_wall_thickness`, `color`, `point_layers`, `max_points`, `version` | Traces the filled cut of that slab and lays it over the points in the viewport without writing a file; returns a job ID |
 | `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
 | `cancel_drawing` | — | Requests cancellation of the running section drawing or preview |
+| `open_in_cad_viewer` | optional `path` | Opens a `.dxf` or `.dwg` file, by default the last one exported, read-only in Open CAD Studio or the program chosen in Settings, else in the system program; returns `path`, `viewer` and `read_only` |
 | `screenshot` | optional `path`, `base64`, `max_edge` | Captures the 3D viewport as a PNG image: written atomically to an absolute `.png` path, replacing a file there, and/or returned as base64 in `png_base64` |
 
 ## Exports, stored settings and the server

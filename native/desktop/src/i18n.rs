@@ -413,6 +413,7 @@ mod tests {
     const SOURCES: &[(&str, &str)] = &[
         ("main.rs", include_str!("main.rs")),
         ("bag_panel.rs", include_str!("bag_panel.rs")),
+        ("cad_viewer.rs", include_str!("cad_viewer.rs")),
         ("cli_help.rs", include_str!("cli_help.rs")),
         ("closed_mesh.rs", include_str!("closed_mesh.rs")),
         ("drawing.rs", include_str!("drawing.rs")),

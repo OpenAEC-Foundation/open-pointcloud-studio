@@ -2031,10 +2031,13 @@ impl Studio {
                         }),
                     };
                 }
-                self.status = match result {
-                    Ok(done) => done.summary(),
-                    Err(error) => format!("Faces export failed: {error}"),
-                };
+                match result {
+                    Ok(done) => {
+                        self.status = done.summary();
+                        self.cad_file_written(&done.path);
+                    }
+                    Err(error) => self.status = format!("Faces export failed: {error}"),
+                }
             }
             FaceAction::Clear => {
                 self.status = match self.clear_faces() {
@@ -2768,6 +2771,7 @@ impl Studio {
             .padding([4, 8])
             .into(),
         );
+        parts.push(self.cad_viewer_controls());
         parts
     }
 }

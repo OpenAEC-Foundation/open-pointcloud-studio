@@ -31,11 +31,12 @@ pub enum SettingsAction {
 }
 
 /// The dialog while it is open: its tab, and what Cancel goes back to.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SettingsDialog {
     tab: SettingsTab,
     language: Language,
     theme: UiTheme,
+    cad_viewer: String,
 }
 
 /// What the application is: its name and version, what it is built with and
@@ -91,6 +92,7 @@ impl Studio {
                         tab: SettingsTab::General,
                         language: i18n::choice(),
                         theme: self.ui_theme,
+                        cad_viewer: self.cad_viewer.input.clone(),
                     });
                 }
             }
@@ -104,17 +106,24 @@ impl Studio {
             SettingsAction::Reset => {
                 i18n::set(Language::Auto);
                 self.preview_theme(UiTheme::Light);
+                self.cad_viewer.input.clear();
+                self.cad_viewer.refresh();
             }
             SettingsAction::Save => {
                 if self.settings.take().is_some() {
                     i18n::save(i18n::choice());
                     self.ui_theme.save();
+                    if let Err(error) = crate::preferences::save(&self.preferences()) {
+                        self.status = format!("Could not save settings: {error}");
+                    }
                 }
             }
             SettingsAction::Cancel => {
                 if let Some(dialog) = self.settings.take() {
                     i18n::set(dialog.language);
                     self.preview_theme(dialog.theme);
+                    self.cad_viewer.input = dialog.cad_viewer;
+                    self.cad_viewer.refresh();
                 }
             }
         }
@@ -127,7 +136,7 @@ impl Studio {
 
     /// The dialog over the dimmed window, while it is open.
     pub(crate) fn settings_view(&self) -> Option<Element<'_, Message>> {
-        let dialog = self.settings?;
+        let dialog = self.settings.as_ref()?;
         let colors = self.ui_theme.colors();
         let send = |action| Message::Settings(action);
 
@@ -179,6 +188,11 @@ impl Studio {
                 ]
                 .spacing(12)
                 .align_y(iced::Alignment::Center),
+                heading("CAD viewer"),
+                text(tr("The program that opens exported DXF and DWG drawings. Leave it empty to use Open CAD Studio where it is installed."))
+                    .size(11)
+                    .color(colors.muted),
+                self.cad_viewer_setting(),
             ]
             .spacing(14)
             .into(),
@@ -290,7 +304,7 @@ impl Studio {
             .spacing(14),
         )
         .width(640)
-        .height(380)
+        .height(460)
         .padding(18)
         .style(|theme| {
             let colors = ui_theme::colors(theme);

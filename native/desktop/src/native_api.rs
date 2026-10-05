@@ -269,6 +269,12 @@ pub enum ApiCommand {
     },
     ClearDrawingPreview,
     CancelDrawing,
+    OpenInCadViewer {
+        /// Absolute `.dxf` or `.dwg` file; without it the last one a drawing,
+        /// faces or mesh export wrote.
+        #[serde(default)]
+        path: Option<PathBuf>,
+    },
     MergeVisible {
         path: PathBuf,
     },

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 mod bag_map;
 mod bag_panel;
 mod bcf;
+mod cad_viewer;
 mod camera_views;
 mod cli_help;
 mod closed_mesh;
@@ -1582,6 +1583,8 @@ enum Message {
     IndexedImportReady(u64, Result<(Arc<PointCloud>, Arc<OctreeIndex>), String>),
     CancelImport(u64),
     Settings(settings_dialog::SettingsAction),
+    /// The CAD viewer that opens exported DXF and DWG files.
+    CadViewer(cad_viewer::CadAction),
     /// Cancel every import that reads its source without building an octree.
     CancelOpening,
     Loaded(Result<Arc<PointCloud>, String>),
@@ -1919,6 +1922,8 @@ struct Studio {
     /// Which built-in optional features are switched on.
     extensions: extensions::Extensions,
     ui_theme: UiTheme,
+    /// The program that opens exported DXF and DWG files.
+    cad_viewer: cad_viewer::CadViewer,
     settings_revision: u64,
     box_select: bool,
     pick_mode: bool,
@@ -2353,6 +2358,10 @@ impl Default for Studio {
             file_page: FilePage::default(),
             extensions: extensions::Extensions::load(),
             ui_theme: UiTheme::load(),
+            cad_viewer: cad_viewer::CadViewer::new(
+                settings.cad_viewer.as_deref(),
+                settings.open_after_export,
+            ),
             settings_revision: 0,
             box_select: false,
             pick_mode: false,
@@ -2394,6 +2403,8 @@ impl Studio {
             filter_vegetation: self.filter_vegetation,
             filter_buildings: self.filter_buildings,
             filter_other: self.filter_other,
+            cad_viewer: self.cad_viewer.chosen(),
+            open_after_export: self.cad_viewer.open_after_export,
         }
     }
 
@@ -3219,6 +3230,7 @@ impl Studio {
                     json!(self.bag_job.as_ref().map(bag_panel::BagJob::progress_value));
                 answer.0["result"]["mesh_export_pending"] = Value::Bool(self.mesh_export_pending);
                 answer.0["result"]["file_view"] = self.file_view_value();
+                answer.0["result"]["cad_viewer"] = self.cad_viewer.value();
                 answer.0["result"]["drawing"] = self.drawing.value();
                 answer.0["result"]["section_align_pending"] =
                     Value::Bool(self.section_align_pending);
@@ -4117,6 +4129,11 @@ impl Studio {
             ApiCommand::PreviewDrawing { options } => self.api_preview_drawing(&options),
             ApiCommand::ClearDrawingPreview => (self.api_clear_drawing_preview(), Task::none()),
             ApiCommand::CancelDrawing => (self.api_cancel_drawing(), Task::none()),
+            ApiCommand::OpenInCadViewer { path } => (
+                self.open_in_cad_viewer(path)
+                    .unwrap_or_else(|error| json!({"ok": false, "error": error})),
+                Task::none(),
+            ),
             ApiCommand::MergeVisible { path } => {
                 if !path.is_absolute()
                     || !matches!(
@@ -5400,6 +5417,7 @@ impl Studio {
                 self.status = "Cancelling imports…".into();
             }
             Message::Settings(action) => self.settings_action(action),
+            Message::CadViewer(action) => return self.update_cad_viewer(action),
             Message::CancelImport(id) => {
                 if let Some(job) = self.imports.get(&id) {
                     job.cancel.store(true, Ordering::Relaxed);

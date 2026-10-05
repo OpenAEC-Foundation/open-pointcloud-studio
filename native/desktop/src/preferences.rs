@@ -11,7 +11,7 @@ use crate::ColorMode;
 pub(crate) const MIN_POINT_BUDGET: u32 = 1_000;
 pub(crate) const MAX_POINT_BUDGET: u32 = 10_000_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Preferences {
     pub color_mode: ColorMode,
@@ -25,6 +25,11 @@ pub(crate) struct Preferences {
     pub filter_vegetation: bool,
     pub filter_buildings: bool,
     pub filter_other: bool,
+    /// The program that opens exported DXF and DWG files; `None` looks for
+    /// Open CAD Studio.
+    pub cad_viewer: Option<PathBuf>,
+    /// Whether every exported DXF or DWG file opens in that program.
+    pub open_after_export: bool,
 }
 
 impl Default for Preferences {
@@ -41,6 +46,8 @@ impl Default for Preferences {
             filter_vegetation: true,
             filter_buildings: true,
             filter_other: true,
+            cad_viewer: None,
+            open_after_export: false,
         }
     }
 }
@@ -109,7 +116,7 @@ fn save_to(path: &Path, preferences: &Preferences) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("settings path has no parent"))?;
     fs::create_dir_all(directory)?;
     let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-    serde_json::to_writer_pretty(temporary.as_file_mut(), &preferences.validated())
+    serde_json::to_writer_pretty(temporary.as_file_mut(), &preferences.clone().validated())
         .map_err(io::Error::other)?;
     temporary.as_file_mut().sync_all()?;
     temporary.persist(path).map_err(|error| error.error)?;
@@ -130,6 +137,8 @@ mod tests {
             budget: 220_000,
             auto_index: false,
             filter_ground: false,
+            cad_viewer: Some(PathBuf::from("/opt/viewer/OpenCADStudio")),
+            open_after_export: true,
             ..Preferences::default()
         };
         save_to(&path, &settings).unwrap();
