@@ -434,6 +434,7 @@ mod tests {
         ("station_photos.rs", include_str!("station_photos.rs")),
         ("ui_theme.rs", include_str!("ui_theme.rs")),
         ("view_cube.rs", include_str!("view_cube.rs")),
+        ("sections.rs", include_str!("sections.rs")),
         ("views.rs", include_str!("views.rs")),
     ];
 

@@ -1496,7 +1496,7 @@ mod tests {
             UiPoint::new(130.0, 70.0),
             size,
         );
-        assert!(matches!(drag, Some(Message::FinishOrbit(-30.0, 10.0))));
+        assert!(matches!(drag, Some(Message::FinishOrbit(-30.0, -10.0))));
 
         // The answer of the pick search goes to the measurement.
         assert!(matches!(
@@ -1541,7 +1541,7 @@ mod tests {
         let _ = viewport.update(&mut state, press, bounds, at(300.0, 400.0));
         let (_, message) =
             viewport.update(&mut state, moved(320.0, 410.0), bounds, at(320.0, 410.0));
-        assert!(matches!(message, Some(Message::Orbit(-20.0, -10.0))));
+        assert!(matches!(message, Some(Message::Orbit(-20.0, 10.0))));
         let (_, message) = viewport.update(&mut state, release, bounds, at(325.0, 410.0));
         assert!(matches!(message, Some(Message::FinishOrbit(-5.0, 0.0))));
     }

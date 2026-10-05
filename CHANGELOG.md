@@ -14,9 +14,10 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- The panel at the left is the **Project Browser**. Below the scans and classes it lists **DRAWINGS** (the 3D model and every drawing of the session: a click shows it, × takes it off the list), **VIEWS** (the saved views of the active scan with their annotations, and the field to save one), **SECTIONS** (section boxes saved under a name: Save keeps the box as it is, a click puts it back, also turned) and **BCF** (what a BCF file would hold, with Export BCF). The Model and Drawing tabs over the scene are gone; the Project Browser switches between them.
+- With Shift and the middle mouse button the model turns sideways the way the pointer moves; up and down stay as they were.
 - In the light theme Blueprint Light the 3D scene is white as well, with dark text and labels on it; the dark themes keep their dark scene.
 - Shift with the middle mouse button orbits, and the middle button alone pans, as the right button does. The left button keeps selecting.
-- Orbiting with the mouse turns the model the way the pointer moves; before, it turned the other way.
 - A section drawing can be looked at in the application itself: the **Drawing** tab over the scene shows it on a light sheet, with its points, filled cut, outlines, frame and text, a switch per layer, pan with any mouse button, zoom about the pointer with the wheel, **Zoom extents**, a scale bar and the coordinates under the pointer in millimetres or metres. An export switches to the drawing as soon as it is written while **Show after export** is on, as it is by default; **Show drawing** in the Section drawing block opens it at any time.
 - A preview of the filled cut also prepares the whole drawing for the Drawing view, points included, as an export with the same choices would write it.
 - **Drawing (DXF/DWG)…** on the Open page of the File view shows any DXF or DWG file in the Drawing view: points, lines, polylines, circles, arcs, ellipses, solid fills with holes, texts and blocks. Entities that are not shown, and 3D content such as meshes, are counted and named instead of stopping the file from opening.

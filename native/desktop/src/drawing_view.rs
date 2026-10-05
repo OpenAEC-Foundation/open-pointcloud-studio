@@ -32,7 +32,7 @@ use pointcloud_core::{Drawing2d, DrawingEntity, DrawingUnits, ReadDrawing};
 use serde_json::{json, Value};
 
 use crate::bag_panel::plain_reason;
-use crate::i18n::{key, tr, tr_args};
+use crate::i18n::{tr, tr_args};
 use crate::ui_theme::UiTheme;
 use crate::{
     flat_tool_style, format_count, muted_checkbox_style, opencad_properties, Message, Studio,
@@ -440,7 +440,13 @@ pub(crate) struct DrawingViewTool {
     pub(crate) show_after_export: bool,
     /// Why the last file could not be read.
     last_error: Option<String>,
+    /// The drawings of this session that the project browser lists, the
+    /// newest first: the last preview, every export and every opened file.
+    sheets: Vec<Arc<DrawScene>>,
 }
+
+/// The project browser keeps this many drawings of a session.
+const MAX_SHEETS: usize = 16;
 
 impl Default for DrawingViewTool {
     fn default() -> Self {
@@ -466,6 +472,7 @@ impl DrawingViewTool {
             next_read: 0,
             show_after_export,
             last_error: None,
+            sheets: Vec::new(),
         }
     }
 
@@ -508,9 +515,36 @@ impl DrawingViewTool {
         self.built.replace(None);
     }
 
+    /// Show a drawing and list it in the project browser: a new preview
+    /// takes the place of the last one, and a file the place of an earlier
+    /// drawing of the same file.
+    pub(crate) fn set_scene(&mut self, scene: Arc<DrawScene>) {
+        let same = |earlier: &Arc<DrawScene>| match (scene.source.path(), earlier.source.path()) {
+            (Some(path), Some(other)) => path == other,
+            (None, None) => true,
+            _ => false,
+        };
+        self.sheets.retain(|earlier| !same(earlier));
+        self.sheets.insert(0, Arc::clone(&scene));
+        self.sheets.truncate(MAX_SHEETS);
+        self.show_scene(scene);
+    }
+
+    /// The drawings the project browser lists, the newest first.
+    pub(crate) fn sheets(&self) -> &[Arc<DrawScene>] {
+        &self.sheets
+    }
+
+    /// Whether this listed drawing is the one in the view.
+    fn is_current(&self, sheet: &Arc<DrawScene>) -> bool {
+        self.scene
+            .as_ref()
+            .is_some_and(|scene| Arc::ptr_eq(scene, sheet))
+    }
+
     /// Show a drawing: every layer the file has on is shown, and the view
     /// zooms to its extents.
-    pub(crate) fn set_scene(&mut self, scene: Arc<DrawScene>) {
+    fn show_scene(&mut self, scene: Arc<DrawScene>) {
         self.visible = scene
             .layers
             .iter()
@@ -1151,6 +1185,10 @@ pub enum DrawingViewAction {
     /// A file of this serial was read.
     Read(u64, Result<Arc<DrawScene>, String>),
     ShowAfterExport(bool),
+    /// Show the drawing at this place in the project browser.
+    ShowSheet(usize),
+    /// Take the drawing at this place out of the project browser.
+    RemoveSheet(usize),
 }
 
 impl Studio {
@@ -1209,6 +1247,26 @@ impl Studio {
             DrawingViewAction::ShowAfterExport(on) => {
                 view.show_after_export = on;
                 return self.queue_preferences_save();
+            }
+            DrawingViewAction::ShowSheet(place) => {
+                if let Some(sheet) = view.sheets.get(place).cloned() {
+                    if !view.is_current(&sheet) {
+                        view.show_scene(sheet);
+                    }
+                    view.shown = true;
+                    self.file_open = false;
+                }
+            }
+            DrawingViewAction::RemoveSheet(place) => {
+                if place < view.sheets.len() {
+                    let sheet = view.sheets.remove(place);
+                    if view.is_current(&sheet) {
+                        view.scene = None;
+                        view.visible.clear();
+                        view.shown = false;
+                        view.invalidate();
+                    }
+                }
             }
         }
         Task::none()
@@ -1399,50 +1457,52 @@ impl Studio {
         json!({"ok": true, "layer": name, "visible": visible})
     }
 
-    /// The tabs over the main area that switch between the 3D scene and the
-    /// drawing.
-    pub(crate) fn drawing_view_tabs(&self) -> Element<'_, Message> {
-        let tab = |label: &'static str, active: bool, show: bool| {
-            button(text(tr(label)).size(11))
-                .on_press(Message::DrawingView(DrawingViewAction::Show(show)))
-                .padding([3, 12])
-                .style(move |_theme, status| {
-                    let hovered =
-                        matches!(status, button::Status::Hovered | button::Status::Pressed);
-                    button::Style {
-                        background: Some(
-                            if active {
-                                Color::from_rgba8(217, 119, 6, 0.28)
-                            } else if hovered {
-                                Color::from_rgba8(250, 250, 249, 0.10)
-                            } else {
-                                Color::TRANSPARENT
-                            }
-                            .into(),
-                        ),
-                        text_color: if active {
-                            Color::from_rgb8(250, 250, 249)
-                        } else {
-                            Color::from_rgb8(161, 161, 170)
-                        },
-                        border: iced::Border {
-                            color: if active {
-                                Color::from_rgb8(217, 119, 6)
-                            } else {
-                                Color::from_rgba8(250, 250, 249, 0.15)
-                            },
-                            width: 1.0,
-                            radius: 3.0.into(),
-                        },
-                        ..button::Style::default()
-                    }
+    /// The drawings part of the project browser: the 3D model, and every
+    /// drawing of this session; a click shows it in the main area.
+    pub(crate) fn drawings_browser(&self) -> Element<'_, Message> {
+        let colors = self.ui_theme.colors();
+        let entry = |label: String, active: bool, message: Message| {
+            button(text(label).size(11))
+                .on_press(message)
+                .style(move |theme, status| {
+                    crate::opencad_ribbon::tool_btn_style(theme, active, status)
                 })
+                .padding([3, 5])
+                .width(Fill)
         };
-        row![
-            tab(key("Model"), !self.drawing_view.shown, false),
-            tab(key("Drawing"), self.drawing_view.shown, true),
+        let mut list = column![
+            text(tr("DRAWINGS")).size(11).color(colors.muted),
+            entry(
+                tr("3D model").to_owned(),
+                !self.drawing_view.shown,
+                Message::DrawingView(DrawingViewAction::Show(false)),
+            ),
         ]
-        .spacing(4)
+        .spacing(2);
+        for (place, sheet) in self.drawing_view.sheets().iter().enumerate() {
+            let active = self.drawing_view.shown && self.drawing_view.is_current(sheet);
+            list = list.push(
+                row![
+                    entry(
+                        sheet.source.caption(),
+                        active,
+                        Message::DrawingView(DrawingViewAction::ShowSheet(place)),
+                    ),
+                    button(text("×").size(11))
+                        .on_press(Message::DrawingView(DrawingViewAction::RemoveSheet(place)))
+                        .style(crate::flat_tool_style)
+                        .padding([3, 6]),
+                ]
+                .spacing(2)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        list.push(
+            button(text(tr("Open drawing…")).size(11))
+                .on_press(Message::DrawingView(DrawingViewAction::OpenFile))
+                .style(crate::flat_tool_style)
+                .width(Fill),
+        )
         .into()
     }
 

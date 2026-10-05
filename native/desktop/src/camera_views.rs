@@ -312,6 +312,30 @@ fn config_path() -> Option<PathBuf> {
     directory().map(|directory| directory.join("camera-views.json"))
 }
 
+fn sections_path() -> Option<PathBuf> {
+    directory().map(|directory| directory.join("section-boxes.json"))
+}
+
+/// The named section boxes, as `save_sections` left them.
+pub fn load_sections() -> Vec<crate::sections::SavedSection> {
+    sections_path()
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_sections(sections: &[crate::sections::SavedSection]) -> io::Result<()> {
+    let path = sections_path().ok_or_else(|| io::Error::other("no user config directory"))?;
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::other("section box path has no parent"))?;
+    fs::create_dir_all(directory)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    serde_json::to_writer_pretty(temporary.as_file_mut(), sections).map_err(io::Error::other)?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
 /// Where the snapshot image of a view is kept.
 pub fn snapshot_path(guid: &str) -> Option<PathBuf> {
     is_guid(guid)

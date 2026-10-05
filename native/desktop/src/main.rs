@@ -39,6 +39,7 @@ mod orbit_point;
 mod preferences;
 mod project_open;
 mod screenshot;
+mod sections;
 mod selection;
 mod settings_dialog;
 #[cfg(test)]
@@ -1755,6 +1756,7 @@ enum Message {
     /// A double click at a pixel of the scene: the drawn point there becomes
     /// the orbit point.
     PickOrbitPoint([f32; 2], Size),
+    Sections(sections::SectionAction),
     OrbitPointPicked(Option<[f64; 3]>),
     /// A single click at a pixel of the scene with no tool on: the point
     /// there becomes the selection, as with Pick point.
@@ -1916,6 +1918,7 @@ struct Studio {
     orbit_point: Option<[f64; 3]>,
     view_label: &'static str,
     views: views::ViewTool,
+    sections: sections::SectionsTool,
     viewport_size: Size,
     ribbon_viewport: Option<(f32, f32, f32)>,
     file_open: bool,
@@ -2357,6 +2360,7 @@ impl Default for Studio {
             orbit_point: None,
             view_label: "ISOMETRIC",
             views: views::ViewTool::load(),
+            sections: sections::SectionsTool::load(),
             viewport_size: Size::new(915.0, 743.0),
             ribbon_viewport: None,
             file_open: false,
@@ -7897,6 +7901,7 @@ impl Studio {
                 return self.schedule_detail();
             }
             Message::Views(action) => return self.update_views(action),
+            Message::Sections(action) => return self.update_sections(action),
             Message::ShowContextMenu(point) => self.context_menu = Some(point),
             Message::DismissContextMenu => self.context_menu = None,
             Message::ContextAction(action) => {
@@ -9040,7 +9045,7 @@ impl Studio {
             cloud_count.push_str(&format!("  ·  {picked} selected"));
         }
         let mut files = column![
-            text(i18n::tr("PROJECT"))
+            text(i18n::tr("Project Browser"))
                 .size(14)
                 .font(Font::with_name("Space Grotesk")),
             text(cloud_count)
@@ -9217,6 +9222,11 @@ impl Studio {
             }
             files = files.push(list);
         }
+        files = files
+            .push(self.drawings_browser())
+            .push(self.views_browser())
+            .push(self.sections_browser())
+            .push(self.bcf_browser());
         container(scrollable(files.padding(14)).height(Fill))
             .width(255)
             .height(Fill)
@@ -9911,7 +9921,6 @@ impl Studio {
                 .color(scene_colors.scene_text),
             text(caption).size(11).color(scene_colors.scene_muted),
             iced::widget::horizontal_space(),
-            self.drawing_view_tabs(),
         ]
         .spacing(16)
         .align_y(iced::Alignment::Center)
@@ -11088,14 +11097,14 @@ fn finish_viewport_drag(
             Some(Message::FinishPan(dx, dy))
         }
         (mouse::Button::Left | mouse::Button::Middle, DragMode::Orbit) if total > 0.5 => {
-            Some(Message::FinishOrbit(-dx, -dy))
+            Some(Message::FinishOrbit(-dx, dy))
         }
         (mouse::Button::Left, DragMode::MeasurePending | DragMode::AnnotatePending)
             if total >= 5.0 =>
         {
             Some(Message::FinishOrbit(
                 drag.start.x - position.x,
-                drag.start.y - position.y,
+                position.y - drag.start.y,
             ))
         }
         (mouse::Button::Left, DragMode::MeasurePending) => Some(Message::Measure(
@@ -11511,9 +11520,8 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     (
                         event::Status::Captured,
                         Some(match previous.mode {
-                            // The model follows the pointer, so the camera
-                            // turns the opposite way.
-                            DragMode::Orbit => Message::Orbit(-dx, -dy),
+                            // Sideways the model follows the pointer.
+                            DragMode::Orbit => Message::Orbit(-dx, dy),
                             DragMode::Pan => Message::Pan(dx, dy),
                             DragMode::RightPending
                             | DragMode::MeasurePending
@@ -13927,12 +13935,12 @@ mod viewport_drag_tests {
         )
         .unwrap();
         // Shift with the middle drag orbits; the model follows the pointer.
-        assert!(matches!(message, Message::FinishOrbit(-10.0, -5.0)));
+        assert!(matches!(message, Message::FinishOrbit(-10.0, 5.0)));
         let yaw = studio.yaw;
         let pitch = studio.pitch;
         let _ = studio.update(message);
         assert!((studio.yaw - yaw + 0.1).abs() < 0.0001);
-        assert!((studio.pitch - pitch + 0.05).abs() < 0.0001);
+        assert!((studio.pitch - pitch - 0.05).abs() < 0.0001);
         assert_eq!(studio.pan, [0.0, 0.0]);
     }
 
@@ -13968,12 +13976,12 @@ mod viewport_drag_tests {
             Size::new(800.0, 600.0),
         )
         .unwrap();
-        assert!(matches!(message, Message::FinishOrbit(-10.0, -5.0)));
+        assert!(matches!(message, Message::FinishOrbit(-10.0, 5.0)));
         let yaw = studio.yaw;
         let pitch = studio.pitch;
         let _ = studio.update(message);
         assert!((studio.yaw - yaw + 0.1).abs() < 0.0001);
-        assert!((studio.pitch - pitch + 0.05).abs() < 0.0001);
+        assert!((studio.pitch - pitch - 0.05).abs() < 0.0001);
 
         let selection = DragState {
             start,

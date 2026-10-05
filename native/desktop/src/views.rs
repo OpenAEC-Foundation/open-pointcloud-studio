@@ -1591,19 +1591,11 @@ impl Studio {
                 .is_some_and(|source| self.views.list.iter().any(|view| view.source == source))
     }
 
-    /// The "Views" section of the Properties panel: the camera, the name
-    /// field, the views of the active scan and the annotations of the
-    /// active view.
+    /// The "Camera" section of the Properties panel: the direction and the
+    /// zoom of the orbit camera. The saved views are in the project browser.
     pub fn views_properties(&self) -> Element<'_, Message> {
-        let flat = crate::flat_tool_style;
-        let small = |label: &'static str, action: ViewAction| {
-            button(text(i18n::tr(label)).size(10))
-                .on_press(Message::Views(action))
-                .style(flat)
-                .padding([3, 4])
-        };
-        let mut section = column![
-            opencad_properties::section_header("Views"),
+        column![
+            opencad_properties::section_header("Camera"),
             opencad_properties::property_row(
                 "Yaw / pitch",
                 format!(
@@ -1613,6 +1605,24 @@ impl Studio {
                 ),
             ),
             opencad_properties::property_row("Zoom", crate::format_zoom_level(self.zoom)),
+        ]
+        .spacing(0)
+        .into()
+    }
+
+    /// The views part of the project browser: the name field with Save, the
+    /// views of the active scan and the annotations of the active view.
+    pub fn views_browser(&self) -> Element<'_, Message> {
+        let flat = crate::flat_tool_style;
+        let small = |label: &'static str, action: ViewAction| {
+            button(text(i18n::tr(label)).size(10))
+                .on_press(Message::Views(action))
+                .style(flat)
+                .padding([3, 4])
+        };
+        let muted = self.ui_theme.colors().muted;
+        let mut section = column![
+            text(i18n::tr("VIEWS")).size(11).color(muted),
             container(
                 row![
                     text_input(i18n::tr("View name"), &self.views.name)
@@ -1632,10 +1642,17 @@ impl Studio {
                 .spacing(4)
                 .align_y(iced::Alignment::Center),
             )
-            .padding([5, 8]),
+            .padding([5, 0]),
         ]
         .spacing(0);
         let source = self.active_camera_source();
+        if source.is_none() {
+            section = section.push(
+                text(i18n::tr("Open a scan to save views of it"))
+                    .size(10)
+                    .color(muted),
+            );
+        }
         let active = self.active_view();
         for view in self
             .views
@@ -1676,7 +1693,7 @@ impl Studio {
                 }
             };
             section = section
-                .push(container(line.spacing(2).align_y(iced::Alignment::Center)).padding([2, 8]));
+                .push(container(line.spacing(2).align_y(iced::Alignment::Center)).padding([2, 0]));
         }
         if let Some(view) = active {
             section = section.push(
@@ -1694,12 +1711,12 @@ impl Studio {
                     .spacing(4)
                     .align_y(iced::Alignment::Center),
                 )
-                .padding([6, 8]),
+                .padding([6, 0]),
             );
             if view.annotations.is_empty() {
                 section = section.push(
                     container(text(i18n::tr("Place a Note or a Line from the ribbon")).size(10))
-                        .padding([2, 8]),
+                        .padding([2, 0]),
                 );
             }
             for (place, annotation) in view.annotations.iter().enumerate() {
@@ -1725,11 +1742,44 @@ impl Studio {
                         .spacing(3)
                         .align_y(iced::Alignment::Center),
                     )
-                    .padding([1, 8]),
+                    .padding([1, 0]),
                 );
             }
         }
         section.into()
+    }
+
+    /// The BCF part of the project browser: what a BCF file of the active
+    /// scan would hold, and the button that writes it.
+    pub fn bcf_browser(&self) -> Element<'_, Message> {
+        let muted = self.ui_theme.colors().muted;
+        let source = self.active_camera_source();
+        let (views, notes) = self
+            .views
+            .list
+            .iter()
+            .filter(|view| Some(&view.source) == source.as_ref())
+            .fold((0usize, 0usize), |(views, notes), view| {
+                (views + 1, notes + view.annotations.len())
+            });
+        column![
+            text("BCF").size(11).color(muted),
+            text(i18n::tr_args(
+                "{views} views with {notes} annotations become topics of a BCF file",
+                &[("views", &views), ("notes", &notes)],
+            ))
+            .size(10)
+            .color(muted),
+            button(text(i18n::tr("Export BCF")).size(11))
+                .on_press_maybe(
+                    self.can_export_bcf()
+                        .then_some(Message::Views(ViewAction::ExportBcf))
+                )
+                .style(crate::flat_tool_style)
+                .width(Fill),
+        ]
+        .spacing(4)
+        .into()
     }
 
     /// The field for the text of a note whose point has been picked, shown
@@ -2503,7 +2553,7 @@ mod tests {
             UiPoint::new(130.0, 70.0),
             size,
         );
-        assert!(matches!(drag, Some(Message::FinishOrbit(-30.0, 10.0))));
+        assert!(matches!(drag, Some(Message::FinishOrbit(-30.0, -10.0))));
 
         // The answer of the pick search goes to the annotation.
         assert!(matches!(
@@ -2555,7 +2605,7 @@ mod tests {
             let _ = viewport.update(&mut state, press.clone(), bounds, at(300.0, 400.0));
             let (_, message) =
                 viewport.update(&mut state, moved(320.0, 410.0), bounds, at(320.0, 410.0));
-            assert!(matches!(message, Some(Message::Orbit(-20.0, -10.0))));
+            assert!(matches!(message, Some(Message::Orbit(-20.0, 10.0))));
         }
 
         let walked = send(
