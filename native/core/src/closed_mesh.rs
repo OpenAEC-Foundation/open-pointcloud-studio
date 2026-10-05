@@ -7,8 +7,12 @@
 //! lattice: positive on the side the scanner saw, negative behind the
 //! surface. It is a weighted mean of the distances to the planes of the
 //! elements nearby, so scanner noise averages out and nothing but the
-//! elements within a fixed reach matters. Where the fine elements end, the
-//! coarser levels tell how the surface runs on, which is what closes gaps.
+//! elements within a fixed reach matters. Near an edge, where elements of
+//! two faces are in reach, such a mean is the plane of neither face and
+//! rounds the edge off; there the distance is measured to the faces
+//! themselves, and the edge lies where their planes cross. Where the fine
+//! elements end, the coarser levels tell how the surface runs on, which is
+//! what closes gaps.
 //! The surface is taken out by dual contouring: one vertex in every voxel
 //! the surface passes through and one quad across every lattice edge whose
 //! ends lie on different sides.
@@ -77,6 +81,31 @@ const SHEET: f32 = 2.0;
 /// to their weight, those of two faces to less. A gap corner whose normals
 /// add up to a smaller share of their weight than this is not closed over.
 const ONE_FACE: f32 = 0.9;
+/// A corner where the normals of the elements around it add up to less
+/// than this share of their weight has more than one face in reach: two
+/// faces of the same weight more than 28 degrees apart. There the distance
+/// is measured to the faces themselves and not to the mean of their planes.
+const ONE_PLANE: f32 = 0.97;
+/// An element lies on the face of another when their normals are less than
+/// about 18 degrees apart and their planes pass the corner within half a
+/// voxel of each other.
+const FACE_COSINE: f32 = 0.95;
+const FACE_WIDTH: f32 = 0.5;
+/// Only an element whose fit is this sure starts a face: one at an edge,
+/// with neighbours on both faces, has a plane between the two.
+const FACE_SEED: f32 = 0.85;
+/// A second face needs this many elements in reach of the corner.
+const FACE_ELEMENTS: usize = 3;
+/// An edge or a corner that the planes at the corners of a voxel give is
+/// taken as its vertex when it lies at least this share of a voxel inside
+/// it.
+const CREASE_INSIDE: f64 = 0.1;
+/// A face found alone must carry this share of the weight in reach of the
+/// corner; otherwise the mean of the planes stays. The rest lies on faces
+/// too small or too bent to fit a sure plane to, such as the reveal of a
+/// window in a wall three voxels thick, which the face beside it must not
+/// cut through.
+const FACE_COVER: f32 = 0.5;
 /// The lattice edges leave a vertex this free to move away from the middle
 /// of its crossings, and directions the crossings say less about than this
 /// share of the best one are left alone.
@@ -973,6 +1002,151 @@ fn kernel(distance_squared: f32, radius: f32) -> f32 {
     square * square * square
 }
 
+/// An element in reach of a corner: its share, the distance from its plane
+/// to the corner, its normal and its offset to the corner.
+struct Near {
+    share: f32,
+    distance: f32,
+    normal: [f32; 3],
+    offset: [f32; 3],
+    far: f32,
+    sure: bool,
+}
+
+/// The face through the elements whose planes agree with that of a seed:
+/// distance to the corner, summed normal, summed weight and the weighted
+/// mean offset from the face's elements to the corner.
+struct NearFace {
+    value: f32,
+    normal: [f32; 3],
+    weight: f32,
+    offset: [f32; 3],
+    count: usize,
+}
+
+/// Whether an element lies on a face with this normal whose plane passes
+/// the corner at this distance.
+fn on_face(element: &Near, normal: [f32; 3], value: f32) -> bool {
+    dot(normal, element.normal) >= FACE_COSINE && (element.distance - value).abs() <= FACE_WIDTH
+}
+
+/// The face of the elements that lie on that of a seed, found twice: the
+/// second time around the mean plane of the first.
+fn face_of(near: &[Near], seed: &Near) -> Option<NearFace> {
+    let (mut value, mut normal) = (seed.distance, seed.normal);
+    let mut face = None;
+    for _ in 0..2 {
+        let unit = normalized(normal);
+        let mut found = NearFace {
+            value: 0.0,
+            normal: [0.0; 3],
+            weight: 0.0,
+            offset: [0.0; 3],
+            count: 0,
+        };
+        for element in near.iter().filter(|element| on_face(element, unit, value)) {
+            found.weight += element.share;
+            found.value += element.share * element.distance;
+            found.count += 1;
+            for axis in 0..3 {
+                found.normal[axis] += element.share * element.normal[axis];
+                found.offset[axis] += element.share * element.offset[axis];
+            }
+        }
+        if found.weight <= 0.0 {
+            return None;
+        }
+        found.value /= found.weight;
+        let weight = found.weight;
+        found.offset = found.offset.map(|value| value / weight);
+        value = found.value;
+        normal = found.normal;
+        face = Some(found);
+    }
+    face
+}
+
+/// The distance at a corner to the surface, and the summed normal of the
+/// face that decides it, measured to the faces in reach of the corner and
+/// not to the mean of their planes. The first face is that of the nearest
+/// element that is sure of its plane. Where a second face meets it in an
+/// edge, the corner takes the farther of the two planes at a convex edge
+/// and the nearer at a concave one, which puts the edge where the two
+/// planes cross. Nothing where the faces do not tell: one face with other
+/// elements around it that lie on no face, such as a strip too narrow to
+/// fit a plane to, or two faces that do not fit together. `near` is room to
+/// work in.
+fn face_at(level: &SurfelLevel, corner: [i32; 3], near: &mut Vec<Near>) -> Option<(f32, [f32; 3])> {
+    let radius = level.reach;
+    let center = corner.map(|value| value * 2);
+    let reach = (radius / level.size).ceil() as i32 + 1;
+    near.clear();
+    level.for_each_near(center, reach, |index, _| {
+        let weight = level.weight[index];
+        if weight <= 0.0 {
+            return;
+        }
+        let offset = level.offset(index, corner, [0.0; 3]);
+        let far = squared(offset);
+        let share = kernel(far, radius) * weight;
+        if share > 0.0 {
+            let normal = level.normal[index];
+            near.push(Near {
+                share,
+                distance: dot(normal, offset),
+                normal,
+                offset,
+                far,
+                sure: weight >= FACE_SEED,
+            });
+        }
+    });
+    let near = &near[..];
+    let nearest = |skip: &dyn Fn(&Near) -> bool| {
+        near.iter()
+            .filter(|element| element.sure && !skip(element))
+            .fold(None::<&Near>, |best, next| match best {
+                Some(best) if best.far <= next.far => Some(best),
+                _ => Some(next),
+            })
+    };
+    let first = face_of(near, nearest(&|_| false)?)?;
+    let unit = normalized(first.normal);
+    let Some(second) = nearest(&|element| on_face(element, unit, first.value))
+        .and_then(|seed| face_of(near, seed))
+        .filter(|second| second.count >= FACE_ELEMENTS)
+    else {
+        let total: f32 = near.iter().map(|element| element.share).sum();
+        return (first.weight >= FACE_COVER * total).then_some((first.value, first.normal));
+    };
+    let two = normalized(second.normal);
+    // Two faces that look the same way, such as two treads of a stair,
+    // meet in no edge: the nearer one decides.
+    if dot(unit, two) >= FACE_COSINE {
+        return Some((first.value, first.normal));
+    }
+    // Where each face lies behind the plane of the other, the solid is the
+    // part behind both: the edge is convex. Where each lies in front of the
+    // other, it is concave. Where one lies in front and the other behind,
+    // the two do not meet in an edge here or their sides do not fit, as
+    // where nothing told the sides.
+    let between: [f32; 3] = std::array::from_fn(|axis| first.offset[axis] - second.offset[axis]);
+    let (behind_second, behind_first) = (dot(two, between) > 0.0, dot(unit, between) < 0.0);
+    if behind_second != behind_first {
+        return None;
+    }
+    let take_second = if behind_second {
+        second.value > first.value
+    } else {
+        second.value < first.value
+    };
+    Some(if take_second {
+        (second.value, second.normal)
+    } else {
+        (first.value, first.normal)
+    })
+}
+
 /// The elements of one level, summed at lattice corners that lie as far
 /// apart as the bell of that level is wide: every voxel for the finest
 /// level, every `step` voxels above it. Between those corners the sums are
@@ -1176,6 +1350,27 @@ impl Field {
             if *weight > 0.0 {
                 field.value[slot] /= weight;
                 field.level[slot] = 0;
+            }
+        }
+        // Near an edge or a corner the mean is over the planes of more than
+        // one face and lies on none of them, which rounds the edge off.
+        // There the distance is taken from the faces themselves.
+        let mut near = Vec::new();
+        for z in 0..side {
+            for y in 0..side {
+                for x in 0..side {
+                    let slot = (z * side + y) * side + x;
+                    let weight = finest.weight[slot];
+                    let sum = squared(field.normal[slot]);
+                    if weight <= 0.0 || sum >= (ONE_PLANE * weight) * (ONE_PLANE * weight) {
+                        continue;
+                    }
+                    let corner = [x, y, z].map(|value| value as i32 + first);
+                    if let Some((value, normal)) = face_at(&surfels.levels[0], corner, &mut near) {
+                        field.value[slot] = value;
+                        field.normal[slot] = normal;
+                    }
+                }
             }
         }
         drop(finest.weight);
@@ -1533,11 +1728,29 @@ fn voxel_vertices(field: &Field, cell: [i32; 3]) -> Option<VoxelVertices> {
         let (from, to) = (place(a), place(b));
         let point: [f64; 3] =
             std::array::from_fn(|axis| from[axis] + f64::from(along) * (to[axis] - from[axis]));
-        let direction = normalized(std::array::from_fn(|axis| {
-            normals[a][axis] + along * (normals[b][axis] - normals[a][axis])
-        }));
         crossed[edge] = true;
-        crossings[edge] = (point, direction.map(f64::from));
+        crossings[edge] = if dot(normals[a], normals[b]) >= FACE_COSINE {
+            let direction = normalized(std::array::from_fn(|axis| {
+                normals[a][axis] + along * (normals[b][axis] - normals[a][axis])
+            }));
+            (point, direction.map(f64::from))
+        } else {
+            // The ends lie at different faces, and a direction between
+            // the two is that of neither: the crossing takes the plane of
+            // the face of the nearer end, through the place where the
+            // values say the surface crosses.
+            let near = if values[a].abs() <= values[b].abs() {
+                a
+            } else {
+                b
+            };
+            let (corner, normal) = (place(near), normals[near].map(f64::from));
+            let off = f64::from(values[near]) + dot3(normal, difference(point, corner));
+            (
+                std::array::from_fn(|axis| point[axis] - off * normal[axis]),
+                normal,
+            )
+        };
     }
     // The pieces: crossed edges joined across the faces.
     let mut group: [usize; 12] = std::array::from_fn(|edge| edge);
@@ -1605,38 +1818,50 @@ fn voxel_vertices(field: &Field, cell: [i32; 3]) -> Option<VoxelVertices> {
                 *sum += part / count;
             }
         }
-        // Least squares on the planes of the crossings, from their middle.
-        let mut matrix = [[0f64; 3]; 3];
-        let mut right = [0f64; 3];
-        let mut mean_direction = [0f64; 3];
+        // The planes of the crossings, and after them those of faces that
+        // only corners of the voxel lie at: twelve and eight at the most.
+        let mut planes = [([0f64; 3], [0f64; 3]); 20];
+        let mut count = 0;
         for edge in (0..12).filter(own) {
-            let (point, direction) = crossings[edge];
-            let offset: f64 = (0..3)
-                .map(|axis| direction[axis] * (point[axis] - middle[axis]))
-                .sum();
-            for a in 0..3 {
-                right[a] += direction[a] * offset;
-                mean_direction[a] += direction[a];
-                for b in 0..3 {
-                    matrix[a][b] += direction[a] * direction[b];
+            planes[count] = crossings[edge];
+            count += 1;
+        }
+        let crossing = count;
+        let mean_direction = planes[..crossing].iter().fold([0f64; 3], |sum, plane| {
+            std::array::from_fn(|axis| sum[axis] + plane.1[axis])
+        });
+        let mut vertex = solve_vertex(&planes[..crossing], middle).0;
+        // A face that a corner of the voxel lies at but no crossing stands
+        // for can still meet the faces of the crossings inside the voxel:
+        // where their edge cuts off a corner of the next voxel without
+        // reaching a lattice corner, that voxel has no vertex, and without
+        // this the edge would be cut off flat. The vertex goes to the edge
+        // when it lies well inside this voxel. Otherwise the edge belongs to
+        // another voxel, or runs so close along a side of this one that the
+        // voxel beside it would put its vertex on the same line, which
+        // leaves triangles a millimetre wide whose side the noise decides.
+        if found.count == 1 {
+            for corner in 0..8 {
+                let normal = normals[corner].map(f64::from);
+                let known = planes[..count]
+                    .iter()
+                    .any(|plane| dot3(plane.1, normal) >= f64::from(FACE_COSINE));
+                if !known && normal != [0.0; 3] {
+                    let at = place(corner);
+                    let point = std::array::from_fn(|axis| {
+                        at[axis] - f64::from(values[corner]) * normal[axis]
+                    });
+                    planes[count] = (point, normal);
+                    count += 1;
                 }
             }
         }
-        let (values, vectors) = symmetric_eigen3(matrix);
-        let mut vertex = middle;
-        for (value, vector) in values.iter().zip(&vectors) {
-            // A direction the planes say little about is left alone: on a
-            // flat face the vertex only moves across the face.
-            if *value >= VERTEX_RANK * values[2] && *value > 0.0 {
-                let step = (0..3).map(|axis| vector[axis] * right[axis]).sum::<f64>()
-                    / (value + VERTEX_PULL);
-                for axis in 0..3 {
-                    vertex[axis] += step * vector[axis];
-                }
+        if count > crossing {
+            let (sharp, rank) = solve_vertex(&planes[..count], middle);
+            let inside = CREASE_INSIDE..=1.0 - CREASE_INSIDE;
+            if rank >= 2 && sharp.iter().all(|value| inside.contains(value)) {
+                vertex = sharp;
             }
-        }
-        if !vertex.iter().all(|value| value.is_finite()) {
-            vertex = middle;
         }
         let vertex = vertex.map(|value| value.clamp(0.0, 1.0) as f32);
         // The normal of the field at the vertex, between the eight
@@ -1666,6 +1891,44 @@ fn voxel_vertices(field: &Field, cell: [i32; 3]) -> Option<VoxelVertices> {
         found.vertices[number] = (vertex, normal);
     }
     Some(found)
+}
+
+/// The point that lies best on a set of planes, each given by a point and
+/// a unit normal, starting from `middle`, and how many directions the
+/// planes fix.
+fn solve_vertex(planes: &[([f64; 3], [f64; 3])], middle: [f64; 3]) -> ([f64; 3], usize) {
+    let mut matrix = [[0f64; 3]; 3];
+    let mut right = [0f64; 3];
+    for (point, direction) in planes {
+        let offset: f64 = (0..3)
+            .map(|axis| direction[axis] * (point[axis] - middle[axis]))
+            .sum();
+        for a in 0..3 {
+            right[a] += direction[a] * offset;
+            for b in 0..3 {
+                matrix[a][b] += direction[a] * direction[b];
+            }
+        }
+    }
+    let (values, vectors) = symmetric_eigen3(matrix);
+    let mut vertex = middle;
+    let mut rank = 0;
+    for (value, vector) in values.iter().zip(&vectors) {
+        // A direction the planes say little about is left alone: on a
+        // flat face the vertex only moves across the face.
+        if *value >= VERTEX_RANK * values[2] && *value > 0.0 {
+            rank += 1;
+            let step =
+                (0..3).map(|axis| vector[axis] * right[axis]).sum::<f64>() / (value + VERTEX_PULL);
+            for axis in 0..3 {
+                vertex[axis] += step * vector[axis];
+            }
+        }
+    }
+    if !vertex.iter().all(|value| value.is_finite()) {
+        return (middle, 0);
+    }
+    (vertex, rank)
 }
 
 /// The colour of the points around a place: from the finest level that has
@@ -2410,9 +2673,10 @@ mod tests {
     }
 
     // The bounds in these tests were measured at a voxel of 4 cm and carry
-    // a margin of about a quarter: the room came to a mean of 0.44 mm, a
-    // 95th percentile of 4.0 mm and a largest distance of 10.3 mm, which is
-    // at the corners, where the surface is rounded.
+    // a margin of about a quarter: the room came to a mean of 0.08 mm, a
+    // 95th percentile of 0.35 mm and a largest distance of 3.3 mm. While
+    // edges were measured to the mean of the planes of their faces, the
+    // corners were rounded: a mean of 0.44 mm, 4.0 mm and 10.3 mm.
     #[test]
     fn box_room_is_closed_and_accurate() {
         let room = room();
@@ -2427,29 +2691,30 @@ mod tests {
         assert_eq!(report.deviation.samples, 200_000);
         assert_eq!(report.triangles_extracted, mesh.triangles.len() as u64);
         assert!(mesh.colors.is_some());
-        assert_deviation(&report, 0.6, 5.1, 13.5);
+        assert_deviation(&report, 0.15, 0.6, 4.5);
         // Seen from inside: every face and every normal looks into the
         // room, so the enclosed volume counts as negative. 31.2 m3 in
         // truth; measured 31.218.
         assert_eq!(facing(&mesh, ROOM_MIDDLE), (1.0, 1.0));
         assert!((volume(&mesh, ROOM_MIDDLE) + 31.2).abs() < 0.06);
-        // No vertex further than 10.3 mm from the planes of the room.
+        // No vertex further than 3.6 mm from the planes of the room (10.3
+        // mm with rounded corners).
         let size = [4.0, 3.0, 2.6];
         assert!(mesh.vertices.iter().all(|vertex| {
             let nearest = (0..3)
                 .map(|axis| vertex[axis].min(size[axis] - vertex[axis]))
                 .fold(f64::INFINITY, f64::min);
-            nearest.abs() < 0.0135
+            nearest.abs() < 0.005
         }));
 
-        // With 2 mm of noise: mean 1.29 mm, 95th percentile 4.0 mm, largest
-        // 12.3 mm. The
-        // walls lie on lattice planes here, so noise decides the side of
-        // whole layers of corners; the surface must stay in one piece.
+        // With 2 mm of noise: mean 0.99 mm, 95th percentile 1.9 mm, largest
+        // 5.1 mm (1.29, 4.0 and 12.3 with rounded corners). The walls lie
+        // on lattice planes here, so noise decides the side of whole layers
+        // of corners; the surface must stay in one piece.
         let noisy = room.with_noise(Noise::Uniform(0.002), 7);
         let (mesh, report) = run(&noisy, &raw());
         assert_closed(&mesh, &report);
-        assert_deviation(&report, 1.65, 5.1, 16.0);
+        assert_deviation(&report, 1.3, 2.5, 6.5);
         assert_eq!(facing(&mesh, ROOM_MIDDLE).1, 1.0);
         assert!((volume(&mesh, ROOM_MIDDLE) + 31.2).abs() < 0.06);
     }
@@ -2645,9 +2910,10 @@ mod tests {
         assert_closed(&mesh, &report);
         // 0.15 voxel unless the caller says otherwise.
         assert!((report.simplify_tolerance - 0.006).abs() < 1e-12);
-        // Measured: 618 of 77,444 triangles left, mean 0.78 mm, 95th
-        // percentile 4.2 mm and largest 10.2 mm. The walls of this room lie
-        // on lattice planes, where rounding decides the side of a corner:
+        // Measured: 90 of 77,480 triangles left, mean 0.23 mm, 95th
+        // percentile 0.69 mm and largest 3.0 mm; with rounded corners 618
+        // of 77,444, 0.78, 4.2 and 10.2 mm. The walls of this room lie on
+        // lattice planes, where rounding decides the side of a corner:
         // another machine may extract up to half as many triangles more
         // and keep some of them, as the room with noise does.
         assert!(
@@ -2656,7 +2922,7 @@ mod tests {
             report.triangles_extracted
         );
         assert!(mesh.triangles.len() < 2_000, "{}", mesh.triangles.len());
-        assert_deviation(&report, 1.0, 5.4, 13.5);
+        assert_deviation(&report, 0.4, 1.0, 4.0);
         assert_eq!(facing(&mesh, ROOM_MIDDLE), (1.0, 1.0));
         assert!((volume(&mesh, ROOM_MIDDLE) + 31.2).abs() < 0.1);
 
@@ -4456,3 +4722,6 @@ mod tests {
         assert_eq!((in_work.bytes, in_work.tiles, in_work.most), (0, 0, 3));
     }
 }
+
+#[cfg(test)]
+mod sharp;

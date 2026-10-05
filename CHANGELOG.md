@@ -14,6 +14,8 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- **Closed mesh** keeps the edges and corners of walls, floors and steps sharp. Near an edge the distance to the surface is measured to the planes of the faces that meet there instead of to their mean, so step nosings, the foot of a wall and outside corners are no longer rounded off: on generated scans at voxels of 4 cm the true edge lies about 3 mm from the mesh instead of 5 to 7 mm.
+
 ## 0.9.1 - 2026-10-05
 
 - **Save view** and **Export BCF** left the ribbon: a view is saved in the Project Browser, and the BCF file is written from File → Export (**Views as BCF…**) or from BCF in the Project Browser.
