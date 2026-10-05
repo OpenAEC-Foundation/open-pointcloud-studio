@@ -14,10 +14,10 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
-- **Closed mesh** keeps the edges and corners of walls, floors and steps sharp. Near an edge the distance to the surface is measured to the planes of the faces that meet there instead of to their mean, so step nosings, the foot of a wall and outside corners are no longer rounded off: on generated scans at voxels of 4 cm the true edge lies about 3 mm from the mesh instead of 5 to 7 mm.
-
 ## 0.9.1 - 2026-10-05
 
+- **Closed mesh** keeps the edges and corners of walls, floors and steps sharp. Near an edge the distance to the surface is measured to the planes of the faces that meet there instead of to their mean, so step nosings, the foot of a wall and outside corners are no longer rounded off: on generated scans at voxels of 4 cm the true edge lies about 3 mm from the mesh instead of 5 to 7 mm.
+- A long message in the status bar stays on one line and is cut off at the right; before, it could squeeze the counts into a narrow column and push the window content up.
 - **Save view** and **Export BCF** left the ribbon: a view is saved in the Project Browser, and the BCF file is written from File → Export (**Views as BCF…**) or from BCF in the Project Browser.
 - The panel at the left is the **Project Browser**. Below the scans and classes it lists **DRAWINGS** (the 3D model and every drawing of the session: a click shows it, × takes it off the list), **VIEWS AND SECTIONS** (one name field with **Save view** and **Save section**; the saved views of the active scan with their annotations, and the section boxes saved under a name: a click puts a box back, also turned) and **BCF** (what a BCF file would hold, with Export BCF). The Model and Drawing tabs over the scene are gone; the Project Browser switches between them.
 - With Shift and the middle mouse button the model turns sideways the way the pointer moves; up and down stay as they were.

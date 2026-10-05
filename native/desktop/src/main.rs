@@ -9334,15 +9334,25 @@ impl Studio {
     /// the totals beside it and the version of the application at the right.
     fn status_bar(&self, message: String) -> Element<'_, Message> {
         let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
+        // One line: a long message is cut off at the right instead of
+        // wrapping, which squeezed the counts into a column and made the
+        // status bar grow over the window.
         let mut details = row![
-            text(message).size(11),
+            container(
+                text(message)
+                    .size(11)
+                    .wrapping(iced::widget::text::Wrapping::None),
+            )
+            .width(Fill)
+            .clip(true),
             text(format!(
                 "{} files  ·  {} points  ·  {} selected",
                 self.clouds.len(),
                 format_count(total_points),
                 format_count(self.selected_total())
             ))
-            .size(11),
+            .size(11)
+            .wrapping(iced::widget::text::Wrapping::None),
         ]
         .spacing(24)
         .align_y(iced::Alignment::Center)
