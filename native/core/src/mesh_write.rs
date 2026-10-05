@@ -26,6 +26,12 @@ pub enum MeshFormat {
     Obj,
     Ply,
     Stl,
+    /// `MESH` entities on the layer `OPS-MESH`, in metres.
+    Dxf,
+    /// As `Dxf`, in the binary drawing format.
+    Dwg,
+    /// IFC4: a building element proxy with a triangulated face set.
+    Ifc,
 }
 
 impl MeshFormat {
@@ -41,6 +47,9 @@ impl MeshFormat {
             Some("obj") => Some(Self::Obj),
             Some("ply") => Some(Self::Ply),
             Some("stl") => Some(Self::Stl),
+            Some("dxf") => Some(Self::Dxf),
+            Some("dwg") => Some(Self::Dwg),
+            Some("ifc") => Some(Self::Ifc),
             _ => None,
         }
     }
@@ -50,6 +59,9 @@ impl MeshFormat {
             Self::Obj => "obj",
             Self::Ply => "ply",
             Self::Stl => "stl",
+            Self::Dxf => "dxf",
+            Self::Dwg => "dwg",
+            Self::Ifc => "ifc",
         }
     }
 
@@ -58,6 +70,9 @@ impl MeshFormat {
             Self::Obj => "OBJ",
             Self::Ply => "PLY",
             Self::Stl => "STL",
+            Self::Dxf => "DXF",
+            Self::Dwg => "DWG",
+            Self::Ifc => "IFC",
         }
     }
 }
@@ -111,6 +126,33 @@ pub fn write_mesh(
                 write_stl(mesh, origin.unwrap_or_default(), &header, writer)
             })?;
             Ok(MeshWriteReport { origin })
+        }
+        MeshFormat::Dxf | MeshFormat::Dwg | MeshFormat::Ifc => {
+            validate(mesh, comments, format)?;
+            let source = comments
+                .iter()
+                .find_map(|comment| comment.strip_prefix("Source: "))
+                .unwrap_or_default();
+            let notes: Vec<&str> = comments
+                .iter()
+                .copied()
+                .filter(|comment| !comment.starts_with("Source: "))
+                .collect();
+            let model = crate::cad3d::mesh_model(mesh, source, &notes);
+            match format {
+                MeshFormat::Dxf => crate::cad3d::cad::write_model_cad(
+                    &model,
+                    destination,
+                    crate::DrawingFormat::Dxf,
+                )?,
+                MeshFormat::Dwg => crate::cad3d::cad::write_model_cad(
+                    &model,
+                    destination,
+                    crate::DrawingFormat::Dwg,
+                )?,
+                _ => crate::cad3d::ifc::write_model_ifc(&model, destination)?,
+            };
+            Ok(MeshWriteReport::default())
         }
     }
 }

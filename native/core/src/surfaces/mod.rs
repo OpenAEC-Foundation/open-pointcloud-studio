@@ -47,10 +47,12 @@ use chart::{Charts, Frame, Tally, MAX_CHART_CELLS};
 use segment::{estimate_normals, grow, refine, Sides};
 use voxel_cloud::{VoxelCloud, NO_STATION};
 
+#[cfg(test)]
+pub(crate) use export::faces_model;
 pub use export::{
     class_color, cylinder_color, deviation_color, deviation_legend, deviation_mesh, face_color,
-    faces_json, flat_mesh, write_faces_json, write_faces_obj, DeviationStop,
-    DEFAULT_DEVIATION_CELLS, FACES_JSON_FORMAT, FACES_JSON_VERSION,
+    faces_json, flat_mesh, write_faces_cad, write_faces_ifc, write_faces_json, write_faces_obj,
+    DeviationStop, DEFAULT_DEVIATION_CELLS, FACES_JSON_FORMAT, FACES_JSON_VERSION,
 };
 
 /// A raw point belongs to a face when it lies within this many times the

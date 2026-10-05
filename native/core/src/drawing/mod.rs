@@ -28,6 +28,7 @@ pub use slab::{
     collect_slab, slab_from_section, CutGrid, Slab, SlabCut, SlabOptions, SlabPoint,
     MAX_CUT_GRID_CELLS,
 };
+pub(crate) use write::{codec_error, codec_version, layer_color};
 pub use write::{write_drawing, write_drawing_progress};
 
 /// Thinned scan points. With several scans one layer per scan

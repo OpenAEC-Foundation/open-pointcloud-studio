@@ -199,7 +199,7 @@ fn build_document(
     Ok(document)
 }
 
-fn codec_version(version: DrawingVersion) -> DxfVersion {
+pub(crate) fn codec_version(version: DrawingVersion) -> DxfVersion {
     match version {
         DrawingVersion::R2004 => DxfVersion::AC1018,
         DrawingVersion::R2010 => DxfVersion::AC1024,
@@ -210,7 +210,7 @@ fn codec_version(version: DrawingVersion) -> DxfVersion {
 
 /// Colour index 7 is black on a light background and white on a dark one.
 /// True black or true white would vanish on one of the two.
-fn layer_color(rgb: [u8; 3]) -> Color {
+pub(crate) fn layer_color(rgb: [u8; 3]) -> Color {
     match rgb {
         [0, 0, 0] | [255, 255, 255] => Color::Index(7),
         [r, g, b] => Color::from_rgb(r, g, b),
@@ -263,7 +263,7 @@ fn escaped_layer_names(layers: &[DrawingLayer]) -> Vec<String> {
     names
 }
 
-fn codec_error(error: DxfError) -> LoadError {
+pub(crate) fn codec_error(error: DxfError) -> LoadError {
     match error {
         DxfError::Io(error) => LoadError::Io(error),
         other => LoadError::InvalidData(format!("drawing could not be written: {other}")),

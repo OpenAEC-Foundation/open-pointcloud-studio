@@ -19,10 +19,14 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use super::{CylinderFace, DetectedSurfaces, FaceClass, PlaneFace};
+use crate::cad3d::{
+    edge, file_name, inner_edges, Cylinder, Kind, Model3d, Object3d, Polygon, PropertyValue,
+};
 use crate::grid2d::{ring_contains, Region};
 use crate::local_fit::{cross, difference, dot, unit};
 use crate::obj_mesh::{MAX_TRIANGLES, MAX_VERTICES};
 use crate::region_source::SourceTransform;
+use crate::DrawingFormat;
 use crate::{LoadError, MeshGeometry};
 
 /// Value of `format` in the JSON export.
@@ -489,6 +493,172 @@ pub fn write_faces_json(
         writeln!(writer)?;
         Ok(())
     })
+}
+
+/// The faces as objects for a CAD or an IFC file, in scene coordinates:
+/// every flat face with its outline rings and their triangles, every
+/// cylinder with its scanned surface and its axis.
+pub(crate) fn faces_model(
+    surfaces: &DetectedSurfaces,
+    source: &str,
+    notes: &[&str],
+) -> Result<Model3d, LoadError> {
+    if surfaces.planes.is_empty() && surfaces.cylinders.is_empty() {
+        return Err(LoadError::InvalidData(
+            "there are no faces to export".into(),
+        ));
+    }
+    let residual_values = |residuals: &super::Residuals| {
+        [
+            ("Points", PropertyValue::Count(residuals.points)),
+            ("ResidualRms", PropertyValue::Length(residuals.rms)),
+            ("ResidualP95", PropertyValue::Length(residuals.p95)),
+            ("ResidualMax", PropertyValue::Length(residuals.max)),
+        ]
+    };
+    let mut objects = Vec::with_capacity(surfaces.planes.len() + surfaces.cylinders.len());
+    for face in &surfaces.planes {
+        let mut vertices = Vec::new();
+        let mut triangles = Vec::new();
+        let mut polygons = Vec::with_capacity(face.patches.len());
+        for patch in &face.patches {
+            let base = vertices.len() as u32;
+            let Triangulated {
+                corners,
+                triangles: patch_triangles,
+            } = triangulate(patch)?;
+            vertices.extend(corners.iter().map(|corner| face.point(*corner)));
+            triangles.extend(
+                patch_triangles
+                    .iter()
+                    .map(|triangle| triangle.map(|index| base + index as u32)),
+            );
+            // The corners are the outer ring and then every hole, in order.
+            let mut next = base;
+            let mut ring = |length: usize| -> Vec<u32> {
+                let ring = (next..next + length as u32).collect();
+                next += length as u32;
+                ring
+            };
+            let outer = ring(patch.outer.len());
+            let holes = patch.holes.iter().map(|hole| ring(hole.len())).collect();
+            polygons.push(Polygon { outer, holes });
+        }
+        let hidden_edges = inner_edges(&triangles, &polygons);
+        let mut properties = vec![
+            ("Class", PropertyValue::Label(face.class.name().into())),
+            ("Area", PropertyValue::Area(face.area)),
+            ("CoveredArea", PropertyValue::Area(face.covered_area)),
+            ("Coverage", PropertyValue::Real(face.coverage())),
+            (
+                "CoplanarGroup",
+                PropertyValue::Count(u64::from(face.coplanar_group)),
+            ),
+            (
+                "NormalFrom",
+                PropertyValue::Label(face.normal_source.name().into()),
+            ),
+        ];
+        properties.extend(residual_values(&face.residuals));
+        objects.push(Object3d {
+            id: face.id,
+            name: format!("Face {} ({})", face.id, face.class.name()),
+            kind: Kind::Plane(face.class),
+            rgb: face_color(face),
+            vertices,
+            triangles,
+            polygons,
+            cylinder: None,
+            hidden_edges,
+            closed: Some(false),
+            properties,
+        });
+    }
+    for face in &surfaces.cylinders {
+        let MantleMesh { corners, triangles } = mantle(face);
+        // Every strip is a quad of two triangles; its diagonal runs from
+        // corner 2s to corner 2s + 3.
+        let hidden_edges = triangles
+            .iter()
+            .flat_map(|&[a, b, c]| {
+                [
+                    edge(a as u32, b as u32),
+                    edge(b as u32, c as u32),
+                    edge(c as u32, a as u32),
+                ]
+            })
+            .filter(|(low, high)| high - low == 3)
+            .collect();
+        let mut properties = vec![
+            ("Radius", PropertyValue::Length(face.radius)),
+            ("Diameter", PropertyValue::Length(face.diameter())),
+            ("Length", PropertyValue::Length(face.length())),
+            ("ArcDegrees", PropertyValue::Real(face.arc_deg)),
+            ("SeenFromInside", PropertyValue::Bool(face.seen_from_inside)),
+            ("ScannedArea", PropertyValue::Area(face.area())),
+        ];
+        properties.extend(residual_values(&face.residuals));
+        objects.push(Object3d {
+            id: face.id,
+            name: format!("Face {} (cylinder)", face.id),
+            kind: Kind::Cylinder,
+            rgb: cylinder_color(face),
+            vertices: corners.iter().map(|(position, _)| *position).collect(),
+            triangles: triangles
+                .iter()
+                .map(|triangle| triangle.map(|index| index as u32))
+                .collect(),
+            polygons: Vec::new(),
+            cylinder: Some(Cylinder {
+                start: face.axis_start,
+                end: face.axis_end,
+                radius: face.radius,
+                across: face.arc_start,
+                seen_from_inside: face.seen_from_inside,
+            }),
+            hidden_edges,
+            closed: Some(false),
+            properties,
+        });
+    }
+    Ok(Model3d {
+        source: file_name(source),
+        notes: notes.iter().map(|note| (*note).to_owned()).collect(),
+        objects,
+    })
+}
+
+/// Write the faces as DXF or DWG in scene coordinates and metres, and
+/// return the size of the file: every flat face as a polyface mesh on the
+/// layer of its class (`OPS-PLANES-WALL` and so on) with only its outline
+/// and the rims of its openings drawn, every cylinder as a polyface mesh
+/// of its scanned part on `OPS-CYLINDERS` and its axis as a line on
+/// `OPS-CYLINDER-AXES`. An existing file is replaced only by a complete
+/// one.
+pub fn write_faces_cad(
+    surfaces: &DetectedSurfaces,
+    destination: impl AsRef<Path>,
+    format: DrawingFormat,
+) -> Result<u64, LoadError> {
+    let model = faces_model(surfaces, "", &[])?;
+    crate::cad3d::cad::write_model_cad(&model, destination.as_ref(), format)
+}
+
+/// Write the faces as IFC4 and return the size of the file: every face as
+/// an `IfcBuildingElementProxy` with its measured values, a flat face as a
+/// polygonal face set with its openings and a cylinder seen from outside as
+/// an extruded circle along its axis. See `cad3d::ifc` for the placement of
+/// coordinates far from zero. `source` is the file name of the anchor
+/// layer; a folder in it is left out. `notes` go into the description of
+/// the project. An existing file is replaced only by a complete one.
+pub fn write_faces_ifc(
+    surfaces: &DetectedSurfaces,
+    source: &str,
+    destination: impl AsRef<Path>,
+    notes: &[&str],
+) -> Result<u64, LoadError> {
+    let model = faces_model(surfaces, source, notes)?;
+    crate::cad3d::ifc::write_model_ifc(&model, destination.as_ref())
 }
 
 /// Scene positions and normals as the source of a layer has them, so that

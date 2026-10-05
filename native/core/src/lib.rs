@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 mod bag3d;
+pub mod cad3d;
 mod closed_mesh;
 mod drawing;
 mod dxf;

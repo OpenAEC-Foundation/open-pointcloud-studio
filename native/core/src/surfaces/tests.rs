@@ -3051,3 +3051,133 @@ fn only_the_points_of_the_faces_in_the_result_count_as_assigned() {
     assert_eq!(found.assigned_points, found.planes[0].residuals.points);
     assert!(found.assigned_points < found.source_points - 9_000);
 }
+
+#[test]
+fn faces_of_a_room_with_a_column_export_as_dxf_dwg_and_ifc() {
+    use crate::cad3d::step::check;
+    use crate::cad3d::tests::{read_cad, FAR};
+    use crate::cad3d::{plane_layer, CAD_LAYER_CYLINDERS, CAD_LAYER_CYLINDER_AXES};
+    use crate::DrawingFormat;
+    use cadcodec::entities::EntityType;
+    use std::collections::BTreeMap;
+
+    let detected = detect(&room_with_column(), &SurfaceDetectConfig::default());
+    assert_eq!((detected.planes.len(), detected.cylinders.len()), (6, 1));
+    let directory = tempfile::tempdir().unwrap();
+    for shift in [[0.0; 3], FAR] {
+        let found = detected
+            .placed(SourceTransform {
+                scale: [1.0; 3],
+                offset: shift,
+            })
+            .unwrap();
+        let column = &found.cylinders[0];
+        for format in DrawingFormat::ALL {
+            let path = directory
+                .path()
+                .join(format!("faces.{}", format.extension()));
+            write_faces_cad(&found, &path, format).unwrap();
+            let document = read_cad(&path, format);
+            let mut per_layer: BTreeMap<String, usize> = BTreeMap::new();
+            for entity in document.entities() {
+                let layer = entity.common().layer.clone();
+                match entity {
+                    EntityType::PolyfaceMesh(mesh) if layer == CAD_LAYER_CYLINDERS => {
+                        for vertex in &mesh.vertices {
+                            let at = [vertex.location.x, vertex.location.y, vertex.location.z];
+                            let radius = off_axis(at, column.axis_start, column.axis_end);
+                            assert!((radius - column.radius).abs() < 1e-6);
+                        }
+                    }
+                    EntityType::PolyfaceMesh(mesh) => {
+                        // The corners of the polyface are those of the
+                        // outline of a face of its class, in order.
+                        let corners: Vec<[f64; 3]> = mesh
+                            .vertices
+                            .iter()
+                            .map(|vertex| [vertex.location.x, vertex.location.y, vertex.location.z])
+                            .collect();
+                        let face = found.planes.iter().find(|face| {
+                            let rings = face.rings().concat();
+                            plane_layer(face.class) == layer
+                                && rings.len() == corners.len()
+                                && rings
+                                    .iter()
+                                    .zip(&corners)
+                                    .all(|(ring, corner)| apart(*ring, *corner) < 1e-6)
+                        });
+                        assert!(face.is_some(), "a face for every polyface on {layer}");
+                    }
+                    EntityType::Line(line) => {
+                        assert_eq!(layer, CAD_LAYER_CYLINDER_AXES);
+                        let start = [line.start.x, line.start.y, line.start.z];
+                        let end = [line.end.x, line.end.y, line.end.z];
+                        assert!(apart(start, column.axis_start) < 1e-6);
+                        assert!(apart(end, column.axis_end) < 1e-6);
+                    }
+                    other => panic!("unexpected {other:?}"),
+                }
+                *per_layer.entry(layer).or_default() += 1;
+            }
+            let expected: BTreeMap<String, usize> = [
+                (plane_layer(FaceClass::Floor), 1),
+                (plane_layer(FaceClass::Ceiling), 1),
+                (plane_layer(FaceClass::Wall), 4),
+                (CAD_LAYER_CYLINDERS.to_owned(), 1),
+                (CAD_LAYER_CYLINDER_AXES.to_owned(), 1),
+            ]
+            .into_iter()
+            .collect();
+            assert_eq!(per_layer, expected, "{format}");
+        }
+
+        let path = directory.path().join("faces.ifc");
+        write_faces_ifc(&found, "C:/scans/room.e57", &path, &["Units: metres"]).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let instances = check::read(&text).unwrap();
+        let count = |name: &str| {
+            instances
+                .values()
+                .filter(|instance| instance.name == name)
+                .count()
+        };
+        assert_eq!(count("IFCBUILDINGELEMENTPROXY"), 7);
+        assert_eq!(count("IFCPOLYGONALFACESET"), 6);
+        assert_eq!(count("IFCEXTRUDEDAREASOLID"), 1);
+        assert_eq!(count("IFCTRIANGULATEDFACESET"), 0);
+        assert!(text.contains("'Plane (wall)'") && text.contains("'Face 7 (cylinder)'"));
+        assert!(text.contains("'Source: room.e57; Units: metres'"));
+        // The room spans 4 by 3 m from the shift: the site stands at its
+        // middle, rounded, on the axes far from zero.
+        let origin = crate::cad3d::ifc::local_origin(&faces_model(&found, "", &[]).unwrap());
+        if shift == FAR {
+            assert_eq!(origin[0], 207_002.0);
+            assert!([474_001.0, 474_002.0].contains(&origin[1]), "{origin:?}");
+            assert_eq!(origin[2], 0.0);
+        } else {
+            assert_eq!(origin, [0.0; 3]);
+        }
+        let [x, y, z] = origin.map(crate::cad3d::step::length);
+        let site_point = format!("IFCCARTESIANPOINT(({x},{y},{z}))");
+        assert!(text.contains(&site_point), "{site_point}");
+    }
+
+    // An opening is an inner loop of its face.
+    let windowed = detect(&windowed_room(), &SurfaceDetectConfig::default());
+    let path = directory.path().join("windowed.ifc");
+    write_faces_ifc(&windowed, "room.e57", &path, &[]).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let instances = check::read(&text).unwrap();
+    let holes = windowed
+        .planes
+        .iter()
+        .flat_map(|face| &face.patches)
+        .filter(|patch| !patch.holes.is_empty())
+        .count();
+    assert!(holes >= 1);
+    let with_voids = instances
+        .values()
+        .filter(|instance| instance.name == "IFCINDEXEDPOLYGONALFACEWITHVOIDS")
+        .count();
+    assert_eq!(with_voids, holes);
+}
