@@ -27,7 +27,7 @@ The [user guide](docs/guide.md) describes every tool in detail. [CHANGELOG.md](C
 
 ## Download and install
 
-The files are on the [releases page](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/latest). In the names below `VERSION` is the number of the release, for example `open-pointcloud-studio_0.9.0_x64-setup.exe`.
+The files are on the [releases page](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/latest). In the names below `VERSION` is the number of the release, for example `open-pointcloud-studio_0.9.1_x64-setup.exe`.
 
 | System | File | What it is |
 | --- | --- | --- |
@@ -69,14 +69,14 @@ Linux needs a C library of version 2.35 or newer (Ubuntu 22.04, Debian 12, Fedor
 The `.deb` installs the application as `/usr/bin/open-pointcloud-studio` with a menu entry, its icon and the libraries it needs, and offers it for E57, LAS, LAZ, PLY, PCD, PTX and PTS files and scan project files:
 
 ```bash
-sudo apt install ./open-pointcloud-studio_0.9.0_amd64.deb
+sudo apt install ./open-pointcloud-studio_0.9.1_amd64.deb
 ```
 
 The AppImage needs no installation. Make it executable once and start it:
 
 ```bash
-chmod +x open-pointcloud-studio_0.9.0_amd64.AppImage
-./open-pointcloud-studio_0.9.0_amd64.AppImage
+chmod +x open-pointcloud-studio_0.9.1_amd64.AppImage
+./open-pointcloud-studio_0.9.1_amd64.AppImage
 ```
 
 It mounts itself through FUSE (`fusermount3` or `fusermount`). Without FUSE, start it with `--appimage-extract-and-run` after the file name.
@@ -88,13 +88,13 @@ The `.tar.gz` holds the binary and the licence texts. It unpacks into a folder o
 A `.sha256` file holds the SHA-256 checksum of the file it is named after. With both in the same folder:
 
 ```bash
-sha256sum -c open-pointcloud-studio_0.9.0_amd64.deb.sha256              # Linux
-shasum -a 256 -c open-pointcloud-studio_0.9.0_macos-universal.dmg.sha256  # macOS
+sha256sum -c open-pointcloud-studio_0.9.1_amd64.deb.sha256              # Linux
+shasum -a 256 -c open-pointcloud-studio_0.9.1_macos-universal.dmg.sha256  # macOS
 ```
 
 ```powershell
-Get-FileHash open-pointcloud-studio_0.9.0_x64-setup.exe -Algorithm SHA256   # Windows
-Get-Content open-pointcloud-studio_0.9.0_x64-setup.exe.sha256
+Get-FileHash open-pointcloud-studio_0.9.1_x64-setup.exe -Algorithm SHA256   # Windows
+Get-Content open-pointcloud-studio_0.9.1_x64-setup.exe.sha256
 ```
 
 On Linux and macOS the command answers `OK`. On Windows, compare the two outputs: the hash must be the same, apart from upper and lower case.

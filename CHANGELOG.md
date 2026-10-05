@@ -14,6 +14,8 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-05
+
 - **Save view** and **Export BCF** left the ribbon: a view is saved in the Project Browser, and the BCF file is written from File → Export (**Views as BCF…**) or from BCF in the Project Browser.
 - The panel at the left is the **Project Browser**. Below the scans and classes it lists **DRAWINGS** (the 3D model and every drawing of the session: a click shows it, × takes it off the list), **VIEWS AND SECTIONS** (one name field with **Save view** and **Save section**; the saved views of the active scan with their annotations, and the section boxes saved under a name: a click puts a box back, also turned) and **BCF** (what a BCF file would hold, with Export BCF). The Model and Drawing tabs over the scene are gone; the Project Browser switches between them.
 - With Shift and the middle mouse button the model turns sideways the way the pointer moves; up and down stay as they were.
@@ -23,7 +25,6 @@ drops those that begin with the name of an operating system or with
 - A preview of the filled cut also prepares the whole drawing for the Drawing view, points included, as an export with the same choices would write it.
 - **Drawing (DXF/DWG)…** on the Open page of the File view shows any DXF or DWG file in the Drawing view: points, lines, polylines, circles, arcs, ellipses, solid fills with holes, texts and blocks. Entities that are not shown, and 3D content such as meshes, are counted and named instead of stopping the file from opening.
 - The local API and the MCP server have `drawing_view`, `open_drawing`, `drawing_zoom_extents` and `set_drawing_layer`, `status` reports the Drawing view, and `screenshot` captures the drawing while it is shown.
-
 - A 3D surface reads the points of a scan from its index when the scan has one, instead of decoding the file again: for a large compressed E57 it is ready in seconds instead of more than a minute. The points are chosen by a fixed rule on their place in the file, so a scan gives the same surface every time, with or without its index.
 - The 3D surface has a **Mesh size** setting: the width of a voxel within which one point is kept before the vertices are thinned, so that no two vertices lie much closer together. 0, the default, leaves the spacing to the number of vertices. The command line has `--mesh-size`.
 - **Closed mesh** has a **Source points (%)** setting, from 0.01 to 100: 100, the default, fits the surface to every point, and a lower share takes the same points on every run for a faster preview, at the cost of sparse detail. A share that leaves no point in the region says so. The command line has `--sample-percent`.
