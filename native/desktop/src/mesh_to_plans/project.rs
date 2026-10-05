@@ -317,6 +317,17 @@ pub(crate) fn now_seconds() -> u64 {
 /// The folder that holds the projects by default: `OPS Mesh to Plans` in the
 /// Documents folder of the user.
 pub(crate) fn default_root() -> Option<PathBuf> {
+    Some(documents_folder()?.join(PROJECTS_FOLDER))
+}
+
+/// The Documents folder of the user: where Windows keeps it, also when it
+/// was moved elsewhere, and `Documents` in the home folder
+/// otherwise.
+fn documents_folder() -> Option<PathBuf> {
+    #[cfg(windows)]
+    if let Some(folder) = known_documents_folder() {
+        return Some(folder);
+    }
     let set = |name: &str| {
         std::env::var_os(name)
             .filter(|value| !value.is_empty())
@@ -327,7 +338,62 @@ pub(crate) fn default_root() -> Option<PathBuf> {
     } else {
         set("HOME")
     }?;
-    Some(home.join("Documents").join(PROJECTS_FOLDER))
+    Some(home.join("Documents"))
+}
+
+/// The Documents folder as Windows knows it, as Explorer shows it.
+#[cfg(windows)]
+fn known_documents_folder() -> Option<PathBuf> {
+    use std::ffi::{c_void, OsString};
+    use std::os::windows::ffi::OsStringExt;
+
+    #[repr(C)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+    /// FOLDERID_Documents, {FDD39AD0-238F-46AF-ADB4-6C85480369C7}.
+    const DOCUMENTS: Guid = Guid {
+        data1: 0xFDD3_9AD0,
+        data2: 0x238F,
+        data3: 0x46AF,
+        data4: [0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7],
+    };
+    #[link(name = "shell32")]
+    extern "system" {
+        fn SHGetKnownFolderPath(
+            id: *const Guid,
+            flags: u32,
+            token: *mut c_void,
+            path: *mut *mut u16,
+        ) -> i32;
+    }
+    #[link(name = "ole32")]
+    extern "system" {
+        fn CoTaskMemFree(memory: *mut c_void);
+    }
+    let mut path: *mut u16 = std::ptr::null_mut();
+    // SAFETY: the id is a GUID that lives through the call, no token asks for
+    // the folder of the user that runs the process, and `path` receives a
+    // string the shell allocates.
+    let result = unsafe { SHGetKnownFolderPath(&DOCUMENTS, 0, std::ptr::null_mut(), &mut path) };
+    let folder = (result >= 0 && !path.is_null()).then(|| {
+        let mut length = 0;
+        // SAFETY: the shell returned a string that ends in a zero.
+        while unsafe { *path.add(length) } != 0 {
+            length += 1;
+        }
+        // SAFETY: `length` characters before that zero were just read.
+        OsString::from_wide(unsafe { std::slice::from_raw_parts(path, length) })
+    });
+    // SAFETY: the string was allocated by the shell, and freeing nothing does
+    // nothing.
+    unsafe { CoTaskMemFree(path.cast()) };
+    folder
+        .map(PathBuf::from)
+        .filter(|folder| folder.is_absolute())
 }
 
 /// A name as a folder can be called: without the characters a file name
@@ -636,6 +702,21 @@ mod tests {
         };
         assert_ne!(first, prepare_basis(&[source(1_759_700_000)], &turned));
         assert_eq!(basis_text(first).len(), 32);
+    }
+
+    #[test]
+    fn projects_go_to_the_documents_folder_that_windows_knows() {
+        let root = default_root().expect("a Documents folder");
+        assert!(root.ends_with(PROJECTS_FOLDER));
+        let documents = root.parent().unwrap();
+        assert!(documents.is_absolute(), "{root:?}");
+        #[cfg(windows)]
+        {
+            // Where Explorer shows it, which need not be in the profile.
+            let known = known_documents_folder().expect("Windows knows it");
+            assert_eq!(documents, known);
+            assert!(known.is_dir(), "{known:?}");
+        }
     }
 
     #[test]
