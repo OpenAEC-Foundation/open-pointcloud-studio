@@ -6,7 +6,8 @@ use std::path::Path;
 use rayon::prelude::*;
 
 use super::{
-    convert_las_point, e57_points, visit_points, Bounds, LoadError, Point, PointCloud, SourceStamp,
+    convert_las_point, e57_points, visit_points, LoadError, OrientedBox, Point, PointCloud,
+    SourceStamp,
 };
 
 // The LAZ compressor parallelizes only when a write contains multiple chunks.
@@ -207,14 +208,15 @@ fn reencode_las_full(
     Ok(())
 }
 
-/// Export every source point inside an axis-aligned section box, including
-/// points omitted from the bounded preview. Stream the source once and patch
+/// Export every source point inside a section box, including points omitted
+/// from the bounded preview. The box is axis-aligned `Bounds` or an
+/// `OrientedBox` turned about the vertical. Stream the source once and patch
 /// the exact PLY/PTS count in the temporary output before atomically saving.
 pub fn export_section(
     cloud: &PointCloud,
     destination: impl AsRef<Path>,
     format: ExportFormat,
-    section: Bounds,
+    section: impl Into<OrientedBox>,
 ) -> Result<u64, LoadError> {
     export_section_where(cloud, destination, format, section, |_, _| true)
 }
@@ -224,14 +226,11 @@ pub fn export_section_where(
     cloud: &PointCloud,
     destination: impl AsRef<Path>,
     format: ExportFormat,
-    section: Bounds,
+    section: impl Into<OrientedBox>,
     mut include: impl FnMut(u64, &Point) -> bool,
 ) -> Result<u64, LoadError> {
-    if (0..3).any(|axis| {
-        !section.min[axis].is_finite()
-            || !section.max[axis].is_finite()
-            || section.min[axis] > section.max[axis]
-    }) {
+    let section: OrientedBox = section.into();
+    if !section.is_valid() {
         return Err(LoadError::InvalidData("invalid section bounds".into()));
     }
     if format == ExportFormat::E57 && source_is_e57(cloud) {
@@ -241,16 +240,12 @@ pub fn export_section_where(
             None,
             1.0,
             [0.0; 3],
-            &mut |ordinal, point| section_contains(section, point.xyz) && include(ordinal, point),
+            &mut |ordinal, point| section.contains(point.xyz) && include(ordinal, point),
         );
     }
     export_map_count(cloud, destination, format, None, |ordinal, point| {
-        (section_contains(section, point.xyz) && include(ordinal, &point)).then_some(point)
+        (section.contains(point.xyz) && include(ordinal, &point)).then_some(point)
     })
-}
-
-fn section_contains(section: Bounds, xyz: [f64; 3]) -> bool {
-    (0..3).all(|axis| xyz[axis] >= section.min[axis] && xyz[axis] <= section.max[axis])
 }
 
 /// Export a full-resolution subset selected by source-point ordinal.
@@ -1491,7 +1486,7 @@ fn write_ply_binary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::open;
+    use crate::{open, Bounds};
 
     #[test]
     fn parallel_point_export_keeps_order_and_exact_count_across_batches() {
@@ -2481,5 +2476,71 @@ mod tests {
         )
         .is_err());
         assert!(!destination.exists());
+        // A turn that is not a number is no box either.
+        assert!(export_section(
+            &cloud,
+            &destination,
+            ExportFormat::Pts,
+            OrientedBox::new(
+                Bounds {
+                    min: [0.0; 3],
+                    max: [9.0; 3],
+                },
+                f64::NAN
+            )
+        )
+        .is_err());
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn section_export_of_a_turned_box_keeps_the_points_inside_the_turned_box() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("turned.xyz");
+        // A wall along a line at 30 degrees through (10, 20), points every
+        // 0.5 m from -3 to 3 m along it, at 0.1 m to either side of it and
+        // at 1.0 m to one side of it.
+        let (sin, cos) = 30f64.to_radians().sin_cos();
+        let mut lines = String::new();
+        let mut inside = 0;
+        for step in -6..=6 {
+            let along = f64::from(step) * 0.5;
+            for off in [-0.1, 0.1, 1.0] {
+                let x = 10.0 + cos * along - sin * off;
+                let y = 20.0 + sin * along + cos * off;
+                lines.push_str(&format!("{x} {y} 1.5\n"));
+                // The box is 4.2 m long and 0.4 m wide along the wall.
+                if along.abs() <= 2.0 && off.abs() <= 0.2 {
+                    inside += 1;
+                }
+            }
+        }
+        fs::write(&source, lines).unwrap();
+        let cloud = open(&source, 1).unwrap();
+        let section = OrientedBox::new(
+            Bounds {
+                min: [7.9, 19.8, 1.0],
+                max: [12.1, 20.2, 2.0],
+            },
+            30.0,
+        );
+        let destination = dir.path().join("turned.ply");
+        let count = export_section(&cloud, &destination, ExportFormat::PlyBinary, section).unwrap();
+        assert_eq!(count, inside);
+        assert_eq!(inside, 18);
+        let exported = open(&destination, 100).unwrap();
+        assert!(exported
+            .points
+            .iter()
+            .all(|point| section.contains(point.xyz)));
+        // The same limits without the turn hold other points.
+        let plain = export_section(
+            &cloud,
+            dir.path().join("plain.ply"),
+            ExportFormat::PlyBinary,
+            section.bounds,
+        )
+        .unwrap();
+        assert_ne!(plain, count);
     }
 }

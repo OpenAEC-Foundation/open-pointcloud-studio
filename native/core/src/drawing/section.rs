@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use super::outline::{trace_cut_regions, CutOutline, OutlineOptions};
+use super::outline::{main_direction_of, trace_cut_regions, CutOutline, OutlineOptions};
 use super::slab::{collect_slab, slab_from_section, Slab, SlabCut, SlabOptions, SlabPoint};
 use super::{
     class_point_layer, drawing_info_text, source_point_layer, write_drawing_progress, Drawing2d,
@@ -17,7 +17,7 @@ use super::{
     LAYER_RGB_CONTRAST,
 };
 use crate::region_source::{RegionFilter, RegionSource};
-use crate::{Bounds, LoadError};
+use crate::{normalized_degrees, LoadError, OrientedBox};
 
 /// Layer colours for the points of several scans or classes, told apart on
 /// a dark and on a light background. The frame is amber and the fill grey,
@@ -122,7 +122,7 @@ impl SectionCut {
 
 fn cut_section(
     sources: &[DrawingSource<'_>],
-    section: Bounds,
+    section: OrientedBox,
     request: &DrawingRequest,
     (points, fill): (bool, bool),
     accept: &RegionFilter<'_>,
@@ -240,7 +240,7 @@ impl PointLayerTable {
 /// See [`export_section_drawing`] for the arguments.
 pub fn section_drawing(
     sources: &[DrawingSource<'_>],
-    section: Bounds,
+    section: impl Into<OrientedBox>,
     request: &DrawingRequest,
     accept: &RegionFilter<'_>,
     progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
@@ -248,7 +248,7 @@ pub fn section_drawing(
     request.validate()?;
     let section = cut_section(
         sources,
-        section,
+        section.into(),
         request,
         (request.points, request.fill),
         accept,
@@ -284,7 +284,8 @@ pub fn section_drawing(
 ///
 /// - `sources` are the layers to draw from, each with its place in the scene
 ///   and, when it has one, its octree index.
-/// - `section` is the section box in scene coordinates.
+/// - `section` is the section box in scene coordinates, axis-aligned or
+///   turned about the vertical; a turned box is drawn along its own axes.
 /// - `request` holds the view, the slab thickness and every other choice;
 ///   `DrawingRequest::for_view` gives the defaults.
 /// - `accept` is asked for every point in the slab, with the position of its
@@ -308,7 +309,7 @@ pub fn section_drawing(
 /// 2.8 kB per point, 0.1 GB for 33,000 points and 1.0 GB for 360,000.
 pub fn export_section_drawing(
     sources: &[DrawingSource<'_>],
-    section: Bounds,
+    section: impl Into<OrientedBox>,
     request: &DrawingRequest,
     destination: &Path,
     accept: &RegionFilter<'_>,
@@ -342,7 +343,7 @@ pub fn export_section_drawing(
 /// arguments are those of [`export_section_drawing`].
 pub fn preview_cut_regions(
     sources: &[DrawingSource<'_>],
-    section: Bounds,
+    section: impl Into<OrientedBox>,
     request: &DrawingRequest,
     accept: &RegionFilter<'_>,
     progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
@@ -352,7 +353,14 @@ pub fn preview_cut_regions(
         ..*request
     }
     .validate()?;
-    let section = cut_section(sources, section, request, (false, true), accept, progress)?;
+    let section = cut_section(
+        sources,
+        section.into(),
+        request,
+        (false, true),
+        accept,
+        progress,
+    )?;
     let stats = section.stats();
     let slab = section.slab;
     let world = |ring: Vec<[f64; 2]>| -> Vec<[f64; 3]> {
@@ -372,6 +380,83 @@ pub fn preview_cut_regions(
         regions,
         stats,
     })
+}
+
+/// The turn of a section box that sets its axes along the walls inside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WallDirection {
+    /// The turn of the box along the walls, in degrees counter-clockwise as
+    /// seen from above, between -180 and 180: the turn the box had and the
+    /// change.
+    pub rotation_degrees: f64,
+    /// How far the walls run from the axes of the box as it was: between
+    /// -45 and 45 degrees.
+    pub change_degrees: f64,
+    /// Points in the part of the box that was read.
+    pub slab_points: u64,
+}
+
+/// Find the direction of the walls in a section box, so that the box can be
+/// turned to follow them.
+///
+/// The middle half of the height of the box is read as a plan, away from a
+/// floor and a ceiling that would fill every cell, and the main direction of
+/// the faces in it is found as the filled cut of a plan finds it. The box
+/// keeps its rough direction: the change is at most 45 degrees either way.
+/// Nothing when that part of the box holds no faces. The arguments are those
+/// of [`export_section_drawing`]; progress is reported as reading.
+pub fn wall_direction(
+    sources: &[DrawingSource<'_>],
+    section: impl Into<OrientedBox>,
+    accept: &RegionFilter<'_>,
+    progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
+) -> Result<Option<WallDirection>, LoadError> {
+    let section: OrientedBox = section.into();
+    if !section.is_valid() {
+        return Err(LoadError::InvalidData(
+            "the section box is not a box".into(),
+        ));
+    }
+    let local = section.bounds;
+    let height = local.max[2] - local.min[2];
+    let (middle, thickness) = if height > 0.0 {
+        let mut middle = local;
+        middle.max[2] = local.min[2] + 0.75 * height;
+        (middle, Some(0.5 * height))
+    } else {
+        (local, None)
+    };
+    let slab = slab_from_section(
+        section.part(middle),
+        super::DrawingView::Plan,
+        thickness,
+        super::DrawingOrigin::BoxCorner,
+    )?;
+    let layers: Vec<RegionSource<'_>> = sources.iter().map(|layer| layer.source).collect();
+    let options = SlabOptions {
+        point_spacing: None,
+        max_points: 1,
+        grid: Some(super::DEFAULT_CUT_GRID),
+    };
+    let cut = collect_slab(&layers, &slab, &options, accept, &mut |step| {
+        progress(DrawingProgress {
+            stage: DrawingStage::Reading,
+            done: step.read,
+            total: step.total,
+        })
+    })?;
+    let Some(grid) = cut.grid.as_ref().filter(|_| cut.slab_points > 0) else {
+        return Ok(None);
+    };
+    let found = main_direction_of(
+        grid,
+        &OutlineOptions::for_request(&DrawingRequest::default()),
+    );
+    Ok(found.map(|change| WallDirection {
+        rotation_degrees: normalized_degrees(section.rotation_degrees + change),
+        change_degrees: change,
+        slab_points: cut.slab_points,
+    }))
 }
 
 #[cfg(test)]
@@ -395,7 +480,7 @@ mod tests {
     use crate::test_shapes::{
         box_room, indexed_cloud, IndexedCloud, Noise, Opening, RoomSpec, Wall,
     };
-    use crate::{IndexedPoint, Point};
+    use crate::{Bounds, IndexedPoint, Point};
 
     /// The section box of the plan: around the furnished room, with its top
     /// face at 1.1 m, so that a slab of 0.1 m holds the heights 1.0 to 1.1.
@@ -1489,6 +1574,126 @@ mod tests {
         // end, 1.4 s later.
         assert!(matches!(result, Err(LoadError::Cancelled)));
         assert_eq!(tracing, 2);
+    }
+
+    #[test]
+    fn a_box_turned_with_a_room_draws_its_walls_along_the_axes_of_the_drawing() {
+        // A room of 4.0 by 3.0 by 2.6 m turned 30 degrees and moved away
+        // from the origin. The same room unturned tells which points each
+        // slab must hold.
+        let plain = box_room(&RoomSpec::default()).cloud_points();
+        let turned_room = box_room(&RoomSpec::default()).transformed(30.0, [100.0, 200.0, 0.0]);
+        let points = turned_room.cloud_points();
+        let cloud = indexed_cloud(&points, 4_096);
+        let sources = [DrawingSource {
+            source: indexed(&cloud),
+            name: "room",
+        }];
+        let count = |test: &dyn Fn([f64; 3]) -> bool| -> u64 {
+            plain.iter().filter(|point| test(point.xyz)).count() as u64
+        };
+        let (sin, cos) = 30f64.to_radians().sin_cos();
+        let center = [100.0 + 2.0 * cos - 1.5 * sin, 200.0 + 2.0 * sin + 1.5 * cos];
+        let around = |half: [f64; 2], z: [f64; 2]| {
+            OrientedBox::new(
+                Bounds {
+                    min: [center[0] - half[0], center[1] - half[1], z[0]],
+                    max: [center[0] + half[0], center[1] + half[1], z[1]],
+                },
+                30.0,
+            )
+        };
+
+        // A box along the model axes around the room finds the walls at 30
+        // degrees.
+        let found = wall_direction(&sources, turned_room.bounds(), &everything, &mut |_| Ok(()))
+            .unwrap()
+            .unwrap();
+        assert!((found.rotation_degrees - 30.0).abs() < 0.05, "{found:?}");
+        assert_eq!(found.change_degrees, found.rotation_degrees);
+        assert!(found.slab_points > 0);
+        // Turned that way, it finds nothing more to turn.
+        let again = wall_direction(
+            &sources,
+            around([2.5, 2.0], [0.0, 2.6]),
+            &everything,
+            &mut |_| Ok(()),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(again.change_degrees.abs() < 0.05, "{again:?}");
+        assert!((again.rotation_degrees - 30.0).abs() < 0.05);
+
+        // The plan of the turned box: the walls between 1.0 and 1.1 m, along
+        // u and v, half a metre in from the corner of the box.
+        let request = DrawingRequest {
+            origin: DrawingOrigin::BoxCorner,
+            ..DrawingRequest::default()
+        };
+        let plan_box = around([2.5, 2.0], [0.0, 1.1]);
+        let (drawing, stats) =
+            section_drawing(&sources, plan_box, &request, &everything, &mut |_| Ok(())).unwrap();
+        assert_eq!(
+            stats.slab_points,
+            count(&|xyz| xyz[2] >= 1.0 && xyz[2] <= 1.1)
+        );
+        assert_eq!(stats.direction_degrees, Some(0.0));
+        let regions = fills(&drawing);
+        assert!(!regions.is_empty());
+        let (mut low, mut high) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for region in &regions {
+            let ring = &region.outer;
+            for (index, at) in ring.iter().enumerate() {
+                let next = ring[(index + 1) % ring.len()];
+                let step = [next[0] - at[0], next[1] - at[1]];
+                assert!(
+                    step[0].abs() < 0.002 || step[1].abs() < 0.002,
+                    "an edge off the axes: {at:?} to {next:?}"
+                );
+                for axis in 0..2 {
+                    low[axis] = low[axis].min(at[axis]);
+                    high[axis] = high[axis].max(at[axis]);
+                }
+            }
+        }
+        for (value, truth) in [(low[0], 0.5), (low[1], 0.5), (high[0], 4.5), (high[1], 3.5)] {
+            assert!((value - truth).abs() < 0.06, "{low:?} {high:?}");
+        }
+
+        // A vertical section of 40 mm at the face of the box just in front
+        // of the south wall: the wall itself, parallel to the cut plane, and
+        // the first points of the two walls beside it.
+        let front_box = around([2.5, 1.52], [0.5, 1.1]);
+        let front = DrawingRequest {
+            view: DrawingView::Front,
+            thickness: Some(0.04),
+            ..request
+        };
+        let slab =
+            slab_from_section(front_box, DrawingView::Front, Some(0.04), front.origin).unwrap();
+        assert!((slab.frame.right[0] - cos).abs() < 1e-12);
+        assert!((slab.frame.right[1] - sin).abs() < 1e-12);
+        assert_eq!(slab.frame.up, [0.0, 0.0, 1.0]);
+        let (drawing, stats) =
+            section_drawing(&sources, front_box, &front, &everything, &mut |_| Ok(())).unwrap();
+        let truth = count(&|xyz| {
+            xyz[1].abs() <= 0.02 && (0.5..=1.1).contains(&xyz[2]) && (-0.5..=4.5).contains(&xyz[0])
+        });
+        // 200 points along the wall in each of 30 rows, and a row of each
+        // wall beside it.
+        assert_eq!(truth, 6_060);
+        assert_eq!(stats.slab_points, truth);
+        // The wall runs along the drawing: from half a metre to 4.5 m.
+        let along: Vec<f64> = drawing
+            .entities
+            .iter()
+            .filter_map(|(_, entity)| match entity {
+                DrawingEntity::Point { uv, .. } => Some(uv[0]),
+                _ => None,
+            })
+            .collect();
+        assert!(!along.is_empty());
+        assert!(along.iter().all(|u| (0.49..=4.51).contains(u)), "{along:?}");
     }
 
     /// A storey of eight rooms in a row, each a scan of its own of 4.0 by

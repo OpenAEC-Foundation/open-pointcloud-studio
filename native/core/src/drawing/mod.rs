@@ -21,8 +21,8 @@ pub use outline::{
     DEFAULT_MIN_WALL_LENGTH, MIN_CUT_HOLE_AREA, SQUARE_TOLERANCE,
 };
 pub use section::{
-    export_section_drawing, preview_cut_regions, section_drawing, CutPreview, DrawingProgress,
-    DrawingSource, DrawingStage, PreviewRegion,
+    export_section_drawing, preview_cut_regions, section_drawing, wall_direction, CutPreview,
+    DrawingProgress, DrawingSource, DrawingStage, PreviewRegion, WallDirection,
 };
 pub use slab::{
     collect_slab, slab_from_section, CutGrid, Slab, SlabCut, SlabOptions, SlabPoint,

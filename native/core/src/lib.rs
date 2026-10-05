@@ -24,6 +24,7 @@ mod mesh_write;
 mod mesher;
 mod obj_mesh;
 mod octree;
+mod oriented_box;
 mod pcd;
 mod ply;
 mod ply_mesh;
@@ -50,16 +51,17 @@ pub use closed_mesh::{
 pub use drawing::{
     class_point_layer, collect_slab, drawing_info_text, export_section_drawing, layer_name,
     preview_cut_regions, section_drawing, slab_from_section, source_point_layer, trace_cut_regions,
-    write_drawing, write_drawing_progress, CutGrid, CutOutline, CutPreview, CutRegion, Drawing2d,
-    DrawingEntity, DrawingFormat, DrawingFrame, DrawingLayer, DrawingOrigin, DrawingProgress,
-    DrawingRequest, DrawingSource, DrawingStage, DrawingStats, DrawingUnits, DrawingVersion,
-    DrawingView, OutlineOptions, PointColor, PointLayers, PreviewRegion, Slab, SlabCut,
-    SlabOptions, SlabPoint, CUT_MIN_POINTS_PER_CELL, DEFAULT_CUT_GRID, DEFAULT_DRAWING_POINTS,
-    DEFAULT_MAX_WALL_THICKNESS, DEFAULT_MIN_WALL_LENGTH, DEFAULT_MIN_WALL_THICKNESS,
-    DEFAULT_POINT_SPACING, DEFAULT_SLAB_THICKNESS, LAYER_CUT_FILL, LAYER_CUT_OUTLINE, LAYER_FRAME,
-    LAYER_INFO, LAYER_POINTS, LAYER_RGB_CONTRAST, LAYER_RGB_CUT_FILL, LAYER_RGB_FRAME,
-    MAX_CUT_GRID_CELLS, MAX_DRAWING_POINTS, MAX_SLAB_THICKNESS, MAX_WALL_THICKNESS, MIN_CUT_GRID,
-    MIN_CUT_HOLE_AREA, MIN_SLAB_THICKNESS, SQUARE_TOLERANCE,
+    wall_direction, write_drawing, write_drawing_progress, CutGrid, CutOutline, CutPreview,
+    CutRegion, Drawing2d, DrawingEntity, DrawingFormat, DrawingFrame, DrawingLayer, DrawingOrigin,
+    DrawingProgress, DrawingRequest, DrawingSource, DrawingStage, DrawingStats, DrawingUnits,
+    DrawingVersion, DrawingView, OutlineOptions, PointColor, PointLayers, PreviewRegion, Slab,
+    SlabCut, SlabOptions, SlabPoint, WallDirection, CUT_MIN_POINTS_PER_CELL, DEFAULT_CUT_GRID,
+    DEFAULT_DRAWING_POINTS, DEFAULT_MAX_WALL_THICKNESS, DEFAULT_MIN_WALL_LENGTH,
+    DEFAULT_MIN_WALL_THICKNESS, DEFAULT_POINT_SPACING, DEFAULT_SLAB_THICKNESS, LAYER_CUT_FILL,
+    LAYER_CUT_OUTLINE, LAYER_FRAME, LAYER_INFO, LAYER_POINTS, LAYER_RGB_CONTRAST,
+    LAYER_RGB_CUT_FILL, LAYER_RGB_FRAME, MAX_CUT_GRID_CELLS, MAX_DRAWING_POINTS,
+    MAX_SLAB_THICKNESS, MAX_WALL_THICKNESS, MIN_CUT_GRID, MIN_CUT_HOLE_AREA, MIN_SLAB_THICKNESS,
+    SQUARE_TOLERANCE,
 };
 pub use dxf::read_mesh as read_dxf_mesh;
 pub use export::{
@@ -85,6 +87,7 @@ pub use obj_mesh::{
     MAX_VERTICES as MAX_MESH_VERTICES,
 };
 pub use octree::{IndexConfig, IndexProgress, IndexStage, IndexedNode, IndexedPoint, OctreeIndex};
+pub use oriented_box::{bounds_corners, normalized_degrees, OrientedBox};
 pub use ply_mesh::read_ply_mesh;
 pub use scan_image::{select_scan_image, ScanImage, ScanImageFormat};
 pub use surface_mesh::{

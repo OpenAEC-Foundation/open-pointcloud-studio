@@ -17,7 +17,7 @@ use crate::grid2d::{CountGrid, GridFrame};
 use crate::region_source::{
     overlaps, visit_region, RegionFilter, RegionProgress, RegionReader, RegionSource,
 };
-use crate::{Bounds, IndexedPoint, LoadError};
+use crate::{bounds_corners, Bounds, IndexedPoint, LoadError, OrientedBox};
 
 /// The most cells the grid of a filled cut gets: 20 bytes each while the
 /// points are read, and about 15 more while the cut is traced (measured:
@@ -34,8 +34,12 @@ const MAX_GRID_REREADS: usize = 2;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Slab {
     pub view: DrawingView,
-    /// The slab in scene coordinates: from the cut plane into the box.
+    /// The axis-aligned box around the slab in scene coordinates: the slab
+    /// itself when the section box is not turned.
     pub bounds: Bounds,
+    /// The slab, from the cut plane into the box, turned as the section box
+    /// is.
+    pub region: OrientedBox,
     /// Depth of the slab behind the cut plane, after it was kept within the
     /// box.
     pub thickness: f64,
@@ -53,22 +57,26 @@ pub struct Slab {
 /// the box, no deeper than the box itself; `None` takes the whole box, as an
 /// elevation does. The drawing is at scale 1:1 with `u` to the right and `v`
 /// up as the viewer sees it; `origin` says where its zero lies.
+///
+/// A box turned about the vertical takes its faces along: the views look
+/// along its own axes, so that a box turned to follow the walls gives a plan
+/// with walls along `u` and `v` and sections parallel to a wall. A plan of a
+/// turned box with the model origin has the model X and Y turned with it,
+/// about the model origin.
 pub fn slab_from_section(
-    section: Bounds,
+    section: impl Into<OrientedBox>,
     view: DrawingView,
     thickness: Option<f64>,
     origin: DrawingOrigin,
 ) -> Result<Slab, LoadError> {
     let invalid = |reason: &str| Err(LoadError::InvalidData(reason.into()));
-    let finite = section
-        .min
-        .iter()
-        .chain(&section.max)
-        .all(|value| value.is_finite());
-    // Written so that a NaN fails the test.
-    if !finite || !(0..3).all(|axis| section.min[axis] <= section.max[axis]) {
+    let turned: OrientedBox = section.into();
+    if !turned.is_valid() {
         return invalid("the section box is not a box");
     }
+    // Everything below is in the frame of the box before it was turned, and
+    // is turned into the scene at the end.
+    let section = turned.bounds;
     let depth_axis = view.depth_axis();
     if (0..3).any(|axis| axis != depth_axis && section.max[axis] <= section.min[axis]) {
         return invalid("the section box has no size in this view");
@@ -103,6 +111,19 @@ pub fn slab_from_section(
     } else {
         bounds.max[depth_axis] = min[depth_axis] + thickness;
     }
+    // Into the scene: the directions follow the axes of the box, and the
+    // corner is where the turn puts it.
+    let [along, across] = turned.axes();
+    let into_scene = |direction: [f64; 3]| -> [f64; 3] {
+        std::array::from_fn(|axis| {
+            direction[0] * along[axis] + direction[1] * across[axis] + direction[2] * up_axis(axis)
+        })
+    };
+    let (right_local, up_local) = (right, up);
+    let (right, up) = (into_scene(right_local), into_scene(up_local));
+    let corner_local = corner;
+    let corner = turned.to_scene(corner_local);
+    let region = turned.part(bounds);
     let zero = match (origin, view) {
         (DrawingOrigin::BoxCorner, _) => corner,
         // A plan keeps model X and Y.
@@ -123,14 +144,27 @@ pub fn slab_from_section(
     };
     Ok(Slab {
         view,
-        bounds,
+        bounds: region.aabb(),
+        region,
         thickness,
         frame,
         extent: [
             lower_left,
-            [lower_left[0] + side(right), lower_left[1] + side(up)],
+            [
+                lower_left[0] + side(right_local),
+                lower_left[1] + side(up_local),
+            ],
         ],
     })
+}
+
+/// The vertical unit vector, one axis at a time.
+fn up_axis(axis: usize) -> f64 {
+    if axis == 2 {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// A point of the slab that is drawn.
@@ -523,15 +557,28 @@ pub fn collect_slab(
         .map(|spacing| Thinning::new(slab.extent[0], spacing, options.max_points));
     let mut grid = match (options.grid, covered) {
         (Some(cell), Some(covered)) => {
-            // The frame only turns the axes, so two opposite corners of the
-            // box give the extent on the plane.
-            let (a, b) = (slab.frame.to_uv(covered.min), slab.frame.to_uv(covered.max));
-            let frame = GridFrame::covering(
-                [a[0].min(b[0]), a[1].min(b[1])],
-                [a[0].max(b[0]), a[1].max(b[1])],
-                cell,
-                MAX_CUT_GRID_CELLS,
-            )?;
+            // The corners of the box give the extent on the plane.
+            let (mut low, mut high) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+            for corner in bounds_corners(covered) {
+                let at = slab.frame.to_uv(corner);
+                for axis in 0..2 {
+                    low[axis] = low[axis].min(at[axis]);
+                    high[axis] = high[axis].max(at[axis]);
+                }
+            }
+            if slab.region.is_turned() {
+                // No farther than the box as the view sees it.
+                for axis in 0..2 {
+                    low[axis] = low[axis].max(slab.extent[0][axis]);
+                    high[axis] = high[axis].min(slab.extent[1][axis]);
+                    if low[axis] > high[axis] {
+                        // The layers reach the corners around the box only.
+                        low[axis] = slab.extent[0][axis];
+                        high[axis] = slab.extent[0][axis];
+                    }
+                }
+            }
+            let frame = GridFrame::covering(low, high, cell, MAX_CUT_GRID_CELLS)?;
             Some(CutGrid::new(frame))
         }
         _ => None,
@@ -619,10 +666,15 @@ fn read_slab(
     for (position, _) in work {
         let position = *position;
         let done = state;
+        let turned = slab.region.is_turned();
         let stats = visit_region(
             &sources[position..=position],
             slab.bounds,
-            &|_, ordinal, point| accept(position, ordinal, point),
+            &|_, ordinal, point| {
+                // The leaves and the box are taken axis-aligned; a turned
+                // slab also leaves out what lies in its corners.
+                (!turned || slab.region.contains(point.xyz)) && accept(position, ordinal, point)
+            },
             &mut |step| {
                 state = RegionProgress {
                     read: done.read + step.read,

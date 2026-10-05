@@ -308,6 +308,38 @@ pub fn trace_cut_regions(
     Ok(outline)
 }
 
+/// The main direction of the faces in a slab, as a filled cut would be
+/// traced in: in degrees from the `u` axis towards `v`, between -45 and 45.
+/// Nothing when no cell holds enough points to be a face.
+pub fn main_direction_of(grid: &CutGrid, options: &OutlineOptions) -> Option<f64> {
+    let mut grid = Cow::Borrowed(grid);
+    let mut coarsenings = 0;
+    while coarsenings < MAX_COARSENINGS && too_sparse(&grid, options.min_points_per_cell) {
+        grid = Cow::Owned(grid.coarsened());
+        coarsenings += 1;
+    }
+    let mut occupied = grid.counts().threshold(options.min_points_per_cell.max(1));
+    remove_noise(&mut occupied, options.min_wall_length * 0.5);
+    let cells = occupied.count();
+    if cells == 0 {
+        return None;
+    }
+    let occupied = Occupied {
+        grid: &grid,
+        mask: occupied,
+    };
+    let mut low = [f64::INFINITY; 2];
+    let mut high = [f64::NEG_INFINITY; 2];
+    occupied.for_each(|at, _| {
+        for axis in 0..2 {
+            low[axis] = low[axis].min(at[axis]);
+            high[axis] = high[axis].max(at[axis]);
+        }
+    });
+    let pivot = [(low[0] + high[0]) * 0.5, (low[1] + high[1]) * 0.5];
+    occupied.direction(cells, pivot, None, &|visit| occupied.for_each_cell(visit))
+}
+
 /// Goes through occupied cells: each as the mean position of its points and
 /// their number.
 type Cells<'a> = dyn Fn(&mut dyn FnMut([f64; 2], u32)) + 'a;
