@@ -22,13 +22,13 @@ use iced::{Color, Element, Fill, Length, Size, Task};
 use pointcloud_core::region_source::{resident_points, RegionSource, SourceTransform, EVERYWHERE};
 use pointcloud_core::surfaces::{
     cylinder_color, detect_surfaces, deviation_legend, deviation_mesh, face_color, faces_json,
-    flat_mesh, write_faces_json, write_faces_obj, CylinderFace, DetectedSurfaces, FaceClass,
-    PlaneFace, Residuals, SurfaceDetectConfig, SurfaceSource, SurfaceStage,
-    DEFAULT_DEVIATION_CELLS,
+    flat_mesh, write_faces_cad, write_faces_ifc, write_faces_json, write_faces_obj, CylinderFace,
+    DetectedSurfaces, FaceClass, PlaneFace, Residuals, SurfaceDetectConfig, SurfaceSource,
+    SurfaceStage, DEFAULT_DEVIATION_CELLS,
 };
 use pointcloud_core::{
-    Bounds, IndexConfig, IndexedPoint, LoadError, MeshGeometry, OctreeIndex, OrientedBox, Point,
-    PointCloud,
+    Bounds, DrawingFormat, IndexConfig, IndexedPoint, LoadError, MeshGeometry, OctreeIndex,
+    OrientedBox, Point, PointCloud,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -66,7 +66,7 @@ const LIST_MAX_H: f32 = 220.0;
 
 const BUSY: &str = "Faces are already being detected";
 const NO_FACES: &str = "Detect faces in the active scan first";
-const NO_FORMAT: &str = "Choose a .json or .obj file name for the faces";
+const NO_FORMAT: &str = "Choose a .json, .obj, .dxf, .dwg or .ifc file name for the faces";
 const SAME_FILE: &str = "Choose a faces file different from the open scans";
 const FLAT_TARGET: &str = "the scan that keeps the faces has a scale of zero";
 
@@ -110,21 +110,35 @@ pub enum FaceFormat {
     Json,
     /// The faces as triangles, one group per face.
     Obj,
+    /// The faces as 3D polyface meshes on a layer per kind, with the axes
+    /// of the cylinders as lines.
+    Dxf,
+    /// As `Dxf`, in the binary drawing format.
+    Dwg,
+    /// The faces as IFC4 building element proxies: flat faces as polygonal
+    /// face sets, cylinders as extruded circles.
+    Ifc,
 }
 
 impl FaceFormat {
     /// The formats in the order the save dialog offers them, each with the
     /// name of its filter. The first one is what a file name without an
     /// extension gets where the system adds one.
-    const ALL: [(Self, &'static str); 2] = [
+    const ALL: [(Self, &'static str); 5] = [
         (Self::Json, "Faces with their parameters (JSON)"),
         (Self::Obj, "Faces as a mesh (OBJ)"),
+        (Self::Dxf, "Faces as 3D CAD geometry (DXF)"),
+        (Self::Dwg, "Faces as 3D CAD geometry (DWG)"),
+        (Self::Ifc, "Faces as BIM elements (IFC)"),
     ];
 
     fn extension(self) -> &'static str {
         match self {
             Self::Json => "json",
             Self::Obj => "obj",
+            Self::Dxf => "dxf",
+            Self::Dwg => "dwg",
+            Self::Ifc => "ifc",
         }
     }
 
@@ -140,6 +154,9 @@ impl FaceFormat {
         match self {
             Self::Json => "JSON",
             Self::Obj => "OBJ",
+            Self::Dxf => "DXF",
+            Self::Dwg => "DWG",
+            Self::Ifc => "IFC",
         }
     }
 }
@@ -1188,6 +1205,19 @@ fn write(
             let comments: Vec<&str> = comments.iter().map(String::as_str).collect();
             write_faces_obj(&request.surfaces, path, &comments)?;
         }
+        FaceFormat::Dxf => {
+            write_faces_cad(&request.surfaces, path, DrawingFormat::Dxf)?;
+        }
+        FaceFormat::Dwg => {
+            write_faces_cad(&request.surfaces, path, DrawingFormat::Dwg)?;
+        }
+        FaceFormat::Ifc => {
+            let mut notes = vec!["Units: metres"];
+            if request.stale {
+                notes.push("The points of the scan changed after the faces were detected");
+            }
+            write_faces_ifc(&request.surfaces, &name, path, &notes)?;
+        }
     }
     Ok(ExportDone {
         path: path.to_path_buf(),
@@ -1958,7 +1988,8 @@ impl Studio {
                     .unwrap_or("scan");
                 let suggestion = format!("{stem}-faces.{}", FaceFormat::ALL[0].0.extension());
                 self.faces.export_pending = true;
-                self.status = "Choose where to save the faces as JSON or OBJ…".into();
+                self.status =
+                    "Choose where to save the faces as JSON, OBJ, DXF, DWG or IFC…".into();
                 return Task::perform(
                     async move {
                         FaceFormat::ALL
@@ -2330,7 +2361,9 @@ impl Studio {
     pub(crate) fn api_export_faces(&mut self, path: PathBuf) -> (Value, Task<Message>) {
         let refuse = |error: &str| (json!({"ok": false, "error": error}), Task::none());
         let Some(format) = FaceFormat::from_path(&path).filter(|_| path.is_absolute()) else {
-            return refuse("export_faces requires an absolute .json or .obj destination");
+            return refuse(
+                "export_faces requires an absolute .json, .obj, .dxf, .dwg or .ifc destination",
+            );
         };
         if self.faces.export_pending {
             return refuse("a faces export is already open or running");
@@ -2886,7 +2919,7 @@ fn face_lines(surfaces: &DetectedSurfaces) -> Vec<String> {
 }
 
 /// The `--faces` mode of the command line: detect the faces of a scan file,
-/// or of a box in it, and write them as JSON or OBJ. `arguments` are what
+/// or of a box in it, and write them as JSON, OBJ, DXF, DWG or IFC. `arguments` are what
 /// follows the flag. Returns the lines to print, or the exit code with the
 /// line that says what is wrong; an empty line stands for the usage line.
 pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, String)> {
@@ -2897,7 +2930,9 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
     };
     let (source, destination) = (PathBuf::from(source), PathBuf::from(destination));
     let Some(format) = FaceFormat::from_path(&destination) else {
-        return Err(wrong("Supported faces extensions: .json, .obj"));
+        return Err(wrong(
+            "Supported faces extensions: .json, .obj, .dxf, .dwg, .ifc",
+        ));
     };
     if camera_views::source_key(&source) == camera_views::source_key(&destination) {
         return Err(wrong("Choose an output path different from the input"));

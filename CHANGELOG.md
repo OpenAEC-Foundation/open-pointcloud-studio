@@ -26,6 +26,10 @@ drops those that begin with the name of an operating system or with
 
 - Walking close to a floor, wall or other surface keeps loading its points. Before, the parts of a scan that reach behind the camera could be taken for out of view, so looking down at a floor from close by showed nothing, and parts wholly behind the camera were read in their place.
 
+- Detected faces can be saved as 3D geometry for CAD and BIM programs. **Export faces…** and **Detected faces…** now also offer DXF, DWG and IFC. In DXF and DWG every flat face is a polyface mesh on a layer per type (`OPS-PLANES-WALL` and so on) that shows its outline and its openings, and every cylinder is its scanned surface on `OPS-CYLINDERS` with its axis as a line. The meshes are editable in a CAD program; true ACIS solids are not written.
+- In IFC4 every detected face is a building element with its measured values (type, area, coverage, residuals): a flat face as a polygonal face set with its openings, and a column or pipe as a circle extruded along its axis that a BIM program can edit. Scans in national grid coordinates are placed relative to a local origin that the site carries, so the elements keep their place and their precision.
+- A mesh, also a closed mesh, can be saved as DXF, DWG and IFC: **Export mesh…** and **Surface mesh…** offer them beside OBJ, PLY and STL, as `MESH` entities in a drawing or as one IFC element with a triangulated face set. The command line (`--faces`, `--closed-mesh`, `--mesh-export`) and the local API and MCP tools take the new extensions too.
+
 ## 0.8.0 - 2026-10-03
 
 - **Section drawing** in the SECTION BOX group makes a 2D drawing at scale 1:1 of what the section box cuts and saves it as DXF or DWG: a plan from the slab under the top face of the box, or a vertical section from the slab behind one of its sides (#9, #11). The drawing holds the points of the slab from every visible scan, thinned to one per 5 mm, on layers per scan or per class, in millimetres or metres.

@@ -483,6 +483,28 @@ fn the_model_as_ifc_is_valid_step_with_its_objects_relative_to_a_local_origin() 
 }
 
 #[test]
+fn a_shaft_seen_from_inside_is_its_scanned_surface_in_ifc() {
+    let mut model = sample([0.0; 3]);
+    if let Some(shape) = model.objects[1].cylinder.as_mut() {
+        shape.seen_from_inside = true;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("shaft.ifc");
+    write_model_ifc(&model, &path).unwrap();
+    let instances = check::read(&fs::read_to_string(&path).unwrap()).unwrap();
+    let count = |name: &str| {
+        instances
+            .values()
+            .filter(|instance| instance.name == name)
+            .count()
+    };
+    assert_eq!(count("IFCEXTRUDEDAREASOLID"), 0);
+    assert_eq!(count("IFCTRIANGULATEDFACESET"), 2);
+    // The axis is there all the same.
+    assert_eq!(count("IFCPOLYLINE"), 1);
+}
+
+#[test]
 fn meshes_write_as_dxf_dwg_and_ifc_through_the_mesh_writer() {
     let directory = tempfile::tempdir().unwrap();
     let mesh = tetrahedron(FAR);

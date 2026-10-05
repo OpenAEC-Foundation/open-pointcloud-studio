@@ -1423,15 +1423,15 @@ fn faces_are_exported_as_json_and_obj_in_scene_coordinates() {
     for (path, error) in [
         (
             PathBuf::from("faces.json"),
-            "export_faces requires an absolute .json or .obj destination",
+            "export_faces requires an absolute .json, .obj, .dxf, .dwg or .ifc destination",
         ),
         (
             directory.path().join("faces.ply"),
-            "export_faces requires an absolute .json or .obj destination",
+            "export_faces requires an absolute .json, .obj, .dxf, .dwg or .ifc destination",
         ),
         (
             directory.path().join("room.xyz").with_extension("XYZ"),
-            "export_faces requires an absolute .json or .obj destination",
+            "export_faces requires an absolute .json, .obj, .dxf, .dwg or .ifc destination",
         ),
         (
             directory.path().join("missing").join("faces.obj"),
@@ -1582,7 +1582,7 @@ fn faces_are_exported_as_json_and_obj_in_scene_coordinates() {
     )));
     assert_eq!(
         studio.status,
-        "Choose a .json or .obj file name for the faces"
+        "Choose a .json, .obj, .dxf, .dwg or .ifc file name for the faces"
     );
     assert!(!studio.faces.export_pending);
     let _ = studio.update(Message::Faces(FaceAction::PathChosen(
@@ -1942,6 +1942,44 @@ fn command_line_detects_the_faces_of_a_box_of_a_scan_file() {
         5
     );
 
+    // The same faces as CAD and BIM files.
+    for (name, title) in [
+        ("faces.dxf", "DXF"),
+        ("faces.dwg", "DWG"),
+        ("faces.ifc", "IFC"),
+    ] {
+        let path = folder.join(name);
+        let lines = command_line(&arguments(&[source, path.to_str().unwrap()])).unwrap();
+        let first = lines.lines().next().unwrap();
+        assert!(first.contains(&format!("{name} ({title}, ")), "{first}");
+        let content = std::fs::read(&path).unwrap();
+        match title {
+            "DWG" => assert_eq!(&content[..6], b"AC1027"),
+            "DXF" => {
+                let text = String::from_utf8(content).unwrap();
+                let lines: Vec<&str> = text.lines().map(str::trim).collect();
+                assert_eq!(
+                    lines
+                        .iter()
+                        .filter(|line| **line == "AcDbPolyFaceMesh")
+                        .count(),
+                    7
+                );
+                for layer in ["OPS-PLANES-WALL", "OPS-CYLINDERS", "OPS-CYLINDER-AXES"] {
+                    assert!(lines.contains(&layer), "{layer}");
+                }
+            }
+            _ => {
+                let text = String::from_utf8(content).unwrap();
+                assert!(text.starts_with("ISO-10303-21;"));
+                assert!(text.contains("FILE_SCHEMA(('IFC4'));"));
+                assert_eq!(text.matches("=IFCBUILDINGELEMENTPROXY(").count(), 7);
+                assert_eq!(text.matches("=IFCEXTRUDEDAREASOLID(").count(), 1);
+                assert!(text.contains("'Source: room.xyz; Units: metres'"));
+            }
+        }
+    }
+
     // What is wrong is said before the scan is read, with the exit code.
     let refused = |values: &[&str]| command_line(&arguments(values)).unwrap_err();
     let out = json_path.to_str().unwrap();
@@ -1953,7 +1991,10 @@ fn command_line_detects_the_faces_of_a_box_of_a_scan_file() {
     );
     assert_eq!(
         refused(&[source, "faces.ply"]),
-        (2, "Supported faces extensions: .json, .obj".into())
+        (
+            2,
+            "Supported faces extensions: .json, .obj, .dxf, .dwg, .ifc".into()
+        )
     );
     assert_eq!(
         refused(&[out, out]),

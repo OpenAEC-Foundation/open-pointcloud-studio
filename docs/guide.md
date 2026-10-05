@@ -254,8 +254,8 @@ The exports are in the File view under **EXPORT**. Each asks where to save and t
 | **Section box…** | The points of the active scan inside the section box; available while the box is on |
 | **Section drawing…** | What the section box cuts as a 2D drawing in DXF or DWG, from every visible scan; available while the box is on. See [Section drawings](#section-drawings) |
 | **Every Nth point…** | One point of the active scan in 2, 5, 10, 20, 50 or 100, as set under **EVERY NTH POINT** on the Workspace page |
-| **Surface mesh…** | The mesh of the active scan as OBJ, PLY or STL; see [Saving a mesh](#saving-a-mesh) |
-| **Detected faces…** | The faces detected in the active scan as JSON or OBJ; see [Saving the faces](#saving-the-faces) |
+| **Surface mesh…** | The mesh of the active scan as OBJ, PLY, STL, DXF, DWG or IFC; see [Saving a mesh](#saving-a-mesh) |
+| **Detected faces…** | The faces detected in the active scan as JSON, OBJ, DXF, DWG or IFC; see [Saving the faces](#saving-the-faces) |
 | **Views as BCF…** | The saved views of the active scan; see [BCF export](#bcf-export) |
 
 Every export reads the source again from start to end, so points that are not on screen are written too. The file appears under its name only when it is complete. A section drawing has its own formats and reads only the slab it draws.
@@ -281,7 +281,7 @@ The command line does the same without a window: `--export`, `--section` and `--
 
 While the block is open, the slab of the chosen view is outlined in blue in the scene, and the block says which face of the box is the cut plane. That face is easy to miss for a vertical section: with the box drawn around a whole building for a plan, its front face lies in front of the building, and a slab of 0.10 m there holds no points.
 
-A section drawing is flat: it shows one slab of the building, and what it fills of a wall is traced from the points in that slab. For the floors, ceilings and walls of a room as planes in 3D, each with its area and with how far the points lie from it, use **Detect faces**; see [Detected faces](#detected-faces). Detected faces are saved as JSON or OBJ and not as a drawing, and a drawing does not use them.
+A section drawing is flat: it shows one slab of the building, and what it fills of a wall is traced from the points in that slab. For the floors, ceilings and walls of a room as planes in 3D, each with its area and with how far the points lie from it, use **Detect faces**; see [Detected faces](#detected-faces). Detected faces are saved as JSON, OBJ, or as 3D geometry in DXF, DWG and IFC (see [Saving the faces](#saving-the-faces)), and a section drawing does not use them.
 
 ### What is drawn
 
@@ -442,13 +442,15 @@ These figures say how the triangles hang together. They do not say how far the m
 
 ### Saving a mesh
 
-**Surface mesh…** in the File view, or **Export mesh…** under **Surface mesh** in Properties, saves the mesh of the active scan: a terrain mesh, a 3D surface, a closed mesh, the faces of an opened mesh file or downloaded 3D BAG buildings. The save dialog offers three formats, and the extension of the file name decides which one is written:
+**Surface mesh…** in the File view, or **Export mesh…** under **Surface mesh** in Properties, saves the mesh of the active scan: a terrain mesh, a 3D surface, a closed mesh, the faces of an opened mesh file or downloaded 3D BAG buildings. The save dialog offers six formats, and the extension of the file name decides which one is written:
 
 | Format | What the file holds |
 | --- | --- |
 | OBJ (`.obj`) | Text. Positions, and colours and normals per vertex where the mesh has them |
 | PLY (`.ply`) | Binary. Positions as double-precision numbers, so survey coordinates keep all their digits, and colours and normals where the mesh has them |
 | STL (`.stl`) | Binary. Triangles only: no colours, and 32-bit numbers |
+| DXF (`.dxf`), DWG (`.dwg`) | For a CAD program: the triangles as `MESH` entities on the layer `OPS-MESH`, in metres and in version R2013, with double-precision coordinates. A `MESH` entity holds at most 65,536 triangles here, so a larger mesh becomes several. No colours |
+| IFC (`.ifc`) | For a BIM program: IFC4 with a project, site, building and storey, and the mesh as one building element proxy with a triangulated face set, marked closed when every edge has two triangles. See [The CAD and IFC files](#the-cad-and-ifc-files) for where coordinates far from zero go |
 
 The mesh is written as the scene shows it, with the move and scale of its scan applied. A scan that is mirrored by a negative scale factor keeps its outside in the file: the corners of the triangles are written in reverse order and the normals point outward. The file appears under its name only when it is complete. The source file of the scan cannot be chosen as the destination.
 
@@ -456,7 +458,7 @@ An STL file stores 32-bit numbers, which hold about seven digits. Up to 2,048 m 
 
 An OBJ or PLY file of 3D BAG buildings carries the credit of the register in its first lines, in plain ASCII in a PLY file. Open Pointcloud Studio reads it there when the file is opened again, so the scene shows the credit and a further export keeps it. An STL file has no room for the credit; name the source yourself when you pass such a file on.
 
-Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, and `--mesh-export INPUT OUTPUT` writes the faces of any mesh file as OBJ, PLY or STL by the extension of `OUTPUT`.
+Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, and `--mesh-export INPUT OUTPUT` writes the faces of any mesh file as OBJ, PLY, STL, DXF, DWG or IFC by the extension of `OUTPUT`.
 
 ## Closed mesh
 
@@ -480,7 +482,7 @@ The points are reduced, per cell of half a voxel, to small pieces of surface wit
 4. When the room was scanned from several stations that are separate files, set **Scans** to **All visible scans** and hide the layers that should stay out. With the section box on, only the visible layers that reach the box take part: a layer that lies outside it is not read and does not count for the size of the region. Layers of 3D BAG buildings are left out. The mesh goes to the active scan either way, so make one of the scans the active layer first: a layer of 3D BAG buildings does not take a mesh of the scans, and the block says so.
 5. Choose **Start**. The strip above the scene shows the job step by step, with a **Cancel** button: reading (only for a scan without an index), finding the blocks that hold points, meshing block after block, simplifying across the blocks, and measuring the result. A cancelled job leaves the mesh the scan had as it was.
 6. When the job is done the mesh is shown as the mesh of the active scan, and the status bar and the block give its figures. Hide the points of the layer in the project panel to look at the mesh alone; the **Surface** switch of the layer hides the mesh.
-7. The mesh exists in this session only. **Export mesh…** under **Surface mesh** in Properties, or **Surface mesh…** in the File view, saves it as OBJ, PLY or STL; see [Saving a mesh](#saving-a-mesh).
+7. The mesh exists in this session only. **Export mesh…** under **Surface mesh** in Properties, or **Surface mesh…** in the File view, saves it as OBJ, PLY, STL, DXF, DWG or IFC; see [Saving a mesh](#saving-a-mesh).
 
 A scan holds one mesh. The closed mesh takes the place of the mesh the active scan had, whichever mesher made it, and Undo does not bring that one back. The mesh is kept in the frame of its scan: **Move** and **Scale** afterwards take the mesh along with the points.
 
@@ -545,7 +547,7 @@ open-pointcloud-studio --closed-mesh scan.e57 room.ply --box 0,0,-0.1,5.1,4.1,2.
 open-pointcloud-studio --closed-mesh merged.laz room.obj --box 0,0,-0.1,5.1,4.1,2.7 --voxel 0.03 --max-hole 0.1 --simplify 0 --sides centre
 ```
 
-The extension of the output chooses OBJ, PLY or STL. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--rotation` turns that box that many degrees about the vertical through its centre. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
+The extension of the output chooses OBJ, PLY, STL, DXF, DWG or IFC. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--rotation` turns that box that many degrees about the vertical through its centre. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
 
 ## Detected faces
 
@@ -637,14 +639,38 @@ Moving or scaling a scan does not make faces that were made from that scan alone
 
 ### Saving the faces
 
-**Export faces…** in the block, or **Detected faces…** in the File view, saves the faces of the active scan. The save dialog offers two formats, and the extension of the file name decides which one is written:
+**Export faces…** in the block, or **Detected faces…** in the File view, saves the faces of the active scan. The save dialog offers five formats, and the extension of the file name decides which one is written:
 
 | Format | What the file holds |
 | --- | --- |
 | JSON (`.json`) | Every plane and cylinder with its parameters, its outline, the residuals of its points, the edges between faces and the settings of the detection |
 | OBJ (`.obj`) | The faces as triangles: one group per face, named `face_0001_wall` after its number and type, with the outline and its openings as triangles and a normal at every corner; a cylinder as the scanned part of its surface. It opens again as a mesh |
+| DXF (`.dxf`), DWG (`.dwg`) | The faces as 3D geometry for a CAD program, on a layer per type; see [The CAD and IFC files](#the-cad-and-ifc-files) |
+| IFC (`.ifc`) | The faces as building elements with their measured values, for a BIM program; see [The CAD and IFC files](#the-cad-and-ifc-files) |
 
-Both are written in the coordinates of the scene, with the move and scale of the scan applied, and in metres. The file appears under its name only when it is complete. An open scan cannot be chosen as the destination.
+All are written in the coordinates of the scene, with the move and scale of the scan applied, and in metres. The file appears under its name only when it is complete. An open scan cannot be chosen as the destination.
+
+#### The CAD and IFC files
+
+The DXF and DWG files are in version R2013 with metres as their unit. They hold:
+
+| Layer | What is on it |
+| --- | --- |
+| `OPS-PLANES-FLOOR`, `OPS-PLANES-CEILING`, `OPS-PLANES-WALL`, `OPS-PLANES-SLOPED` | One polyface mesh per flat face, in the colour of its type. The triangles inside the outline have invisible edges, so the face shows as its outline with the rims of its openings. A polyface mesh holds at most 32,767 corners; a larger face is split over several |
+| `OPS-CYLINDERS` | One polyface mesh per cylinder: the scanned part of its surface in strips of at most 7.5 degrees |
+| `OPS-CYLINDER-AXES` | The axis of every cylinder as a 3D line, as far as it was scanned |
+
+Every entity takes its colour from its layer, so a layer can be recoloured, frozen or switched off at once. The vertices of a polyface mesh can be moved and the mesh can be exploded into 3D faces. The files hold no ACIS solids (`3DSOLID`) or NURBS surfaces: a CAD program that can turn a mesh into a surface or a solid does that from these meshes.
+
+The IFC file is IFC4, written as a STEP file. It holds a project with one site, one building and one storey named *Scan*, and every face as an `IfcBuildingElementProxy` in that storey with the object type `Plane (floor)`, `Plane (ceiling)`, `Plane (wall)`, `Plane (sloped)` or `Cylinder`. The type of a face follows from its direction alone, so a table top is a floor; for that reason no face is written as a wall, slab or column. The geometry:
+
+- A flat face is an `IfcPolygonalFaceSet` with one face per connected part, its openings as inner loops.
+- A cylinder seen from outside, a column or a pipe, is an `IfcExtrudedAreaSolid`: a circle of the fitted radius, extruded along the axis over the scanned length, which a BIM program can edit as a profile and a depth. The whole round is filled, also where only part of it was scanned. Its axis is a second representation, `Axis`. A cylinder seen from inside, a shaft, has no solid to fill and is its scanned surface as an `IfcTriangulatedFaceSet`.
+- Every face has the property set `OPS_ScanGeometry`: its type, area, covered area and coverage, the number of points and the RMS, 95th percentile and largest deviation of its points; for a cylinder also the radius, diameter, length, scanned arc in degrees and whether it was seen from inside.
+
+Coordinates far from zero: on an axis where the faces or the mesh lie more than 1,000 m from zero, as in RD New, the site is placed at the middle of the geometry rounded to whole metres, and all geometry is relative to that point. The placement of the site carries the offset, so the elements stand at their scene coordinates, and the description of the site names the point. Close to zero nothing is moved. The coordinate system of the scan is not known to the application, so the file holds no map conversion; a BIM program that needs one gets it from the user.
+
+The files were checked with the reader of the codec that writes the DXF and DWG files, and the IFC file with a check of its STEP structure and with an open-source IFC library; not yet with a range of CAD and BIM programs. If a program refuses a DWG file, try DXF.
 
 #### The JSON file
 
@@ -735,7 +761,7 @@ open-pointcloud-studio --faces scan.e57 room-faces.json --box -0.1,-0.1,-0.1,5.1
 open-pointcloud-studio --faces merged.laz faces.obj --distance 0.03 --angle 12 --min-area 0.5 --cylinders off
 ```
 
-The extension of the output chooses JSON or OBJ. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is searched. `--rotation` turns that box that many degrees about the vertical through its centre. `--distance` is the distance tolerance in metres, `--angle` the angle tolerance in degrees, `--min-area` the smallest face in square metres and `--cylinders` `on` or `off`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory and a larger one is read from start to end twice. The mode prints the number of faces per type, the time and the voxel size, and one line per face with its type, area, normal, openings, coverage and residuals; when no face is found it writes nothing and ends with an error.
+The extension of the output chooses JSON, OBJ, DXF, DWG or IFC. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is searched. `--rotation` turns that box that many degrees about the vertical through its centre. `--distance` is the distance tolerance in metres, `--angle` the angle tolerance in degrees, `--min-area` the smallest face in square metres and `--cylinders` `on` or `off`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory and a larger one is read from start to end twice. The mode prints the number of faces per type, the time and the voxel size, and one line per face with its type, area, normal, openings, coverage and residuals; when no face is found it writes nothing and ends with an error.
 
 ## 3D BAG buildings
 

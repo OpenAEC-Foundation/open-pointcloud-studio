@@ -822,7 +822,7 @@ fn main() -> iced::Result {
             Err((code, line)) => {
                 if line.is_empty() {
                     eprintln!(
-                        "Usage: open-pointcloud-studio --closed-mesh INPUT OUTPUT.obj|.ply|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]"
+                        "Usage: open-pointcloud-studio --closed-mesh INPUT OUTPUT.obj|.ply|.stl|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]"
                     );
                 } else {
                     eprintln!("{line}");
@@ -841,7 +841,7 @@ fn main() -> iced::Result {
             Err((code, line)) => {
                 if line.is_empty() {
                     eprintln!(
-                        "Usage: open-pointcloud-studio --faces INPUT OUTPUT.json|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]"
+                        "Usage: open-pointcloud-studio --faces INPUT OUTPUT.json|.obj|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]"
                     );
                 } else {
                     eprintln!("{line}");

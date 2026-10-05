@@ -1349,7 +1349,10 @@ fn command_line_meshes_a_box_of_a_scan_file() {
     assert_eq!(refused(&[input, output, "--fast", "1"]), (2, String::new()));
     assert_eq!(
         refused(&[input, "room.off"]),
-        (2, "Supported mesh extensions: .obj, .ply, .stl".to_owned())
+        (
+            2,
+            "Supported mesh extensions: .obj, .ply, .stl, .dxf, .dwg, .ifc".to_owned()
+        )
     );
     assert_eq!(
         refused(&[output, output]),

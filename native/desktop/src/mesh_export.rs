@@ -1,6 +1,7 @@
-//! Saving the mesh a layer holds as OBJ, PLY or STL: the save dialog behind
-//! the File view entry and the Properties button, the `export_mesh` command
-//! of the local API and the `--mesh-export` mode of the command line. Also
+//! Saving the mesh a layer holds as OBJ, PLY, STL, DXF, DWG or IFC: the save
+//! dialog behind the File view entry and the Properties button, the
+//! `export_mesh` command of the local API and the `--mesh-export` mode of the
+//! command line. Also
 //! what is measured of a mesh when it is made or read, and how Properties and
 //! the API show that.
 
@@ -22,13 +23,16 @@ use crate::{
 /// The formats in the order the save dialog offers them, each with the name
 /// of its filter. The first one is what a file name without an extension
 /// gets where the system adds one.
-const FORMATS: [(MeshFormat, &str); 3] = [
+const FORMATS: [(MeshFormat, &str); 6] = [
     (MeshFormat::Obj, "OBJ mesh"),
     (MeshFormat::Ply, "PLY mesh (binary)"),
     (MeshFormat::Stl, "STL (binary)"),
+    (MeshFormat::Dxf, "DXF 3D mesh"),
+    (MeshFormat::Dwg, "DWG 3D mesh"),
+    (MeshFormat::Ifc, "IFC model"),
 ];
 
-const NO_FORMAT: &str = "Choose an .obj, .ply or .stl file name for the mesh";
+const NO_FORMAT: &str = "Choose an .obj, .ply, .stl, .dxf, .dwg or .ifc file name for the mesh";
 const SAME_FILE: &str = "Choose a mesh file different from the source file";
 
 /// A mesh with what was measured of it when it was made or read.
@@ -255,7 +259,7 @@ fn write(
 pub(crate) fn convert_file(source: &Path, destination: &Path) -> Result<String, (i32, String)> {
     let format = destination_format(source, destination).map_err(|problem| {
         let line = if problem == NO_FORMAT {
-            "Supported mesh export extensions: .obj, .ply, .stl"
+            "Supported mesh export extensions: .obj, .ply, .stl, .dxf, .dwg, .ifc"
         } else {
             "Choose an output path different from the input"
         };
@@ -316,7 +320,7 @@ impl Studio {
             .unwrap_or("surface");
         let suggestion = format!("{stem}-mesh.{}", FORMATS[0].0.extension());
         self.mesh_export_pending = true;
-        self.status = "Choose where to save the mesh as OBJ, PLY or STL…".into();
+        self.status = "Choose where to save the mesh as OBJ, PLY, STL, DXF, DWG or IFC…".into();
         Task::perform(
             async move {
                 FORMATS
@@ -411,7 +415,9 @@ impl Studio {
     pub(crate) fn api_export_mesh(&mut self, path: PathBuf) -> (Value, Task<Message>) {
         let refuse = |error: &str| (json!({"ok": false, "error": error}), Task::none());
         let Some(format) = MeshFormat::from_path(&path).filter(|_| path.is_absolute()) else {
-            return refuse("export_mesh requires an absolute .obj, .ply or .stl destination");
+            return refuse(
+                "export_mesh requires an absolute .obj, .ply, .stl, .dxf, .dwg or .ifc destination",
+            );
         };
         if self.mesh_export_pending {
             return refuse("a mesh export is already open or running");
@@ -571,6 +577,9 @@ mod tests {
             ("out.obj", MeshFormat::Obj),
             ("out.PLY", MeshFormat::Ply),
             ("folder.v2/out.stl", MeshFormat::Stl),
+            ("out.dxf", MeshFormat::Dxf),
+            ("out.DWG", MeshFormat::Dwg),
+            ("out.ifc", MeshFormat::Ifc),
         ] {
             assert_eq!(destination_format(source, Path::new(name)), Ok(format));
         }
@@ -587,7 +596,17 @@ mod tests {
         );
         // The dialog offers every format the core writes, each once.
         let offered: Vec<MeshFormat> = FORMATS.iter().map(|(format, _)| *format).collect();
-        assert_eq!(offered, [MeshFormat::Obj, MeshFormat::Ply, MeshFormat::Stl]);
+        assert_eq!(
+            offered,
+            [
+                MeshFormat::Obj,
+                MeshFormat::Ply,
+                MeshFormat::Stl,
+                MeshFormat::Dxf,
+                MeshFormat::Dwg,
+                MeshFormat::Ifc
+            ]
+        );
     }
 
     #[test]
@@ -922,7 +941,7 @@ mod tests {
             refused("copy.off"),
             (
                 2,
-                "Supported mesh export extensions: .obj, .ply, .stl".to_owned()
+                "Supported mesh export extensions: .obj, .ply, .stl, .dxf, .dwg, .ifc".to_owned()
             )
         );
         assert_eq!(
@@ -1018,7 +1037,7 @@ mod tests {
             let answer = export(&mut studio, &refused);
             assert_eq!(
                 answer["error"],
-                "export_mesh requires an absolute .obj, .ply or .stl destination",
+                "export_mesh requires an absolute .obj, .ply, .stl, .dxf, .dwg or .ifc destination",
                 "{}",
                 refused.display()
             );
@@ -1123,7 +1142,7 @@ mod tests {
         assert!(studio.mesh_export_pending);
         assert_eq!(
             studio.status,
-            "Choose where to save the mesh as OBJ, PLY or STL…"
+            "Choose where to save the mesh as OBJ, PLY, STL, DXF, DWG or IFC…"
         );
         let request = studio.mesh_export_request().unwrap();
 

@@ -78,9 +78,10 @@ wherever the scan has points or a gap up to `max_hole` wide. Deleted points
 and hidden classes are left out. The mesh goes to the active layer, where it
 takes the place of the mesh that layer had, and is kept in the frame of that
 layer, so a later `translate` or `scale` takes it along. `path` is optional:
-with an absolute `.obj`, `.ply` or `.stl` destination in a folder that exists
-the mesh is also written there, as the scene shows it; without it the mesh is
-shown only, and `export_mesh` saves it later.
+with an absolute `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` destination in
+a folder that exists the mesh is also written there, as the scene shows it
+and in the format described under Mesh export; without it the mesh is shown
+only, and `export_mesh` saves it later.
 
 The other fields are the settings of the block. A field that is left out
 keeps what the block has, and a field that is given is put in the block as
@@ -180,10 +181,22 @@ buildings.
 - `.ply`: binary little-endian, with double coordinates, colours as `uchar`
   and normals as `float` where the mesh has them.
 - `.stl`: binary, triangles only, with 32-bit float coordinates.
+- `.dxf` and `.dwg`: drawing version R2013 in metres, with the triangles as
+  `MESH` entities of at most 65,536 faces each on the layer `OPS-MESH`.
+  These are editable meshes; no ACIS solid (`3DSOLID`) is written.
+- `.ifc`: IFC4 as a STEP file: a project with a site, building and storey
+  holding one `IfcBuildingElementProxy` (object type `Mesh`) with an
+  `IfcTriangulatedFaceSet`, closed when every edge has two triangles, and a
+  property set `OPS_ScanGeometry` with the counts. Where the coordinates lie
+  more than 1,000 m from zero on an axis, the site is placed at the middle of
+  the mesh rounded to whole metres and the geometry is relative to it; the
+  description of the site names that point. No map conversion is written,
+  as the coordinate system of the scan is not known.
 
 The mesh is written as the scene shows it, with the move and scale of its
 layer applied. The command answers with a `job_id`; the complete job has
-`operation` (`export_mesh`), `path`, `format` (`obj`, `ply` or `stl`),
+`operation` (`export_mesh`), `path`, `format` (`obj`, `ply`, `stl`, `dxf`,
+`dwg` or `ifc`),
 `vertices`, `triangles` and `origin`. `origin` is `null` except for an STL
 file of a mesh that lies more than 2,048 m from zero on an axis: such an axis
 is written relative to a whole-metre origin, so that the floats keep their
@@ -309,9 +322,30 @@ destination in a folder that exists, and its extension chooses the format:
   `face_0001_wall` after its number and class, with the normal of the face at
   every corner, and a cylinder as the scanned part of its surface in a group
   `face_0007_cylinder`.
+- `.dxf` and `.dwg`: 3D geometry for a CAD program, drawing version R2013 in
+  metres and scene coordinates. Every flat face is a polyface mesh on the
+  layer of its class (`OPS-PLANES-FLOOR`, `OPS-PLANES-CEILING`,
+  `OPS-PLANES-WALL`, `OPS-PLANES-SLOPED`) whose inner triangle edges are
+  invisible, so that it shows as its outline with its openings. Every
+  cylinder is a polyface mesh of its scanned part on `OPS-CYLINDERS`, with
+  its axis as a line on `OPS-CYLINDER-AXES`. A polyface mesh holds at most
+  32,767 vertices and faces; a larger face is split over several. No ACIS
+  solids (`3DSOLID`) are written: a CAD program can turn the meshes into
+  surfaces or solids where it offers that.
+- `.ifc`: IFC4 as a STEP file, with a project, site, building and storey.
+  Every face is an `IfcBuildingElementProxy` with object type
+  `Plane (wall)` and so on, or `Cylinder`, as the class is a direction and
+  not a building element. A flat face is an `IfcPolygonalFaceSet` with a
+  face per part and its openings as inner loops; a cylinder seen from
+  outside is an `IfcExtrudedAreaSolid` of an `IfcCircleProfileDef` of its
+  radius along its axis over its scanned length, with the axis as an `Axis`
+  representation; a cylinder seen from inside is the triangulated scanned
+  surface. The property set `OPS_ScanGeometry` holds the class, area,
+  coverage and residuals of a face and the radius, length and arc of a
+  cylinder. Coordinates far from zero are placed as for `export_mesh`.
 
-The complete job has `operation` (`export_faces`), `path`, `format` (`json`
-or `obj`), `planes`, `cylinders`, `edges`, `bytes` and `stale`. The file is
+The complete job has `operation` (`export_faces`), `path`, `format` (`json`,
+`obj`, `dxf`, `dwg` or `ifc`), `planes`, `cylinders`, `edges`, `bytes` and `stale`. The file is
 written to a temporary file first and appears under its name when it is
 complete. The command is refused for a path that is not absolute or has
 another extension, for a folder that does not exist, for the source file of
@@ -781,16 +815,16 @@ when the view is restored.
 | `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
 | `set_surface_settings` | `max_vertices`, `neighbors`, `edge_factor` | Sets the native GUI's 3D surface reconstruction limits atomically: 3–1,000,000 vertices, 3–32 neighbors and a finite positive edge factor |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
-| `mesh` | `mode`, `path` (optional for `closed`), and for `closed` optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path, or a `closed` mesh that is shown and, with a `.obj`, `.ply` or `.stl` path, also written, using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings, closed mode the Closed mesh settings with the fields given. Returns a job ID. The complete job reports the open edges and the connected parts of the mesh, and for `closed` the distance between points and mesh |
+| `mesh` | `mode`, `path` (optional for `closed`), and for `closed` optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path, or a `closed` mesh that is shown and, with a `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path, also written, using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings, closed mode the Closed mesh settings with the fields given. Returns a job ID. The complete job reports the open edges and the connected parts of the mesh, and for `closed` the distance between points and mesh |
 | `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sides`, `layers` | Sets the settings of the Closed mesh block atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task, of whatever mode |
-| `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply` or `.stl` path; the extension chooses the format. Returns a job ID |
+| `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
 | `set_face_settings` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Sets the settings of the Detect faces block atomically: a distance tolerance of 0.001–0.5 m, an angle tolerance of 1–45 degrees, a smallest face of 0.01–10000 m², cylinders on or off, layers `active` or `visible`, and the colouring `face` or `deviation` of the faces that are shown. Returns the `settings` |
 | `detect_faces` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Finds the flat faces and the cylinders in the undeleted points inside the active section box and visible classification filters, with the Detect faces settings and the fields given, and keeps them with the active layer beside its mesh. Returns a job ID; the complete job reports the faces per type, the edges, the voxel used and the points on a face |
 | `cancel_detect_faces` | — | Requests cancellation of the running face detection |
 | `list_faces` | optional `boundaries` | Lists the faces of the active layer in scene coordinates with their class, plane or axis, area and residuals; with `boundaries: true` also their outlines and the edges between them |
 | `select_face` | optional `id` | Highlights the face with that number in the viewport and the block and returns it; without `id` or with `null` takes the highlight off |
-| `export_faces` | `path` | Saves the faces of the active layer in scene coordinates to an absolute `.json` or `.obj` path; the extension chooses the format. Returns a job ID |
+| `export_faces` | `path` | Saves the faces of the active layer in scene coordinates to an absolute `.json`, `.obj`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
 | `clear_faces` | — | Removes the faces of the active layer; `cleared` is false when it had none |
 | `merge_visible` | `path` | Merges the visible LAS/LAZ layers to an absolute `.las` or `.laz` path; returns a job ID |
 | `cancel_merge` | — | Requests cancellation of the running merge task |

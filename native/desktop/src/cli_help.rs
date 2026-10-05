@@ -108,17 +108,17 @@ pub const MODES: &[Mode] = &[
     Mode {
         flag: "--closed-mesh",
         short: None,
-        arguments: "INPUT OUTPUT.obj|.ply|.stl [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]",
+        arguments: "INPUT OUTPUT.obj|.ply|.stl|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sides automatic|centre|upward]",
         description: key(
-            "Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY or STL.",
+            "Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY, STL, DXF, DWG or IFC.",
         ),
     },
     Mode {
         flag: "--faces",
         short: None,
-        arguments: "INPUT OUTPUT.json|.obj [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]",
+        arguments: "INPUT OUTPUT.json|.obj|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on|off]",
         description: key(
-            "Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON or OBJ.",
+            "Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON, OBJ, DXF, DWG or IFC.",
         ),
     },
     Mode {
@@ -126,7 +126,7 @@ pub const MODES: &[Mode] = &[
         short: None,
         arguments: "INPUT OUTPUT",
         description: key(
-            "Writes the faces of a mesh file as OBJ, PLY or STL; the extension of OUTPUT chooses the format.",
+            "Writes the faces of a mesh file as OBJ, PLY, STL, DXF, DWG or IFC; the extension of OUTPUT chooses the format.",
         ),
     },
     Mode {
