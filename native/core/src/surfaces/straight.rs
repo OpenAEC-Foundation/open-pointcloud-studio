@@ -53,25 +53,30 @@ const STEP_CELLS: f64 = 1.0;
 const OUTER_SHARE: f64 = 0.2;
 /// A ring shorter than this many cells round is too small to straighten.
 const MIN_RING_CELLS: f64 = 24.0;
-/// Every corner of the traced ring stays within this many cells of the
-/// straightened one, and every corner of that within `REACH_CELLS` of the
-/// traced one: the stair of cells cuts across a corner of an opening.
-const KEEP_CELLS: f64 = 2.0;
+/// The corners of the traced ring lie within this many cells of the
+/// straightened one, as the reduction and the squaring may each move an
+/// edge by a cell and a half; but for one in `SPIKE_SHARE` at most, such as
+/// the end of a spike of one cell wide that the reduction passes over, and
+/// none further than twice as far. Every corner of the straightened ring
+/// stays within `REACH_CELLS` of the traced one: the stair of cells cuts
+/// across a corner of an opening.
+const FOLLOW_CELLS: f64 = 3.0;
+const SPIKE_SHARE: usize = 10;
 const REACH_CELLS: f64 = 4.0;
+/// The corners of the ring along a short line that is left out lie within
+/// this many cells of one of the lines beside it.
+const KEEP_CELLS: f64 = 2.0;
 /// Positions along a ring are weighed in pieces of this many cells.
 const SAMPLE_CELLS: f64 = 0.25;
 
 /// One part of a face as it was traced: its rings with every step of the
-/// cells, the corners that the reduction to `STRAIGHT_CELLS` keeps of each,
-/// and the outline it has without straightening. The three hold the same
-/// holes in the same order.
+/// cells moved in to the outermost points, the corners that the reduction
+/// to `STRAIGHT_CELLS` keeps of each, and the outline it has without
+/// straightening. The three hold the same holes in the same order.
 pub(crate) struct Traced {
     pub(crate) dense: Region,
     pub(crate) coarse: Vec<Vec<usize>>,
     pub(crate) plain: Region,
-    /// Whether the rings may be straightened; a part whose rings stayed on
-    /// the edges of the cells keeps them.
-    pub(crate) straighten: bool,
 }
 
 /// A straight line fitted to a stretch of a ring.
@@ -87,6 +92,9 @@ struct Line {
     /// The corners of the outline where its stretch begins and ends.
     start: [f64; 2],
     end: [f64; 2],
+    /// The stretch of the ring: the position of its first corner and the
+    /// number of sides it has.
+    span: [usize; 2],
 }
 
 /// The outlines of the parts of one face with straight edges. Every ring
@@ -98,11 +106,7 @@ pub(crate) fn straightened(parts: &[Traced], grid: &GridFrame) -> Vec<Region> {
         .map(|part| {
             rings_of(&part.dense)
                 .zip(&part.coarse)
-                .map(|(ring, kept)| {
-                    part.straighten
-                        .then(|| fitted_lines(ring, kept, grid))
-                        .flatten()
-                })
+                .map(|(ring, kept)| fitted_lines(ring, kept, grid))
                 .collect()
         })
         .collect();
@@ -115,7 +119,7 @@ pub(crate) fn straightened(parts: &[Traced], grid: &GridFrame) -> Vec<Region> {
                 .iter()
                 .zip(rings_of(&part.dense))
                 .map(|(lines, traced)| {
-                    let straight = straight_ring(lines.clone()?, main, cell)?;
+                    let straight = straight_ring(traced, lines.clone()?, main, cell)?;
                     follows(&straight, traced, cell).then_some(straight)
                 })
                 .collect();
@@ -198,7 +202,10 @@ fn fitted_lines(ring: &[[f64; 2]], kept: &[usize], grid: &GridFrame) -> Option<V
                 let steps = (last + n - first) % n;
                 let stretch: Vec<[f64; 2]> =
                     (0..=steps).map(|step| ring[(first + step) % n]).collect();
-                fitted_line(&stretch, grid)
+                Line {
+                    span: [first, steps],
+                    ..fitted_line(&stretch, grid)
+                }
             })
             .collect(),
     )
@@ -232,6 +239,7 @@ fn fitted_line(stretch: &[[f64; 2]], grid: &GridFrame) -> Line {
         measured: false,
         start,
         end,
+        span: [0, 0],
     };
     if length < SHORT_CELLS * cell {
         return short;
@@ -288,6 +296,7 @@ fn fitted_line(stretch: &[[f64; 2]], grid: &GridFrame) -> Line {
                     measured: true,
                     start,
                     end,
+                    span: [0, 0],
                 };
             }
         }
@@ -342,6 +351,7 @@ fn fitted_line(stretch: &[[f64; 2]], grid: &GridFrame) -> Line {
             measured: true,
             start,
             end,
+            span: [0, 0],
         };
         if placed.len() >= 4 {
             let mut sorted = placed.clone();
@@ -375,6 +385,7 @@ fn fitted_line(stretch: &[[f64; 2]], grid: &GridFrame) -> Line {
         measured: true,
         start,
         end,
+        span: [0, 0],
     }
 }
 
@@ -521,12 +532,17 @@ fn main_direction<'a>(lines: impl Iterator<Item = &'a Line>) -> f64 {
 
 /// A ring with straight edges from its fitted lines, or nothing when too
 /// few lines remain.
-fn straight_ring(mut lines: Vec<Line>, main: f64, cell: f64) -> Option<Vec<[f64; 2]>> {
+fn straight_ring(
+    ring: &[[f64; 2]],
+    mut lines: Vec<Line>,
+    main: f64,
+    cell: f64,
+) -> Option<Vec<[f64; 2]>> {
     for line in &mut lines {
         square(line, main, cell);
     }
     drop_steps(&mut lines, cell);
-    drop_chamfers(&mut lines, cell);
+    drop_chamfers(ring, &mut lines, cell);
     merge_collinear(&mut lines, cell);
     if lines.len() < 3 {
         return None;
@@ -564,16 +580,23 @@ fn straight_ring(mut lines: Vec<Line>, main: f64, cell: f64) -> Option<Vec<[f64;
     (corners.len() >= 3).then_some(corners)
 }
 
-/// Whether a straightened ring follows its traced ring: every corner of
-/// either lies near the other.
+/// Whether a straightened ring follows its traced ring: the corners of
+/// either lie near the other.
 fn follows(straight: &[[f64; 2]], traced: &[[f64; 2]], cell: f64) -> bool {
     let near = |at: [f64; 2], ring: &[[f64; 2]], cells: f64| {
         (0..ring.len()).any(|index| {
             segment_distance(at, ring[index], ring[(index + 1) % ring.len()]) <= cells * cell
         })
     };
+    let off = traced
+        .iter()
+        .filter(|at| !near(**at, straight, FOLLOW_CELLS))
+        .collect::<Vec<_>>();
     straight.iter().all(|at| near(*at, traced, REACH_CELLS))
-        && traced.iter().all(|at| near(*at, straight, KEEP_CELLS))
+        && off.len() * SPIKE_SHARE <= traced.len()
+        && off
+            .iter()
+            .all(|at| near(**at, straight, 2.0 * FOLLOW_CELLS))
 }
 
 fn segment_distance(at: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -632,7 +655,7 @@ fn drop_steps(lines: &mut Vec<Line>, cell: f64) {
 /// the corner is where those two lines cross. A short line between two
 /// lines that run alongside each other, such as the side of a small step
 /// or the head of a narrow opening, stays.
-fn drop_chamfers(lines: &mut Vec<Line>, cell: f64) {
+fn drop_chamfers(ring: &[[f64; 2]], lines: &mut Vec<Line>, cell: f64) {
     let limit = CHAMFER_DEGREES.to_radians().sin();
     let mut position = 0;
     while lines.len() > 3 && position < lines.len() {
@@ -656,9 +679,20 @@ fn drop_chamfers(lines: &mut Vec<Line>, cell: f64) {
                 before.point[1] + along * before.direction[1],
             ]
         });
-        let reach = (CORNER_REACH_CELLS * cell).max(line.length);
+        // Every corner of the ring along the short line lies near one of
+        // the two lines: what the line cut off was a corner and not a side
+        // of the face.
+        let near = |line: &Line, at: [f64; 2]| {
+            cross(line.direction, minus(at, line.point)).abs() <= KEEP_CELLS * cell
+        };
+        let cut = |at: [f64; 2]| {
+            cross(line.direction, minus(at, line.point)).abs() <= REACH_CELLS * cell
+                && (0..=line.span[1])
+                    .map(|step| ring[(line.span[0] + step) % ring.len()])
+                    .all(|corner| near(before, corner) || near(after, corner))
+        };
         match crossing {
-            Some(at) if norm(minus(at, line.point)) <= reach => {
+            Some(at) if cut(at) => {
                 lines.remove(position);
                 position = position.saturating_sub(1);
             }
@@ -706,6 +740,7 @@ fn merge_collinear(lines: &mut Vec<Line>, cell: f64) {
                 measured: a.measured || b.measured,
                 start: a.start,
                 end: b.end,
+                span: [a.span[0], a.span[1] + b.span[1]],
             };
             lines[position] = merged;
             lines.remove(next);

@@ -824,7 +824,12 @@ impl Measured {
         proceed()?;
         let mut parts = Vec::new();
         for traced in mask.trace(Connectivity::Four) {
-            let (region, straighten) = self.tightened(&traced);
+            let (tight, apart) = self.tightened(&traced);
+            let region = if apart {
+                tight.clone()
+            } else {
+                traced.to_plane(&grid)
+            };
             let kept = region.kept_corners(grid.cell * 0.5, proceed)?;
             let ring = |ring: &[[f64; 2]], kept: &[usize]| -> Vec<[f64; 2]> {
                 kept.iter().map(|index| ring[*index]).collect()
@@ -833,17 +838,20 @@ impl Measured {
             if outer.len() < 3 {
                 continue;
             }
-            // The holes that keep three corners, each with its traced ring.
+            // The holes that keep three corners, each with its ring moved in
+            // to the points: straightening starts from those, also where
+            // they would pass each other, and keeps only a sound result.
             let holes: Vec<(Vec<[f64; 2]>, Vec<[f64; 2]>)> = region
                 .holes
                 .iter()
                 .zip(&kept[1..])
-                .map(|(hole, kept)| (ring(hole, kept), hole.clone()))
+                .zip(tight.holes)
+                .map(|((hole, kept), tight)| (ring(hole, kept), tight))
                 .filter(|(hole, _)| hole.len() >= 3)
                 .collect();
             let dense = Region {
-                outer: region.outer,
-                holes: holes.iter().map(|(_, traced)| traced.clone()).collect(),
+                outer: tight.outer,
+                holes: holes.iter().map(|(_, tight)| tight.clone()).collect(),
             };
             let coarse = dense.kept_corners(grid.cell * STRAIGHT_CELLS, proceed)?;
             parts.push(Traced {
@@ -853,7 +861,6 @@ impl Measured {
                     outer,
                     holes: holes.into_iter().map(|(hole, _)| hole).collect(),
                 },
-                straighten,
             });
         }
         let patches = straightened(&parts, &grid);
@@ -864,11 +871,10 @@ impl Measured {
         })
     }
 
-    /// The rings of a traced part, moved in to the outermost points. The
-    /// two sides of a strip one cell wide are moved by the points of
-    /// different cells and can pass each other; the part then keeps its
-    /// rings along the cell edges, which bound an area, and says so with
-    /// `false`.
+    /// The rings of a traced part, moved in to the outermost points, and
+    /// whether they keep apart. The two sides of a strip one cell wide are
+    /// moved by the points of different cells and can pass each other; the
+    /// part then keeps its rings along the cell edges, which bound an area.
     fn tightened(&self, traced: &CellRegion) -> (Region, bool) {
         let region = Region {
             outer: self.tightened_ring(&traced.outer),
@@ -882,11 +888,8 @@ impl Measured {
             .chain(&region.holes)
             .map(Vec::as_slice)
             .collect();
-        if rings_meet(&rings) {
-            (traced.to_plane(&self.grid), false)
-        } else {
-            (region, true)
-        }
+        let apart = !rings_meet(&rings);
+        (region, apart)
     }
 
     /// A traced ring runs along cell edges, up to a cell beyond the points.
