@@ -722,6 +722,10 @@ Next may leave that step), `next_reason` (why not, or `null`) and `steps`,
 for every step its `id`, `number`, English `name` and `status`: `not_run`,
 `running`, `done` (run, waiting for confirmation), `confirmed`, `skipped`,
 `stale` (run on scans that changed since, or with other choices) or `failed`.
+Step 0 is `stale` as soon as one of its scans moves, loses points or has a
+class hidden, or the core or the main direction chosen for it changes, and
+`done` or `confirmed` again when the change is taken back; confirmed levels
+stay locked meanwhile.
 It also holds `project` (the project file, or `null` before it was first
 written), `project_name`, `project_folder` and `prepare`: `null` before step
 0 ran, and after it `rotation_deg` and `second_direction_deg` (the main
@@ -813,8 +817,11 @@ before it started. The steps after step 0 compute nothing yet: of them only
 `survey/profile.csv` (the horizontal area per height) and `survey/top.png`
 (the view from above) in the folder. The newest eight project files are kept
 in the preferences; the Project Browser offers **Resume Mesh to Plans (step
-n)** for those whose scans are all open. A resumed project whose scans
-changed since step 0 ran has step 0 `stale`.
+n)** for those whose scans are all open, also when a scan was opened by a
+path written with other separators. A resumed project whose scans changed
+since step 0 ran has step 0 `stale`. Run again, step 0 keeps the levels that
+were edited: each takes the place of the level it finds within 1 m of its
+floor.
 
 ## Editing
 

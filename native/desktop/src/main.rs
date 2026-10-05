@@ -5237,6 +5237,7 @@ impl Studio {
         self.settle_views();
         self.settle_drawing();
         self.settle_faces();
+        self.settle_mesh_to_plans();
         task
     }
 

@@ -514,6 +514,11 @@ impl Studio {
             let wizard = &mut self.mesh_to_plans;
             if *wizard.status(done.step) == StepStatus::Running {
                 ended = true;
+                if done.step == WizardStep::Prepare {
+                    // Run again on the scans as they are: up to date.
+                    wizard.stale_from = None;
+                    wizard.watched = None;
+                }
                 wizard.runs[done.step.place()] = StepRun {
                     basis: if done.step == WizardStep::Prepare {
                         basis

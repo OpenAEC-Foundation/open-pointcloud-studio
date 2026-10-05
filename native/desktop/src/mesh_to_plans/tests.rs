@@ -981,14 +981,20 @@ fn a_project_that_appears_in_the_folder_meanwhile_is_not_written_over() {
     );
 }
 
-/// A window with three confirmed levels in step 0, as a run on scans with
-/// this basis left them, whose project goes to `folder`.
+/// The basis of step 0 of a window without scans.
+fn basis_without_scans(studio: &Studio) -> u128 {
+    project::prepare_basis(&[], &studio.mesh_to_plans.prepare.regions)
+}
+
+/// A window with three confirmed levels in step 0, as a run on no scans
+/// left them, whose project goes to `folder`.
 fn studio_with_confirmed_levels(folder: &std::path::Path) -> Studio {
     let mut studio = studio_with_levels();
+    let basis = basis_without_scans(&studio);
     let wizard = &mut studio.mesh_to_plans;
     wizard.set_status(WizardStep::Prepare, StepStatus::Confirmed);
     wizard.runs[WizardStep::Prepare.place()] = StepRun {
-        basis: Some(0x1234),
+        basis: Some(basis),
         finished: Some(1_759_700_100),
         seconds: Some(11.0),
     };
@@ -1018,7 +1024,8 @@ fn a_step_that_runs_is_written_as_it_was_and_exit_writes_what_waits() {
     let saved = project::load(&file).unwrap();
     assert_eq!(saved.status(WizardStep::Prepare), StepStatus::Confirmed);
     let record = &saved.steps["prepare"];
-    assert_eq!(record.basis, Some(project::basis_text(0x1234)));
+    let basis = basis_without_scans(&studio);
+    assert_eq!(record.basis, Some(project::basis_text(basis)));
     assert_eq!(record.seconds, Some(11.0));
     assert_eq!(saved.datum.nap_offset, Some(1.85));
 
@@ -1143,6 +1150,29 @@ fn a_project_resumes_on_its_next_step_and_finds_a_changed_scan() {
     assert!(wizard_state.prepare.top.is_some(), "the view from above");
     assert_eq!(wizard_state.project_name, "building");
     assert_eq!(second.status, "Mesh to Plans project building opened");
+
+    // The scan opened by a path typed with other separators is the same
+    // scan: offered, and step 0 is as it was.
+    let mut text = std::fs::read_to_string(&file).unwrap();
+    let typed = scan.display().to_string();
+    text = text.replace(
+        &serde_json::to_string(&typed).unwrap(),
+        &serde_json::to_string(&typed.replace('\\', "/")).unwrap(),
+    );
+    let retyped = directory.path().join("Retyped").join(project::FILE_NAME);
+    std::fs::create_dir_all(retyped.parent().unwrap()).unwrap();
+    std::fs::write(&retyped, text).unwrap();
+    let mut retyped_studio = Studio::default();
+    let cloud = std::sync::Arc::new(pointcloud_core::open(&path, 1_000_000).unwrap());
+    let _ = retyped_studio.update(Message::Loaded(Ok(cloud)));
+    retyped_studio.mesh_to_plans.recent_projects =
+        project::read_recent(std::slice::from_ref(&retyped));
+    assert!(retyped_studio.mesh_to_plans_browser().is_some());
+    let _ = retyped_studio.update(wizard(WizardAction::Resume(retyped.clone())));
+    assert_eq!(
+        *retyped_studio.mesh_to_plans.status(WizardStep::Prepare),
+        StepStatus::Confirmed
+    );
     let _ = second.update(wizard(WizardAction::Step(WizardStep::Prepare)));
     let _ = second.view();
 
@@ -1191,6 +1221,112 @@ fn a_project_resumes_on_its_next_step_and_finds_a_changed_scan() {
         command(json!({"command": "mesh_to_plans_action", "action": "resume"})),
     );
     assert_eq!(answer["error"], "resume needs the folder of the project");
+}
+
+fn prepare_status(studio: &Studio) -> StepStatus {
+    studio.mesh_to_plans.status(WizardStep::Prepare).clone()
+}
+
+#[test]
+fn step_0_is_out_of_date_as_soon_as_the_scans_or_the_choices_change() {
+    let _language = TestLanguage::hold(Language::English);
+    let directory = tempfile::tempdir().unwrap();
+    let (mut studio, _) = studio_with_building(directory.path());
+    let folder = directory.path().join("Office");
+    studio.mesh_to_plans.project_folder = folder.display().to_string();
+    let _ = studio.update(wizard(WizardAction::Open));
+    prepare_and_save(&mut studio);
+    let _ = studio.update(wizard(WizardAction::Confirm));
+    assert_eq!(prepare_status(&studio), StepStatus::Confirmed);
+    assert!(studio.mesh_to_plans.step_ready().is_ok());
+
+    // A main direction typed after the run: out of date, Next waits, and
+    // the confirmed levels stay locked.
+    act(&mut studio, PrepareAction::Rotation("20".into()));
+    assert_eq!(prepare_status(&studio), StepStatus::Stale);
+    assert_eq!(status(&mut studio)["steps"][0]["status"], "stale");
+    assert_eq!(
+        studio.mesh_to_plans.step_ready().unwrap_err().english(),
+        "The scans or the choices changed since this step ran: run it again"
+    );
+    act(&mut studio, PrepareAction::Remove);
+    assert_eq!(studio.status, "Edit levels first: they are confirmed");
+    let _ = studio.view();
+    // The file keeps the step as it was with the basis it ran on, so that
+    // it is out of date when the project is opened again.
+    let revision = studio.mesh_to_plans.save_revision;
+    let _ = studio.update(wizard(WizardAction::Save(revision)));
+    let saved = project::load(&folder.join(project::FILE_NAME)).unwrap();
+    assert_eq!(saved.status(WizardStep::Prepare), StepStatus::Confirmed);
+    assert_eq!(saved.regions.chosen_rotation, Some(20.0));
+    // Taken back, the step is as it was.
+    act(&mut studio, PrepareAction::Rotation(String::new()));
+    assert_eq!(prepare_status(&studio), StepStatus::Confirmed);
+
+    // The scan moved, and back.
+    studio.clouds[0].transform.offset[0] += 0.5;
+    let _ = studio.update(wizard(WizardAction::Poll));
+    assert_eq!(prepare_status(&studio), StepStatus::Stale);
+    studio.clouds[0].transform.offset[0] -= 0.5;
+    let _ = studio.update(wizard(WizardAction::Poll));
+    assert_eq!(prepare_status(&studio), StepStatus::Confirmed);
+    // A deletion that was undone deletes nothing.
+    let total = studio.clouds[0].cloud.total_points;
+    studio.clouds[0].deleted = Some(std::sync::Arc::new(
+        crate::selection::DeletionMask::new(total).unwrap(),
+    ));
+    let _ = studio.update(wizard(WizardAction::Poll));
+    assert_eq!(prepare_status(&studio), StepStatus::Confirmed);
+    // The core read from the section box.
+    act(&mut studio, PrepareAction::SectionToBuilding);
+    act(&mut studio, PrepareAction::CoreFromSection);
+    assert_eq!(prepare_status(&studio), StepStatus::Stale);
+
+    // Edit levels while out of date: the step was waiting for confirmation
+    // under it, and it is that once the whole scan is read again.
+    act(&mut studio, PrepareAction::Unlock);
+    assert_eq!(prepare_status(&studio), StepStatus::Stale);
+    act(&mut studio, PrepareAction::Select(1));
+    act(&mut studio, PrepareAction::Name("Office floor".into()));
+    assert_eq!(studio.mesh_to_plans.prepare.levels[1].name, "Office floor");
+    act(&mut studio, PrepareAction::CoreWhole);
+    assert_eq!(prepare_status(&studio), StepStatus::Done);
+}
+
+#[test]
+fn a_run_again_keeps_the_levels_the_user_changed() {
+    use pointcloud_core::plans::LevelStatus;
+    let _language = TestLanguage::hold(Language::English);
+    let directory = tempfile::tempdir().unwrap();
+    let (mut studio, _) = studio_with_building(directory.path());
+    studio.mesh_to_plans.project_folder = directory.path().join("Office").display().to_string();
+    prepare_and_save(&mut studio);
+    let floor = studio.mesh_to_plans.prepare.levels[1].floor_z;
+    act(&mut studio, PrepareAction::Select(1));
+    act(&mut studio, PrepareAction::Name("Office floor".into()));
+    act(&mut studio, PrepareAction::Cut("1,35".into()));
+    act(&mut studio, PrepareAction::Move(1, floor + 0.1));
+    // The main direction typed, and the step run again.
+    act(&mut studio, PrepareAction::Rotation("25".into()));
+    assert_eq!(prepare_status(&studio), StepStatus::Stale);
+    prepare_and_save(&mut studio);
+    assert_eq!(prepare_status(&studio), StepStatus::Done);
+    let levels = &studio.mesh_to_plans.prepare.levels;
+    let found: Vec<(&str, &str, LevelStatus)> = levels
+        .iter()
+        .map(|level| (level.id.as_str(), level.name.as_str(), level.status))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("00", "Ground floor", LevelStatus::Found),
+            ("01", "Office floor", LevelStatus::Edited),
+            ("R", "Roof", LevelStatus::Found),
+        ]
+    );
+    assert!((levels[1].floor_z - (floor + 0.1)).abs() < 1e-9);
+    assert_eq!(levels[1].cut_height, 1.35);
+    assert!(levels[0].is_peil);
 }
 
 /// Three levels as step 0 finds them, on a survey whose grid runs from 1 m

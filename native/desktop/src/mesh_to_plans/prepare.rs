@@ -44,6 +44,9 @@ pub(crate) const LEVEL_ACTIONS: [&str; 6] =
 
 /// Levels snap to heights of this step above P while they are dragged.
 pub(crate) const SNAP: f64 = 0.05;
+/// A level the user changed takes the place of a level a new run finds this
+/// near to its floor.
+const KEEP_REACH: f64 = 1.0;
 /// A level line is taken by the pointer this many pixels away.
 const GRAB: f32 = 6.0;
 /// The building box reaches this far around the footprint.
@@ -582,6 +585,43 @@ impl Prepare {
         for level in &mut levels {
             level.name = default_name(level);
         }
+        // A level the user changed stays as it was: in the place of the
+        // level found nearest to its floor, or beside the levels found.
+        let edited: Vec<Level> = self
+            .levels
+            .iter()
+            .filter(|level| level.status == LevelStatus::Edited)
+            .cloned()
+            .collect();
+        if !edited.is_empty() {
+            if edited.iter().any(|level| level.is_peil) {
+                for level in &mut levels {
+                    level.is_peil = false;
+                }
+            }
+            for kept in edited {
+                let roof = kept.kind == LevelKind::Roof;
+                let nearest = levels
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, found)| {
+                        found.status == LevelStatus::Found
+                            && (found.kind == LevelKind::Roof) == roof
+                            && (found.floor_z - kept.floor_z).abs() <= KEEP_REACH
+                    })
+                    .min_by(|a, b| {
+                        let off = |level: &Level| (level.floor_z - kept.floor_z).abs();
+                        off(a.1).total_cmp(&off(b.1))
+                    })
+                    .map(|(place, _)| place);
+                match nearest {
+                    Some(place) => levels[place] = kept,
+                    None => levels.push(kept),
+                }
+            }
+            renumber(&mut levels, None);
+            slab_thicknesses(&mut levels, &LevelConfig::default());
+        }
         self.levels = levels;
         self.survey = Some(prepared.survey.clone());
         self.top_handle = prepared.top.as_ref().map(TopImage::handle);
@@ -663,12 +703,25 @@ fn send(action: PrepareAction) -> Message {
 }
 
 impl Studio {
-    /// Whether the levels are confirmed and so locked.
+    /// Whether the levels are confirmed and so locked, also while step 0 is
+    /// out of date after they were confirmed.
     pub(crate) fn levels_locked(&self) -> bool {
-        matches!(
-            self.mesh_to_plans.status(WizardStep::Prepare),
-            StepStatus::Confirmed | StepStatus::Running
-        )
+        let wizard = &self.mesh_to_plans;
+        match wizard.status(WizardStep::Prepare) {
+            StepStatus::Confirmed | StepStatus::Running => true,
+            StepStatus::Stale => wizard.stale_from == Some(StepStatus::Confirmed),
+            _ => false,
+        }
+    }
+
+    /// Whether Edit levels opens confirmed levels.
+    fn levels_confirmed(&self) -> bool {
+        let wizard = &self.mesh_to_plans;
+        match wizard.status(WizardStep::Prepare) {
+            StepStatus::Confirmed => true,
+            StepStatus::Stale => wizard.stale_from == Some(StepStatus::Confirmed),
+            _ => false,
+        }
     }
 
     /// What the preparation of a job reads, or why it cannot start: every
@@ -925,10 +978,17 @@ impl Studio {
                 }
             }
             PrepareAction::Unlock => {
-                if *self.mesh_to_plans.status(WizardStep::Prepare) == StepStatus::Confirmed {
-                    self.mesh_to_plans
-                        .set_status(WizardStep::Prepare, StepStatus::Done);
-                    save = true;
+                let wizard = &mut self.mesh_to_plans;
+                match wizard.status(WizardStep::Prepare) {
+                    StepStatus::Confirmed => {
+                        wizard.set_status(WizardStep::Prepare, StepStatus::Done);
+                        save = true;
+                    }
+                    StepStatus::Stale if wizard.stale_from == Some(StepStatus::Confirmed) => {
+                        wizard.stale_from = Some(StepStatus::Done);
+                        save = true;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1395,7 +1455,7 @@ impl Studio {
                 (!locked).then_some(send(PrepareAction::Add)),
             ));
         }
-        if locked && *wizard.status(WizardStep::Prepare) == StepStatus::Confirmed {
+        if self.levels_confirmed() {
             page = page.push(plain(key("Edit levels"), Some(send(PrepareAction::Unlock))));
         }
         page.into()

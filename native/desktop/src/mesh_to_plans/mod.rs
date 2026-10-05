@@ -36,6 +36,8 @@ pub use prepare::PrepareAction;
 pub(crate) use prepare::LEVEL_ACTIONS;
 use project::{MeshToPlansProject, RecentProject, SourceRef, StepRecord};
 
+use std::hash::{Hash, Hasher};
+
 /// How many projects the list of recent ones keeps.
 pub(crate) const MAX_RECENT_PROJECTS: usize = project::MAX_RECENT;
 
@@ -372,6 +374,12 @@ pub(crate) struct Wizard {
     pub(crate) existing: Option<(PathBuf, String)>,
     /// The scans step 0 ran on.
     sources: Vec<SourceRef>,
+    /// What step 0 was, Waiting for confirmation or Confirmed, before the
+    /// scans or the choices changed and made it out of date; it is that
+    /// again when they change back.
+    stale_from: Option<StepStatus>,
+    /// A quick print of what step 0 reads, as last looked at.
+    watched: Option<u64>,
     /// The project files that were worked on last, newest first, and what
     /// they hold as far as the Project Browser needs it.
     pub(crate) recent: Vec<PathBuf>,
@@ -799,6 +807,11 @@ impl Studio {
                     .and_then(|job| job.before(step))
                     .cloned()
                     .unwrap_or_default(),
+                // Out of date in this session: the file keeps what it was,
+                // and the basis tells when it is opened again.
+                StepStatus::Stale if step == WizardStep::Prepare => {
+                    wizard.stale_from.clone().unwrap_or(StepStatus::Stale)
+                }
                 other => other.clone(),
             };
             // A step that only stands in for its work keeps nothing but
@@ -889,8 +902,8 @@ impl Studio {
         };
         let wizard = &mut self.mesh_to_plans;
         wizard.save_revision = wizard.save_revision.wrapping_add(1);
-        let current = self.current_sources(&project);
-        let wizard = &mut self.mesh_to_plans;
+        wizard.stale_from = None;
+        wizard.watched = None;
         let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
         wizard.project = Some(ProjectPlace {
             file: file.to_path_buf(),
@@ -941,15 +954,8 @@ impl Studio {
             };
         }
         // Step 0 is out of date on other scans, or on scans that changed.
-        let saved = wizard.runs[WizardStep::Prepare.place()].basis;
-        let now = current.map(|sources| project::prepare_basis(&sources, &project.regions));
-        let ran = !matches!(
-            wizard.status(WizardStep::Prepare),
-            StepStatus::NotRun | StepStatus::Failed(_)
-        );
-        if ran && (now.is_none() || now != saved) {
-            wizard.set_status(WizardStep::Prepare, StepStatus::Stale);
-        }
+        self.refresh_prepare_stale();
+        let wizard = &mut self.mesh_to_plans;
         wizard.step = project.resume_step();
         if *wizard.status(WizardStep::Prepare) == StepStatus::Stale {
             wizard.step = WizardStep::Prepare;
@@ -968,21 +974,119 @@ impl Studio {
         Task::batch([written, self.queue_preferences_save()])
     }
 
-    /// The scans of a project as they are open now, or none when one of
+    /// The scans step 0 ran on as they are open now, or none when one of
     /// them is not open.
-    fn current_sources(&self, project: &MeshToPlansProject) -> Option<Vec<SourceRef>> {
+    fn current_sources(&self, sources: &[SourceRef]) -> Option<Vec<SourceRef>> {
         let mut filter = self.mesh_filter();
         filter.section = None;
-        project
-            .sources
+        sources
             .iter()
             .map(|source| {
                 self.clouds
                     .iter()
-                    .find(|entry| entry.cloud.path == source.path)
+                    .find(|entry| project::same_path(&entry.cloud.path, &source.path))
                     .map(|entry| SourceRef::of(entry, &filter))
             })
             .collect()
+    }
+
+    /// Whether step 0 is out of date: it ran on scans that are not open now,
+    /// or that changed since, in their file, their transform, their deleted
+    /// points or the classes read, or the core or the main direction chosen
+    /// for it changed. A step that waits for confirmation or is confirmed is
+    /// then out of date, and it is that again when they change back.
+    pub(crate) fn refresh_prepare_stale(&mut self) {
+        let wizard = &self.mesh_to_plans;
+        let place = WizardStep::Prepare.place();
+        let status = wizard.status(WizardStep::Prepare).clone();
+        if !matches!(
+            status,
+            StepStatus::Done | StepStatus::Confirmed | StepStatus::Stale
+        ) {
+            return;
+        }
+        let ran_on = wizard.runs[place].basis;
+        let now = self
+            .current_sources(&wizard.sources)
+            .map(|sources| project::prepare_basis(&sources, &wizard.prepare.regions));
+        let wizard = &mut self.mesh_to_plans;
+        let current = ran_on.is_some() && now == ran_on;
+        match status {
+            StepStatus::Done | StepStatus::Confirmed if !current => {
+                wizard.stale_from = Some(status);
+                wizard.set_status(WizardStep::Prepare, StepStatus::Stale);
+            }
+            StepStatus::Stale if current => {
+                if let Some(before) = wizard.stale_from.take() {
+                    wizard.set_status(WizardStep::Prepare, before);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A quick print of what step 0 reads: per scan it ran on whether it is
+    /// open, which load of it, its transform and its deleted points, and
+    /// the classes read and the choices for the survey. It changes with
+    /// everything that changes the basis of the step in this session.
+    fn prepare_watch(&self) -> u64 {
+        let wizard = &self.mesh_to_plans;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let regions = &wizard.prepare.regions;
+        regions.chosen_rotation.map(f64::to_bits).hash(&mut hasher);
+        regions
+            .chosen_core
+            .map(|core| {
+                (
+                    core.min.map(f64::to_bits),
+                    core.max.map(f64::to_bits),
+                    core.rotation_deg.to_bits(),
+                )
+            })
+            .hash(&mut hasher);
+        let mut filter = self.mesh_filter();
+        filter.section = None;
+        project::hidden_classes(&filter).hash(&mut hasher);
+        for source in &wizard.sources {
+            let entry = self
+                .clouds
+                .iter()
+                .find(|entry| project::same_path(&entry.cloud.path, &source.path));
+            entry
+                .map(|entry| {
+                    (
+                        std::sync::Arc::as_ptr(&entry.cloud) as usize,
+                        entry.transform.scale.map(f64::to_bits),
+                        entry.transform.offset.map(f64::to_bits),
+                        entry
+                            .deleted
+                            .as_ref()
+                            .map(|mask| (std::sync::Arc::as_ptr(mask) as usize, mask.count)),
+                    )
+                })
+                .hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// After every message: when what step 0 reads changed, look whether it
+    /// is out of date, or no longer.
+    pub(crate) fn settle_mesh_to_plans(&mut self) {
+        let wizard = &self.mesh_to_plans;
+        let watching = wizard.runs[WizardStep::Prepare.place()].basis.is_some()
+            && matches!(
+                wizard.status(WizardStep::Prepare),
+                StepStatus::Done | StepStatus::Confirmed | StepStatus::Stale
+            );
+        if !watching {
+            self.mesh_to_plans.watched = None;
+            return;
+        }
+        let watch = self.prepare_watch();
+        if self.mesh_to_plans.watched != Some(watch) {
+            self.mesh_to_plans.watched = Some(watch);
+            self.refresh_prepare_stale();
+        }
     }
 
     /// The Mesh to Plans part of the Project Browser: the recent projects
@@ -1003,7 +1107,7 @@ impl Studio {
                     && recent
                         .sources
                         .iter()
-                        .all(|source| open.contains(&source.as_path()))
+                        .all(|source| open.iter().any(|path| project::same_path(path, source)))
             })
             .collect();
         if resumable.is_empty() {

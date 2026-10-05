@@ -100,16 +100,8 @@ impl SourceRef {
             .and_then(|metadata| metadata.modified().ok())
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |since| since.as_secs());
-        let hidden_classes = (0..=u8::MAX)
-            .filter(|code| {
-                !filter.accepts(&Point {
-                    xyz: [0.0; 3],
-                    rgb: None,
-                    intensity: None,
-                    classification: Some(*code),
-                })
-            })
-            .collect();
+        // A mask from which every deletion was undone deletes nothing.
+        let deleted = entry.deleted.as_ref().filter(|mask| mask.count > 0);
         Self {
             path,
             file_len: metadata.map_or(0, |metadata| metadata.len()),
@@ -117,18 +109,15 @@ impl SourceRef {
             points: entry.cloud.total_points,
             scale: entry.transform.scale,
             offset: entry.transform.offset,
-            deleted_points: entry.deleted.as_ref().map_or(0, |mask| mask.count),
-            deletions_digest: format!(
-                "{:016x}",
-                entry.deleted.as_ref().map_or(0, |mask| mask.digest())
-            ),
-            hidden_classes,
+            deleted_points: deleted.map_or(0, |mask| mask.count),
+            deletions_digest: format!("{:016x}", deleted.map_or(0, |mask| mask.digest())),
+            hidden_classes: hidden_classes(filter),
         }
     }
 
     fn hash_into(&self, hasher: &mut StableHasher) {
         hasher
-            .str(&self.path.to_string_lossy())
+            .str(&path_key(&self.path))
             .u64(self.file_len)
             .u64(self.mtime)
             .u64(self.points)
@@ -138,6 +127,51 @@ impl SourceRef {
             .str(&self.deletions_digest)
             .bytes(&self.hidden_classes);
     }
+}
+
+/// The classes a filter does not read.
+pub(crate) fn hidden_classes(filter: &ClassFilter) -> Vec<u8> {
+    (0..=u8::MAX)
+        .filter(|code| {
+            !filter.accepts(&Point {
+                xyz: [0.0; 3],
+                rgb: None,
+                intensity: None,
+                classification: Some(*code),
+            })
+        })
+        .collect()
+}
+
+/// A path as one text whatever separators it was typed with, and on Windows,
+/// whose file names do not tell capitals, in small letters: the same file
+/// opened through the file dialog or through the local API has one.
+pub(crate) fn path_key(path: &Path) -> String {
+    use std::path::Component;
+    let mut key = String::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::RootDir => key.push('/'),
+            Component::Prefix(prefix) => key.push_str(&prefix.as_os_str().to_string_lossy()),
+            other => {
+                if !key.is_empty() && !key.ends_with('/') {
+                    key.push('/');
+                }
+                key.push_str(&other.as_os_str().to_string_lossy());
+            }
+        }
+    }
+    if cfg!(windows) {
+        key.to_lowercase()
+    } else {
+        key
+    }
+}
+
+/// Whether two paths name the same file as `path_key` tells it.
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
+    a == b || path_key(a) == path_key(b)
 }
 
 /// Where the building lies in the world, as far as the user knows it.
@@ -794,6 +828,37 @@ mod tests {
         assert_eq!(free_folder(root, "Office"), root.join("Office 2"));
         save(&project_file(&root.join("Office 2")), &sample()).unwrap();
         assert_eq!(free_folder(root, "Office"), root.join("Office 3"));
+    }
+
+    #[test]
+    fn a_scan_has_one_basis_however_its_path_was_typed() {
+        let regions = Regions::default();
+        let first = prepare_basis(&[source(1_759_700_000)], &regions);
+        let mut typed = source(1_759_700_000);
+        typed.path = PathBuf::from("C:/scans/./office.laz");
+        assert_eq!(prepare_basis(&[typed], &regions), first);
+        assert!(same_path(
+            Path::new("C:/scans/office.laz"),
+            Path::new("C:/scans/./office.laz")
+        ));
+        assert!(!same_path(
+            Path::new("C:/scans/office.laz"),
+            Path::new("C:/scans/other.laz")
+        ));
+        #[cfg(windows)]
+        {
+            let mut typed = source(1_759_700_000);
+            typed.path = PathBuf::from(r"c:\Scans\Office.LAZ");
+            assert_eq!(prepare_basis(&[typed], &regions), first);
+            assert!(same_path(
+                Path::new(r"C:\scans\office.laz"),
+                Path::new("c:/Scans/office.laz")
+            ));
+            assert_eq!(
+                path_key(Path::new(r"C:\scans\office.laz")),
+                "c:/scans/office.laz"
+            );
+        }
     }
 
     #[test]
