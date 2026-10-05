@@ -9227,6 +9227,7 @@ impl Studio {
     fn point_viewport(&self) -> PointViewport<'_> {
         PointViewport {
             clouds: &self.clouds,
+            scene: self.ui_theme.colors(),
             loading_status: (!self.imports.is_empty()).then_some(self.status.as_str()),
             color_mode: self.color_mode,
             point_size: self.point_size,
@@ -9902,14 +9903,13 @@ impl Studio {
         } else {
             (i18n::tr("MODEL SPACE"), self.view_caption().to_owned())
         };
+        let scene_colors = self.ui_theme.colors();
         let viewport_header = row![
             text(title)
                 .size(12)
                 .font(Font::with_name("Space Grotesk"))
-                .color(Color::from_rgb8(250, 250, 249)),
-            text(caption)
-                .size(11)
-                .color(Color::from_rgb8(161, 161, 170)),
+                .color(scene_colors.scene_text),
+            text(caption).size(11).color(scene_colors.scene_muted),
             iced::widget::horizontal_space(),
             self.drawing_view_tabs(),
         ]
@@ -10317,8 +10317,8 @@ fn sidebar_style(theme: &Theme) -> container::Style {
         })
 }
 
-fn viewport_style(_: &Theme) -> container::Style {
-    container::Style::default().background(Color::from_rgb8(42, 42, 50))
+fn viewport_style(theme: &Theme) -> container::Style {
+    container::Style::default().background(ui_theme::colors(theme).scene)
 }
 
 fn status_style(theme: &Theme) -> container::Style {
@@ -10864,6 +10864,9 @@ fn selected_source_bounds(
 #[derive(Clone, Copy)]
 struct PointViewport<'a> {
     clouds: &'a [CloudEntry],
+    /// Colours of the scene in the chosen theme: text drawn straight on it
+    /// must stay readable on a white scene.
+    scene: ui_theme::UiColors,
     loading_status: Option<&'a str>,
     color_mode: ColorMode,
     point_size: f32,
@@ -11030,14 +11033,14 @@ struct ViewportState {
 }
 
 /// What the status line says when the mouse is back to selecting.
-const SELECT_MODE_STATUS: &str = "Select: click a point or drag a rectangle to select, middle drag or Alt + left drag to orbit, right drag to pan, double-click to orbit about a point";
+const SELECT_MODE_STATUS: &str = "Select: click a point or drag a rectangle to select, Shift + middle drag to orbit, middle or right drag to pan, double-click to orbit about a point";
 
-/// The middle button orbits; with Shift it pans, as the right button does.
+/// The middle button pans, as the right button does; with Shift it orbits.
 fn middle_drag_mode(modifiers: iced::keyboard::Modifiers) -> DragMode {
     if modifiers.shift() {
-        DragMode::Pan
-    } else {
         DragMode::Orbit
+    } else {
+        DragMode::Pan
     }
 }
 
@@ -11615,7 +11618,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 horizontal_alignment: iced::alignment::Horizontal::Center,
                 vertical_alignment: iced::alignment::Vertical::Center,
                 size: iced::Pixels(16.0),
-                color: Color::WHITE,
+                color: self.scene.scene_text,
                 ..canvas::Text::default()
             });
             if let Some(status) = self.loading_status {
@@ -11625,7 +11628,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     horizontal_alignment: iced::alignment::Horizontal::Center,
                     vertical_alignment: iced::alignment::Vertical::Center,
                     size: iced::Pixels(12.0),
-                    color: Color::from_rgb8(180, 183, 191),
+                    color: self.scene.scene_muted,
                     ..canvas::Text::default()
                 });
             }
@@ -11747,7 +11750,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             content: format!("{name}{}", if is_min { "-" } else { "+" }),
                             position: UiPoint::new(x + 8.0, y + 3.0),
                             size: iced::Pixels(10.0),
-                            color: Color::from_rgb8(245, 188, 100),
+                            color: self.scene.scene_label,
                             ..canvas::Text::default()
                         });
                     }
@@ -13893,18 +13896,18 @@ mod viewport_drag_tests {
     }
 
     #[test]
-    fn middle_drag_orbits_while_shift_middle_drag_pans() {
+    fn shift_middle_drag_orbits_while_middle_drag_pans() {
         assert!(matches!(
             middle_drag_mode(iced::keyboard::Modifiers::SHIFT),
-            DragMode::Pan
+            DragMode::Orbit
         ));
         assert!(matches!(
             middle_drag_mode(iced::keyboard::Modifiers::default()),
-            DragMode::Orbit
+            DragMode::Pan
         ));
         assert!(matches!(
             middle_drag_mode(iced::keyboard::Modifiers::CTRL),
-            DragMode::Orbit
+            DragMode::Pan
         ));
 
         let start = UiPoint::new(10.0, 20.0);
@@ -13912,7 +13915,7 @@ mod viewport_drag_tests {
         let orbit = DragState {
             start,
             position: UiPoint::new(25.0, 25.0),
-            mode: middle_drag_mode(iced::keyboard::Modifiers::default()),
+            mode: middle_drag_mode(iced::keyboard::Modifiers::SHIFT),
         };
         let message = finish_viewport_drag(
             mouse::Button::Middle,
@@ -13921,7 +13924,7 @@ mod viewport_drag_tests {
             Size::new(800.0, 600.0),
         )
         .unwrap();
-        // The middle drag orbits as the left drag did before it selected.
+        // Shift with the middle drag orbits as the left drag did before it selected.
         assert!(matches!(message, Message::FinishOrbit(10.0, 5.0)));
         let yaw = studio.yaw;
         let pitch = studio.pitch;

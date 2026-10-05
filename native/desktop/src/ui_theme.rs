@@ -60,6 +60,10 @@ impl UiTheme {
                 file_tab_text: Color::from_rgb8(54, 54, 62),
                 file_tab_hover: Color::from_rgb8(234, 88, 12),
                 hover: Color::from_rgba8(161, 161, 170, 0.12),
+                scene: Color::from_rgb8(42, 42, 50),
+                scene_text: Color::from_rgb8(250, 250, 249),
+                scene_muted: Color::from_rgb8(161, 161, 170),
+                scene_label: Color::from_rgb8(245, 188, 100),
             },
             Self::Light => UiColors {
                 shell: Color::from_rgb8(250, 250, 249),
@@ -81,6 +85,10 @@ impl UiTheme {
                 file_tab_text: Color::WHITE,
                 file_tab_hover: Color::from_rgb8(234, 88, 12),
                 hover: Color::from_rgba8(54, 54, 62, 0.06),
+                scene: Color::WHITE,
+                scene_text: Color::from_rgb8(28, 25, 23),
+                scene_muted: Color::from_rgb8(113, 113, 122),
+                scene_label: Color::from_rgb8(180, 83, 9),
             },
             Self::Night => UiColors {
                 shell: Color::from_rgb8(39, 39, 42),
@@ -102,6 +110,10 @@ impl UiTheme {
                 file_tab_text: Color::from_rgb8(39, 39, 42),
                 file_tab_hover: Color::from_rgb8(234, 88, 12),
                 hover: Color::from_rgba8(161, 161, 170, 0.12),
+                scene: Color::from_rgb8(42, 42, 50),
+                scene_text: Color::from_rgb8(250, 250, 249),
+                scene_muted: Color::from_rgb8(161, 161, 170),
+                scene_label: Color::from_rgb8(245, 188, 100),
             },
             Self::Blueprint => UiColors {
                 shell: Color::from_rgb8(15, 27, 45),
@@ -123,6 +135,10 @@ impl UiTheme {
                 file_tab_text: Color::from_rgb8(15, 27, 45),
                 file_tab_hover: Color::from_rgb8(147, 197, 253),
                 hover: Color::from_rgba8(152, 193, 217, 0.12),
+                scene: Color::from_rgb8(42, 42, 50),
+                scene_text: Color::from_rgb8(250, 250, 249),
+                scene_muted: Color::from_rgb8(161, 161, 170),
+                scene_label: Color::from_rgb8(245, 188, 100),
             },
             Self::Contrast => UiColors {
                 shell: Color::BLACK,
@@ -144,6 +160,10 @@ impl UiTheme {
                 file_tab_text: Color::BLACK,
                 file_tab_hover: Color::from_rgb8(255, 255, 0),
                 hover: Color::from_rgba8(255, 215, 0, 0.25),
+                scene: Color::from_rgb8(42, 42, 50),
+                scene_text: Color::from_rgb8(250, 250, 249),
+                scene_muted: Color::from_rgb8(200, 200, 200),
+                scene_label: Color::from_rgb8(255, 215, 0),
             },
         }
     }
@@ -218,6 +238,13 @@ pub struct UiColors {
     pub file_tab_text: Color,
     pub file_tab_hover: Color,
     pub hover: Color,
+    /// Background of the 3D scene: white in the light theme.
+    pub scene: Color,
+    /// Text drawn straight on the scene, and its quieter variant.
+    pub scene_text: Color,
+    pub scene_muted: Color,
+    /// Labels beside the handles of the section box.
+    pub scene_label: Color,
 }
 
 pub fn colors(theme: &Theme) -> UiColors {

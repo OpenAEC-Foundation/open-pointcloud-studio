@@ -92,9 +92,9 @@ The percentage needs a known total: an E57 file states its record count, and an 
 ## Looking around
 
 - The left button selects: a click selects the point under the pointer and a drag draws a rectangle that selects the points inside it (see **Select** under Selecting).
-- Drag with the middle button to orbit, or with the left button while Alt is held.
+- Drag with the middle button while Shift is held to orbit, or with the left button while Alt is held.
 - Double-click a point to orbit about it: from then on the view turns about that point, which stays where it is on the screen, and a small target marks it while the view turns. Double-click where no point is drawn, or use Zoom all, to orbit about the centre of the model again. The view does not move when the point is set. While the section box is on and no point is set, the view turns about the centre of the box.
-- Drag with the right button, or with the middle button while Shift is held, to pan.
+- Drag with the middle or the right button to pan.
 - Turn the wheel to zoom at the pointer.
 - `F` or **Zoom all** returns to the isometric overview of the whole model: it resets the direction, the zoom and the pan.
 - The **VIEW** group has **Zoom all**, **Fit stations** and **Isometric**; the six directions are on the view cube.
@@ -168,7 +168,7 @@ A turned box clips the points, the exports, the selections, the meshers and **De
 
 - **Select** is the plain mouse, and what Escape returns to: a click selects the nearest point of the active scan within eight pixels, as Pick point does, a drag orbits and a double-click sets the orbit point. The button is lit while no other tool is on.
 - **Box select**: draw a rectangle in the scene. Every source point of every visible scan inside it is selected, not only the points on screen. With an index the search visits only the parts of the index that the rectangle touches; without one it reads the whole source. While a search runs, **Cancel selection** takes the place of Zoom selection; a cancelled search leaves the previous selection as it was.
-- **Pick point**: click a point. The nearest point of the active scan within eight pixels of the pointer is selected, and Properties shows its coordinates, colour, intensity and class under **Selected point**. While Pick point is on, the point under the pointer is picked when the left button is released, also after a drag. Orbit with a middle drag and pan with a right drag.
+- **Pick point**: click a point. The nearest point of the active scan within eight pixels of the pointer is selected, and Properties shows its coordinates, colour, intensity and class under **Selected point**. While Pick point is on, the point under the pointer is picked when the left button is released, also after a drag. Orbit with Shift and a middle drag, and pan with a middle or right drag.
 - **Clear** drops the selection. Escape leaves the active tool for Select and drops the selection as well.
 - **Zoom selection** frames the selected points without changing the section box.
 
@@ -881,8 +881,8 @@ Nothing is written beside the scans, and the scans themselves are never changed.
 | Left drag | Draw a rectangle that selects the points inside it; in Distance, Area, Note and Line, orbit; in Pick point, the point under the pointer is picked on release |
 | Alt + left drag | Orbit |
 | Left click | Select the point under the pointer; pick a point in Pick point, Distance, Area, Note and Line; click a station marker, a station ball or the view cube |
-| Middle drag | Orbit |
-| Right drag, Shift + middle drag | Pan |
+| Middle or right drag | Pan |
+| Shift + middle drag | Orbit |
 | Double click | Orbit about the point under the pointer; where no point is, about the centre of the model |
 | Wheel | Zoom at the pointer |
 | Drag, in the Drawing view | Pan the drawing; the wheel zooms about the pointer |
