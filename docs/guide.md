@@ -37,7 +37,7 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 - The **scene** in the middle is the 3D view, with the view cube in a corner.
 - The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the saved views and the annotations of the active view, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the Section drawing, Closed mesh and Detect faces blocks while those tools are open, the strength of eye-dome lighting while that is on, the 3D surface settings, the size of the mesh of the active scan with its open edges and connected parts, and the progress of mesh, merge and scale jobs with their cancel buttons.
 - The **status bar** at the bottom says what is going on, how many files and points are open and how many points are selected, and ends with the version.
-- The **File view** opens with the File button and covers the ribbon and the scene. Its menu has the import entries, **3D BAG buildings…**, the exports and the merge, above the pages Workspace, Extensions and About and the entries **Settings…**, **Return to model** and **Exit**. The Workspace page lists the open scans (click one to make it the active scan, the same as a click on its row in the project panel) and has the export format and the "every Nth point" setting. Escape or Return to model closes the File view.
+- The **File view** opens with the File button and covers the ribbon and the scene. Its menu leads to the pages **New**, **Open**, **Import** and **Export**, then **Workspace**, **Extensions** and **About**, and ends with **Settings…**, **Return to model** and **Exit**. Each task is a tile that says what it writes or what it needs, and is greyed while it cannot run. **New** closes every open scan (the files are not changed); **Open** has **Point cloud…** and **Scan folder…**; **Import** has **3D BAG buildings…**; **Export** groups the point cloud exports (with the format and the "every Nth point" step), the drawings and models, the BCF views and the merge. The Workspace page lists the open scans (click one to make it the active scan, the same as a click on its row in the project panel). Escape or Return to model closes the File view.
 
 The title of the window is the file name of the active scan followed by the name and the version of the application, such as `rooms.las - Open Pointcloud Studio v0.8.0`; without a scan it is the name and the version alone.
 
@@ -164,9 +164,10 @@ A turned box clips the points, the exports, the selections, the meshers and **De
 
 ### Selecting
 
+- **Select** is the plain mouse, and what Escape returns to: a click selects the nearest point of the active scan within eight pixels, as Pick point does, a drag orbits and a double-click sets the orbit point. The button is lit while no other tool is on.
 - **Box select**: draw a rectangle in the scene. Every source point of every visible scan inside it is selected, not only the points on screen. With an index the search visits only the parts of the index that the rectangle touches; without one it reads the whole source. While a search runs, **Cancel selection** takes the place of Zoom selection; a cancelled search leaves the previous selection as it was.
 - **Pick point**: click a point. The nearest point of the active scan within eight pixels of the pointer is selected, and Properties shows its coordinates, colour, intensity and class under **Selected point**. A left drag does not orbit while Pick point is on: the point under the pointer is picked when the button is released. Pan with a middle or right drag, or orbit with Shift and a middle drag.
-- **Clear** drops the selection. Escape leaves the selection tool and drops the selection as well.
+- **Clear** drops the selection. Escape leaves the active tool for Select and drops the selection as well.
 - **Zoom selection** frames the selected points without changing the section box.
 
 Selections honour the section box, the hidden classes and the points deleted before. For a very large selection the scene highlights a sample of the selected points; the count in Properties and in the status bar is the exact one.
@@ -855,7 +856,7 @@ Nothing is written beside the scans, and the scans themselves are never changed.
 | Ctrl+Y, Ctrl+Shift+Z | Redo |
 | Enter | Finish a measurement; place a note |
 | Backspace | Remove the last point of a measurement |
-| Escape | Close Settings or the File view; cancel a half-placed annotation; leave walking; otherwise leave the active tool, stop a running selection and drop the selection |
+| Escape | Close Settings or the File view; cancel a half-placed annotation; leave walking; otherwise leave the active tool for Select, stop a running selection and drop the selection |
 | `W` `A` `S` `D` | Walk forward, left, back and right |
 | `Q` `E` | Move down and up |
 | Shift, while walking | Walk faster |

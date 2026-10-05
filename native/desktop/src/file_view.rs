@@ -1,12 +1,13 @@
 //! The File view: the backstage the File button opens over the model. Its
-//! menu starts imports and exports, chooses a page and holds the Settings,
-//! About and Exit entries of the OpenAEC style book; the pages are the
-//! workspace with the open scans, the extensions and what the application is.
+//! menu leads to the pages New, Open, Import and Export, which hold the file
+//! tasks as tiles, to the workspace with the open scans, the extensions and
+//! what the application is, and holds the Settings, Return and Exit entries
+//! of the OpenAEC style book.
 
 use std::sync::atomic::Ordering;
 
 use iced::widget::{
-    button, column, container, horizontal_space, pick_list, row, scrollable, text, Space,
+    button, column, container, horizontal_space, pick_list, row, scrollable, text, Column, Space,
 };
 use iced::{Element, Fill, Font, Task};
 use pointcloud_core::ExportFormat;
@@ -23,7 +24,15 @@ use crate::{
 /// `Studio::file_page_view`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilePage {
-    /// The open scans and the export settings.
+    /// Start again with an empty workspace.
+    New,
+    /// Open scan files and scan folders.
+    Open,
+    /// Bring in data from elsewhere, such as the 3D BAG.
+    Import,
+    /// Every export, grouped by what it writes.
+    Export,
+    /// The open scans.
     #[default]
     Workspace,
     /// The optional features and their switches.
@@ -33,11 +42,23 @@ pub enum FilePage {
 
 impl FilePage {
     /// The pages in the order of the menu.
-    pub const ALL: [Self; 3] = [Self::Workspace, Self::Extensions, Self::About];
+    pub const ALL: [Self; 7] = [
+        Self::New,
+        Self::Open,
+        Self::Import,
+        Self::Export,
+        Self::Workspace,
+        Self::Extensions,
+        Self::About,
+    ];
 
     /// The English name of the page in the menu.
     pub fn label(self) -> &'static str {
         match self {
+            Self::New => key("New"),
+            Self::Open => key("Open"),
+            Self::Import => key("Import"),
+            Self::Export => key("Export"),
             Self::Workspace => key("Workspace"),
             Self::Extensions => key("Extensions"),
             Self::About => key("About"),
@@ -47,6 +68,10 @@ impl FilePage {
     /// The name the local API knows the page by.
     pub fn id(self) -> &'static str {
         match self {
+            Self::New => "new",
+            Self::Open => "open",
+            Self::Import => "import",
+            Self::Export => "export",
             Self::Workspace => "workspace",
             Self::Extensions => "extensions",
             Self::About => "about",
@@ -61,11 +86,19 @@ impl FilePage {
     pub fn ids() -> Vec<&'static str> {
         Self::ALL.into_iter().map(Self::id).collect()
     }
+
+    /// The pages that do the file tasks; the menu sets them apart from the
+    /// pages that show what is open and what the application is.
+    fn is_task(self) -> bool {
+        matches!(self, Self::New | Self::Open | Self::Import | Self::Export)
+    }
 }
 
-/// An entry of the File view menu that starts a task and closes the view.
+/// A tile of a File view page that starts a task and closes the view.
 #[derive(Debug, Clone, Copy)]
 pub enum FileAction {
+    /// Close every open scan; the files themselves are not touched.
+    NewWorkspace,
     Import,
     ImportFolder,
     /// Show the panel that downloads buildings of the 3D BAG.
@@ -89,12 +122,19 @@ pub enum FileAction {
 
 /// The height of a menu row that leads to a page.
 const PAGE_ROW_H: f32 = 40.0;
+/// The widest a column of tiles grows on a wide window.
+const TILE_COLUMN_W: f32 = 620.0;
 
 impl Studio {
-    /// Carry out an entry of the File view menu and return to the model.
+    /// Carry out a tile of the File view and return to the model.
     pub(crate) fn file_action(&mut self, action: FileAction) -> Task<Message> {
         self.file_open = false;
-        self.update(match action {
+        let message = match action {
+            FileAction::NewWorkspace => {
+                let task = self.remove_clouds((0..self.clouds.len()).collect());
+                self.status = tr("New workspace: the open scans were closed").into();
+                return task;
+            }
             FileAction::Import => Message::Open,
             FileAction::ImportFolder => Message::OpenFolder,
             FileAction::Bag3d => Message::ShowBagPanel,
@@ -112,7 +152,8 @@ impl Studio {
             FileAction::ExportBcf => Message::Views(views::ViewAction::ExportBcf),
             FileAction::MergeVisible => Message::MergeVisible,
             FileAction::CancelMerge => Message::CancelMerge,
-        })
+        };
+        self.update(message)
     }
 
     pub(crate) fn file_view(&self) -> Element<'_, Message> {
@@ -132,6 +173,10 @@ impl Studio {
     /// The page the menu has chosen.
     fn file_page_view(&self) -> Element<'_, Message> {
         match self.file_page {
+            FilePage::New => self.new_page(),
+            FilePage::Open => self.open_page(),
+            FilePage::Import => self.import_page(),
+            FilePage::Export => self.export_page(),
             FilePage::Workspace => self.workspace_page(),
             FilePage::Extensions => self.extensions_page(),
             FilePage::About => self.about_page(),
@@ -178,99 +223,22 @@ impl Studio {
         json!({"ok": true, "file_view": self.file_view_value()})
     }
 
-    /// The menu at the left: the tasks, which scroll when the window is low,
-    /// above the pages and the entries every OpenAEC application has.
+    /// The menu at the left: the task pages, then the pages that show what
+    /// is open and what the application is, then the entries every OpenAEC
+    /// application has.
     fn file_menu(&self) -> Element<'_, Message> {
-        let colors = self.ui_theme.colors();
-        let item = |label: &'static str, message: Option<Message>| {
+        let rule = || {
+            container(Space::new(Fill, 1)).style(|theme| {
+                container::Style::default().background(ui_theme::colors(theme).border)
+            })
+        };
+        let item = |label: &'static str, message: Message| {
             button(text(tr(label)).size(14))
-                .on_press_maybe(message)
+                .on_press(message)
                 .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
                 .width(Fill)
                 .padding([11, 18])
         };
-        let entry = |label: &'static str, action: FileAction, available: bool| {
-            item(label, available.then_some(Message::FileAction(action)))
-        };
-        let active_cloud = self.active.and_then(|index| self.clouds.get(index));
-        let active_selected = active_cloud
-            .and_then(|entry| entry.selection.as_ref())
-            .map_or(0, |selection| selection.count);
-        let tasks = column![
-            container(text(tr("FILE")).size(12).color(colors.accent)).padding([20, 18]),
-            entry("Import point cloud…", FileAction::Import, true),
-            entry("Open scan folder…", FileAction::ImportFolder, true),
-            entry(
-                "3D BAG buildings…",
-                FileAction::Bag3d,
-                self.extensions.enabled(extensions::BAG3D),
-            ),
-            container(text(tr("EXPORT")).size(10).color(colors.muted)).padding(iced::Padding {
-                top: 22.0,
-                right: 18.0,
-                bottom: 7.0,
-                left: 18.0,
-            }),
-            entry(
-                "Full resolution…",
-                FileAction::ExportFull,
-                active_cloud.is_some()
-            ),
-            entry(
-                "Selected points…",
-                FileAction::ExportSelection,
-                active_selected > 0
-            ),
-            entry(
-                "Without selected points…",
-                FileAction::ExportWithoutSelection,
-                active_selected > 0
-            ),
-            entry(
-                "Section box…",
-                FileAction::ExportSection,
-                active_cloud.is_some() && self.section_enabled && !self.section_export_pending,
-            ),
-            entry(
-                "Section drawing…",
-                FileAction::ExportDrawing,
-                self.drawing_entry_enabled(),
-            ),
-            entry(
-                "Every Nth point…",
-                FileAction::ExportDecimated,
-                active_cloud.is_some()
-            ),
-            entry(
-                "Merge visible LAS/LAZ scans…",
-                FileAction::MergeVisible,
-                self.merge_job.is_none()
-                    && !self.merge_dialog_pending
-                    && self.visible_merge_sources().is_ok(),
-            ),
-            entry(
-                "Cancel merge",
-                FileAction::CancelMerge,
-                self.merge_job.is_some(),
-            ),
-            entry(
-                "Surface mesh…",
-                FileAction::ExportMesh,
-                active_cloud.is_some_and(|entry| entry.mesh.is_some()) && !self.mesh_export_pending,
-            ),
-            entry(
-                "Detected faces…",
-                FileAction::ExportFaces,
-                self.faces_entry_enabled(),
-            ),
-            entry(
-                "Views as BCF…",
-                FileAction::ExportBcf,
-                self.can_export_bcf(),
-            ),
-        ]
-        .width(Fill);
-
         // The open page carries the accent bar of the style book at its left.
         let page = |page: FilePage| {
             let open = self.file_page == page;
@@ -292,17 +260,24 @@ impl Studio {
             ]
             .height(PAGE_ROW_H)
         };
-        let pages = FilePage::ALL
-            .into_iter()
-            .fold(column![].width(Fill), |pages, each| pages.push(page(each)));
+        let pages = |task: bool| {
+            FilePage::ALL
+                .into_iter()
+                .filter(|each| each.is_task() == task)
+                .fold(column![].width(Fill), |pages, each| pages.push(page(each)))
+        };
+        let top = column![
+            Space::new(Fill, 14),
+            pages(true),
+            container(rule()).padding([10, 0]),
+            pages(false),
+        ]
+        .width(Fill);
         let footer = column![
-            container(Space::new(Fill, 1)).style(
-                |theme| container::Style::default().background(ui_theme::colors(theme).border)
-            ),
-            pages,
+            rule(),
             item(
                 "Settings…",
-                Some(Message::Settings(settings_dialog::SettingsAction::Open)),
+                Message::Settings(settings_dialog::SettingsAction::Open),
             ),
             button(text(tr("←  Return to model")).size(13))
                 .on_press(Message::ToggleFile)
@@ -311,30 +286,294 @@ impl Studio {
                 .padding([13, 18]),
             // Exit ends the session at once: it stands apart, below the entry
             // that is used most.
-            container(Space::new(Fill, 1)).style(
-                |theme| container::Style::default().background(ui_theme::colors(theme).border)
-            ),
-            item("Exit", Some(Message::Exit)),
+            rule(),
+            item("Exit", Message::Exit),
         ]
         .width(Fill);
 
-        container(column![scrollable(tasks).height(Fill), footer].height(Fill))
+        container(column![scrollable(top).height(Fill), footer].height(Fill))
             .width(260)
             .height(Fill)
             .style(sidebar_style)
             .into()
     }
 
-    /// The open scans with their sizes, and what an export writes.
-    fn workspace_page(&self) -> Element<'_, Message> {
-        let colors = self.ui_theme.colors();
-        let caption = |label: &'static str| {
-            container(text(tr(label)).size(10).color(colors.muted)).padding(iced::Padding {
-                top: 28.0,
-                bottom: 4.0,
+    /// The title of a page with one line under it that says what it is for.
+    fn page_heading(&self, title: &'static str, lead: &'static str) -> Column<'_, Message> {
+        column![
+            text(tr(title))
+                .size(26)
+                .font(Font::with_name("Space Grotesk")),
+            text(tr(lead)).size(13).color(self.ui_theme.colors().muted),
+        ]
+        .spacing(6)
+    }
+
+    /// A small heading above a group of tiles.
+    fn group_caption(&self, label: &'static str) -> Element<'_, Message> {
+        container(text(tr(label)).size(10).color(self.ui_theme.colors().muted))
+            .padding(iced::Padding {
+                top: 26.0,
+                bottom: 6.0,
                 ..iced::Padding::ZERO
             })
-        };
+            .into()
+    }
+
+    /// A task as a tile: its name, and under it what it writes or what it
+    /// needs. A task that cannot run now is shown greyed.
+    fn file_tile(
+        &self,
+        title: &'static str,
+        detail: &'static str,
+        action: FileAction,
+        available: bool,
+    ) -> Element<'_, Message> {
+        let muted = self.ui_theme.colors().muted;
+        button(
+            column![
+                text(tr(title)).size(15),
+                text(tr(detail)).size(12).color(muted),
+            ]
+            .spacing(3),
+        )
+        .on_press_maybe(available.then_some(Message::FileAction(action)))
+        .style(|theme, status| {
+            let mut style = opencad_ribbon::tool_btn_style(theme, false, status);
+            let colors = ui_theme::colors(theme);
+            style.border.color = colors.border;
+            style.border.width = 1.0;
+            style.border.radius = 4.0.into();
+            if style.background.is_none() {
+                style.background = Some(colors.panel.into());
+            }
+            style
+        })
+        .width(Fill)
+        .padding([12, 16])
+        .into()
+    }
+
+    /// A column of tiles that does not grow wider than reads well.
+    fn tiles<'a>(tiles: impl IntoIterator<Item = Element<'a, Message>>) -> Element<'a, Message> {
+        container(Column::with_children(tiles).spacing(8).width(Fill))
+            .width(Fill)
+            .max_width(TILE_COLUMN_W)
+            .into()
+    }
+
+    fn new_page(&self) -> Element<'_, Message> {
+        column![
+            self.page_heading(
+                key("New"),
+                key("Start again with an empty workspace. The files on disk are not changed."),
+            ),
+            Space::new(Fill, 18),
+            Self::tiles([self.file_tile(
+                key("Empty workspace"),
+                key("Closes every open scan and mesh"),
+                FileAction::NewWorkspace,
+                !self.clouds.is_empty(),
+            )]),
+        ]
+        .width(Fill)
+        .into()
+    }
+
+    fn open_page(&self) -> Element<'_, Message> {
+        column![
+            self.page_heading(
+                key("Open"),
+                key("Add scans to the workspace. Each file becomes a layer; several can be chosen at once."),
+            ),
+            Space::new(Fill, 18),
+            Self::tiles([
+                self.file_tile(
+                    key("Point cloud…"),
+                    key("Scan files and scan project files"),
+                    FileAction::Import,
+                    true,
+                ),
+                self.file_tile(
+                    key("Scan folder…"),
+                    key("Every scan file in a folder"),
+                    FileAction::ImportFolder,
+                    true,
+                ),
+            ]),
+        ]
+        .width(Fill)
+        .into()
+    }
+
+    fn import_page(&self) -> Element<'_, Message> {
+        let bag = self.extensions.enabled(extensions::BAG3D);
+        column![
+            self.page_heading(
+                key("Import"),
+                key("Bring in data from other sources beside the scans."),
+            ),
+            Space::new(Fill, 18),
+            Self::tiles([self.file_tile(
+                key("3D BAG buildings…"),
+                if bag {
+                    key("Download the buildings of an area in the Netherlands as a mesh")
+                } else {
+                    key("Switch on the 3D BAG extension under Extensions first")
+                },
+                FileAction::Bag3d,
+                bag,
+            )]),
+        ]
+        .width(Fill)
+        .into()
+    }
+
+    /// Every export, grouped by what it writes. The format of a point cloud
+    /// export and the step of Every Nth point are chosen here as well.
+    fn export_page(&self) -> Element<'_, Message> {
+        let active_cloud = self.active.and_then(|index| self.clouds.get(index));
+        let active = active_cloud.is_some();
+        let selected = active_cloud
+            .and_then(|entry| entry.selection.as_ref())
+            .map_or(0, |selection| selection.count)
+            > 0;
+        let format = row![
+            text(tr("Format")).size(13),
+            pick_list(
+                ExportFormat::ALL,
+                Some(self.export_format),
+                Message::ExportFormat,
+            )
+            .style(themed_pick_list_style)
+            .width(220),
+            Space::new(18, 1),
+            text(tr("Keep 1 in")).size(13),
+            pick_list(
+                [2u64, 5, 10, 20, 50, 100],
+                Some(self.decimation_stride),
+                Message::DecimationStride
+            )
+            .style(themed_pick_list_style)
+            .width(90),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+
+        let mut page = column![
+            self.page_heading(
+                key("Export"),
+                key("Save the active scan, a part of it, or what was made from it."),
+            ),
+            self.group_caption(key("POINT CLOUD")),
+            container(format).padding(iced::Padding {
+                bottom: 8.0,
+                ..iced::Padding::ZERO
+            }),
+            Self::tiles([
+                self.file_tile(
+                    key("Full resolution…"),
+                    key("Every point of the active scan in the chosen format"),
+                    FileAction::ExportFull,
+                    active,
+                ),
+                self.file_tile(
+                    key("Selected points…"),
+                    key("Only the selected points; needs a selection"),
+                    FileAction::ExportSelection,
+                    selected,
+                ),
+                self.file_tile(
+                    key("Without selected points…"),
+                    key("The active scan without the selected points; needs a selection"),
+                    FileAction::ExportWithoutSelection,
+                    selected,
+                ),
+                self.file_tile(
+                    key("Section box…"),
+                    key("The points inside the section box; needs the section box"),
+                    FileAction::ExportSection,
+                    active && self.section_enabled && !self.section_export_pending,
+                ),
+                self.file_tile(
+                    key("Every Nth point…"),
+                    key("A thinned copy that keeps one point in the chosen step"),
+                    FileAction::ExportDecimated,
+                    active,
+                ),
+            ]),
+            self.group_caption(key("DRAWINGS AND MODELS")),
+            Self::tiles([
+                self.file_tile(
+                    key("Section drawing…"),
+                    key("A plan or a vertical section as DXF or DWG; needs the section box"),
+                    FileAction::ExportDrawing,
+                    self.drawing_entry_enabled(),
+                ),
+                self.file_tile(
+                    key("Surface mesh…"),
+                    key("The mesh of the active scan as OBJ, PLY, STL, DXF, DWG or IFC"),
+                    FileAction::ExportMesh,
+                    active_cloud.is_some_and(|entry| entry.mesh.is_some())
+                        && !self.mesh_export_pending,
+                ),
+                self.file_tile(
+                    key("Detected faces…"),
+                    key("Planes and cylinders as JSON, OBJ, DXF, DWG or IFC"),
+                    FileAction::ExportFaces,
+                    self.faces_entry_enabled(),
+                ),
+            ]),
+            self.group_caption(key("COORDINATION")),
+            Self::tiles([self.file_tile(
+                key("Views as BCF…"),
+                key("The saved views with their notes, for issue tracking"),
+                FileAction::ExportBcf,
+                self.can_export_bcf(),
+            )]),
+            self.group_caption(key("MERGE")),
+            Self::tiles([self.file_tile(
+                key("Merge visible LAS/LAZ scans…"),
+                key("One LAZ file from every visible LAS or LAZ scan"),
+                FileAction::MergeVisible,
+                self.merge_job.is_none()
+                    && !self.merge_dialog_pending
+                    && self.visible_merge_sources().is_ok(),
+            )]),
+        ]
+        .width(Fill);
+        if let Some(job) = &self.merge_job {
+            let processed = job.control.processed.load(Ordering::Relaxed);
+            page = page.push(
+                column![
+                    text(job.progress_text()).size(13),
+                    iced::widget::progress_bar(
+                        0.0..=1.0,
+                        processed as f32 / job.control.total.max(1) as f32,
+                    )
+                    .height(8),
+                    text(format!(
+                        "{} points written to {}",
+                        format_count(job.control.written.load(Ordering::Relaxed)),
+                        job.path.display()
+                    ))
+                    .size(11),
+                    button(text(tr("Cancel merge")))
+                        .on_press(Message::FileAction(FileAction::CancelMerge)),
+                ]
+                .spacing(8)
+                .padding(iced::Padding {
+                    top: 12.0,
+                    ..iced::Padding::ZERO
+                }),
+            );
+        }
+        page.into()
+    }
+
+    /// The open scans with their sizes; a click makes one the active scan.
+    fn workspace_page(&self) -> Element<'_, Message> {
+        let colors = self.ui_theme.colors();
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
         let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
         let active_name = active_cloud.map_or(tr("No active scan"), |entry| {
@@ -364,7 +603,7 @@ impl Studio {
                 )
             },
         );
-        let mut details = column![
+        column![
             text(tr("Point cloud workspace"))
                 .size(26)
                 .font(Font::with_name("Space Grotesk")),
@@ -376,67 +615,14 @@ impl Studio {
             ))
             .size(13)
             .color(colors.muted),
-            caption("CURRENT SCAN"),
+            self.group_caption(key("CURRENT SCAN")),
             text(active_name).size(16),
-            caption("OPEN SCANS"),
-            container(open_scans).width(Fill).max_width(560),
-            caption("EXPORT FORMAT"),
-            pick_list(
-                ExportFormat::ALL,
-                Some(self.export_format),
-                Message::ExportFormat,
-            )
-            .style(themed_pick_list_style)
-            .width(240),
-            caption("EVERY NTH POINT"),
-            row![
-                text(tr("Keep 1 in")).size(13),
-                pick_list(
-                    [2u64, 5, 10, 20, 50, 100],
-                    Some(self.decimation_stride),
-                    Message::DecimationStride
-                )
-                .style(themed_pick_list_style)
-                .width(90),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
-            container(
-                text(tr(
-                    "Choose an export format, then save the active scan or selection."
-                ))
-                .size(12)
-                .color(colors.muted),
-            )
-            .padding(iced::Padding {
-                top: 32.0,
-                ..iced::Padding::ZERO
-            }),
+            self.group_caption(key("OPEN SCANS")),
+            container(open_scans).width(Fill).max_width(TILE_COLUMN_W),
         ]
-        .spacing(8)
-        .width(Fill);
-        if let Some(job) = &self.merge_job {
-            let processed = job.control.processed.load(Ordering::Relaxed);
-            details = details
-                .push(text(job.progress_text()).size(13))
-                .push(
-                    iced::widget::progress_bar(
-                        0.0..=1.0,
-                        processed as f32 / job.control.total.max(1) as f32,
-                    )
-                    .height(8),
-                )
-                .push(
-                    text(format!(
-                        "{} points written to {}",
-                        format_count(job.control.written.load(Ordering::Relaxed)),
-                        job.path.display()
-                    ))
-                    .size(11),
-                )
-                .push(button(tr("Cancel merge")).on_press(Message::CancelMerge));
-        }
-        details.into()
+        .spacing(4)
+        .width(Fill)
+        .into()
     }
 
     /// What the application is, as the About tab of Settings shows it.
@@ -484,7 +670,18 @@ mod tests {
             .into_iter()
             .map(|page| tr(page.label()))
             .collect();
-        assert_eq!(names, ["Werkruimte", "Extensies", "Over"]);
+        assert_eq!(
+            names,
+            [
+                "Nieuw",
+                "Openen",
+                "Importeren",
+                "Exporteren",
+                "Werkruimte",
+                "Extensies",
+                "Over"
+            ]
+        );
     }
 
     fn send(studio: &mut Studio, command: crate::native_api::ApiCommand) -> Value {
@@ -510,7 +707,18 @@ mod tests {
     #[test]
     fn page_ids_are_unique_and_round_trip() {
         let ids = FilePage::ids();
-        assert_eq!(ids, ["workspace", "extensions", "about"]);
+        assert_eq!(
+            ids,
+            [
+                "new",
+                "open",
+                "import",
+                "export",
+                "workspace",
+                "extensions",
+                "about"
+            ]
+        );
         for page in FilePage::ALL {
             assert_eq!(FilePage::from_id(page.id()), Some(page));
         }
@@ -568,7 +776,7 @@ mod tests {
         let unknown = file_view(&mut studio, true, Some("settings"));
         assert_eq!(
             unknown,
-            json!({"ok": false, "error": "unknown page; use workspace, extensions, about"})
+            json!({"ok": false, "error": "unknown page; use new, open, import, export, workspace, extensions, about"})
         );
         assert!(!studio.file_open);
         let _ = file_view(&mut studio, true, Some("about"));
@@ -611,7 +819,7 @@ mod tests {
         let _ = studio.update(Message::Loaded(Ok(cloud)));
         let _ = studio.update(Message::ToggleFile);
         let _ = studio.view();
-        assert_eq!(tr("Import point cloud…"), "Puntenwolk importeren…");
+        assert_eq!(tr("Point cloud…"), "Puntenwolk…");
         assert_eq!(tr("Exit"), "Afsluiten");
 
         // An export entry closes the view.

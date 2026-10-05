@@ -14,6 +14,9 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- The File view is laid out as pages New, Open, Import and Export, followed by Workspace, Extensions and About. Every task is a tile that says what it writes or what it needs and is greyed while it cannot run; the Export page groups the point cloud exports with their format, the drawings and models, the BCF views and the merge. **New** closes every open scan. The local API knows the pages as `new`, `open`, `import` and `export` as well.
+- Escape returns the mouse to **Select**, a new button in the SELECTION group: with no other tool on, a click selects the point under the pointer, a drag orbits and a double-click sets the orbit point.
+
 - The section box can be turned about the vertical, for cuts parallel to the walls of a building that stands at an angle to the axes of the scan. Type a **Rotation (°)** under **Section box** in Properties, or choose **Align to walls** to turn the box along the main direction of the walls inside it. The turned box clips the view, exports, selections, Closed mesh and Detect faces, and a saved view and a BCF file keep its rotation.
 - A section drawing of a turned box follows the box: the plan shows the walls along the axes of the drawing, and the four vertical views are sections parallel to the walls.
 - While the Section drawing block is open, the slab of the chosen view is outlined in blue in the scene and the block names the face of the box that is the cut plane, so that the place of a vertical section is in sight. A slab without points now says which face that was and what to do about it.

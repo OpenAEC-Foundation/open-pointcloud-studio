@@ -205,7 +205,7 @@ follows when that view is restored.
 | `cancel_bag3d` | — | Cancels the 3D BAG download |
 | `list_extensions` | — | Built-in optional features and whether each is enabled |
 | `set_extension_enabled` | `id` (`bag3d`), `enabled` | Switches a built-in optional feature on or off; kept for later sessions, unless the answer has `saved: false` with `save_error` |
-| `file_view` | `open`, optional `page` (`workspace`, `extensions` or `about`) | Opens the File view, on a page, or returns to the model |
+| `file_view` | `open`, optional `page` (`new`, `open`, `import`, `export`, `workspace`, `extensions` or `about`) | Opens the File view, on a page, or returns to the model |
 | `list_instances` | — | Running windows and the one in use |
 | `select_instance` | `pid` or `port`, at least one | Chooses the window to drive |
 | `start_instance` | optional `files` | Starts a new window and chooses it |

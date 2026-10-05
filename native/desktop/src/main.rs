@@ -1752,6 +1752,12 @@ enum Message {
     /// the orbit point.
     PickOrbitPoint([f32; 2], Size),
     OrbitPointPicked(Option<[f64; 3]>),
+    /// A single click at a pixel of the scene with no tool on: the point
+    /// there becomes the selection, as with Pick point.
+    ClickSelect([f32; 2], Size),
+    /// Leave every viewport tool for the plain mouse: a click selects a
+    /// point and a drag orbits. The selection is kept.
+    SelectMode,
     Pan(f32, f32),
     FinishPan(f32, f32),
     FinishOrbit(f32, f32),
@@ -7726,6 +7732,28 @@ impl Studio {
                 return self.schedule_detail();
             }
             Message::PickOrbitPoint(pointer, size) => return self.pick_orbit_point(pointer, size),
+            Message::ClickSelect(pointer, size) => {
+                if self.clouds.is_empty() || self.selection_pending {
+                    return Task::none();
+                }
+                self.pending_delete = false;
+                self.viewport_size = size;
+                return match self.start_point_pick(pointer, 8.0, size, None) {
+                    Ok(task) => task,
+                    Err(error) => {
+                        self.status = error;
+                        Task::none()
+                    }
+                };
+            }
+            Message::SelectMode => {
+                self.box_select = false;
+                self.pick_mode = false;
+                self.measure.leave(false);
+                self.views.leave_tool();
+                self.drag_rectangle = None;
+                self.status = SELECT_MODE_STATUS.into();
+            }
             Message::OrbitPointPicked(point) => self.set_orbit_point(point),
             Message::Pan(dx, dy) => {
                 self.pan[0] += dx;
@@ -7906,7 +7934,7 @@ impl Studio {
                 } else if annotating {
                     "Annotation tool closed; orbit and right-click menu available".into()
                 } else {
-                    "Selection tool closed; orbit and right-click menu available".into()
+                    SELECT_MODE_STATUS.into()
                 };
             }
             Message::CancelSelection => {
@@ -8091,6 +8119,15 @@ impl Studio {
             }
         }
         Task::none()
+    }
+
+    /// Whether no viewport tool is on, so that a click selects a point and
+    /// a drag orbits: the Select button of the ribbon shows it.
+    fn plain_mouse(&self) -> bool {
+        !self.box_select
+            && !self.pick_mode
+            && self.measure.mode.is_none()
+            && self.views.tool.is_none()
     }
 
     fn selected_total(&self) -> u64 {
@@ -8749,16 +8786,20 @@ impl Studio {
             "SELECTION",
             column![
                 row![
+                    small_tool_button("Select", Message::SelectMode, self.plain_mouse()),
                     small_tool_button("Box select", Message::ToggleBoxSelect, self.box_select),
-                    small_tool_button("Pick point", Message::TogglePickSelect, self.pick_mode),
                 ]
                 .spacing(2),
                 row![
+                    small_tool_button("Pick point", Message::TogglePickSelect, self.pick_mode),
                     small_tool_button("Clear", Message::ClearSelection, false),
-                    small_tool_button_when("Delete", Message::DeleteSelection, false, selected > 0),
                 ]
                 .spacing(2),
-                zoom_selection,
+                row![
+                    small_tool_button_when("Delete", Message::DeleteSelection, false, selected > 0),
+                    zoom_selection,
+                ]
+                .spacing(2),
             ]
             .spacing(1)
             .into(),
@@ -10935,6 +10976,10 @@ struct ViewportState {
     last_click: Option<(Instant, UiPoint)>,
 }
 
+/// What the status line says when the mouse is back to selecting.
+const SELECT_MODE_STATUS: &str =
+    "Select: click a point to select it, drag to orbit, double-click to orbit about a point";
+
 fn middle_drag_mode(modifiers: iced::keyboard::Modifiers) -> DragMode {
     if modifiers.shift() {
         DragMode::Turn
@@ -10943,8 +10988,9 @@ fn middle_drag_mode(modifiers: iced::keyboard::Modifiers) -> DragMode {
     }
 }
 
-/// A left release in the orbit mode: the second click of a double click
-/// asks for the orbit point there. A release after a drag is no click.
+/// A left release in the orbit mode: a click selects the point there and
+/// the second click of a double click asks for the orbit point there. A
+/// release after a drag is no click.
 fn orbit_click(
     last_click: &mut Option<(Instant, UiPoint)>,
     drag: DragState,
@@ -10962,7 +11008,7 @@ fn orbit_click(
         return Some(Message::PickOrbitPoint([position.x, position.y], size));
     }
     *last_click = Some((now, position));
-    None
+    Some(Message::ClickSelect([position.x, position.y], size))
 }
 
 fn finish_viewport_drag(
@@ -14476,19 +14522,22 @@ mod camera_api_tests {
         };
         let first = Instant::now();
         let mut last = None;
-        assert!(orbit_click(&mut last, click, start, first, size).is_none());
+        let selects = |message: Option<Message>| {
+            matches!(message, Some(Message::ClickSelect([200.0, 150.0], _)))
+        };
+        assert!(selects(orbit_click(&mut last, click, start, first, size)));
         let second = first + Duration::from_millis(250);
         assert!(matches!(
             orbit_click(&mut last, click, UiPoint::new(201.0, 151.0), second, size),
             Some(Message::PickOrbitPoint([201.0, 151.0], _))
         ));
         // A third click starts a new pair.
-        assert!(orbit_click(&mut last, click, start, second, size).is_none());
+        assert!(selects(orbit_click(&mut last, click, start, second, size)));
         // A drag in between is no click.
         let mut last = None;
-        assert!(orbit_click(&mut last, click, start, first, size).is_none());
+        assert!(selects(orbit_click(&mut last, click, start, first, size)));
         assert!(orbit_click(&mut last, click, UiPoint::new(260.0, 150.0), second, size).is_none());
-        assert!(orbit_click(&mut last, click, start, second, size).is_none());
+        assert!(selects(orbit_click(&mut last, click, start, second, size)));
         // Measuring keeps its own clicks.
         let measuring = DragState {
             mode: DragMode::MeasurePending,

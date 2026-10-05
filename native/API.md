@@ -608,7 +608,8 @@ and disables its entry in the File view.
 ## File view
 
 `file_view` opens the File view over the model or closes it. With
-`open: true` an optional `page` (`workspace`, `extensions` or `about`) chooses
+`open: true` an optional `page` (`new`, `open`, `import`, `export`,
+`workspace`, `extensions` or `about`) chooses
 the page; without it the view opens on `workspace`, or keeps the page it
 shows. The answer holds `file_view` with `open` and `page`, as
 `status.result.file_view` does; `page` is `null` while the view is closed. The
@@ -832,7 +833,7 @@ when the view is restored.
 | `cancel_bag3d` | — | Requests cancellation of the running 3D BAG download |
 | `list_extensions` | — | Lists the built-in optional features and whether each is enabled |
 | `set_extension_enabled` | `id`, `enabled` | Switches a built-in optional feature (`bag3d`) on or off and persists that; `saved` in the answer is false, with `save_error`, when it could not be persisted |
-| `file_view` | `open`, optional `page` | Opens the File view, on the page `workspace`, `extensions` or `about` when one is named, or closes it and returns to the model |
+| `file_view` | `open`, optional `page` | Opens the File view, on the page `new`, `open`, `import`, `export`, `workspace`, `extensions` or `about` when one is named, or closes it and returns to the model |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |
