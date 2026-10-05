@@ -1610,8 +1610,9 @@ impl Studio {
         .into()
     }
 
-    /// The views part of the project browser: the name field with Save, the
-    /// views of the active scan and the annotations of the active view.
+    /// The views and sections part of the Project Browser: one name field
+    /// with Save view and Save section, the views and the section boxes of
+    /// the active scan, and the annotations of the active view.
     pub fn views_browser(&self) -> Element<'_, Message> {
         let flat = crate::flat_tool_style;
         let small = |label: &'static str, action: ViewAction| {
@@ -1621,28 +1622,43 @@ impl Studio {
                 .padding([3, 4])
         };
         let muted = self.ui_theme.colors().muted;
+        let can_save_section = self.active.is_some() && self.section_box().is_some();
         let mut section = column![
-            text(i18n::tr("VIEWS")).size(11).color(muted),
+            text(i18n::tr("VIEWS AND SECTIONS")).size(11).color(muted),
+            container(
+                text_input(i18n::tr("Name"), &self.views.name)
+                    .on_input(|name| Message::Views(ViewAction::Name(name)))
+                    .on_submit(Message::Views(ViewAction::Save))
+                    .size(11)
+                    .padding([3, 5])
+                    .width(Fill),
+            )
+            .padding(iced::Padding {
+                top: 5.0,
+                ..iced::Padding::ZERO
+            }),
             container(
                 row![
-                    text_input(i18n::tr("View name"), &self.views.name)
-                        .on_input(|name| Message::Views(ViewAction::Name(name)))
-                        .on_submit(Message::Views(ViewAction::Save))
-                        .size(11)
-                        .padding([3, 5])
-                        .width(Fill),
-                    button(i18n::tr("Save"))
+                    button(text(i18n::tr("Save view")).size(11))
                         .on_press_maybe(
                             self.active
                                 .is_some()
                                 .then_some(Message::Views(ViewAction::Save)),
                         )
                         .style(flat),
+                    button(text(i18n::tr("Save section")).size(11))
+                        .on_press_maybe(
+                            can_save_section
+                                .then_some(Message::Sections(crate::sections::SectionAction::Save)),
+                        )
+                        .style(flat),
                 ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center),
+                .spacing(4),
             )
-            .padding([5, 0]),
+            .padding(iced::Padding {
+                bottom: 4.0,
+                ..iced::Padding::ZERO
+            }),
         ]
         .spacing(0);
         let source = self.active_camera_source();
@@ -1695,6 +1711,7 @@ impl Studio {
             section = section
                 .push(container(line.spacing(2).align_y(iced::Alignment::Center)).padding([2, 0]));
         }
+        section = section.push(self.section_rows());
         if let Some(view) = active {
             section = section.push(
                 container(

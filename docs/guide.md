@@ -202,7 +202,7 @@ The measurement is drawn over the points with a label on every segment and one f
 
 A view holds everything needed to come back to it: the camera (the orbit camera, or the walking camera when the view was saved while walking), the section box with its limits in model coordinates and whether it was on, the colour mode, the time it was saved, an identifier and its annotations.
 
-**Save view** in the VIEWS group, or Save beside the name field under **VIEWS** in the Project Browser, saves what the scene shows. Without a name the view becomes "View 1", "View 2", and so on. The Project Browser lists the views of the active scan: a click on a name restores the view, **Rename** changes its name, **Update** overwrites it with the current view and × deletes it. A scan has at most 32 views, with names of at most 64 characters that are unique within it.
+**Save view** in the VIEWS group, or **Save view** under the name field of **VIEWS AND SECTIONS** in the Project Browser, saves what the scene shows. Without a name the view becomes "View 1", "View 2", and so on. The Project Browser lists the views of the active scan: a click on a name restores the view, **Rename** changes its name, **Update** overwrites it with the current view and × deletes it. A scan has at most 32 views, with names of at most 64 characters that are unique within it.
 
 Restoring puts the camera, the section box and the colour mode back. The orbit camera is relative to the bounds of the scene and to the size of the 3D view, so a view also keeps those: in a 3D view of another size the pan scales with the picture, and when other scans have been opened or closed since, the camera is moved to show what it showed.
 
@@ -217,7 +217,7 @@ The view last saved or restored is the active view, shown highlighted in the lis
 - A note is a picked point with a text: after the click a field over the scene takes the text, and Enter or Add places a marker with a label and a leader.
 - A line is two picked points, drawn as an arrow from the first to the second.
 
-Escape cancels a half-placed annotation and, pressed again, leaves the tool. An annotation placed while no view is active first saves the current view. The annotations of the active view are listed under VIEWS in the Project Browser, each with × to delete it. A view holds at most 64, and a note at most 240 characters. The label of a note stays inside the scene and moves away from its point past the markers and the labels of other notes close by. The annotation tools, the measuring tools and the selection tools exclude each other. A half-placed annotation is dropped when another scan becomes the active one, and the tool is left when the last scan is closed.
+Escape cancels a half-placed annotation and, pressed again, leaves the tool. An annotation placed while no view is active first saves the current view. The annotations of the active view are listed under VIEWS AND SECTIONS in the Project Browser, each with × to delete it. A view holds at most 64, and a note at most 240 characters. The label of a note stays inside the scene and moves away from its point past the markers and the labels of other notes close by. The annotation tools, the measuring tools and the selection tools exclude each other. A half-placed annotation is dropped when another scan becomes the active one, and the tool is left when the last scan is closed.
 
 ### Snapshots
 

@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-use iced::widget::{button, column, container, row, text, text_input};
+use iced::widget::{button, column, row, text};
 use iced::{Element, Fill, Task};
 use serde::{Deserialize, Serialize};
 
@@ -32,23 +32,20 @@ pub struct SavedSection {
 #[derive(Debug, Default)]
 pub struct SectionsTool {
     pub list: Vec<SavedSection>,
-    /// Text of the name field.
-    pub name: String,
 }
 
 impl SectionsTool {
     pub fn load() -> Self {
         Self {
             list: camera_views::load_sections(),
-            name: String::new(),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum SectionAction {
-    Name(String),
-    /// Keep the section box as it is under the name typed.
+    /// Keep the section box as it is under the name typed in the field the
+    /// views share.
     Save,
     /// Put the section box at this place in the list back.
     Apply(usize),
@@ -58,9 +55,6 @@ pub enum SectionAction {
 impl Studio {
     pub(crate) fn update_sections(&mut self, action: SectionAction) -> Task<Message> {
         match action {
-            SectionAction::Name(name) => {
-                self.sections.name = name.chars().take(MAX_NAME_CHARS).collect();
-            }
             SectionAction::Save => {
                 let (Some(source), Some(section)) =
                     (self.active_camera_source(), self.section_box())
@@ -69,7 +63,13 @@ impl Studio {
                     return Task::none();
                 };
                 let of_scan = |saved: &&SavedSection| saved.source == source;
-                let typed = self.sections.name.trim().to_owned();
+                let typed: String = self
+                    .views
+                    .name
+                    .trim()
+                    .chars()
+                    .take(MAX_NAME_CHARS)
+                    .collect();
                 let name = if typed.is_empty() {
                     let count = self.sections.list.iter().filter(of_scan).count();
                     format!("Section {}", count + 1)
@@ -90,7 +90,7 @@ impl Studio {
                     max: section.bounds.max,
                     rotation: section.rotation_degrees,
                 });
-                self.sections.name.clear();
+                self.views.name.clear();
                 self.save_sections();
                 self.status = format!("Section box saved as {name}");
             }
@@ -136,39 +136,12 @@ impl Studio {
         }
     }
 
-    /// The Sections part of the Project Browser: the name field with Save
-    /// and the section boxes of the active scan.
-    pub(crate) fn sections_browser(&self) -> Element<'_, Message> {
+    /// The section boxes of the active scan, as rows of the views and
+    /// sections part of the Project Browser.
+    pub(crate) fn section_rows(&self) -> Element<'_, Message> {
         let muted = self.ui_theme.colors().muted;
         let source = self.active_camera_source();
-        let can_save = source.is_some() && self.section_box().is_some();
-        let mut list = column![
-            text(i18n::tr("SECTIONS")).size(11).color(muted),
-            container(
-                row![
-                    text_input(i18n::tr("Section name"), &self.sections.name)
-                        .on_input(|name| Message::Sections(SectionAction::Name(name)))
-                        .on_submit(Message::Sections(SectionAction::Save))
-                        .size(11)
-                        .padding([3, 5])
-                        .width(Fill),
-                    button(i18n::tr("Save"))
-                        .on_press_maybe(can_save.then_some(Message::Sections(SectionAction::Save)))
-                        .style(crate::flat_tool_style),
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center),
-            )
-            .padding([5, 0]),
-        ]
-        .spacing(2);
-        if !can_save {
-            list = list.push(
-                text(i18n::tr("Switch on Section box to save it"))
-                    .size(10)
-                    .color(muted),
-            );
-        }
+        let mut list = column![].spacing(2);
         for (place, saved) in self.sections.list.iter().enumerate() {
             if Some(&saved.source) != source.as_ref() {
                 continue;
@@ -187,6 +160,7 @@ impl Studio {
                         })
                         .padding([3, 5])
                         .width(Fill),
+                    text(i18n::tr("section")).size(10).color(muted),
                     button(text("×").size(11))
                         .on_press(Message::Sections(SectionAction::Delete(place)))
                         .style(crate::flat_tool_style)
@@ -228,7 +202,7 @@ mod tests {
             },
             reply,
         });
-        let _ = studio.update_sections(SectionAction::Name("Hall".into()));
+        studio.views.name = "Hall".into();
         let _ = studio.update_sections(SectionAction::Save);
         assert_eq!(studio.sections.list.len(), 1);
         assert_eq!(studio.sections.list[0].name, "Hall");

@@ -9225,7 +9225,6 @@ impl Studio {
         files = files
             .push(self.drawings_browser())
             .push(self.views_browser())
-            .push(self.sections_browser())
             .push(self.bcf_browser());
         container(scrollable(files.padding(14)).height(Fill))
             .width(255)

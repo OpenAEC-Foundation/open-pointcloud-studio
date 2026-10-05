@@ -539,12 +539,13 @@
   "Show all": "Alles tonen",
   "Hide all": "Alles verbergen",
   "Project Browser": "Projectbrowser",
-  "SECTIONS": "DOORSNEDEN",
-  "Section name": "Naam van de doorsnede",
-  "Switch on Section box to save it": "Zet de snedebox aan om hem op te slaan",
   "DRAWINGS": "TEKENINGEN",
   "3D model": "3D-model",
   "Camera": "Camera",
   "Open a scan to save views of it": "Open een scan om er views van op te slaan",
-  "{views} views with {notes} annotations become topics of a BCF file": "{views} views met {notes} annotaties worden onderwerpen van een BCF-bestand"
+  "{views} views with {notes} annotations become topics of a BCF file": "{views} views met {notes} annotaties worden onderwerpen van een BCF-bestand",
+  "VIEWS AND SECTIONS": "VIEWS EN DOORSNEDEN",
+  "Save section": "Doorsnede opslaan",
+  "Name": "Naam",
+  "section": "doorsnede"
 }
