@@ -64,6 +64,13 @@ impl UiTheme {
                 scene_text: Color::from_rgb8(250, 250, 249),
                 scene_muted: Color::from_rgb8(161, 161, 170),
                 scene_label: Color::from_rgb8(245, 188, 100),
+                browser_band: Color::from_rgb8(63, 63, 70),
+                browser_band_text: Color::from_rgb8(250, 250, 249),
+                browser_sub_band: Color::from_rgb8(54, 54, 62),
+                scan_mark: Color::from_rgb8(217, 119, 6),
+                class_mark: Color::from_rgb8(74, 222, 128),
+                view_mark: Color::from_rgb8(96, 165, 250),
+                bcf_mark: Color::from_rgb8(244, 114, 182),
             },
             Self::Light => UiColors {
                 shell: Color::from_rgb8(250, 250, 249),
@@ -89,6 +96,13 @@ impl UiTheme {
                 scene_text: Color::from_rgb8(28, 25, 23),
                 scene_muted: Color::from_rgb8(113, 113, 122),
                 scene_label: Color::from_rgb8(180, 83, 9),
+                browser_band: Color::from_rgb8(231, 229, 228),
+                browser_band_text: Color::from_rgb8(54, 54, 62),
+                browser_sub_band: Color::from_rgb8(245, 245, 244),
+                scan_mark: Color::from_rgb8(217, 119, 6),
+                class_mark: Color::from_rgb8(22, 163, 74),
+                view_mark: Color::from_rgb8(37, 99, 235),
+                bcf_mark: Color::from_rgb8(219, 39, 119),
             },
             Self::Night => UiColors {
                 shell: Color::from_rgb8(39, 39, 42),
@@ -114,6 +128,13 @@ impl UiTheme {
                 scene_text: Color::from_rgb8(250, 250, 249),
                 scene_muted: Color::from_rgb8(161, 161, 170),
                 scene_label: Color::from_rgb8(245, 188, 100),
+                browser_band: Color::from_rgb8(63, 63, 70),
+                browser_band_text: Color::from_rgb8(250, 250, 249),
+                browser_sub_band: Color::from_rgb8(39, 39, 42),
+                scan_mark: Color::from_rgb8(217, 119, 6),
+                class_mark: Color::from_rgb8(74, 222, 128),
+                view_mark: Color::from_rgb8(96, 165, 250),
+                bcf_mark: Color::from_rgb8(244, 114, 182),
             },
             Self::Blueprint => UiColors {
                 shell: Color::from_rgb8(15, 27, 45),
@@ -139,6 +160,13 @@ impl UiTheme {
                 scene_text: Color::from_rgb8(250, 250, 249),
                 scene_muted: Color::from_rgb8(161, 161, 170),
                 scene_label: Color::from_rgb8(245, 188, 100),
+                browser_band: Color::from_rgb8(37, 58, 82),
+                browser_band_text: Color::from_rgb8(224, 231, 255),
+                browser_sub_band: Color::from_rgb8(26, 44, 69),
+                scan_mark: Color::from_rgb8(245, 188, 100),
+                class_mark: Color::from_rgb8(134, 239, 172),
+                view_mark: Color::from_rgb8(147, 197, 253),
+                bcf_mark: Color::from_rgb8(249, 168, 212),
             },
             Self::Contrast => UiColors {
                 shell: Color::BLACK,
@@ -164,6 +192,13 @@ impl UiTheme {
                 scene_text: Color::from_rgb8(250, 250, 249),
                 scene_muted: Color::from_rgb8(200, 200, 200),
                 scene_label: Color::from_rgb8(255, 215, 0),
+                browser_band: Color::from_rgb8(25, 25, 25),
+                browser_band_text: Color::from_rgb8(255, 255, 255),
+                browser_sub_band: Color::from_rgb8(10, 10, 10),
+                scan_mark: Color::from_rgb8(255, 215, 0),
+                class_mark: Color::from_rgb8(0, 255, 127),
+                view_mark: Color::from_rgb8(0, 229, 255),
+                bcf_mark: Color::from_rgb8(255, 105, 180),
             },
         }
     }
@@ -245,6 +280,17 @@ pub struct UiColors {
     pub scene_muted: Color,
     /// Labels beside the handles of the section box.
     pub scene_label: Color,
+    /// The band over a group of the Project Browser, its text, and the band
+    /// over a sub-group.
+    pub browser_band: Color,
+    pub browser_band_text: Color,
+    pub browser_sub_band: Color,
+    /// The strip at the left of the band of each group of the Project
+    /// Browser, by what the group holds: scans, classes, views and BCF.
+    pub scan_mark: Color,
+    pub class_mark: Color,
+    pub view_mark: Color,
+    pub bcf_mark: Color,
 }
 
 pub fn colors(theme: &Theme) -> UiColors {

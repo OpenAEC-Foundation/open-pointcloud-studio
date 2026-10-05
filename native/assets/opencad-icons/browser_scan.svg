@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Scan" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3.5 20h17" stroke="#A1A1AA" stroke-width="1.5"/>
+  <path d="M12 20v-3.5M9.5 20l2.5-3.5 2.5 3.5" stroke="#A1A1AA" stroke-width="1.4"/>
+  <circle cx="5" cy="13" r="1.4" fill="#D97706" stroke="none"/>
+  <circle cx="7.5" cy="8.5" r="1.4" fill="#D97706" stroke="none"/>
+  <circle cx="12" cy="5.5" r="1.4" fill="#D97706" stroke="none"/>
+  <circle cx="16.5" cy="8.5" r="1.4" fill="#D97706" stroke="none"/>
+  <circle cx="19" cy="13" r="1.4" fill="#D97706" stroke="none"/>
+  <circle cx="9.3" cy="12.3" r="1.15" fill="#D97706" stroke="none"/>
+  <circle cx="14.7" cy="12.3" r="1.15" fill="#D97706" stroke="none"/>
+  <circle cx="12" cy="9.6" r="1.15" fill="#D97706" stroke="none"/>
+</svg>

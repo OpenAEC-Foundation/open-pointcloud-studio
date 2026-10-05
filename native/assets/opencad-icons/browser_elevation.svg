@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Elevation" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 20.5v-10l8 -6.5 8 6.5v10z" stroke="#A1A1AA" stroke-width="1.5"/>
+  <rect x="7" y="11.5" width="3.5" height="3.5" stroke="#3B82F6" stroke-width="1.4"/>
+  <rect x="13.5" y="11.5" width="3.5" height="3.5" stroke="#3B82F6" stroke-width="1.4"/>
+  <path d="M10.5 20.5v-3h3v3" stroke="#3B82F6" stroke-width="1.4"/>
+</svg>

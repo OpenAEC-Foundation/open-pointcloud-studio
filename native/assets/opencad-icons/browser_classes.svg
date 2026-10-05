@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Classes" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="5.5" cy="6.5" r="1.9" fill="#D97706" stroke="none"/>
+  <circle cx="5.5" cy="12" r="1.9" fill="#16A34A" stroke="none"/>
+  <circle cx="5.5" cy="17.5" r="1.9" fill="#A1A1AA" stroke="none"/>
+  <line x1="9.5" y1="6.5" x2="19.5" y2="6.5" stroke="#A1A1AA" stroke-width="1.6"/>
+  <line x1="9.5" y1="12" x2="17.5" y2="12" stroke="#A1A1AA" stroke-width="1.6"/>
+  <line x1="9.5" y1="17.5" x2="15.5" y2="17.5" stroke="#A1A1AA" stroke-width="1.6"/>
+</svg>
