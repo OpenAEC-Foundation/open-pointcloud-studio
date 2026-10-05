@@ -457,18 +457,19 @@ fn draw_compass(frame: &mut Frame, basis: Basis, center: Point) {
     }
 }
 
-pub fn draw(frame: &mut Frame, bounds: Rectangle, yaw: f32, pitch: f32, hovered: Option<Point>) {
+/// Draws the cube with its compass and, below it, the pill that shows and
+/// switches the lens: PERSP for perspective, ORTHO for orthographic.
+pub fn draw(
+    frame: &mut Frame,
+    bounds: Rectangle,
+    yaw: f32,
+    pitch: f32,
+    hovered: Option<Point>,
+    orthographic: bool,
+) {
     let basis = Basis::new(yaw, pitch);
     let center = center(bounds);
     let hovered_target = hovered.and_then(|point| hit(point, bounds, yaw, pitch));
-    frame.fill(
-        &Path::rounded_rectangle(
-            Point::new(center.x - 61.0, 8.0),
-            Size::new(122.0, 142.0),
-            10.0.into(),
-        ),
-        Color::from_rgba8(30, 30, 36, 0.58),
-    );
 
     // Seen from above the ring lies behind the cube, from below in front of it.
     let from_above = basis.toward[2] >= 0.0;
@@ -591,7 +592,7 @@ pub fn draw(frame: &mut Frame, bounds: Rectangle, yaw: f32, pitch: f32, hovered:
             .with_width(1.0),
     );
     frame.fill_text(canvas::Text {
-        content: "ISO".into(),
+        content: if orthographic { "ORTHO" } else { "PERSP" }.into(),
         position: Point::new(home.center_x(), home.center_y()),
         horizontal_alignment: alignment::Horizontal::Center,
         vertical_alignment: alignment::Vertical::Center,

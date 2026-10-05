@@ -33,6 +33,8 @@ pub(crate) struct Preferences {
     /// Whether the Drawing view is shown when a section drawing has been
     /// exported.
     pub show_drawing_after_export: bool,
+    /// Whether the orbit camera draws without perspective.
+    pub orthographic: bool,
 }
 
 impl Default for Preferences {
@@ -52,6 +54,7 @@ impl Default for Preferences {
             cad_viewer: None,
             open_after_export: false,
             show_drawing_after_export: true,
+            orthographic: false,
         }
     }
 }
@@ -157,6 +160,7 @@ mod tests {
             cad_viewer: Some(PathBuf::from("/opt/viewer/OpenCADStudio")),
             open_after_export: true,
             show_drawing_after_export: false,
+            orthographic: true,
             ..Preferences::default()
         };
         save_to(&path, &settings).unwrap();

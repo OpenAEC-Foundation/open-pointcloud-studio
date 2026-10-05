@@ -362,6 +362,25 @@ pub struct Projection {
     pan: [f32; 2],
 }
 
+/// Whether the orbit camera draws without perspective. The window sets it;
+/// every orbit projection reads it, so the scene, the picking and the level
+/// of detail all agree.
+static ORTHOGRAPHIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// How far away the camera stands, in its usual distances, when the view is
+/// orthographic: far enough that sizes differ by less than half a percent
+/// across the scene, and near enough that the depth of the scene still
+/// spreads over tens of thousands of steps of the depth buffer.
+const ORTHOGRAPHIC_FACTOR: f64 = 200.0;
+
+pub fn set_orthographic(on: bool) {
+    ORTHOGRAPHIC.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn orthographic() -> bool {
+    ORTHOGRAPHIC.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Projection {
     pub fn new(
         bounds: Bounds,
@@ -372,9 +391,31 @@ impl Projection {
         width: f32,
         height: f32,
     ) -> Self {
+        Self::with_lens(bounds, yaw, pitch, zoom, pan, width, height, orthographic())
+    }
+
+    /// An orbit camera with perspective, or without: then it stands
+    /// `ORTHOGRAPHIC_FACTOR` times as far and zooms in as much, so that the
+    /// scene keeps its size on the screen.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_lens(
+        bounds: Bounds,
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        width: f32,
+        height: f32,
+        orthographic: bool,
+    ) -> Self {
+        let far = if orthographic {
+            ORTHOGRAPHIC_FACTOR
+        } else {
+            1.0
+        };
         let (sy, cy) = (yaw as f64).sin_cos();
         let (sp, cp) = (pitch as f64).sin_cos();
-        let distance = bounds.extent().max(0.001) * 1.8;
+        let distance = bounds.extent().max(0.001) * 1.8 * far;
         Self {
             center: bounds.center(),
             right: [-sy, cy, 0.0],
@@ -382,7 +423,7 @@ impl Projection {
             toward_camera: [cp * cy, cp * sy, sp],
             eye: [0.0, 0.0, distance],
             distance,
-            scale: height.min(width) as f64 * 1.25 / zoom as f64,
+            scale: height.min(width) as f64 * 1.25 / zoom as f64 * far,
             width: width as f64,
             height: height as f64,
             pan,
@@ -1169,6 +1210,37 @@ fn select_one(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_orthographic_lens_keeps_the_size_and_drops_the_perspective() {
+        let scene = Bounds {
+            min: [-10.0, -10.0, -10.0],
+            max: [10.0, 10.0, 10.0],
+        };
+        let lens = |orthographic| {
+            Projection::with_lens(scene, 0.3, 0.4, 1.0, [0.0; 2], 800.0, 600.0, orthographic)
+        };
+        let width_at = |projection: Projection, depth_shift: f64| {
+            // A one metre bar across the view, shifted toward the camera.
+            let toward = projection.toward_camera;
+            let right = projection.right;
+            let at = |side: f64| {
+                std::array::from_fn(|axis| toward[axis] * depth_shift + right[axis] * side)
+            };
+            let (left, _, _) = projection.project_unclipped(at(-0.5)).unwrap();
+            let (right, _, _) = projection.project_unclipped(at(0.5)).unwrap();
+            f64::from(right - left)
+        };
+        let (perspective, orthographic) = (lens(false), lens(true));
+        // In the middle both show the bar alike.
+        assert!((width_at(perspective, 0.0) - width_at(orthographic, 0.0)).abs() < 0.05);
+        // Ten metres nearer, perspective shows it clearly larger, the
+        // orthographic lens within half a percent.
+        let near = width_at(perspective, 10.0) / width_at(perspective, 0.0);
+        let flat = width_at(orthographic, 10.0) / width_at(orthographic, 0.0);
+        assert!(near > 1.1, "{near}");
+        assert!((flat - 1.0).abs() < 0.005, "{flat}");
+    }
     use super::*;
     use std::fs;
 

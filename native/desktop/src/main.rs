@@ -1777,6 +1777,8 @@ enum Message {
     /// Turn the section box about the vertical through its centre by this
     /// many degrees, counter-clockwise seen from above.
     TurnSectionBy(f64),
+    /// Switch the orbit camera between perspective and orthographic.
+    ToggleOrthographic,
     SectionCoordinate(usize, bool, String),
     ApplySectionCoordinates,
     SectionRotationInput(String),
@@ -2425,7 +2427,10 @@ impl Default for Studio {
             pick_mode: false,
             measure: measure::MeasureTool::default(),
             drawing: drawing::DrawingTool::default(),
-            drawing_view: drawing_view::DrawingViewTool::new(settings.show_drawing_after_export),
+            drawing_view: {
+                selection::set_orthographic(settings.orthographic);
+                drawing_view::DrawingViewTool::new(settings.show_drawing_after_export)
+            },
             closed_mesh: closed_mesh::ClosedMeshTool::default(),
             faces: faces::FaceTool::default(),
             drag_rectangle: None,
@@ -2465,6 +2470,7 @@ impl Studio {
             cad_viewer: self.cad_viewer.chosen(),
             open_after_export: self.cad_viewer.open_after_export,
             show_drawing_after_export: self.drawing_view.show_after_export,
+            orthographic: selection::orthographic(),
         }
     }
 
@@ -7622,6 +7628,18 @@ impl Studio {
             Message::SectionRotationInput(value) => {
                 self.section_rotation_input = value;
             }
+            Message::ToggleOrthographic => {
+                let on = !selection::orthographic();
+                selection::set_orthographic(on);
+                self.revision += 1;
+                self.status = if on {
+                    "Orthographic view: no perspective"
+                } else {
+                    "Perspective view"
+                }
+                .into();
+                return Task::batch([self.queue_preferences_save(), self.schedule_detail()]);
+            }
             Message::TurnSectionBy(degrees) => {
                 let rotation = normalized_turn(self.section_rotation + degrees);
                 if !self.turn_section(rotation) {
@@ -11527,9 +11545,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         view_cube::CubeTarget::Face(preset) => Message::CameraPreset(preset),
                         view_cube::CubeTarget::Edge(edge) => Message::CubeEdge(edge),
                         view_cube::CubeTarget::Corner(corner) => Message::CubeCorner(corner),
-                        view_cube::CubeTarget::Home => {
-                            Message::CameraPreset(CameraPreset::Isometric)
-                        }
+                        view_cube::CubeTarget::Home => Message::ToggleOrthographic,
                     };
                     return (event::Status::Captured, Some(message));
                 }
@@ -11843,6 +11859,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 self.yaw,
                 self.pitch,
                 _cursor.position_in(bounds),
+                selection::orthographic(),
             );
             if let Some(menu) = self.context_menu {
                 draw_context_menu(&mut frame, menu, bounds, _cursor.position_in(bounds), false);
@@ -12169,6 +12186,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
             self.yaw,
             self.pitch,
             _cursor.position_in(bounds),
+            selection::orthographic(),
         );
         if let Some((start, end)) = self.drag_rectangle {
             let rectangle = ScreenRect::from_corners(start, end);
