@@ -12028,7 +12028,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 Some(point) if self.walk_station_at(view, point, bounds.size()).is_some() => {
                     mouse::Interaction::Pointer
                 }
-                Some(_) => mouse::Interaction::Grab,
+                Some(_) => mouse::Interaction::Idle,
                 None => mouse::Interaction::default(),
             };
         }
@@ -12090,13 +12090,10 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 || self.annotate.tool.is_some()
             {
                 mouse::Interaction::Crosshair
-            } else if _state
-                .drag
-                .is_some_and(|drag| matches!(drag.mode, DragMode::Orbit | DragMode::Pan))
-            {
-                mouse::Interaction::Grabbing
             } else {
-                // Select is the plain mouse: an arrow, not a hand.
+                // Select is the plain mouse: an arrow, also while the view is
+                // turned or moved. The hand of the system reads as a move
+                // cursor on Windows.
                 mouse::Interaction::Idle
             }
         } else {

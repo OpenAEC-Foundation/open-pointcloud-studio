@@ -1162,7 +1162,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         if state.is_some() {
-            mouse::Interaction::Grabbing
+            mouse::Interaction::Idle
         } else if cursor.is_over(bounds) && self.tool.scene().is_some() {
             mouse::Interaction::Crosshair
         } else {

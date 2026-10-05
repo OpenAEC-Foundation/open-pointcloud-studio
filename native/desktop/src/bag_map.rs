@@ -353,7 +353,7 @@ impl canvas::Program<Message> for BagMap {
             if self.drawing {
                 mouse::Interaction::Crosshair
             } else {
-                mouse::Interaction::Grab
+                mouse::Interaction::Idle
             }
         } else {
             mouse::Interaction::default()

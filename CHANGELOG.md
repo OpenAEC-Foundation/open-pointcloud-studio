@@ -15,7 +15,7 @@ drops those that begin with the name of an operating system or with
 ## Unreleased
 
 - **Create 2D plan / elevation / section…** under VIEWS AND SECTIONS in the Project Browser opens a dialog: choose a plan, an elevation or a section, made from the whole 3D model, the section box or a saved section box. From the model, a plan is cut at a height (1.20 m above the floor by default) and a section at a place along the axis it looks; an elevation takes the whole depth. The drawing shows in the Drawing view and is listed under DRAWINGS with its name.
-- In Select the pointer is an arrow; it becomes a closed hand while the view is turned or moved, and a crosshair in the picking and measuring tools.
+- The pointer is an arrow in Select, also while the view is turned or moved, in walking and over the Drawing view and the 3D BAG map; it is a crosshair in the picking and measuring tools. The hand, which Windows shows as a move cursor, is gone.
 - The ribbon is lighter: **Box select** left the SELECTION group (a left drag selects with a box), and Move, Scale and Thin moved from the EDIT group to **Transform** in Properties, with the scan they act on.
 - The explanations in the Closed mesh, Detect faces and Section drawing blocks are tooltips of their Start, Preview and Export buttons; warnings and advice sit behind a small **!** mark.
 
