@@ -1774,6 +1774,9 @@ enum Message {
     SectionMin(usize, f32),
     SectionMax(usize, f32),
     SectionHandleDelta(usize, bool, f32),
+    /// Turn the section box about the vertical through its centre by this
+    /// many degrees, counter-clockwise seen from above.
+    TurnSectionBy(f64),
     SectionCoordinate(usize, bool, String),
     ApplySectionCoordinates,
     SectionRotationInput(String),
@@ -7619,6 +7622,20 @@ impl Studio {
             Message::SectionRotationInput(value) => {
                 self.section_rotation_input = value;
             }
+            Message::TurnSectionBy(degrees) => {
+                let rotation = normalized_turn(self.section_rotation + degrees);
+                if !self.turn_section(rotation) {
+                    return Task::none();
+                }
+                self.section_enabled = true;
+                self.sync_section_coordinate_inputs();
+                self.revision += 1;
+                self.status = format!(
+                    "Section box turned to {}° about its centre",
+                    format_rotation(self.section_rotation)
+                );
+                return self.schedule_detail();
+            }
             Message::ApplySectionRotation => {
                 let Some(rotation) = parse_rotation(&self.section_rotation_input) else {
                     self.status = "The rotation must be a number of degrees".into();
@@ -11095,6 +11112,8 @@ enum DragMode {
     /// Left press with an annotation tool: a click picks a point, a drag orbits.
     AnnotatePending,
     Section(usize, bool),
+    /// The turning handle above a side face of the section box.
+    SectionTurn,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -11314,6 +11333,79 @@ fn section_handle_world(section: OrientedBox, axis: usize, is_min: bool) -> [f64
     section.to_scene(point)
 }
 
+/// The turning handles: the middle of the top edge of each side face, seen
+/// as a curved arrow. A drag turns the box about the vertical.
+fn section_turn_handles(section: OrientedBox) -> [[f64; 3]; 4] {
+    let at = |axis: usize, is_min: bool| {
+        let mut point = section.center();
+        point[axis] = if is_min {
+            section.bounds.min[axis]
+        } else {
+            section.bounds.max[axis]
+        };
+        point[2] = section.bounds.max[2];
+        section.to_scene(point)
+    };
+    [at(0, true), at(0, false), at(1, true), at(1, false)]
+}
+
+fn section_turn_handle_at(pointer: UiPoint, section: OrientedBox, projection: Projection) -> bool {
+    section_turn_handles(section).into_iter().any(|world| {
+        projection
+            .project_unclipped(world)
+            .is_some_and(|(x, y, _)| (pointer.x - x).hypot(pointer.y - y) <= 10.0)
+    })
+}
+
+/// The turn about the vertical through the middle of the top of the box
+/// that moves the pointer from `before` to `after` round it, in degrees,
+/// counter-clockwise seen from above.
+fn section_turn_delta(
+    section: OrientedBox,
+    projection: Projection,
+    before: UiPoint,
+    after: UiPoint,
+) -> Option<f64> {
+    let mut top = section.center();
+    top[2] = section.bounds.max[2];
+    let middle = section.to_scene(top);
+    let (cx, cy, _) = projection.project_unclipped(middle)?;
+    // The screen near the middle as a picture of the horizontal plane
+    // through it: a step east and a step north, and the pointer measured in
+    // those steps, so that the angle is the one in the scene.
+    let reach = (section.bounds.max[0] - section.bounds.min[0])
+        .max(section.bounds.max[1] - section.bounds.min[1])
+        .max(1e-3);
+    let east = projection.project_unclipped([middle[0] + reach, middle[1], middle[2]])?;
+    let north = projection.project_unclipped([middle[0], middle[1] + reach, middle[2]])?;
+    let (ex, ey) = (f64::from(east.0 - cx), f64::from(east.1 - cy));
+    let (nx, ny) = (f64::from(north.0 - cx), f64::from(north.1 - cy));
+    let determinant = ex * ny - ey * nx;
+    // Seen edge-on the plane gives no angle.
+    if determinant.abs() < 1.0 {
+        return None;
+    }
+    let angle = |point: UiPoint| {
+        let (vx, vy) = (f64::from(point.x - cx), f64::from(point.y - cy));
+        let along_east = (vx * ny - vy * nx) / determinant;
+        let along_north = (ex * vy - ey * vx) / determinant;
+        along_north.atan2(along_east)
+    };
+    let mut delta = angle(after) - angle(before);
+    if delta > std::f64::consts::PI {
+        delta -= std::f64::consts::TAU;
+    } else if delta < -std::f64::consts::PI {
+        delta += std::f64::consts::TAU;
+    }
+    Some(delta.to_degrees())
+}
+
+/// A turn in degrees brought within -180 to 180.
+fn normalized_turn(degrees: f64) -> f64 {
+    let turned = (degrees + 180.0).rem_euclid(360.0) - 180.0;
+    (turned * 100.0).round() / 100.0
+}
+
 fn section_handle_at(
     pointer: UiPoint,
     section: OrientedBox,
@@ -11455,6 +11547,14 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         bounds.width,
                         bounds.height,
                     );
+                    if section_turn_handle_at(position, section, projection) {
+                        *state = Some(DragState {
+                            start: position,
+                            position,
+                            mode: DragMode::SectionTurn,
+                        });
+                        return (event::Status::Captured, None);
+                    }
                     if let Some((axis, is_min)) = section_handle_at(position, section, projection) {
                         *state = Some(DragState {
                             start: position,
@@ -11599,6 +11699,29 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             | DragMode::MeasurePending
                             | DragMode::AnnotatePending
                             | DragMode::PlainPending => unreachable!(),
+                            DragMode::SectionTurn => {
+                                let (Some(section), Some(scene_bounds)) =
+                                    (self.section, combined_bounds(self.clouds))
+                                else {
+                                    return (event::Status::Captured, None);
+                                };
+                                let projection = Projection::new(
+                                    scene_bounds,
+                                    self.yaw,
+                                    self.pitch,
+                                    self.zoom,
+                                    self.pan,
+                                    bounds.width,
+                                    bounds.height,
+                                );
+                                let before = UiPoint::new(position.x - dx, position.y - dy);
+                                match section_turn_delta(section, projection, before, position) {
+                                    Some(degrees) if degrees.abs() > 1e-6 => {
+                                        Message::TurnSectionBy(degrees)
+                                    }
+                                    _ => return (event::Status::Captured, None),
+                                }
+                            }
                             DragMode::Section(axis, is_min) => {
                                 let (Some(section), Some(scene_bounds)) =
                                     (self.section, combined_bounds(self.clouds))
@@ -11838,6 +11961,61 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     }
                 }
             }
+            // A curved arrow on the top edge of each side face turns the box.
+            let pointer = _cursor.position_in(bounds);
+            let turning = _state
+                .drag
+                .is_some_and(|drag| matches!(drag.mode, DragMode::SectionTurn));
+            for world in section_turn_handles(section) {
+                let Some((x, y, _)) = projection.project_unclipped(world) else {
+                    continue;
+                };
+                if x < -10.0 || y < -10.0 || x > bounds.width + 10.0 || y > bounds.height + 10.0 {
+                    continue;
+                }
+                let centre = UiPoint::new(x, y);
+                let hovered = turning
+                    || pointer.is_some_and(|point| (point.x - x).hypot(point.y - y) <= 10.0);
+                let radius = if hovered { 8.0 } else { 6.5 };
+                frame.fill(
+                    &canvas::Path::circle(centre, radius + 2.5),
+                    if hovered {
+                        Color::from_rgba8(245, 158, 11, 0.35)
+                    } else {
+                        Color::from_rgba8(83, 60, 38, 0.55)
+                    },
+                );
+                let start = -0.3_f32;
+                let end = start + 4.7;
+                let arc = canvas::Path::new(|path| {
+                    path.arc(canvas::path::Arc {
+                        center: centre,
+                        radius,
+                        start_angle: iced::Radians(start),
+                        end_angle: iced::Radians(end),
+                    });
+                });
+                let stroke = canvas::Stroke::default()
+                    .with_color(Color::from_rgb8(245, 158, 11))
+                    .with_width(1.6);
+                frame.stroke(&arc, stroke);
+                // The arrowhead at the end of the arc, along its turn.
+                let tip = UiPoint::new(x + radius * end.cos(), y + radius * end.sin());
+                let along = (-end.sin(), end.cos());
+                let across = (end.cos(), end.sin());
+                let head = canvas::Path::new(|path| {
+                    path.move_to(UiPoint::new(
+                        tip.x - along.0 * 3.5 + across.0 * 3.0,
+                        tip.y - along.1 * 3.5 + across.1 * 3.0,
+                    ));
+                    path.line_to(UiPoint::new(tip.x + along.0 * 3.0, tip.y + along.1 * 3.0));
+                    path.line_to(UiPoint::new(
+                        tip.x - along.0 * 3.5 - across.0 * 3.0,
+                        tip.y - along.1 * 3.5 - across.1 * 3.0,
+                    ));
+                });
+                frame.stroke(&head, stroke);
+            }
         }
         if self.show_scan_poses {
             let pose_count: usize = self
@@ -12055,6 +12233,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                                 bounds.height,
                             );
                             section_handle_at(point, section, projection).is_some()
+                                || section_turn_handle_at(point, section, projection)
                         })
                     })
                 })
@@ -14794,6 +14973,60 @@ mod camera_api_tests {
             .drawn_at(Rectangle::new(UiPoint::new(280.0, 150.0), drawn));
         assert_ne!(studio.viewport_size, drawn);
         assert_eq!(studio.scene_size(), drawn);
+    }
+
+    #[test]
+    fn dragging_a_turning_handle_turns_the_box_as_the_pointer_goes_round() {
+        let section = OrientedBox::new(
+            Bounds {
+                min: [0.0, 0.0, 0.0],
+                max: [10.0, 6.0, 3.0],
+            },
+            20.0,
+        );
+        let scene = Bounds {
+            min: [-5.0, -5.0, -1.0],
+            max: [15.0, 11.0, 4.0],
+        };
+        let middle = [5.0, 3.0, 3.0];
+        let round = |degrees: f64| {
+            let angle = degrees.to_radians();
+            [
+                middle[0] + 4.0 * angle.cos(),
+                middle[1] + 4.0 * angle.sin(),
+                3.0,
+            ]
+        };
+        // From above and from below a turn of the pointer round the middle
+        // over ten degrees of the scene turns the box ten degrees.
+        for pitch in [0.9_f32, -0.9] {
+            let projection = Projection::new(scene, 0.4, pitch, 1.0, [0.0, 0.0], 800.0, 600.0);
+            let screen = |world: [f64; 3]| {
+                let (x, y, _) = projection.project_unclipped(world).unwrap();
+                UiPoint::new(x, y)
+            };
+            let turned = section_turn_delta(
+                section,
+                projection,
+                screen(round(30.0)),
+                screen(round(40.0)),
+            )
+            .unwrap();
+            assert!((turned - 10.0).abs() < 0.5, "pitch {pitch}: {turned}");
+            let back = section_turn_delta(
+                section,
+                projection,
+                screen(round(40.0)),
+                screen(round(30.0)),
+            )
+            .unwrap();
+            assert!((back + 10.0).abs() < 0.5, "pitch {pitch}: {back}");
+        }
+        assert_eq!(normalized_turn(190.0), -170.0);
+        assert_eq!(normalized_turn(-185.5), 174.5);
+        assert!(section_turn_handles(section)
+            .iter()
+            .all(|handle| (handle[2] - 3.0).abs() < 1e-9));
     }
 
     #[test]

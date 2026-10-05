@@ -14,6 +14,7 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- The section box has a turning handle, a curved arrow in the middle of the top edge of each side face: dragging it turns the box about the vertical through its centre, the way the pointer goes round. **Rotation (°)** in Properties follows the turn and takes a typed value as before.
 - **Create 2D plan / elevation / section…** under VIEWS AND SECTIONS in the Project Browser opens a dialog: choose a plan, an elevation or a section, made from the whole 3D model, the section box or a saved section box. From the model, a plan is cut at a height (1.20 m above the floor by default) and a section at a place along the axis it looks; an elevation takes the whole depth. The drawing shows in the Drawing view and is listed under DRAWINGS with its name.
 - The pointer is an arrow in Select, also while the view is turned or moved, in walking and over the Drawing view and the 3D BAG map; it is a crosshair in the picking and measuring tools. The hand, which Windows shows as a move cursor, is gone.
 - The ribbon is lighter: **Box select** left the SELECTION group (a left drag selects with a box), and Move, Scale and Thin moved from the EDIT group to **Transform** in Properties, with the scan they act on.

@@ -154,6 +154,7 @@ Walking starts from the current orbit view, or from inside a station. Walking ou
 - While the box is on, Properties has a **Section box** section with a slider for each of the six limits, **Min** and **Max** fields for X, Y and Z in model coordinates with **Apply XYZ limits**, and **Zoom box**, which frames the clipped volume.
 - **Fit selection** fits the box around the selected points, using the selected source points themselves, also those that are not on screen.
 - **Reset box** opens the box to the whole model again, keeping its rotation.
+- The **turning handles**, curved arrows in the middle of the top edge of each side face, turn the box about the vertical line through its centre as the pointer goes round it.
 - **Rotation (°)** turns the box about the vertical line through its centre, counter-clockwise as seen from above; type the angle and press Enter, or choose **Apply XYZ limits**. **Align to walls** turns it for you: it looks for the main direction of the walls in the middle half of the height of the box, as the filled cut of a plan does, and turns the box by at most 45 degrees so that its sides run along them. Put the box around a few walls first; with only the floor or ceiling in its middle, no walls are found and the box stays as it is.
 
 The limits are coordinates in the model. They stay where they are when another layer is shown or hidden. In a turned box the **Min** and **Max** fields are the limits of the box before it is turned about its centre; the sliders and the handles move its faces along its own axes.
