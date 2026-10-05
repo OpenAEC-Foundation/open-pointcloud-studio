@@ -17,13 +17,15 @@ use crate::{views, Message, Studio};
 pub const DEFAULT_MAX_EDGE: u32 = 1920;
 pub const MIN_MAX_EDGE: u32 = 16;
 pub const MAX_MAX_EDGE: u32 = 8192;
-/// Pause between two looks at whether the viewport still reads points.
+/// Pause between two looks at whether the viewport still reads points or
+/// makes the caps of the cut.
 const SETTLE_STEP: Duration = Duration::from_millis(100);
-/// Looks before the screenshot is taken while points are still being read.
+/// Looks before the screenshot is taken while the viewport is still busy.
 const SETTLE_STEPS: u8 = 40;
-/// Looks in a row without points being read before the screenshot is taken.
-/// Reading starts 220 ms after a camera change and the points that arrived
-/// last must have been drawn, so this spans longer than that.
+/// Looks in a row without points being read or caps being made before the
+/// screenshot is taken. Reading starts 220 ms after a camera change and the
+/// points that arrived last must have been drawn, so this spans longer than
+/// that.
 const QUIET_STEPS: u8 = 4;
 
 /// A screenshot command on its way, with where its answer goes.
@@ -37,7 +39,8 @@ pub struct Request {
 
 #[derive(Debug, Clone)]
 pub enum Step {
-    /// Look whether the viewport still reads the points of its camera.
+    /// Look whether the viewport still reads the points of its camera or
+    /// makes the caps of the cut.
     Settle {
         request: Request,
         remaining: u8,
@@ -98,6 +101,13 @@ fn settle_timer(request: Request, remaining: u8, quiet: u8) -> Task<Message> {
 }
 
 impl Studio {
+    /// Whether the 3D view is still completing its picture: reading the
+    /// points of its camera, or making the caps where the section box cuts
+    /// a mesh. A picture taken now may lack some of either.
+    pub(crate) fn scene_pending(&self) -> bool {
+        self.detail_pending || self.section_fill.cap_jobs.running()
+    }
+
     /// Where the part of the window that a screenshot captures lies: the
     /// sheet of the Drawing view while it is shown, else the 3D scene.
     pub(crate) fn shown_canvas_bounds(&self) -> Option<Rectangle> {
@@ -150,12 +160,12 @@ impl Studio {
                 remaining,
                 quiet,
             } => {
-                // The drawing has no points to wait for, only its first
-                // frame after it was switched on.
+                // The drawing has no points or caps to wait for, only its
+                // first frame after it was switched on.
                 let waiting = if self.drawing_view.shown {
                     self.shown_canvas_bounds().is_none()
                 } else {
-                    self.detail_pending
+                    self.scene_pending()
                 };
                 let quiet = if waiting { 0 } else { quiet + 1 };
                 if quiet < QUIET_STEPS && remaining > 0 {
@@ -188,11 +198,15 @@ impl Studio {
                         .send(json!({"ok": false, "error": Uncaptured::NoWindow.message()}));
                     return Task::none();
                 };
-                let detail_pending = self.detail_pending && !self.drawing_view.shown;
+                let model = !self.drawing_view.shown;
+                let pending = Pending {
+                    detail: self.detail_pending && model,
+                    section_caps: self.section_fill.cap_jobs.running() && model,
+                };
                 Task::future(async move {
                     let reply = request.reply.clone();
                     let answer = tokio::task::spawn_blocking(move || {
-                        let mut value = answer(&request, &screenshot, canvas, detail_pending);
+                        let mut value = answer(&request, &screenshot, canvas, pending);
                         if value["ok"] == true {
                             value["view"] = view.into();
                         }
@@ -215,13 +229,22 @@ fn is_png_path(path: &Path) -> bool {
             .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
 }
 
+/// What the 3D view was still busy with when a screenshot was taken.
+#[derive(Debug, Clone, Copy, Default)]
+struct Pending {
+    /// Reading the points of its camera.
+    detail: bool,
+    /// Making the caps of the cut of a mesh.
+    section_caps: bool,
+}
+
 /// The answer to a screenshot command: the image cut from the window, as a
 /// file and/or base64 text, with its size.
 fn answer(
     request: &Request,
     screenshot: &Screenshot,
     canvas: Rectangle,
-    detail_pending: bool,
+    pending: Pending,
 ) -> Value {
     let encoded = views::encode_viewport(
         &screenshot.bytes,
@@ -248,7 +271,8 @@ fn answer(
         "path": request.path,
         "viewport_size": [canvas.width, canvas.height],
         "scale_factor": screenshot.scale_factor,
-        "detail_pending": detail_pending,
+        "detail_pending": pending.detail,
+        "section_caps_pending": pending.section_caps,
     });
     if request.base64 {
         value["png_base64"] = Value::String(base64(&png));
@@ -328,7 +352,7 @@ mod tests {
         let screenshot = Screenshot::new(vec![90u8; 400 * 300 * 4], Size::new(400, 300), 2.0);
         let canvas = Rectangle::new(Point::new(10.0, 20.0), Size::new(150.0, 100.0));
         let (with_both, _) = request(Some(path.clone()), true);
-        let value = answer(&with_both, &screenshot, canvas, false);
+        let value = answer(&with_both, &screenshot, canvas, Pending::default());
         assert_eq!(value["ok"], true, "{value}");
         assert_eq!(value["width"], 300);
         assert_eq!(value["height"], 200);
@@ -339,16 +363,40 @@ mod tests {
         assert!(written.starts_with(b"\x89PNG\r\n\x1a\n"));
 
         let (file_only, _) = request(Some(path), false);
-        let value = answer(&file_only, &screenshot, canvas, true);
+        let busy = Pending {
+            detail: true,
+            section_caps: false,
+        };
+        let value = answer(&file_only, &screenshot, canvas, busy);
         assert!(value.get("png_base64").is_none());
         assert_eq!(value["detail_pending"], true);
+        assert_eq!(value["section_caps_pending"], false);
+        let busy = Pending {
+            detail: false,
+            section_caps: true,
+        };
+        let value = answer(&file_only, &screenshot, canvas, busy);
+        assert_eq!(value["detail_pending"], false);
+        assert_eq!(value["section_caps_pending"], true);
 
         let outside = Rectangle::new(Point::new(500.0, 400.0), Size::new(10.0, 10.0));
         let (base64_only, _) = request(None, true);
         assert_eq!(
-            answer(&base64_only, &screenshot, outside, false)["ok"],
+            answer(&base64_only, &screenshot, outside, Pending::default())["ok"],
             false
         );
+    }
+
+    #[test]
+    fn pictures_wait_for_the_points_and_the_caps_of_the_view() {
+        let mut studio = Studio::default();
+        assert!(!studio.scene_pending());
+        let caps = studio.section_fill.cap_jobs.start();
+        assert!(studio.scene_pending());
+        drop(caps);
+        assert!(!studio.scene_pending());
+        studio.detail_pending = true;
+        assert!(studio.scene_pending());
     }
 
     #[test]

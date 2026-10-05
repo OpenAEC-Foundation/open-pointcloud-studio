@@ -795,7 +795,9 @@ image is still to be written. `set_annotation_tool`, `annotate_screen` and
 `annotate_screen` picks the exact source point at a viewport pixel like
 `pick_screen` and answers `accepted: true` when the search has started; poll
 `status.result.selection_pending` until it is false and read `placing`. A snapshot is taken shortly after a view is saved or updated or
-its annotations change, once the viewport has drawn the change, and only
+its annotations change, once the viewport has drawn the change and, for at
+most about 9 seconds, has read the points of the camera and made the caps of
+the cut of a mesh, and only
 while the viewport shows that view: the camera, the section box, the colour
 mode and the scene bounds are as the view was last saved, updated or
 restored. After `set_camera`, `set_section` or another change of those,
@@ -816,10 +818,13 @@ it captures the drawing instead, once the sheet has been drawn, and the
 answer has `view`: `drawing`, else `model`. It first waits until the
 viewport has read the points for the current camera, at most about 4
 seconds; `status.result.detail_pending` is true while those points are still
-being read, which starts about 0.2 seconds after the camera changed. The answer has the `width` and `height` of the PNG image in
+being read, which starts about 0.2 seconds after the camera changed. It
+waits as well, within the same time, while the caps of the cut of a mesh by the
+section box are being made (`status.result.section_fill.pending`). The answer has the `width` and `height` of the PNG image in
 pixels, its size in `bytes`, the `viewport_size` in logical pixels with the
 window's `scale_factor`, `detail_pending` (true when the points were still
-being read when the picture was taken), the `path` it was written to or
+being read when the picture was taken), `section_caps_pending` (true when the
+caps were still being made), the `path` it was written to or
 `null`, and `png_base64`, the image as standard base64 text, when `base64`
 is true. Without a `path` the image is returned as base64; with a `path` only
 when `base64` is true as well. An image whose longer edge exceeds `max_edge`

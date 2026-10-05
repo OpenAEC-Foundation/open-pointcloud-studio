@@ -109,7 +109,9 @@ edits, meshing (a closed mesh included), mesh export, a face detection, a
 faces export, a section drawing or its preview, a drawing file being read, merging, a 3D BAG download,
 point loading for the camera, the fill of the cut of a mesh by the section
 box and view snapshots have finished; call it after
-`open`, before `screenshot` when the camera changed, and before `export_bcf`. `screenshot` returns MCP image content (`type: "image"`,
+`open`, before `screenshot` when the camera changed, and before `export_bcf`.
+`screenshot` itself waits up to 4 seconds for the points of the camera and the
+fill of the cut, and so does the snapshot of a view. `screenshot` returns MCP image content (`type: "image"`,
 `mimeType: "image/png"`, base64 data) followed by a text part with the image
 size. While the Drawing view is shown, `screenshot` captures the drawing
 instead of the 3D viewport. While the File view or Settings covers the model, `screenshot` answers

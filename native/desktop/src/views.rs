@@ -1174,8 +1174,9 @@ impl Studio {
                         self.snapshot_timer(guid, serial, tries),
                     ]);
                 }
-                if tries > 0 && self.detail_pending {
-                    // The points of this camera are still being read.
+                if tries > 0 && self.scene_pending() {
+                    // The points of this camera are still being read, or
+                    // the caps of the cut made.
                     return self.snapshot_timer(guid, serial, tries - 1);
                 }
                 // A minimised window gives no screenshot; the view stays due.
