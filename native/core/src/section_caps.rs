@@ -40,6 +40,9 @@ const MIN_CELL: f64 = 0.002;
 /// A line counts a surface only when it crosses it at least this steeply:
 /// the cosine between the line and the normal of the surface.
 const MIN_FACING: f64 = 0.5;
+/// A triangle is cut only when it stands at least this steeply on the face:
+/// the sine of the angle between them, here 10 degrees.
+const MIN_STEEPNESS: f64 = 0.17;
 /// Two surfaces enclose material only when their normals point at least
 /// this much against each other.
 const OPPOSITE: f64 = -0.5;
@@ -111,15 +114,28 @@ pub fn section_caps(
         return caps;
     }
     let segments = cut_segments(mesh, &place, section, &faces, max_thickness);
-    for (face, segments) in faces.iter().zip(&segments) {
-        if segments.is_empty() {
-            continue;
-        }
-        let Some(grid) = Grid::over(face, segments, max_thickness) else {
-            continue;
+    let parts: Vec<MeshGeometry> = faces
+        .par_iter()
+        .zip(segments.par_iter())
+        .map(|(face, segments)| {
+            let mut part = MeshGeometry::default();
+            if let Some(grid) = Grid::over(face, segments, max_thickness) {
+                let mask = grid.material(segments, max_thickness);
+                write_rectangles(&mut part, face, &grid, &mask, section);
+            }
+            part
+        })
+        .collect();
+    for part in parts {
+        let Ok(base) = u32::try_from(caps.vertices.len()) else {
+            break;
         };
-        let mask = grid.material(segments, max_thickness);
-        write_rectangles(&mut caps, face, &grid, &mask, section);
+        caps.vertices.extend(part.vertices);
+        caps.triangles.extend(
+            part.triangles
+                .into_iter()
+                .map(|triangle| triangle.map(|index| index + base)),
+        );
     }
     caps
 }
@@ -215,7 +231,10 @@ fn cut(
     let along = [normal[face.u], normal[face.v]];
     let length = along[0].hypot(along[1]);
     let size = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
-    if length <= size * 1e-9 {
+    // A triangle that lies almost in the face, as a floor does in a cut at
+    // its height, says nothing about which side of its cut is air: the
+    // little of its normal that lies in the face points anywhere.
+    if length <= size * MIN_STEEPNESS {
         return None;
     }
     let air = [along[0] / length, along[1] / length];
@@ -881,6 +900,37 @@ mod tests {
         assert!(caps_of(&far, section).triangles.is_empty());
         let wide = section_caps(&far, |xyz| xyz, &section, CapOptions { max_thickness: 1.0 });
         assert!((area(&wide) - 8.0).abs() < 0.2, "{}", area(&wide));
+    }
+
+    #[test]
+    fn ground_that_wavers_about_a_face_of_the_box_gets_no_cap() {
+        // A measured ground of 10 cm triangles, a millimetre above and below
+        // the bottom of the box in turn, facing up.
+        let mut ground = MeshGeometry::default();
+        let count = 60;
+        for j in 0..=count {
+            for i in 0..=count {
+                let lift = if (i * 7 + j * 3) % 2 == 0 {
+                    0.001
+                } else {
+                    -0.001
+                };
+                ground.vertices.push([i as f64 * 0.1, j as f64 * 0.1, lift]);
+            }
+        }
+        let at = |i: usize, j: usize| (j * (count + 1) + i) as u32;
+        for j in 0..count {
+            for i in 0..count {
+                ground
+                    .triangles
+                    .push([at(i, j), at(i + 1, j), at(i + 1, j + 1)]);
+                ground
+                    .triangles
+                    .push([at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
+            }
+        }
+        let caps = caps_of(&ground, boxed([-1.0, -1.0, 0.0], [7.0, 7.0, 2.0]));
+        assert!(caps.triangles.is_empty(), "{}", area(&caps));
     }
 
     #[test]

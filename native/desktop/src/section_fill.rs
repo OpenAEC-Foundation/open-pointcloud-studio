@@ -7,16 +7,16 @@ use std::sync::Arc;
 
 use iced::widget::{checkbox, column, container, row, text_input};
 use iced::{Background, Border, Color, Element, Fill};
-use pointcloud_core::{
-    DEFAULT_CAP_MAX_THICKNESS, LAYER_RGB_CUT_FILL, MAX_CAP_MAX_THICKNESS, MIN_CAP_MAX_THICKNESS,
-};
+use pointcloud_core::{DEFAULT_CAP_MAX_THICKNESS, MAX_CAP_MAX_THICKNESS, MIN_CAP_MAX_THICKNESS};
 use serde_json::{json, Value};
 
 use crate::i18n::tr;
 use crate::{opencad_properties, Message};
 
-/// The grey of the filled cut in a section drawing.
-pub(crate) const DEFAULT_CAP_COLOR: [u8; 3] = LAYER_RGB_CUT_FILL;
+/// A dark neutral grey. It stands apart from a mesh without colours, drawn in
+/// a light warm grey, and reads as cut material on a light and on a dark
+/// background.
+pub(crate) const DEFAULT_CAP_COLOR: [u8; 3] = [88, 88, 88];
 
 /// How the caps are drawn, while they are switched on.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -210,7 +210,7 @@ impl SectionFill {
                     "Cap colour",
                     row![
                         swatch,
-                        text_input("#808080", &self.color_input)
+                        text_input("#585858", &self.color_input)
                             .on_input(|value| Message::SectionFill(FillAction::Color(value)))
                             .size(11)
                             .padding([2, 4])
@@ -246,16 +246,16 @@ mod tests {
     }
 
     #[test]
-    fn the_fill_is_on_in_drawing_grey_and_half_a_metre() {
+    fn the_fill_is_on_in_dark_grey_and_half_a_metre() {
         let fill = SectionFill::default();
         assert_eq!(
             fill.style(),
             Some(CapStyle {
-                color: [128, 128, 128],
+                color: [88, 88, 88],
                 max_thickness: 0.5,
             })
         );
-        assert_eq!(fill.value()["color"], "#808080");
+        assert_eq!(fill.value()["color"], "#585858");
         let off = SectionFill::new(false, [1, 2, 3], 99.0);
         assert_eq!(off.style(), None);
         assert_eq!(off.max_thickness, DEFAULT_CAP_MAX_THICKNESS);

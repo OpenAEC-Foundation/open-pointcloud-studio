@@ -1990,7 +1990,7 @@ mod tests {
         assert!(state.borrow().caps_job.is_some());
         let capped = draw(&studio);
         assert!(!capped.caps.indices.is_empty());
-        let grey = 128.0 / 255.0;
+        let grey = 88.0 / 255.0;
         for vertex in &capped.caps.vertices {
             assert_eq!(vertex.color, [grey, grey, grey, 1.0]);
             assert_eq!(vertex.normal, [0.0; 4]);

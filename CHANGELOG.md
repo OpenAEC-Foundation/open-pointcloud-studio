@@ -16,6 +16,7 @@ drops those that begin with the name of an operating system or with
 
 - The Linux packages on the release page carry a build attestation kept by GitHub: with the GitHub CLI, `gh attestation verify` checks that the project's release workflow attested the file and that it has not been changed since. The release notes and the README give the full command.
 - Where the section box cuts a mesh, the cut looks solid: the material between the two faces of a wall, floor or ceiling is filled on the faces of the box in one colour, as in a section drawing, instead of showing the hollow between them. Only two faces that look away from each other and lie at most the largest thickness apart are filled, so a facade scanned from one side gets no fill. **Fill the cut**, **Cap colour** and **Largest thickness (m)** under **Section box** in Properties set it, and are kept with the display settings; the local API and the MCP server have `set_section_fill`, and `status` reports `section_fill`.
+- A mesh of large triangles, such as a model of a few walls, is drawn with the right face in front: inside a large triangle the depth was off, so that a face behind another could show through it, and the section box clipped it a little off its faces.
 
 ## 0.9.1 - 2026-10-05
 

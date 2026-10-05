@@ -13136,7 +13136,7 @@ mod section_box_tests {
         let mut studio = studio_with_grid(directory.path());
         let status = send(&mut studio, native_api::ApiCommand::Status);
         assert_eq!(status["result"]["section_fill"]["fill_cut"], true);
-        assert_eq!(status["result"]["section_fill"]["color"], "#808080");
+        assert_eq!(status["result"]["section_fill"]["color"], "#585858");
         assert_eq!(status["result"]["section_fill"]["max_thickness"], 0.5);
         let answer = send(
             &mut studio,
