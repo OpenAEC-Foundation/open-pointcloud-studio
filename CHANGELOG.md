@@ -14,6 +14,8 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-05
+
 - The ribbon shows the main tool of each group as a large button with its icon above its name: Zoom all, Section box, Section drawing, Select, Distance, Area, Closed mesh and Build index. The other tools are small buttons with smaller icons, three to a column.
 - The pill under the view cube shows **PERSP** or **ORTHO** and switches the 3D view between perspective and orthographic; the choice is kept. The view cube has no grey panel behind it any more. Isometric stays in the VIEW group and on the corners of the cube.
 - The section box has a turning handle, a curved arrow in the middle of the top edge of each side face: dragging it turns the box about the vertical through its centre, the way the pointer goes round. **Rotation (°)** in Properties follows the turn and takes a typed value as before.
@@ -21,8 +23,6 @@ drops those that begin with the name of an operating system or with
 - The pointer is an arrow in Select, also while the view is turned or moved, in walking and over the Drawing view and the 3D BAG map; it is a crosshair in the picking and measuring tools. The hand, which Windows shows as a move cursor, is gone.
 - The ribbon is lighter: **Box select** left the SELECTION group (a left drag selects with a box), and Move, Scale and Thin moved from the EDIT group to **Transform** in Properties, with the scan they act on.
 - The explanations in the Closed mesh, Detect faces and Section drawing blocks are tooltips of their Start, Preview and Export buttons; warnings and advice sit behind a small **!** mark.
-
-## 0.9.1 - 2026-10-05
 
 - **Closed mesh** keeps the edges and corners of walls, floors and steps sharp. Near an edge the distance to the surface is measured to the planes of the faces that meet there instead of to their mean, so step nosings, the foot of a wall and outside corners are no longer rounded off: on generated scans at voxels of 4 cm the true edge lies about 3 mm from the mesh instead of 5 to 7 mm.
 - A long message in the status bar stays on one line and is cut off at the right; before, it could squeeze the counts into a narrow column and push the window content up.
