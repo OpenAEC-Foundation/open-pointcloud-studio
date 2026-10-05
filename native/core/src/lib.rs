@@ -27,6 +27,7 @@ mod obj_mesh;
 mod octree;
 mod oriented_box;
 mod pcd;
+pub mod plans;
 mod ply;
 mod ply_mesh;
 mod ptx;
