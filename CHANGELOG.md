@@ -14,6 +14,11 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- A section drawing can be looked at in the application itself: the **Drawing** tab over the scene shows it on a light sheet, with its points, filled cut, outlines, frame and text, a switch per layer, pan with any mouse button, zoom about the pointer with the wheel, **Zoom extents**, a scale bar and the coordinates under the pointer in millimetres or metres. An export switches to the drawing as soon as it is written while **Show after export** is on, as it is by default; **Show drawing** in the Section drawing block opens it at any time.
+- A preview of the filled cut also prepares the whole drawing for the Drawing view, points included, as an export with the same choices would write it.
+- **Drawing (DXF/DWG)…** on the Open page of the File view shows any DXF or DWG file in the Drawing view: points, lines, polylines, circles, arcs, ellipses, solid fills with holes, texts and blocks. Entities that are not shown, and 3D content such as meshes, are counted and named instead of stopping the file from opening.
+- The local API and the MCP server have `drawing_view`, `open_drawing`, `drawing_zoom_extents` and `set_drawing_layer`, `status` reports the Drawing view, and `screenshot` captures the drawing while it is shown.
+
 ## 0.9.0 - 2026-10-05
 
 - The left mouse button selects by default: a click selects the point under the pointer and a drag draws a rectangle that selects the points inside it. The middle button orbits, Alt with the left button orbits as well, and the right button, or Shift with the middle button, pans.

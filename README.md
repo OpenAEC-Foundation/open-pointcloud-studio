@@ -206,6 +206,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - **Filled cut** adds the walls, columns and floors that the slab goes through as filled regions with outlines, and leaves door and window openings open. **Preview** shows these regions over the points before a file is saved.
 - The choices are millimetres or metres, model coordinates or the corner of the box as zero, a layer per scan or per class, layer colours or the colours of the scan, and the file versions R2004 to R2018.
 - **Open in CAD viewer** shows the saved DXF or DWG file read-only in [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio), the open-source CAD application, and **Open after export** does so after every export; the same holds for faces and meshes saved as DXF or DWG. Without Open CAD Studio the file opens in the program the system has for it.
+- The **Drawing** tab over the scene shows the drawing in the application itself as soon as it is exported, or after a preview: points, filled cut, outlines, frame and text on a light sheet, with a switch per layer, pan and zoom, a scale bar and the coordinates under the pointer. Any DXF or DWG file opens there too, from **Open** in the File view.
 - The filled cut is traced from the points and has limits: a wall scanned from one side is drawn as a thin strip, gaps under about half a metre are closed, and furniture in the slab is drawn unless its points are deleted first. The [user guide](docs/guide.md#the-filled-cut-and-its-limits) lists them.
 
 ### Mesh

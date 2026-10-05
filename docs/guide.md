@@ -35,10 +35,10 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 - The **top strip** starts with the application logo, the **File** button and the **Home** tab. At its right end are five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo delete and Redo delete), and the **Settings** button. Actions that are not available are shown muted.
 - The **ribbon** holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE and INDEX. The ribbon is wider than the default window of 1440 pixels. The groups that do not fit scroll sideways, with the wheel, the scrollbar or the arrow buttons that appear at both ends; in a window wide enough for all groups the arrows go away.
 - The **project panel** at the left lists the open clouds in name order, one row each with a visibility switch, the point count and a button to close the cloud. A second line appears only while a cloud is loading or indexing, or when it has selected or deleted points. Below the clouds, the classes that occur in them are listed.
-- The **scene** in the middle is the 3D view, with the view cube in a corner.
-- The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the saved views and the annotations of the active view, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the Section drawing, Closed mesh and Detect faces blocks while those tools are open, the strength of eye-dome lighting while that is on, the 3D surface settings, the size of the mesh of the active scan with its open edges and connected parts, and the progress of mesh, merge and scale jobs with their cancel buttons.
+- The **scene** in the middle is the 3D view, with the view cube in a corner. The tabs **Model** and **Drawing** in its header switch it for the [Drawing view](#the-drawing-view), which shows a 2D drawing in its place.
+- The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the saved views and the annotations of the active view, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the Drawing view block while that view is shown, the Section drawing, Closed mesh and Detect faces blocks while those tools are open, the strength of eye-dome lighting while that is on, the 3D surface settings, the size of the mesh of the active scan with its open edges and connected parts, and the progress of mesh, merge and scale jobs with their cancel buttons.
 - The **status bar** at the bottom says what is going on, how many files and points are open and how many points are selected, and ends with the version.
-- The **File view** opens with the File button and covers the ribbon and the scene. Its menu leads to the pages **New**, **Open**, **Import** and **Export**, then **Workspace**, **Extensions** and **About**, and ends with **Settings…**, **Return to model** and **Exit**. Each task is a tile that says what it writes or what it needs, and is greyed while it cannot run. **New** closes every open scan (the files are not changed); **Open** has **Point cloud…** and **Scan folder…**; **Import** has **3D BAG buildings…**; **Export** groups the point cloud exports (with the format and the "every Nth point" step), the drawings and models, the BCF views and the merge. The Workspace page lists the open scans (click one to make it the active scan, the same as a click on its row in the project panel). Escape or Return to model closes the File view.
+- The **File view** opens with the File button and covers the ribbon and the scene. Its menu leads to the pages **New**, **Open**, **Import** and **Export**, then **Workspace**, **Extensions** and **About**, and ends with **Settings…**, **Return to model** and **Exit**. Each task is a tile that says what it writes or what it needs, and is greyed while it cannot run. **New** closes every open scan (the files are not changed); **Open** has **Point cloud…**, **Scan folder…** and **Drawing (DXF/DWG)…**, which shows a drawing file in the Drawing view; **Import** has **3D BAG buildings…**; **Export** groups the point cloud exports (with the format and the "every Nth point" step), the drawings and models, the BCF views and the merge. The Workspace page lists the open scans (click one to make it the active scan, the same as a click on its row in the project panel). Escape or Return to model closes the File view.
 
 The title of the window is the file name of the active scan followed by the name and the version of the application, such as `rooms.las - Open Pointcloud Studio v0.9.0`; without a scan it is the name and the version alone.
 
@@ -372,6 +372,27 @@ When a job is done, the status bar says what was drawn, and the block keeps it u
 
 A slab without points gives no drawing: the job fails with "the slab holds no points", followed by the face of the box that is the cut plane, and nothing is written.
 
+### The Drawing view
+
+A drawing can be looked at in the application itself, without a drawing program. The header of the main area has two tabs: **Model** shows the scans in 3D and **Drawing** shows a 2D drawing in its place, on a light sheet.
+
+- **After an export** the Drawing view opens with the drawing that was written, as long as **Show after export** is on in the Section drawing block; it is on in a new installation and kept for later sessions. **Show drawing** beside it opens the view at any time.
+- **After a preview** the view holds the drawing an export with the same choices would write, made from the same read of the slab, but the window stays on the model. A preview therefore also collects the points of the drawing, and its result names them under **Points drawn**.
+- **A DXF or DWG file**, made here or elsewhere, opens in the view with **Drawing (DXF/DWG)…** on the **Open** page of the File view, or with **Open drawing…** in the Drawing view block.
+
+The drawing shows the points as dots, in their own colour or in that of their layer, the filled cut as filled regions with their holes, the outlines, the frame and the line of text. White and black are drawn black on the sheet, and colours too light to read on it a little darker. Drag with any mouse button to pan and turn the wheel to zoom about the pointer. The scale bar at the lower left gives a round length in the units of the drawing, and the lower right the coordinates under the pointer, in millimetres or metres as the drawing has them.
+
+While the Drawing view is shown, the **Drawing view** block at the top of Properties says where the drawing came from, its units, and how many points, polylines, fills and texts it holds. **Zoom extents** fits the whole drawing on the sheet. Under **Layers** every layer has its colour, its number of entities and a switch; **Show all** and **Hide all** switch them together.
+
+What a file is read with:
+
+- Points, lines, polylines with their arcs, circles, arcs, ellipses, solid fills with their holes, 2D solids, texts, multiline texts and the attributes of blocks are drawn. Block references are drawn with the blocks they insert, nested ones too; splines, leaders and dimensions as the lines they consist of. Curves become short straight segments.
+- A fill with a pattern is drawn by its boundary only. Line types, line widths and the colours of single entities other than points are not drawn: every entity takes the colour of its layer.
+- Other entities, such as images and external references, are counted by type and named in the block; meshes, polyface meshes, 3D faces and solids are counted as 3D content that is not shown. Neither stops the file from opening.
+- Layers that the file has switched off or frozen start hidden.
+- The units of the file are kept when they are millimetres; other units are shown in metres. A file that names no units is read as millimetres, and the block says so.
+- The texts are placed by an estimate of their width, so a text that is centred or aligned right in a drawing program can stand a little off here.
+
 ### The filled cut and its limits
 
 A scanner records surfaces, not what is behind them. A wall that the slab cuts is two rows of points, one for each face that was scanned. The filled cut closes the space between two such rows when they are at most the **Largest wall** apart, traces the outline of what results, and moves every edge onto the points it came from. Openings wider than that stay open, so doors and windows do.
@@ -393,7 +414,7 @@ Measured on generated rooms with a scanner noise of 2 mm, not on scans of real b
 ### Other limits of a section drawing
 
 - **Points.** A drawing holds 150,000 points at the start and at most 400,000. While the file is written, every point takes about 2.8 kB of memory: about 0.4 GB at 150,000 points and 1.1 GB at 400,000. A dense underlay of millions of points is not what this drawing is for; export the section as a point cloud instead.
-- **Opening the drawing here again.** Open Pointcloud Studio opens the POINT entities of an ASCII DXF as a point cloud and skips fills, polylines and text. It does not apply the units of the drawing, so a drawing in millimetres comes back a thousand times larger than the scan. DWG files are not opened.
+- **Opening the drawing here again.** To look at a drawing, use the [Drawing view](#the-drawing-view). Opened as a scan with **Point cloud…**, an ASCII DXF gives its POINT entities as a point cloud and skips fills, polylines and text, without applying the units of the drawing, so a drawing in millimetres comes back a thousand times larger than the scan. DWG files are not opened as a scan.
 - **The preview** is drawn over the points without regard to depth, so it reads right when looking straight at the cut plane and only roughly from the side. It shows the filled cut whether **Filled cut** is on or off. It goes away when what it was made from changes: the section box, the visible scans, a Move or Scale, deleted points, the classes shown, or the view, slab thickness, squaring, largest wall or grid size of the block. The other choices of the block, the point limit among them, leave it in place. It is not kept with a saved view.
 - **Checked with** the reader of the codec that writes the files and with this application's own DXF reader, not yet with a range of drawing programs. If a program refuses a DWG file, try DXF or another file version.
 - One drawing or preview runs at a time, and Undo does not apply to it.
@@ -864,6 +885,7 @@ Nothing is written beside the scans, and the scans themselves are never changed.
 | Right drag, Shift + middle drag | Pan |
 | Double click | Orbit about the point under the pointer; where no point is, about the centre of the model |
 | Wheel | Zoom at the pointer |
+| Drag, in the Drawing view | Pan the drawing; the wheel zooms about the pointer |
 | Right click | Menu of the scene |
 | `F` | Isometric overview of the whole model (Zoom all) |
 | Delete | Hide the selected points |
