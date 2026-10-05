@@ -14,12 +14,17 @@ use rayon::prelude::*;
 use super::{visit_points, LoadError, Point, PointCloud};
 use crate::local_fit::{cross, difference, dot, symmetric_eigen3, unit};
 use crate::mesher::{MeshProgress, MeshStage, MeshStats};
+use crate::{IndexConfig, OctreeIndex};
 
 #[derive(Clone, Copy, Debug)]
 pub struct SurfaceMeshConfig {
     pub max_vertices: usize,
     pub neighbors: usize,
     pub max_edge_factor: f64,
+    /// Percentage of eligible source points considered before the bounded reservoir.
+    pub sample_percent: f64,
+    /// Minimum voxel width in source units; zero lets the vertex budget choose it.
+    pub mesh_size: f64,
 }
 
 impl Default for SurfaceMeshConfig {
@@ -28,6 +33,8 @@ impl Default for SurfaceMeshConfig {
             max_vertices: 50_000,
             neighbors: 12,
             max_edge_factor: 4.0,
+            sample_percent: 100.0,
+            mesh_size: 0.0,
         }
     }
 }
@@ -47,6 +54,19 @@ impl SurfaceMeshConfig {
         if !self.max_edge_factor.is_finite() || self.max_edge_factor <= 0.0 {
             return Err(LoadError::InvalidData(
                 "3D surface edge factor must be finite and positive".into(),
+            ));
+        }
+        if !self.sample_percent.is_finite()
+            || !(0.0..=100.0).contains(&self.sample_percent)
+            || self.sample_percent == 0.0
+        {
+            return Err(LoadError::InvalidData(
+                "3D surface sample percent must be >0 and <=100".into(),
+            ));
+        }
+        if !self.mesh_size.is_finite() || self.mesh_size < 0.0 {
+            return Err(LoadError::InvalidData(
+                "3D surface mesh size must be nonnegative and finite".into(),
             ));
         }
         Ok(())
@@ -299,6 +319,53 @@ fn spatially_thin_indices(candidates: &[[f64; 3]], budget: usize) -> Vec<usize> 
     indices.into_iter().take(budget).collect()
 }
 
+fn voxel_thin_indices(candidates: &[[f64; 3]], width: f64) -> Vec<usize> {
+    if width <= 0.0 {
+        return (0..candidates.len()).collect();
+    }
+    let origin = std::array::from_fn(|axis| {
+        candidates
+            .iter()
+            .map(|point| point[axis])
+            .fold(f64::INFINITY, f64::min)
+    });
+    let mut representatives = HashMap::<[i64; 3], (usize, f64)>::new();
+    for (index, point) in candidates.iter().enumerate() {
+        let key = voxel_key(*point, origin, width);
+        let distance_sq = (0..3)
+            .map(|axis| {
+                let center = origin[axis] + (key[axis] as f64 + 0.5) * width;
+                (point[axis] - center).powi(2)
+            })
+            .sum();
+        match representatives.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut entry)
+                if distance_sq < entry.get().1 =>
+            {
+                *entry.get_mut() = (index, distance_sq)
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert((index, distance_sq));
+            }
+            _ => {}
+        }
+    }
+    let mut indices: Vec<_> = representatives.values().map(|entry| entry.0).collect();
+    indices.sort_unstable();
+    indices
+}
+
+pub(crate) fn sampled_ordinal(ordinal: u64, percent: f64) -> bool {
+    if percent >= 100.0 {
+        return true;
+    }
+    let mut hash = ordinal.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    hash ^= hash >> 31;
+    (hash as f64 / u64::MAX as f64) < percent / 100.0
+}
+
 /// Reconstruct a general 3D surface and atomically write an OBJ. The point
 /// reservoir is sampled across the complete source, not from the GUI preview.
 pub fn mesh_surface_obj(
@@ -366,8 +433,7 @@ fn mesh_surface_obj_inner(
     let mut source_points = 0u64;
     let mut random = 0x7a81_09e6_63d1_c207u64;
     progress(MeshProgress::new(MeshStage::Reading, 0, cloud.total_points))?;
-    visit_points(&cloud.path, &mut |point| {
-        let ordinal = visited;
+    let mut take = |ordinal: u64, point: Point| {
         visited += 1;
         if visited.is_multiple_of(65_536) {
             progress(MeshProgress::new(
@@ -377,6 +443,9 @@ fn mesh_surface_obj_inner(
             ))?;
         }
         if !include(ordinal, &point) {
+            return Ok(());
+        }
+        if !sampled_ordinal(ordinal, config.sample_percent) {
             return Ok(());
         }
         if !point.xyz.iter().all(|value| value.is_finite()) {
@@ -395,7 +464,24 @@ fn mesh_surface_obj_inner(
             }
         }
         Ok(())
-    })?;
+    };
+    // A validated on-disk octree stores every point with its original file
+    // ordinal. Reuse it when present: reconstructing a large E57 repeatedly
+    // need not decode the compressed source for every parameter change.
+    // An absent cache or one that fails validation falls back to the source.
+    if let Some(index) = OctreeIndex::open_cached_if_present(cloud, IndexConfig::default())
+        .ok()
+        .flatten()
+    {
+        index.visit_intersecting(|_| true, |record| take(record.ordinal, record.point))?;
+    } else {
+        let mut ordinal = 0;
+        visit_points(&cloud.path, &mut |point| {
+            let current = ordinal;
+            ordinal += 1;
+            take(current, point)
+        })?;
+    }
     if visited != cloud.total_points {
         return Err(LoadError::InvalidData(format!(
             "source changed during meshing (expected {}, found {visited})",
@@ -415,9 +501,11 @@ fn mesh_surface_obj_inner(
     }
     progress(MeshProgress::new(MeshStage::Reconstructing, 0, 0))?;
     let candidate_xyz: Vec<_> = candidates.iter().map(|point| point.xyz).collect();
-    let vertex_points: Vec<_> = spatially_thin_indices(&candidate_xyz, config.max_vertices)
+    let spaced = voxel_thin_indices(&candidate_xyz, config.mesh_size);
+    let spaced_xyz: Vec<_> = spaced.iter().map(|&index| candidate_xyz[index]).collect();
+    let vertex_points: Vec<_> = spatially_thin_indices(&spaced_xyz, config.max_vertices)
         .into_iter()
-        .map(|index| candidates[index])
+        .map(|index| candidates[spaced[index]])
         .collect();
     let vertices: Vec<_> = vertex_points.iter().map(|point| point.xyz).collect();
     let reconstruct_total = vertices.len() as u64 * 3;
@@ -1351,5 +1439,34 @@ mod tests {
             assert_eq!(zs[0], zs[1]);
             assert_eq!(zs[1], zs[2]);
         }
+    }
+
+    #[test]
+    fn percentage_sampling_covers_the_entire_source_deterministically() {
+        let sample: Vec<_> = (0..10_000)
+            .filter(|&ordinal| sampled_ordinal(ordinal, 10.0))
+            .collect();
+        assert!((850..=1_150).contains(&sample.len()));
+        assert!(sample.iter().any(|&ordinal| ordinal > 9_000));
+        assert_eq!(
+            sample,
+            (0..10_000)
+                .filter(|&ordinal| sampled_ordinal(ordinal, 10.0))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn mesh_size_keeps_one_representative_per_voxel() {
+        let points = [
+            [0.1, 0.1, 0.0],
+            [0.2, 0.2, 0.0],
+            [1.2, 0.1, 0.0],
+            [0.1, 1.2, 0.0],
+        ];
+        let selected = voxel_thin_indices(&points, 1.0);
+        assert_eq!(selected.len(), 3);
+        assert!(selected.contains(&2));
+        assert!(selected.contains(&3));
     }
 }

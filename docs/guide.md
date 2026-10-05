@@ -414,12 +414,12 @@ A point cloud becomes a mesh of triangles with one of the three meshers of the S
 | --- | --- | --- |
 | **Terrain mesh** | Ground, and other surfaces seen from above | A 2.5D surface of at most 100,000 vertices from one pass over the whole scan. No walls, no overhangs |
 | **3D surface** | A quick impression of a whole scan, walls included | A surface from a sample of the points. It leaves holes, its patches can overlap and it is not watertight |
-| **Closed mesh** | A room or a part of a building of which the surface has to be right | A surface without overlaps from every point of the region, closed where the scan has points, with the measured distance between points and mesh. It takes more time and memory and works best inside a section box; see [Closed mesh](#closed-mesh) |
+| **Closed mesh** | A room or a part of a building of which the surface has to be right | A surface without overlaps from the region, closed where the scan has points, with the measured distance between points and mesh. It uses every source point by default; a deterministic lower percentage trades detail for speed. It works best inside a section box; see [Closed mesh](#closed-mesh) |
 
 **Terrain mesh** and **3D surface** take the active scan and ask for an `.obj` file first. Properties shows their progress; **Cancel mesh** stops the job and leaves an existing file as it was.
 
 - **Terrain mesh** passes every source point through a grid seen from above, keeps the lowest point in each cell and connects those to a 2.5D surface of at most 100,000 vertices. Long edges across gaps are left out. It suits ground and other surfaces seen from above.
-- **3D surface** takes a sample of the source, thins it evenly to the number of vertices asked for, estimates a normal at each and connects neighbours in their tangent planes. It can follow vertical walls and overhangs. Sparse parts leave holes, and neighbouring patches can disagree, so the result is not watertight. While a scan is active, Properties has its settings: **Max vertices** (3 to 1,000,000; 50,000 by default), **Neighbors** (3 to 32; 12 by default) and a positive **Edge factor** (4 by default).
+- **3D surface** takes a sample of the source, thins it evenly to the number of vertices asked for, estimates a normal at each and connects neighbours in their tangent planes. It can follow vertical walls and overhangs. Sparse parts leave holes, and neighbouring patches can disagree, so the result is not watertight. While a scan is active, Properties has its settings: **Max vertices** (3 to 1,000,000; 50,000 by default), **Neighbors** (3 to 32; 12 by default), a positive **Edge factor** (4 by default), **Source %** (above 0 to 100; 100 by default) and **Mesh size** (minimum 3D voxel width in source units; 0 is automatic). A cached octree is reused when available, avoiding another decode of a large E57.
 
 The OBJ file has the colours of the source where it has them and a normal per vertex.
 
@@ -467,7 +467,7 @@ Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, and `--
 
 *A closed mesh of two generated rooms with its report in the Closed mesh block (Gesloten mesh), in the Dutch interface.*
 
-**Closed mesh** in the SURFACE group makes a surface of the points in a region that has no overlapping faces and is closed wherever the scan has points or a gap narrower than the hole limit. It is the mesher for a room or a part of a building of which the result has to be right: it uses every point of the region, not a sample, tells how far the points lie from the mesh, and leaves door and window openings open. The button opens the **Closed mesh** block at the top of Properties, and closes it again.
+**Closed mesh** in the SURFACE group makes a surface of the points in a region that has no overlapping faces and is closed wherever the scan has points or a gap narrower than the hole limit. It is the mesher for a room or a part of a building of which the result has to be right: by default it uses every point of the region, tells how far the points lie from the mesh, and leaves door and window openings open. A lower **Source points (%)** setting uses a reproducible subset to reduce fitting work, with a possible loss of sparse detail. The button opens the **Closed mesh** block at the top of Properties, and closes it again.
 
 The table under [Meshing](#meshing) sets it beside **Terrain mesh** and **3D surface** and says when to use which; [What Properties says about a mesh](#what-properties-says-about-a-mesh) and [Saving a mesh](#saving-a-mesh) hold for a closed mesh as for the other two. For the planes of a building instead of its surface, see [Detected faces](#detected-faces).
 
@@ -494,6 +494,7 @@ A scan holds one mesh. The closed mesh takes the place of the mesh the active sc
 | **Voxel size (m)** | The edge of a voxel, from 0.005 to 0.5 m. Smaller voxels follow more detail and cost more time and triangles. Empty, or `auto`, lets the job choose: 0.02 m for a region up to 20 m long, 0.03 m up to 60 m and 0.05 m beyond | Empty (automatic) |
 | **Close holes up to (m)** | Gaps in the points up to this wide are closed, from 0 (none) to 3.2 m, and never more than 32 voxels: 0.64 m at voxels of 0.02 m. Wider openings, such as doors and windows, stay open as a whole | 0.25 |
 | **Simplify within (mm)** | How far simplification may move the surface, from 0 (no simplification) to 1000 mm. Empty, or `auto`, is 0.15 voxel: 3 mm at voxels of 0.02 m | Empty (automatic) |
+| **Source points (%)** | Deterministic share of source points used for surface fitting, above 0 through 100. For example, 10 uses about one in ten points; sparse details may be lost | 100 |
 | **Sides** | Which side of a surface is its front. **Automatic**: the side of the scanner station that measured it, where the scan knows its stations; elsewhere the side of the centre of the region. **Towards the centre**: every face looks at the centre of the region, and stations are not used. **Upward**: every face looks up, for data measured from above | Automatic |
 | **Scans** | **Active scan**, or **All visible scans**: every layer whose points are shown and that reaches the section box when the box is on, without layers of 3D BAG buildings | Active scan |
 
@@ -548,7 +549,7 @@ open-pointcloud-studio --closed-mesh scan.e57 room.ply --box 0,0,-0.1,5.1,4.1,2.
 open-pointcloud-studio --closed-mesh merged.laz room.obj --box 0,0,-0.1,5.1,4.1,2.7 --voxel 0.03 --max-hole 0.1 --simplify 0 --sides centre
 ```
 
-The extension of the output chooses OBJ, PLY, STL, DXF, DWG or IFC. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--rotation` turns that box that many degrees about the vertical through its centre. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
+The extension of the output chooses OBJ, PLY, STL, DXF, DWG or IFC. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--rotation` turns that box that many degrees about the vertical through its centre. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, `--sample-percent` selects a deterministic share of source points, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the block starts. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
 
 ## Detected faces
 

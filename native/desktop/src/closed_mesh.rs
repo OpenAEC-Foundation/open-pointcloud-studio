@@ -216,6 +216,7 @@ pub(crate) struct ClosedMeshSettings {
     /// How far simplification may move the surface, in millimetres; empty
     /// for automatic and 0 for none.
     simplify: String,
+    sample_percent: String,
     sides: Sides,
     layers: Layers,
 }
@@ -233,6 +234,7 @@ impl Default for ClosedMeshSettings {
                 .simplify_tolerance
                 .map(|tolerance| (tolerance * 1000.0).to_string())
                 .unwrap_or_default(),
+            sample_percent: config.sample_percent.to_string(),
             sides: Sides::Automatic,
             layers: Layers::Active,
         }
@@ -279,6 +281,8 @@ impl ClosedMeshSettings {
         };
         let config = ClosedMeshConfig {
             voxel: self.voxel()?,
+            sample_percent: number(&self.sample_percent)
+                .ok_or_else(|| Sentence::plain(key("Source sample must be a percentage")))?,
             max_hole: number(&self.max_hole)
                 .ok_or_else(|| Sentence::plain(key("Hole limit must be a number of metres")))?,
             simplify_tolerance: self.tolerance()?,
@@ -337,6 +341,9 @@ impl ClosedMeshSettings {
                 .map(|millimetres| millimetres.to_string())
                 .unwrap_or_default();
         }
+        if let Some(percent) = options.sample_percent {
+            next.sample_percent = percent.to_string();
+        }
         if let Some(sides) = &options.sides {
             next.sides = Sides::from_name(&sides.to_ascii_lowercase())
                 .ok_or("sides must be automatic, centre or upward")?;
@@ -357,6 +364,7 @@ impl ClosedMeshSettings {
             "voxel": self.voxel().ok().flatten(),
             "max_hole": number(&self.max_hole),
             "simplify_mm": self.tolerance().ok().flatten().map(|metres| metres * 1000.0),
+            "sample_percent": number(&self.sample_percent),
             "sides": self.sides.name(),
             "layers": self.layers.name(),
         })
@@ -373,6 +381,8 @@ fn given<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Option<f64
 /// out keeps what the Properties block has.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct ClosedMeshOptions {
+    /// Deterministic percentage of source points used for reconstruction.
+    pub sample_percent: Option<f64>,
     /// Edge of a voxel in metres, from 0.005 to 0.5; `null` for automatic.
     #[serde(default, deserialize_with = "given")]
     pub voxel: Option<Option<f64>>,
@@ -1158,6 +1168,7 @@ pub enum ClosedMeshAction {
     Voxel(String),
     MaxHole(String),
     Simplify(String),
+    SamplePercent(String),
     Sides(Sides),
     Layers(Layers),
     Start,
@@ -1638,6 +1649,9 @@ impl Studio {
             ClosedMeshAction::Voxel(value) => self.closed_mesh.settings.voxel = value,
             ClosedMeshAction::MaxHole(value) => self.closed_mesh.settings.max_hole = value,
             ClosedMeshAction::Simplify(value) => self.closed_mesh.settings.simplify = value,
+            ClosedMeshAction::SamplePercent(value) => {
+                self.closed_mesh.settings.sample_percent = value
+            }
             ClosedMeshAction::Sides(sides) => self.closed_mesh.settings.sides = sides,
             ClosedMeshAction::Layers(layers) => self.closed_mesh.settings.layers = layers,
             ClosedMeshAction::Start => match self.closed_mesh_start() {
@@ -1868,6 +1882,12 @@ impl Studio {
                 "auto",
                 &settings.simplify,
                 |value| Message::ClosedMesh(ClosedMeshAction::Simplify(value)),
+            ),
+            opencad_properties::property_input(
+                "Source points (%)",
+                "100",
+                &settings.sample_percent,
+                |value| Message::ClosedMesh(ClosedMeshAction::SamplePercent(value)),
             ),
             opencad_properties::property_control(
                 "Sides",
@@ -2117,6 +2137,7 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
             Some("--voxel") => settings.voxel = value.to_owned(),
             Some("--max-hole") => settings.max_hole = value.to_owned(),
             Some("--simplify") => settings.simplify = value.to_owned(),
+            Some("--sample-percent") => settings.sample_percent = value.to_owned(),
             Some("--sides") => {
                 settings.sides = Sides::from_name(value)
                     .ok_or_else(|| wrong("--sides must be automatic, centre or upward"))?;
