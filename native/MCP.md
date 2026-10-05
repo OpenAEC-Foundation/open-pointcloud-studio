@@ -162,7 +162,7 @@ follows when that view is restored.
 | `set_budget` | `points` (1,000–10,000,000) | Point budget of the viewport |
 | `set_section` | `min`, `max`, optional `rotation` | Switches on a section box; `rotation` turns it that many degrees about the vertical through its centre |
 | `clear_section` | — | Switches the section box off |
-| `set_section_fill` | at least one of `fill_cut`, `color` (`#rrggbb`), `max_thickness` (0.01–2 m) | Fills the cut of a mesh by the section box between two opposite faces |
+| `set_section_fill` | at least one of `fill_cut`, `color` (`#rrggbb`), `max_thickness` (maximum wall thickness, 0.01–2 m) | Fills the cut of a mesh by the section box between two opposite faces; a single surface gets no fill |
 | `align_section_to_walls` | — | Turns the section box along the walls inside it |
 | `select_world` | `min`, `max`, optional `wait_seconds` | Selects the exact points in a box; job |
 | `pick_screen` | `pointer`, optional `radius` (1–64 pixels), `wait_seconds` | Picks the source point at a viewport pixel; job |

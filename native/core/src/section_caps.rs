@@ -8,15 +8,25 @@
 //! On every face of the box the mesh is cut into segments. Each segment
 //! knows the side its triangle faces, the side of the air: the front of a
 //! triangle looks away from the material. Along lines in eight directions
-//! over the face, a stretch between two segments is material when the line
-//! passes into the material through the back of the first one and out
-//! through the front of the second, the two face roughly opposite ways and
-//! they lie no farther apart than the largest thickness. A single surface,
-//! such as a facade seen from one side only, has no second surface to pair
-//! with and gets no cap; two surfaces that face the same way do not pair
-//! either. The stretches are gathered on a fine grid over the face, the
-//! small gaps where walls meet are closed, and the grid is written as
-//! rectangles.
+//! over the face, a stretch between two segments that lie opposite each
+//! other no farther apart than the largest thickness may be material. It is
+//! when the line passes into the material through the back of the first one
+//! and out through the front of the second; when the fronts of the two look
+//! at each other it is the air between two walls. A single surface, such as
+//! a facade seen from one side only, has no second surface to pair with and
+//! gets no cap.
+//!
+//! A mesh made without stations faces one point, so one surface of most
+//! walls faces the wrong way. When most pairs on a face of the box disagree
+//! like that, the fronts are not trusted: air and material take turns at
+//! every surface along a line, which begins and ends in the open, and a
+//! pair is material where those turns fit the stretches beside it. A
+//! surface that stands on its own breaks the turns and is left open.
+//!
+//! The stretches are gathered on a fine grid over the face, the small gaps
+//! where walls meet are closed, and the grid is written as rectangles.
+
+use std::ops::RangeInclusive;
 
 use rayon::prelude::*;
 
@@ -46,8 +56,10 @@ const MIN_STEEPNESS: f64 = 0.17;
 /// Two surfaces enclose material only when their normals point at least
 /// this much against each other.
 const OPPOSITE: f64 = -0.5;
-/// The caps lie this far inside the box, so that the clip of the box keeps
-/// them; never more than a thousandth of the size of the box.
+/// The mesh is cut and the caps lie this far inside the box, so that the
+/// clip of the box keeps them, and a mesh that was made in the same box and
+/// ends in its faces is still cut; never more than a thousandth of the size
+/// of the box.
 const INSET: f64 = 0.0005;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,7 +77,8 @@ impl Default for CapOptions {
 }
 
 /// One face of the box: the axis it stands across in the frame of the box,
-/// whether it is the face at the top of that axis, and where it lies.
+/// whether it is the face at the top of that axis, and where the mesh is
+/// cut, just inside the face.
 #[derive(Debug, Clone, Copy)]
 struct Face {
     axis: usize,
@@ -87,6 +100,171 @@ struct Segment {
     a: [f64; 2],
     b: [f64; 2],
     air: [f64; 2],
+}
+
+/// Where a line over a face crosses a segment.
+#[derive(Debug, Clone, Copy)]
+struct Hit {
+    /// How far along the line.
+    at: f64,
+    /// The side of the air along the line: the cosine between the line and
+    /// the side the triangle faces.
+    facing: f64,
+    air: [f64; 2],
+}
+
+/// What a line holds between two surfaces it crosses one after the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stretch {
+    /// Air, or material too thick to be a wall.
+    Open,
+    /// The air between two surfaces close together whose fronts look at
+    /// each other, as between two walls.
+    Gap,
+    /// The material of a wall, floor or ceiling: capped.
+    Material,
+    /// Two surfaces that lie close together and opposite each other, but
+    /// that face the same way, so that one of them faces the wrong side, as
+    /// in a mesh made without stations. The stretches beside it tell.
+    Unknown,
+    /// Two surfaces close together that cross the line too slantingly or
+    /// stand at an angle to each other: nothing can be said of it, and it
+    /// tells nothing about the stretches beside it.
+    Unsure,
+}
+
+impl Stretch {
+    fn between(from: &Hit, to: &Hit, max_thickness: f64) -> Self {
+        let length = to.at - from.at;
+        // Through the back of the first surface into the material, out
+        // through the front of the second.
+        let (into, out) = (-from.facing, to.facing);
+        let turn = dot(from.air, to.air);
+        let steep = into.abs() >= MIN_FACING && out.abs() >= MIN_FACING;
+        if !steep || turn.abs() < -OPPOSITE {
+            return if length * MIN_FACING > max_thickness {
+                Self::Open
+            } else {
+                Self::Unsure
+            };
+        }
+        if length * into.abs().max(out.abs()) > max_thickness {
+            Self::Open
+        } else if turn <= OPPOSITE && into > 0.0 && out > 0.0 {
+            Self::Material
+        } else if turn <= OPPOSITE && into < 0.0 && out < 0.0 {
+            Self::Gap
+        } else {
+            Self::Unknown
+        }
+    }
+}
+
+/// What a line holds between every two surfaces it crosses one after the
+/// other.
+fn stretches_of(hits: &[Hit], max_thickness: f64, stretches: &mut Vec<Stretch>) {
+    stretches.clear();
+    stretches.extend(
+        hits.windows(2)
+            .map(|pair| Stretch::between(&pair[0], &pair[1], max_thickness)),
+    );
+}
+
+/// The groups of surfaces close together along a line, between open
+/// stretches: the hits that bound each run of stretches that are not open.
+fn groups(stretches: &[Stretch]) -> impl Iterator<Item = RangeInclusive<usize>> + '_ {
+    let mut index = 0;
+    std::iter::from_fn(move || {
+        while stretches.get(index) == Some(&Stretch::Open) {
+            index += 1;
+        }
+        if index >= stretches.len() {
+            return None;
+        }
+        let first = index;
+        while stretches
+            .get(index)
+            .is_some_and(|stretch| *stretch != Stretch::Open)
+        {
+            index += 1;
+        }
+        Some(first..=index)
+    })
+}
+
+/// Whether a group of surfaces has one between its first and its last that
+/// faces against both, which face the same way. A wall thinner than a few
+/// voxels comes out so in a mesh made without stations: its two surfaces
+/// face one point, and a third one forms inside it.
+fn split_inside(group: &[Hit]) -> bool {
+    let side = |hit: &Hit| hit.facing > 0.0;
+    match group {
+        [first, middle @ .., last] if !middle.is_empty() => {
+            side(first) == side(last) && middle.iter().any(|hit| side(hit) != side(first))
+        }
+        _ => false,
+    }
+}
+
+/// The hits of a line without the surfaces that formed inside thin walls:
+/// such a wall lies between the two surfaces around the one inside it.
+fn leave_out_inner_surfaces(hits: &[Hit], stretches: &[Stretch], kept: &mut Vec<Hit>) {
+    kept.clear();
+    let mut next = 0;
+    for group in groups(stretches) {
+        kept.extend_from_slice(&hits[next..*group.start()]);
+        let members = &hits[group.clone()];
+        if split_inside(members) {
+            let side = members[0].facing > 0.0;
+            kept.extend(members.iter().filter(|hit| (hit.facing > 0.0) == side));
+        } else {
+            kept.extend_from_slice(members);
+        }
+        next = group.end() + 1;
+    }
+    kept.extend_from_slice(&hits[next..]);
+}
+
+/// Decide the unknown stretches of a line from those beside them, where the
+/// fronts of the mesh do not tell the side of the air. Along a line air and
+/// material take turns at every surface of a wall that was meshed from both
+/// sides, and the line begins and ends in the open. A run
+/// of unknown stretches between two known ones, or the ends of the line, is
+/// settled when the turns fit at both of its ends. Where they do not, one
+/// of the surfaces stands on its own, such as a facade seen from one side in
+/// front of a wall, and the run is left open, as it is beside a stretch that
+/// tells nothing.
+fn settle(stretches: &mut [Stretch]) {
+    let mut index = 0;
+    while index < stretches.len() {
+        if stretches[index] != Stretch::Unknown {
+            index += 1;
+            continue;
+        }
+        let first = index;
+        while index < stretches.len() && stretches[index] == Stretch::Unknown {
+            index += 1;
+        }
+        let before = first
+            .checked_sub(1)
+            .map_or(Stretch::Open, |before| stretches[before]);
+        let after = stretches.get(index).copied().unwrap_or(Stretch::Open);
+        let air = |stretch: Stretch| matches!(stretch, Stretch::Open | Stretch::Gap);
+        let run = &mut stretches[first..index];
+        // The first of the run turns from what lies before it, and the last
+        // must turn into what lies after it.
+        let first_material = air(before);
+        let last_material = first_material == (run.len() % 2 == 1);
+        let fits =
+            before != Stretch::Unsure && after != Stretch::Unsure && last_material == air(after);
+        for (offset, stretch) in run.iter_mut().enumerate() {
+            *stretch = if fits && first_material == (offset % 2 == 0) {
+                Stretch::Material
+            } else {
+                Stretch::Open
+            };
+        }
+    }
 }
 
 /// The caps of one mesh on the faces of a section box, in scene
@@ -150,7 +328,8 @@ fn box_faces(section: &OrientedBox) -> Vec<Face> {
         if max[axis] - min[axis] <= 4.0 * INSET || max[u] <= min[u] || max[v] <= min[v] {
             continue;
         }
-        for (upper, level) in [(false, min[axis]), (true, max[axis])] {
+        let inset = INSET.min((max[axis] - min[axis]) * 0.001);
+        for (upper, level) in [(false, min[axis] + inset), (true, max[axis] - inset)] {
             faces.push(Face {
                 axis,
                 upper,
@@ -270,6 +449,25 @@ fn cut(
     (!outside).then_some(Segment { a, b, air })
 }
 
+/// Parallel lines over a face in one of the directions: `count` lines from
+/// `first` across them, `spacing` apart.
+#[derive(Debug, Clone, Copy)]
+struct Lines {
+    step: usize,
+    along: [f64; 2],
+    across: [f64; 2],
+    first: f64,
+    spacing: f64,
+    count: usize,
+}
+
+impl Lines {
+    /// Along the rows or the columns of the grid.
+    fn straight(&self) -> bool {
+        self.step == 0 || 2 * self.step == DIRECTIONS
+    }
+}
+
 /// A grid over the part of a face where segments lie, aligned to the
 /// corner of the face.
 #[derive(Debug, Clone, Copy)]
@@ -326,9 +524,54 @@ impl Grid {
     fn material(&self, segments: &[Segment], max_thickness: f64) -> Vec<bool> {
         let mut mask = vec![false; self.columns * self.rows];
         let mut inside = vec![false; self.columns * self.rows];
+        let trusted = self.fronts_look_at_the_air(segments, max_thickness);
+        // What slanted lines find in a mesh whose fronts do not tell.
+        let mut slanted = vec![false; if trusted { 0 } else { mask.len() }];
+        let mut stretches: Vec<Stretch> = Vec::new();
+        let mut kept: Vec<Hit> = Vec::new();
         for step in 0..DIRECTIONS {
-            let angle = std::f64::consts::PI * step as f64 / DIRECTIONS as f64;
-            self.scan(segments, max_thickness, step, angle, &mut mask, &mut inside);
+            let lines = self.lines(step);
+            self.each_line(segments, &lines, |level, hits| {
+                stretches_of(hits, max_thickness, &mut stretches);
+                let hits = if trusted {
+                    for stretch in &mut stretches {
+                        if *stretch == Stretch::Unknown {
+                            *stretch = Stretch::Open;
+                        }
+                    }
+                    hits
+                } else {
+                    leave_out_inner_surfaces(hits, &stretches, &mut kept);
+                    stretches_of(&kept, max_thickness, &mut stretches);
+                    settle(&mut stretches);
+                    &kept
+                };
+                let found = if trusted || lines.straight() {
+                    &mut mask
+                } else {
+                    &mut slanted
+                };
+                for (pair, stretch) in hits.windows(2).zip(&stretches) {
+                    self.mark_stretch(
+                        &lines,
+                        level,
+                        [&pair[0], &pair[1]],
+                        *stretch,
+                        found,
+                        &mut inside,
+                    );
+                }
+            });
+        }
+        if !trusted {
+            // Where the turns are counted, a slanted line that passes the
+            // open end of one of three sheets in a row miscounts: it fills
+            // the corners where walls meet, but only next to what the rows
+            // and the columns found.
+            let near = self.dilate(&mask, (max_thickness / self.cell).ceil() as usize);
+            for (cell, set) in mask.iter_mut().enumerate() {
+                *set |= slanted[cell] && near[cell];
+            }
         }
         let radius = (0.5 * max_thickness / self.cell).ceil() as usize;
         let grown = self.dilate(&mask, radius);
@@ -340,6 +583,77 @@ impl Grid {
             *set |= inside[cell] && !closed[cell];
         }
         mask
+    }
+
+    /// Whether the fronts of the mesh look at the air, as those of a mesh
+    /// made with stations do: the two surfaces of most walls then turn
+    /// their backs to each other. In a mesh whose fronts all look at one
+    /// point, as one made without stations does, most walls have one
+    /// surface that faces the wrong way or a third surface inside, and
+    /// their stretches are settled by the turns of air and material
+    /// instead. Every group of surfaces close together along the rows and
+    /// the columns counts once.
+    fn fronts_look_at_the_air(&self, segments: &[Segment], max_thickness: f64) -> bool {
+        let (mut agree, mut disagree) = (0usize, 0usize);
+        let mut stretches = Vec::new();
+        for step in [0, DIRECTIONS / 2] {
+            self.each_line(segments, &self.lines(step), |_, hits| {
+                stretches_of(hits, max_thickness, &mut stretches);
+                for group in groups(&stretches) {
+                    let run = &stretches[*group.start()..*group.end()];
+                    // A surface on its own beside a wall disagrees with
+                    // it, but the wall itself agrees.
+                    if split_inside(&hits[group.clone()]) {
+                        disagree += 1;
+                    } else if run
+                        .iter()
+                        .any(|stretch| matches!(stretch, Stretch::Material | Stretch::Gap))
+                    {
+                        agree += 1;
+                    } else if run.contains(&Stretch::Unknown) {
+                        disagree += 1;
+                    }
+                }
+            });
+        }
+        agree >= disagree
+    }
+
+    /// Mark one stretch of a line. Along rows and columns every stretch
+    /// from the back of one face to the front of the next is also marked in
+    /// `inside`, however far apart and however turned the faces are.
+    fn mark_stretch(
+        &self,
+        lines: &Lines,
+        level: f64,
+        [from, to]: [&Hit; 2],
+        stretch: Stretch,
+        mask: &mut [bool],
+        inside: &mut [bool],
+    ) {
+        let (start, end) = (from.at, to.at);
+        // In through the back of the first, out through the front of the
+        // second.
+        let (into, out) = (-from.facing, to.facing);
+        if into > 0.0 && out > 0.0 && lines.straight() {
+            self.mark(inside, lines, level, start, end);
+        }
+        if stretch != Stretch::Material {
+            return;
+        }
+        if lines.straight() {
+            self.mark(mask, lines, level, start, end);
+        } else {
+            // A slanted line marks the cells it passes, also those whose
+            // centre lies beyond a face. Kept that far from the faces, it
+            // marks none of them; the rows and the columns find the edge of
+            // every straight wall exactly.
+            let margin = std::f64::consts::FRAC_1_SQRT_2 * self.cell;
+            let (start, end) = (start + margin / into.abs(), end - margin / out.abs());
+            if start < end {
+                self.mark(mask, lines, level, start, end);
+            }
+        }
     }
 
     /// Every cell within `radius` cells of a set one, along rows and
@@ -380,22 +694,11 @@ impl Grid {
         grown
     }
 
-    /// Mark what lines in one direction find. Along the axes the lines run
+    /// The lines in one of the directions. Along the axes the lines run
     /// through the centres of the cells; in between they lie half a cell
-    /// apart. Along rows and columns every stretch from the back of one
-    /// face to the front of the next is also marked in `inside`, however
-    /// far apart and however turned the faces are.
-    #[allow(clippy::too_many_arguments)]
-    fn scan(
-        &self,
-        segments: &[Segment],
-        max_thickness: f64,
-        step: usize,
-        angle: f64,
-        mask: &mut [bool],
-        inside: &mut [bool],
-    ) {
-        let (along, across, first, spacing, lines) = match step {
+    /// apart.
+    fn lines(&self, step: usize) -> Lines {
+        let (along, across, first, spacing, count) = match step {
             0 => (
                 [1.0, 0.0],
                 [0.0, 1.0],
@@ -411,6 +714,7 @@ impl Grid {
                 self.columns,
             ),
             _ => {
+                let angle = std::f64::consts::PI * step as f64 / DIRECTIONS as f64;
                 let (sin, cos) = angle.sin_cos();
                 let across = [-sin, cos];
                 let corners = [
@@ -441,12 +745,30 @@ impl Grid {
                 )
             }
         };
-        if lines == 0 {
-            return;
+        Lines {
+            step,
+            along,
+            across,
+            first,
+            spacing,
+            count,
         }
+    }
+
+    /// Visit every line that crosses two segments or more, with where it
+    /// lies across the face and where it crosses them, in order along it.
+    fn each_line(&self, segments: &[Segment], lines: &Lines, mut visit: impl FnMut(f64, &[Hit])) {
+        let Lines {
+            along,
+            across,
+            first,
+            spacing,
+            count,
+            ..
+        } = *lines;
         // The segments each line crosses: a segment from one side of a line
         // to the other, its lower end counted and its upper end not.
-        let mut crossing: Vec<Vec<u32>> = vec![Vec::new(); lines];
+        let mut crossing: Vec<Vec<u32>> = vec![Vec::new(); count];
         for (index, segment) in segments.iter().enumerate() {
             let (wa, wb) = (dot(segment.a, across), dot(segment.b, across));
             if wa == wb {
@@ -454,16 +776,16 @@ impl Grid {
             }
             let (low, high) = (wa.min(wb), wa.max(wb));
             let start = ((low - first) / spacing).ceil().max(0.0);
-            if start >= lines as f64 {
+            if start >= count as f64 {
                 continue;
             }
             let mut line = start as usize;
-            while line < lines && first + line as f64 * spacing < high {
+            while line < count && first + line as f64 * spacing < high {
                 crossing[line].push(index as u32);
                 line += 1;
             }
         }
-        let mut hits: Vec<(f64, f64, [f64; 2])> = Vec::new();
+        let mut hits: Vec<Hit> = Vec::new();
         for (line, found) in crossing.iter().enumerate() {
             if found.len() < 2 {
                 continue;
@@ -478,51 +800,25 @@ impl Grid {
                     segment.a[0] + (segment.b[0] - segment.a[0]) * share,
                     segment.a[1] + (segment.b[1] - segment.a[1]) * share,
                 ];
-                hits.push((dot(point, along), dot(segment.air, along), segment.air));
+                hits.push(Hit {
+                    at: dot(point, along),
+                    facing: dot(segment.air, along),
+                    air: segment.air,
+                });
             }
-            hits.sort_by(|left, right| left.0.total_cmp(&right.0));
-            for pair in hits.windows(2) {
-                let ((start, into, air_in), (end, out, air_out)) = (pair[0], pair[1]);
-                // In through the back of the first, out through the front
-                // of the second.
-                let (into, out) = (-into, out);
-                if into > 0.0 && out > 0.0 && (step == 0 || 2 * step == DIRECTIONS) {
-                    self.mark(inside, step, along, across, level, start, end);
-                }
-                if into < MIN_FACING || out < MIN_FACING || dot(air_in, air_out) > OPPOSITE {
-                    continue;
-                }
-                if (end - start) * into.max(out) > max_thickness {
-                    continue;
-                }
-                if step == 0 || 2 * step == DIRECTIONS {
-                    self.mark(mask, step, along, across, level, start, end);
-                } else {
-                    // A slanted line marks the cells it passes, also those
-                    // whose centre lies beyond a face. Kept that far from
-                    // the faces, it marks none of them; the rows and the
-                    // columns find the edge of every straight wall exactly.
-                    let margin = std::f64::consts::FRAC_1_SQRT_2 * self.cell;
-                    let (start, end) = (start + margin / into, end - margin / out);
-                    if start < end {
-                        self.mark(mask, step, along, across, level, start, end);
-                    }
-                }
-            }
+            hits.sort_by(|left, right| left.at.total_cmp(&right.at));
+            visit(level, &hits);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn mark(
-        &self,
-        mask: &mut [bool],
-        step: usize,
-        along: [f64; 2],
-        across: [f64; 2],
-        level: f64,
-        start: f64,
-        end: f64,
-    ) {
+    /// Mark the cells a line passes from `start` to `end` along it.
+    fn mark(&self, mask: &mut [bool], lines: &Lines, level: f64, start: f64, end: f64) {
+        let Lines {
+            step,
+            along,
+            across,
+            ..
+        } = *lines;
         let cell = self.cell;
         // The cells whose centres lie from `start` to `end` along a row or
         // a column with centres at `origin + (i + ½) cell`.
@@ -634,13 +930,7 @@ fn write_rectangle(
     if u[0] >= u[1] || v[0] >= v[1] {
         return;
     }
-    let depth = section.bounds.max[face.axis] - section.bounds.min[face.axis];
-    let inset = INSET.min(depth * 0.001);
-    let level = if face.upper {
-        face.level - inset
-    } else {
-        face.level + inset
-    };
+    let level = face.level;
     let Ok(base) = u32::try_from(caps.vertices.len()) else {
         return;
     };
@@ -872,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn two_sheets_pair_only_when_they_face_apart_within_the_thickness() {
+    fn two_sheets_pair_only_within_the_thickness_and_not_front_to_front() {
         let section = boxed([-1.0, -1.0, -1.0], [11.0, 2.0, 3.0]);
         // The outer face of a wall faces -y, the inner +y: material between.
         let mut wall = MeshGeometry::default();
@@ -881,11 +1171,17 @@ mod tests {
         let found = area(&caps_of(&wall, section));
         assert!((found - 2.5).abs() < 0.08, "{found}");
 
-        // Both facing the same way, as a mesh turned to one point may.
-        let mut turned = MeshGeometry::default();
-        add_sheet(&mut turned, 0.0, [0.0, 10.0], [0.0, 6.0], true);
-        add_sheet(&mut turned, 0.25, [0.0, 10.0], [0.0, 6.0], true);
-        assert!(caps_of(&turned, section).triangles.is_empty());
+        // Both facing the same way, as in a mesh made without stations
+        // whose faces all look at one point: one of them faces the wrong
+        // way, and with the open on both sides the stretch between them is
+        // a wall.
+        for toward_plus in [true, false] {
+            let mut turned = MeshGeometry::default();
+            add_sheet(&mut turned, 0.0, [0.0, 10.0], [0.0, 6.0], toward_plus);
+            add_sheet(&mut turned, 0.25, [0.0, 10.0], [0.0, 6.0], toward_plus);
+            let found = area(&caps_of(&turned, section));
+            assert!((found - 2.5).abs() < 0.08, "{found}");
+        }
 
         // Facing each other: the air between two walls.
         let mut gap = MeshGeometry::default();
@@ -931,6 +1227,215 @@ mod tests {
         }
         let caps = caps_of(&ground, boxed([-1.0, -1.0, 0.0], [7.0, 7.0, 2.0]));
         assert!(caps.triangles.is_empty(), "{}", area(&caps));
+    }
+
+    #[test]
+    fn a_wall_that_ends_in_a_face_of_the_box_is_capped() {
+        // As a mesh made in the same box: its faces stop at the bottom, the
+        // top and the two ends of it, and each of those is capped.
+        let mut wall = MeshGeometry::default();
+        add_sheet(&mut wall, 0.0, [0.0, 10.0], [0.0, 1.5], false);
+        add_sheet(&mut wall, 0.25, [0.0, 10.0], [0.0, 1.5], true);
+        let found = area(&caps_of(&wall, boxed([0.0, -1.0, 0.0], [10.0, 2.0, 1.5])));
+        let expected = 2.0 * 10.0 * 0.25 + 2.0 * 1.5 * 0.25;
+        assert!((found - expected).abs() < 0.1, "{found}");
+    }
+
+    #[test]
+    fn stretches_are_settled_by_the_turns_of_air_and_material() {
+        use Stretch::{Material as M, Open as O, Unknown as U, Unsure as S};
+        let settled = |mut stretches: Vec<Stretch>| {
+            settle(&mut stretches);
+            stretches
+        };
+        // A wall between two rooms, or between a room and the open.
+        assert_eq!(settled(vec![U]), [M]);
+        assert_eq!(settled(vec![O, U, O]), [O, M, O]);
+        // A door leaf, the gap behind it and the wall.
+        assert_eq!(settled(vec![O, U, U, U, O]), [O, M, O, M, O]);
+        // Air between two walls.
+        assert_eq!(settled(vec![M, U, M]), [M, O, M]);
+        // A sheet in front of a wall, alone on its side: its gap is no
+        // wall, and without anything known neither is the wall behind it.
+        assert_eq!(settled(vec![U, M, O]), [O, M, O]);
+        assert_eq!(settled(vec![O, M, U]), [O, M, O]);
+        assert_eq!(settled(vec![U, U]), [O, O]);
+        // Beside a stretch that tells nothing.
+        assert_eq!(settled(vec![S, U, O]), [S, O, O]);
+        assert_eq!(settled(vec![O, U, S]), [O, O, S]);
+        // Runs are settled one by one.
+        assert_eq!(settled(vec![U, O, U, U, U, M]), [M, O, O, O, O, M]);
+        assert_eq!(settled(vec![U, O, U, U, M, U]), [M, O, M, O, M, O]);
+    }
+
+    /// Turn every triangle to look at `point`, as a mesh made without
+    /// stations faces the middle of its region.
+    fn facing(mut mesh: MeshGeometry, point: [f64; 3]) -> MeshGeometry {
+        for triangle in &mut mesh.triangles {
+            let [a, b, c] = triangle.map(|index| mesh.vertices[index as usize]);
+            let normal = cross(difference(b, a), difference(c, a));
+            let centre: [f64; 3] = std::array::from_fn(|axis| (a[axis] + b[axis] + c[axis]) / 3.0);
+            let towards = difference(point, centre);
+            if normal[0] * towards[0] + normal[1] * towards[1] + normal[2] * towards[2] < 0.0 {
+                triangle.swap(1, 2);
+            }
+        }
+        mesh
+    }
+
+    #[test]
+    fn walls_whose_faces_all_look_at_one_point_are_capped() {
+        // The room and the facade beside it, all facing the middle of the
+        // room or a point outside it.
+        let section = boxed([-4.0, -4.0, -2.0], [7.0, 7.0, 1.5]);
+        let ring = 4.6 * 5.6 - 4.0 * 5.0;
+        for point in [[2.0, 2.5, 1.5], [-6.0, -5.0, 0.0], [2.0, -1.0, 1.0]] {
+            let mut mesh = room();
+            add_sheet(&mut mesh, -3.0, [-2.0, 6.0], [-1.0, 4.0], false);
+            let caps = caps_of(&facing(mesh, point), section);
+            let found = area(&caps);
+            assert!(
+                (found - ring).abs() < 0.03 * ring,
+                "{point:?}: {found} against {ring}"
+            );
+            // The facade, seen from one side only, stays open.
+            assert!(caps.vertices.iter().all(|vertex| vertex[1] > -1.0));
+        }
+
+        // Two rooms beside each other: the walls and the partition between
+        // them, and most of the junction where they meet.
+        let mut rooms = MeshGeometry::default();
+        add_box(&mut rooms, [-0.3, -0.3, -0.25], [9.3, 5.3, 3.25], true);
+        add_box(&mut rooms, [0.0, 0.0, 0.0], [4.0, 5.0, 3.0], false);
+        add_box(&mut rooms, [4.2, 0.0, 0.0], [9.0, 5.0, 3.0], false);
+        let rooms = facing(rooms, [4.5, 2.5, 1.5]);
+        let caps = caps_of(&rooms, boxed([-1.0, -2.5, -0.25], [10.0, 5.3, 1.5]));
+        let walls = 9.6 * 5.6 - 4.0 * 5.0 - 4.8 * 5.0;
+        let found = area(&caps);
+        assert!(
+            (found - walls).abs() < 0.01 * walls,
+            "{found} against {walls}"
+        );
+        for at in [[4.1, 2.5], [4.1, -0.15], [-0.15, -0.15], [2.0, -0.15]] {
+            assert!(covered(&caps, at), "{at:?}");
+        }
+        for at in [[2.0, 2.5], [6.0, 2.5], [4.1, -0.5]] {
+            assert!(!covered(&caps, at), "{at:?}");
+        }
+    }
+
+    #[test]
+    fn a_thin_wall_with_a_surface_inside_it_is_capped_whole() {
+        // Two rooms whose faces look at a point in the second one, and a
+        // third surface in the middle of the partition that faces the other
+        // way, as a mesh made without stations has in a thin wall.
+        let mut rooms = MeshGeometry::default();
+        add_box(&mut rooms, [-0.3, -0.3, -0.25], [9.3, 5.3, 3.25], true);
+        add_box(&mut rooms, [0.0, 0.0, 0.0], [4.0, 5.0, 3.0], false);
+        add_box(&mut rooms, [4.2, 0.0, 0.0], [9.0, 5.0, 3.0], false);
+        let mut rooms = facing(rooms, [6.5, 2.5, 1.5]);
+        let base = rooms.vertices.len() as u32;
+        rooms.vertices.extend([
+            [4.08, 0.0, 0.0],
+            [4.08, 5.0, 0.0],
+            [4.08, 5.0, 3.0],
+            [4.08, 0.0, 3.0],
+        ]);
+        rooms.triangles.push([base, base + 2, base + 1]);
+        rooms.triangles.push([base, base + 3, base + 2]);
+        let caps = caps_of(&rooms, boxed([-1.0, -2.5, -0.25], [10.0, 5.3, 1.5]));
+        let walls = 9.6 * 5.6 - 4.0 * 5.0 - 4.8 * 5.0;
+        let found = area(&caps);
+        assert!(
+            (found - walls).abs() < 0.01 * walls,
+            "{found} against {walls}"
+        );
+        for at in [[4.02, 2.5], [4.1, 2.5], [4.18, 2.5]] {
+            assert!(covered(&caps, at), "{at:?}");
+        }
+    }
+
+    #[test]
+    fn a_sheet_in_front_of_a_wall_is_not_capped_to_it() {
+        // A wall of 0.25 and a sheet 0.2 in front of it that was seen from
+        // its front only.
+        let section = boxed([-1.0, -1.0, -1.0], [11.0, 2.0, 3.0]);
+        let mut mesh = MeshGeometry::default();
+        add_sheet(&mut mesh, 0.0, [0.0, 10.0], [0.0, 6.0], false);
+        add_sheet(&mut mesh, 0.25, [0.0, 10.0], [0.0, 6.0], true);
+        add_sheet(&mut mesh, -0.2, [0.0, 10.0], [0.0, 6.0], false);
+        let caps = caps_of(&mesh, section);
+        let found = area(&caps);
+        assert!((found - 2.5).abs() < 0.08, "{found}");
+        assert!(caps.vertices.iter().all(|vertex| vertex[1] > -0.01));
+        // Turned to a point behind the wall, the faces no longer tell the
+        // wall from the gap; neither is capped rather than both, also not
+        // at the open ends, where a slanted line misses one of the three.
+        let turned = caps_of(&facing(mesh, [5.0, 3.0, 1.0]), section);
+        assert!(turned.triangles.is_empty(), "{}", area(&turned));
+    }
+
+    /// The closed mesh of a scan, at voxels of 4 cm.
+    fn closed_mesh(shape: &crate::test_shapes::Shape) -> MeshGeometry {
+        use crate::region_source::{RegionSource, SourceTransform};
+        use crate::surfels::SurfelSource;
+        let cloud = crate::test_shapes::indexed_cloud(&shape.cloud_points(), 4_096);
+        let ranges = shape
+            .station_ranges()
+            .into_iter()
+            .map(|(first_ordinal, station)| crate::ScanRange {
+                first_ordinal,
+                station: (station != u32::MAX).then_some(station),
+            })
+            .collect();
+        let sources = [SurfelSource::with_stations(
+            RegionSource::new(&cloud.cloud, Some(&cloud.index), SourceTransform::default()),
+            shape.stations.clone(),
+            ranges,
+        )];
+        let config = crate::ClosedMeshConfig {
+            voxel: Some(0.04),
+            ..crate::ClosedMeshConfig::default()
+        };
+        let everything = |_: usize, _: u64, _: &crate::Point| true;
+        crate::mesh_closed(&sources, None, &everything, &config, &mut |_| Ok(()))
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn the_closed_mesh_of_a_scanned_room_is_capped_on_its_walls_and_not_on_a_facade() {
+        use crate::test_shapes::{box_room, rectangle, RoomSpec};
+        // A room of 4 by 3 m inside with walls of 0.3, scanned inside and
+        // outside, and a facade south of it scanned from the street only.
+        let room = box_room(&RoomSpec {
+            wall_thickness: Some(0.3),
+            ..RoomSpec::default()
+        });
+        let facade = rectangle(
+            [-1.0, -5.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [6.0, 2.6],
+            0.02,
+        )
+        .with_stations(&[[2.0, -8.0, 1.2]]);
+        let scan = room.merged(facade);
+        let section = boxed([-2.0, -6.0, -1.0], [6.0, 5.0, 1.3]);
+        let ring = 4.6 * 3.6 - 4.0 * 3.0;
+        // With its stations the fronts of the mesh look at the air; without
+        // them they all look at the middle of the scan, and the walls are
+        // capped all the same.
+        for shape in [scan.clone(), scan.with_stations(&[])] {
+            let caps = caps_of(&closed_mesh(&shape), section);
+            let found = area(&caps);
+            assert!((found - ring).abs() < 0.03 * ring, "{found} against {ring}");
+            assert!(caps.vertices.iter().all(|vertex| vertex[1] > -1.0));
+            assert!(!covered(&caps, [2.0, 1.5]));
+            for at in [[-0.15, 1.5], [4.15, 1.5], [2.0, -0.15], [2.0, 3.15]] {
+                assert!(covered(&caps, at), "{at:?}");
+            }
+        }
     }
 
     #[test]

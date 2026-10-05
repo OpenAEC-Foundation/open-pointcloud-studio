@@ -206,6 +206,12 @@ impl SectionFill {
                     ..Default::default()
                 });
             block = block
+                .push(opencad_properties::property_input(
+                    "Max. wall thickness (m)",
+                    "0.50",
+                    &self.thickness_input,
+                    |value| Message::SectionFill(FillAction::MaxThickness(value)),
+                ))
                 .push(opencad_properties::property_control(
                     "Cap colour",
                     row![
@@ -219,12 +225,6 @@ impl SectionFill {
                     .spacing(5)
                     .align_y(iced::Alignment::Center)
                     .into(),
-                ))
-                .push(opencad_properties::property_input(
-                    "Largest thickness (m)",
-                    "0.50",
-                    &self.thickness_input,
-                    |value| Message::SectionFill(FillAction::MaxThickness(value)),
                 ));
         }
         block.into()

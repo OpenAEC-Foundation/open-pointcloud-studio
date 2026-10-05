@@ -359,10 +359,10 @@ fn table() -> Vec<Tool> {
             optional("rotation", number_in("Degrees counter-clockwise seen from above, about the vertical through the centre of the box; 0 or absent for a box along the axes", -3_600.0, 3_600.0)),
         ]),
         tool("clear_section", Command, "Switches the section box off.", vec![]),
-        at_least_one(tool("set_section_fill", Command, "Chooses how the cut of a mesh by the section box is filled: where a wall, floor or ceiling has two opposite faces no farther apart than max_thickness, the material between them is closed with a cap of one colour on the faces of the box. A single surface gets no cap. What is left out is kept; the setting is kept for later sessions and status.result.section_fill reports it.", vec![
+        at_least_one(tool("set_section_fill", Command, "Chooses how the cut of a mesh by the section box is filled: where a wall, floor or ceiling has two opposite faces no farther apart than max_thickness, the material between them is closed with a cap of one colour on the faces of the box. A single surface, such as a facade scanned from one side, a loose sheet or the open edge of a mesh, gets no cap. What is left out is kept; the setting is kept for later sessions and status.result.section_fill reports it.", vec![
             optional("fill_cut", boolean("Whether the cut is filled; on by default")),
             optional("color", text("Colour of the caps as #rrggbb; #585858 by default", 6, 64)),
-            optional("max_thickness", number_in("Largest distance between two faces that is filled, in metres, from 0.01 to 2; 0.5 by default", 0.01, 2.0)),
+            optional("max_thickness", number_in("Maximum wall thickness: the largest distance between two opposite faces that is filled, in metres, from 0.01 to 2; 0.5 by default", 0.01, 2.0)),
         ])),
         tool("align_section_to_walls", Command, "Turns the section box along the main direction of the walls inside it, found in the middle half of its height; the box turns at most 45 degrees and keeps its size and centre. Answers when the search has started; wait_until_idle, then status.result.section.rotation holds the turn and status.result.status says what was found.", vec![]),
         tool("select_world", Job, "Selects every exact source point inside an inclusive box across the visible layers, honouring class filters, the section box and deleted points. Answers with a job_id; the job reports the number of points.", vec![
