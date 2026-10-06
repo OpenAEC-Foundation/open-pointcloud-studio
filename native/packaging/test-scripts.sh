@@ -159,6 +159,172 @@ else
     wrong "the release notes do not name:$missing"
 fi
 
+# ---- open-cad-studio.pin and build-open-cad-studio.sh --------------------
+
+# The pin file of the repository holds only a URL, two hashes and a date.
+if output=$(bash "$packaging_dir/build-open-cad-studio.sh" --pin 2>&1) \
+    && grep -qE '^url=https://[^ ]+$' <<< "$output" \
+    && grep -qE '^commit=[0-9a-f]{40}$' <<< "$output" \
+    && grep -qE '^tree=[0-9a-f]{40}$' <<< "$output" \
+    && grep -qE '^date=[0-9]{4}-[0-9]{2}-[0-9]{2}$' <<< "$output" \
+    && [[ "$(grep -c . "$packaging_dir/open-cad-studio.pin")" -eq 4 ]]; then
+    passed "the pin file names the repository, commit, tree and date of Open CAD Studio and nothing else"
+else
+    wrong "the pin file of Open CAD Studio is not read as four lines url, commit, tree and date:"
+    sed 's/^/        /' <<< "$output"
+fi
+
+# A pin file that is not exactly that is refused.
+good_hash=0123456789abcdef0123456789abcdef01234567
+refused=0
+for pin in \
+    "url=https://example.org/a.git|commit=$good_hash|date=2026-10-01" \
+    "url=http://example.org/a.git|commit=$good_hash|tree=$good_hash|date=2026-10-01" \
+    "url=https://example.org/a.git|commit=0123abc|tree=$good_hash|date=2026-10-01" \
+    "url=https://example.org/a.git|commit=$good_hash|tree=$good_hash|date=1 October" \
+    "url=https://example.org/a.git|commit=$good_hash|tree=$good_hash|date=2026-10-01|branch=main" \
+    "url=https://example.org/a.git|commit=$good_hash|tree=$good_hash|date=2026-10-01|commit=$good_hash" \
+    "url=https://example.org/a.git|commit=$good_hash|tree=$good_hash|date=2026-10-01|a comment"; do
+    tr '|' '\n' <<< "$pin" > "$work/bad.pin"
+    if OCS_PIN_FILE="$work/bad.pin" bash "$packaging_dir/build-open-cad-studio.sh" --pin > /dev/null 2>&1; then
+        wrong "build-open-cad-studio.sh reads the pin file '$pin'"
+        refused=1
+    fi
+done
+[[ "$refused" -ne 0 ]] || passed "build-open-cad-studio.sh refuses a pin file with a missing, malformed or other line"
+
+# A repository in place of the upstream one. Its Cargo.lock follows a branch
+# and names a rev by a shortened hash, both with the full hash of a commit.
+upstream=$work/upstream
+mkdir -p "$upstream/src"
+cp "$native_dir/desktop/LICENSE-GPL-3.0" "$upstream/LICENSE"
+printf 'fn main() {}\n' > "$upstream/src/main.rs"
+cat > "$upstream/Cargo.lock" <<'EOF'
+[[package]]
+name = "followed"
+version = "0.1.0"
+source = "git+https://example.org/followed.git?branch=feature%2Fone#1111111111111111111111111111111111111111"
+
+[[package]]
+name = "shortened"
+version = "0.1.0"
+source = "git+https://example.org/short.git?rev=abc1234#abc1234000000000000000000000000000000000"
+EOF
+git -C "$upstream" init -q
+git -C "$upstream" config core.autocrlf false
+# commit_upstream MESSAGE commits what is there and prints the hash.
+commit_upstream() {
+    git -C "$upstream" add -A
+    GIT_COMMITTER_DATE=2026-10-01T12:00:00Z GIT_AUTHOR_DATE=2026-10-01T12:00:00Z \
+        git -C "$upstream" -c user.name=test -c user.email=test@example.org commit -q -m "$1"
+    git -C "$upstream" rev-parse HEAD
+}
+# pin_upstream COMMIT [TREE [DATE]] writes the pin file for COMMIT.
+pin_upstream() {
+    printf 'url=https://example.org/upstream.git\ncommit=%s\ntree=%s\ndate=%s\n' "$1" \
+        "${2:-$(git -C "$upstream" rev-parse "$1^{tree}")}" "${3:-2026-10-01}" > "$work/ocs.pin"
+}
+good=$(commit_upstream "a tree to build")
+
+# Writes down where and how it is asked to build, and leaves a program
+# where Cargo would.
+cat > "$work/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+echo "$PWD|$*" >> "$CARGO_LOG"
+while [[ $# -gt 0 ]]; do
+    [[ "$1" != --target-dir ]] || folder=$2
+    shift
+done
+mkdir -p "$folder/release"
+echo program > "$folder/release/OpenCADStudio"
+echo program > "$folder/release/OpenCADStudio.exe"
+EOF
+printf '#!/usr/bin/env bash\necho "host: x86_64-unknown-linux-gnu"\n' > "$work/bin/rustc"
+chmod +x "$work/bin/cargo" "$work/bin/rustc"
+
+# build_cad ARGUMENTS... runs the script on the repository above.
+build_cad() {
+    : > "$work/cargo.log"
+    PATH="$work/bin:$PATH" CARGO_LOG="$work/cargo.log" OCS_PIN_FILE="$work/ocs.pin" \
+        OCS_FETCH_FROM="$upstream" OCS_TARGET_DIR="$work/ocs-target" \
+        bash "$packaging_dir/build-open-cad-studio.sh" "$@"
+}
+source_dir=$work/ocs-target/source
+
+pin_upstream "$good"
+if output=$(build_cad -j 1 2> "$work/build.log"); then
+    if [[ "$output" == */ocs-target/release/OpenCADStudio* && -f "$output" ]] \
+        && [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$good" ]]; then
+        passed "build-open-cad-studio.sh fetches the pinned commit and prints the program"
+    else
+        wrong "build-open-cad-studio.sh printed '$output' and left $(git -C "$source_dir" rev-parse HEAD 2>&1)"
+    fi
+    call=$(cat "$work/cargo.log")
+    if [[ "$call" == "$(cd "$source_dir" && pwd)|build --release --locked --bin OpenCADStudio --target-dir "*"/ocs-target -j 1" ]]; then
+        passed "Cargo builds the pinned source with --locked into the target folder of Open CAD Studio"
+    else
+        wrong "Cargo was not asked to build the pinned source with --locked: $call"
+    fi
+else
+    wrong "build-open-cad-studio.sh failed on a pinned commit:"
+    sed 's/^/        /' "$work/build.log"
+fi
+
+# What is changed in the checkout by hand is not built.
+echo "fn changed() {}" >> "$source_dir/src/main.rs"
+echo "extra" > "$source_dir/src/extra.rs"
+if build_cad > /dev/null 2> "$work/build.log" \
+    && [[ -z "$(git -C "$source_dir" status --porcelain)" && ! -e "$source_dir/src/extra.rs" ]] \
+    && ! grep -q '^fetching' "$work/build.log"; then
+    passed "a checkout at the pinned commit is restored, not fetched again"
+else
+    wrong "a checkout with changes is built as it is, or fetched again:"
+    sed 's/^/        /' "$work/build.log"
+fi
+
+# refused_build WHAT PATTERN expects the build to fail before Cargo runs, with
+# PATTERN in its message.
+refused_build() {
+    if build_cad > /dev/null 2> "$work/build.log"; then
+        wrong "build-open-cad-studio.sh builds $1"
+    elif [[ -s "$work/cargo.log" ]] || ! grep -q "$2" "$work/build.log"; then
+        wrong "build-open-cad-studio.sh does not refuse $1 before Cargo runs with '$2':"
+        sed 's/^/        /' "$work/build.log"
+    else
+        passed "build-open-cad-studio.sh refuses $1"
+    fi
+}
+
+pin_upstream "$good" "$good_hash"
+refused_build "a commit whose tree is not the pinned tree" "names the tree $good_hash"
+pin_upstream "$good" "" 2026-10-02
+refused_build "a commit of another date than the pinned one" "names 2026-10-02"
+
+sed -i.orig 's/#1111111111111111111111111111111111111111//' "$upstream/Cargo.lock"
+rm -f "$upstream/Cargo.lock.orig"
+pin_upstream "$(commit_upstream "a git dependency without a commit")"
+refused_build "a Cargo.lock with a git dependency without a commit" "names no commit"
+git -C "$upstream" checkout -q "$good" -- Cargo.lock
+
+sed -i.orig 's/#abc1234000/#fff1234000/' "$upstream/Cargo.lock"
+rm -f "$upstream/Cargo.lock.orig"
+pin_upstream "$(commit_upstream "a shortened hash that resolves to another commit")"
+refused_build "a shortened hash that resolves to another commit" "resolves rev abc1234"
+git -C "$upstream" checkout -q "$good" -- Cargo.lock
+
+echo "Another licence" > "$upstream/LICENSE"
+pin_upstream "$(commit_upstream "another licence")"
+refused_build "a commit with another licence than GPL-3.0" "is not the GPL-3.0 text"
+git -C "$upstream" checkout -q "$good" -- LICENSE
+
+pin_upstream "$good"
+if output=$(build_cad --fetch 2> "$work/build.log") && [[ "$output" == "$source_dir" && ! -s "$work/cargo.log" ]]; then
+    passed "build-open-cad-studio.sh --fetch checks the source and builds nothing"
+else
+    wrong "build-open-cad-studio.sh --fetch printed '$output':"
+    sed 's/^/        /' "$work/build.log"
+fi
+
 if [[ "$failures" -ne 0 ]]; then
     fail "$failures of the tests failed"
 fi

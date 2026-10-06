@@ -411,6 +411,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 The executable is `native/target/release/open-pointcloud-studio`, with `.exe` on Windows. `cargo run -p open-pointcloud-studio-native -- scan.laz` builds and starts a development build with a file.
 
+Open CAD Studio, the CAD program that shows exported drawings, is not part of this repository. This script fetches the commit of its repository that `native/packaging/open-cad-studio.pin` names, checks that it is that commit, and builds it in a Cargo workspace of its own. It needs git and a C++ compiler besides Rust, and on Debian and Ubuntu also `libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev libfontconfig1-dev libfreetype6-dev`:
+
+```bash
+bash native/packaging/build-open-cad-studio.sh -j 4
+```
+
+It writes `native/target/open-cad-studio/release/OpenCADStudio`. [native/README.md](native/README.md#open-cad-studio) says more.
+
 [native/README.md](native/README.md) has notes for developers, and [native/packaging/README.md](native/packaging/README.md) describes how the installer and the packages are built and how a release is made.
 
 ## Repository layout

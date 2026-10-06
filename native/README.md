@@ -163,6 +163,20 @@ The window starts a token-protected command server on the loopback address (`nat
 
 `cli_help.rs` holds the one list of modes that `--help` prints. A new mode is an entry there, its branch in `main`, and a row in the command-line table of the root README.
 
+## Open CAD Studio
+
+Open CAD Studio is the program that `cad_viewer.rs` opens exported DXF and DWG files in. Its source is not part of this repository. [`packaging/open-cad-studio.pin`](packaging/open-cad-studio.pin) names the one commit of its repository that is built, with four lines: `url`, `commit` (the full hash), `tree` (the hash of the tree of that commit) and `date`.
+
+```bash
+bash packaging/build-open-cad-studio.sh -j 4                 # target/open-cad-studio/release/OpenCADStudio
+bash packaging/build-open-cad-studio.sh --target aarch64-apple-darwin
+bash packaging/build-open-cad-studio.sh --fetch              # only fetch and check the source
+```
+
+The script fetches that commit alone (`git fetch --depth 1 URL COMMIT`) into `target/open-cad-studio/source`, a git repository of its own, and stops before anything is built when the tree it got is not the pinned tree, the date differs, a git dependency in its `Cargo.lock` names no full commit hash, or its `LICENSE` is not the GPL-3.0 text of `desktop/LICENSE-GPL-3.0`. A checkout already at the commit is used without fetching; files changed in it by hand are restored first. `OCS_FETCH_FROM` fetches from a local clone or a mirror instead, checked the same way. The source is built as it is, with no change of our own: `cargo build --locked` builds the commit of every git dependency that its `Cargo.lock` names, also for a dependency that follows a branch, so nothing moves on by itself. Cargo runs in the source folder, so that its `.cargo/config.toml` applies (the stack size of the program on Windows, and of `rustc`), with `--release`, only the binary `OpenCADStudio` and the target folder `target/open-cad-studio`; other options go to `cargo build`. Run again with nothing changed, Cargo has nothing to do. The build script of the program reads its revision from that checkout, so the program reports the pinned commit.
+
+On Linux it needs the libraries listed in the root README and a C++ compiler, for a mesh library of the program; the binary then links the C++ runtime, which `packaging/linux/check-binary.sh` allows up to the symbol version of the oldest supported systems. A release build with `-j 4` from an empty target folder, with the crates already downloaded, took 27 minutes (Rust 1.94, `x86_64-pc-windows-gnu`, on a development machine with 32 threads); the program is about 125 MB. Built with the GNU toolchain on Windows it links `libstdc++-6.dll` of MinGW; the script copies that library, and the libraries it needs in turn (`libgcc_s_seh-1.dll` and `libwinpthread-1.dll`), from the folder of `g++` to beside the program, so that it starts from a development build also where MinGW is not on the search path. Built with the MSVC toolchain, it needs none of them.
+
 ## Installer and packages
 
 The Windows installer is built from [`installer/windows.iss`](installer/windows.iss) and the folder that `packaging/build-archive.sh` leaves behind:
