@@ -19,6 +19,19 @@ pub(crate) const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 pub(crate) const FIRST_FRAME_WAIT: Duration = Duration::from_millis(600);
 const FIRST_FRAME_POLL: Duration = Duration::from_millis(40);
 
+/// How far, as a share of its extent, a scene may reach beyond the points
+/// shown while it was read before the checked cloud frames it anew.
+const REFRAME_GROWTH: f64 = 0.05;
+
+/// Whether `after` reaches beyond `before` by more than `REFRAME_GROWTH` of
+/// the extent of `before` on any side.
+fn outgrows(before: Bounds, after: Bounds) -> bool {
+    let margin = before.extent() * REFRAME_GROWTH;
+    (0..3).any(|axis| {
+        after.min[axis] < before.min[axis] - margin || after.max[axis] > before.max[axis] + margin
+    })
+}
+
 /// The camera as the application or the user left it.
 struct Camera {
     yaw: f32,
@@ -253,16 +266,22 @@ impl Studio {
 
     /// Place the camera after the checked cloud of a scan took the place of
     /// what was shown while it was read. Points shown before framed the
-    /// camera when they appeared, and it stays where it is: the checked
-    /// cloud only reaches a little farther than they did. A layer that
-    /// showed only its metadata is framed anew, as its first points are,
+    /// camera when they appeared, and it stays where it is while the checked
+    /// cloud reaches hardly farther than they did, as it does after a
+    /// picture spread through the whole file. A scene that grew beyond that,
+    /// because the points shown came from the part of the file read so far,
+    /// is framed anew, as is a layer that showed only its metadata; both
     /// unless the user moved the camera.
     pub(crate) fn place_camera_for_checked_cloud(
         &mut self,
         scene: Option<Bounds>,
         points_shown: bool,
     ) {
-        if !points_shown {
+        let grown = match (scene, combined_bounds(&self.clouds)) {
+            (Some(before), Some(after)) => outgrows(before, after),
+            _ => true,
+        };
+        if !points_shown || grown {
             self.reframe_after_replacement(scene);
             return;
         }
@@ -441,43 +460,72 @@ mod tests {
     #[test]
     fn the_checked_cloud_of_a_scan_shown_while_it_is_read_leaves_the_camera_as_framed() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("scan.xyz");
-        // A row of points and one far beyond them, which the looks miss.
-        let text: String = (0..10)
-            .map(|index| format!("{index} 0 1\n"))
-            .chain(["60 30 1\n".to_owned()])
-            .collect();
-        std::fs::write(&path, text).unwrap();
-        let cloud = Arc::new(pointcloud_core::open(&path, 20).unwrap());
-        let mut studio = Studio::default();
-        studio.imports.insert(5, job(&path));
-        // The first look frames the camera.
-        let _ = studio.update(Message::IndexedImportPreview(5, look(&cloud, 4)));
-        let _ = studio.update(Message::FlushSnapshots);
-        assert_eq!(studio.clouds.len(), 1);
-        assert_eq!(studio.auto_camera, Some(studio.camera_key()));
-        let framed = (studio.zoom, studio.pan);
-        let _ = studio.update(Message::IndexedImportPreview(5, look(&cloud, 8)));
-        let _ = studio.update(Message::FlushSnapshots);
+        // A row of points, and one more that the looks miss: just beyond
+        // the row, as after a picture spread through the whole file, or far
+        // beyond it, as after the part of a file read so far.
+        let scan = |name: &str, last: &str| {
+            let path = directory.path().join(name);
+            let text: String = (0..100)
+                .map(|index| format!("{index} {} 1\n", index % 7))
+                .chain([last.to_owned()])
+                .collect();
+            std::fs::write(&path, text).unwrap();
+            Arc::new(pointcloud_core::open(&path, 200).unwrap())
+        };
+        let near = scan("near.xyz", "100 3 1\n");
+        let far = scan("far.xyz", "600 300 1\n");
+        // The first look frames the camera, and later looks keep it.
+        let shown = |cloud: &Arc<PointCloud>| {
+            let mut studio = Studio::default();
+            studio.imports.insert(5, job(&cloud.path));
+            let _ = studio.update(Message::IndexedImportPreview(5, look(cloud, 50)));
+            let _ = studio.update(Message::FlushSnapshots);
+            assert_eq!(studio.clouds.len(), 1);
+            assert_eq!(studio.auto_camera, Some(studio.camera_key()));
+            let _ = studio.update(Message::IndexedImportPreview(5, look(cloud, 100)));
+            let _ = studio.update(Message::FlushSnapshots);
+            studio
+        };
+        let framed_anew = |studio: &mut Studio| {
+            let kept = (studio.zoom, studio.pan);
+            studio.auto_camera = Some(studio.camera_key());
+            studio.frame_new_scene();
+            (studio.zoom, studio.pan) != kept
+        };
 
-        // The checked cloud takes its place at once, and the camera keeps
-        // showing what it showed instead of framing the scene anew.
-        let _ = studio.update(Message::IndexedImportPreview(5, Arc::clone(&cloud)));
-        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
+        // The checked cloud takes the place of the looks at once, and the
+        // camera keeps showing what it showed instead of framing the scene
+        // anew.
+        let mut studio = shown(&near);
+        let before = (studio.zoom, studio.pan);
+        let _ = studio.update(Message::IndexedImportPreview(5, Arc::clone(&near)));
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &near));
         assert!(!studio.imports.contains_key(&5));
-        assert_ne!((studio.zoom, studio.pan), framed);
+        assert_ne!(
+            (studio.zoom, studio.pan),
+            before,
+            "it makes up for the scene"
+        );
         assert_eq!(
             studio.auto_camera,
             Some(studio.camera_key()),
             "the camera is still the one the application left"
         );
-        let kept = (studio.zoom, studio.pan);
-        studio.frame_new_scene();
-        assert_ne!(
-            (studio.zoom, studio.pan),
-            kept,
-            "framing anew would have moved the camera"
-        );
+        assert!(framed_anew(&mut studio), "framing anew would move it");
+
+        // A checked cloud that reaches far beyond the looks is framed anew.
+        let mut studio = shown(&far);
+        let _ = studio.update(Message::IndexedImportPreview(5, Arc::clone(&far)));
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &far));
+        assert_eq!(studio.auto_camera, Some(studio.camera_key()));
+        assert!(!framed_anew(&mut studio), "it is framed already");
+
+        // Unless the user moved the camera: it stays where they put it.
+        let mut studio = shown(&far);
+        studio.zoom *= 2.0;
+        let _ = studio.update(Message::IndexedImportPreview(5, Arc::clone(&far)));
+        assert_ne!(studio.auto_camera, Some(studio.camera_key()));
+        assert!(framed_anew(&mut studio));
     }
 
     #[test]
