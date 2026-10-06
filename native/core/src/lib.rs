@@ -468,11 +468,12 @@ pub const LARGE_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 /// which is spread over everything read so far; a large file that states no
 /// count is shown every few seconds. The returned cloud is then the one
 /// `open_with_progress` returns. A source of at least `LARGE_SOURCE_BYTES`
-/// is instead shown every few seconds from a denser sample, first with the
-/// points spread through an E57 scan that allows it: its returned cloud keeps
-/// up to two million points instead of `sample_limit`, so that it is as
-/// dense as the last snapshot. At most two sources are shown densely at a
-/// time; further ones are shown in steps.
+/// is instead shown every second from a denser sample, first with the points
+/// spread through an E57 scan that allows it, coarsely at once and densely
+/// from a read beside the pass: its returned cloud keeps up to two million
+/// points instead of `sample_limit`, so that it is as dense as the last
+/// snapshot. At most four sources are shown densely at a time; further ones
+/// are shown in steps, after the coarse spread of such a scan.
 pub fn open_with_snapshots(
     path: impl AsRef<Path>,
     sample_limit: usize,

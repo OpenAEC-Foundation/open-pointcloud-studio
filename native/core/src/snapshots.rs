@@ -5,12 +5,15 @@
 //! tenth of them, from the sample the pass keeps anyway: that sample is
 //! spread over everything read so far, and the cloud the pass returns is the
 //! same as without the steps. A very large source can instead be shown every
-//! few seconds from a denser sample of its own.
+//! second from a denser sample of its own, after a first picture of points
+//! spread through an E57 scan that allows it: a coarse one at once, and a
+//! denser one read beside the pass.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use super::{e57_points, e57_quick, Bounds, Collector, LoadError, PointCloud, SourceStamp};
@@ -18,15 +21,20 @@ use super::{e57_points, e57_quick, Bounds, Collector, LoadError, PointCloud, Sou
 /// Points of the pass kept for showing a large source densely, and for the
 /// checked cloud at its end.
 const SNAPSHOT_POINTS: usize = 2_000_000;
-/// Points asked of a preview spread through the file.
+/// Points of the first picture spread through the file: about what the
+/// window draws by default, read in a fraction of a second.
+const FIRST_SPREAD_POINTS: usize = 250_000;
+/// Points of the denser picture spread through the file, read beside the
+/// pass.
 const SPREAD_POINTS: usize = 1_000_000;
-/// Time to the first dense snapshot; later ones follow at growing intervals.
-const FIRST_INTERVAL: Duration = Duration::from_secs(3);
-const LONGEST_INTERVAL: Duration = Duration::from_secs(10);
-/// Sources shown densely while they are read at any one time. A dense
-/// snapshot is a copy of millions of points, so further sources are shown in
-/// steps instead.
-const MAX_SHOWN: usize = 2;
+/// Time from the start of the pass to the first dense snapshot, and from
+/// each to the next.
+const INTERVAL: Duration = Duration::from_secs(1);
+/// Sources shown densely at any one time. A dense snapshot is a copy of
+/// millions of points, so further sources are shown in steps instead. Large
+/// sources on one disk are read one after another, and those that wait for
+/// their turn hold only their pictures spread through the file.
+const MAX_SHOWN: usize = 4;
 
 /// A source of known size is shown at every this many parts of its points.
 pub(crate) const STEPS: u64 = 10;
@@ -64,19 +72,28 @@ impl Showing {
 
     /// Start showing a source that is about to be read: densely when it is
     /// large enough and a place is free, otherwise in steps when it is worth
-    /// it, otherwise not at all.
+    /// it, otherwise not at all. A large source shown in steps still shows
+    /// the coarse picture spread through an E57 scan that has one at once.
     pub(crate) fn begin(
         self,
         path: &Path,
         stamp: SourceStamp,
         show: Show,
     ) -> Result<Option<Snapshots>, LoadError> {
-        if stamp.length >= self.dense_from {
+        let large = stamp.length >= self.dense_from;
+        if large {
             if let Some(dense) = Snapshots::begin(path, stamp, show)? {
                 return Ok(Some(dense));
             }
         }
-        Ok(Snapshots::progressive(path, stamp, self.steps_from))
+        let mut stepped = Snapshots::progressive(path, stamp, self.steps_from);
+        if let Some(stepped) = stepped.as_mut().filter(|_| large && super::is_e57(path)) {
+            if let Ok(Some(first)) = e57_quick::preview(path, FIRST_SPREAD_POINTS) {
+                show(&first)?;
+                stepped.known = Some(first);
+            }
+        }
+        Ok(stepped)
     }
 }
 
@@ -100,6 +117,8 @@ pub(crate) struct Snapshots {
     /// What the file states about itself, and for a scan that allows it,
     /// points spread through the file: both are kept with every snapshot.
     known: Option<PointCloud>,
+    /// The denser picture spread through the file while it is being read.
+    spread: Option<Receiver<PointCloud>>,
     /// The count of points the source states, zero when it states none.
     stated: u64,
     cadence: Cadence,
@@ -127,9 +146,10 @@ impl Snapshots {
         self.dense
     }
 
-    /// Start showing a source densely, beginning with the spread preview of
-    /// an E57 scan that has one. Returns `None` when enough other sources
-    /// are being shown densely already.
+    /// Start showing a source densely, beginning with the coarse picture
+    /// spread through an E57 scan that has one, while a denser one is read
+    /// beside the pass. Returns `None` when enough other sources are being
+    /// shown densely already.
     pub(crate) fn begin(
         path: &Path,
         stamp: SourceStamp,
@@ -151,33 +171,75 @@ impl Snapshots {
             path: path.to_path_buf(),
             stamp,
             known: None,
+            spread: None,
             stated: 0,
             cadence: Cadence::Timed {
-                interval: FIRST_INTERVAL,
-                longest: LONGEST_INTERVAL,
+                interval: INTERVAL,
+                longest: INTERVAL,
                 due: Instant::now(),
             },
             dense: true,
         };
         if super::is_e57(path) {
-            snapshots.known = match e57_quick::preview(path, SPREAD_POINTS) {
-                Ok(Some(spread)) => Some(spread),
+            snapshots.known = match e57_quick::preview(path, FIRST_SPREAD_POINTS) {
+                Ok(Some(first)) => {
+                    // A small scan is all there in the first picture.
+                    if (first.points.len() as u64) < first.total_points {
+                        snapshots.spread = spread_beside(path);
+                    }
+                    Some(first)
+                }
                 _ => super::open_e57_header(path).ok(),
             };
         }
-        if let Some(spread) = snapshots
+        if let Some(known) = snapshots
             .known
             .as_ref()
             .filter(|known| !known.points.is_empty())
         {
-            show(spread)?;
+            show(known)?;
         }
-        snapshots.cadence = Cadence::Timed {
-            interval: FIRST_INTERVAL,
-            longest: LONGEST_INTERVAL,
-            due: Instant::now() + FIRST_INTERVAL,
-        };
+        snapshots.start_clock();
         Ok(Some(snapshots))
+    }
+
+    /// Time the next snapshot from now, when the pass starts: a source that
+    /// waited for its turn has nothing more to show before.
+    pub(crate) fn start_clock(&mut self) {
+        if let Cadence::Timed { interval, due, .. } = &mut self.cadence {
+            *due = Instant::now() + *interval;
+        }
+    }
+
+    /// Take the denser picture spread through the file once it has been
+    /// read.
+    fn take_spread(&mut self) -> bool {
+        let Some(spread) = &self.spread else {
+            return false;
+        };
+        match spread.try_recv() {
+            Ok(spread) => {
+                self.known = Some(spread);
+                self.spread = None;
+                true
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                self.spread = None;
+                false
+            }
+        }
+    }
+
+    /// Show the denser picture spread through the file as soon as it has
+    /// been read, while the source waits for its turn to be read.
+    pub(crate) fn tick_waiting(&mut self, show: Show) -> Result<(), LoadError> {
+        if self.take_spread() {
+            if let Some(cloud) = self.cloud(&Collector::new(1)) {
+                show(&cloud)?;
+            }
+        }
+        Ok(())
     }
 
     /// Show a source from the sample its pass keeps anyway: at every tenth
@@ -213,6 +275,7 @@ impl Snapshots {
             path: path.to_path_buf(),
             stamp,
             known,
+            spread: None,
             stated: stated.unwrap_or(0),
             cadence,
             dense: false,
@@ -228,10 +291,13 @@ impl Snapshots {
     /// Show the points read so far when the next step is reached or the
     /// last snapshot is old enough.
     pub(crate) fn tick(&mut self, read: &Collector, show: Show) -> Result<(), LoadError> {
-        let due = match self.cadence {
-            Cadence::Steps { next, stated, .. } => read.total >= next && next < stated,
-            Cadence::Timed { due, .. } => Instant::now() >= due,
-        };
+        // The denser picture spread through the file is shown as soon as it
+        // has been read.
+        let due = self.take_spread()
+            || match self.cadence {
+                Cadence::Steps { next, stated, .. } => read.total >= next && next < stated,
+                Cadence::Timed { due, .. } => Instant::now() >= due,
+            };
         if !due {
             return Ok(());
         }
@@ -306,6 +372,23 @@ impl Snapshots {
             scan_ranges_known: false,
         })
     }
+}
+
+/// Read the denser picture spread through an E57 scan on a thread of its own,
+/// beside the pass that reads the file in order. A picture that cannot be
+/// read is not sent: the snapshots go on with the coarse one.
+fn spread_beside(path: &Path) -> Option<Receiver<PointCloud>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let path = path.to_path_buf();
+    std::thread::Builder::new()
+        .name("spread preview".into())
+        .spawn(move || {
+            if let Ok(Some(spread)) = e57_quick::preview(&path, SPREAD_POINTS) {
+                let _ = sender.send(spread);
+            }
+        })
+        .ok()?;
+    Some(receiver)
 }
 
 /// The count of points a source states in its header: the records of an E57
@@ -430,7 +513,7 @@ mod tests {
         snapshots.tick(&read, &mut show).unwrap();
         make_due(&mut snapshots);
         snapshots.tick(&read, &mut show).unwrap();
-        assert!(interval(&snapshots) > FIRST_INTERVAL);
+        assert_eq!(interval(&snapshots), INTERVAL);
         assert_eq!(shown.len(), 1);
         let cloud = &shown[0];
         assert!(cloud.provisional && cloud.has_intensity && !cloud.has_rgb);
@@ -450,6 +533,143 @@ mod tests {
             snapshots.tick(&read, &mut refuse),
             Err(LoadError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn dense_snapshots_come_every_second_from_the_start_of_the_pass() {
+        let _places = TEST_PLACES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("points.xyz");
+        std::fs::write(&source, "0 0 1\n").unwrap();
+        let stamp = SourceStamp::read(&source).unwrap();
+        let count = std::cell::Cell::new(0);
+        let mut show = |_: &PointCloud| {
+            count.set(count.get() + 1);
+            Ok(())
+        };
+        let mut snapshots = Snapshots::begin(&source, stamp, &mut show)
+            .unwrap()
+            .unwrap();
+        let due = |snapshots: &Snapshots| match snapshots.cadence {
+            Cadence::Timed { due, .. } => due.saturating_duration_since(Instant::now()),
+            Cadence::Steps { .. } => unreachable!(),
+        };
+        // The first is due a second after the start.
+        let first = due(&snapshots);
+        assert!(first > Duration::from_millis(900) && first <= INTERVAL);
+        let mut read = Collector::new(10);
+        read.push(point(1.0)).unwrap();
+        // A tick before then shows nothing.
+        snapshots.tick(&read, &mut show).unwrap();
+        assert_eq!(count.get(), 0);
+        // Each later one is due a second after the one before, however
+        // many have been shown.
+        for shown in 1..=5 {
+            make_due(&mut snapshots);
+            snapshots.tick(&read, &mut show).unwrap();
+            assert_eq!(count.get(), shown);
+            assert_eq!(interval(&snapshots), INTERVAL);
+            let next = due(&snapshots);
+            assert!(next > Duration::from_millis(900) && next <= INTERVAL);
+        }
+        // A source that waited for its turn is timed again when its pass
+        // starts, so its first snapshot does not come at once.
+        make_due(&mut snapshots);
+        snapshots.start_clock();
+        assert!(due(&snapshots) > Duration::from_millis(900));
+        snapshots.tick(&read, &mut show).unwrap();
+        assert_eq!(count.get(), 5);
+    }
+
+    /// Tick until the denser picture spread through the file has been shown,
+    /// or a while has passed.
+    fn wait_for_spread(
+        snapshots: &mut Snapshots,
+        read: Option<&Collector>,
+        show: Show,
+    ) -> Result<(), LoadError> {
+        let started = Instant::now();
+        while snapshots.spread.is_some() && started.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(10));
+            match read {
+                Some(read) => {
+                    // No snapshot of the pass is due meanwhile.
+                    snapshots.start_clock();
+                    snapshots.tick(read, show)?;
+                }
+                None => snapshots.tick_waiting(show)?,
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_large_e57_scan_is_shown_coarsely_at_once_then_densely_beside_the_pass() {
+        let _places = TEST_PLACES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("large.e57");
+        crate::e57_quick::tests::write_scan(&source, 400_000, false);
+        let stamp = SourceStamp::read(&source).unwrap();
+        let shown = std::cell::RefCell::new(Vec::<PointCloud>::new());
+        let mut show = |cloud: &PointCloud| {
+            shown.borrow_mut().push(cloud.clone());
+            Ok(())
+        };
+        let count = || shown.borrow().len();
+        let points = |index: usize| shown.borrow()[index].points.len();
+        // A first picture of about a quarter of a million points spread
+        // through the file, at once.
+        let mut snapshots = Snapshots::begin(&source, stamp, &mut show)
+            .unwrap()
+            .unwrap();
+        assert!(snapshots.dense());
+        assert_eq!(count(), 1);
+        let first = points(0);
+        assert!((240_000..=260_000).contains(&first), "{first}");
+        // While the source waits for its turn, the denser picture is shown
+        // as soon as it has been read: every point of this small scan.
+        wait_for_spread(&mut snapshots, None, &mut show).unwrap();
+        assert_eq!(count(), 2);
+        assert!(shown.borrow().iter().all(|cloud| cloud.provisional));
+        assert_eq!(points(1), 400_000);
+        assert_eq!(shown.borrow()[1].total_points, 400_000);
+        // Later snapshots keep it, with what the pass read.
+        let mut read = Collector::new(10);
+        read.push(point(1.0)).unwrap();
+        make_due(&mut snapshots);
+        snapshots.tick(&read, &mut show).unwrap();
+        assert_eq!(points(2), 400_001);
+        drop(snapshots);
+
+        // Read during the pass, it is shown at once, with what the pass
+        // read so far, and the next snapshot a second later.
+        shown.borrow_mut().clear();
+        let mut snapshots = Snapshots::begin(&source, stamp, &mut show)
+            .unwrap()
+            .unwrap();
+        wait_for_spread(&mut snapshots, Some(&read), &mut show).unwrap();
+        assert_eq!(count(), 2);
+        assert_eq!(points(1), 400_001);
+        assert_eq!(interval(&snapshots), INTERVAL);
+        snapshots.tick(&read, &mut show).unwrap();
+        assert_eq!(count(), 2, "the next is not due yet");
+        drop(snapshots);
+
+        // A scan that the first picture holds whole is shown once.
+        let small = directory.path().join("small.e57");
+        crate::e57_quick::tests::write_scan(&small, 50_000, false);
+        shown.borrow_mut().clear();
+        let stamp = SourceStamp::read(&small).unwrap();
+        let mut snapshots = Snapshots::begin(&small, stamp, &mut show).unwrap().unwrap();
+        assert!(snapshots.spread.is_none());
+        snapshots.tick_waiting(&mut show).unwrap();
+        drop(snapshots);
+        assert_eq!(count(), 1);
+        assert_eq!(points(0), 50_000);
     }
 
     #[test]
@@ -530,6 +750,62 @@ mod tests {
             .unwrap()
             .is_some());
         assert_eq!(Snapshots::sample_limit(100), SNAPSHOT_POINTS);
+    }
+
+    #[test]
+    fn a_large_e57_scan_shown_in_steps_still_shows_its_first_picture_at_once() {
+        let _places = TEST_PLACES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let directory = tempfile::tempdir().unwrap();
+        let held = directory.path().join("points.xyz");
+        std::fs::write(&held, "0 0 1\n").unwrap();
+        let held_stamp = SourceStamp::read(&held).unwrap();
+        let mut ignore = |_: &PointCloud| Ok(());
+        // Every place for showing densely is taken.
+        let places: Vec<_> = (0..MAX_SHOWN)
+            .map(|_| {
+                Snapshots::begin(&held, held_stamp, &mut ignore)
+                    .unwrap()
+                    .unwrap()
+            })
+            .collect();
+        let source = directory.path().join("large.e57");
+        crate::e57_quick::tests::write_scan(&source, 400_000, false);
+        let stamp = SourceStamp::read(&source).unwrap();
+        let shown = std::cell::RefCell::new(Vec::<PointCloud>::new());
+        let mut show = |cloud: &PointCloud| {
+            shown.borrow_mut().push(cloud.clone());
+            Ok(())
+        };
+        let showing = Showing {
+            dense_from: 0,
+            steps_from: 1,
+        };
+        let mut stepped = showing.begin(&source, stamp, &mut show).unwrap().unwrap();
+        assert!(stepped.stepped() && !stepped.dense());
+        assert_eq!(shown.borrow().len(), 1);
+        let first = shown.borrow()[0].points.len();
+        assert!((240_000..=260_000).contains(&first), "{first}");
+        // Every step keeps it, with the sample of what was read.
+        let mut read = Collector::new(10);
+        for index in 0..40_000 {
+            read.push(point(f64::from(index))).unwrap();
+        }
+        stepped.tick(&read, &mut show).unwrap();
+        assert_eq!(shown.borrow().len(), 2);
+        assert_eq!(shown.borrow()[1].points.len(), first + 10);
+        assert_eq!(shown.borrow()[1].total_points, 400_000);
+
+        // A source below the size for showing densely gets no such picture.
+        shown.borrow_mut().clear();
+        let small = Showing {
+            dense_from: u64::MAX,
+            steps_from: 1,
+        };
+        assert!(small.begin(&source, stamp, &mut show).unwrap().is_some());
+        assert!(shown.borrow().is_empty());
+        drop(places);
     }
 
     #[test]
