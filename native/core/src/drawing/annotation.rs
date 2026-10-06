@@ -17,6 +17,9 @@ pub const LAYER_LINES: &str = "OPS-LINES";
 /// The height of a text on the paper, in millimetres, unless another is
 /// given.
 pub const DEFAULT_TEXT_HEIGHT: f64 = 2.5;
+/// A dimension this many radians off vertical, a millimetre in a metre,
+/// still has its text upright, read from the right.
+const UPRIGHT: f64 = 1e-3;
 
 /// The lines and the text of a dimension, in the units of its points.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,8 +30,8 @@ pub struct DimensionShape {
     pub ends: [[f64; 2]; 2],
     /// The middle of the baseline of the text.
     pub text_at: [f64; 2],
-    /// The turn of the text in radians, so that it reads from the left or
-    /// from below.
+    /// The turn of the text in radians, from just over -90 to 90 degrees,
+    /// so that it reads from below or from the right.
     pub text_rotation: f64,
 }
 
@@ -105,10 +108,13 @@ pub fn dimension_shape(
     for foot in [start, end] {
         lines.push([along(foot, slant, -tick), along(foot, slant, tick)]);
     }
+    // The text reads from below or from the right. A dimension within
+    // `UPRIGHT` of vertical counts as upright, whichever way it was
+    // measured: the corners of a scan are never exactly above each other.
     let mut rotation = direction[1].atan2(direction[0]);
-    if rotation > std::f64::consts::FRAC_PI_2 + 1e-9 {
+    if rotation > std::f64::consts::FRAC_PI_2 + UPRIGHT {
         rotation -= std::f64::consts::PI;
-    } else if rotation <= -std::f64::consts::FRAC_PI_2 + 1e-9 {
+    } else if rotation <= -std::f64::consts::FRAC_PI_2 + UPRIGHT {
         rotation += std::f64::consts::PI;
     }
     // Above the line as the text reads.
@@ -205,7 +211,7 @@ mod tests {
         assert!(near(back.ends[0], [4.0, -1.0]));
         assert!(back.text_rotation.abs() < 1e-12);
         assert!(near(back.text_at, [2.0, -0.875]));
-        // Upright, the text reads from below.
+        // Upright, the text reads from the right.
         let up = dimension_shape([0.0, 0.0], [0.0, 3.0], -0.5, 0.25).unwrap();
         assert!((up.text_rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
         assert!(dimension_shape([1.0, 1.0], [1.0, 1.0], 1.0, 0.25).is_none());
@@ -217,6 +223,40 @@ mod tests {
                 .len(),
             3
         );
+    }
+
+    #[test]
+    fn a_nearly_upright_dimension_reads_from_the_right_whichever_way_it_was_measured() {
+        use std::f64::consts::FRAC_PI_2;
+        // Corners of a scan are never exactly above each other: a hair to
+        // either side of vertical, up or down, the text turns a quarter to
+        // the left and stands to the left of its line.
+        for (from, to) in [
+            ([0.0, 0.0], [-1e-6, 3.0]),
+            ([0.0, 0.0], [1e-6, 3.0]),
+            ([0.0, 3.0], [1e-6, 0.0]),
+            ([0.0, 3.0], [-1e-6, 0.0]),
+            // The dimension of the acceptance plan: 28 µm off over 14 m.
+            ([261.497, -341.147], [261.469, 13_659.08]),
+            ([261.469, 13_659.08], [261.497, -341.147]),
+        ] {
+            for offset in [-0.5, 0.5] {
+                let shape = dimension_shape(from, to, offset, 0.25).unwrap();
+                assert!(
+                    (shape.text_rotation - FRAC_PI_2).abs() < 1e-5,
+                    "{from:?} to {to:?}: {}",
+                    shape.text_rotation.to_degrees()
+                );
+                let line_x = (shape.ends[0][0] + shape.ends[1][0]) / 2.0;
+                assert!(shape.text_at[0] < line_x, "{from:?} to {to:?}");
+            }
+        }
+        // A dimension clearly off vertical keeps the turn of its line, and
+        // its text is never upside down.
+        let slanted = dimension_shape([0.0, 3.0], [0.1, 0.0], 0.5, 0.25).unwrap();
+        assert!(slanted.text_rotation < -1.0 && slanted.text_rotation > -FRAC_PI_2);
+        let back = dimension_shape([0.1, 0.0], [0.0, 3.0], 0.5, 0.25).unwrap();
+        assert!((back.text_rotation - slanted.text_rotation).abs() < 1e-12);
     }
 
     /// A plan in millimetres with a wall outline, a dimension of 3.4512 m
