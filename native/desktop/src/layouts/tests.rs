@@ -779,3 +779,35 @@ fn the_picture_of_a_view_keeps_its_proportions_when_its_snapshot_changes() {
         [[25.0, 0.0], [75.0, 100.0]]
     );
 }
+
+#[test]
+fn a_copy_of_a_sheet_has_notes_of_its_own() {
+    let (mut studio, _directory) = studio_with_scan();
+    let sheet = studio
+        .create_layout("01", "Plans", Paper::A3, true)
+        .unwrap();
+    let _ = studio.show_layout(&sheet);
+    let noted = send(
+        &mut studio,
+        json!({"command": "annotate_sheet", "kind": "text", "at": [30, 30], "text": "North"}),
+    );
+    assert_eq!(noted["ok"], true, "{noted}");
+    let copy = studio.duplicate_layout(&sheet).unwrap();
+    let original_id = studio.layouts.layout(&sheet).unwrap().notes[0]
+        .id()
+        .to_owned();
+    let copy_id = studio.layouts.layout(&copy).unwrap().notes[0]
+        .id()
+        .to_owned();
+    assert_ne!(original_id, copy_id);
+    assert!(camera_views::is_guid(&copy_id));
+    // Deleted by its id, the note of the copy goes, that of the original
+    // stays.
+    let deleted = send(
+        &mut studio,
+        json!({"command": "delete_annotation", "id": copy_id}),
+    );
+    assert_eq!(deleted["ok"], true, "{deleted}");
+    assert!(studio.layouts.layout(&copy).unwrap().notes.is_empty());
+    assert_eq!(studio.layouts.layout(&sheet).unwrap().notes.len(), 1);
+}

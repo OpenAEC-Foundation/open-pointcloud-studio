@@ -46,7 +46,7 @@ use model::{
     drawing_size, image_size, parse_scale, scale_label, scale_valid, MARGIN, MAX_NAME_CHARS,
     MAX_NUMBER_CHARS, MAX_SHEETS, MAX_VIEWPORTS, TITLE_BLOCK,
 };
-pub(crate) use model::{Layout, Paper, PlacedKind, Viewport};
+pub(crate) use model::{Layout, Paper, PaperNote, PlacedKind, Viewport};
 use plot::{Content, Plot};
 
 /// The group of the Project Browser, by the key the preferences keep it
@@ -798,6 +798,9 @@ impl Studio {
         for viewport in &mut copy.viewports {
             viewport.id = crate::camera_views::new_guid();
         }
+        // Its notes are its own, to be named apart from those of the
+        // original.
+        copy.notes = original.notes.iter().map(PaperNote::renewed).collect();
         let guid = copy.guid.clone();
         self.layouts.list.insert(place + 1, copy);
         if let Err(error) = self.layouts.store() {

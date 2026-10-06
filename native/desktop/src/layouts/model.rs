@@ -209,6 +209,14 @@ impl PaperNote {
         }
     }
 
+    /// The same with an identifier of its own, for a copy of its sheet.
+    pub fn renewed(&self) -> Self {
+        let mut note = self.clone();
+        let (Self::Text { id, .. } | Self::Line { id, .. }) = &mut note;
+        *id = camera_views::new_guid();
+        note
+    }
+
     /// The same moved by `delta` millimetres.
     pub fn moved(&self, delta: [f64; 2]) -> Self {
         let shift = |point: [f64; 2]| [point[0] + delta[0], point[1] + delta[1]];
