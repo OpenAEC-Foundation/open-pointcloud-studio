@@ -93,7 +93,9 @@ fn build_fraction(job: &IndexJob) -> f32 {
     };
     let stage = progress.fraction().unwrap_or(0.0);
     match progress.stage {
+        IndexStage::WaitingToRead => 0.0,
         IndexStage::ReadingSource => stage * 0.5,
+        IndexStage::WaitingToBuild => 0.5,
         IndexStage::BuildingTree => 0.5 + stage * 0.5,
         IndexStage::Ready => 1.0,
     }
@@ -198,6 +200,17 @@ impl Studio {
         };
         let cancelling = job.cancelling();
         let (phase, detail, fraction) = match progress.stage {
+            // A large scan waits for the large scans opened before it.
+            IndexStage::WaitingToRead => (
+                Phase::Reading,
+                i18n::tr("Step 1 of 2  ·  waiting for the scan before it on this disk").to_owned(),
+                None,
+            ),
+            IndexStage::WaitingToBuild => (
+                Phase::Building,
+                i18n::tr("Step 2 of 2  ·  waiting for the octree before it").to_owned(),
+                None,
+            ),
             // Nothing read yet: the source is being opened, or an octree
             // kept from an earlier session is being attached.
             IndexStage::ReadingSource if progress.completed == 0 => {
@@ -243,18 +256,21 @@ impl Studio {
 
     /// The line of builds that run side by side or wait for a place: how
     /// many there are, how many are ready and how far the rest are.
-    fn index_batch_line(&self, jobs: &[&IndexJob], waiting: usize) -> Line {
-        let count = self.index_finished + jobs.len() + waiting;
+    fn index_batch_line(&self, jobs: &[&IndexJob], queued: usize) -> Line {
+        let count = self.index_finished + jobs.len() + queued;
         let ready = self.index_finished;
         let running: f32 = jobs.iter().map(|job| build_fraction(job)).sum();
         let cancelling = jobs.iter().all(|job| job.cancelling());
+        // Builds that wait for their turn are told with the queue.
+        let turns = jobs.iter().filter(|job| job.waits_for_turn()).count();
+        let waiting = queued + turns;
         let detail = if waiting > 0 {
             i18n::tr_args(
                 "{ready} of {count} ready  ·  {running} at once  ·  {waiting} waiting",
                 &[
                     ("ready", &ready),
                     ("count", &count),
-                    ("running", &jobs.len()),
+                    ("running", &(jobs.len() - turns)),
                     ("waiting", &waiting),
                 ],
             )
@@ -264,7 +280,7 @@ impl Studio {
                 &[
                     ("ready", &ready),
                     ("count", &count),
-                    ("running", &jobs.len()),
+                    ("running", &(jobs.len() - turns)),
                 ],
             )
         };
@@ -337,11 +353,15 @@ impl Studio {
             Some((text, fraction))
         };
         if let Some(job) = self.index_job_of(entry) {
-            return match job.progress() {
-                Some(progress) if progress.stage == IndexStage::ReadingSource => {
+            return match job.progress().map(|progress| (progress.stage, progress)) {
+                Some((IndexStage::WaitingToRead, _)) => percent(i18n::tr("waiting to read"), None),
+                Some((IndexStage::ReadingSource, progress)) => {
                     percent("reading", progress.fraction())
                 }
-                Some(progress) => percent("indexing", progress.fraction()),
+                Some((IndexStage::WaitingToBuild, _)) => {
+                    percent(i18n::tr("waiting to index"), None)
+                }
+                Some((_, progress)) => percent("indexing", progress.fraction()),
                 None => percent("indexing", None),
             };
         }
@@ -756,5 +776,102 @@ mod tests {
         assert_eq!(studio.progress_lines()[0].title, "Indexing 0.xyz");
         studio.index_jobs[0].cancel.store(true, Ordering::Relaxed);
         assert_eq!(studio.progress_lines()[0].title, "Cancelling…");
+    }
+
+    #[test]
+    fn large_scans_that_wait_for_their_turn_are_told_as_waiting() {
+        let _language = TestLanguage::hold(Language::English);
+        let mut studio = Studio::default();
+        let progress = |stage, completed, total| {
+            Arc::new(Mutex::new(IndexProgress {
+                stage,
+                ..reading(completed, total)
+            }))
+        };
+        // The first of two large scans opened together is read; the second
+        // waits until it has been read.
+        let first = progress(IndexStage::ReadingSource, 30_000_000, 120_000_000);
+        let second = progress(IndexStage::WaitingToRead, 0, 130_000_000);
+        for (id, name, progress) in [(1, "first.e57", &first), (2, "second.e57", &second)] {
+            let import = job(name, 0);
+            studio
+                .index_jobs
+                .push(index_job(None, Some(id), name, progress, &import.cancel));
+            studio.imports.insert(id, import);
+        }
+        let lines = studio.progress_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].title, "Indexing 2 scans");
+        assert_eq!(lines[0].detail, "0 of 2 ready  ·  1 at once  ·  1 waiting");
+        assert_eq!(lines[0].fraction, Some(0.125 / 2.0));
+        let _ = studio.update(Message::IndexPoll);
+        assert_eq!(studio.status, "Building 1 octrees at once; 1 waiting");
+
+        // Alone, the waiting scan has a line of its own that says so.
+        let alone = studio.index_jobs.remove(1);
+        let mut waiting = Studio::default();
+        waiting
+            .imports
+            .insert(2, studio.imports.remove(&2).unwrap());
+        waiting.index_jobs.push(alone);
+        let lines = waiting.progress_lines();
+        assert_eq!(lines[0].phase, Phase::Reading);
+        assert_eq!(lines[0].title, "Opening second.e57");
+        assert_eq!(
+            lines[0].detail,
+            "Step 1 of 2  ·  waiting for the scan before it on this disk"
+        );
+        assert_eq!(lines[0].fraction, None);
+        assert_eq!(
+            Studio::index_progress_text(*second.lock().unwrap()),
+            "Waiting to read: the scan opened before it on this disk is read first"
+        );
+
+        // Read, its octree waits for the octree of the first.
+        *second.lock().unwrap() = IndexProgress {
+            stage: IndexStage::WaitingToBuild,
+            ..reading(0, 130_000_000)
+        };
+        let lines = waiting.progress_lines();
+        assert_eq!(lines[0].phase, Phase::Building);
+        assert_eq!(
+            lines[0].detail,
+            "Step 2 of 2  ·  waiting for the octree before it"
+        );
+        assert_eq!(build_fraction(&waiting.index_jobs[0]), 0.5);
+        assert_eq!(
+            Studio::index_progress_text(*second.lock().unwrap()),
+            "Read; its octree is built once the octree before it is ready"
+        );
+    }
+
+    #[test]
+    fn a_layer_tells_that_its_scan_waits_for_its_turn() {
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.xyz");
+        std::fs::write(&path, "0 0 1\n1 0 1\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&cloud))));
+        let progress = Arc::new(Mutex::new(IndexProgress {
+            stage: IndexStage::WaitingToRead,
+            ..reading(0, 2)
+        }));
+        studio.index_jobs.push(index_job(
+            Some(Arc::clone(&cloud)),
+            None,
+            "large.xyz",
+            &progress,
+            &Arc::new(AtomicBool::new(false)),
+        ));
+        let row = |studio: &Studio| studio.layer_progress(&studio.clouds[0]);
+        assert_eq!(row(&studio), Some(("waiting to read…".to_owned(), None)));
+        progress.lock().unwrap().stage = IndexStage::ReadingSource;
+        assert_eq!(row(&studio), Some(("reading 0%".to_owned(), Some(0.0))));
+        progress.lock().unwrap().stage = IndexStage::WaitingToBuild;
+        assert_eq!(row(&studio), Some(("waiting to index…".to_owned(), None)));
+        progress.lock().unwrap().stage = IndexStage::BuildingTree;
+        assert_eq!(row(&studio), Some(("indexing 0%".to_owned(), Some(0.0))));
     }
 }

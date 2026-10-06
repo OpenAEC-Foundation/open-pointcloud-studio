@@ -76,6 +76,18 @@ impl IndexJob {
         self.progress.lock().ok().map(|progress| *progress)
     }
 
+    /// Whether the build waits for its turn: to read its source after the
+    /// large scans opened before it on the same disk, or to build its octree
+    /// after theirs.
+    pub(crate) fn waits_for_turn(&self) -> bool {
+        self.progress().is_some_and(|progress| {
+            matches!(
+                progress.stage,
+                IndexStage::WaitingToRead | IndexStage::WaitingToBuild
+            )
+        })
+    }
+
     pub(crate) fn cancelling(&self) -> bool {
         self.cancel.load(Ordering::Relaxed) || self.stop_tree.load(Ordering::Relaxed)
     }
@@ -106,7 +118,9 @@ impl IndexJob {
 
 pub(crate) fn stage_key(stage: IndexStage) -> &'static str {
     match stage {
+        IndexStage::WaitingToRead => "waiting_to_read",
         IndexStage::ReadingSource => "reading_source",
+        IndexStage::WaitingToBuild => "waiting_to_build",
         IndexStage::BuildingTree => "building_tree",
         IndexStage::Ready => "ready",
     }
@@ -362,9 +376,14 @@ impl Studio {
             [_] => {}
             jobs if jobs.iter().all(IndexJob::cancelling) => {}
             jobs => {
+                // Builds that wait for their turn wait like the queue.
+                let turns = jobs.iter().filter(|job| job.waits_for_turn()).count();
                 self.status = i18n::tr_args(
                     "Building {running} octrees at once; {waiting} waiting",
-                    &[("running", &jobs.len()), ("waiting", &self.index_waiting())],
+                    &[
+                        ("running", &(jobs.len() - turns)),
+                        ("waiting", &(self.index_waiting() + turns)),
+                    ],
                 );
             }
         }

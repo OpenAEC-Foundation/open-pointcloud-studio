@@ -1342,8 +1342,11 @@ Several octree builds run at the same time. `status.result.index` has
 memory available when the window started), `builds`, the running builds in
 the order they started, and `waiting`, the layers in the queue. Each build
 has `path`, `import_id` (the import that reads its source and builds the
-octree in the same pass, or `null`), `stage` (`reading_source`,
-`building_tree` or `ready`), `completed`, `total`, `fraction` (how far the
+octree in the same pass, or `null`), `stage` (`waiting_to_read`,
+`reading_source`, `waiting_to_build`, `building_tree` or `ready`; a file of
+512 MiB or more waits to read until the large files opened before it on the
+same disk have been read, and waits to build until their octrees are built),
+`completed`, `total`, `fraction` (how far the
 current stage is, from 0 to 1, or `null` while the size of the source is
 unknown) and `cancelling`. A build that ends gives its place to the next
 layer in the queue: those asked for with `build_index` first, then the active

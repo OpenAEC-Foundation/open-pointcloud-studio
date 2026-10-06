@@ -16,6 +16,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::snapshots::{self, Showing, Snapshots};
+use super::turns::SourceTurn;
 use super::{
     e57_points, pcd, visit_points_with_poses, Bounds, Collector, LoadError, Point, PointCloud,
     ScanLog, ScanPose, ScanRange, SourceStamp,
@@ -127,7 +128,13 @@ pub struct IndexConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexStage {
+    /// The source waits for the sources opened before it on its disk to be
+    /// read, as `SourceTurn` orders them.
+    WaitingToRead,
     ReadingSource,
+    /// The source has been read and its octree waits for the octrees of the
+    /// sources opened before it, as `SourceTurn` orders them.
+    WaitingToBuild,
     BuildingTree,
     Ready,
 }
@@ -162,6 +169,7 @@ impl IndexProgress {
         }
         let of_total = |count: u64| (count as f64 / self.total as f64).min(1.0);
         Some(match self.stage {
+            IndexStage::WaitingToRead | IndexStage::WaitingToBuild => 0.0,
             IndexStage::ReadingSource => of_total(self.completed),
             IndexStage::BuildingTree => {
                 ROOT_SPLIT_SHARE * of_total(self.completed)
@@ -169,6 +177,20 @@ impl IndexProgress {
             }
             IndexStage::Ready => 1.0,
         } as f32)
+    }
+
+    fn waiting_to_read(total: u64) -> Self {
+        Self {
+            stage: IndexStage::WaitingToRead,
+            ..Self::reading(0, total)
+        }
+    }
+
+    fn waiting_to_build(total: u64) -> Self {
+        Self {
+            stage: IndexStage::WaitingToBuild,
+            ..Self::reading(0, total)
+        }
     }
 
     fn reading(completed: u64, total: u64) -> Self {
@@ -451,7 +473,7 @@ impl OctreeIndex {
         config: IndexConfig,
         progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
     ) -> Result<(PointCloud, Self), LoadError> {
-        Self::open_and_build(path, sample_limit, config, None, |_| Ok(()), progress)
+        Self::open_and_build(path, sample_limit, config, None, None, |_| Ok(()), progress)
     }
 
     /// Publish a preview while the single source pass and the partitioning of
@@ -473,17 +495,49 @@ impl OctreeIndex {
             sample_limit,
             config,
             Some(Showing::DEFAULT),
+            None,
             preview,
             progress,
         )
     }
 
-    /// `showing` says from what size the source is shown while it is read.
+    /// Like `open_and_build_cached_with_preview`, and read the source and
+    /// build its octree in its turns, as `SourceTurn` orders them: after the
+    /// sources of its disk that took a turn before have been read, and after
+    /// the octrees of the sources that took a turn to build one before. What
+    /// is known without reading the source, such as the spread preview of a
+    /// large E57 scan, is shown at once. While it waits, `progress` hears
+    /// `IndexStage::WaitingToRead` or `IndexStage::WaitingToBuild` a few
+    /// times a second, and an error from it ends the wait. The turn to read
+    /// ends when the source has been read and its checked cloud shown, so the
+    /// next source of its disk is read while this octree waits or is built.
+    pub fn open_and_build_cached_in_turn(
+        path: &Path,
+        sample_limit: usize,
+        config: IndexConfig,
+        turn: SourceTurn,
+        preview: impl FnMut(&PointCloud) -> Result<(), LoadError>,
+        progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
+    ) -> Result<(PointCloud, Self), LoadError> {
+        Self::open_and_build(
+            path,
+            sample_limit,
+            config,
+            Some(Showing::DEFAULT),
+            Some(turn),
+            preview,
+            progress,
+        )
+    }
+
+    /// `showing` says from what size the source is shown while it is read;
+    /// with `turn` the pass and the tree each wait for their turn.
     pub(crate) fn open_and_build(
         path: &Path,
         sample_limit: usize,
         config: IndexConfig,
         showing: Option<Showing>,
+        mut turn: Option<SourceTurn>,
         mut preview: impl FnMut(&PointCloud) -> Result<(), LoadError>,
         mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
     ) -> Result<(PointCloud, Self), LoadError> {
@@ -502,6 +556,8 @@ impl OctreeIndex {
         fs::create_dir_all(&cache_root)?;
         let cache_path = cache_directory(&cache_root, &fingerprint);
         if cache_path.exists() {
+            // The cloud and the tree kept from before need no turn.
+            drop(turn);
             let cloud = super::open(path, sample_limit)?;
             preview(&cloud)?;
             let index = Self::build_cached_with_progress(&cloud, config, progress)?;
@@ -522,6 +578,21 @@ impl OctreeIndex {
             None => None,
         };
         let dense = snapshots.as_ref().is_some_and(Snapshots::dense);
+        // A source that states how many points it holds tells the pass how
+        // far it is. The records of an E57 file that hold no valid point make
+        // the count of points smaller, never larger.
+        let stated = snapshots::stated_points(path).unwrap_or(0);
+        if let Some(turn) = &turn {
+            turn.wait_to_read(|| {
+                if let Some(snapshots) = &mut snapshots {
+                    snapshots.tick_waiting(&mut preview)?;
+                }
+                progress(IndexProgress::waiting_to_read(stated))
+            })?;
+            if let Some(snapshots) = &mut snapshots {
+                snapshots.start_clock();
+            }
+        }
         let storage = tempfile::Builder::new()
             .prefix("open-pointcloud-index-")
             .tempdir_in(&cache_root)?;
@@ -535,10 +606,6 @@ impl OctreeIndex {
         // The scan callback cannot look into the collector while the point
         // callback holds it, so the count of points read is kept beside it.
         let read = Cell::new(0u64);
-        // A source that states how many points it holds tells the pass how
-        // far it is. The records of an E57 file that hold no valid point make
-        // the count of points smaller, never larger.
-        let stated = snapshots::stated_points(path).unwrap_or(0);
         progress(IndexProgress::reading(0, stated))?;
         {
             let mut writer =
@@ -587,6 +654,12 @@ impl OctreeIndex {
         // is built, so that it remains when the build fails or is cancelled.
         if !previewed {
             preview(&cloud)?;
+        }
+        // The next source of the disk is read while this octree waits for
+        // its turn or is built.
+        if let Some(turn) = &mut turn {
+            turn.end_read();
+            turn.wait_to_build(|| progress(IndexProgress::waiting_to_build(cloud.total_points)))?;
         }
 
         let mut handled_records = 0u64;
@@ -3955,5 +4028,124 @@ mod tests {
             assert_eq!(cached.points.len(), 2, "{extension}");
             assert_eq!(cached.point_ordinals.len(), 2, "{extension}");
         }
+    }
+
+    #[test]
+    fn large_sources_are_read_one_after_another_and_their_octrees_built_in_turn() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        use crate::turns::tests::turn_on;
+
+        let _places = crate::snapshots::TEST_PLACES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.e57");
+        let second = directory.path().join("second.e57");
+        crate::e57_quick::tests::write_scan(&first, 60_000, false);
+        crate::e57_quick::tests::write_scan(&second, 60_000, false);
+        // The turns are taken in the order the files were opened, whatever
+        // the order their threads start in.
+        let disk = format!("test pipeline {}", uuid::Uuid::new_v4());
+        let builds = format!("test builds {}", uuid::Uuid::new_v4());
+        let turns = [turn_on(&disk, Some(&builds)), turn_on(&disk, Some(&builds))];
+        let events = Arc::new(Mutex::new(Vec::<(&str, &str)>::new()));
+        let seen = Arc::new([AtomicBool::new(false), AtomicBool::new(false)]);
+        // Hold a stage of the first until the second is seen waiting, so that
+        // the waits cannot be missed however fast the stages go.
+        let hold = |seen: &AtomicBool| {
+            let started = Instant::now();
+            while !seen.load(Ordering::Acquire) && started.elapsed() < Duration::from_secs(30) {
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let open = |name: &'static str, path: std::path::PathBuf, turn: SourceTurn| {
+            let events = Arc::clone(&events);
+            let seen = Arc::clone(&seen);
+            let cache = directory.path().join(format!("cache-{name}"));
+            thread::spawn(move || {
+                let log = |event| {
+                    let mut events = events.lock().unwrap();
+                    if events.last() != Some(&(name, event)) {
+                        events.push((name, event));
+                    }
+                };
+                OctreeIndex::open_and_build(
+                    &path,
+                    500,
+                    IndexConfig {
+                        scratch_dir: Some(cache),
+                        leaf_points: 8_192,
+                        ..IndexConfig::default()
+                    },
+                    Some(Showing {
+                        dense_from: 0,
+                        ..Showing::DEFAULT
+                    }),
+                    Some(turn),
+                    |cloud| {
+                        log(if cloud.provisional { "shown" } else { "read" });
+                        Ok(())
+                    },
+                    |progress| {
+                        let stage = match progress.stage {
+                            IndexStage::WaitingToRead => "waits to read",
+                            IndexStage::ReadingSource => "reads",
+                            IndexStage::WaitingToBuild => "waits to build",
+                            IndexStage::BuildingTree => "builds",
+                            IndexStage::Ready => "ready",
+                        };
+                        log(stage);
+                        match (name, progress.stage) {
+                            ("second", IndexStage::WaitingToRead) => {
+                                seen[0].store(true, Ordering::Release)
+                            }
+                            ("second", IndexStage::WaitingToBuild) => {
+                                seen[1].store(true, Ordering::Release)
+                            }
+                            ("first", IndexStage::ReadingSource) => hold(&seen[0]),
+                            ("first", IndexStage::BuildingTree) => hold(&seen[1]),
+                            _ => {}
+                        }
+                        Ok(())
+                    },
+                )
+                .unwrap()
+            })
+        };
+        let [first_turn, second_turn] = turns;
+        let later = open("second", second.clone(), second_turn);
+        let earlier = open("first", first.clone(), first_turn);
+        let (second_cloud, _) = later.join().unwrap();
+        let (first_cloud, _) = earlier.join().unwrap();
+        assert_eq!(first_cloud.total_points, 60_000);
+        assert_eq!(second_cloud.total_points, 60_000);
+        let events = events.lock().unwrap().clone();
+        let at = |event: (&str, &str)| {
+            events
+                .iter()
+                .position(|seen| *seen == event)
+                .unwrap_or_else(|| panic!("{event:?} missing from {events:?}"))
+        };
+        // The second is shown at once and waits to be read until the first
+        // has been read.
+        assert!(at(("second", "shown")) < at(("second", "waits to read")));
+        assert!(at(("second", "waits to read")) < at(("first", "read")));
+        assert!(at(("first", "read")) < at(("second", "reads")));
+        // It is read while the first octree is built, and its own octree
+        // waits for that one.
+        assert!(at(("second", "read")) < at(("second", "waits to build")));
+        assert!(at(("second", "waits to build")) < at(("first", "ready")));
+        assert!(at(("first", "ready")) < at(("second", "builds")));
+        assert!(at(("second", "builds")) < at(("second", "ready")));
+        // The first never waits.
+        assert!(
+            !events.contains(&("first", "waits to read"))
+                && !events.contains(&("first", "waits to build")),
+            "{events:?}"
+        );
     }
 }

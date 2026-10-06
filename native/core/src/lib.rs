@@ -45,6 +45,7 @@ pub mod surfaces;
 pub mod surfels;
 #[cfg(test)]
 mod test_shapes;
+mod turns;
 mod window_reader;
 
 pub use bag3d::{
@@ -112,6 +113,7 @@ pub use surface_mesh::{
     mesh_surface_obj, mesh_surface_obj_from, mesh_surface_obj_where,
     mesh_surface_obj_where_progress, SurfaceMeshConfig, SurfacePoints,
 };
+pub use turns::SourceTurn;
 
 pub fn read_mesh_geometry(path: impl AsRef<Path>) -> Result<Option<MeshGeometry>, LoadError> {
     let path = path.as_ref();
@@ -453,7 +455,7 @@ pub fn open_with_progress(
     sample_limit: usize,
     progress: impl FnMut(u64) -> Result<(), LoadError>,
 ) -> Result<PointCloud, LoadError> {
-    open_showing(path.as_ref(), sample_limit, progress, None)
+    open_showing(path.as_ref(), sample_limit, progress, None, None)
 }
 
 /// Source size from which a file is shown densely while it is still being
@@ -485,6 +487,29 @@ pub fn open_with_snapshots(
         sample_limit,
         progress,
         Some((&mut snapshot, snapshots::Showing::DEFAULT)),
+        None,
+    )
+}
+
+/// Open a point cloud like `open_with_snapshots`, and read it in its turn:
+/// after the sources of its disk that took their turn before, as
+/// `SourceTurn` orders them. What is known without reading it, such as the
+/// spread preview of a large E57 scan, is shown at once; while it waits,
+/// `progress` hears 0 a few times a second, and an error from it ends the
+/// wait. The turn ends with the pass.
+pub fn open_with_snapshots_in_turn(
+    path: impl AsRef<Path>,
+    sample_limit: usize,
+    turn: SourceTurn,
+    progress: impl FnMut(u64) -> Result<(), LoadError>,
+    mut snapshot: impl FnMut(&PointCloud) -> Result<(), LoadError>,
+) -> Result<PointCloud, LoadError> {
+    open_showing(
+        path.as_ref(),
+        sample_limit,
+        progress,
+        Some((&mut snapshot, snapshots::Showing::DEFAULT)),
+        Some(turn),
     )
 }
 
@@ -508,6 +533,7 @@ pub fn open_with_steps(
         sample_limit,
         progress,
         Some((&mut snapshot, STEPS_ONLY)),
+        None,
     )
 }
 
@@ -536,6 +562,7 @@ fn las_sample(
             sample_limit,
             |_| Ok(()),
             Some((&mut snapshot, showing)),
+            None,
         )
     })
 }
@@ -545,6 +572,7 @@ fn open_showing(
     sample_limit: usize,
     mut progress: impl FnMut(u64) -> Result<(), LoadError>,
     mut snapshot: Option<(snapshots::Show, snapshots::Showing)>,
+    turn: Option<SourceTurn>,
 ) -> Result<PointCloud, LoadError> {
     if sample_limit == 0 {
         return Err(LoadError::InvalidData(
@@ -578,6 +606,17 @@ fn open_showing(
         Some((show, showing)) => showing.begin(path, before, &mut **show)?,
         None => None,
     };
+    if let Some(turn) = &turn {
+        turn.wait_to_read(|| {
+            if let (Some(snapshots), Some((show, _))) = (&mut snapshots, &mut snapshot) {
+                snapshots.tick_waiting(&mut **show)?;
+            }
+            progress(0)
+        })?;
+        if let Some(snapshots) = &mut snapshots {
+            snapshots.start_clock();
+        }
+    }
     // A source that is shown densely keeps enough points for its snapshots,
     // and its checked cloud is as dense as the last of them.
     let mut collector = Collector::new(if snapshots.as_ref().is_some_and(Snapshots::dense) {
@@ -610,6 +649,7 @@ fn open_showing(
         &mut |pose| scans.begin(read.get(), pose),
     )?;
     drop(snapshots);
+    drop(turn);
     progress(collector.total)?;
     let after = SourceStamp::read(path)?;
     if before != after {
@@ -1176,8 +1216,14 @@ mod tests {
             dense_from: u64::MAX,
             steps_from,
         };
-        let cloud =
-            open_showing(path, sample_limit, |_| Ok(()), Some((&mut show, showing))).unwrap();
+        let cloud = open_showing(
+            path,
+            sample_limit,
+            |_| Ok(()),
+            Some((&mut show, showing)),
+            None,
+        )
+        .unwrap();
         (cloud, shown)
     }
 
@@ -1439,6 +1485,7 @@ mod tests {
                 ..octree::IndexConfig::default()
             },
             Some(showing),
+            None,
             |preview| {
                 previews.push(preview.clone());
                 Ok(())

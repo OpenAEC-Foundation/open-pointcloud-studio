@@ -84,7 +84,7 @@ use lod_pace::{
 use pointcloud_core::photo_colour::PointColours;
 use pointcloud_core::{
     BagBounds, BagLod, Bounds, ExportFormat, IndexConfig, IndexProgress, IndexStage, IndexedPoint,
-    MeshGeometry, OctreeIndex, OrientedBox, Point, PointCloud, SurfaceMeshConfig,
+    MeshGeometry, OctreeIndex, OrientedBox, Point, PointCloud, SourceTurn, SurfaceMeshConfig,
 };
 use preferences::{MAX_POINT_BUDGET, MIN_POINT_BUDGET};
 use rayon::prelude::*;
@@ -5327,6 +5327,13 @@ impl Studio {
 
     fn index_progress_text(progress: IndexProgress) -> String {
         match progress.stage {
+            IndexStage::WaitingToRead => {
+                i18n::tr("Waiting to read: the scan opened before it on this disk is read first")
+                    .to_owned()
+            }
+            IndexStage::WaitingToBuild => {
+                i18n::tr("Read; its octree is built once the octree before it is ready").to_owned()
+            }
             IndexStage::ReadingSource if progress.total == 0 => format!(
                 "Reading source and preparing octree: {} points…",
                 format_count(progress.completed)
@@ -5636,25 +5643,39 @@ impl Studio {
         let done = Arc::new(AtomicBool::new(false));
         let worker_done = Arc::clone(&done);
         let (snapshot_tx, snapshot_rx) = tokio::sync::mpsc::unbounded_channel();
+        // A large scan is read after the large scans opened before it on the
+        // same disk; the turn is taken here, in the order of opening.
+        let turn = SourceTurn::for_source(&path, false);
         let worker = Task::perform(
             async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    pointcloud_core::open_with_snapshots(
-                        path,
-                        LOAD_SAMPLE_LIMIT,
-                        |processed| {
-                            if cancel.load(Ordering::Relaxed) {
-                                return Err(pointcloud_core::LoadError::Cancelled);
-                            }
-                            decoded.store(processed, Ordering::Relaxed);
-                            Ok(())
-                        },
-                        |cloud| {
-                            snapshot_tx
-                                .send(Arc::new(cloud.clone()))
-                                .map_err(|_| pointcloud_core::LoadError::Cancelled)
-                        },
-                    )
+                    let progress = |processed| {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Err(pointcloud_core::LoadError::Cancelled);
+                        }
+                        decoded.store(processed, Ordering::Relaxed);
+                        Ok(())
+                    };
+                    let snapshot = |cloud: &PointCloud| {
+                        snapshot_tx
+                            .send(Arc::new(cloud.clone()))
+                            .map_err(|_| pointcloud_core::LoadError::Cancelled)
+                    };
+                    match turn {
+                        Some(turn) => pointcloud_core::open_with_snapshots_in_turn(
+                            path,
+                            LOAD_SAMPLE_LIMIT,
+                            turn,
+                            progress,
+                            snapshot,
+                        ),
+                        None => pointcloud_core::open_with_snapshots(
+                            path,
+                            LOAD_SAMPLE_LIMIT,
+                            progress,
+                            snapshot,
+                        ),
+                    }
                 })
                 .await
                 .map_err(|error| error.to_string())
@@ -5716,46 +5737,67 @@ impl Studio {
             stop_tree: Arc::clone(&stop_tree),
         });
         let (preview_tx, preview_rx) = tokio::sync::mpsc::unbounded_channel();
+        // A large scan is read after the large scans opened before it on the
+        // same disk, and its octree built after theirs; the turns are taken
+        // here, in the order of opening.
+        let turn = SourceTurn::for_source(&path, true);
         let worker = Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || {
                     // The checked cloud is kept for when the octree is
                     // stopped after the pass.
                     let mut checked = None;
-                    let built = OctreeIndex::open_and_build_cached_with_preview(
-                        &path,
-                        LOAD_SAMPLE_LIMIT,
-                        IndexConfig::default(),
-                        |cloud| {
-                            if cancel.load(Ordering::Relaxed) {
-                                return Err(pointcloud_core::LoadError::Cancelled);
-                            }
-                            let cloud = Arc::new(cloud.clone());
-                            if !cloud.provisional {
-                                checked = Some(Arc::clone(&cloud));
-                            }
-                            preview_tx
-                                .send(cloud)
-                                .map_err(|_| pointcloud_core::LoadError::Cancelled)
-                        },
-                        |update| {
-                            // Cancel index stops the octree, not the reading:
-                            // the checked cloud comes before the tree.
-                            let tree = update.stage != IndexStage::ReadingSource;
-                            if cancel.load(Ordering::Relaxed)
-                                || (tree && stop_tree.load(Ordering::Relaxed))
-                            {
-                                return Err(pointcloud_core::LoadError::Cancelled);
-                            }
-                            if !tree {
-                                decoded.store(update.completed, Ordering::Relaxed);
-                            }
-                            if let Ok(mut current) = progress.lock() {
-                                *current = update;
-                            }
-                            Ok(())
-                        },
-                    );
+                    let preview = |cloud: &PointCloud| {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Err(pointcloud_core::LoadError::Cancelled);
+                        }
+                        let cloud = Arc::new(cloud.clone());
+                        if !cloud.provisional {
+                            checked = Some(Arc::clone(&cloud));
+                        }
+                        preview_tx
+                            .send(cloud)
+                            .map_err(|_| pointcloud_core::LoadError::Cancelled)
+                    };
+                    let update = |update: IndexProgress| {
+                        // Cancel index stops the octree, not the reading:
+                        // the checked cloud comes before the tree.
+                        let tree = matches!(
+                            update.stage,
+                            IndexStage::WaitingToBuild
+                                | IndexStage::BuildingTree
+                                | IndexStage::Ready
+                        );
+                        if cancel.load(Ordering::Relaxed)
+                            || (tree && stop_tree.load(Ordering::Relaxed))
+                        {
+                            return Err(pointcloud_core::LoadError::Cancelled);
+                        }
+                        if !tree {
+                            decoded.store(update.completed, Ordering::Relaxed);
+                        }
+                        if let Ok(mut current) = progress.lock() {
+                            *current = update;
+                        }
+                        Ok(())
+                    };
+                    let built = match turn {
+                        Some(turn) => OctreeIndex::open_and_build_cached_in_turn(
+                            &path,
+                            LOAD_SAMPLE_LIMIT,
+                            IndexConfig::default(),
+                            turn,
+                            preview,
+                            update,
+                        ),
+                        None => OctreeIndex::open_and_build_cached_with_preview(
+                            &path,
+                            LOAD_SAMPLE_LIMIT,
+                            IndexConfig::default(),
+                            preview,
+                            update,
+                        ),
+                    };
                     match (built, checked) {
                         (Ok((cloud, index)), _) => Ok((Arc::new(cloud), Some(Arc::new(index)))),
                         (Err(pointcloud_core::LoadError::Cancelled), Some(cloud))
