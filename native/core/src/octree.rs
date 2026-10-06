@@ -577,7 +577,9 @@ impl OctreeIndex {
             Some(showing) => showing.begin(path, stamp, &mut preview)?,
             None => None,
         };
-        let dense = snapshots.as_ref().is_some_and(Snapshots::dense);
+        let dense = snapshots
+            .as_ref()
+            .is_some_and(Snapshots::keeps_dense_sample);
         // A source that states how many points it holds tells the pass how
         // far it is. The records of an E57 file that hold no valid point make
         // the count of points smaller, never larger.

@@ -475,7 +475,8 @@ pub const LARGE_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 /// from a read beside the pass: its returned cloud keeps up to two million
 /// points instead of `sample_limit`, so that it is as dense as the last
 /// snapshot. At most four sources are shown densely at a time; further ones
-/// are shown in steps, after the coarse spread of such a scan.
+/// are shown in steps, after the coarse spread of such a scan, and then keep
+/// the denser sample as well.
 pub fn open_with_snapshots(
     path: impl AsRef<Path>,
     sample_limit: usize,
@@ -619,11 +620,16 @@ fn open_showing(
     }
     // A source that is shown densely keeps enough points for its snapshots,
     // and its checked cloud is as dense as the last of them.
-    let mut collector = Collector::new(if snapshots.as_ref().is_some_and(Snapshots::dense) {
-        Snapshots::sample_limit(sample_limit)
-    } else {
-        sample_limit
-    });
+    let mut collector = Collector::new(
+        if snapshots
+            .as_ref()
+            .is_some_and(Snapshots::keeps_dense_sample)
+        {
+            Snapshots::sample_limit(sample_limit)
+        } else {
+            sample_limit
+        },
+    );
     let mut scans = ScanLog::default();
     // The scan callback cannot look into the collector while the point
     // callback holds it, so the count of points read is kept beside it.

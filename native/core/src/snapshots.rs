@@ -141,9 +141,23 @@ impl Snapshots {
         requested.max(SNAPSHOT_POINTS)
     }
 
-    /// Whether the pass keeps its denser sample for these snapshots.
+    /// Whether these snapshots hold one of the places for showing a source
+    /// densely.
+    #[cfg(test)]
     pub(crate) fn dense(&self) -> bool {
         self.dense
+    }
+
+    /// Whether the pass keeps its denser sample: for a source shown densely,
+    /// and for one shown in steps after a picture spread through the whole
+    /// file, so that the checked cloud of either is about as dense as the
+    /// last picture and the scene does not thin out when it takes its place.
+    pub(crate) fn keeps_dense_sample(&self) -> bool {
+        self.dense
+            || self
+                .known
+                .as_ref()
+                .is_some_and(|known| !known.points.is_empty())
     }
 
     /// Start showing a source densely, beginning with the coarse picture
@@ -783,7 +797,7 @@ mod tests {
             steps_from: 1,
         };
         let mut stepped = showing.begin(&source, stamp, &mut show).unwrap().unwrap();
-        assert!(stepped.stepped() && !stepped.dense());
+        assert!(stepped.stepped() && !stepped.dense() && stepped.keeps_dense_sample());
         assert_eq!(shown.borrow().len(), 1);
         let first = shown.borrow()[0].points.len();
         assert!((240_000..=260_000).contains(&first), "{first}");
@@ -796,15 +810,35 @@ mod tests {
         assert_eq!(shown.borrow().len(), 2);
         assert_eq!(shown.borrow()[1].points.len(), first + 10);
         assert_eq!(shown.borrow()[1].total_points, 400_000);
+        drop(stepped);
 
-        // A source below the size for showing densely gets no such picture.
+        // Its pass keeps the denser sample, so the checked cloud is not
+        // thinner than the pictures it takes the place of.
+        shown.borrow_mut().clear();
+        let cloud =
+            crate::open_showing(&source, 1_000, |_| Ok(()), Some((&mut show, showing)), None)
+                .unwrap();
+        assert!(!cloud.provisional);
+        assert_eq!(cloud.points.len(), 400_000);
+        let pictures = shown.borrow();
+        assert!(pictures.len() > 1 && pictures.iter().all(|cloud| cloud.provisional));
+        assert!(pictures.iter().all(|picture| picture.points.len() >= first));
+        drop(pictures);
+
+        // A source below the size for showing densely gets no such picture,
+        // and keeps the sample it asks for.
         shown.borrow_mut().clear();
         let small = Showing {
             dense_from: u64::MAX,
             steps_from: 1,
         };
-        assert!(small.begin(&source, stamp, &mut show).unwrap().is_some());
+        let stepped = small.begin(&source, stamp, &mut show).unwrap().unwrap();
+        assert!(!stepped.keeps_dense_sample());
         assert!(shown.borrow().is_empty());
+        drop(stepped);
+        let cloud = crate::open_showing(&source, 1_000, |_| Ok(()), Some((&mut show, small)), None)
+            .unwrap();
+        assert_eq!(cloud.points.len(), 1_000);
         drop(places);
     }
 
