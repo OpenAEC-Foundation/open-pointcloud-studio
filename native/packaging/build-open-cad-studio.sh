@@ -10,12 +10,12 @@
 # The source is not part of this repository. The pinned commit is fetched
 # into native/target/open-cad-studio/source, a git repository of its own, and
 # nothing is built unless the tree of that commit is the tree the pin file
-# names (see fetch_cad_source in common.sh). It is built as it is, without a
-# change: its Cargo.lock names the full hash of one commit for every git
-# dependency, which check_cad_source checks, and `cargo build --locked`
-# builds those commits and nothing newer. OCS_FETCH_FROM fetches from another
-# place than the pinned URL, such as a local clone; the tree is checked all
-# the same.
+# names (see fetch_cad_source in open-cad-studio-source.sh). It is built as
+# it is, without a change: its Cargo.lock names the full hash of one commit
+# for every git dependency, which check_cad_source checks, and
+# `cargo build --locked` builds those commits and nothing newer.
+# OCS_FETCH_FROM fetches from another place than the pinned URL, such as a
+# local clone; the tree is checked all the same.
 #
 # The options go to `cargo build`, for example `-j 4` or
 # `--target aarch64-apple-darwin`. Open CAD Studio is a Cargo workspace of its

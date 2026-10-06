@@ -119,9 +119,12 @@ jobs:
 
   # Open CAD Studio for each system and processor, from the pinned commit.
   # Its build takes long and the pin changes seldom, so the binary is kept in
-  # the cache under the pinned commit, the Rust toolchain and the build
-  # script, and is built only when one of them changed. The macOS halves are
-  # joined in the macos job, as the application's are.
+  # the cache under all that decides it, and is built only when one of them
+  # changed: the target, the pinned commit, the Rust toolchain, the system
+  # image of the machine with the C and C++ compiler (which builds a mesh
+  # library of the program) and on macOS its SDK, the oldest macOS it is
+  # built for, and the two scripts that fetch, check and build the source.
+  # The macOS halves are joined in the macos job, as the application's are.
   open-cad-studio:
     needs: open-cad-studio-pin
     strategy:
@@ -161,12 +164,25 @@ jobs:
         id: toolchain
         with:
           targets: ${{ matrix.target }}
+      - name: Describe the build machine
+        id: machine
+        run: |
+          case "$RUNNER_OS" in
+            # The newest MSVC toolset, which the build takes, from the folder
+            # of the build tools: Program Files[ (x86)]/VENDOR/YEAR/EDITION.
+            Windows) compiler=$(ls -d "/c/Program Files"*/*/20*/*/VC/Tools/MSVC/* 2>/dev/null | sed 's|.*/||' | sort -V | tail -n 1) ;;
+            macOS) compiler="$(c++ --version | sed -n 1p), SDK $(xcrun --show-sdk-version)" ;;
+            *) compiler=$(c++ --version | sed -n 1p) ;;
+          esac
+          description="image $ImageOS, compiler ${compiler:-unknown}, macOS target $MACOSX_DEPLOYMENT_TARGET"
+          echo "$description"
+          echo "key=$(printf '%s' "$description" | git hash-object --stdin | cut -c1-16)" >> "$GITHUB_OUTPUT"
       - name: Look for this build in the cache
         id: cache
         uses: actions/cache@v4
         with:
           path: native/target/open-cad-studio/${{ matrix.target }}/release/${{ matrix.file }}
-          key: open-cad-studio-${{ matrix.target }}-${{ needs.open-cad-studio-pin.outputs.commit }}-rust-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('native/packaging/build-open-cad-studio.sh') }}
+          key: open-cad-studio-${{ matrix.target }}-${{ needs.open-cad-studio-pin.outputs.commit }}-rust-${{ steps.toolchain.outputs.cachekey }}-machine-${{ steps.machine.outputs.key }}-${{ hashFiles('native/packaging/open-cad-studio-source.sh', 'native/packaging/build-open-cad-studio.sh') }}
       - name: Install the libraries of the build
         if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
         run: |

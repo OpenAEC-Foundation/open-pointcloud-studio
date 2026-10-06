@@ -57,7 +57,10 @@ tested on build machines with software rendering only.
   dependency and its licence is the GPL-3.0 text, and builds it unchanged with
   `cargo build --locked` into `native/target/open-cad-studio`; other options
   go to `cargo build`. `--pin` prints the pin, `--fetch` only fetches and
-  checks. `archive-open-cad-studio-source.sh` writes the source archive of the
+  checks. Reading the pin and fetching and checking the source is in
+  `open-cad-studio-source.sh`, which `common.sh` sources; a change there or in
+  the build script builds the program again in the workflow, a change to the
+  other scripts does not. `archive-open-cad-studio-source.sh` writes the source archive of the
   release from the same checkout. `check-open-cad-studio.sh` checks in an
   installed or unpacked package that Open CAD Studio lies where the
   application looks for it, starts, and converts a small DXF file without a
@@ -86,9 +89,12 @@ tested on build machines with software rendering only.
   with `--fetch` and writes the source archive, which the release takes as
   the artifact `package-open-cad-studio-source`. The job `open-cad-studio`
   builds the program for each system and processor and keeps it in the cache
-  under the pinned commit, the Rust toolchain and the hash of
-  `build-open-cad-studio.sh`, so it is built again only when one of them
-  changes; a build with an empty cache takes the longest part of a run. The
+  under all that decides it: the target, the pinned commit, the Rust
+  toolchain, the system image with its C and C++ compiler (and SDK on macOS),
+  the oldest macOS it is built for, and the hash of
+  `open-cad-studio-source.sh` and `build-open-cad-studio.sh`. It is built
+  again only when one of them changes; a build with an empty cache takes the
+  longest part of a run. The
   macOS job joins the two halves with `lipo`, as it does for the
   application, and every package is checked with `check-open-cad-studio.sh`
   after it is installed or unpacked.
