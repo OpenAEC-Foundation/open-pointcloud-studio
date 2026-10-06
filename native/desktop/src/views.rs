@@ -487,6 +487,15 @@ impl Studio {
         self.views.shown = None;
         self.views.drop_placing();
     }
+
+    /// A view is of the 3D scene: saving or updating one shows the scene,
+    /// also when a drawing or the File view was in front, so that what is
+    /// saved is what is seen and its snapshot is of the scene.
+    fn show_scene_for_view(&mut self) {
+        self.drawing_view.shown = false;
+        self.file_open = false;
+    }
+
     fn activate_view(&mut self, guid: &str) {
         let path = self
             .active
@@ -538,13 +547,15 @@ impl Studio {
         }
     }
 
-    /// Whether the viewport shows a view as it was saved or restored: it is
-    /// the active view, and the camera, the section box, the colour mode and
-    /// the scene bounds have not changed since. The viewport may have got
-    /// another size; `follow_viewport` deals with that.
+    /// Whether the viewport shows a view as it was saved or restored: the 3D
+    /// scene is shown rather than a drawing, it is the active view, and the
+    /// camera, the section box, the colour mode and the scene bounds have
+    /// not changed since. The viewport may have got another size;
+    /// `follow_viewport` deals with that.
     fn shows_view(&self, guid: &str) -> bool {
         let now = self.showing(guid);
-        self.active_view().is_some_and(|view| view.guid == guid)
+        !self.drawing_view.shown
+            && self.active_view().is_some_and(|view| view.guid == guid)
             && self
                 .views
                 .shown
@@ -686,6 +697,7 @@ impl Studio {
             self.views.list.remove(place);
             return Err(error);
         }
+        self.show_scene_for_view();
         self.activate_view(&guid);
         self.views.shown = Some(self.showing(&guid));
         self.status = format!("Saved view {name}");
@@ -771,8 +783,6 @@ impl Studio {
             });
         // Right below the 3D model: before the other views of the scan.
         let place = views.iter().position(|view| view.source == source);
-        self.drawing_view.shown = false;
-        self.file_open = false;
         let task = self.save_view_at(&name, place)?;
         self.status = format!("3D model duplicated as the view {name}");
         Ok(task)
@@ -971,6 +981,7 @@ impl Studio {
             self.views.list[index] = old;
             return Err(error);
         }
+        self.show_scene_for_view();
         self.activate_view(&old.guid);
         self.views.shown = Some(self.showing(&old.guid));
         self.status = format!("Updated view {} to the current view", old.name);
@@ -4127,5 +4138,37 @@ mod tests {
         assert_eq!(checked_name(" Hal "), Some("Hal"));
         assert_eq!(checked_name("  "), None);
         assert!(!author().is_empty());
+    }
+
+    #[test]
+    fn saving_or_updating_a_view_over_a_drawing_shows_the_scene_its_snapshot_is_of() {
+        use crate::project_browser::ViewRow;
+
+        let (mut studio, _directory) = studio_with_scan();
+        draw(&studio, Size::new(900.0, 700.0));
+        // Save view with the Drawing view in front shows the 3D scene, so
+        // that the view saved is the one seen, and its row is highlighted.
+        studio.drawing_view.shown = true;
+        act(&mut studio, ViewAction::Save);
+        assert!(!studio.drawing_view.shown);
+        let guid = studio.views.list[0].guid.clone();
+        assert_eq!(studio.shown_row(), Some(ViewRow::Saved(guid.clone())));
+        // A drawing shown before the snapshot is taken is not taken as it:
+        // the snapshot waits until the view is restored.
+        studio.drawing_view.shown = true;
+        capture(&mut studio, &guid);
+        assert!(studio.views.snapshots.is_empty());
+        assert!(studio.views.list[0].snapshot_due);
+        assert!(!studio.shows_view(&guid));
+        // Update from its row does the same, also with the File view open,
+        // and its snapshot goes on to the screenshot.
+        let _ = studio.update(Message::ToggleFile);
+        assert!(studio.file_open);
+        act(&mut studio, ViewAction::Update(guid.clone()));
+        assert!(!studio.drawing_view.shown && !studio.file_open);
+        let serial = studio.views.snapshots[&guid];
+        capture(&mut studio, &guid);
+        assert_eq!(studio.views.snapshots.get(&guid), Some(&serial));
+        assert!(studio.shows_view(&guid));
     }
 }

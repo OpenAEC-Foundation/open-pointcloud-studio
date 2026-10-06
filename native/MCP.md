@@ -142,8 +142,8 @@ follows when that view is restored.
 | `walk` | `eye` (`[x, y, z]`), `yaw`, `pitch` | Places the walking camera |
 | `close_panorama` | — | Returns to the orbit view |
 | `list_camera_views` | — | Saved views of the active scan |
-| `save_camera_view` | optional `name` | Saves the current view, with the section box while it is on, and makes it active |
-| `update_camera_view` | `name` | Overwrites a view with the current view |
+| `save_camera_view` | optional `name` | Saves the current 3D view, with the section box while it is on, and makes it active; shows the 3D scene when a drawing was shown |
+| `update_camera_view` | `name` | Overwrites a view with the current 3D view; shows the 3D scene when a drawing was shown |
 | `rename_camera_view` | `name`, `new_name` | Renames a view |
 | `restore_camera_view` | `name` | Shows a saved view: its camera and its section box, or the box off when it has none |
 | `delete_camera_view` | `name` | Deletes a view |

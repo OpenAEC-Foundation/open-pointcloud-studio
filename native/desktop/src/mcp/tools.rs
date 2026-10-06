@@ -291,10 +291,10 @@ fn table() -> Vec<Tool> {
         ]),
         tool("close_panorama", Command, "Leaves the walking camera and returns to the orbit view.", vec![]),
         tool("list_camera_views", Command, "Lists the saved views of the active scan with their camera, section box, colour mode and annotations, and the name of the active view.", vec![]),
-        tool("save_camera_view", Command, "Saves what the viewport shows of the active scan (camera, the section box while it is on, colour mode) as a view and makes it the active view. A snapshot image follows shortly after; wait_until_idle waits for it.", vec![
+        tool("save_camera_view", Command, "Saves what the 3D viewport shows of the active scan (camera, the section box while it is on, colour mode) as a view and makes it the active view, showing the 3D scene when a drawing or the File view was in front. A snapshot image follows shortly after; wait_until_idle waits for it.", vec![
             optional("name", text("Name of the new view, unique within the scan; without it the first free \"View N\" is used", 1, 64)),
         ]),
-        tool("update_camera_view", Command, "Overwrites a saved view with what the viewport shows now, keeping its name, identifier and annotations, and makes it the active view.", vec![
+        tool("update_camera_view", Command, "Overwrites a saved view with what the 3D viewport shows now, keeping its name, identifier and annotations, and makes it the active view, showing the 3D scene when a drawing or the File view was in front.", vec![
             required("name", view_name()),
         ]),
         tool("rename_camera_view", Command, "Renames a saved view of the active scan.", vec![

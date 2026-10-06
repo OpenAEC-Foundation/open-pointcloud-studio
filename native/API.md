@@ -1124,8 +1124,8 @@ screen.
 | `walk` | `eye`, `yaw`, `pitch` | Places the walking camera at a position in scene coordinates, looking along the heading `yaw` and elevation `pitch`; inside a station ball it shows that station's photos |
 | `close_panorama` | — | Leaves the walking camera and returns to the orbit view |
 | `list_camera_views` | — | Lists the saved views of the active scan with everything they hold, and the name of the `active` view |
-| `save_camera_view` | optional `name` | Saves the current view of the active scan (camera, the section box while it is on, colour mode) and makes it the active view; returns its `name` and `guid`. The name must be unique within that scan and 1–64 characters long; without a name the first free "View 1", "View 2", … is used (maximum 64 views per scan) |
-| `update_camera_view` | `name` | Overwrites a named view with the current view, keeping its name, identifier, time and annotations, and makes it the active view |
+| `save_camera_view` | optional `name` | Saves the current view of the active scan (camera, the section box while it is on, colour mode) and makes it the active view, showing the 3D scene when the Drawing view or the File view was in front; returns its `name` and `guid`. The name must be unique within that scan and 1–64 characters long; without a name the first free "View 1", "View 2", … is used (maximum 64 views per scan) |
+| `update_camera_view` | `name` | Overwrites a named view with the current 3D view, keeping its name, identifier, time and annotations, and makes it the active view, showing the 3D scene when the Drawing view or the File view was in front |
 | `rename_camera_view` | `name`, `new_name` | Renames a view of the active scan |
 | `restore_camera_view` | `name` | Restores a named view of the active scan, ignoring name case: its camera, its section box (switched off when the view has none) and colour mode, in the 3D scene also when a drawing was shown. It becomes the active view and its annotations are shown; a snapshot that is due is taken |
 | `delete_camera_view` | `name` | Deletes a named view of the active scan with its snapshot, ignoring name case |
