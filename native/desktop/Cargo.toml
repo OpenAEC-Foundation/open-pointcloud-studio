@@ -10,7 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 pointcloud-core = { path = "../core" }
-iced = { version = "0.13.1", features = ["advanced", "canvas", "image", "svg", "tokio"] }
+# "web-colors" lays a colour with alpha over what lies under it as CSS does,
+# so that the tokens of the OpenAEC style book look as its template shows them.
+iced = { version = "0.13.1", features = ["advanced", "canvas", "image", "svg", "tokio", "web-colors"] }
 iced_wgpu = "0.13.5"
 bytemuck = { version = "1", features = ["derive"] }
 rfd = "0.15"

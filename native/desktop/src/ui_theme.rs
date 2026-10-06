@@ -21,6 +21,12 @@ use std::path::PathBuf;
 
 use iced::{Color, Shadow, Theme, Vector};
 
+// The template lays `rgba(217, 119, 6, 0.08)` over its shell in sRGB, as a
+// browser does; laid over in linear light, the amber of the borders and
+// hovers of the dark themes would come out about twice as strong. The
+// feature `web-colors` of iced blends as the template does.
+const _: () = assert!(!iced::advanced::graphics::color::GAMMA_CORRECTION);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiTheme {
     Light,
