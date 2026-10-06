@@ -22,18 +22,22 @@ use pointcloud_core::{Bounds, IndexedNode, IndexedPoint, OctreeIndex, OrientedBo
 use rayon::prelude::*;
 
 use crate::selection::Projection;
-use crate::{
-    i18n, CloudEntry, CloudTransform, DetailLayers, LodRefinement, LodSets, Message, Studio,
-};
+use crate::{i18n, CloudEntry, CloudTransform, LodRefinement, LodSets, Message, Studio};
 
 /// What the sets of points were read for besides the section box: the
 /// camera, the layers with an octree and the budget.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DetailView {
     pub projection: Projection,
-    pub layers: DetailLayers,
+    pub layers: ViewLayers,
     pub budget: usize,
 }
+
+/// The visible layers with an octree as the sets read from them know them:
+/// their place in the list, their octree and how they are placed. The sample
+/// a layer keeps in memory is not among it: another sample of the same scan
+/// leaves what its octree gives as it was.
+pub(crate) type ViewLayers = Vec<(usize, usize, CloudTransform)>;
 
 /// The points read inside the section box besides the sets of the view.
 #[derive(Debug, Clone)]
@@ -787,6 +791,37 @@ mod tests {
         assert!(refine(&mut studio, |_| {}).is_none());
         assert_eq!(drawn_frame(&studio, &state), added);
         assert_eq!(view_sample(&mut studio), added.drawn);
+    }
+
+    #[test]
+    fn a_new_sample_of_a_layer_leaves_the_detail_of_its_octree_in_place() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = indexed_floor(directory.path());
+        refine(&mut studio, |_| {});
+
+        // The layer gets another sample of its scan, as when the reading of
+        // its file ends, and keeps its octree: the sets read from the octree
+        // are still those of the view.
+        let sample = Arc::new((*studio.clouds[0].cloud).clone());
+        studio.clouds[0].replace_cloud(sample);
+        studio.revision += 1;
+        assert!(refine(&mut studio, |_| {}).is_none());
+
+        // The box is read beside them, and switched off it reads nothing.
+        let region = small_box(&mut studio);
+        assert_eq!(
+            refine(&mut studio, |_| {}),
+            Some((
+                DetailPlan::Inside {
+                    region,
+                    strict: true
+                },
+                true
+            ))
+        );
+        let _ = studio.update(crate::Message::SetSectionEnabled(false));
+        assert!(!studio.focus_drawn());
+        assert!(refine(&mut studio, |_| {}).is_none());
     }
 
     #[test]

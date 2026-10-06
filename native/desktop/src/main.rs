@@ -9333,7 +9333,12 @@ impl Studio {
         let size = self.scene_size();
         Some(DetailView {
             projection: self.projection(bounds, size.width, size.height),
-            layers: self.detail_basis().0,
+            layers: self
+                .detail_basis()
+                .0
+                .into_iter()
+                .map(|(index, tree, _, transform)| (index, tree, transform))
+                .collect(),
             budget: self.budget as usize,
         })
     }
