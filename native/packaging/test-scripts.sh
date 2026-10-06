@@ -81,11 +81,16 @@ fi
 # ---- draft-release.sh ----------------------------------------------------
 
 # Writes down what it is asked; GH_HAS_DRAFT says whether the release exists.
+# Asked for fields, it answers with GH_IS_DRAFT and the names in GH_ASSETS.
 cat > "$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 if [[ "$1 $2" == "release view" ]]; then
-    [[ "$GH_HAS_DRAFT" == "true" ]]
+    case "$*" in
+        *"--json isDraft"*) echo "${GH_IS_DRAFT:-true}" ;;
+        *"--json assets"*) printf '%s\n' ${GH_ASSETS:-} ;;
+        *) [[ "$GH_HAS_DRAFT" == "true" ]] ;;
+    esac
 fi
 EOF
 chmod +x "$work/bin/gh"
@@ -121,6 +126,32 @@ if [[ "$call" == *--prerelease* ]]; then
     passed "a pre-release is marked as one"
 else
     wrong "a pre-release is not marked as one: gh $call"
+fi
+
+# ---- prune-release-assets.sh ---------------------------------------------
+
+# A draft from an earlier run holds the files of this release and the source
+# archives of Open CAD Studio for a commit pinned before; only those go.
+# prune_calls IS_DRAFT prints the files it was asked to remove.
+prune_calls() {
+    : > "$work/gh.log"
+    PATH="$work/bin:$PATH" GH_LOG="$work/gh.log" GH_IS_DRAFT=$1 GITHUB_REPOSITORY=example/repository \
+        GH_ASSETS="$(bash "$packaging_dir/expected-assets.sh" 9.9.9 | sed 'p; s/$/.sha256/')
+open-cad-studio-source_00000000.tar.gz open-cad-studio-source_00000000.tar.gz.sha256" \
+        bash "$packaging_dir/prune-release-assets.sh" v9.9.9 9.9.9 > /dev/null 2>&1 || true
+    sed -n 's/^release delete-asset v9.9.9 \([^ ]*\) .*--yes$/\1/p' "$work/gh.log"
+}
+removed=$(prune_calls true)
+if [[ "$removed" == "open-cad-studio-source_00000000.tar.gz"$'\n'"open-cad-studio-source_00000000.tar.gz.sha256" ]]; then
+    passed "files that an earlier run left on the draft and this release does not hold are removed"
+else
+    wrong "prune-release-assets.sh removed '$(echo $removed)' instead of the source archives of an older commit"
+fi
+removed=$(prune_calls false)
+if [[ -z "$removed" ]]; then
+    passed "nothing is removed from a published release"
+else
+    wrong "prune-release-assets.sh removed '$(echo $removed)' from a published release"
 fi
 
 # ---- release-notes.sh ----------------------------------------------------

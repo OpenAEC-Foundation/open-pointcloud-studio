@@ -140,6 +140,11 @@ jobs:
           for name in $(bash ../native/packaging/expected-assets.sh "$NUMBER"); do
             gh release upload "$TAG" "$name" "$name.sha256" --clobber --repo "$GITHUB_REPOSITORY"
           done
+      # A draft taken over from an earlier run keeps what that run uploaded,
+      # such as the source archives of Open CAD Studio for a commit pinned
+      # before; whatever this release does not hold goes.
+      - name: Remove the files of an earlier run from the draft
+        run: bash native/packaging/prune-release-assets.sh "$TAG" "$NUMBER"
       - name: Publish the release
         if: ${{ !inputs.draft_only }}
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

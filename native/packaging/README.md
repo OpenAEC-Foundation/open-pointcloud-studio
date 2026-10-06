@@ -116,7 +116,12 @@ tested on build machines with software rendering only.
 - `release-notes.sh` cuts the section of a version out of
   [`../../CHANGELOG.md`](../../CHANGELOG.md) and appends
   `release-notes-footer.md`; `draft-release.sh` creates the draft release
-  those notes go into, at the commit the packages were built from.
+  those notes go into, at the commit the packages were built from, or takes
+  over the draft of an earlier run. After the upload,
+  `prune-release-assets.sh` removes from the draft every file that
+  `expected-assets.sh` does not list, so that a file of an earlier run whose
+  name has changed since, such as a source archive of Open CAD Studio for a
+  commit pinned before, is not published.
 - `test-scripts.sh` tests these scripts with stand-ins for the programs they
   call, and fetches from a small repository of its own in place of that of
   Open CAD Studio; it needs nothing installed besides git and runs first in
