@@ -301,18 +301,32 @@ fn cache_directory(variable: impl Fn(&str) -> Option<OsString>) -> Option<PathBu
     Some(base.join("open-pointcloud-studio-native"))
 }
 
+/// The folder in the cache folder that holds the copy of the viewer, and the
+/// file in it that names the version of the application that made the copy.
+const COPY_FOLDER: &str = "open-cad-studio";
+const COPY_VERSION: &str = "version";
+
 /// The program to start for `executable`. A program inside a mounted
 /// AppImage lies in a mount that goes away when the application ends, and a
 /// viewer started from there would end with it; it is started from a copy in
-/// `cache` instead, made once for each version of the application. `appdir`
-/// is the folder the AppImage runtime announces. Every program an AppImage
-/// starts inherits it, so it counts only when the executable lies in it and
-/// it is a mount.
+/// `cache` instead. `appdir` is the folder the AppImage runtime announces.
+/// Every program an AppImage starts inherits it, so it counts only when the
+/// executable lies in it and it is a mount.
+///
+/// The copy has one place for every version of the application. It is made
+/// again when `version`, the version of the application, or the size of the
+/// program changed, and takes the place of the copy before it, so that no
+/// copy of an earlier version is left in the cache, and what the viewer
+/// registers for itself with the desktop (a preview program for DWG files,
+/// and the program for DWG and DXF files when the user agrees) still exists
+/// after an update. A viewer that still runs from the copy before keeps its
+/// program: the copy is written beside and renamed over it.
 fn runnable(
     executable: &Path,
     appdir: Option<&Path>,
     is_mount: impl Fn(&Path) -> bool,
     cache: Option<&Path>,
+    version: &str,
 ) -> Result<PathBuf, String> {
     let in_mount =
         appdir.is_some_and(|appdir| crate::mcp::lies_in(executable, appdir) && is_mount(appdir));
@@ -321,21 +335,37 @@ fn runnable(
     }
     let folder = cache
         .ok_or("there is no cache folder to start it from outside the AppImage")?
-        .join(format!("open-cad-studio-{}", env!("CARGO_PKG_VERSION")));
+        .join(COPY_FOLDER);
     let copy = folder.join(EXECUTABLE);
+    let made_by = folder.join(COPY_VERSION);
     let size = |path: &Path| std::fs::metadata(path).map(|metadata| metadata.len()).ok();
-    if size(&copy).is_none() || size(&copy) != size(executable) {
-        // Written beside and renamed, so that a copy cut short is never run.
-        let partial = folder.join(format!("{EXECUTABLE}.partial"));
-        std::fs::create_dir_all(&folder)
-            .and_then(|()| std::fs::copy(executable, &partial))
-            .and_then(|_| std::fs::rename(&partial, &copy))
-            .map_err(|error| {
-                format!(
-                    "{} could not be copied out of the AppImage: {error}",
-                    executable.display()
-                )
-            })?;
+    let current = std::fs::read_to_string(&made_by).is_ok_and(|made| made == version)
+        && size(&copy).is_some()
+        && size(&copy) == size(executable);
+    if current {
+        return Ok(copy);
+    }
+    // Renamed into place only when it is whole, so that a copy cut short is
+    // never run; named after this process, so that two windows that open a
+    // drawing at the same moment do not write into one file. The version is
+    // taken away first and written last, so that a copy that was cut short
+    // after the rename is made again.
+    let partial = folder.join(format!("{EXECUTABLE}.{}.partial", std::process::id()));
+    let gone = |result: std::io::Result<()>| match result {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    };
+    let made = std::fs::create_dir_all(&folder)
+        .and_then(|()| std::fs::copy(executable, &partial))
+        .and_then(|_| gone(std::fs::remove_file(&made_by)))
+        .and_then(|()| std::fs::rename(&partial, &copy))
+        .and_then(|()| std::fs::write(&made_by, version));
+    if let Err(error) = made {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!(
+            "{} could not be copied out of the AppImage: {error}",
+            executable.display()
+        ));
     }
     Ok(copy)
 }
@@ -351,6 +381,7 @@ fn launch(found: &Found, file: &Path) -> Result<Opened, String> {
                 std::env::var_os("APPDIR").map(PathBuf::from).as_deref(),
                 crate::mcp::is_mount_point,
                 cache_directory(|name| std::env::var_os(name)).as_deref(),
+                env!("CARGO_PKG_VERSION"),
             )?;
             let mut child = viewer_command(&program, file)
                 .spawn()
@@ -806,40 +837,102 @@ mod tests {
         executable_at(&inside);
         let cache = directory.path().join("cache");
         let mounted = |_: &Path| true;
+        let version = "1.0.0";
 
         // Outside the folder the runtime announces, or when that folder is no
         // mount, the program runs where it is.
         assert_eq!(
-            runnable(&inside, None, mounted, Some(&cache)),
+            runnable(&inside, None, mounted, Some(&cache), version),
             Ok(inside.clone())
         );
         assert_eq!(
-            runnable(&inside, Some(&mount), |_: &Path| false, Some(&cache)),
+            runnable(
+                &inside,
+                Some(&mount),
+                |_: &Path| false,
+                Some(&cache),
+                version
+            ),
             Ok(inside.clone())
         );
         let elsewhere = directory.path().join("opt").join(EXECUTABLE);
         assert_eq!(
-            runnable(&elsewhere, Some(&mount), mounted, Some(&cache)),
+            runnable(&elsewhere, Some(&mount), mounted, Some(&cache), version),
             Ok(elsewhere)
         );
 
-        let copy = runnable(&inside, Some(&mount), mounted, Some(&cache)).unwrap();
-        assert!(copy.starts_with(&cache), "{}", copy.display());
-        assert_eq!(copy.file_name(), inside.file_name());
+        let copy = runnable(&inside, Some(&mount), mounted, Some(&cache), version).unwrap();
+        assert_eq!(copy, cache.join(COPY_FOLDER).join(EXECUTABLE));
         assert_eq!(std::fs::read(&copy).unwrap(), b"not a real program");
         // Made once: a copy of the same size is used as it is.
         std::fs::write(&copy, b"NOT A REAL PROGRAM").unwrap();
         assert_eq!(
-            runnable(&inside, Some(&mount), mounted, Some(&cache)),
+            runnable(&inside, Some(&mount), mounted, Some(&cache), version),
             Ok(copy.clone())
         );
         assert_eq!(std::fs::read(&copy).unwrap(), b"NOT A REAL PROGRAM");
         // Another program is copied again.
         std::fs::write(&inside, b"another program").unwrap();
-        runnable(&inside, Some(&mount), mounted, Some(&cache)).unwrap();
+        runnable(&inside, Some(&mount), mounted, Some(&cache), version).unwrap();
         assert_eq!(std::fs::read(&copy).unwrap(), b"another program");
 
-        assert!(runnable(&inside, Some(&mount), mounted, None).is_err());
+        assert!(runnable(&inside, Some(&mount), mounted, None, version).is_err());
+    }
+
+    #[test]
+    fn copy_of_the_viewer_is_replaced_in_its_place_by_another_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let mount = directory.path().join("mount");
+        let inside = mount.join("usr").join("bin").join(EXECUTABLE);
+        executable_at(&inside);
+        let cache = directory.path().join("cache");
+        let mounted = |_: &Path| true;
+        let copy_of =
+            |version: &str| runnable(&inside, Some(&mount), mounted, Some(&cache), version);
+
+        let first = copy_of("1.0.0").unwrap();
+        let folder = cache.join(COPY_FOLDER);
+        let made_by = || std::fs::read_to_string(folder.join(COPY_VERSION)).unwrap();
+        assert_eq!(made_by(), "1.0.0");
+        // The program of the next version has the same size; the copy is made
+        // again all the same, in the same place, and nothing of the copy
+        // before it is left.
+        std::fs::write(&inside, b"NOT A REAL PROGRAM").unwrap();
+        assert_eq!(copy_of("1.0.1"), Ok(first.clone()));
+        assert_eq!(std::fs::read(&first).unwrap(), b"NOT A REAL PROGRAM");
+        assert_eq!(made_by(), "1.0.1");
+        let mut left: Vec<_> = std::fs::read_dir(&cache)
+            .unwrap()
+            .chain(std::fs::read_dir(&folder).unwrap())
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        left.sort();
+        let mut expected = [COPY_FOLDER, COPY_VERSION, EXECUTABLE].map(OsString::from);
+        expected.sort();
+        assert_eq!(left, expected);
+
+        // A copy that was cut short after it was renamed into place has no
+        // version yet and is made again, also when its size is right.
+        std::fs::remove_file(folder.join(COPY_VERSION)).unwrap();
+        std::fs::write(&inside, b"not a real program").unwrap();
+        assert_eq!(copy_of("1.0.1"), Ok(first.clone()));
+        assert_eq!(std::fs::read(&first).unwrap(), b"not a real program");
+        assert_eq!(made_by(), "1.0.1");
+
+        // A copy that cannot take its place is not left behind, and without
+        // the version the next start makes it again.
+        std::fs::remove_file(&first).unwrap();
+        std::fs::create_dir_all(first.join("in the way")).unwrap();
+        assert!(copy_of("1.0.2")
+            .unwrap_err()
+            .contains("could not be copied"));
+        let left: Vec<_> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, [OsString::from(EXECUTABLE)]);
+        std::fs::remove_file(&inside).unwrap();
+        assert!(copy_of("1.0.2").is_err());
     }
 
     #[test]

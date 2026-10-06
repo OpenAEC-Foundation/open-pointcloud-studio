@@ -772,9 +772,12 @@ application, as the preview program for DWG files of the desktop and, when
 the user agrees, as the program for DWG and DXF files. Open CAD Studio gives
 a file opened read-only a window and a process of its own, also while it is
 already running. A program inside a mounted AppImage is first copied to
-`open-pointcloud-studio-native/open-cad-studio-VERSION/` in the cache folder
+`open-pointcloud-studio-native/open-cad-studio/` in the cache folder
 (`$XDG_CACHE_HOME`, else `~/.cache`) and started from there, so that it stays
-open when the application ends. Without a viewer the file goes to the program
+open when the application ends. The copy is made again in the same place when
+the version of the application or the size of the program changed (the file
+`version` beside it names the version that made it), so that no copy of an
+earlier version is left behind. Without a viewer the file goes to the program
 the system has for it. The answer has `path`, `viewer` (the program that was
 started, or `null` for the system program) and `read_only`. It is refused
 when no file was exported yet, for a path that is not absolute, has another
