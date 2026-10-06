@@ -811,3 +811,25 @@ fn a_copy_of_a_sheet_has_notes_of_its_own() {
     assert!(studio.layouts.layout(&copy).unwrap().notes.is_empty());
     assert_eq!(studio.layouts.layout(&sheet).unwrap().notes.len(), 1);
 }
+
+#[test]
+fn the_hint_on_an_empty_sheet_reads_on_the_desk_of_every_theme() {
+    fn luminance(color: Color) -> f32 {
+        let channel = |value: f32| {
+            if value <= 0.039_28 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+    }
+    for theme in crate::ui_theme::UiTheme::ALL {
+        let (ink, desk) = (
+            luminance(canvas::desk_ink(theme)),
+            luminance(canvas::desk(theme)),
+        );
+        let contrast = (ink.max(desk) + 0.05) / (ink.min(desk) + 0.05);
+        assert!(contrast >= 4.5, "{theme:?}: {contrast}");
+    }
+}

@@ -43,6 +43,15 @@ pub(crate) fn desk(theme: UiTheme) -> Color {
     }
 }
 
+/// What is written on the desk: dark on the light grey of the light
+/// themes, light on the dark grey of the others.
+pub(crate) fn desk_ink(theme: UiTheme) -> Color {
+    match theme {
+        UiTheme::Light | UiTheme::Contrast => Color::from_rgb8(24, 24, 27),
+        UiTheme::Blueprint | UiTheme::Forge | UiTheme::Night => Color::from_rgb8(245, 245, 244),
+    }
+}
+
 /// An iced colour from a colour of the plot.
 fn color(rgb: [u8; 3]) -> Color {
     Color::from_rgb8(rgb[0], rgb[1], rgb[2])
@@ -337,8 +346,10 @@ pub(crate) struct Overlay<'a> {
     /// is dragged.
     pub dropping: Option<[f64; 2]>,
     pub accent: Color,
-    /// What the paper says while no view is placed on it.
+    /// What the paper says while no view is placed on it, and the ink it
+    /// is written in on the desk.
     pub hint: Option<String>,
+    pub hint_ink: Color,
     /// The tool that places a text or a line on the paper, and the points
     /// clicked with it.
     pub tool_kind: Option<crate::drawing_notes::NoteKind>,
@@ -713,7 +724,7 @@ impl canvas::Program<Message> for Overlay<'_> {
             frame.fill_text(canvas::Text {
                 content: hint.clone(),
                 position: UiPoint::new(size.width / 2.0, 14.0),
-                color: Color::from_rgb8(245, 245, 244),
+                color: self.hint_ink,
                 size: Pixels(13.0),
                 horizontal_alignment: alignment::Horizontal::Center,
                 vertical_alignment: alignment::Vertical::Top,
