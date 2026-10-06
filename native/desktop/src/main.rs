@@ -10952,12 +10952,12 @@ fn large_tool_button_when(
     .on_press_maybe(enabled.then_some(message))
     .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
     .height(Fill)
-    .padding([8, 6])
+    .padding([6, 3])
     .into()
 }
 
 /// The narrowest a large ribbon button gets, for a short name.
-const LARGE_TOOL_MIN_WIDTH: f32 = 56.0;
+const LARGE_TOOL_MIN_WIDTH: f32 = 46.0;
 
 /// A tool as its icon alone, named in its tooltip: for a narrow panel.
 fn icon_tool_button_when(
@@ -10986,13 +10986,13 @@ fn small_tool_button_when(
     let icon = tool_icon(&message);
     button(
         row![icon_svg(icon, 18.0), text(i18n::tr(label)).size(12),]
-            .spacing(6)
+            .spacing(4)
             .align_y(iced::Alignment::Center),
     )
     .on_press_maybe(enabled.then_some(message))
     .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
     .height(opencad_ribbon::ROW_H)
-    .padding([2, 4])
+    .padding([2, 3])
     .into()
 }
 

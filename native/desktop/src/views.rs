@@ -1905,32 +1905,6 @@ impl Studio {
         save.into()
     }
 
-    /// Under the rows of VIEWS: the actions that make or open a drawing.
-    pub fn view_actions(&self) -> Element<'_, Message> {
-        let flat = crate::flat_tool_style;
-        let has_scan = self.active.is_some();
-        column![
-            button(text(i18n::tr("Create 2D plan / elevation / section…")).size(11))
-                .on_press_maybe(
-                    has_scan.then_some(Message::Sheet(crate::sheet_dialog::SheetAction::Open)),
-                )
-                .style(flat)
-                .width(Fill),
-            button(text(i18n::tr("Open drawing…")).size(11))
-                .on_press(Message::DrawingView(
-                    crate::drawing_view::DrawingViewAction::OpenFile,
-                ))
-                .style(flat)
-                .width(Fill),
-        ]
-        .spacing(2)
-        .padding(iced::Padding {
-            top: 4.0,
-            ..iced::Padding::ZERO
-        })
-        .into()
-    }
-
     /// The annotations of the active view, each with × to delete it, while
     /// a view is active.
     pub fn annotation_list(&self) -> Option<Element<'_, Message>> {
@@ -1995,30 +1969,28 @@ impl Studio {
     /// scan would hold, and the button that writes it. A view with a section
     /// box takes it along as the clipping planes of its viewpoint.
     pub fn bcf_body(&self) -> Element<'_, Message> {
-        let muted = self.ui_theme.colors().muted;
         let (views, notes) = self
             .listed_views()
             .iter()
             .fold((0usize, 0usize), |(views, notes), view| {
                 (views + 1, notes + view.annotations.len())
             });
-        column![
-            text(i18n::tr_args(
-                "{views} views with {notes} annotations become topics of a BCF file",
-                &[("views", &views), ("notes", &notes)],
-            ))
-            .size(10)
-            .color(muted),
-            button(text(i18n::tr("Export BCF")).size(11))
+        // What the file would hold is in the tooltip of the button.
+        crate::opencad_properties::explained(
+            button(text(i18n::tr("Export BCF…")).size(11))
                 .on_press_maybe(
                     self.can_export_bcf()
-                        .then_some(Message::Views(ViewAction::ExportBcf))
+                        .then_some(Message::Views(ViewAction::ExportBcf)),
                 )
                 .style(crate::flat_tool_style)
                 .width(Fill),
-        ]
-        .spacing(4)
-        .into()
+            vec![
+                i18n::tr_args("Saved views: {count}", &[("count", &views)]),
+                i18n::tr_args("Annotations: {count}", &[("count", &notes)]),
+                i18n::tr("Each saved view becomes a topic of the BCF file, with its annotations.")
+                    .to_owned(),
+            ],
+        )
     }
 
     /// The field for the text of a note whose point has been picked, shown

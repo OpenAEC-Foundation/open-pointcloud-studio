@@ -379,7 +379,11 @@ impl Studio {
             SheetKind::Elevation => (
                 dialog.side.0,
                 None,
-                format!("{} {} · {basis}", tr("Elevation view"), dialog.side),
+                if dialog.basis == SheetBasis::Model {
+                    format!("{} {}", tr("Elevation view"), dialog.side)
+                } else {
+                    format!("{} {} · {basis}", tr("Elevation view"), dialog.side)
+                },
             ),
             SheetKind::Section => {
                 let mut name = format!("{} {} · {basis}", tr("Section"), dialog.side);

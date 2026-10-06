@@ -466,6 +466,21 @@ fn icon_button<'a>(icon: ToolIcon, tip: &str, message: Message) -> Element<'a, M
     .into()
 }
 
+/// An action on the band of a group: an icon with its name in a tooltip,
+/// disabled when there is no message.
+fn band_action<'a>(icon: ToolIcon, tip: &str, message: Option<Message>) -> Element<'a, Message> {
+    tooltip(
+        button(icon_svg(icon, 15.0))
+            .on_press_maybe(message)
+            .style(flat_tool_style)
+            .padding(3),
+        hint(tip.to_owned()),
+        tooltip::Position::Bottom,
+    )
+    .gap(4)
+    .into()
+}
+
 /// The box a tooltip of the Project Browser shows its text in.
 pub(crate) fn hint<'a>(content: String) -> Element<'a, Message> {
     container(text(content).size(11))
@@ -515,10 +530,21 @@ pub fn view_row<'a>(
     message: Message,
     controls: Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
-    let label = text(name).size(11).style(move |theme| text::Style {
-        color: quiet.then(|| ui_theme::colors(theme).muted),
-    });
-    let mut line = row![button(
+    // The actions of a row are on the row of what the window shows only,
+    // so that the list reads as a list of names.
+    let controls = if shown { controls } else { Vec::new() };
+    // A name stays on one line: a long one is cut with an ellipsis and
+    // shown whole in the tooltip.
+    let room = ROW_NAME_WIDTH - controls.len() as f32 * ROW_CONTROL_WIDTH;
+    let fitted = crate::view_tabs::shortened(&name, (room / NAME_CHAR_WIDTH).max(8.0) as usize);
+    let cut = fitted != name;
+    let label = text(fitted)
+        .size(11)
+        .wrapping(iced::widget::text::Wrapping::None)
+        .style(move |theme| text::Style {
+            color: quiet.then(|| ui_theme::colors(theme).muted),
+        });
+    let pick = button(
         row![icon_svg(icon, 14.0), label]
             .spacing(6)
             .align_y(iced::Alignment::Center),
@@ -526,14 +552,27 @@ pub fn view_row<'a>(
     .on_press(message)
     .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, shown, status))
     .padding([3, 5])
-    .width(Fill)]
-    .spacing(2)
-    .align_y(iced::Alignment::Center);
+    .width(Fill);
+    let pick: Element<'a, Message> = if cut {
+        tooltip(pick, hint(name), tooltip::Position::Bottom)
+            .gap(4)
+            .into()
+    } else {
+        pick.into()
+    };
+    let mut line = row![pick].spacing(1).align_y(iced::Alignment::Center);
     for control in controls {
         line = line.push(control);
     }
     line.into()
 }
+
+/// The width a row of VIEWS has for its name when it shows no actions.
+const ROW_NAME_WIDTH: f32 = 200.0;
+/// The width an action button of a row takes.
+const ROW_CONTROL_WIDTH: f32 = 21.0;
+/// The mean width of a character of a row's name.
+const NAME_CHAR_WIDTH: f32 = 5.9;
 
 /// The small button of a row that makes a copy of it.
 pub fn duplicate_button<'a>(message: Message) -> Element<'a, Message> {
@@ -1109,13 +1148,26 @@ impl Studio {
             tooltip::Position::Bottom,
         )
         .gap(4);
+        // Making and opening drawings are icons on the band, beside the 3D
+        // model, so that the group holds only views.
+        let has_scan = self.active.is_some();
+        let new_drawing = band_action(
+            ToolIcon::PlanSheet,
+            tr("Create 2D plan / elevation / section…"),
+            has_scan.then_some(Message::Sheet(crate::sheet_dialog::SheetAction::Open)),
+        );
+        let open_drawing = band_action(
+            ToolIcon::Open,
+            tr("Open drawing…"),
+            Some(Message::DrawingView(DrawingViewAction::OpenFile)),
+        );
         let group = column![band(
             VIEWS.to_owned(),
             open,
             ToolIcon::Views,
             tr("VIEWS").to_owned(),
             count.to_string(),
-            vec![show_model.into()],
+            vec![new_drawing, open_drawing, show_model.into()],
             Mark::Views,
             false,
         )]
@@ -1146,7 +1198,6 @@ impl Studio {
             }
             body = body.push(sub);
         }
-        body = body.push(self.view_actions());
         if let Some(annotations) = self.annotation_list() {
             body = body.push(annotations);
         }

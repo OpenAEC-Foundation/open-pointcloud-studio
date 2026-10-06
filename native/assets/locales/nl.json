@@ -59,7 +59,6 @@
   "Save view": "View opslaan",
   "Note": "Notitie",
   "Line": "Lijn",
-  "Export BCF": "BCF exporteren",
   "+  Add point cloud": "+  Puntenwolk toevoegen",
   "+  Open scan folder…": "+  Scanmap openen…",
   "Surface": "Oppervlak",
@@ -543,7 +542,6 @@
   "3D model": "3D-model",
   "Camera": "Camera",
   "Open a scan to save views of it": "Open een scan om er views van op te slaan",
-  "{views} views with {notes} annotations become topics of a BCF file": "{views} views met {notes} annotaties worden onderwerpen van een BCF-bestand",
   "Name": "Naam",
   "Transform": "Transformeren",
   "Advice": "Advies",
@@ -859,5 +857,9 @@
   "Kept with {name}, as a layer beside its points and its mesh; faces it had are replaced.": "Bewaard bij {name}, als laag naast de punten en de mesh; vlakken die de scan had worden vervangen.",
   "Its scan was closed while the job ran, so nothing is kept.": "De scan is gesloten terwijl de taak liep, dus er wordt niets bewaard.",
   "On": "Aan",
-  "Off": "Uit"
+  "Off": "Uit",
+  "Export BCF…": "BCF exporteren…",
+  "Saved views: {count}": "Opgeslagen views: {count}",
+  "Annotations: {count}": "Annotaties: {count}",
+  "Each saved view becomes a topic of the BCF file, with its annotations.": "Elke opgeslagen view wordt een onderwerp van het BCF-bestand, met zijn annotaties."
 }

@@ -171,7 +171,7 @@ pub fn render_group_items<'a>(
     ]
     .align_x(iced::Alignment::Center)
     .spacing(0)
-    .padding([2u16, 4])
+    .padding([2u16, 2])
     .width(Length::Shrink)
     .height(TOOL_BAR_H);
 
