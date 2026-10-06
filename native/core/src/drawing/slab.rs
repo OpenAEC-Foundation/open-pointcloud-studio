@@ -17,7 +17,8 @@ use crate::grid2d::{CountGrid, GridFrame};
 use crate::region_source::{
     overlaps, visit_region, RegionFilter, RegionProgress, RegionReader, RegionSource,
 };
-use crate::{bounds_corners, Bounds, IndexedPoint, LoadError, OrientedBox};
+use crate::surface_mesh::sampled_ordinal;
+use crate::{bounds_corners, Bounds, IndexedPoint, LoadError, OrientedBox, Point};
 
 /// The most cells the grid of a filled cut gets: 20 bytes each while the
 /// points are read, and about 15 more while the cut is traced (measured:
@@ -188,6 +189,26 @@ pub struct SlabOptions {
     pub max_points: usize,
     /// Cell of the count grid for the filled cut; `None` builds no grid.
     pub grid: Option<f64>,
+    /// The share of the points of the scans that is thinned to the points
+    /// drawn, in percent: below 100 the same points whatever the slab,
+    /// chosen by their ordinal in the source file.
+    pub sample_percent: f64,
+    /// The share of the points that is counted on the grid of the filled
+    /// cut, in the same way. A sparse scan needs every point for its walls.
+    pub grid_percent: f64,
+}
+
+impl SlabOptions {
+    /// The share of the points that is read: the larger of the shares of
+    /// what is collected.
+    pub fn read_percent(&self) -> f64 {
+        let points = self.point_spacing.map(|_| self.sample_percent);
+        let grid = self.grid.map(|_| self.grid_percent);
+        match (points, grid) {
+            (Some(points), Some(grid)) => points.max(grid),
+            (points, grid) => points.or(grid).unwrap_or(self.sample_percent),
+        }
+    }
 }
 
 /// What one pass over the slab collected.
@@ -204,6 +225,9 @@ pub struct SlabCut {
     /// slab, and all points of a layer without an index. Counted again for
     /// every time the slab was read once more to lay the grid closer.
     pub read_points: u64,
+    /// Points taken from memory, kept from an earlier read, instead of
+    /// being read again.
+    pub reused_points: u64,
 }
 
 /// Points per cell of the cut plane, and where in its cell they lie on
@@ -222,6 +246,9 @@ pub struct CutGrid {
 }
 
 impl CutGrid {
+    /// Bytes a cell takes: its count and the two sums.
+    pub(super) const CELL_BYTES: usize = 20;
+
     pub fn new(frame: GridFrame) -> Self {
         Self {
             counts: CountGrid::new(frame),
@@ -246,6 +273,18 @@ impl CutGrid {
             let y = (index / frame.width as usize) as f64;
             self.sum_u[index] += uv[0] - frame.origin[0] - x * frame.cell;
             self.sum_v[index] += uv[1] - frame.origin[1] - y * frame.cell;
+        }
+    }
+
+    /// Add the counts and sums of another grid on the same frame.
+    fn absorb(&mut self, other: &Self) {
+        debug_assert_eq!(self.frame(), other.frame());
+        self.counts.absorb(&other.counts);
+        for (sum, more) in self.sum_u.iter_mut().zip(&other.sum_u) {
+            *sum += more;
+        }
+        for (sum, more) in self.sum_v.iter_mut().zip(&other.sum_v) {
+            *sum += more;
         }
     }
 
@@ -351,7 +390,7 @@ pub(super) type CellMap<V> = HashMap<u64, V, BuildHasherDefault<CellHasher>>;
 
 /// The point that stands for its cell, with what decides between two points
 /// of one cell.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct Kept {
     point: SlabPoint,
     /// Squared distance to the centre of the cell of the spacing that was
@@ -378,6 +417,7 @@ impl Kept {
 /// nearest the centre of its cell at the spacing that was asked. At that
 /// spacing the points form an even pattern. When more cells fill than the
 /// drawing may hold points, cells are joined four by four.
+#[derive(Debug, Clone)]
 struct Thinning {
     anchor: [f64; 2],
     spacing: f64,
@@ -419,13 +459,38 @@ impl Thinning {
         };
         let key = cell_key(cell[0] as u32 >> self.level, cell[1] as u32 >> self.level);
         self.keep(key, kept);
+        self.fit();
+    }
+
+    /// Join cells four by four while more fill than the drawing may hold.
+    fn fit(&mut self) {
         while self.cells.len() > self.max_points && self.level < 31 {
-            self.level += 1;
-            for (key, kept) in std::mem::take(&mut self.cells) {
-                let (x, y) = cell_of_key(key);
-                self.keep(cell_key(x >> 1, y >> 1), kept);
-            }
+            self.double();
         }
+    }
+
+    fn double(&mut self) {
+        self.level += 1;
+        for (key, kept) in std::mem::take(&mut self.cells) {
+            let (x, y) = cell_of_key(key);
+            self.keep(cell_key(x >> 1, y >> 1), kept);
+        }
+    }
+
+    /// Take in the points another thinning of the same slab kept. The order
+    /// of `Kept::before` does not depend on which points came first, so this
+    /// keeps what one thinning of all the points keeps.
+    fn merge(&mut self, mut other: Self) {
+        while self.level < other.level {
+            self.double();
+        }
+        while other.level < self.level {
+            other.double();
+        }
+        for (key, kept) in other.cells {
+            self.keep(key, kept);
+        }
+        self.fit();
     }
 
     fn keep(&mut self, key: u64, kept: Kept) {
@@ -513,6 +578,34 @@ pub fn collect_slab(
     accept: &RegionFilter<'_>,
     progress: &mut dyn FnMut(RegionProgress) -> Result<(), LoadError>,
 ) -> Result<SlabCut, LoadError> {
+    check_options(options)?;
+    let (work, covered) = slab_work(sources, slab);
+    let first = RegionProgress {
+        read: 0,
+        total: work.iter().map(|(_, points)| points).sum(),
+        accepted: 0,
+    };
+    progress(first)?;
+    let percent = options.read_percent();
+    let sampled = |position: usize, ordinal: u64, point: &Point| {
+        sampled_ordinal(ordinal, percent) && accept(position, ordinal, point)
+    };
+    collect_passes(slab, options, covered, &mut |take, again| match again {
+        None => read_slab(sources, &work, slab, &sampled, progress, take),
+        // The job hears the count of the first read while it goes on.
+        Some(state) => read_slab(
+            sources,
+            &work,
+            slab,
+            &sampled,
+            &mut |_| progress(state),
+            take,
+        ),
+    })
+}
+
+/// Refuses options that cannot collect anything, before a point is read.
+pub(super) fn check_options(options: &SlabOptions) -> Result<(), LoadError> {
     let invalid = |reason: &str| Err(LoadError::InvalidData(reason.into()));
     let positive = |value: f64| value.is_finite() && value > 0.0;
     if options
@@ -524,8 +617,21 @@ pub fn collect_slab(
     if options.grid.is_some_and(|cell| !positive(cell)) {
         return invalid("grid size must be above zero");
     }
-    // The layers that reach into the slab, the points a read of each goes
-    // through, and the part of the slab they can have points in.
+    // Written so that a NaN fails the test.
+    let share = |percent: f64| percent > 0.0 && percent <= 100.0;
+    if !share(options.sample_percent) || !share(options.grid_percent) {
+        return invalid("the share of the points must lie above 0 and at most 100 percent");
+    }
+    Ok(())
+}
+
+/// The layers that reach into the slab, each as its position in `sources`
+/// with the points a read of it goes through, and the part of the slab
+/// they can have points in.
+pub(super) fn slab_work(
+    sources: &[RegionSource<'_>],
+    slab: &Slab,
+) -> (Vec<(usize, u64)>, Option<Bounds>) {
     let mut work = Vec::new();
     let mut covered: Option<Bounds> = None;
     for (position, source) in sources.iter().enumerate() {
@@ -546,59 +652,143 @@ pub fn collect_slab(
             None => covered = Some(part),
         }
     }
-    progress(RegionProgress {
-        read: 0,
-        total: work.iter().map(|(_, points)| points).sum(),
-        accepted: 0,
-    })?;
+    (work, covered)
+}
 
-    let mut thinning = options
-        .point_spacing
-        .map(|spacing| Thinning::new(slab.extent[0], spacing, options.max_points));
-    let mut grid = match (options.grid, covered) {
-        (Some(cell), Some(covered)) => {
-            // The corners of the box give the extent on the plane.
-            let (mut low, mut high) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-            for corner in bounds_corners(covered) {
-                let at = slab.frame.to_uv(corner);
-                for axis in 0..2 {
-                    low[axis] = low[axis].min(at[axis]);
-                    high[axis] = high[axis].max(at[axis]);
-                }
-            }
-            if slab.region.is_turned() {
-                // No farther than the box as the view sees it.
-                for axis in 0..2 {
-                    low[axis] = low[axis].max(slab.extent[0][axis]);
-                    high[axis] = high[axis].min(slab.extent[1][axis]);
-                    if low[axis] > high[axis] {
-                        // The layers reach the corners around the box only.
-                        low[axis] = slab.extent[0][axis];
-                        high[axis] = slab.extent[0][axis];
+/// One pass over the points of the slab: it hands every point of the slab
+/// that takes part to `take`, with its place on the cut plane and the
+/// position of its layer, and answers with the count of the pass. The
+/// second argument is `None` for the first pass and the count of the first
+/// pass for a pass that lays the grid closer.
+pub(super) type SlabPass<'a> = dyn FnMut(
+        &mut dyn FnMut([f64; 2], u32, &IndexedPoint),
+        Option<RegionProgress>,
+    ) -> Result<RegionProgress, LoadError>
+    + 'a;
+
+/// What a pass over the slab collects: the thinned points and the count
+/// grid, as far as the options ask for them. Two of these, filled with
+/// different points of the same slab, merge into what one pass over all of
+/// them gives, but for the order in which the sums of the grid are added.
+#[derive(Debug, Clone)]
+pub(super) struct Gathered {
+    thinning: Option<Thinning>,
+    grid: Option<CutGrid>,
+    /// The shares of the points that are thinned and counted.
+    shares: [f64; 2],
+}
+
+impl Gathered {
+    /// Nothing collected yet, for the slab, the options and the part of the
+    /// slab the layers can have points in.
+    pub(super) fn start(
+        slab: &Slab,
+        options: &SlabOptions,
+        covered: Option<Bounds>,
+    ) -> Result<Self, LoadError> {
+        let thinning = options
+            .point_spacing
+            .map(|spacing| Thinning::new(slab.extent[0], spacing, options.max_points));
+        let grid = match (options.grid, covered) {
+            (Some(cell), Some(covered)) => {
+                // The corners of the box give the extent on the plane.
+                let (mut low, mut high) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+                for corner in bounds_corners(covered) {
+                    let at = slab.frame.to_uv(corner);
+                    for axis in 0..2 {
+                        low[axis] = low[axis].min(at[axis]);
+                        high[axis] = high[axis].max(at[axis]);
                     }
                 }
+                if slab.region.is_turned() {
+                    // No farther than the box as the view sees it.
+                    for axis in 0..2 {
+                        low[axis] = low[axis].max(slab.extent[0][axis]);
+                        high[axis] = high[axis].min(slab.extent[1][axis]);
+                        if low[axis] > high[axis] {
+                            // The layers reach the corners around the box only.
+                            low[axis] = slab.extent[0][axis];
+                            high[axis] = slab.extent[0][axis];
+                        }
+                    }
+                }
+                let frame = GridFrame::covering(low, high, cell, MAX_CUT_GRID_CELLS)?;
+                Some(CutGrid::new(frame))
             }
-            let frame = GridFrame::covering(low, high, cell, MAX_CUT_GRID_CELLS)?;
-            Some(CutGrid::new(frame))
-        }
-        _ => None,
-    };
+            _ => None,
+        };
+        Ok(Self {
+            thinning,
+            grid,
+            shares: [options.sample_percent, options.grid_percent],
+        })
+    }
 
-    let state = read_slab(
-        sources,
-        &work,
-        slab,
-        accept,
-        progress,
-        &mut |uv, source, record| {
-            if let Some(grid) = &mut grid {
+    /// Take a point of the slab, at its place on the cut plane: on the grid
+    /// and among the points to thin when it is in their share.
+    pub(super) fn add(&mut self, uv: [f64; 2], source: u32, record: &IndexedPoint) {
+        if let Some(grid) = &mut self.grid {
+            if sampled_ordinal(record.ordinal, self.shares[1]) {
                 grid.add(uv);
             }
-            if let Some(thinning) = &mut thinning {
+        }
+        if let Some(thinning) = &mut self.thinning {
+            if sampled_ordinal(record.ordinal, self.shares[0]) {
                 thinning.add(uv, source, record);
             }
-        },
+        }
+    }
+
+    /// Take in what another pass over other points of the same slab
+    /// collected.
+    pub(super) fn merge(&mut self, other: Self) {
+        if let (Some(grid), Some(more)) = (&mut self.grid, &other.grid) {
+            grid.absorb(more);
+        }
+        if let (Some(thinning), Some(more)) = (&mut self.thinning, other.thinning) {
+            thinning.merge(more);
+        }
+    }
+
+    /// Memory the grid takes, which every copy of this takes again.
+    pub(super) fn grid_bytes(&self) -> usize {
+        self.grid
+            .as_ref()
+            .map_or(0, |grid| grid.frame().cells() * CutGrid::CELL_BYTES)
+    }
+}
+
+/// Thin the points and count them on the grid, in as many passes over the
+/// slab as the grid needs: see `collect_slab`. `covered` is the part of the
+/// slab the layers can have points in.
+pub(super) fn collect_passes(
+    slab: &Slab,
+    options: &SlabOptions,
+    covered: Option<Bounds>,
+    pass: &mut SlabPass<'_>,
+) -> Result<SlabCut, LoadError> {
+    let mut gathered = Gathered::start(slab, options, covered)?;
+    let state = pass(
+        &mut |uv, source, record| gathered.add(uv, source, record),
+        None,
     )?;
+    finish_passes(options, gathered, state, pass)
+}
+
+/// After the first pass, that gathered what `state` counts: lay the grid
+/// closer when its cells came out larger than asked, with further passes,
+/// and hand over what was collected.
+pub(super) fn finish_passes(
+    options: &SlabOptions,
+    gathered: Gathered,
+    state: RegionProgress,
+    pass: &mut SlabPass<'_>,
+) -> Result<SlabCut, LoadError> {
+    let Gathered {
+        thinning,
+        mut grid,
+        shares,
+    } = gathered;
     let mut read_points = state.read;
 
     // Cells larger than asked: the bounds of the layers span more than the
@@ -623,13 +813,13 @@ pub fn collect_slab(
             // The grid that served goes before the next one is made.
             drop(grid.take());
             let mut closer = CutGrid::new(frame);
-            let again = read_slab(
-                sources,
-                &work,
-                slab,
-                accept,
-                &mut |_| progress(state),
-                &mut |uv, _, _| closer.add(uv),
+            let again = pass(
+                &mut |uv, _, record| {
+                    if sampled_ordinal(record.ordinal, shares[1]) {
+                        closer.add(uv);
+                    }
+                },
+                Some(state),
             )?;
             read_points += again.read;
             grid = Some(closer);
@@ -642,6 +832,7 @@ pub fn collect_slab(
         grid,
         slab_points: state.accepted,
         read_points,
+        reused_points: 0,
     })
 }
 
@@ -911,6 +1102,8 @@ mod tests {
                     point_spacing: Some(0.005),
                     max_points,
                     grid: None,
+                    sample_percent: 100.0,
+                    grid_percent: 100.0,
                 },
             )
         };
@@ -1030,6 +1223,8 @@ mod tests {
         point_spacing: Some(0.005),
         max_points: 150_000,
         grid: Some(0.02),
+        sample_percent: 100.0,
+        grid_percent: 100.0,
     };
 
     #[test]

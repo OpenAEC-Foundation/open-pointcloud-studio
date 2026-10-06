@@ -42,9 +42,17 @@ pub struct StoredRequest {
     pub origin: String,
     pub point_spacing: f64,
     pub max_points: usize,
+    /// The points used, in percent. A drawing kept before this setting was
+    /// made from every point.
+    #[serde(default = "every_point")]
+    pub sample_percent: f64,
     pub point_layers: String,
     pub color: String,
     pub version: String,
+}
+
+fn every_point() -> f64 {
+    100.0
 }
 
 /// How a drawing of the Project Browser was made.
@@ -98,6 +106,7 @@ impl SavedDrawing {
                 origin: request.origin.key().to_owned(),
                 point_spacing: request.point_spacing,
                 max_points: request.max_points,
+                sample_percent: request.sample_percent,
                 point_layers: request.point_layers.key().to_owned(),
                 color: request.color.key().to_owned(),
                 version: request.version.key().to_owned(),
@@ -136,6 +145,7 @@ impl SavedDrawing {
             origin: DrawingOrigin::from_key(&stored.origin)?,
             point_spacing: stored.point_spacing,
             max_points: stored.max_points,
+            sample_percent: stored.sample_percent,
             point_layers: PointLayers::from_key(&stored.point_layers)?,
             color: PointColor::from_key(&stored.color)?,
             version: DrawingVersion::from_key(&stored.version)?,

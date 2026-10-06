@@ -6,6 +6,7 @@
 //! The unit factor is applied once, by the writer, so a preview and an export
 //! are made from the same numbers.
 
+mod kept;
 mod outline;
 mod read;
 mod section;
@@ -17,15 +18,16 @@ use std::path::Path;
 
 use super::LoadError;
 
+pub use kept::{collect_slab_kept, KeptSlab, KEPT_POINT_BYTES};
 pub use outline::{
     trace_cut_regions, CutOutline, CutRegion, OutlineOptions, CUT_MIN_POINTS_PER_CELL,
     DEFAULT_MIN_WALL_LENGTH, MIN_CUT_HOLE_AREA, SQUARE_TOLERANCE,
 };
 pub use read::{read_drawing, ReadDrawing};
 pub use section::{
-    export_section_drawing, preview_cut_regions, preview_section_drawing, section_drawing,
-    wall_direction, CutPreview, DrawingProgress, DrawingSource, DrawingStage, PreviewRegion,
-    WallDirection,
+    export_section_drawing, preview_cut_regions, preview_section_drawing,
+    preview_section_drawing_kept, section_drawing, wall_direction, CutPreview, DrawingProgress,
+    DrawingSource, DrawingStage, PreviewRegion, WallDirection,
 };
 pub use slab::{
     collect_slab, slab_from_section, CutGrid, Slab, SlabCut, SlabOptions, SlabPoint,
@@ -74,6 +76,9 @@ pub const DEFAULT_MAX_WALL_THICKNESS: f64 = 0.50;
 /// so this also bounds what the filled cut costs, whatever a request asks.
 pub const MAX_WALL_THICKNESS: f64 = 2.0;
 pub const DEFAULT_MIN_WALL_THICKNESS: f64 = 0.05;
+/// The smallest share of the points of the scans a drawing is made from, in
+/// percent.
+pub const MIN_DRAWING_SAMPLE_PERCENT: f64 = 0.1;
 
 /// A layer table entry cannot be longer than this.
 const MAX_LAYER_NAME_CHARS: usize = 255;
@@ -375,6 +380,11 @@ pub struct DrawingRequest {
     pub point_spacing: f64,
     /// When thinning leaves more points than this, the spacing doubles.
     pub max_points: usize,
+    /// The share of the points of the scans the drawing is made from, in
+    /// percent, from `MIN_DRAWING_SAMPLE_PERCENT` to 100: below 100 the same
+    /// points whatever the box, spread over every scan, chosen by their
+    /// ordinal in the source file.
+    pub sample_percent: f64,
     pub point_layers: PointLayers,
     pub color: PointColor,
     pub version: DrawingVersion,
@@ -397,6 +407,7 @@ impl DrawingRequest {
             origin: DrawingOrigin::default(),
             point_spacing: DEFAULT_POINT_SPACING,
             max_points: DEFAULT_DRAWING_POINTS,
+            sample_percent: 100.0,
             point_layers: PointLayers::default(),
             color: PointColor::default(),
             version: DrawingVersion::default(),
@@ -431,6 +442,10 @@ impl DrawingRequest {
         if self.min_wall_thickness > self.max_wall_thickness {
             return invalid("smallest wall thickness is above the largest");
         }
+        // Written so that a NaN fails the test.
+        if !(self.sample_percent >= MIN_DRAWING_SAMPLE_PERCENT && self.sample_percent <= 100.0) {
+            return invalid("the points used must lie between 0.1 and 100 percent");
+        }
         if self.max_points == 0 || self.max_points > MAX_DRAWING_POINTS {
             return invalid(&format!(
                 "a drawing holds between 1 and {} points",
@@ -455,6 +470,9 @@ pub struct DrawingStats {
     /// Points that were read to find them: those of the octree leaves that
     /// touch the slab, and all points of a layer without an index.
     pub read_points: u64,
+    /// Points taken from memory, kept from an earlier read of the same
+    /// slab, instead of being read again.
+    pub reused_points: u64,
     /// Point entities in the drawing, after thinning.
     pub drawn_points: u64,
     /// The spacing the points were thinned to; above the requested spacing

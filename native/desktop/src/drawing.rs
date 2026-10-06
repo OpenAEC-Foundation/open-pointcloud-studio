@@ -12,7 +12,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame};
@@ -22,7 +22,7 @@ use pointcloud_core::region_source::{RegionFilter, RegionSource};
 use pointcloud_core::{
     Bounds, CutPreview, Drawing2d, DrawingFormat, DrawingOrigin, DrawingProgress, DrawingRequest,
     DrawingSource, DrawingStage, DrawingStats, DrawingUnits, DrawingVersion, DrawingView,
-    IndexConfig, LoadError, OctreeIndex, OrientedBox, Point, PointColor, PointLayers,
+    IndexConfig, KeptSlab, LoadError, OctreeIndex, OrientedBox, Point, PointColor, PointLayers,
     WallDirection, DEFAULT_MIN_WALL_THICKNESS,
 };
 use serde::Deserialize;
@@ -501,6 +501,9 @@ pub(crate) struct JobInput {
     scene: Scene,
     request: DrawingRequest,
     target: Target,
+    /// The points a drawing of the Project Browser read before and keeps
+    /// for the next time it is made.
+    kept: Option<Arc<Mutex<KeptSlab>>>,
 }
 
 /// What a finished job hands back: with the drawing it made, which the
@@ -552,13 +555,23 @@ fn run(
                     path: path.clone(),
                 })
             }
-            Target::Preview | Target::Sheet(_) => pointcloud_core::preview_section_drawing(
-                sources,
-                scene.section,
-                &input.request,
-                accept,
-                progress,
-            )
+            Target::Preview | Target::Sheet(_) => match &input.kept {
+                Some(kept) => pointcloud_core::preview_section_drawing_kept(
+                    sources,
+                    scene.section,
+                    &input.request,
+                    accept,
+                    &mut kept.lock().unwrap_or_else(PoisonError::into_inner),
+                    progress,
+                ),
+                None => pointcloud_core::preview_section_drawing(
+                    sources,
+                    scene.section,
+                    &input.request,
+                    accept,
+                    progress,
+                ),
+            }
             .map(|(preview, drawing)| Done::Preview(Box::new(preview), Box::new(drawing))),
         })
         .map_err(|error| hint_empty_slab(error, input.request.view))
@@ -646,6 +659,7 @@ impl DrawingEnd {
 fn stage_key(stage: DrawingStage) -> &'static str {
     match stage {
         DrawingStage::Reading => "reading",
+        DrawingStage::Thinning => "thinning",
         DrawingStage::Tracing => "tracing",
         DrawingStage::Writing => "writing",
     }
@@ -675,10 +689,14 @@ impl DrawingControl {
     fn snapshot(&self) -> DrawingProgress {
         let stage = self.stage.load(Ordering::Relaxed);
         DrawingProgress {
-            stage: [DrawingStage::Tracing, DrawingStage::Writing]
-                .into_iter()
-                .find(|known| *known as u8 == stage)
-                .unwrap_or(DrawingStage::Reading),
+            stage: [
+                DrawingStage::Thinning,
+                DrawingStage::Tracing,
+                DrawingStage::Writing,
+            ]
+            .into_iter()
+            .find(|known| *known as u8 == stage)
+            .unwrap_or(DrawingStage::Reading),
             done: self.done.load(Ordering::Relaxed),
             total: self.total.load(Ordering::Relaxed),
         }
@@ -714,6 +732,11 @@ impl DrawingJob {
             DrawingStage::Reading if progress.total == 0 => "reading the slab".to_owned(),
             DrawingStage::Reading => format!(
                 "reading the slab, {} of {} points",
+                compact_count(progress.done.min(progress.total)),
+                compact_count(progress.total)
+            ),
+            DrawingStage::Thinning => format!(
+                "thinning the points of the slab, {} of {}",
                 compact_count(progress.done.min(progress.total)),
                 compact_count(progress.total)
             ),
@@ -874,6 +897,7 @@ fn stats_value(stats: &DrawingStats, request: &DrawingRequest, slab: f64) -> Val
         "units": request.units.key(),
         "slab_points": stats.slab_points,
         "read_points": stats.read_points,
+        "reused_points": stats.reused_points,
         "drawn_points": stats.drawn_points,
         "point_spacing": stats.point_spacing,
         "point_spacing_raised": spacing_raised(stats, request),
@@ -1054,7 +1078,8 @@ impl DrawingTool {
         let traced = job.preview() || job.input.request.fill;
         let steps = 1 + u8::from(traced) + u8::from(!job.preview());
         let step = match progress.stage {
-            DrawingStage::Reading => 1,
+            // Thinning the points read is part of the first step.
+            DrawingStage::Reading | DrawingStage::Thinning => 1,
             DrawingStage::Tracing => 2,
             DrawingStage::Writing => steps,
         };
@@ -1320,11 +1345,21 @@ impl Studio {
         target: Target,
         api_job_id: Option<String>,
     ) -> Task<Message> {
+        // A drawing of the Project Browser keeps the points it reads.
+        let kept = match &target {
+            Target::Sheet(definition) => Some(
+                self.drawing_view
+                    .kept
+                    .for_job(&definition.guid, &scene.layers),
+            ),
+            _ => None,
+        };
         let control = Arc::new(DrawingControl::default());
         let input = Arc::new(JobInput {
             scene,
             request,
             target,
+            kept,
         });
         let serial = self.drawing.next_serial;
         self.drawing.next_serial += 1;
@@ -1385,6 +1420,7 @@ impl Studio {
         request.view = job.view;
         request.thickness = job.thickness;
         request.fill = DrawingRequest::for_view(job.view).fill;
+        request.sample_percent = job.sample_percent;
         let mut sources: Vec<PathBuf> = Vec::new();
         for entry in self.clouds.iter().filter(|entry| drawn(entry)) {
             let source = self.views.source_of(&entry.cloud.path);
@@ -1730,8 +1766,12 @@ impl Studio {
                 value["crop"] = crate::drawing_crop::crop_value(definition);
             }
             self.status = match &last {
-                Last::Previewed { .. } => match &remade {
-                    Some(remake) => Self::remade_status(definition, remake.operation),
+                Last::Previewed { stats, .. } => match &remade {
+                    Some(remake) => Self::remade_status(
+                        definition,
+                        remake.operation,
+                        stats.read_points == 0 && stats.reused_points > 0,
+                    ),
                     None => {
                         format!("Drawing {} made; it is listed under VIEWS", definition.name)
                     }
@@ -1767,6 +1807,9 @@ impl Studio {
         if let Some(path) = written {
             self.cad_file_written(&path);
         }
+        // The drawings used longest ago let go of the points they keep when
+        // all of them take too much memory.
+        self.drawing_view.kept.settle();
     }
 
     /// Start a job for a command of the local API: put the fields it names
@@ -2028,6 +2071,7 @@ impl Studio {
             } else {
                 match progress.stage {
                     DrawingStage::Reading => tr("Reading the slab…"),
+                    DrawingStage::Thinning => tr("Thinning the points of the slab…"),
                     DrawingStage::Tracing => tr("Tracing the filled cut…"),
                     DrawingStage::Writing => tr("Writing the file…"),
                 }
@@ -2535,6 +2579,7 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
         ),
         request,
         target: Target::Export(destination.clone(), format),
+        kept: None,
     };
     match run(&input, &mut |_| Ok(())).map_err(failed)? {
         Done::Exported { stats, .. } => Ok(format!(
@@ -3141,6 +3186,7 @@ mod tests {
         let stats = DrawingStats {
             slab_points: 1_822_308,
             read_points: 4_000_000,
+            reused_points: 0,
             drawn_points: 65_637,
             point_spacing: 0.04,
             regions: 3,
@@ -4397,13 +4443,13 @@ mod tests {
         assert!(!directory.path().join("empty.dxf").exists());
     }
 
-    /// Make a plan of the model with Create 2D at a height, as the local
-    /// API does, and answer its identifier.
+    /// Make a plan of the model with Create 2D at a height from every
+    /// point, as the local API does, and answer its identifier.
     fn make_plan(studio: &mut Studio, height: f64) -> String {
         let answer = send(
             studio,
             serde_json::from_str(&format!(
-                r#"{{"command":"create_drawing","kind":"plan","height":{height}}}"#
+                r#"{{"command":"create_drawing","kind":"plan","height":{height},"sample_percent":100}}"#
             ))
             .unwrap(),
         );
@@ -5533,5 +5579,160 @@ mod tests {
                 "Choose an output path different from the input".to_owned()
             )
         );
+    }
+
+    /// Make a plan of the room at 1.1 m with Create 2D from a share of its
+    /// points, and answer the finished job.
+    fn make_plan_of(studio: &mut Studio, percent: f64) -> Value {
+        let answer = send(
+            studio,
+            serde_json::from_str(&format!(
+                r#"{{"command":"create_drawing","kind":"plan","height":1.1,"sample_percent":{percent}}}"#
+            ))
+            .unwrap(),
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        finish(studio);
+        job(studio, answer["job_id"].as_str().unwrap())
+    }
+
+    /// Change the crop region of a drawing and answer the finished job.
+    fn crop_job(studio: &mut Studio, guid: &str, change: Value) -> Value {
+        let name = definition(studio, guid).name;
+        let mut command = json!({"command": "set_sheet_crop", "name": name});
+        for (key, value) in change.as_object().unwrap() {
+            command[key] = value.clone();
+        }
+        let answer = send(studio, serde_json::from_value(command).unwrap());
+        assert_eq!(answer["ok"], true, "{answer}");
+        finish(studio);
+        job(studio, answer["job_id"].as_str().unwrap())
+    }
+
+    #[test]
+    fn a_crop_region_changed_within_the_slab_is_drawn_from_the_points_read() {
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, in_slab) = studio_with_room(directory.path());
+        let kept = |studio: &mut Studio| {
+            send(studio, ApiCommand::Status)["result"]["drawing_view"]["kept"].clone()
+        };
+
+        // Every point: the slab of the plan is that of the room, read once.
+        let made = make_plan_of(&mut studio, 100.0);
+        assert_eq!(made["state"], "complete", "{made}");
+        assert_eq!(made["slab_points"], in_slab);
+        assert!(made["read_points"].as_u64().unwrap() > 0, "{made}");
+        assert_eq!(made["reused_points"], 0);
+        let guid = made["guid"].as_str().unwrap().to_owned();
+        assert_eq!(definition(&studio, &guid).request.sample_percent, 100.0);
+        let held = kept(&mut studio);
+        assert_eq!(held["drawings"], 1, "{held}");
+        assert!(held["points"].as_u64().unwrap() >= in_slab, "{held}");
+
+        // A smaller crop region and one moved within it: nothing is read.
+        let crop = crate::drawing_crop::crop_value(&definition(&studio, &guid));
+        let (width, centre) = (crop["width"].as_f64().unwrap(), crop["center"].clone());
+        for change in [
+            json!({"width": width - 1.0}),
+            json!({"center": [centre[0].as_f64().unwrap() + 0.3, centre[1].as_f64().unwrap()]}),
+        ] {
+            let remade = crop_job(&mut studio, &guid, change);
+            assert_eq!(remade["state"], "complete", "{remade}");
+            assert_eq!(remade["read_points"], 0, "{remade}");
+            assert!(remade["reused_points"].as_u64().unwrap() > 0, "{remade}");
+            assert!(
+                studio
+                    .status
+                    .ends_with("made again from the points it had read"),
+                "{}",
+                studio.status
+            );
+        }
+        // Another cut reads the slab again.
+        let lower = crop_job(&mut studio, &guid, json!({"cut": 1.05}));
+        assert!(lower["read_points"].as_u64().unwrap() > 0, "{lower}");
+        assert_eq!(lower["reused_points"], 0);
+        // The filled cut of a plan is traced from every point, which the
+        // drawing keeps: other points used read nothing either.
+        let half = crop_job(&mut studio, &guid, json!({"sample_percent": 50.0}));
+        assert_eq!(half["read_points"], 0, "{half}");
+        assert!(
+            half["drawn_points"].as_u64() < lower["drawn_points"].as_u64(),
+            "{half}"
+        );
+        assert_eq!(half["slab_points"], lower["slab_points"]);
+        assert_eq!(half["crop"]["sample_percent"], 50.0);
+        assert_eq!(definition(&studio, &guid).request.sample_percent, 50.0);
+        let name = definition(&studio, &guid).name;
+        let refused = send(
+            &mut studio,
+            serde_json::from_value(json!({
+                "command": "set_sheet_crop",
+                "name": name,
+                "sample_percent": 0.05,
+            }))
+            .unwrap(),
+        );
+        assert_eq!(refused["ok"], false, "{refused}");
+
+        // A drawing that is deleted lets go of its points.
+        assert_eq!(studio.api_delete_drawing(&name)["ok"], true);
+        assert_eq!(kept(&mut studio)["drawings"], 0);
+    }
+
+    #[test]
+    fn a_plan_of_create_2d_uses_a_tenth_of_the_points_unless_told_otherwise() {
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, in_slab) = studio_with_room(directory.path());
+        let mut plan = || {
+            let answer = send(
+                &mut studio,
+                serde_json::from_str(r#"{"command":"create_drawing","kind":"plan","height":1.1}"#)
+                    .unwrap(),
+            );
+            assert_eq!(answer["ok"], true, "{answer}");
+            finish(&mut studio);
+            job(&mut studio, answer["job_id"].as_str().unwrap())
+        };
+        let made = plan();
+        let again = plan();
+        let guid = made["guid"].as_str().unwrap().to_owned();
+        assert_eq!(definition(&studio, &guid).request.sample_percent, 10.0);
+        // The filled cut takes every point of the slab; the points drawn are
+        // thinned from a tenth of them, the same points every time.
+        assert_eq!(made["slab_points"], in_slab);
+        let every = make_plan(&mut studio, 1.1);
+        let all = studio.drawing.last.as_ref().unwrap().value();
+        assert_eq!(definition(&studio, &every).request.sample_percent, 100.0);
+        let drawn = made["drawn_points"].as_u64().unwrap();
+        assert!(
+            drawn > 0 && drawn < all["drawn_points"].as_u64().unwrap(),
+            "{made} {all}"
+        );
+        assert_eq!(made["regions"], all["regions"]);
+        assert_ne!(again["guid"], made["guid"]);
+        assert_eq!(again["drawn_points"], drawn);
+        // A share outside 0.1 to 100 is refused before anything is made.
+        for percent in [0.05, 120.0] {
+            let answer = send(
+                &mut studio,
+                serde_json::from_str(&format!(
+                    r#"{{"command":"create_drawing","kind":"plan","height":1.1,"sample_percent":{percent}}}"#
+                ))
+                .unwrap(),
+            );
+            assert_eq!(answer["ok"], false, "{answer}");
+            assert!(
+                answer["error"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("The points used must lie between"),
+                "{answer}"
+            );
+        }
     }
 }

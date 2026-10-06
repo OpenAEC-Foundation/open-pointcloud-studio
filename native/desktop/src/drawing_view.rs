@@ -470,6 +470,9 @@ pub(crate) struct DrawingViewTool {
     made: Vec<Arc<DrawScene>>,
     /// The crop region of a drawing of `saved` is drawn over it.
     pub(crate) crop_shown: bool,
+    /// The points the drawings of `saved` read, kept for the next time one
+    /// is made.
+    pub(crate) kept: crate::kept_slabs::KeptSlabs,
     /// A drawing of `saved` being made again after its crop region changed.
     pub(crate) remake: Option<Remake>,
     /// What is typed in the fields of the Crop region section, for the
@@ -515,6 +518,7 @@ impl DrawingViewTool {
             saved: crate::saved_drawings::load(),
             made: Vec::new(),
             crop_shown: true,
+            kept: crate::kept_slabs::KeptSlabs::default(),
             remake: None,
             crop_edits: (None, Vec::new()),
             pointer: Cell::new(None),
@@ -770,6 +774,7 @@ impl DrawingViewTool {
             },
             "crop_shown": self.crop_shown,
             "remaking": self.remake.as_ref().map(|remake| &remake.definition.name),
+            "kept": self.kept.value(),
             "viewport_size": self.bounds.get().map(|bounds| [bounds.width, bounds.height]),
         })
     }
@@ -1708,6 +1713,7 @@ impl Studio {
                 .retain(|made| made.source.sheet_guid() != Some(guid));
             view.drop_scene(&scene);
         }
+        self.drawing_view.kept.forget(guid);
         self.status = format!("Drawing {} deleted", removed.name);
         Ok(removed.name)
     }

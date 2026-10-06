@@ -56,19 +56,20 @@ pub use closed_mesh::{
     DEFAULT_CLOSED_MESH_VERTICES, MAX_CLOSED_MESH_HOLE, MIN_CLOSED_MESH_SAMPLE_PERCENT,
 };
 pub use drawing::{
-    class_point_layer, collect_slab, drawing_info_text, export_section_drawing, layer_name,
-    preview_cut_regions, preview_section_drawing, read_drawing, section_drawing, slab_from_section,
-    source_point_layer, trace_cut_regions, wall_direction, write_drawing, write_drawing_progress,
-    CutGrid, CutOutline, CutPreview, CutRegion, Drawing2d, DrawingEntity, DrawingFormat,
-    DrawingFrame, DrawingLayer, DrawingOrigin, DrawingProgress, DrawingRequest, DrawingSource,
-    DrawingStage, DrawingStats, DrawingUnits, DrawingVersion, DrawingView, OutlineOptions,
-    PointColor, PointLayers, PreviewRegion, ReadDrawing, Slab, SlabCut, SlabOptions, SlabPoint,
-    WallDirection, CUT_MIN_POINTS_PER_CELL, DEFAULT_CUT_GRID, DEFAULT_DRAWING_POINTS,
-    DEFAULT_MAX_WALL_THICKNESS, DEFAULT_MIN_WALL_LENGTH, DEFAULT_MIN_WALL_THICKNESS,
-    DEFAULT_POINT_SPACING, DEFAULT_SLAB_THICKNESS, LAYER_CUT_FILL, LAYER_CUT_OUTLINE, LAYER_FRAME,
-    LAYER_INFO, LAYER_POINTS, LAYER_RGB_CONTRAST, LAYER_RGB_CUT_FILL, LAYER_RGB_FRAME,
-    MAX_CUT_GRID_CELLS, MAX_DRAWING_POINTS, MAX_SLAB_THICKNESS, MAX_WALL_THICKNESS, MIN_CUT_GRID,
-    MIN_CUT_HOLE_AREA, MIN_SLAB_THICKNESS, SQUARE_TOLERANCE,
+    class_point_layer, collect_slab, collect_slab_kept, drawing_info_text, export_section_drawing,
+    layer_name, preview_cut_regions, preview_section_drawing, preview_section_drawing_kept,
+    read_drawing, section_drawing, slab_from_section, source_point_layer, trace_cut_regions,
+    wall_direction, write_drawing, write_drawing_progress, CutGrid, CutOutline, CutPreview,
+    CutRegion, Drawing2d, DrawingEntity, DrawingFormat, DrawingFrame, DrawingLayer, DrawingOrigin,
+    DrawingProgress, DrawingRequest, DrawingSource, DrawingStage, DrawingStats, DrawingUnits,
+    DrawingVersion, DrawingView, KeptSlab, OutlineOptions, PointColor, PointLayers, PreviewRegion,
+    ReadDrawing, Slab, SlabCut, SlabOptions, SlabPoint, WallDirection, CUT_MIN_POINTS_PER_CELL,
+    DEFAULT_CUT_GRID, DEFAULT_DRAWING_POINTS, DEFAULT_MAX_WALL_THICKNESS, DEFAULT_MIN_WALL_LENGTH,
+    DEFAULT_MIN_WALL_THICKNESS, DEFAULT_POINT_SPACING, DEFAULT_SLAB_THICKNESS, KEPT_POINT_BYTES,
+    LAYER_CUT_FILL, LAYER_CUT_OUTLINE, LAYER_FRAME, LAYER_INFO, LAYER_POINTS, LAYER_RGB_CONTRAST,
+    LAYER_RGB_CUT_FILL, LAYER_RGB_FRAME, MAX_CUT_GRID_CELLS, MAX_DRAWING_POINTS,
+    MAX_SLAB_THICKNESS, MAX_WALL_THICKNESS, MIN_CUT_GRID, MIN_CUT_HOLE_AREA,
+    MIN_DRAWING_SAMPLE_PERCENT, MIN_SLAB_THICKNESS, SQUARE_TOLERANCE,
 };
 pub use dxf::read_mesh as read_dxf_mesh;
 pub use export::{

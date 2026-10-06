@@ -17,7 +17,7 @@ use iced::widget::{column, container, text, text_input};
 use iced::{Element, Fill, Size, Task};
 use pointcloud_core::{
     normalized_degrees, Bounds, DrawingFrame, DrawingOrigin, DrawingView, OrientedBox,
-    MAX_SLAB_THICKNESS, MIN_SLAB_THICKNESS,
+    MAX_SLAB_THICKNESS, MIN_DRAWING_SAMPLE_PERCENT, MIN_SLAB_THICKNESS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -342,6 +342,8 @@ pub enum Field {
     Rotation,
     Cut,
     Depth,
+    /// The share of the points of the scans the drawing is made from.
+    Points,
 }
 
 impl Field {
@@ -356,6 +358,7 @@ impl Field {
                 Self::Rotation,
                 Self::Cut,
                 Self::Depth,
+                Self::Points,
             ],
             _ => &[
                 Self::Width,
@@ -364,6 +367,7 @@ impl Field {
                 Self::CentreB,
                 Self::Cut,
                 Self::Depth,
+                Self::Points,
             ],
         }
     }
@@ -381,11 +385,12 @@ impl Field {
             Self::Cut if plan => key("Cut height"),
             Self::Cut => key("Cut position"),
             Self::Depth => key("View depth (m)"),
+            Self::Points => key("Points used (%)"),
         }
     }
 
-    /// The figure as the field shows it.
-    fn text(self, figures: &Figures) -> String {
+    /// The figure as the field shows it, with `percent` the points used.
+    fn text(self, figures: &Figures, percent: f64) -> String {
         match self {
             Self::Width => format!("{:.3}", figures.width),
             Self::Height => format!("{:.3}", figures.height),
@@ -394,8 +399,35 @@ impl Field {
             Self::Rotation => format_rotation(figures.rotation),
             Self::Cut => format!("{:.3}", figures.cut),
             Self::Depth => format!("{:.3}", figures.depth),
+            Self::Points => percent_text(percent),
         }
     }
+}
+
+/// A share in percent as a field shows it: without the decimals it does not
+/// need.
+pub fn percent_text(percent: f64) -> String {
+    let text = format!("{percent:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// A share in percent as it is typed, with a point or a comma and with or
+/// without the percent sign; nothing for what is no number.
+pub fn parse_percent(typed: &str) -> Option<f64> {
+    typed
+        .trim()
+        .trim_end_matches('%')
+        .trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+/// Why a share of the points cannot be used, if it cannot.
+pub fn percent_problem(percent: f64) -> Option<String> {
+    (!(MIN_DRAWING_SAMPLE_PERCENT..=100.0).contains(&percent))
+        .then(|| format!("The points used must lie between {MIN_DRAWING_SAMPLE_PERCENT} and 100 %"))
 }
 
 /// The box and the slab after one figure of the crop region was set. Width
@@ -453,6 +485,7 @@ pub fn with_figure(
             OrientedBox::new(section.bounds, normalized_degrees(value) + 0.0)
         }
         Field::Rotation => return Err("Only the crop region of a plan turns".into()),
+        Field::Points => return Err("The points used are no figure of the box".into()),
         Field::Cut => {
             let shift = value - now.cut;
             let look = layout.look;
@@ -796,6 +829,9 @@ pub struct SheetCropOptions {
     pub cut: Option<f64>,
     #[serde(default)]
     pub depth: Option<f64>,
+    /// The points used, in percent.
+    #[serde(default)]
+    pub sample_percent: Option<f64>,
 }
 
 /// The figures and the rectangle of the crop region of a drawing, for the
@@ -817,6 +853,7 @@ pub(crate) fn crop_value(definition: &SavedDrawing) -> Value {
         "depth": shown.depth,
         "rect": rect,
         "units": request.units.key(),
+        "sample_percent": request.sample_percent,
     })
 }
 
@@ -924,10 +961,10 @@ impl Studio {
                 let Some(guid) = self.drawing_view.shown_guid().map(str::to_owned) else {
                     return Task::none();
                 };
-                let value = if field == Field::Rotation {
-                    parse_rotation(&typed)
-                } else {
-                    typed.trim().replace(',', ".").parse::<f64>().ok()
+                let value = match field {
+                    Field::Rotation => parse_rotation(&typed),
+                    Field::Points => parse_percent(&typed),
+                    _ => typed.trim().replace(',', ".").parse::<f64>().ok(),
                 };
                 let Some(value) = value.filter(|value| value.is_finite()) else {
                     self.status = "Type a number".into();
@@ -1032,7 +1069,15 @@ impl Studio {
         let crop = crop_frame(definition.oriented(), request.view, request.origin)
             .ok_or_else(|| "The drawing has no crop region".to_owned())?;
         let (mut section, mut thickness) = (definition.oriented(), definition.thickness);
+        let mut percent = request.sample_percent;
         for (field, value) in changes {
+            if *field == Field::Points {
+                if let Some(problem) = percent_problem(*value) {
+                    return Err(problem);
+                }
+                percent = *value;
+                continue;
+            }
             (section, thickness) = with_figure(section, request.view, thickness, *field, *value)?;
         }
         if crop_frame(section, request.view, request.origin).is_none() {
@@ -1045,6 +1090,7 @@ impl Studio {
             rotation: section.rotation_degrees,
         };
         changed.thickness = thickness;
+        changed.request.sample_percent = percent;
         if changed == definition {
             return Ok(Task::none());
         }
@@ -1145,7 +1191,11 @@ impl Studio {
     }
 
     /// The status line once a drawing was made again in place.
-    pub(crate) fn remade_status(definition: &SavedDrawing, operation: &str) -> String {
+    pub(crate) fn remade_status(
+        definition: &SavedDrawing,
+        operation: &str,
+        reused: bool,
+    ) -> String {
         let Some(request) = definition.request() else {
             return format!("Drawing {} made again", definition.name);
         };
@@ -1158,8 +1208,15 @@ impl Studio {
             )
         } else {
             format!(
-                "Crop region of {} set to {:.2} × {:.2} m and the drawing made again",
-                definition.name, shown.width, shown.height
+                "Crop region of {} set to {:.2} × {:.2} m and the drawing made again{}",
+                definition.name,
+                shown.width,
+                shown.height,
+                if reused {
+                    " from the points it had read"
+                } else {
+                    ""
+                }
             )
         }
     }
@@ -1446,7 +1503,7 @@ impl Studio {
             .width(Fill);
         for field in Field::of(request.view) {
             let field = *field;
-            let value = typed(field).unwrap_or_else(|| field.text(&shown));
+            let value = typed(field).unwrap_or_else(|| field.text(&shown, request.sample_percent));
             let input = text_input("", &value)
                 .on_input(move |value| Message::Crop(CropAction::Field(field, value)))
                 .on_submit(Message::Crop(CropAction::Apply(field)))
@@ -1513,8 +1570,11 @@ impl Studio {
         push(Field::Rotation, options.rotation);
         push(Field::Cut, options.cut);
         push(Field::Depth, options.depth);
+        push(Field::Points, options.sample_percent);
         if options.rect.is_none() && changes.is_empty() {
-            return refuse("give rect, width, height, center, rotation, cut or depth".into());
+            return refuse(
+                "give rect, width, height, center, rotation, cut, depth or sample_percent".into(),
+            );
         }
         let id = self.record_api_job(json!({"state": "running", "operation": "set_sheet_crop"}));
         let result = match options.rect {

@@ -25,6 +25,12 @@ use crate::{
 /// from.
 const CUT_ABOVE_FLOOR: f64 = 1.20;
 
+/// The share of the points a drawing is made from unless another is typed,
+/// in percent: a tenth makes a plan of a scan of a hundred million points in
+/// seconds, and still lays several points in every cell of the filled cut of
+/// a dense scan.
+pub const DEFAULT_SAMPLE_PERCENT: f64 = 10.0;
+
 /// The height steps in which the floor of the model is looked for, in
 /// metres.
 const FLOOR_STEP: f64 = 0.10;
@@ -175,6 +181,8 @@ pub struct SheetJob {
     pub section: OrientedBox,
     pub view: DrawingView,
     pub thickness: Option<f64>,
+    /// The points used, in percent.
+    pub sample_percent: f64,
     pub name: String,
 }
 
@@ -215,6 +223,8 @@ pub struct SheetDialog {
     /// Where a section made from the 3D model cuts, along the axis it looks.
     position: String,
     thickness: String,
+    /// The points used, in percent.
+    points: String,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +237,7 @@ pub enum SheetAction {
     Height(String),
     Position(String),
     Thickness(String),
+    Points(String),
     Create,
 }
 
@@ -263,6 +274,7 @@ impl Studio {
                 floor: model_floor,
                 position: format!("{middle:.2}"),
                 thickness: "0.10".into(),
+                points: crate::drawing_crop::percent_text(DEFAULT_SAMPLE_PERCENT),
             });
             return Task::none();
         }
@@ -287,6 +299,7 @@ impl Studio {
             SheetAction::Height(value) => dialog.height = value,
             SheetAction::Position(value) => dialog.position = value,
             SheetAction::Thickness(value) => dialog.thickness = value,
+            SheetAction::Points(value) => dialog.points = value,
             SheetAction::Create => {
                 let dialog = dialog.clone();
                 match self
@@ -339,6 +352,11 @@ impl Studio {
         let thickness = parse(&dialog.thickness)
             .filter(|value| *value > 0.0)
             .ok_or_else(|| "The slab thickness must be a number above 0".to_owned())?;
+        let sample_percent = crate::drawing_crop::parse_percent(&dialog.points)
+            .ok_or_else(|| "The points used must be a number of percent".to_owned())?;
+        if let Some(problem) = crate::drawing_crop::percent_problem(sample_percent) {
+            return Err(problem);
+        }
         let basis = dialog.basis.to_string();
         let mut bounds = base.bounds;
         let (view, slab, name) = match dialog.kind {
@@ -400,6 +418,7 @@ impl Studio {
             section: OrientedBox::new(bounds, base.rotation_degrees),
             view,
             thickness: slab,
+            sample_percent,
             name,
         })
     }
@@ -456,6 +475,11 @@ impl Studio {
             options
                 .thickness
                 .map(|value| SheetAction::Thickness(value.to_string())),
+        );
+        actions.extend(
+            options
+                .sample_percent
+                .map(|value| SheetAction::Points(value.to_string())),
         );
         for action in actions {
             let _ = self.update_sheet_dialog(action);
@@ -590,6 +614,13 @@ impl Studio {
                 .align_y(iced::Alignment::Center),
             );
         }
+        form = form.push(
+            row![
+                label("Points used (%)"),
+                field(&dialog.points, SheetAction::Points)
+            ]
+            .align_y(iced::Alignment::Center),
+        );
         let card = container(
             column![
                 row![
@@ -711,9 +742,28 @@ mod tests {
         let mut outside = dialog.clone();
         outside.height = "20".into();
         assert!(studio.sheet_job(&outside).is_err());
-        let mut from_box = dialog;
+        let mut from_box = dialog.clone();
         from_box.basis = SheetBasis::SectionBox;
         assert!(studio.sheet_job(&from_box).is_err());
+
+        // A tenth of the points by default; another share as typed, with a
+        // comma or a percent sign, within 0.1 and 100.
+        assert_eq!(dialog.points, "10");
+        assert_eq!(studio.sheet_job(&dialog).unwrap().sample_percent, 10.0);
+        let mut share = dialog;
+        for (typed, percent) in [
+            ("2,5", Some(2.5)),
+            ("100 %", Some(100.0)),
+            ("0.05", None),
+            ("x", None),
+        ] {
+            share.points = typed.into();
+            assert_eq!(
+                studio.sheet_job(&share).ok().map(|job| job.sample_percent),
+                percent,
+                "{typed}"
+            );
+        }
 
         let _ = studio.update_sheet_dialog(SheetAction::Close);
         assert!(studio.sheet_dialog.is_none());

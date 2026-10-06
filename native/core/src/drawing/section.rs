@@ -9,6 +9,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use super::kept::{collect_slab_kept, KeptSlab};
 use super::outline::{main_direction_of, trace_cut_regions, CutOutline, CutRegion, OutlineOptions};
 use super::slab::{collect_slab, slab_from_section, Slab, SlabCut, SlabOptions, SlabPoint};
 use super::{
@@ -51,6 +52,10 @@ pub struct DrawingSource<'a> {
 pub enum DrawingStage {
     /// Reading the points of the slab; counted in points read.
     Reading,
+    /// Thinning the points of the slab that were read or kept from an
+    /// earlier read, and counting them on the grid of the filled cut;
+    /// counted in points. Only a drawing that keeps its points has it.
+    Thinning,
     /// Tracing the filled cut. It has no measure: `total` is zero.
     Tracing,
     /// Writing the file; counted in entities.
@@ -106,6 +111,7 @@ impl SectionCut {
         DrawingStats {
             slab_points: self.cut.slab_points,
             read_points: self.cut.read_points,
+            reused_points: self.cut.reused_points,
             drawn_points: self.cut.points.len() as u64,
             point_spacing: self.cut.spacing,
             regions: self.outline.as_ref().map_or(0, |cut| cut.regions.len()),
@@ -120,12 +126,15 @@ impl SectionCut {
     }
 }
 
+/// Read the slab of the section box, from the points kept in `kept` where
+/// it holds them, and trace its filled cut when asked.
 fn cut_section(
     sources: &[DrawingSource<'_>],
     section: OrientedBox,
     request: &DrawingRequest,
     (points, fill): (bool, bool),
     accept: &RegionFilter<'_>,
+    kept: Option<&mut KeptSlab>,
     progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
 ) -> Result<SectionCut, LoadError> {
     let slab = slab_from_section(section, request.view, request.thickness, request.origin)?;
@@ -134,14 +143,25 @@ fn cut_section(
         point_spacing: points.then_some(request.point_spacing),
         max_points: request.max_points,
         grid: fill.then_some(request.grid),
+        sample_percent: request.sample_percent,
+        // A filled cut is traced from every point: on a sparse scan a tenth
+        // of them leaves the walls without their fill.
+        grid_percent: if request.fill {
+            100.0
+        } else {
+            request.sample_percent
+        },
     };
-    let mut cut = collect_slab(&layers, &slab, &options, accept, &mut |step| {
-        progress(DrawingProgress {
-            stage: DrawingStage::Reading,
-            done: step.read,
-            total: step.total,
-        })
-    })?;
+    let mut cut = match kept {
+        Some(kept) => collect_slab_kept(&layers, &slab, &options, accept, kept, progress)?,
+        None => collect_slab(&layers, &slab, &options, accept, &mut |step| {
+            progress(DrawingProgress {
+                stage: DrawingStage::Reading,
+                done: step.read,
+                total: step.total,
+            })
+        })?,
+    };
     if cut.slab_points == 0 {
         return Err(LoadError::InvalidData("the slab holds no points".into()));
     }
@@ -252,6 +272,7 @@ pub fn section_drawing(
         request,
         (request.points, request.fill),
         accept,
+        None,
         progress,
     )?;
     let stats = section.stats();
@@ -373,6 +394,7 @@ pub fn preview_cut_regions(
         request,
         (false, true),
         accept,
+        None,
         progress,
     )?;
     let stats = section.stats();
@@ -407,6 +429,39 @@ pub fn preview_section_drawing(
     accept: &RegionFilter<'_>,
     progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
 ) -> Result<(CutPreview, Drawing2d), LoadError> {
+    preview_section(sources, section.into(), request, accept, None, progress)
+}
+
+/// As [`preview_section_drawing`], from the points of the slab that `kept`
+/// holds from an earlier call, and keeping those it reads for the next one:
+/// see [`KeptSlab`]. A drawing whose crop region changes, and so its box in
+/// the plane of the drawing, is made again without reading what was read.
+pub fn preview_section_drawing_kept(
+    sources: &[DrawingSource<'_>],
+    section: impl Into<OrientedBox>,
+    request: &DrawingRequest,
+    accept: &RegionFilter<'_>,
+    kept: &mut KeptSlab,
+    progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
+) -> Result<(CutPreview, Drawing2d), LoadError> {
+    preview_section(
+        sources,
+        section.into(),
+        request,
+        accept,
+        Some(kept),
+        progress,
+    )
+}
+
+fn preview_section(
+    sources: &[DrawingSource<'_>],
+    section: OrientedBox,
+    request: &DrawingRequest,
+    accept: &RegionFilter<'_>,
+    kept: Option<&mut KeptSlab>,
+    progress: &mut dyn FnMut(DrawingProgress) -> Result<(), LoadError>,
+) -> Result<(CutPreview, Drawing2d), LoadError> {
     DrawingRequest {
         fill: true,
         ..*request
@@ -414,10 +469,11 @@ pub fn preview_section_drawing(
     .validate()?;
     let section = cut_section(
         sources,
-        section.into(),
+        section,
         request,
         (request.points, true),
         accept,
+        kept,
         progress,
     )?;
     let stats = section.stats();
@@ -500,6 +556,8 @@ pub fn wall_direction(
         point_spacing: None,
         max_points: 1,
         grid: Some(super::DEFAULT_CUT_GRID),
+        sample_percent: 100.0,
+        grid_percent: 100.0,
     };
     let cut = collect_slab(&layers, &slab, &options, accept, &mut |step| {
         progress(DrawingProgress {

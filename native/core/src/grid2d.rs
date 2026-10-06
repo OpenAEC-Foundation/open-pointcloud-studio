@@ -208,6 +208,14 @@ impl CountGrid {
         Some(index)
     }
 
+    /// Add the counts of another grid on the same frame.
+    pub fn absorb(&mut self, other: &Self) {
+        debug_assert_eq!(self.frame, other.frame);
+        for (count, more) in self.counts.iter_mut().zip(&other.counts) {
+            *count = count.saturating_add(*more);
+        }
+    }
+
     /// Cells with at least one point.
     pub fn occupied(&self) -> usize {
         self.counts.iter().filter(|count| **count > 0).count()

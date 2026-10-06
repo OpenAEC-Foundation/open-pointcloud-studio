@@ -493,6 +493,7 @@ fn table() -> Vec<Tool> {
             optional("height", number("Height of the cut of a plan made from the model, in scene units; by default 1.20 above the floor of the model")),
             optional("position", number("Where a section made from the model cuts, along the axis it looks along, in scene units; by default the middle of the model")),
             optional("thickness", positive_up_to("Depth of the slab behind the cut of a plan or a section in metres, 0.005 to 5; 0.10 by default", 5.0)),
+            optional("sample_percent", number_in("The points used: the share of the points of the scans the drawing is made from, in percent, 0.1 to 100; 10 by default. The same points whatever the crop region, spread over every scan; the filled cut of a plan takes every point", pointcloud_core::MIN_DRAWING_SAMPLE_PERCENT, 100.0)),
             optional("name", text("Name of the drawing; without it the drawing is named after its kind and what it was made from", 1, 96)),
         ]),
         tool("list_drawings", Command, "Lists the drawings of create_drawing made from an open scan, with how each was made and whether it is made and shown in this session, and the previews, exports and opened files of this session.", vec![]),
@@ -506,7 +507,7 @@ fn table() -> Vec<Tool> {
             required("group", text("The group", 1, 4096)),
             required("open", boolean("true to open the group, false to collapse it")),
         ]),
-        tool("set_sheet_crop", Command, "Sets the crop region of a drawing of create_drawing, as dragging its handles in the Drawing view or the Crop region section of Properties does, and makes the drawing again under the same name; only the faces of its box in the plane of the drawing move. Give rect alone, or any of the figures. Answers with accepted, a job_id and the new crop, or with changed: false.", vec![
+        tool("set_sheet_crop", Command, "Sets the crop region of a drawing of create_drawing, as dragging its handles in the Drawing view or the Crop region section of Properties does, and makes the drawing again under the same name; only the faces of its box in the plane of the drawing move. The drawing is made from the points it read before, without reading the scans, as long as the cut, the depth and the points used stay; a region that grows reads only what it adds. Give rect alone, or any of the figures. Answers with accepted, a job_id and the new crop, or with changed: false.", vec![
             optional("name", text("Name of the drawing as list_drawings gives it; without it the drawing shown in the Drawing view", 1, 96)),
             optional("rect", list("The crop region as [[left, bottom], [right, top]] in the units and coordinates of the drawing, as list_drawings gives it under crop.rect", numbers("A corner [u, v]", 2), 2, 2)),
             optional("width", positive("Width of the crop region in metres, at least 0.10, about its centre")),
@@ -515,6 +516,7 @@ fn table() -> Vec<Tool> {
             optional("rotation", number("The turn of the box of a plan in degrees, counter-clockwise seen from above")),
             optional("cut", number("A plan: the height of the cut. An elevation or a section: where the cut lies along the direction it looks, measured along the box")),
             optional("depth", positive("The view depth behind the cut in metres: the slab of a plan or a section (0.005 to 5), the depth of the box of an elevation")),
+            optional("sample_percent", number_in("The points used, in percent, 0.1 to 100; the points drawn are thinned from that share, while the filled cut of a plan takes every point. Another share of an elevation or a section reads the slab again", pointcloud_core::MIN_DRAWING_SAMPLE_PERCENT, 100.0)),
         ]),
         tool("drag_crop_handle", Command, "Drags a handle of the crop region of the drawing the Drawing view shows to a point of the drawing, as the pointer does: the side or the two sides it moves go there, with the size in whole centimetres and at least 0.10 m. With release false the handle is held and the region is drawn as during a drag, with its size; let go (the default), the drawing is made again in place, with a job_id.", vec![
             required("handle", choice("The handle", &["left", "right", "bottom", "top", "bottom_left", "bottom_right", "top_left", "top_right"])),

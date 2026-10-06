@@ -486,6 +486,9 @@ pub struct CreateDrawingOptions {
     pub position: Option<f64>,
     #[serde(default)]
     pub thickness: Option<f64>,
+    /// The points used, in percent: 0.1 to 100.
+    #[serde(default)]
+    pub sample_percent: Option<f64>,
     /// The name of the drawing; without one it is named as the dialog
     /// names it.
     #[serde(default)]

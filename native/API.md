@@ -516,6 +516,8 @@ The command answers with a `job_id`. While the job runs, its job and
 `status.result.drawing.job` hold `operation` (`export_drawing`), `path`,
 `view`, `stage`, `done`, `total`, `fraction`, `cancel_requested` and
 `elapsed_seconds`, refreshed four times a second. The stages are `reading` (counted in points read),
+`thinning` (a drawing of `create_drawing` only: the points it read, or kept
+from an earlier read, are thinned and counted on the grid; counted in points),
 `tracing` (the filled cut; it has no measure, so `total` is 0 and `fraction`
 is `null`) and `writing` (counted in entities). The complete job has:
 
@@ -525,7 +527,9 @@ is `null`) and `writing` (counted in entities). The complete job has:
   asked, as the text on `OPS-INFO` says it;
 - `slab_points`, the points of the scans that lie in the slab, `read_points`,
   the points read to find them, counted for every read of the slab and so
-  two or three times after a second or third read, and `drawn_points`, the
+  two or three times after a second or third read, `reused_points`, the
+  points a drawing of `create_drawing` took from memory instead of reading
+  them again (0 for an export and a preview), and `drawn_points`, the
   points in the drawing;
 - `point_spacing` in metres, with `point_spacing_raised` true when the point
   limit made it larger than 0.005;
@@ -634,8 +638,15 @@ looks at, front by default. From the model a plan is cut at `height` (1.20
 above the floor of the model by default) and a section at `position` along
 the axis it looks along (the middle of the model by default); an elevation
 takes the whole depth. `thickness` is the slab behind the cut of a plan or a
-section in metres, 0.10 by default. The other settings are those of the
-Section drawing block, and the drawing is made from every visible layer.
+section in metres, 0.10 by default. `sample_percent`, **Points used (%)** in
+the dialog, is the share of the points of the scans the drawing is made from,
+0.1 to 100 and 10 by default: the same points whatever the crop region, spread
+over every scan, chosen by their place in the file. The points of the drawing
+are thinned from that share; the filled cut of a plan is traced from every
+point, as a sparse scan needs every point for the fill of its walls, so
+`slab_points` of a plan counts every point of its slab. The other settings
+are those of the Section drawing block, and the drawing is made from every
+visible layer.
 Without `name` the drawing is named after its kind and what it was made from;
 a name that a drawing of the same scans has gets a number after it. The
 answer has a `job_id`; the complete job has `operation: "create_drawing"`,
@@ -645,8 +656,23 @@ The drawing is shown in the Drawing view and listed under VIEWS by its kind.
 How each drawing was made is kept beside the saved views in `drawings.json`:
 its `name`, `guid`, `kind`, the `box` it was cut from (`min`, `max` and
 `rotation`), the `view` (the face drawn), the slab `thickness`, the other
-`settings` and the `sources`, the scans it was made from as the saved views
-name them. `list_drawings` lists the drawings made from an open scan, each
+`settings` with `sample_percent` (100 for a drawing kept before this setting
+existed) and the `sources`, the scans it was made from as the saved views
+name them.
+
+A drawing keeps the points it read in memory for this session: of every
+octree leaf its slab touched, the points between its cut and the depth it
+sees, every point for a plan and its share for an elevation or a section.
+Made again after its crop region shrank, moved or turned over those leaves,
+it is drawn from them without reading the scans (`read_points` 0), and a crop
+region that grows reads only the leaves it touches for the first time.
+Another cut or view depth, another share of an elevation or a section,
+another layer or a layer that moved reads the slab again. A drawing keeps at most 384 MB of points, 24 bytes each
+(about 16 million), and all drawings together 1 GB; the drawing used longest
+ago lets go of its points first, and a slab that holds more than that is read
+each time, as before. A kept point has no intensity; a drawing does not use
+it. Deleted points and hidden classes are left out each time the drawing
+is made, so they need no read either. `list_drawings` lists the drawings made from an open scan, each
 with those, with its `crop` region and with `made` (true once it is made in
 this session) and `shown`, and the `files` of this session: the last preview, the exports and
 the opened DXF and DWG files, each with `name`, `source`, `path` and `shown`.
@@ -673,14 +699,15 @@ the drawing runs along, and its height), the `rotation` of the box in degrees,
 the cut lies along the direction it looks, measured along the box), `depth`
 (how deep the drawing sees behind the cut: the slab, and the whole box for an
 elevation), `rect` (`[[left, bottom], [right, top]]` in the units and
-coordinates of the drawing) and the `units`.
+coordinates of the drawing), the `units` and `sample_percent`, the points used.
 
 `set_sheet_crop` changes the crop region of the drawing `name` (in any case),
 or of the drawing the Drawing view shows. `rect` sets the region as a drag of
 its handles leaves it, in drawing units; or give any of `width` and `height`
 (about the centre, at least 0.10 m), `center`, `rotation` (plans only), `cut`
 and `depth` (0.005 to 5 m for a plan or a section, whose box grows when it is
-shallower; for an elevation the depth of the box). Only the faces of the box
+shallower; for an elevation the depth of the box), and `sample_percent`
+(0.1 to 100). Only the faces of the box
 in the plane of the drawing move with `rect`, `width`, `height` and `center`;
 the saved views and the section box of the 3D view never change. The drawing
 is made again under its name: the answer has `accepted: true`, a `job_id`, its
@@ -1343,12 +1370,12 @@ layer with photo colours.
 | `cancel_drawing` | — | Requests cancellation of the running section drawing or preview |
 | `drawing_view` | `show` | Shows the Drawing view in the main area in place of the 3D scene (`true`) or the 3D scene again (`false`); answers with `drawing_view` |
 | `open_drawing` | `path` | Reads an absolute `.dxf` or `.dwg` file into the Drawing view and shows it; returns a job ID whose complete job reports units, layers, entities drawn and skipped |
-| `create_drawing` | `kind`, optional `basis`, `side`, `height`, `position`, `thickness`, `name` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; returns a job ID. See [Drawings of the Project Browser](#drawings-of-the-project-browser) |
+| `create_drawing` | `kind`, optional `basis`, `side`, `height`, `position`, `thickness`, `sample_percent`, `name` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; returns a job ID. See [Drawings of the Project Browser](#drawings-of-the-project-browser) |
 | `list_drawings` | — | Lists the drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`, made again from how it was made when it is not made in this session yet (then with a job ID); `3D model` shows the 3D model as a click on its row does, letting go of the active view |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
 | `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
-| `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth` | Sets the crop region of a drawing of `create_drawing` and makes it again in place; returns a job ID. See [Crop region, duplicates and RO](#crop-region-duplicates-and-ro) |
+| `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before as long as its cut, depth and points used stay; returns a job ID. See [Crop region, duplicates and RO](#crop-region-duplicates-and-ro) |
 | `drag_crop_handle` | `handle`, `to`, optional `release` | Drags a handle of the crop region of the drawing shown to a point of the drawing, as the pointer does; held with `release: false`, else the drawing is made again (job ID) |
 | `duplicate_view` | `name`, optional `kind` | Duplicates the 3D model, a saved view or a drawing under VIEWS, right below it, and shows the copy |
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as the keys R and then O do |

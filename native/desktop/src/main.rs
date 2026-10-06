@@ -28,6 +28,7 @@ mod gpu_viewport;
 mod i18n;
 mod index_jobs;
 mod job_scene;
+mod kept_slabs;
 mod lod_pace;
 #[cfg(target_os = "macos")]
 mod macos_open;
