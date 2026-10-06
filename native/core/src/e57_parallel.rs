@@ -97,6 +97,33 @@ pub(crate) fn read_scan(
     })
 }
 
+/// Whether the points of an E57 file are decoded on several threads: every
+/// scan that holds records is laid out for it, which the picture spread
+/// through the whole file needs as well, and most records lie in scans large
+/// enough to be read that way. A file that cannot be read is not.
+pub(crate) fn decoded_in_parallel(path: &Path, parallel: Parallel) -> bool {
+    if parallel.threads <= 1 {
+        return false;
+    }
+    let Ok(file) = e57_points::open_reader(path) else {
+        return false;
+    };
+    let (mut total, mut in_runs) = (0u64, 0u64);
+    for scan in file.pointclouds() {
+        if scan.records == 0 {
+            continue;
+        }
+        if !matches!(layout(path, &scan), Ok(Some(_))) {
+            return false;
+        }
+        total += scan.records;
+        if scan.records >= parallel.min_records.max(1) {
+            in_runs += scan.records;
+        }
+    }
+    total > 0 && in_runs >= total - in_runs
+}
+
 fn layout(path: &Path, scan: &e57::PointCloud) -> Result<Option<(Layout, u64)>, LoadError> {
     let Some(page) = e57_quick::page_size(path)? else {
         return Ok(None);
@@ -507,6 +534,39 @@ mod tests {
     fn scan_layout(path: &Path, number: usize) -> Layout {
         let scan = e57_points::open_reader(path).unwrap().pointclouds()[number].clone();
         layout(path, &scan).unwrap().unwrap().0
+    }
+
+    #[test]
+    fn a_file_is_decoded_in_parallel_when_its_scans_are_laid_out_for_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let write = |name: &str, counts: &[(usize, bool)]| {
+            let path = directory.path().join(name);
+            write_scans(&path, counts);
+            path
+        };
+        let laid_out = write("laid-out.e57", &[(20_000, false), (10_000, false)]);
+        assert!(decoded_in_parallel(&laid_out, TEST));
+        // Not on one thread, nor when most records lie in scans too small
+        // for it.
+        assert!(!decoded_in_parallel(
+            &laid_out,
+            Parallel { threads: 1, ..TEST }
+        ));
+        let large = Parallel {
+            min_records: 15_000,
+            ..TEST
+        };
+        assert!(decoded_in_parallel(&laid_out, large));
+        let small = write("small-scans.e57", &[(10_000, false), (12_000, false)]);
+        assert!(!decoded_in_parallel(&small, large));
+        // A scan with a packed row index has no such layout, and keeps the
+        // whole file from it.
+        let packed = write("packed.e57", &[(20_000, false), (500, true)]);
+        assert!(!decoded_in_parallel(&packed, TEST));
+        // Nor is a file that is not an E57 scan.
+        let other = directory.path().join("other.e57");
+        std::fs::write(&other, b"not a scan").unwrap();
+        assert!(!decoded_in_parallel(&other, TEST));
     }
 
     #[test]

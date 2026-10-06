@@ -1,14 +1,23 @@
-//! Large sources are read one after another on each disk, and their octrees
-//! are built one after another, in the order the sources were opened.
+//! Large E57 scans are read one after another on each disk, in the order they
+//! were opened, and their octrees are built one after another, in the order
+//! they were read.
 //!
-//! A source read alone has been read sooner, so it is shown in full and its
-//! octree is started sooner, and a disk serves one sequential read better
-//! than several that make it seek between them. An octree of a large source
-//! keeps most cores and the disk of the index busy, so a second one built
-//! beside it makes both late; built one after the other, the first is ready
-//! long before the second, while the next source is being read. A source
-//! takes its places when it is opened, waits for the places taken before it
-//! and gives each up when it is done with it, or when it is dropped.
+//! Only a scan laid out for a picture spread through the whole file and for
+//! decoding on several threads takes these turns: it shows that picture at
+//! once while it waits, and its read is paced by the disk. Read alone it has
+//! been read sooner, so it is shown in full and its octree is started sooner,
+//! and a disk serves one sequential read better than several that make it
+//! seek between them. Any other source is read beside the others as soon as
+//! it is opened: it would show nothing while it waited, and its read keeps
+//! one core busy rather than the disk. An octree of a large source keeps most
+//! cores and the disk of the index busy, so a second one built beside it
+//! makes both late; built one after the other, the first is ready long before
+//! the second, while the next source is being read. A source takes its place
+//! among the reads of its disk when it is opened and its place among the
+//! builds when it has been read, so that a source read from a faster disk
+//! does not wait for the read of one opened before it on another. It waits
+//! for the places taken before it and gives each up when it is done with it,
+//! or when it is dropped.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path, Prefix};
@@ -16,6 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use super::e57_parallel::{self, Parallel};
 use super::{LoadError, LARGE_SOURCE_BYTES};
 
 /// How often a source that waits asks whether it is still wanted.
@@ -94,20 +104,27 @@ impl Drop for Place {
 
 /// The places of a large source that is being opened: among the reads of its
 /// disk, and for a source whose octree is built in the same pass, among the
-/// builds of large octrees.
+/// builds of large octrees once it has been read.
 #[derive(Debug)]
 pub struct SourceTurn {
     read: Option<Place>,
+    /// The queue of builds the source joins when it has been read.
+    builds: Option<String>,
     build: Option<Place>,
 }
 
 impl SourceTurn {
-    /// The places a source takes when it is opened: `None` for a source
-    /// smaller than `LARGE_SOURCE_BYTES`, which is read and indexed beside
-    /// the others as soon as it is opened. With `build`, the source also
-    /// takes a place among the builds of large octrees.
+    /// The place a source takes among the reads of its disk when it is
+    /// opened: `None` for a source that is not an E57 file of at least
+    /// `LARGE_SOURCE_BYTES`, which is read and indexed beside the others as
+    /// soon as it is opened. With `build`, the source takes a place among the
+    /// builds of large octrees when it has been read. This looks only at the
+    /// name and the length of the file; `kept_for` looks into it.
     pub fn for_source(path: impl AsRef<Path>, build: bool) -> Option<Self> {
         let path = path.as_ref();
+        if !super::is_e57(path) {
+            return None;
+        }
         let length = std::fs::metadata(path).ok()?.len();
         (length >= LARGE_SOURCE_BYTES).then(|| Self::on(disk_of(path), build.then_some(BUILDS)))
     }
@@ -115,8 +132,18 @@ impl SourceTurn {
     fn on(disk: String, builds: Option<&str>) -> Self {
         Self {
             read: Some(Place::take(format!("read {disk}"))),
-            build: builds.map(|queue| Place::take(queue.to_owned())),
+            builds: builds.map(str::to_owned),
+            build: None,
         }
+    }
+
+    /// Keep the turn of a scan that shows a picture spread through the whole
+    /// file while it waits and is decoded on several threads; any other
+    /// source gives its place up at once and is read beside the others. This
+    /// reads the layout of the scan, so it is asked on the thread that reads
+    /// the source rather than where the turn is taken.
+    pub fn kept_for(self, path: impl AsRef<Path>) -> Option<Self> {
+        e57_parallel::decoded_in_parallel(path.as_ref(), Parallel::machine()).then_some(self)
     }
 
     /// Whether the sources that took a place among the reads of this disk
@@ -139,13 +166,17 @@ impl SourceTurn {
         }
     }
 
-    /// The source has been read: the next source of its disk may be read.
+    /// The source has been read: the next source of its disk may be read,
+    /// and the octree of this one takes its place among the builds.
     pub(crate) fn end_read(&mut self) {
         self.read = None;
+        if let Some(queue) = self.builds.take() {
+            self.build = Some(Place::take(queue));
+        }
     }
 
-    /// Wait for the turn to build the octree of the source, as
-    /// `wait_to_read` waits.
+    /// Wait for the turn to build the octree of the source, after the
+    /// sources that were read before it, as `wait_to_read` waits.
     pub(crate) fn wait_to_build(
         &self,
         wanted: impl FnMut() -> Result<(), LoadError>,
@@ -281,11 +312,11 @@ pub(crate) mod tests {
         small.wait_to_build(|| unreachable!()).unwrap();
 
         first.wait_to_read(|| unreachable!()).unwrap();
-        first.wait_to_build(|| unreachable!()).unwrap();
         assert!(!second.is_due());
         // The first has been read: the second is read while the first
         // octree is built, and its own octree waits for that one.
         first.end_read();
+        first.wait_to_build(|| unreachable!()).unwrap();
         assert!(second.is_due());
         second.wait_to_read(|| unreachable!()).unwrap();
         second.end_read();
@@ -301,22 +332,80 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn only_large_sources_take_turns() {
+    fn octrees_are_built_in_the_order_their_sources_were_read() {
+        // Two sources on disks of their own: the one opened first is read
+        // from a slow network share, the other from a fast local disk.
+        let builds = own_queue("builds");
+        let mut slow = turn_on(&own_queue("share"), Some(&builds));
+        let mut fast = turn_on(&own_queue("local"), Some(&builds));
+        // Each is read at once, beside the other.
+        slow.wait_to_read(|| unreachable!()).unwrap();
+        fast.wait_to_read(|| unreachable!()).unwrap();
+        // The second has been read first, and its octree is built at once:
+        // it does not wait for the read of the first.
+        fast.end_read();
+        fast.wait_to_build(|| unreachable!()).unwrap();
+        // The first, read later, waits for the octree of the second.
+        slow.end_read();
+        let (sender, receiver) = mpsc::channel();
+        let waiting = thread::spawn(move || {
+            slow.wait_to_build(|| Ok(())).unwrap();
+            sender.send("built").unwrap();
+            slow
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(300)).is_err());
+        drop(fast);
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+            "built"
+        );
+        drop(waiting.join().unwrap());
+        assert!(!queues().contains_key(&builds), "an empty queue is let go");
+    }
+
+    #[test]
+    fn only_large_e57_files_take_turns() {
         let directory = tempfile::tempdir().unwrap();
         let small = directory.path().join("small.e57");
         std::fs::write(&small, b"e57").unwrap();
         assert!(SourceTurn::for_source(&small, true).is_none());
         assert!(SourceTurn::for_source(directory.path().join("gone.e57"), false).is_none());
-        let large = directory.path().join("large.e57");
-        let file = std::fs::File::create(&large).unwrap();
-        // A sparse file: its length is all that is looked at.
-        file.set_len(LARGE_SOURCE_BYTES).unwrap();
-        drop(file);
+        // Sparse files: their names and lengths are all that is looked at.
+        let sparse = |name: &str| {
+            let path = directory.path().join(name);
+            std::fs::File::create(&path)
+                .unwrap()
+                .set_len(LARGE_SOURCE_BYTES)
+                .unwrap();
+            path
+        };
+        let large = sparse("large.E57");
         let turn = SourceTurn::for_source(&large, false).unwrap();
-        assert!(turn.read.is_some() && turn.build.is_none());
+        assert!(turn.read.is_some() && turn.builds.is_none() && turn.build.is_none());
         drop(turn);
+        let mut turn = SourceTurn::for_source(&large, true).unwrap();
+        assert!(turn.read.is_some() && turn.builds.is_some() && turn.build.is_none());
+        // The place among the builds is taken when the source has been read.
+        turn.end_read();
+        assert!(turn.read.is_none() && turn.builds.is_none() && turn.build.is_some());
+        drop(turn);
+        // A large file of another format is read beside the others.
+        for name in [
+            "large.ply",
+            "large.pts",
+            "large.ptx",
+            "large.pcd",
+            "large.xyz",
+        ] {
+            assert!(
+                SourceTurn::for_source(sparse(name), true).is_none(),
+                "{name}"
+            );
+        }
+        // A file that is not laid out for decoding on several threads gives
+        // its turn up when it is looked into.
         let turn = SourceTurn::for_source(&large, true).unwrap();
-        assert!(turn.read.is_some() && turn.build.is_some());
+        assert!(turn.kept_for(&large).is_none());
     }
 
     #[test]

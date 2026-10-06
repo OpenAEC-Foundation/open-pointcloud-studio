@@ -7,8 +7,8 @@
 //! ```
 //!
 //! `together` opens every file at the same moment, `alone` one after the
-//! other. `turns` reads every large file in its turn on its disk and builds
-//! its octree in its turn, as the window does; `reads` takes the turns to
+//! other. `turns` reads every large E57 file laid out for it in its turn on
+//! its disk and builds its octree in its turn, as the window does; `reads` takes the turns to
 //! read only, and lets the octrees be built side by side; `parallel` reads
 //! and builds every file at once. Set `XDG_CACHE_HOME` to an empty folder
 //! first, so that no index or preview of an earlier run is used and nothing
@@ -89,7 +89,12 @@ fn open_together(files: &[PathBuf], turns: Option<bool>) -> Vec<Timeline> {
         .map(|file| {
             let turn = turns.and_then(|build| SourceTurn::for_source(file, build));
             let file = file.clone();
-            thread::spawn(move || open(&file, turn, started))
+            thread::spawn(move || {
+                // As in the window, only a scan that is worth its turn keeps
+                // it.
+                let turn = turn.and_then(|turn| turn.kept_for(&file));
+                open(&file, turn, started)
+            })
         })
         .collect();
     workers

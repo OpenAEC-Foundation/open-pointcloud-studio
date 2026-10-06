@@ -5670,7 +5670,9 @@ impl Studio {
                             .send(Arc::new(cloud.clone()))
                             .map_err(|_| pointcloud_core::LoadError::Cancelled)
                     };
-                    match turn {
+                    // Only a scan that shows a picture while it waits and
+                    // is read at the pace of its disk keeps its turn.
+                    match turn.and_then(|turn| turn.kept_for(&path)) {
                         Some(turn) => pointcloud_core::open_with_snapshots_in_turn(
                             path,
                             LOAD_SAMPLE_LIMIT,
@@ -5747,8 +5749,8 @@ impl Studio {
         });
         let (preview_tx, preview_rx) = tokio::sync::mpsc::unbounded_channel();
         // A large scan is read after the large scans opened before it on the
-        // same disk, and its octree built after theirs; the turns are taken
-        // here, in the order of opening.
+        // same disk, and its octree built after those read before it; the
+        // turn to read is taken here, in the order of opening.
         let turn = SourceTurn::for_source(&path, true);
         let worker = Task::perform(
             async move {
@@ -5790,7 +5792,9 @@ impl Studio {
                         }
                         Ok(())
                     };
-                    let built = match turn {
+                    // Only a scan that shows a picture while it waits and
+                    // is read at the pace of its disk keeps its turns.
+                    let built = match turn.and_then(|turn| turn.kept_for(&path)) {
                         Some(turn) => OctreeIndex::open_and_build_cached_in_turn(
                             &path,
                             LOAD_SAMPLE_LIMIT,
