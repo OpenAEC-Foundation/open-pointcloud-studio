@@ -1398,6 +1398,13 @@ impl PointViewport<'_> {
         self.photo_marks_where(projection, |_| true)
     }
 
+    /// Whether a photo taken at this scene position is shown: with the
+    /// section box on, only the photos inside it, as with the points.
+    fn photo_in_box(&self, position: [f64; 3]) -> bool {
+        self.section
+            .is_none_or(|section| section.contains(position))
+    }
+
     /// The photos in front of the camera whose position `keep` accepts.
     fn photo_marks_where(
         &self,
@@ -1411,7 +1418,7 @@ impl PointViewport<'_> {
             };
             for (index, photo) in photos.photos.iter().enumerate() {
                 let position = entry.transform.xyz(photo.position);
-                if !keep(position) {
+                if !keep(position) || !self.photo_in_box(position) {
                     continue;
                 }
                 let Some((x, y, depth)) = projection.project(position) else {
@@ -1465,7 +1472,9 @@ impl PointViewport<'_> {
                     photos
                         .photos
                         .iter()
-                        .map(|photo| distance(entry.transform.xyz(photo.position)))
+                        .map(|photo| entry.transform.xyz(photo.position))
+                        .filter(|&position| self.photo_in_box(position))
+                        .map(distance)
                         .collect::<Vec<_>>(),
                 )
             })
@@ -1549,8 +1558,15 @@ impl PointViewport<'_> {
             };
             let mut previous: Option<(f32, f32)> = None;
             for photo in &photos.photos {
+                let position = entry.transform.xyz(photo.position);
+                // The path stops at the section box and starts again where
+                // it comes back in.
+                if !self.photo_in_box(position) {
+                    previous = None;
+                    continue;
+                }
                 let at = projection
-                    .project_unclipped(entry.transform.xyz(photo.position))
+                    .project_unclipped(position)
                     .map(|(x, y, _)| (x, y));
                 if let (Some(from), Some(to)) = (previous, at) {
                     frame.stroke(
@@ -2138,6 +2154,30 @@ mod tests {
         let marks = viewport.photo_marks(projection);
         assert_eq!(marks.len(), 3);
         assert!(marks[2].toward.is_some() && marks[0].toward.is_none());
+    }
+
+    #[test]
+    fn the_section_box_hides_the_photos_outside_it() {
+        let (mut studio, _directory, _source) = studio_with_photos();
+        let scene = crate::combined_bounds(&studio.clouds).unwrap();
+        let projection = Projection::new(scene, -0.8, 0.6, 1.0, [0.0, 0.0], 900.0, 600.0);
+        assert_eq!(studio.point_viewport().photo_marks(projection).len(), 3);
+        // A box around the first photo only.
+        let set = send(
+            &mut studio,
+            json!({"command": "set_section", "min": [1.0, 4.0, 0.0], "max": [3.0, 6.0, 3.0]}),
+        );
+        assert_eq!(set["ok"], true, "{set}");
+        let viewport = studio.point_viewport();
+        let inside: Vec<usize> = viewport
+            .photo_marks(projection)
+            .iter()
+            .map(|mark| mark.index)
+            .collect();
+        assert_eq!(inside, [0]);
+        // Off again, every photo is back.
+        let _ = studio.update(Message::SetSectionEnabled(false));
+        assert_eq!(studio.point_viewport().photo_marks(projection).len(), 3);
     }
 
     #[test]

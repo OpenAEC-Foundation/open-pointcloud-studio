@@ -14,6 +14,7 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- With the section box on, the photo marks, their path and the rings to step into show only the photos taken inside the box, as the points do.
 - The **Select** button left the ribbon: without a tool the mouse selects, and Escape returns to it.
 - A click on the mark of a photo enters it; a double click is no longer needed. Inside a photo, or while walking, the nearest photos ahead show as rings, and a click on a ring steps into that photo.
 - **Distance** and **Area** measure inside a photo and while walking: a click without a drag picks the point under the pointer.
