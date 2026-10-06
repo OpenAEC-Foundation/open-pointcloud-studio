@@ -262,6 +262,32 @@ pub(crate) fn viewer_arguments(file: &Path) -> Vec<OsString> {
     vec!["--read-only".into(), file.as_os_str().to_owned()]
 }
 
+/// The variables the AppImage runtime sets for the program of its AppImage.
+/// Every program that program starts inherits them and would take them for
+/// its own: at each start Open CAD Studio registers the program `APPIMAGE`
+/// names as the preview program for DWG files of the desktop, and as the
+/// program for DWG and DXF files when the user agrees. From the AppImage of
+/// this application that would be this application, which does not
+/// understand the arguments they are started with. An AppImage started from
+/// here sets them again for itself.
+const APPIMAGE_VARIABLES: [&str; 4] = ["APPIMAGE", "APPDIR", "ARGV0", "OWD"];
+
+/// How `program` is started as the viewer of `file`: with
+/// [`viewer_arguments`], without input or output, and without
+/// [`APPIMAGE_VARIABLES`].
+fn viewer_command(program: &Path, file: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command
+        .args(viewer_arguments(file))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    for name in APPIMAGE_VARIABLES {
+        command.env_remove(name);
+    }
+    command
+}
+
 /// The folder for files the application can make again at any time:
 /// `XDG_CACHE_HOME`, else `~/.cache`, with a folder of the application.
 /// `variable` reads the environment.
@@ -326,11 +352,7 @@ fn launch(found: &Found, file: &Path) -> Result<Opened, String> {
                 crate::mcp::is_mount_point,
                 cache_directory(|name| std::env::var_os(name)).as_deref(),
             )?;
-            let mut child = std::process::Command::new(&program)
-                .args(viewer_arguments(file))
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+            let mut child = viewer_command(&program, file)
                 .spawn()
                 .map_err(|error| format!("{} could not start: {error}", program.display()))?;
             // Collect its exit so that no finished child is left behind.
@@ -852,6 +874,26 @@ mod tests {
                 OsString::from("/out/plan.dxf")
             ]
         );
+    }
+
+    #[test]
+    fn viewer_starts_without_the_variables_of_the_appimage_runtime() {
+        let program = Path::new("/home/u/.cache/open-pointcloud-studio-native")
+            .join("open-cad-studio")
+            .join(EXECUTABLE);
+        let file = Path::new("/out/plan.dxf");
+        let command = viewer_command(&program, file);
+        assert_eq!(command.get_program(), program.as_os_str());
+        assert!(command.get_args().eq(viewer_arguments(file).iter()));
+        // Each of them is taken out of what the program inherits, and
+        // nothing else is changed.
+        let mut changed: Vec<(String, Option<OsString>)> = command
+            .get_envs()
+            .map(|(name, value)| (name.to_string_lossy().into_owned(), value.map(Into::into)))
+            .collect();
+        changed.sort();
+        let removed = ["APPDIR", "APPIMAGE", "ARGV0", "OWD"].map(|name| (name.to_owned(), None));
+        assert_eq!(changed, removed);
     }
 
     fn send(studio: &mut Studio, command: ApiCommand) -> Value {

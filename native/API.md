@@ -765,9 +765,13 @@ program chosen in Settings, otherwise Open CAD Studio where it is installed:
 `%ProgramFiles%\Open CAD Studio` or `%LOCALAPPDATA%\Programs\Open CAD Studio`
 on Windows, `/Applications/OpenCADStudio.app` or `~/Applications` on macOS,
 `/snap/bin` on Linux, or the search path. It is started with `--read-only`
-and the file, without waiting for it. Open CAD Studio gives a file opened
-read-only a window and a process of its own, also while it is already
-running. A program inside a mounted AppImage is first copied to
+and the file, without waiting for it, and without the variables the AppImage
+runtime sets (`APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`): from the AppImage, Open
+CAD Studio would otherwise register the program `APPIMAGE` names, this
+application, as the preview program for DWG files of the desktop and, when
+the user agrees, as the program for DWG and DXF files. Open CAD Studio gives
+a file opened read-only a window and a process of its own, also while it is
+already running. A program inside a mounted AppImage is first copied to
 `open-pointcloud-studio-native/open-cad-studio-VERSION/` in the cache folder
 (`$XDG_CACHE_HOME`, else `~/.cache`) and started from there, so that it stays
 open when the application ends. Without a viewer the file goes to the program
