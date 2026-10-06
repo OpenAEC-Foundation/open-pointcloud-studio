@@ -623,8 +623,11 @@ drawing units, `inserts`, `skipped`, `skipped_3d` and `layers`, each with
 `name`, `visible`, `color` and its `points`, `polylines`, `fills` and
 `texts`), `camera` (`center` in drawing units and `pixels_per_unit`), the
 `viewport_size` of the sheet, `crop_shown` (whether the crop region of a
-drawing of `create_drawing` is drawn) and `remaking` (the name of a drawing
-being made again after its crop region changed, or `null`).
+drawing of `create_drawing` is drawn), `crop_selected` (whether that crop
+region is selected), `remaking` (the name of a drawing being made again after
+its crop region changed, or `null`) and `kept`: the `drawings` that keep the
+points they read in memory, with the `points` and the `bytes` they take
+together.
 
 ## Drawings of the Project Browser
 
@@ -719,8 +722,16 @@ one the Drawing view holds, shown or behind the 3D scene; when the view holds
 another drawing by then, or none, it is only listed as made, and the window
 stays on what it shows.
 
+`select_crop_region` with `selected: true` selects the crop region of the
+drawing the Drawing view shows, as a click on its outline does: it is drawn
+thicker with its handles, and the Crop region section of Properties, with its
+figures and **Points used (%)**, comes first in Properties. `selected: false`
+deselects it, as Escape or a click elsewhere on the sheet does; it is then a
+thin line without handles. The answer has `selected` and the `crop`; it is
+refused while the Drawing view shows no crop region.
+
 `drag_crop_handle` drags a handle of the crop region of the drawing the
-Drawing view shows, as the pointer does: `handle` is `left`, `right`,
+Drawing view shows, as the pointer does, and selects the crop region: `handle` is `left`, `right`,
 `bottom`, `top`, `bottom_left`, `bottom_right`, `top_left` or `top_right`,
 and `to` the point `[u, v]` of the drawing, in its units and coordinates, the
 side or sides go to. The size goes in whole centimetres and is at least
@@ -1376,6 +1387,7 @@ layer with photo colours.
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
 | `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
 | `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before as long as its cut, depth and points used stay; returns a job ID. See [Crop region, duplicates and RO](#crop-region-duplicates-and-ro) |
+| `select_crop_region` | `selected` | Selects (`true`) or deselects (`false`) the crop region of the drawing shown, as a click on its outline or Escape does; Properties shows its figures while it is selected |
 | `drag_crop_handle` | `handle`, `to`, optional `release` | Drags a handle of the crop region of the drawing shown to a point of the drawing, as the pointer does; held with `release: false`, else the drawing is made again (job ID) |
 | `duplicate_view` | `name`, optional `kind` | Duplicates the 3D model, a saved view or a drawing under VIEWS, right below it, and shows the copy |
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as the keys R and then O do |

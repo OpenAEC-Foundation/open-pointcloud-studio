@@ -4737,6 +4737,9 @@ impl Studio {
                 to,
                 release,
             } => self.api_drag_crop_handle(&handle, to, release),
+            ApiCommand::SelectCropRegion { selected } => {
+                (self.api_select_crop_region(selected), Task::none())
+            }
             ApiCommand::RotateCrop {
                 name,
                 degrees,
@@ -8529,6 +8532,10 @@ impl Studio {
                     return Task::none();
                 }
                 if self.sheet_dialog.take().is_some() {
+                    return Task::none();
+                }
+                // A selected crop region lets go before the rest.
+                if self.drawing_view.shown && self.select_crop(false) {
                     return Task::none();
                 }
                 // The card of the wizard comes next: it becomes the strip

@@ -221,6 +221,7 @@ follows when that view is restored.
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
 | `set_browser_group` | `group` (`scans`, `classes`, `views`, `bcf`, `3d`, `plans`, `elevations`, `sections`, `files` or `folder:` and a path), `open` | Opens or collapses a group of the Project Browser |
 | `set_sheet_crop` | optional `name`, `rect` (`[[left, bottom], [right, top]]` in drawing units), `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` (0.1–100) | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before when its cut, depth and points used stay |
+| `select_crop_region` | `selected` | Selects the crop region of the drawing shown, as a click on its outline does, so that Properties shows its figures at the top and its handles can be dragged; `false` deselects it, as Escape does |
 | `drag_crop_handle` | `handle` (`left`, `right`, `bottom`, `top`, `bottom_left`, `bottom_right`, `top_left` or `top_right`), `to` (`[u, v]` in drawing units), optional `release` | Drags a handle of the crop region of the drawing shown, as the pointer does |
 | `duplicate_view` | `name`, optional `kind` (`model`, `view` or `drawing`) | Duplicates the 3D model, a saved view or a drawing under VIEWS, right below it, and shows the copy |
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as R and then O do |

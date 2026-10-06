@@ -4,9 +4,11 @@
 //! The crop region is the face of the box of a drawing as the drawing shows
 //! it: for a plan the box along its own two horizontal axes, for an
 //! elevation or a section its width along the view and its height. Its
-//! handles in the Drawing view move its sides, the Crop region section of
-//! Properties sets its figures, and the drawing is made again in place from
-//! the box that follows. RO turns the crop region of a plan: the box turns
+//! handles in the Drawing view move its sides once a click on its outline
+//! selected it, the Crop region section of Properties sets its figures while
+//! it is selected, and the drawing is made again in place from the box that
+//! follows, from the points it read before as long as its cut, its depth and
+//! the points it uses stay. RO turns the crop region of a plan: the box turns
 //! about the vertical through the centre of the region, and the plan made
 //! again stands upright in it with the model turned the other way. In the 3D
 //! view RO turns the section box in the same way.
@@ -778,8 +780,11 @@ pub(crate) struct CropOverlay {
     pub corners: [[f64; 2]; 4],
     /// While RO turns it: the angle as it is shown.
     pub turn: Option<String>,
-    /// Its handles can be dragged.
+    /// Its handles can be dragged, once it is selected.
     pub editable: bool,
+    /// A click on its outline selected it: it is drawn thicker, with its
+    /// handles, and Properties shows its figures.
+    pub selected: bool,
 }
 
 /// What the crop region and RO react to.
@@ -787,6 +792,9 @@ pub(crate) struct CropOverlay {
 pub enum CropAction {
     /// Show or hide the crop region in the Drawing view.
     Show(bool),
+    /// Select the crop region of the drawing shown, or deselect it: a click
+    /// on its outline, or elsewhere on the sheet.
+    Select(bool),
     /// A handle was let go with the crop region at this rectangle, in the
     /// units of the drawing with this identifier.
     Set(String, [[f64; 2]; 2]),
@@ -909,6 +917,7 @@ impl Studio {
             }
         }
         Some(CropOverlay {
+            selected: self.drawing_view.crop_selected.as_deref() == Some(definition.guid.as_str()),
             guid: definition.guid.clone(),
             rect,
             unit,
@@ -918,12 +927,45 @@ impl Studio {
         })
     }
 
+    /// Select the crop region of the drawing shown, or deselect it; false
+    /// when nothing changed.
+    pub(crate) fn select_crop(&mut self, on: bool) -> bool {
+        if !on {
+            let was = self.drawing_view.crop_selected.take().is_some();
+            if was {
+                self.status = "Crop region deselected".into();
+            }
+            return was;
+        }
+        let Some(crop) = self.crop_overlay() else {
+            return false;
+        };
+        if crop.selected {
+            return false;
+        }
+        let name = self
+            .shown_sheet()
+            .map(|definition| definition.name.clone())
+            .unwrap_or_default();
+        self.drawing_view.crop_selected = Some(crop.guid);
+        self.status = format!(
+            "Crop region of {name} selected: set its figures in Properties or drag a handle; Escape deselects it"
+        );
+        true
+    }
+
     pub(crate) fn update_crop(&mut self, action: CropAction) -> Task<Message> {
         match action {
+            CropAction::Select(on) => {
+                self.select_crop(on);
+            }
             CropAction::Show(on) => {
+                if !on {
+                    self.drawing_view.crop_selected = None;
+                }
                 self.drawing_view.crop_shown = on;
                 self.status = if on {
-                    "Crop region shown; drag a handle to change it"
+                    "Crop region shown; click its outline to select it and change it"
                 } else {
                     "Crop region hidden"
                 }
@@ -1480,10 +1522,14 @@ impl Studio {
         }
     }
 
-    /// The Crop region section of Properties, while a drawing of the
-    /// Project Browser is shown: its figures, each set with Enter.
+    /// The Crop region section of Properties, while the crop region of the
+    /// drawing shown is selected: its figures and the points used, each set
+    /// with Enter.
     pub(crate) fn crop_properties(&self) -> Option<Element<'_, Message>> {
         let definition = self.shown_sheet()?;
+        if self.drawing_view.crop_selected.as_deref() != Some(definition.guid.as_str()) {
+            return None;
+        }
         let request = definition.request()?;
         let shown = figures(definition.oriented(), request.view, request.thickness);
         let edits = &self.drawing_view.crop_edits;
@@ -1518,7 +1564,7 @@ impl Studio {
         block = block.push(
             container(
                 text(crate::i18n::tr(
-                    "Enter applies a value and makes the drawing again. Drag a handle of the crop region on the sheet; RO turns the crop region of a plan.",
+                    "Enter applies a value and makes the drawing again, from the points it read as long as the cut, the view depth and the points used stay. Drag a handle of the crop region on the sheet; RO turns the crop region of a plan; Escape deselects it.",
                 ))
                 .size(10)
                 .color(colors.muted),
@@ -1618,6 +1664,8 @@ impl Studio {
         if !crop.editable {
             return refuse("the crop region cannot change while a drawing is made or RO turns it");
         }
+        // The pointer drags a handle of a selected crop region only.
+        self.drawing_view.crop_selected = Some(crop.guid.clone());
         let rect = dragged(crop.rect, handle, to, crop.unit);
         let size = [
             (rect[1][0] - rect[0][0]) / crop.unit,
@@ -1642,6 +1690,26 @@ impl Studio {
             value["height"] = json!(size[1]);
         }
         (value, task)
+    }
+
+    /// The `select_crop_region` command of the local API: the crop region
+    /// of the drawing shown selected or deselected, as a click on its
+    /// outline or Escape does.
+    pub(crate) fn api_select_crop_region(&mut self, selected: bool) -> Value {
+        let Some(definition) = self.shown_sheet() else {
+            return json!({"ok": false, "error": "the Drawing view shows no crop region: show a drawing of create_drawing with its crop region on"});
+        };
+        let crop = crop_value(definition);
+        if self.crop_overlay().is_none() {
+            return json!({"ok": false, "error": "the Drawing view shows no crop region: show a drawing of create_drawing with its crop region on"});
+        }
+        let changed = self.select_crop(selected);
+        json!({
+            "ok": true,
+            "selected": selected,
+            "changed": changed,
+            "crop": crop,
+        })
     }
 
     /// The answer of a command that makes a drawing again: its job, or that

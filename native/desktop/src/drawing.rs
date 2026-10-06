@@ -5735,4 +5735,79 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn a_click_on_the_crop_region_selects_it_and_properties_shows_its_figures() {
+        use crate::drawing_crop::{CropAction, Field};
+
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        let guid = make_plan(&mut studio, 1.1);
+        let selected = |studio: &mut Studio| {
+            send(studio, ApiCommand::Status)["result"]["drawing_view"]["crop_selected"].clone()
+        };
+        assert_eq!(selected(&mut studio), false);
+        assert!(studio.crop_overlay().is_some_and(|crop| !crop.selected));
+        assert!(studio.crop_properties().is_none());
+
+        let _ = studio.update(Message::Crop(CropAction::Select(true)));
+        assert_eq!(selected(&mut studio), true);
+        assert!(studio.crop_overlay().is_some_and(|crop| crop.selected));
+        assert!(studio.crop_properties().is_some());
+        assert!(
+            studio.status.starts_with("Crop region of"),
+            "{}",
+            studio.status
+        );
+        let _ = studio.view();
+
+        // Points used is a figure of Properties as well.
+        let _ = studio.update(Message::Crop(CropAction::Field(
+            Field::Points,
+            "25 %".into(),
+        )));
+        let _ = studio.update(Message::Crop(CropAction::Apply(Field::Points)));
+        assert!(studio.drawing.job.is_some(), "{}", studio.status);
+        finish(&mut studio);
+        assert_eq!(definition(&studio, &guid).request.sample_percent, 25.0);
+        // Made again, it stays selected.
+        assert_eq!(selected(&mut studio), true);
+
+        // Escape deselects it; so does a click elsewhere, and hiding it.
+        let _ = studio.update(Message::Escape);
+        assert_eq!(selected(&mut studio), false);
+        assert!(studio.crop_properties().is_none());
+        let answer = send(&mut studio, ApiCommand::SelectCropRegion { selected: true });
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["changed"], true);
+        assert_eq!(answer["crop"]["sample_percent"], 25.0);
+        let _ = studio.update(Message::Crop(CropAction::Select(false)));
+        assert_eq!(selected(&mut studio), false);
+        let _ = studio.update(Message::Crop(CropAction::Select(true)));
+        let _ = studio.update(Message::Crop(CropAction::Show(false)));
+        assert_eq!(selected(&mut studio), false);
+        let refused = send(&mut studio, ApiCommand::SelectCropRegion { selected: true });
+        assert_eq!(refused["ok"], false, "{refused}");
+        let _ = studio.update(Message::Crop(CropAction::Show(true)));
+
+        // A drag of a handle by the local API selects it, as the pointer
+        // needs it selected.
+        let crop = studio.crop_overlay().unwrap();
+        let answer = send(
+            &mut studio,
+            ApiCommand::DragCropHandle {
+                handle: "right".into(),
+                to: [crop.rect[1][0] - 200.0, 0.0],
+                release: false,
+            },
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(selected(&mut studio), true);
+        // Another drawing in the view starts without a selection.
+        let other = make_plan(&mut studio, 1.0);
+        assert_ne!(other, guid);
+        assert_eq!(selected(&mut studio), false);
+    }
 }

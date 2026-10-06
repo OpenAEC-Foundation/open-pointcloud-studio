@@ -363,6 +363,11 @@ pub enum ApiCommand {
         #[serde(default)]
         kind: Option<String>,
     },
+    /// Select or deselect the crop region of the drawing shown, as a click
+    /// on its outline or Escape does.
+    SelectCropRegion {
+        selected: bool,
+    },
     /// Drag a handle of the crop region of the drawing shown, as the
     /// pointer does.
     DragCropHandle {

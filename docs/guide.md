@@ -438,11 +438,12 @@ While the Drawing view is shown, the **Drawing view** block at the top of Proper
 
 #### Crop region
 
-A plan, an elevation or a section made with **Create 2D plan / elevation / section…** shows its **crop region** on the sheet: a thin blue rectangle with a small square handle in the middle of each side and at each corner. It is the face of the box the drawing was cut from, as the drawing shows it: for a plan the box along its own two horizontal axes, for an elevation or a section its width along the view and its height.
+A plan, an elevation or a section made with **Create 2D plan / elevation / section…** shows its **crop region** on the sheet: a thin blue rectangle. It is the face of the box the drawing was cut from, as the drawing shows it: for a plan the box along its own two horizontal axes, for an elevation or a section its width along the view and its height.
 
-- **Drag a handle** to move that side, or the two sides at a corner. Over a handle the pointer shows arrows the way it moves; while dragging, the size is shown over the rectangle in metres, and the size goes in whole centimetres, never below 0.10 m. When you let go, the box of the drawing changes in the plane of the drawing only, and the drawing is made again under the same name, in place: the view keeps its zoom and position and the layers you switched off stay off. Making it again takes a moment on a large scan; when you choose the 3D model, a view, another drawing or the File view meanwhile, the window stays there, and the drawing is ready in place when you come back to it. The section box of the 3D view and the saved views are not changed.
+- **Click its outline** to select it: under the pointer the line grows a little thicker to show that a click takes it, and selected it is drawn thicker with a small square handle in the middle of each side and at each corner, while the **Crop region** section comes first in Properties. **Escape**, or a click elsewhere on the sheet, deselects it; a drag still pans.
+- **Drag a handle** of the selected crop region to move that side, or the two sides at a corner. Over a handle the pointer shows arrows the way it moves; while dragging, the size is shown over the rectangle in metres, and the size goes in whole centimetres, never below 0.10 m. When you let go, the box of the drawing changes in the plane of the drawing only, and the drawing is made again under the same name, in place: the view keeps its zoom and position and the layers you switched off stay off. Making it again takes a moment on a large scan; when you choose the 3D model, a view, another drawing or the File view meanwhile, the window stays there, and the drawing is ready in place when you come back to it. The section box of the 3D view and the saved views are not changed.
 - The **Crop region** switch below the layers hides the rectangle or shows it again. The crop region is never written into a DXF or DWG file.
-- The **Crop region** section of Properties gives its figures: **Width (m)** and **Height (m)**, the centre (**Centre X** and **Centre Y** in model coordinates for a plan; **Centre along** and **Centre height** for an elevation or a section, the first measured along the box from the model origin), **Rotation (°)** for a plan, **Cut height** of a plan or **Cut position** of an elevation or a section, and **View depth (m)**: how deep the drawing sees behind the cut. Type a value and press Enter; the drawing is made again. Width and height change about the centre; a view depth deeper than the box makes the box deeper.
+- The **Crop region** section of Properties, while the crop region is selected, gives its figures: **Width (m)** and **Height (m)**, the centre (**Centre X** and **Centre Y** in model coordinates for a plan; **Centre along** and **Centre height** for an elevation or a section, the first measured along the box from the model origin), **Rotation (°)** for a plan, **Cut height** of a plan or **Cut position** of an elevation or a section, **View depth (m)**: how deep the drawing sees behind the cut, and **Points used (%)**. Type a value and press Enter; the drawing is made again. Width and height change about the centre; a view depth deeper than the box makes the box deeper.
 
 #### Making a drawing again after a change of its crop region
 
@@ -1005,7 +1006,8 @@ Nothing is written beside the scans, and the scans themselves are never changed.
 | Shift + middle drag | Orbit |
 | Double click | Orbit about the point under the pointer; where no point is, about the centre of the model |
 | Wheel | Zoom at the pointer |
-| Drag, in the Drawing view | Pan the drawing; the wheel zooms about the pointer; on a handle of the crop region, move that side |
+| Drag, in the Drawing view | Pan the drawing; the wheel zooms about the pointer; on a handle of the selected crop region, move that side |
+| Click, in the Drawing view | On the outline of the crop region, select it and show its figures in Properties; elsewhere on the sheet, deselect it |
 | Right click | Menu of the scene |
 | `F` | Isometric overview of the whole model (Zoom all) |
 | `R` then `O` | Turn the crop region of the plan in the Drawing view, or the section box in the 3D view; then type an angle, Enter applies, Escape cancels |
@@ -1014,7 +1016,7 @@ Nothing is written beside the scans, and the scans themselves are never changed.
 | Ctrl+Y, Ctrl+Shift+Z | Redo |
 | Enter | Finish a measurement; place a note |
 | Backspace | Remove the last point of a measurement |
-| Escape | Close Settings or the File view; cancel a half-placed annotation; leave walking; otherwise leave the active tool for Select, stop a running selection and drop the selection |
+| Escape | Close Settings or the File view; deselect the crop region in the Drawing view; cancel a half-placed annotation; leave walking; otherwise leave the active tool for Select, stop a running selection and drop the selection |
 | `W` `A` `S` `D` | Walk forward, left, back and right |
 | `Q` `E` | Move down and up |
 | Shift, while walking | Walk faster |

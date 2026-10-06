@@ -470,6 +470,9 @@ pub(crate) struct DrawingViewTool {
     made: Vec<Arc<DrawScene>>,
     /// The crop region of a drawing of `saved` is drawn over it.
     pub(crate) crop_shown: bool,
+    /// The drawing of `saved` whose crop region a click selected: it is
+    /// drawn with its handles, and Properties shows its figures.
+    pub(crate) crop_selected: Option<String>,
     /// The points the drawings of `saved` read, kept for the next time one
     /// is made.
     pub(crate) kept: crate::kept_slabs::KeptSlabs,
@@ -518,6 +521,7 @@ impl DrawingViewTool {
             saved: crate::saved_drawings::load(),
             made: Vec::new(),
             crop_shown: true,
+            crop_selected: None,
             kept: crate::kept_slabs::KeptSlabs::default(),
             remake: None,
             crop_edits: (None, Vec::new()),
@@ -692,6 +696,11 @@ impl DrawingViewTool {
                     .any(|hidden| hidden.eq_ignore_ascii_case(&layer.name))
             })
             .collect();
+        // A drawing made again keeps its crop region selected; another
+        // drawing starts without.
+        if self.crop_selected.as_deref() != scene.source.sheet_guid() {
+            self.crop_selected = None;
+        }
         self.scene = Some(scene);
         self.held = None;
         self.fit_pending.set(true);
@@ -773,6 +782,8 @@ impl DrawingViewTool {
                 "pixels_per_unit": camera.scale,
             },
             "crop_shown": self.crop_shown,
+            "crop_selected": self.crop_selected.is_some()
+                && self.crop_selected.as_deref() == self.current_guid(),
             "remaking": self.remake.as_ref().map(|remake| &remake.definition.name),
             "kept": self.kept.value(),
             "viewport_size": self.bounds.get().map(|bounds| [bounds.width, bounds.height]),
@@ -1063,11 +1074,13 @@ impl<'a> From<Sheet<'a>> for Element<'a, Message> {
 }
 
 /// What is drawn over the sheet every frame, and the pointer: the texts,
-/// the crop region of a drawing of the Project Browser with its handles,
-/// the scale bar and the coordinates under the pointer. A drag pans, a drag
-/// of a handle moves sides of the crop region, and the wheel zooms about
-/// the pointer. While RO turns the crop region, the pointer turns it, a left
-/// click applies the turn and a right click cancels it.
+/// the crop region of a drawing of the Project Browser, the scale bar and
+/// the coordinates under the pointer. A drag pans and the wheel zooms about
+/// the pointer. A click on the outline of the crop region selects it: it is
+/// drawn thicker with its handles, and a drag of a handle moves sides of it;
+/// a click elsewhere deselects it. While RO turns the crop region, the
+/// pointer turns it, a left click applies the turn and a right click
+/// cancels it.
 struct Overlay<'a> {
     tool: &'a DrawingViewTool,
     crop: Option<CropOverlay>,
@@ -1098,15 +1111,22 @@ pub(crate) struct CropDrag {
 }
 
 /// What the overlay keeps between events: where a pan is, or the handle
-/// being dragged.
+/// being dragged, and where a left button went down that may be a click.
 #[derive(Debug, Default)]
 struct OverlayState {
     pan: Option<UiPoint>,
     crop: Option<CropDrag>,
+    click: Option<UiPoint>,
 }
 
 /// How near the pointer must be to a handle to take it, in pixels.
 const HANDLE_REACH: f64 = 7.0;
+/// How near the pointer must be to the outline of the crop region for a
+/// click to select it, in pixels.
+const OUTLINE_REACH: f64 = 5.0;
+/// A press and a release no farther apart than this are a click, in
+/// pixels; farther apart they are a pan.
+const CLICK_SLOP: f32 = 4.0;
 /// Half the side of the square of a handle, in pixels.
 const HANDLE_HALF: f32 = 3.5;
 /// The colour of the crop region.
@@ -1116,7 +1136,10 @@ impl Overlay<'_> {
     /// The handle of the crop region under a pixel of the sheet, the nearest
     /// one when two are close.
     fn handle_at(&self, pixel: UiPoint, size: Size) -> Option<Handle> {
-        let crop = self.crop.as_ref().filter(|crop| crop.editable)?;
+        let crop = self
+            .crop
+            .as_ref()
+            .filter(|crop| crop.editable && crop.selected)?;
         let camera = self.tool.camera.get();
         Handle::ALL
             .into_iter()
@@ -1130,8 +1153,24 @@ impl Overlay<'_> {
             .map(|(handle, _)| handle)
     }
 
-    /// The crop region with its handles, the size while a handle is
-    /// dragged, and the angle beside its centre while RO turns it.
+    /// Whether a pixel of the sheet lies on the outline of the crop region,
+    /// as it is drawn.
+    fn on_outline(&self, pixel: UiPoint, size: Size) -> bool {
+        let Some(crop) = &self.crop else {
+            return false;
+        };
+        let camera = self.tool.camera.get();
+        let corners = crop.corners.map(|corner| camera.to_screen(corner, size));
+        let at = [f64::from(pixel.x), f64::from(pixel.y)];
+        (0..4).any(|side| {
+            let (a, b) = (corners[side], corners[(side + 1) % 4]);
+            distance_to_segment(at, a, b) <= OUTLINE_REACH
+        })
+    }
+
+    /// The crop region, thin, or thicker with its handles while it is
+    /// selected, the size while a handle is dragged, and the angle beside
+    /// its centre while RO turns it.
     fn draw_crop(
         &self,
         frame: &mut Frame,
@@ -1147,7 +1186,16 @@ impl Overlay<'_> {
         let live = self.live(state);
         let (rect, corners, handles) = match live {
             Some(drag) => (drag.rect, turned_corners(drag.rect, 0.0), true),
-            None => (crop.rect, crop.corners, crop.editable),
+            None => (crop.rect, crop.corners, crop.editable && crop.selected),
+        };
+        // Selected it stands out; under the pointer it shows that a click
+        // takes it.
+        let width = if crop.selected || live.is_some() {
+            2.2
+        } else if pointer.is_some_and(|at| self.on_outline(at, size)) {
+            1.8
+        } else {
+            1.0
         };
         let screen = |point: [f64; 2]| {
             let [x, y] = camera.to_screen(point, size);
@@ -1162,7 +1210,9 @@ impl Overlay<'_> {
         });
         frame.stroke(
             &outline,
-            canvas::Stroke::default().with_color(color).with_width(1.2),
+            canvas::Stroke::default()
+                .with_color(color)
+                .with_width(width),
         );
         if handles {
             let hovered = live
@@ -1252,6 +1302,18 @@ fn wheel_factor(delta: mouse::ScrollDelta) -> f32 {
     ZOOM_STEP.powf(steps.clamp(-10.0, 10.0))
 }
 
+/// The distance from a point to a segment, in the units of the three.
+fn distance_to_segment(at: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let length = dx * dx + dy * dy;
+    let t = if length > 0.0 {
+        (((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / length).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (at[0] - (a[0] + t * dx)).hypot(at[1] - (a[1] + t * dy))
+}
+
 /// A length of 1, 2 or 5 times a power of ten close to `about`.
 pub(crate) fn nice_length(about: f64) -> f64 {
     if !(about.is_finite() && about > 0.0) {
@@ -1317,13 +1379,14 @@ impl canvas::Program<Message> for Overlay<'_> {
                             });
                             return (event::Status::Captured, None);
                         }
+                        state.click = Some(position);
                     }
                     state.pan = Some(position);
                     return (event::Status::Captured, None);
                 }
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(
-                mouse::Button::Left | mouse::Button::Middle | mouse::Button::Right,
+                button @ (mouse::Button::Left | mouse::Button::Middle | mouse::Button::Right),
             )) => {
                 if let Some(drag) = state.crop.take() {
                     // Let go: the drawing is made again with the region.
@@ -1336,8 +1399,18 @@ impl canvas::Program<Message> for Overlay<'_> {
                         moved.then(|| Message::Crop(CropAction::Set(drag.guid, drag.rect))),
                     );
                 }
+                // A left click without a drag selects the crop region on its
+                // outline and deselects it elsewhere.
+                let click = state.click.take().filter(|_| button == mouse::Button::Left);
                 if state.pan.take().is_some() {
-                    return (event::Status::Captured, None);
+                    let select = click.zip(self.crop.as_ref()).and_then(|(at, crop)| {
+                        let hit = self.on_outline(at, bounds.size());
+                        (hit != crop.selected).then_some(hit)
+                    });
+                    return (
+                        event::Status::Captured,
+                        select.map(|on| Message::Crop(CropAction::Select(on))),
+                    );
                 }
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { position }) => {
@@ -1354,6 +1427,11 @@ impl canvas::Program<Message> for Overlay<'_> {
                     return (event::Status::Captured, None);
                 }
                 if let Some(previous) = state.pan {
+                    if state.click.is_some_and(|at| {
+                        (now.x - at.x).abs() > CLICK_SLOP || (now.y - at.y).abs() > CLICK_SLOP
+                    }) {
+                        state.click = None;
+                    }
                     state.pan = Some(now);
                     return (
                         event::Status::Captured,
@@ -2157,9 +2235,12 @@ impl Studio {
         let colors = self.ui_theme.colors();
         let note =
             |content: String| container(text(content).size(10).color(colors.muted)).padding([4, 8]);
-        let mut block = column![opencad_properties::section_header("Drawing view")]
-            .spacing(0)
-            .width(Fill);
+        let mut block = column![].spacing(0).width(Fill);
+        // A selected crop region comes first, where it is seen at once.
+        if let Some(crop) = self.crop_properties() {
+            block = block.push(crop);
+        }
+        block = block.push(opencad_properties::section_header("Drawing view"));
         let open = button(text(tr("Open drawing…")).size(11))
             .on_press(Message::DrawingView(DrawingViewAction::OpenFile))
             .style(flat_tool_style);
@@ -2232,8 +2313,12 @@ impl Studio {
             )
             .padding([3, 8]),
         );
-        if let Some(crop) = self.crop_properties() {
-            block = block.push(crop);
+        let unselected = self.crop_overlay().is_some_and(|crop| !crop.selected);
+        if unselected {
+            block = block.push(note(
+                tr("Click the outline of the crop region on the sheet to select it and set its figures.")
+                    .to_owned(),
+            ));
         }
         block = block
             .push(opencad_properties::section_header("Layers"))
@@ -2605,25 +2690,91 @@ mod tests {
     }
 
     #[test]
-    fn a_handle_of_the_crop_region_drags_its_side_and_ro_takes_the_clicks() {
+    fn a_click_selects_the_crop_region_its_handle_drags_a_side_and_ro_takes_the_clicks() {
         let tool = DrawingViewTool::default();
-        let crop = CropOverlay {
+        let unselected = CropOverlay {
             guid: "plan".into(),
             rect: [[-100.0, -50.0], [100.0, 50.0]],
             unit: 1000.0,
             corners: turned_corners([[-100.0, -50.0], [100.0, 50.0]], 0.0),
             turn: None,
             editable: true,
+            selected: false,
+        };
+        // The camera has the drawing zero in the middle, a unit a pixel.
+        let bounds = Rectangle::new(UiPoint::ORIGIN, Size::new(800.0, 600.0));
+        let at = |x: f32, y: f32| mouse::Cursor::Available(UiPoint::new(x, y));
+        let mut state = OverlayState::default();
+        let click =
+            |overlay: &Overlay<'_>, state: &mut OverlayState, from: [f32; 2], to: [f32; 2]| {
+                let _ = canvas::Program::update(
+                    overlay,
+                    state,
+                    canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    bounds,
+                    at(from[0], from[1]),
+                );
+                let _ = canvas::Program::update(
+                    overlay,
+                    state,
+                    canvas::Event::Mouse(mouse::Event::CursorMoved {
+                        position: UiPoint::new(to[0], to[1]),
+                    }),
+                    bounds,
+                    at(to[0], to[1]),
+                );
+                canvas::Program::update(
+                    overlay,
+                    state,
+                    canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                    bounds,
+                    at(to[0], to[1]),
+                )
+                .1
+            };
+        {
+            // Not selected: a thin line without handles, and the pointer over
+            // a handle takes nothing.
+            let overlay = Overlay {
+                tool: &tool,
+                crop: Some(unselected.clone()),
+                turning: false,
+            };
+            assert_eq!(
+                overlay.handle_at(UiPoint::new(503.0, 301.0), bounds.size()),
+                None
+            );
+            assert_eq!(
+                canvas::Program::mouse_interaction(&overlay, &state, bounds, at(503.0, 301.0)),
+                mouse::Interaction::default()
+            );
+            // A click on the outline selects it, also a few pixels beside it;
+            // a click inside or outside does nothing, and neither does a drag
+            // that starts on the outline.
+            assert!(matches!(
+                click(&overlay, &mut state, [497.0, 320.0], [497.0, 321.0]),
+                Some(Message::Crop(CropAction::Select(true)))
+            ));
+            assert!(click(&overlay, &mut state, [450.0, 320.0], [450.0, 320.0]).is_none());
+            assert!(click(&overlay, &mut state, [700.0, 100.0], [700.0, 100.0]).is_none());
+            assert!(click(&overlay, &mut state, [500.0, 320.0], [540.0, 320.0]).is_none());
+        }
+        let crop = CropOverlay {
+            selected: true,
+            ..unselected
         };
         let overlay = Overlay {
             tool: &tool,
             crop: Some(crop.clone()),
             turning: false,
         };
-        // The camera has the drawing zero in the middle, a unit a pixel.
-        let bounds = Rectangle::new(UiPoint::ORIGIN, Size::new(800.0, 600.0));
-        let at = |x: f32, y: f32| mouse::Cursor::Available(UiPoint::new(x, y));
-        let mut state = OverlayState::default();
+        // Selected, a click on the outline keeps it and a click elsewhere on
+        // the sheet deselects it.
+        assert!(click(&overlay, &mut state, [400.0, 250.0], [400.0, 250.0]).is_none());
+        assert!(matches!(
+            click(&overlay, &mut state, [450.0, 320.0], [451.0, 320.0]),
+            Some(Message::Crop(CropAction::Select(false)))
+        ));
         // Over a handle the pointer shows the way it moves the region.
         let cursor = |state: &OverlayState, x, y| {
             canvas::Program::mouse_interaction(&overlay, state, bounds, at(x, y))

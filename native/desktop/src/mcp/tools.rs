@@ -518,6 +518,9 @@ fn table() -> Vec<Tool> {
             optional("depth", positive("The view depth behind the cut in metres: the slab of a plan or a section (0.005 to 5), the depth of the box of an elevation")),
             optional("sample_percent", number_in("The points used, in percent, 0.1 to 100; the points drawn are thinned from that share, while the filled cut of a plan takes every point. Another share of an elevation or a section reads the slab again", pointcloud_core::MIN_DRAWING_SAMPLE_PERCENT, 100.0)),
         ]),
+        tool("select_crop_region", Command, "Selects the crop region of the drawing the Drawing view shows, as a click on its outline does: it is drawn thicker with its handles, and the Crop region section of Properties, with its figures and the points used, comes first in Properties. false deselects it, as Escape or a click elsewhere on the sheet does. Answers with selected, changed and the crop; refused while the Drawing view shows no crop region.", vec![
+            required("selected", boolean("true to select the crop region, false to deselect it")),
+        ]),
         tool("drag_crop_handle", Command, "Drags a handle of the crop region of the drawing the Drawing view shows to a point of the drawing, as the pointer does: the side or the two sides it moves go there, with the size in whole centimetres and at least 0.10 m. With release false the handle is held and the region is drawn as during a drag, with its size; let go (the default), the drawing is made again in place, with a job_id.", vec![
             required("handle", choice("The handle", &["left", "right", "bottom", "top", "bottom_left", "bottom_right", "top_left", "top_right"])),
             required("to", numbers("The point [u, v] of the drawing, in its units and coordinates, as list_drawings gives crop.rect", 2)),
