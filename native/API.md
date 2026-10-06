@@ -811,14 +811,17 @@ saved view that the scene still has comes back as it was left; otherwise its
 tab shows it as it was saved, as a click on its row does. A drawing comes back
 zoomed as it was left, with its layers as they were, also from its row.
 
-`list_tabs` answers with `tabs`, each with its `index`, `name`, `kind`
+`list_tabs` answers with `tabs`, each with its `index`, `name` (`3D model`
+for the 3D model in every language, as `project_browser` names it), `kind`
 (`model`, `view`, `drawing` or `file`), the `guid` of a view or drawing or the
 `path` of a file (`null` for the preview), `active` and `closable`, and with
 `active`, the index of the active tab or `null` while the Drawing view holds
 no drawing. `status.result.view_tabs` holds the same. `show_tab` shows an open
 tab as a click on it does, by its `index` or its `name` in any case; a drawing
 that is not made in this session yet is made, and the answer then has
-`accepted: true` and a `job_id`. `close_tab` closes a tab as its × does, by
+`accepted: true` and a `job_id`. It is refused while Settings, the dialog of
+Create 2D or the card of the Mesh to Plans wizard is open, as Ctrl+Tab does
+nothing then. `close_tab` closes a tab as its × does, by
 `index` or `name`; the view or drawing stays under VIEWS, and when the tab
 was active the tab after it is shown, else the one before it. The tab of the
 3D model does not close. Both answer with the tabs as `list_tabs` gives them,
@@ -1426,7 +1429,7 @@ layer with photo colours.
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
 | `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
 | `list_tabs` | — | The tabs above the main area in their order, the 3D model first, and the active one |
-| `show_tab` | `name` or `index` | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job ID |
+| `show_tab` | `name` or `index` | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job ID. Refused while Settings, the dialog of Create 2D or the card of the Mesh to Plans wizard is open |
 | `close_tab` | `name` or `index` | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |
 | `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before as long as its cut, depth and points used stay; returns a job ID. See [Crop region, duplicates and RO](#crop-region-duplicates-and-ro) |
 | `select_crop_region` | `selected` | Selects (`true`) or deselects (`false`) the crop region of the drawing shown, as a click on its outline or Escape does; Properties shows its figures while it is selected |

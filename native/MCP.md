@@ -221,7 +221,7 @@ follows when that view is restored.
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
 | `set_browser_group` | `group` (`scans`, `classes`, `views`, `bcf`, `3d`, `plans`, `elevations`, `sections`, `files` or `folder:` and a path), `open` | Opens or collapses a group of the Project Browser |
 | `list_tabs` | — | The tabs above the main area in their order, the 3D model first, with the active one |
-| `show_tab` | `name` or `index` as `list_tabs` gives them | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job to wait for |
+| `show_tab` | `name` or `index` as `list_tabs` gives them | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job to wait for. Refused while Settings, the dialog of Create 2D or the card of the Mesh to Plans wizard is open |
 | `close_tab` | `name` or `index` as `list_tabs` gives them | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |
 | `set_sheet_crop` | optional `name`, `rect` (`[[left, bottom], [right, top]]` in drawing units), `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` (0.1–100) | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before when its cut, depth and points used stay |
 | `select_crop_region` | `selected` | Selects the crop region of the drawing shown, as a click on its outline does, so that Properties shows its figures at the top and its handles can be dragged; `false` deselects it, as Escape does |

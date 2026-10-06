@@ -45,6 +45,9 @@ pub enum TabId {
 /// How the preferences name the 3D model, and how they start the name of a
 /// saved view and of a drawing.
 const MODEL_KEY: &str = "model";
+/// The name of the tab of the 3D model in English, which the local API
+/// gives it in every language.
+const MODEL_NAME: &str = "3D model";
 const VIEW_KEY: &str = "view:";
 const DRAWING_KEY: &str = "drawing:";
 
@@ -141,11 +144,36 @@ pub fn shortened(name: &str, most: usize) -> String {
     format!("{}…", kept.trim_end())
 }
 
+/// A name shortened to at most `most` characters in its middle, so that
+/// its end stays: its last word when that leaves three characters before
+/// the ellipsis, such as the number a copy gets, else its last few
+/// characters.
+pub fn shortened_in_the_middle(name: &str, most: usize) -> String {
+    let characters: Vec<char> = name.chars().collect();
+    if characters.len() <= most {
+        return name.to_owned();
+    }
+    let room = most.saturating_sub(1);
+    let last_word = characters
+        .iter()
+        .rposition(|character| character.is_whitespace())
+        .map_or(characters.len(), |space| characters.len() - space - 1);
+    let tail = if last_word > 0 && last_word <= room.saturating_sub(3) {
+        last_word
+    } else {
+        room / 2
+    };
+    let head: String = characters[..room - tail].iter().collect();
+    let end: String = characters[characters.len() - tail..].iter().collect();
+    format!("{}…{end}", head.trim_end())
+}
+
 /// The names of tabs, each with whether it closes, as a strip of
 /// `available` pixels shows them: as they are while they fit, else all
 /// shortened to the same most characters, which takes the longest first,
-/// down to `MIN_CHARS`. Also whether the tabs are wider than the strip even
-/// so, and it scrolls.
+/// down to `MIN_CHARS`. Names that would then read the same, as copies of
+/// a view do, are shortened in their middle instead. Also whether the tabs
+/// are wider than the strip even so, and it scrolls.
 pub fn fitted_names(names: &[(String, bool)], available: f32) -> (Vec<String>, bool) {
     let total = |most: usize| -> f32 {
         names
@@ -157,11 +185,36 @@ pub fn fitted_names(names: &[(String, bool)], available: f32) -> (Vec<String>, b
     while most > MIN_CHARS && total(most) > available {
         most -= 1;
     }
-    let shown = names
+    let mut shown: Vec<String> = names
         .iter()
         .map(|(name, _)| shortened(name, most))
         .collect();
+    let alike: Vec<bool> = (0..names.len())
+        .map(|place| {
+            (0..names.len()).any(|other| {
+                other != place && shown[other] == shown[place] && names[other].0 != names[place].0
+            })
+        })
+        .collect();
+    for (place, (name, _)) in names.iter().enumerate() {
+        if alike[place] {
+            shown[place] = shortened_in_the_middle(name, most);
+        }
+    }
     (shown, total(most) > available)
+}
+
+/// Where the strip scrolls to for the tab at `place` of tabs `widths`
+/// wide, in a strip `available` wide: to the start of the tab before it,
+/// so that a whole tab shows at its left, when both fit; else to the start
+/// of the tab itself.
+pub fn scroll_offset(widths: &[f32], place: usize, available: f32) -> f32 {
+    let before: f32 = widths[..place].iter().sum();
+    let shown = widths.get(place).copied().unwrap_or(0.0);
+    match place.checked_sub(1).map(|previous| widths[previous]) {
+        Some(previous) if previous + shown <= available => before - previous,
+        _ => before,
+    }
 }
 
 /// The tab shown in place of a closed one that was shown: of the tabs as
@@ -334,6 +387,8 @@ struct StripLayout {
     names: Vec<(String, bool)>,
     fitted: Vec<String>,
     caption: Option<(&'static str, String)>,
+    /// The pixels the tabs have.
+    available: f32,
 }
 
 /// What a tab does on a click, on its × and on the keys.
@@ -363,8 +418,10 @@ impl Studio {
             },
             TabAction::Close(tab) => self.close_tab(&tab),
             TabAction::Cycle(forward) => {
-                // The File view and the Settings dialog cover the tabs.
-                if self.file_open || self.settings.is_some() {
+                // Not under what covers the tabs or the main area: the File
+                // view, Settings, the dialog of Create 2D and the card of
+                // the Mesh to Plans wizard.
+                if self.tabs_covered() {
                     return Task::none();
                 }
                 let listed = self.listed_tabs();
@@ -374,6 +431,12 @@ impl Studio {
                 }
             }
         }
+    }
+
+    /// Whether the File view, Settings, the dialog of Create 2D or the card
+    /// of the Mesh to Plans wizard lies over the tabs or what they show.
+    pub(crate) fn tabs_covered(&self) -> bool {
+        self.model_covered() || self.sheet_dialog.is_some()
     }
 
     /// The tab of what the window shows: the drawing in the Drawing view,
@@ -457,6 +520,15 @@ impl Studio {
                 .map_or_else(String::new, |place| {
                     self.drawing_view.sheets()[place].source.caption()
                 }),
+        }
+    }
+
+    /// The name the local API gives a tab: that of its row, and `3D model`
+    /// for the 3D model in every language, as `project_browser` names it.
+    fn tab_api_name(&self, tab: &TabId) -> String {
+        match tab {
+            TabId::Model => MODEL_NAME.to_owned(),
+            _ => self.tab_name(tab),
         }
     }
 
@@ -637,6 +709,15 @@ impl Studio {
     /// get the tabs when they changed. Answers the work this needs, if any.
     pub(crate) fn settle_tabs(&mut self) -> Option<Task<Message>> {
         let mut tasks = Vec::new();
+        // A saved view that had the scene and was deleted gives the scene
+        // back to the 3D model, as closing its tab does, before the 3D model
+        // takes what the scene shows as its own.
+        if matches!(self.tabs.owner, TabId::View(_)) && !self.tab_exists(&self.tabs.owner) {
+            if let Some(look) = self.tabs.model {
+                tasks.push(self.put_back_model_look(look));
+            }
+            self.tabs.owner = TabId::Model;
+        }
         let mut moved = self.follow_shown_tab();
         if let Some(task) = self.show_pending_tab() {
             tasks.push(task);
@@ -759,16 +840,17 @@ impl Studio {
         let caption_width =
             (title.chars().count() + caption.chars().count()) as f32 * CHAR_WIDTH + 40.0;
         let (fitted, scrolls) = fitted_names(&names, width - caption_width);
-        let (fitted, caption) = if scrolls {
-            (fitted_names(&names, width).0, None)
+        let (fitted, caption, available) = if scrolls {
+            (fitted_names(&names, width).0, None, width)
         } else {
-            (fitted, Some((title, caption)))
+            (fitted, Some((title, caption)), width - caption_width)
         };
         StripLayout {
             listed,
             names,
             fitted,
             caption,
+            available,
         }
     }
 
@@ -778,15 +860,16 @@ impl Studio {
         let shown = self.tabs.shown.as_ref()?;
         let layout = self.strip_layout();
         let place = layout.listed.iter().position(|tab| tab == shown)?;
-        let before: f32 = layout.fitted[..place]
+        let widths: Vec<f32> = layout
+            .fitted
             .iter()
             .zip(&layout.names)
             .map(|(name, (_, closable))| tab_width(name.chars().count(), *closable))
-            .sum();
+            .collect();
         Some(scrollable::scroll_to(
             strip_id(),
             AbsoluteOffset {
-                x: (before - 48.0).max(0.0),
+                x: scroll_offset(&widths, place, layout.available).max(0.0),
                 y: 0.0,
             },
         ))
@@ -804,16 +887,7 @@ impl Studio {
             caption,
             ..
         } = self.strip_layout();
-        // The active tab lies on what is shown under it: the sheet of a
-        // drawing, else the scene.
-        let surface = if self.drawing_view.shown {
-            (
-                crate::drawing_view::paper(self.ui_theme),
-                Color::from_rgb8(28, 25, 23),
-            )
-        } else {
-            (colors.scene, colors.scene_text)
-        };
+        let surface = active_surface(self.ui_theme, self.drawing_view.shown);
         let mut tabs = row![].spacing(2).align_y(iced::Alignment::End);
         for ((tab, (full, _)), short) in listed.iter().zip(names).zip(fitted) {
             let active = (shown.as_ref() == Some(tab)).then_some(surface);
@@ -883,7 +957,7 @@ impl Studio {
             content = content.push(
                 button(text("×").size(12))
                     .on_press(Message::Tabs(TabAction::Close(tab.clone())))
-                    .style(close_style)
+                    .style(move |theme, status| close_style(theme, active, status))
                     .padding([0, 4]),
             );
         }
@@ -943,7 +1017,7 @@ impl Studio {
             .map(|(index, tab)| {
                 let mut entry = json!({
                     "index": index,
-                    "name": self.tab_name(tab),
+                    "name": self.tab_api_name(tab),
                     "kind": tab.kind(),
                     "active": shown.as_ref() == Some(tab),
                     "closable": tab.closable(),
@@ -975,7 +1049,7 @@ impl Studio {
         let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else {
             return Err("give the name or the index of a tab as list_tabs gives them".into());
         };
-        if name.eq_ignore_ascii_case("3D model") {
+        if name.eq_ignore_ascii_case(MODEL_NAME) || name.eq_ignore_ascii_case(tr(MODEL_NAME)) {
             return Ok(TabId::Model);
         }
         listed
@@ -1002,11 +1076,17 @@ impl Studio {
         if self.settings.is_some() {
             return refused("the Settings dialog is open".into());
         }
+        if self.sheet_dialog.is_some() {
+            return refused("the dialog of Create 2D is open".into());
+        }
+        if self.mesh_to_plans.covers_model() {
+            return refused("the card of the Mesh to Plans wizard is open".into());
+        }
         let tab = match self.tab_asked(name, index) {
             Ok(tab) => tab,
             Err(error) => return refused(error),
         };
-        let tab_name = self.tab_name(&tab);
+        let tab_name = self.tab_api_name(&tab);
         let mut job = None;
         let shown = match &tab {
             TabId::Drawing(guid) if self.drawing_view.made(guid).is_none() => {
@@ -1054,13 +1134,27 @@ impl Studio {
         if !tab.closable() {
             return refused("the tab of the 3D model does not close".into());
         }
-        let tab_name = self.tab_name(&tab);
+        let tab_name = self.tab_api_name(&tab);
         let task = self.close_tab(&tab);
         let settled = self.settle_tabs().unwrap_or_else(Task::none);
         let mut answer = self.tabs_value();
         answer["ok"] = Value::Bool(true);
         answer["closed"] = Value::from(tab_name);
         (answer, Task::batch([task, settled]))
+    }
+}
+
+/// What the active tab lies on, as its colour and its ink: the sheet of a
+/// drawing (`drawing`), else the scene.
+fn active_surface(theme: ui_theme::UiTheme, drawing: bool) -> (Color, Color) {
+    if drawing {
+        (
+            crate::drawing_view::paper(theme),
+            Color::from_rgb8(28, 25, 23),
+        )
+    } else {
+        let colors = theme.colors();
+        (colors.scene, colors.scene_text)
     }
 }
 
@@ -1099,16 +1193,37 @@ fn tab_style(
     }
 }
 
-/// The × of a tab.
-fn close_style(theme: &Theme, status: button::Status) -> button::Style {
+/// The × of a tab: on the active one in the ink of what is shown under it,
+/// a little quieter until the pointer is over it, so that it reads as well
+/// on the sheet of a drawing as on the scene; on the others in the quiet
+/// colour of the strip.
+fn close_style(
+    theme: &Theme,
+    active: Option<(Color, Color)>,
+    status: button::Status,
+) -> button::Style {
     let colors = ui_theme::colors(theme);
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    let (quiet, hover, ink) = match active {
+        Some((surface, ink)) => (mixed(ink, surface, 0.7), Color { a: 0.12, ..ink }, ink),
+        None => (colors.muted, colors.ribbon_hover, colors.text),
+    };
     button::Style {
-        background: hovered.then_some(Background::Color(colors.ribbon_hover)),
-        text_color: if hovered { colors.text } else { colors.muted },
+        background: hovered.then_some(Background::Color(hover)),
+        text_color: if hovered { ink } else { quiet },
         border: Border::default().rounded(3.0),
         ..button::Style::default()
     }
+}
+
+/// `share` of `ink` laid over `surface`.
+fn mixed(ink: Color, surface: Color, share: f32) -> Color {
+    let mix = |a: f32, b: f32| a * share + b * (1.0 - share);
+    Color::from_rgb(
+        mix(ink.r, surface.r),
+        mix(ink.g, surface.g),
+        mix(ink.b, surface.b),
+    )
 }
 
 #[cfg(test)]

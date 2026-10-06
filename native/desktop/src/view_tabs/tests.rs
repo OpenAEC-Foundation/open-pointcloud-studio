@@ -159,6 +159,81 @@ fn names_shrink_with_an_ellipsis_before_the_strip_scrolls() {
     assert_eq!(shown[2], "Front");
 }
 
+#[test]
+fn copies_that_would_read_the_same_are_shortened_in_their_middle() {
+    assert_eq!(shortened_in_the_middle("Entree (3)", 8), "Entr…(3)");
+    assert_eq!(shortened_in_the_middle("Entree (12)", 8), "Ent…(12)");
+    assert_eq!(shortened_in_the_middle("Begane grond +1.20", 8), "Bega….20");
+    assert_eq!(shortened_in_the_middle("Entree", 8), "Entree");
+    let names: Vec<(String, bool)> = [
+        ("3D model", false),
+        ("Entree", true),
+        ("Entree (2)", true),
+        ("Entree (3)", true),
+        ("Doorsnede A-A", true),
+    ]
+    .into_iter()
+    .map(|(name, closable)| (name.to_owned(), closable))
+    .collect();
+    let (shown, scrolls) = fitted_names(&names, 300.0);
+    assert!(scrolls);
+    assert_eq!(shown[2], "Entr…(2)");
+    assert_eq!(shown[3], "Entr…(3)");
+    // A name that reads as no other keeps its start.
+    assert_eq!(shown[4], "Doorsne…");
+    assert_eq!(shown[1], "Entree");
+    let distinct: std::collections::HashSet<&String> = shown.iter().collect();
+    assert_eq!(distinct.len(), shown.len(), "{shown:?}");
+}
+
+#[test]
+fn the_strip_scrolls_to_the_start_of_a_whole_tab() {
+    let widths = [80.0, 100.0, 120.0, 90.0];
+    // The tab before the one shown shows whole at the left.
+    assert_eq!(scroll_offset(&widths, 2, 300.0), 80.0);
+    assert_eq!(scroll_offset(&widths, 3, 300.0), 180.0);
+    // Without room for both, the tab shown starts the strip.
+    assert_eq!(scroll_offset(&widths, 3, 200.0), 300.0);
+    assert_eq!(scroll_offset(&widths, 0, 300.0), 0.0);
+}
+
+#[test]
+fn the_x_of_the_active_tab_reads_on_the_sheet_and_on_the_scene_in_every_theme() {
+    // The contrast of two colours, as WCAG works it out.
+    fn luminance(color: Color) -> f32 {
+        let channel = |value: f32| {
+            if value <= 0.039_28 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+    }
+    fn contrast(a: Color, b: Color) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+    for theme in crate::ui_theme::UiTheme::ALL {
+        let iced = theme.iced();
+        for drawing in [true, false] {
+            let surface = active_surface(theme, drawing);
+            for status in [button::Status::Active, button::Status::Hovered] {
+                let style = close_style(&iced, Some(surface), status);
+                let behind = match style.background {
+                    Some(Background::Color(color)) => mixed(color, surface.0, color.a),
+                    _ => surface.0,
+                };
+                let ratio = contrast(style.text_color, behind);
+                assert!(
+                    ratio >= 4.5,
+                    "{theme:?} drawing {drawing} {status:?}: {ratio:.2}"
+                );
+            }
+        }
+    }
+}
+
 /// A studio with one scan, its views and drawings in a folder of the test.
 fn studio_with_scan() -> (Studio, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
@@ -431,6 +506,102 @@ fn the_3d_model_keeps_its_camera_box_and_colours_and_a_drawing_its_zoom() {
         plan.clone(),
     )));
     assert!(studio.drawing_view.layer_shown(0));
+}
+
+#[test]
+fn a_deleted_view_that_had_the_scene_gives_the_3d_model_its_camera_back() {
+    let (mut studio, _directory) = studio_with_scan();
+    let _ = studio.update(Message::Views(ViewAction::Save));
+    let entrance = studio.listed_views()[0].guid.clone();
+    act(&mut studio, TabAction::Show(TabId::Model));
+    let _ = studio.update(Message::CameraPreset(CameraPreset::Top));
+    let model = (studio.yaw, studio.pitch, studio.zoom, studio.pan);
+    act(&mut studio, TabAction::Show(view(&entrance)));
+    let _ = studio.update(Message::Orbit(12.0, 0.0));
+    assert_ne!((studio.yaw, studio.pitch, studio.zoom, studio.pan), model);
+
+    // The × of its row under VIEWS deletes it: its tab goes, and the 3D
+    // model shows with its own camera, as when its tab is closed.
+    let _ = studio.update(Message::Views(ViewAction::Delete(entrance.clone())));
+    assert_eq!(names(&studio), ["3D model"]);
+    assert_eq!(studio.shown_tab(), Some(TabId::Model));
+    assert_eq!((studio.yaw, studio.pitch, studio.zoom, studio.pan), model);
+    // And keeps it: it is the camera of the 3D model again.
+    act(&mut studio, TabAction::Show(TabId::Model));
+    assert_eq!((studio.yaw, studio.pitch, studio.zoom, studio.pan), model);
+
+    // A deleted view that no longer had the scene leaves the camera alone.
+    let _ = studio.update(Message::Views(ViewAction::Save));
+    let hall = studio.listed_views()[0].guid.clone();
+    act(&mut studio, TabAction::Show(TabId::Model));
+    let _ = studio.update(Message::CameraPreset(CameraPreset::Front));
+    let front = (studio.yaw, studio.pitch, studio.zoom, studio.pan);
+    let _ = studio.update(Message::Views(ViewAction::Delete(hall)));
+    assert_eq!((studio.yaw, studio.pitch, studio.zoom, studio.pan), front);
+}
+
+#[test]
+fn ctrl_tab_and_show_tab_leave_what_lies_under_a_dialog_or_the_wizard_card() {
+    let (mut studio, _directory) = studio_with_scan();
+    let plan = made_drawing(&mut studio, "Ground floor", 4.0);
+    let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+        plan.clone(),
+    )));
+    assert_eq!(studio.shown_tab(), Some(drawing(&plan)));
+
+    // The dialog of Create 2D.
+    let _ = studio.update(Message::Sheet(crate::sheet_dialog::SheetAction::Open));
+    assert!(studio.sheet_dialog.is_some());
+    act(&mut studio, TabAction::Cycle(true));
+    assert_eq!(studio.shown_tab(), Some(drawing(&plan)));
+    let refused = send(
+        &mut studio,
+        serde_json::json!({"command": "show_tab", "index": 0}),
+    );
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(studio.shown_tab(), Some(drawing(&plan)));
+    let _ = studio.update(Message::Escape);
+    assert!(studio.sheet_dialog.is_none());
+
+    // The card of the Mesh to Plans wizard.
+    let _ = studio.update(Message::MeshToPlans(
+        crate::mesh_to_plans::WizardAction::Open,
+    ));
+    assert!(studio.mesh_to_plans.covers_model());
+    act(&mut studio, TabAction::Cycle(false));
+    assert_eq!(studio.shown_tab(), Some(drawing(&plan)));
+    let refused = send(
+        &mut studio,
+        serde_json::json!({"command": "show_tab", "index": 0}),
+    );
+    assert_eq!(refused["ok"], false, "{refused}");
+    // As a strip beside the scene it covers nothing.
+    let _ = studio.update(Message::Escape);
+    assert!(!studio.mesh_to_plans.covers_model());
+    act(&mut studio, TabAction::Cycle(true));
+    assert_eq!(studio.shown_tab(), Some(TabId::Model));
+}
+
+#[test]
+fn the_local_api_names_the_3d_model_alike_in_every_language() {
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::Table(0));
+    let (mut studio, _directory) = studio_with_scan();
+    // The strip speaks the language of the window...
+    assert_eq!(studio.tab_name(&TabId::Model), "3D-model");
+    // ...the local API does not, as for the Project Browser it reports.
+    let listed = send(&mut studio, serde_json::json!({"command": "list_tabs"}));
+    assert_eq!(listed["tabs"][0]["name"], "3D model", "{listed}");
+    let status = send(&mut studio, serde_json::json!({"command": "status"}));
+    assert_eq!(status["result"]["view_tabs"]["tabs"][0]["name"], "3D model");
+    // Either name finds it.
+    for name in ["3D model", "3d-MODEL"] {
+        let shown = send(
+            &mut studio,
+            serde_json::json!({"command": "show_tab", "name": name}),
+        );
+        assert_eq!(shown["ok"], true, "{shown}");
+        assert_eq!(shown["shown"], "3D model");
+    }
 }
 
 #[test]
