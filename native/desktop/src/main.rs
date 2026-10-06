@@ -1892,9 +1892,12 @@ enum Message {
     /// was read for it.
     RefreshLod,
     RefreshDetail(u64),
+    /// Count the points of the active layer drawn inside the section box,
+    /// when this is still the count asked for last.
+    CountBoxSample(u64),
     DetailPreview(u64, Vec<(usize, Vec<IndexedPoint>)>),
     DetailReady(u64, Result<Vec<(usize, Vec<IndexedPoint>)>, String>),
-    /// What a refinement of part of the view gives for a revision: a set to
+    /// What a refinement inside the section box gives for a revision: a set to
     /// show in between (`false`) or what it comes to at its end (`true`).
     DetailMerged(u64, bool, Result<MergedSets, String>),
     ExportFormat(ExportFormat),
@@ -2233,6 +2236,11 @@ struct Studio {
     /// Counts the changes of the sets of points read for the view and
     /// inside the section box.
     sets_revision: u64,
+    /// The points of the active layer drawn inside the section box, with
+    /// what they were counted for.
+    box_sample: Option<(BoxSampleKey, usize)>,
+    /// The count of them asked for last, with its number.
+    box_sample_asked: Option<(BoxSampleKey, u64)>,
     lod_pace: Arc<LodPace>,
     auto_index: bool,
     revision: u64,
@@ -2286,7 +2294,7 @@ type LodSets = Vec<(usize, Vec<IndexedPoint>)>;
 enum DetailRun {
     /// It reads the whole view, whose sets replace those drawn.
     Whole(u64, LodRefinement),
-    /// It reads part of the view and merges it with what is drawn.
+    /// It reads inside the section box and merges that with what is drawn.
     Merge(u64, MergeRefinement),
 }
 
@@ -2314,6 +2322,17 @@ fn whole_detail_task(revision: u64, refinement: LodRefinement) -> Task<Message> 
     })
 }
 
+/// What the points drawn inside the section box were counted for: the
+/// active layer, the sets of points, the box and the place of the layer.
+#[derive(Debug, Clone, PartialEq)]
+struct BoxSampleKey {
+    active: usize,
+    cloud: usize,
+    sets: u64,
+    region: OrientedBox,
+    transform: CloudTransform,
+}
+
 /// A refinement of the view that was started: for which revision, what it
 /// reads and for which view.
 #[derive(Debug, Clone)]
@@ -2335,10 +2354,6 @@ struct LodRefinement {
     sampled_limits: Vec<usize>,
     samples: Vec<Vec<IndexedPoint>>,
     section: Option<OrientedBox>,
-    /// Nodes that lie wholly inside this box are not read, and an exact read
-    /// keeps none of its points: the part outside a box that was switched
-    /// off, whose inside stays as it is.
-    exclude: Option<OrientedBox>,
     projection: Projection,
     cancel: Arc<AtomicBool>,
     budget: usize,
@@ -2361,12 +2376,11 @@ impl LodRefinement {
             .filter(|(slot, _)| self.requested[*slot] > self.sampled_limits[*slot])
             .map(|(slot, (_, tree, transform, _))| {
                 let limit = self.requested[slot];
-                let (section, exclude) = (self.section, self.exclude);
+                let section = self.section;
                 let projection = self.projection;
                 let deep_zoom = self.deep_zoom;
-                let projected = |node_bounds| {
-                    lod_node_span(*transform, section, exclude, projection, node_bounds)
-                };
+                let projected =
+                    |node_bounds| lod_node_span(*transform, section, projection, node_bounds);
                 let exact = if deep_zoom {
                     tree.sample_visible_indexed_cancellable(
                         limit,
@@ -2375,7 +2389,6 @@ impl LodRefinement {
                         |record| {
                             let xyz = transform.xyz(record.point.xyz);
                             section.is_none_or(|clip| clip.contains(xyz))
-                                && exclude.is_none_or(|kept| !kept.contains(xyz))
                                 && projection.project(xyz).is_some()
                         },
                         || self.cancel.load(Ordering::Relaxed),
@@ -2805,6 +2818,8 @@ impl Default for Studio {
             focus: None,
             section_read: None,
             sets_revision: 0,
+            box_sample: None,
+            box_sample_asked: None,
             lod_pace: Arc::default(),
             auto_index: settings.auto_index,
             revision: 0,
@@ -3293,7 +3308,7 @@ impl Studio {
 
     /// The drawn point nearest to the eye under a pixel of the scene.
     fn orbit_point_at(&self, pointer: [f32; 2], size: Size) -> impl FnOnce() -> Option<[f64; 3]> {
-        let views: Vec<_> = self.clouds.iter().map(PickView::of).collect();
+        let views = self.pick_views();
         let budget = self.budget as usize;
         let filter = self.mesh_filter();
         let projection = combined_bounds(&self.clouds)
@@ -5609,7 +5624,7 @@ impl Studio {
         let cloud = Arc::clone(&entry.cloud);
         let deleted = entry.deleted.as_ref().map(Arc::clone);
         let transform = entry.transform;
-        let display_views: Vec<_> = self.clouds.iter().map(PickView::of).collect();
+        let display_views = self.pick_views();
         let display_budget = self.budget as usize;
         let projection = self.projection(bounds, size.width, size.height);
         let sphere_radius = gpu_viewport::display_point_radius(self.point_size, self.zoom);
@@ -5699,7 +5714,11 @@ impl Studio {
         self.settle_faces();
         self.settle_mesh_to_plans();
         self.settle_turn();
-        task
+        self.settle_focus();
+        match self.ask_box_sample() {
+            Some(count) => Task::batch([task, count]),
+            None => task,
+        }
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
@@ -7564,6 +7583,17 @@ impl Studio {
                 }
                 return self.update(Message::LoadDetail);
             }
+            Message::CountBoxSample(asked) => {
+                let key = self.box_sample_key();
+                if let Some((key, _)) = self
+                    .box_sample_asked
+                    .clone()
+                    .filter(|(wanted, number)| *number == asked && key.as_ref() == Some(wanted))
+                {
+                    let count = self.count_box_sample(&key);
+                    self.box_sample = Some((key, count));
+                }
+            }
             Message::RefreshDetail(revision) => {
                 if self.detail_current(revision) && !self.detail_pending && !self.detail_loaded() {
                     return self.update(Message::LoadDetail);
@@ -9097,7 +9127,7 @@ impl Studio {
                     }
                     let (_, tree, transform, _) = &sources[slot];
                     preview_tier_points(&tree.root, limit, |bounds| {
-                        lod_node_span(*transform, section, None, projection, bounds)
+                        lod_node_span(*transform, section, projection, bounds)
                     })
                 })
             })
@@ -9158,29 +9188,17 @@ impl Studio {
             self.status = "A viewport LOD request is already running".into();
             return None;
         }
-        let bounds = combined_bounds(&self.clouds)?;
-        let size = self.scene_size();
-        let projection = self.projection(bounds, size.width, size.height);
-        let budget = self.budget as usize;
-        let view = DetailView {
-            projection,
-            layers: self.detail_basis().0,
-            budget,
-        };
+        let view = self.detail_view_now()?;
+        let (projection, budget) = (view.projection, view.budget);
         let plan = self.detail_plan(&view);
         if plan == DetailPlan::Nothing {
-            // The box went off with the camera where the sets were
-            // read: they show the view, with what was read inside
-            // the box besides them.
+            // The sets show this view, and the box, when it is on, was read
+            // for it beside them.
             self.detail_loaded_revision = Some(self.revision);
             return None;
         }
         let section = match plan {
             DetailPlan::Inside { region, .. } => Some(region),
-            _ => None,
-        };
-        let exclude = match plan {
-            DetailPlan::Outside { region } => Some(region),
             _ => None,
         };
         let indexed_sources: Vec<_> = self
@@ -9280,10 +9298,6 @@ impl Studio {
                     "Reading the octree nodes inside the section box in {count} cloud(s)…",
                     &[("count", &sources.len())],
                 ),
-                DetailPlan::Outside { .. } => i18n::tr_args(
-                    "Reading the octree nodes outside the section box in {count} cloud(s)…",
-                    &[("count", &sources.len())],
-                ),
                 DetailPlan::Nothing | DetailPlan::Whole => format!(
                     "Refining visible octree nodes in {} cloud(s)…",
                     sources.len()
@@ -9297,7 +9311,6 @@ impl Studio {
             source_weights,
             requested: limits,
             section,
-            exclude,
             projection,
             cancel,
             budget,
@@ -9311,6 +9324,124 @@ impl Studio {
             Some(merge) => DetailRun::Merge(revision, MergeRefinement::new(refinement, merge)),
             None => DetailRun::Whole(revision, refinement),
         })
+    }
+
+    /// What detail read now would be read for: the camera, the layers with an
+    /// octree and the budget.
+    fn detail_view_now(&self) -> Option<DetailView> {
+        let bounds = combined_bounds(&self.clouds)?;
+        let size = self.scene_size();
+        Some(DetailView {
+            projection: self.projection(bounds, size.width, size.height),
+            layers: self.detail_basis().0,
+            budget: self.budget as usize,
+        })
+    }
+
+    /// The drawn samples of the layers as the picker sees them.
+    fn pick_views(&self) -> Vec<PickView> {
+        let focus = self.focus_drawn();
+        self.clouds
+            .iter()
+            .map(|entry| PickView::of(entry, focus))
+            .collect()
+    }
+
+    /// What the count of the points drawn inside the section box would be
+    /// made for now: `None` while the box is off or no layer is active.
+    fn box_sample_key(&self) -> Option<BoxSampleKey> {
+        let region = self.section_box()?;
+        let active = self.active?;
+        let entry = self.clouds.get(active)?;
+        Some(BoxSampleKey {
+            active,
+            cloud: Arc::as_ptr(&entry.cloud) as usize,
+            sets: self.sets_revision,
+            region,
+            transform: entry.transform,
+        })
+    }
+
+    /// Ask for the points drawn inside the section box to be counted a
+    /// moment after the box or the sets last changed: a drag of a face has
+    /// them counted once, at its end.
+    fn ask_box_sample(&mut self) -> Option<Task<Message>> {
+        let key = self.box_sample_key()?;
+        let known = |known: Option<&BoxSampleKey>| known == Some(&key);
+        if known(self.box_sample.as_ref().map(|(key, _)| key))
+            || known(self.box_sample_asked.as_ref().map(|(key, _)| key))
+        {
+            return None;
+        }
+        let number = self
+            .box_sample_asked
+            .as_ref()
+            .map_or(0, |(_, number)| number + 1);
+        self.box_sample_asked = Some((key, number));
+        Some(Task::perform(
+            async move {
+                tokio::time::sleep(Duration::from_millis(220)).await;
+                number
+            },
+            Message::CountBoxSample,
+        ))
+    }
+
+    /// The points of a layer drawn inside the section box: those of its set
+    /// for the view, and those read inside the box besides it.
+    fn count_box_sample(&self, key: &BoxSampleKey) -> usize {
+        let Some(entry) = self.clouds.get(key.active) else {
+            return 0;
+        };
+        let (region, transform) = (key.region, entry.transform);
+        let inside = |xyz: [f64; 3]| region.contains(transform.xyz(xyz));
+        let view = match &entry.detail_points {
+            Some(points) => points
+                .par_iter()
+                .filter(|record| inside(record.point.xyz))
+                .count(),
+            None => {
+                let cloud = &entry.cloud;
+                let shown = cloud.points.len().min(cloud.point_ordinals.len());
+                cloud.points[..shown]
+                    .par_iter()
+                    .filter(|point| inside(point.xyz))
+                    .count()
+            }
+        };
+        let focus = entry.focus_points.as_ref().map_or(0, |points| {
+            points
+                .par_iter()
+                .filter(|record| inside(record.point.xyz))
+                .count()
+        });
+        view + focus
+    }
+
+    /// The points of the active layer that the view draws: with the section
+    /// box on, those inside it, as last counted for this layer; else its set
+    /// for the view, with the points read inside the box while they are
+    /// drawn.
+    fn view_sample(&self) -> usize {
+        let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) else {
+            return 0;
+        };
+        let focus = if self.focus_drawn() {
+            entry.focus_len()
+        } else {
+            0
+        };
+        let Some(key) = self.box_sample_key() else {
+            return entry.view_len() + focus;
+        };
+        match &self.box_sample {
+            Some((counted, count))
+                if counted.active == key.active && counted.cloud == key.cloud =>
+            {
+                *count
+            }
+            _ => entry.view_len() + focus,
+        }
     }
 
     /// The view that the request of this revision read for, when it is the
@@ -9827,6 +9958,7 @@ impl Studio {
             class_visibility: self.class_visibility,
             section: self.section_box(),
             section_reference: self.section_reference_bounds,
+            focus_drawn: self.focus_drawn(),
             section_fill: self.section_fill.style(),
             section_cap_jobs: &self.section_fill.cap_jobs,
             yaw: self.yaw,
@@ -10059,9 +10191,7 @@ impl Studio {
 
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
         let source_points = active_cloud.map_or(0, |entry| entry.cloud.total_points);
-        // The sample of the view and the points read inside the section box
-        // besides it.
-        let view_points = active_cloud.map_or(0, |entry| entry.view_len() + entry.focus_len());
+        let view_points = self.view_sample();
         let selected_points = active_cloud
             .and_then(|entry| entry.selection.as_ref())
             .map_or(0, |selection| selection.count);
@@ -11299,12 +11429,10 @@ fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
 }
 
 /// Size on screen of an octree node of a placed cloud, as the sampler is
-/// told it: `None` when the section box or the camera leaves the node out,
-/// or when it lies wholly inside `exclude`.
+/// told it: `None` when the section box or the camera leaves the node out.
 fn lod_node_span(
     transform: CloudTransform,
     section: Option<OrientedBox>,
-    exclude: Option<OrientedBox>,
     projection: Projection,
     node_bounds: Bounds,
 ) -> Option<f32> {
@@ -11314,13 +11442,6 @@ fn lod_node_span(
         (0..3).any(|axis| {
             node_bounds.max[axis] < clip.min[axis] || node_bounds.min[axis] > clip.max[axis]
         })
-    }) {
-        return None;
-    }
-    if exclude.is_some_and(|kept| {
-        pointcloud_core::bounds_corners(node_bounds)
-            .into_iter()
-            .all(|corner| kept.contains(corner))
     }) {
         return None;
     }
@@ -11695,6 +11816,9 @@ struct PointViewport<'a> {
     class_visibility: ClassVisibility,
     section: Option<OrientedBox>,
     section_reference: Option<Bounds>,
+    /// Whether the points read inside the section box are drawn: not while
+    /// they are put aside with the box off.
+    focus_drawn: bool,
     /// How the cut of a mesh by the section box is filled, when it is.
     section_fill: Option<section_fill::CapStyle>,
     /// Counts the caps of the scene while they are being made.
@@ -14816,7 +14940,6 @@ mod lod_transition_tests {
             sampled_limits: vec![0],
             samples: vec![Vec::new()],
             section: None,
-            exclude: None,
             projection,
             cancel: Arc::new(AtomicBool::new(false)),
             budget: total,
@@ -14948,8 +15071,7 @@ mod lod_transition_tests {
         assert!(seen > 10_000, "{seen}");
         assert!(source_lod_coverage(projection, tree.root.bounds, None).is_some());
 
-        let span =
-            |bounds| lod_node_span(CloudTransform::default(), None, None, projection, bounds);
+        let span = |bounds| lod_node_span(CloudTransform::default(), None, projection, bounds);
         let sample = tree.sample_lod_indexed(total, span).unwrap();
         assert!(
             in_view(&sample) * 2 > seen,

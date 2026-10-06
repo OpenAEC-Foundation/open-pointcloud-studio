@@ -922,6 +922,7 @@ impl shader::Program<Message> for GpuViewport<'_> {
             .and_then(|shown| crate::photo_overlay::frame(&shown));
         CloudPrimitive {
             geometry,
+            focus_drawn: self.overlay.focus_drawn,
             caps,
             camera,
             photos,
@@ -1082,6 +1083,9 @@ struct PanoramaFrame {
 #[derive(Debug)]
 pub struct CloudPrimitive {
     geometry: Arc<RenderGeometry>,
+    /// Whether the points read inside the section box are drawn; they stay
+    /// on the device while they are put aside.
+    focus_drawn: bool,
     /// The caps over the cut of the meshes by the section box.
     caps: Arc<MeshBuffers>,
     camera: CameraUniform,
@@ -1867,8 +1871,9 @@ impl Primitive for CloudPrimitive {
             .ball_photos
             .as_ref()
             .filter(|_| !self.photos.balls.is_empty());
+        let focus = state.focus.chunks.iter().filter(|_| self.focus_drawn);
         if state.points.chunks.is_empty()
-            && state.focus.chunks.is_empty()
+            && focus.clone().next().is_none()
             && state.mesh.index_count == 0
             && state.caps.index_count == 0
             && balls.is_none()
@@ -1915,7 +1920,7 @@ impl Primitive for CloudPrimitive {
                     pass.draw_indexed(0..meshes.index_count, 0, 0..1);
                 }
             }
-            let chunks = || state.points.chunks.iter().chain(&state.focus.chunks);
+            let chunks = || state.points.chunks.iter().chain(focus.clone());
             if chunks().next().is_some() {
                 pass.set_pipeline(&state.pipeline);
                 for chunk in chunks() {
@@ -1978,7 +1983,8 @@ pub(crate) struct DrawnFrame {
     /// The points read inside the section box, by identity.
     pub focus: usize,
     /// The points of both that the shader draws: those inside the section
-    /// box while it is on.
+    /// box while it is on, and those read inside it only while they are not
+    /// put aside.
     pub drawn: usize,
     /// Those of them that are on the screen.
     pub in_view: usize,
@@ -1993,10 +1999,11 @@ pub(crate) fn drawn_frame(studio: &crate::Studio, state: &RefCell<RenderCache>) 
     let bounds = Rectangle::new(iced::Point::ORIGIN, studio.viewport_size);
     let frame = shader::Program::draw(&viewport, state, mouse::Cursor::Unavailable, bounds);
     let geometry = &frame.geometry;
+    let focus = geometry.focus.iter().filter(|_| frame.focus_drawn);
     let drawn: Vec<_> = geometry
         .points
         .iter()
-        .chain(geometry.focus.iter())
+        .chain(focus)
         .filter(|point| !clipped(&frame.camera, point.relative))
         .collect();
     let in_view = combined_bounds(&studio.clouds).map_or(0, |scene| {
@@ -2588,6 +2595,7 @@ mod tests {
 #[cfg(test)]
 mod section_box_tests {
     use super::*;
+    use crate::section_detail::FocusDetail;
     use crate::selection::{pick_displayed, pick_surface, PickTarget, PickView};
     use crate::{CameraPreset, Studio};
     use std::sync::atomic::AtomicBool;
@@ -2719,6 +2727,23 @@ mod section_box_tests {
         assert_ne!(added.focus, view.focus);
         assert_eq!(added.drawn, 1_010);
 
+        // Put aside while the box is off, it stays on the device undrawn,
+        // and shows again with the box.
+        let region = OrientedBox::from(studio.clouds[0].cloud.bounds);
+        studio.focus = Some(FocusDetail {
+            region,
+            view: None,
+            hidden: true,
+        });
+        let aside = drawn_frame(&studio, &state);
+        assert_eq!((aside.points, aside.focus), (added.points, added.focus));
+        assert_eq!(aside.drawn, 1_000);
+        let _ = studio.update(Message::SetSectionEnabled(true));
+        assert_eq!(drawn_frame(&studio, &state).drawn, 1_010);
+        let _ = studio.update(Message::SetSectionEnabled(false));
+        assert_eq!(drawn_frame(&studio, &state), added);
+        studio.focus = None;
+
         // New sets for the view leave it on the device.
         studio.clouds[0].detail_points = Some(grid[..900].into());
         let refined = drawn_frame(&studio, &state);
@@ -2756,7 +2781,11 @@ mod section_box_tests {
             let scene = crate::combined_bounds(&studio.clouds).unwrap();
             let projection = studio.projection(scene, 800.0, 600.0);
             let (x, y, _) = projection.project([5.0, 5.0, 0.5]).unwrap();
-            let views: Vec<_> = studio.clouds.iter().map(PickView::of).collect();
+            let views: Vec<_> = studio
+                .clouds
+                .iter()
+                .map(|entry| PickView::of(entry, studio.focus_drawn()))
+                .collect();
             let target = PickTarget {
                 pointer: [x, y],
                 radius: 1.0,
@@ -2799,5 +2828,14 @@ mod section_box_tests {
         assert_eq!(picked(&studio), Some(4.5));
         let _ = studio.update(Message::SetSectionEnabled(false));
         assert_eq!(picked(&studio), Some(9.5));
+
+        // Put aside with the box off, the column is neither drawn nor
+        // picked.
+        studio.focus = Some(FocusDetail {
+            region: OrientedBox::from(studio.clouds[0].cloud.bounds),
+            view: None,
+            hidden: true,
+        });
+        assert_eq!(picked(&studio), None);
     }
 }

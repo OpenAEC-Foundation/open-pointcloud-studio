@@ -32,12 +32,13 @@ pub(crate) struct PickView {
 }
 
 impl PickView {
-    /// The drawn sample of a layer as the renderer and the picker see it.
-    pub(crate) fn of(entry: &crate::CloudEntry) -> Self {
+    /// The drawn sample of a layer as the renderer and the picker see it,
+    /// with the points read inside the section box when they are drawn.
+    pub(crate) fn of(entry: &crate::CloudEntry, focus_drawn: bool) -> Self {
         Self {
             cloud: Arc::clone(&entry.cloud),
             detail: entry.detail_points.clone(),
-            focus: entry.focus_points.clone(),
+            focus: entry.focus_points.clone().filter(|_| focus_drawn),
             deleted: entry.deleted.clone(),
             transform: entry.transform,
             visible: entry.visible,
