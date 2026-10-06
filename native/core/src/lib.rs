@@ -496,12 +496,14 @@ pub fn open_with_snapshots(
 /// after the sources of its disk that took their turn before, as
 /// `SourceTurn` orders them. What is known without reading it, such as the
 /// spread preview of a large E57 scan, is shown at once; while it waits,
-/// `progress` hears 0 a few times a second, and an error from it ends the
-/// wait. The turn ends with the pass.
+/// `waiting` is called a few times a second, and an error from it ends the
+/// wait. `progress` hears 0 when the read starts. The turn ends with the
+/// pass.
 pub fn open_with_snapshots_in_turn(
     path: impl AsRef<Path>,
     sample_limit: usize,
     turn: SourceTurn,
+    mut waiting: impl FnMut() -> Result<(), LoadError>,
     progress: impl FnMut(u64) -> Result<(), LoadError>,
     mut snapshot: impl FnMut(&PointCloud) -> Result<(), LoadError>,
 ) -> Result<PointCloud, LoadError> {
@@ -510,9 +512,12 @@ pub fn open_with_snapshots_in_turn(
         sample_limit,
         progress,
         Some((&mut snapshot, snapshots::Showing::DEFAULT)),
-        Some(turn),
+        Some((turn, &mut waiting)),
     )
 }
+
+/// The turn a pass waits for, and what it calls while it waits.
+type Turn<'a> = (SourceTurn, &'a mut dyn FnMut() -> Result<(), LoadError>);
 
 /// Showing a source in steps only, never densely.
 const STEPS_ONLY: snapshots::Showing = snapshots::Showing {
@@ -573,7 +578,7 @@ fn open_showing(
     sample_limit: usize,
     mut progress: impl FnMut(u64) -> Result<(), LoadError>,
     mut snapshot: Option<(snapshots::Show, snapshots::Showing)>,
-    turn: Option<SourceTurn>,
+    mut turn: Option<Turn<'_>>,
 ) -> Result<PointCloud, LoadError> {
     if sample_limit == 0 {
         return Err(LoadError::InvalidData(
@@ -607,16 +612,17 @@ fn open_showing(
         Some((show, showing)) => showing.begin(path, before, &mut **show)?,
         None => None,
     };
-    if let Some(turn) = &turn {
+    if let Some((turn, waiting)) = &mut turn {
         turn.wait_to_read(|| {
             if let (Some(snapshots), Some((show, _))) = (&mut snapshots, &mut snapshot) {
                 snapshots.tick_waiting(&mut **show)?;
             }
-            progress(0)
+            waiting()
         })?;
         if let Some(snapshots) = &mut snapshots {
             snapshots.start_clock();
         }
+        progress(0)?;
     }
     // A source that is shown densely keeps enough points for its snapshots,
     // and its checked cloud is as dense as the last of them.

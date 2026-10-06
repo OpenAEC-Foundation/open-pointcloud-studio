@@ -337,6 +337,7 @@ mod tests {
             path: path.to_path_buf(),
             decoded: Arc::new(AtomicU64::new(0)),
             cancel: Arc::new(AtomicBool::new(false)),
+            waiting: Default::default(),
         }
     }
 

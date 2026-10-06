@@ -773,6 +773,7 @@ mod tests {
                 path: directory.path().join("e.xyz"),
                 decoded: Arc::new(AtomicU64::new(0)),
                 cancel: Arc::clone(&import_cancel),
+                waiting: Default::default(),
             },
         );
         studio.index_jobs.push(IndexJob {

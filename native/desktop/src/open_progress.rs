@@ -145,20 +145,37 @@ impl Studio {
             let cancelling = plain
                 .iter()
                 .all(|(_, job)| job.cancel.load(Ordering::Relaxed));
+            // Large scans that wait for their turn to be read.
+            let waiting = plain
+                .iter()
+                .filter(|(_, job)| job.waiting.load(Ordering::Relaxed))
+                .count();
             let mut detail = points_text(read, expected);
             let title = if cancelling {
                 "Cancelling…".to_owned()
             } else if files > 1 {
-                detail = format!("{done} of {files} done  ·  {detail}");
+                detail = if waiting > 0 {
+                    format!(
+                        "{done} of {files} done  ·  {}  ·  {detail}",
+                        i18n::tr_args("{waiting} waiting to be read", &[("waiting", &waiting)])
+                    )
+                } else {
+                    format!("{done} of {files} done  ·  {detail}")
+                };
                 format!("Opening {files} scans")
             } else {
+                if waiting > 0 {
+                    detail =
+                        i18n::tr("Waiting for the scan opened before it on this disk").to_owned();
+                }
                 format!("Opening {}", display_name(&plain[0].1.path))
             };
             lines.push(Line {
                 phase: Phase::Opening,
                 title,
                 detail,
-                fraction: (expected.is_some() || files > 1)
+                // A scan that waits for its turn has no pace yet.
+                fraction: (files > 1 || (expected.is_some() && waiting == 0))
                     .then(|| ((done as f32 + reading) / files as f32).min(1.0)),
                 // Scans of different sizes count alike in the bar of a
                 // batch, so its pace says little about the time left.
@@ -374,6 +391,9 @@ impl Studio {
             .find(|(_, header)| entry.matches_source(header))
             .map(|(id, _)| *id);
         if let Some(job) = import.and_then(|id| self.imports.get(&id)) {
+            if job.waiting.load(Ordering::Relaxed) {
+                return percent(i18n::tr("waiting to read"), None);
+            }
             let expected = import.and_then(|id| self.import_expected.get(&id));
             return percent(
                 "reading",
@@ -517,6 +537,7 @@ mod tests {
             path: PathBuf::from(name),
             decoded: Arc::new(AtomicU64::new(decoded)),
             cancel: Arc::new(AtomicBool::new(false)),
+            waiting: Default::default(),
         }
     }
 
@@ -873,5 +894,59 @@ mod tests {
         assert_eq!(row(&studio), Some(("waiting to index…".to_owned(), None)));
         progress.lock().unwrap().stage = IndexStage::BuildingTree;
         assert_eq!(row(&studio), Some(("indexing 0%".to_owned(), Some(0.0))));
+    }
+
+    #[test]
+    fn an_import_that_waits_for_its_turn_to_be_read_says_so() {
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("second.e57");
+        let mut studio = Studio::default();
+        // The layer of the metadata of a large scan that is read without an
+        // octree, after the scan opened before it on the same disk.
+        let mut header = pointcloud_core::open(write_points(&directory), 10).unwrap();
+        header.path = path;
+        header.total_points = 130_000_000;
+        let header = Arc::new(header);
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&header))));
+        let import = job("second.e57", 0);
+        import.waiting.store(true, Ordering::Relaxed);
+        studio.imports.insert(7, import);
+        studio.import_headers.insert(7, Arc::clone(&header));
+        studio.import_expected.insert(7, 130_000_000);
+        studio.opening_total = 1;
+        let lines = studio.progress_lines();
+        assert_eq!(lines[0].title, "Opening second.e57");
+        assert_eq!(
+            lines[0].detail,
+            "Waiting for the scan opened before it on this disk"
+        );
+        assert_eq!(lines[0].fraction, None);
+        let row = |studio: &Studio| studio.layer_progress(&studio.clouds[0]);
+        assert_eq!(row(&studio), Some(("waiting to read…".to_owned(), None)));
+
+        // Opened with another scan that is being read.
+        studio.imports.insert(6, job("first.e57", 30_000_000));
+        studio.opening_total = 2;
+        assert_eq!(
+            studio.progress_lines()[0].detail,
+            "0 of 2 done  ·  1 waiting to be read  ·  30.0M points read"
+        );
+
+        // Its read started.
+        let import = &studio.imports[&7];
+        import.waiting.store(false, Ordering::Relaxed);
+        import.decoded.store(13_000_000, Ordering::Relaxed);
+        studio.imports.remove(&6);
+        studio.opening_total = 1;
+        assert_eq!(studio.progress_lines()[0].detail, "13.0M of 130.0M points");
+        assert_eq!(row(&studio), Some(("reading 10%".to_owned(), Some(0.1))));
+    }
+
+    /// A text file of two points in `directory`.
+    fn write_points(directory: &tempfile::TempDir) -> PathBuf {
+        let path = directory.path().join("points.xyz");
+        std::fs::write(&path, "0 0 1\n1 0 1\n").unwrap();
+        path
     }
 }

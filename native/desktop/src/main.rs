@@ -2327,6 +2327,9 @@ struct ImportJob {
     path: PathBuf,
     decoded: Arc<AtomicU64>,
     cancel: Arc<AtomicBool>,
+    /// Whether a large scan waits for its turn to be read, after the large
+    /// scans opened before it on the same disk.
+    waiting: Arc<AtomicBool>,
 }
 
 struct CloudEntry {
@@ -3826,6 +3829,7 @@ impl Studio {
                             "path": job.path,
                             "decoded": job.decoded.load(Ordering::Relaxed),
                             "cancelling": job.cancel.load(Ordering::Relaxed),
+                            "waiting": job.waiting.load(Ordering::Relaxed),
                         })).collect::<Vec<_>>(),
                         "active": self.active,
                         "status": self.status,
@@ -5640,6 +5644,7 @@ impl Studio {
         let header = Self::header_task(id, path.clone());
         let decoded = Arc::new(AtomicU64::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
+        let waiting = Arc::new(AtomicBool::new(false));
         self.opening_total += 1;
         self.imports.insert(
             id,
@@ -5647,6 +5652,7 @@ impl Studio {
                 path: path.clone(),
                 decoded: Arc::clone(&decoded),
                 cancel: Arc::clone(&cancel),
+                waiting: Arc::clone(&waiting),
             },
         );
         let done = Arc::new(AtomicBool::new(false));
@@ -5658,10 +5664,18 @@ impl Studio {
         let worker = Task::perform(
             async move {
                 let result = tokio::task::spawn_blocking(move || {
+                    let waits = || {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Err(pointcloud_core::LoadError::Cancelled);
+                        }
+                        waiting.store(true, Ordering::Relaxed);
+                        Ok(())
+                    };
                     let progress = |processed| {
                         if cancel.load(Ordering::Relaxed) {
                             return Err(pointcloud_core::LoadError::Cancelled);
                         }
+                        waiting.store(false, Ordering::Relaxed);
                         decoded.store(processed, Ordering::Relaxed);
                         Ok(())
                     };
@@ -5677,6 +5691,7 @@ impl Studio {
                             path,
                             LOAD_SAMPLE_LIMIT,
                             turn,
+                            waits,
                             progress,
                             snapshot,
                         ),
@@ -5736,6 +5751,7 @@ impl Studio {
                 path: path.clone(),
                 decoded: Arc::clone(&decoded),
                 cancel: Arc::clone(&cancel),
+                waiting: Default::default(),
             },
         );
         let stop_tree = Arc::new(AtomicBool::new(false));
@@ -15614,6 +15630,7 @@ mod lod_transition_tests {
                 path: other.clone(),
                 decoded: Arc::new(AtomicU64::new(0)),
                 cancel: Arc::new(AtomicBool::new(false)),
+                waiting: Default::default(),
             },
         );
 
@@ -15869,6 +15886,7 @@ mod import_api_tests {
                 path: path.to_path_buf(),
                 decoded: Arc::new(AtomicU64::new(0)),
                 cancel: Arc::clone(&cancel),
+                waiting: Default::default(),
             },
         );
         studio.index_jobs.push(index_jobs::IndexJob {
@@ -15903,11 +15921,16 @@ mod import_api_tests {
                 path,
                 decoded: Arc::new(AtomicU64::new(1)),
                 cancel: Arc::clone(&cancel),
+                waiting: Default::default(),
             },
         );
 
         let status = send(&mut studio, native_api::ApiCommand::Status);
         assert_eq!(status["result"]["imports"][0]["decoded"], 1);
+        assert_eq!(status["result"]["imports"][0]["waiting"], false);
+        studio.imports[&7].waiting.store(true, Ordering::Relaxed);
+        let status = send(&mut studio, native_api::ApiCommand::Status);
+        assert_eq!(status["result"]["imports"][0]["waiting"], true);
         let response = send(&mut studio, native_api::ApiCommand::CancelImport { id: 7 });
         assert_eq!(response["cancelling"], true);
         assert!(cancel.load(Ordering::Relaxed));
@@ -15978,6 +16001,7 @@ mod import_api_tests {
             path: path.clone(),
             decoded: Arc::new(AtomicU64::new(0)),
             cancel: Arc::new(AtomicBool::new(false)),
+            waiting: Default::default(),
         };
         // A snapshot takes the place of the layer of metadata.
         studio.imports.insert(31, job());

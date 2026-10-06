@@ -769,6 +769,8 @@
   "Step 2 of 2  ·  waiting for the octree before it": "Stap 2 van 2  ·  wacht op de index ervoor",
   "waiting to read": "wacht op lezen",
   "waiting to index": "wacht op indexeren",
+  "Waiting for the scan opened before it on this disk": "Wacht op de scan die eerder op deze schijf is geopend",
+  "{waiting} waiting to be read": "{waiting} wachtend op lezen",
   "Floor found at {height} m": "Vloer gevonden op {height} m",
   "pinhole photo": "camerafoto",
   "panorama": "panorama",
