@@ -671,6 +671,11 @@ impl DrawingViewTool {
         self.scene.as_deref()
     }
 
+    /// The drawing in the view, as it is shared with the drawings made.
+    pub(crate) fn shared_scene(&self) -> Option<&Arc<DrawScene>> {
+        self.scene.as_ref()
+    }
+
     /// Whether a drawing of the Section drawing tool is in the view.
     pub(crate) fn has_section_drawing(&self) -> bool {
         self.scene

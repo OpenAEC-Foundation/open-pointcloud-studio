@@ -18,7 +18,7 @@
 
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use iced::alignment;
 use iced::mouse;
@@ -477,8 +477,10 @@ pub(crate) fn snapped(points: &[[f64; 2]], at: [f64; 2], reach: f64) -> Option<[
         .map(|(point, _)| *point)
 }
 
-/// The points a click snaps to, with the drawing and layers they are of.
-type Snaps = (usize, Arc<Vec<[f64; 2]>>);
+/// The points a click snaps to, with the drawing and the switches of its
+/// layers they were found with. The weak handle keeps the place of the
+/// drawing, so that no drawing made later takes it.
+type Snaps = (Weak<DrawScene>, Vec<bool>, Arc<Vec<[f64; 2]>>);
 
 /// What the annotation tools are doing.
 #[derive(Debug, Default)]
@@ -499,6 +501,9 @@ pub(crate) struct NoteTool {
     /// The points a click snaps to, for the drawing they were found in.
     snaps: RefCell<Option<Snaps>>,
     pub(crate) export_pending: bool,
+    /// The drawing or the sheet what was clicked, typed and selected
+    /// belongs to; see `settle_notes`.
+    target: Option<NoteTarget>,
 }
 
 impl NoteTool {
@@ -522,15 +527,17 @@ impl NoteTool {
         had
     }
 
-    fn snap_points(&self, scene: &DrawScene, shown: &[bool]) -> Arc<Vec<[f64; 2]>> {
-        let key = scene as *const DrawScene as usize ^ shown.len().rotate_left(17);
-        if let Some((known, points)) = &*self.snaps.borrow() {
-            if *known == key {
+    /// The points a click snaps to in a drawing with these layers shown,
+    /// found again when the drawing or a switch of its layers changed.
+    fn snap_points(&self, scene: &Arc<DrawScene>, shown: &[bool]) -> Arc<Vec<[f64; 2]>> {
+        if let Some((known, switches, points)) = &*self.snaps.borrow() {
+            if std::ptr::eq(known.as_ptr(), Arc::as_ptr(scene)) && switches == shown {
                 return Arc::clone(points);
             }
         }
         let points = Arc::new(snap_points(scene, shown));
-        *self.snaps.borrow_mut() = Some((key, Arc::clone(&points)));
+        *self.snaps.borrow_mut() =
+            Some((Arc::downgrade(scene), shown.to_vec(), Arc::clone(&points)));
         points
     }
 }
@@ -758,12 +765,7 @@ impl Studio {
                     self.status = "Annotation cancelled".into();
                 }
             }
-            NoteAction::Select(id) => {
-                if self.notes.selected != id {
-                    self.notes.edit = None;
-                }
-                self.notes.selected = id;
-            }
+            NoteAction::Select(id) => self.select_note(id),
             NoteAction::Moved(id, delta) => {
                 if let Err(error) = self.move_note(&id, delta) {
                     self.status = error;
@@ -989,8 +991,28 @@ impl Studio {
                 self.add_paper_note(&sheet, note)
             }
         }?;
-        self.notes.selected = Some(added);
+        self.select_note(Some(added));
         Ok(())
+    }
+
+    /// Select an annotation of the drawing or the sheet shown, or none. A
+    /// note selected on a sheet lets go of its selected viewport, so that
+    /// Delete takes what was selected last.
+    fn select_note(&mut self, id: Option<String>) {
+        if self.notes.selected != id {
+            self.notes.edit = None;
+        }
+        if id.is_some() && self.drawing_view.shown_layout().is_some() {
+            self.select_viewport(None);
+        }
+        self.notes.selected = id;
+    }
+
+    /// A viewport was selected on the sheet shown: the selected note of the
+    /// paper lets go, so that Delete takes the viewport.
+    pub(crate) fn viewport_selected(&mut self) {
+        self.notes.selected = None;
+        self.notes.edit = None;
     }
 
     /// Move an annotation of the drawing or the sheet shown by `delta`, in
@@ -1112,15 +1134,20 @@ impl Studio {
         false
     }
 
-    /// Keep the annotation tools with what is shown: a tool for a drawing
-    /// is left once no drawing or sheet is shown.
+    /// Keep the annotation tools with what is shown: the points clicked,
+    /// the text typed and the selected annotation belong to the drawing or
+    /// the sheet they were on, and are let go when another one is shown; a
+    /// tool is left once no drawing or sheet is shown.
     pub(crate) fn settle_notes(&mut self) {
         let target = self.note_target();
-        if target.is_none() && (self.notes.kind.is_some() || self.notes.selected.is_some()) {
+        if self.notes.target != target {
             self.notes.drop_placing();
-            self.notes.kind = None;
             self.notes.selected = None;
             self.notes.edit = None;
+            self.notes.target.clone_from(&target);
+        }
+        if target.is_none() {
+            self.notes.kind = None;
         }
         if matches!(target, Some(NoteTarget::Sheet(_)))
             && matches!(
@@ -1314,7 +1341,7 @@ pub(crate) fn note_input_id() -> text_input::Id {
 /// shown and takes the clicks of the annotation tools.
 pub(crate) struct NotesLayer<'a> {
     pub tool: &'a NoteTool,
-    pub scene: &'a DrawScene,
+    pub scene: &'a Arc<DrawScene>,
     pub shown_layers: Vec<bool>,
     pub notes: &'a [DrawingNote],
     pub frame: DrawingFrame,
@@ -1737,7 +1764,7 @@ impl Studio {
     pub(crate) fn notes_layer(&self) -> Option<Element<'_, Message>> {
         let guid = self.drawing_view.shown_guid()?;
         let definition = self.definition(guid)?;
-        let scene = self.drawing_view.scene()?;
+        let scene = self.drawing_view.shared_scene()?;
         let frame = drawing_frame(definition)?;
         let shown_layers = (0..scene.layers.len())
             .map(|index| self.drawing_view.layer_shown(index))
@@ -2785,7 +2812,7 @@ mod tests {
         let release = canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
         fn layer<'a>(
             tool: &'a NoteTool,
-            scene: &'a DrawScene,
+            scene: &'a Arc<DrawScene>,
             definition: &'a SavedDrawing,
             camera: ViewCamera,
         ) -> NotesLayer<'a> {
@@ -2869,6 +2896,148 @@ mod tests {
         assert_eq!(status, event::Status::Ignored);
         assert!(message.is_none());
         let _ = studio.view();
+    }
+
+    #[test]
+    fn delete_takes_the_viewport_or_the_note_that_was_selected_last() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+        use crate::layouts::{LayoutAction, Paper, PlacedKind};
+        let (mut studio, _directory) = studio_with_scan();
+        let guid = shown_plan(&mut studio);
+        let act = |studio: &mut Studio, action: NoteAction| {
+            let _ = studio.update(Message::Notes(action));
+        };
+        let delete = |studio: &mut Studio| {
+            let _ = studio.update(Message::NamedKey(iced::keyboard::key::Named::Delete, true));
+        };
+        // A dimension of the plan is selected.
+        let dimension = send(
+            &mut studio,
+            json!({"command": "annotate_drawing", "kind": "dimension", "from": [1000, 1000], "to": [4451.2, 1000]}),
+        );
+        let dimension = dimension["id"].as_str().unwrap().to_owned();
+        act(&mut studio, NoteAction::Select(Some(dimension.clone())));
+        assert_eq!(studio.notes.selected.as_deref(), Some(dimension.as_str()));
+        // A sheet shown lets go of it.
+        let sheet = studio
+            .create_layout("01", "Plans", Paper::A3, true)
+            .unwrap();
+        let _ = studio.update(Message::Layouts(LayoutAction::Show(sheet.clone())));
+        assert!(studio.notes.selected.is_none());
+        let viewport = studio
+            .place_on_layout(
+                &sheet,
+                PlacedKind::Drawing,
+                &guid,
+                Some([150.0, 150.0]),
+                None,
+            )
+            .unwrap();
+        // A text placed on the paper is selected, the viewport lets go;
+        // a click on the viewport selects it, and the text lets go.
+        act(&mut studio, NoteAction::Tool(NoteKind::Text));
+        act(&mut studio, NoteAction::Pick([300.0, 50.0]));
+        act(&mut studio, NoteAction::Typed("Ground floor".into()));
+        act(&mut studio, NoteAction::Submit);
+        let text = studio.notes.selected.clone().expect("the text is selected");
+        assert!(studio.layouts.selected.is_none());
+        act(&mut studio, NoteAction::Tool(NoteKind::Text));
+        let _ = studio.update(Message::Layouts(LayoutAction::Select(Some(
+            viewport.clone(),
+        ))));
+        assert!(studio.notes.selected.is_none());
+        delete(&mut studio);
+        let layout = studio.layouts.layout(&sheet).unwrap();
+        assert!(layout.viewports.is_empty(), "Delete takes the viewport");
+        assert_eq!(layout.notes.len(), 1);
+        // Selected again, the text goes with Delete; the dimension of the
+        // plan stays.
+        act(&mut studio, NoteAction::Select(Some(text)));
+        delete(&mut studio);
+        assert!(studio.layouts.layout(&sheet).unwrap().notes.is_empty());
+        assert_eq!(notes(&studio, &guid).len(), 1);
+    }
+
+    #[test]
+    fn points_clicked_and_text_typed_stay_with_the_drawing_or_the_sheet_they_were_for() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+        use crate::layouts::{LayoutAction, Paper};
+        let (mut studio, _directory) = studio_with_scan();
+        let guid = shown_plan(&mut studio);
+        let act = |studio: &mut Studio, action: NoteAction| {
+            let _ = studio.update(Message::Notes(action));
+        };
+        let sheet = studio
+            .create_layout("01", "Plans", Paper::A3, true)
+            .unwrap();
+        // The first end of a line clicked on the plan, then the sheet shown:
+        // the point of the plan is let go, the tool stays.
+        act(&mut studio, NoteAction::Tool(NoteKind::Line));
+        act(&mut studio, NoteAction::Pick([1000.0, 1000.0]));
+        assert_eq!(studio.notes.picked.len(), 1);
+        let _ = studio.update(Message::Layouts(LayoutAction::Show(sheet.clone())));
+        assert!(studio.notes.picked.is_empty());
+        assert_eq!(studio.notes.kind, Some(NoteKind::Line));
+        act(&mut studio, NoteAction::Pick([100.0, 100.0]));
+        assert!(studio.layouts.layout(&sheet).unwrap().notes.is_empty());
+        act(&mut studio, NoteAction::Pick([200.0, 100.0]));
+        let placed = studio.layouts.layout(&sheet).unwrap().notes.clone();
+        assert!(
+            matches!(placed.as_slice(), [PaperNote::Line { from, to, .. }] if *from == [100.0, 100.0] && *to == [200.0, 100.0]),
+            "{placed:?}"
+        );
+        // A text being typed for the plan does not land on the sheet.
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+            guid.clone(),
+        )));
+        act(&mut studio, NoteAction::Tool(NoteKind::Text));
+        act(&mut studio, NoteAction::Pick([2000.0, 2000.0]));
+        act(&mut studio, NoteAction::Typed("Hall".into()));
+        assert!(studio.notes.typing.is_some());
+        let _ = studio.update(Message::Layouts(LayoutAction::Show(sheet.clone())));
+        assert!(studio.notes.typing.is_none());
+        act(&mut studio, NoteAction::Submit);
+        assert_eq!(studio.layouts.layout(&sheet).unwrap().notes.len(), 1);
+        assert!(notes(&studio, &guid).is_empty());
+    }
+
+    #[test]
+    fn the_points_a_click_snaps_to_follow_the_layers_shown_and_the_drawing() {
+        let (mut studio, _directory) = studio_with_scan();
+        let guid = shown_plan(&mut studio);
+        let scene = studio.drawing_view.made(&guid).unwrap().clone();
+        let tool = NoteTool::default();
+        assert_eq!(tool.snap_points(&scene, &[true]).len(), 3);
+        // A layer switched off takes its points along, and back.
+        assert!(tool.snap_points(&scene, &[false]).is_empty());
+        assert_eq!(tool.snap_points(&scene, &[true]).len(), 3);
+        // Each drawing made again has points of its own, also where the
+        // one before it went and its memory could be taken again.
+        drop(scene);
+        for corners in 2..6 {
+            let mut drawing = Drawing2d::new(DrawingUnits::Millimetres);
+            let outline = drawing
+                .layer("OPS-CUT-OUTLINE", LAYER_RGB_CONTRAST)
+                .unwrap();
+            let line: Vec<[f64; 2]> = (0..corners).map(|at| [f64::from(at), 0.5]).collect();
+            drawing.add_polyline(outline, line, false);
+            let made = Arc::new(DrawScene::from_drawing(
+                &drawing,
+                DrawingSource::Sheet {
+                    guid: guid.clone(),
+                    name: "Plan +1.20".into(),
+                },
+            ));
+            assert_eq!(
+                tool.snap_points(&made, &[true]).len(),
+                corners as usize,
+                "a drawing of {corners} corners"
+            );
+        }
     }
 
     /// Reading DIMENSION entities back with the codec the writer uses.

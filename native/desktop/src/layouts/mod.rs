@@ -873,9 +873,14 @@ impl Studio {
         Ok(Task::none())
     }
 
-    fn select_viewport(&mut self, id: Option<String>) {
+    /// Select a viewport of the sheet shown, or none. A viewport selected
+    /// lets go of the selected note, so that Delete takes the viewport.
+    pub(crate) fn select_viewport(&mut self, id: Option<String>) {
         if self.layouts.selected != id {
             self.layouts.edits = (id.clone(), Vec::new());
+        }
+        if id.is_some() {
+            self.viewport_selected();
         }
         self.layouts.selected = id;
     }
