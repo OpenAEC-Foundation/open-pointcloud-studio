@@ -482,6 +482,62 @@ fn installs_updates_switches_and_uninstalls_are_kept_across_restarts() {
 }
 
 #[test]
+fn two_windows_keep_each_others_changes_to_the_settings() {
+    let _language = TestLanguage::hold(Language::English);
+    let bench = Bench::new();
+    // Both windows read the settings when they start, before either changes
+    // them.
+    let mut first = bench.studio();
+    let mut second = bench.studio();
+
+    install_confirmed(&mut first, &example_folder());
+    assert_eq!(first.status, "Installed Point count report 1.0.0");
+    // The other window switches 3D BAG off; the install stays recorded.
+    let _ = second.update(Message::ExtensionEnabled(BAG3D, false));
+    assert_eq!(
+        bench.stored(),
+        json!({"disabled": [BAG3D], "installed": {EXAMPLE: "1.0.0"}})
+    );
+    let restarted = bench.studio();
+    assert!(restarted.extension_host.find(EXAMPLE).is_some());
+    assert!(!restarted.extensions.enabled(BAG3D));
+
+    // The first window switches the extension off and keeps 3D BAG off,
+    // which it does not know of; the second switches 3D BAG on and keeps
+    // the extension off.
+    let _ = first.update(Message::Extension(ExtensionAction::SetEnabled(
+        EXAMPLE.into(),
+        false,
+    )));
+    assert_eq!(
+        bench.stored(),
+        json!({"disabled": [BAG3D, EXAMPLE], "installed": {EXAMPLE: "1.0.0"}})
+    );
+    let _ = second.update(Message::ExtensionEnabled(BAG3D, true));
+    assert_eq!(
+        bench.stored(),
+        json!({"disabled": [EXAMPLE], "installed": {EXAMPLE: "1.0.0"}})
+    );
+
+    // An uninstall in one window is not undone by a switch in the other.
+    let _ = first.update(Message::Extension(ExtensionAction::Uninstall(
+        EXAMPLE.into(),
+    )));
+    let _ = first.update(Message::Extension(ExtensionAction::ConfirmUninstall));
+    assert_eq!(first.status, "Uninstalled Point count report");
+    let _ = second.update(Message::ExtensionEnabled(BAG3D, false));
+    assert_eq!(
+        bench.stored(),
+        json!({"disabled": [BAG3D], "installed": {}})
+    );
+
+    // A damaged file is replaced by what the window knows, with its change.
+    fs::write(&bench.settings, "{").unwrap();
+    let _ = second.update(Message::ExtensionEnabled(BAG3D, true));
+    assert_eq!(bench.stored(), json!({"disabled": [], "installed": {}}));
+}
+
+#[test]
 fn a_later_version_before_its_release_replaces_an_earlier_one() {
     let _language = TestLanguage::hold(Language::English);
     let bench = Bench::new();

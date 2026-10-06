@@ -926,7 +926,9 @@ installed extension off takes its buttons and tiles away and stops its run.
 `extensions.json` holds `disabled`, the ids that are switched off, and
 `installed`, the installed extensions with their versions; a file written
 by an earlier version, a list of the ids that are switched off, is read as
-well, also with a byte-order mark.
+well, also with a byte-order mark. A window writes only its own change into
+the file as it finds it, so windows that share the configuration directory
+keep each other's installs and switches.
 
 `install_extension` takes the absolute path of an extension folder, the
 `extension.json` in it, or a `.zip` archive of one. It copies the files to a

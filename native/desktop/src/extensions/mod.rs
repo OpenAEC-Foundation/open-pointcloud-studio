@@ -98,6 +98,17 @@ enum Stored {
     },
 }
 
+/// One change a window makes to the settings. Another window with the same
+/// settings folder may have changed the file since this one read it, so a
+/// change is made to the file as it is then, and nothing else of it is
+/// written over.
+#[derive(Debug, Clone, Copy)]
+enum Change<'a> {
+    Switched(&'a str, bool),
+    Installed(&'a str, &'a str),
+    Forgotten(&'a str),
+}
+
 fn find(id: &str) -> Option<&'static Extension> {
     BUILT_IN.iter().find(|extension| extension.id == id)
 }
@@ -137,9 +148,14 @@ impl Extensions {
     }
 
     /// A missing, oversized or damaged file switches nothing off and
-    /// installs nothing. A byte-order mark, as an editor may write, is
-    /// skipped.
+    /// installs nothing.
     fn load_from(path: &Path) -> Self {
+        Self::read_from(path).unwrap_or_default()
+    }
+
+    /// The settings in a file, unless it is missing, oversized or damaged.
+    /// A byte-order mark, as an editor may write, is skipped.
+    fn read_from(path: &Path) -> Option<Self> {
         let small = fs::metadata(path).is_ok_and(|metadata| metadata.len() <= MAX_FILE_BYTES);
         let stored = small
             .then(|| fs::read(path).ok())
@@ -147,17 +163,16 @@ impl Extensions {
             .and_then(|bytes| {
                 let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
                 serde_json::from_slice::<Stored>(bytes).ok()
-            });
-        match stored {
-            None => Self::default(),
-            Some(Stored::Disabled(disabled)) => Self {
+            })?;
+        Some(match stored {
+            Stored::Disabled(disabled) => Self {
                 disabled,
                 installed: BTreeMap::new(),
             },
-            Some(Stored::Full {
+            Stored::Full {
                 disabled,
                 installed,
-            }) => Self {
+            } => Self {
                 disabled,
                 installed: installed
                     .into_iter()
@@ -166,7 +181,7 @@ impl Extensions {
                     })
                     .collect(),
             },
-        }
+        })
     }
 
     pub fn save(&self) -> io::Result<()> {
@@ -175,6 +190,28 @@ impl Extensions {
         }
         let path = settings_path().ok_or_else(|| io::Error::other("no user config directory"))?;
         self.save_to(&path)
+    }
+
+    /// Make one change to the settings file as it is now, which another
+    /// window may have changed since this one read it. A file that cannot
+    /// be read is replaced by the settings of this window.
+    fn save_change(&self, path: &Path, change: Change<'_>) -> io::Result<()> {
+        let mut stored = Self::read_from(path).unwrap_or_else(|| self.clone());
+        stored.apply(change);
+        stored.save_to(path)
+    }
+
+    fn apply(&mut self, change: Change<'_>) {
+        match change {
+            Change::Switched(id, true) => {
+                self.disabled.remove(id);
+            }
+            Change::Switched(id, false) => {
+                self.disabled.insert(id.to_owned());
+            }
+            Change::Installed(id, version) => self.record_install(id, version),
+            Change::Forgotten(id) => self.forget(id),
+        }
     }
 
     /// The ids that are switched off and the installed extensions, replaced
@@ -209,11 +246,7 @@ impl Extensions {
         if find(id).is_none() && !self.is_installed(id) {
             return Err(format!("unknown extension {id}"));
         }
-        if enabled {
-            self.disabled.remove(id);
-        } else {
-            self.disabled.insert(id.to_owned());
-        }
+        self.apply(Change::Switched(id, enabled));
         Ok(())
     }
 
@@ -485,10 +518,11 @@ fn switched_answer(id: &str, enabled: bool, unsaved: Option<String>) -> Value {
 }
 
 impl Studio {
-    /// Keep the choices about extensions for later sessions.
-    fn save_extension_settings(&self) -> Result<(), String> {
+    /// Keep a change to the extensions for later sessions, beside what other
+    /// windows changed.
+    fn save_extension_settings(&self, change: Change<'_>) -> Result<(), String> {
         match &self.extension_host.settings {
-            Some(path) => self.extensions.save_to(path),
+            Some(path) => self.extensions.save_change(path, change),
             None => self.extensions.save(),
         }
         .map_err(|error| error.to_string())
@@ -504,7 +538,9 @@ impl Studio {
         enabled: bool,
     ) -> Result<Option<String>, String> {
         self.extensions.set_enabled(id, enabled)?;
-        let unsaved = self.save_extension_settings().err();
+        let unsaved = self
+            .save_extension_settings(Change::Switched(id, enabled))
+            .err();
         Ok(self.extension_switched(id, enabled, unsaved))
     }
 
@@ -879,9 +915,9 @@ impl Studio {
         self.end_run_now(&id);
         match install::commit(&staged, &root) {
             Ok(_) => {
-                self.extensions
-                    .record_install(&id, &staged.manifest.version);
-                let unsaved = self.save_extension_settings().err();
+                let change = Change::Installed(&id, &staged.manifest.version);
+                self.extensions.apply(change);
+                let unsaved = self.save_extension_settings(change).err();
                 self.extension_host.read(&id);
                 self.extension_host.last_error = None;
                 let name = staged.manifest.name.get();
@@ -915,8 +951,8 @@ impl Studio {
         self.end_run_now(&id);
         match install::remove(&root, &id) {
             Ok(()) => {
-                self.extensions.forget(&id);
-                let unsaved = self.save_extension_settings().err();
+                self.extensions.apply(Change::Forgotten(&id));
+                let unsaved = self.save_extension_settings(Change::Forgotten(&id)).err();
                 self.extension_host
                     .installed
                     .retain(|each| each.manifest.id != id);
