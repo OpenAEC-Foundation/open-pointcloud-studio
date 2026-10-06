@@ -84,7 +84,7 @@ use preferences::{MAX_POINT_BUDGET, MIN_POINT_BUDGET};
 use rayon::prelude::*;
 use section_detail::{
     merged_detail_task, DetailMerge, DetailPlan, DetailView, FocusDetail, MergeRefinement,
-    MergedSets, ShownSet,
+    MergedSets, SectionRead, ShownSet,
 };
 #[cfg(test)]
 use selection::select_world;
@@ -2228,8 +2228,11 @@ struct Studio {
     /// for, while there are such points.
     focus: Option<FocusDetail>,
     /// The section box that was last read in full, with the view it was
-    /// read for: reading it again for that view gives nothing new.
-    section_read: Option<(OrientedBox, DetailView)>,
+    /// read for and the sets drawn then.
+    section_read: Option<SectionRead>,
+    /// Counts the changes of the sets of points read for the view and
+    /// inside the section box.
+    sets_revision: u64,
     lod_pace: Arc<LodPace>,
     auto_index: bool,
     revision: u64,
@@ -2801,6 +2804,7 @@ impl Default for Studio {
             detail_view: None,
             focus: None,
             section_read: None,
+            sets_revision: 0,
             lod_pace: Arc::default(),
             auto_index: settings.auto_index,
             revision: 0,
@@ -9321,6 +9325,7 @@ impl Studio {
     /// Put the sets read for the view in their clouds; answers how many
     /// points they hold.
     fn take_view_sets(&mut self, details: LodSets) -> usize {
+        self.sets_revision += 1;
         let mut count = 0usize;
         for (index, points) in details {
             count += points.len();

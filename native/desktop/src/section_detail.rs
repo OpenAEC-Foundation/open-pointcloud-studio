@@ -40,11 +40,22 @@ pub(crate) struct FocusDetail {
     pub view: Option<DetailView>,
 }
 
+/// A section box that was read in full for a view.
+#[derive(Debug, Clone)]
+pub(crate) struct SectionRead {
+    pub region: OrientedBox,
+    pub view: DetailView,
+    /// The sets that were drawn then, as `Studio::sets_revision` counts
+    /// them: while they still are, reading the box again for that view
+    /// gives nothing new.
+    pub sets: u64,
+}
+
 /// What the next refinement of the view reads.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum DetailPlan {
     /// Nothing to read: the box is off and the sets are those of this view,
-    /// or the box is on and was read for this view already.
+    /// or the box is on and was read for this view and these sets already.
     Nothing,
     /// The whole view: its sets replace those drawn and the points inside a
     /// box are let go.
@@ -85,13 +96,13 @@ impl Studio {
             .as_ref()
             .filter(|_| done)
             .map(|request| request.view.clone());
-        if let Some((DetailPlan::Inside { region, .. }, view)) = request
+        let read = request
             .as_ref()
             .filter(|_| done)
-            .map(|request| (request.plan, &request.view))
-        {
-            self.section_read = Some((region, view.clone()));
-        }
+            .and_then(|request| match request.plan {
+                DetailPlan::Inside { region, .. } => Some((region, request.view.clone())),
+                _ => None,
+            });
         let status = match sets {
             MergedSets::Inside(region, sets) => {
                 let mut added: Vec<Option<Arc<[IndexedPoint]>>> = vec![None; self.clouds.len()];
@@ -105,6 +116,7 @@ impl Studio {
                 for (entry, points) in self.clouds.iter_mut().zip(added) {
                     entry.focus_points = points;
                 }
+                self.sets_revision += 1;
                 self.focus = Some(FocusDetail { region, view });
                 let count = crate::format_count(count);
                 if done {
@@ -157,6 +169,15 @@ impl Studio {
                 }
             }
         };
+        // The box was read in full for this view: it needs no read again
+        // while these sets are drawn.
+        if let Some((region, view)) = read {
+            self.section_read = Some(SectionRead {
+                region,
+                view,
+                sets: self.sets_revision,
+            });
+        }
         if self.reports_detail() {
             self.status = status;
         }
@@ -166,12 +187,11 @@ impl Studio {
     /// `view`.
     pub(crate) fn detail_plan(&self, view: &DetailView) -> DetailPlan {
         if let Some(region) = self.section_box() {
-            if self
-                .section_read
-                .as_ref()
-                .is_some_and(|(read, seen)| *read == region && seen == view)
-            {
-                // This box was read for this view already.
+            if self.section_read.as_ref().is_some_and(|read| {
+                read.region == region && read.view == *view && read.sets == self.sets_revision
+            }) {
+                // This box was read for this view, and nothing drawn changed
+                // since.
                 return DetailPlan::Nothing;
             }
             let strict = match &self.focus {
@@ -644,7 +664,7 @@ mod tests {
 
     use super::*;
     use crate::gpu_viewport::{drawn_frame, RenderCache};
-    use crate::{DetailRun, ScreenFill};
+    use crate::{CameraPreset, DetailRun, ScreenFill};
 
     const BUDGET: u32 = 18_000;
 
@@ -722,6 +742,14 @@ mod tests {
     /// The ordinals of a set of points.
     fn ordinals(points: &[IndexedPoint]) -> HashSet<u64> {
         points.iter().map(|record| record.ordinal).collect()
+    }
+
+    /// The box over the middle ninth of the floor.
+    fn small_box(studio: &mut Studio) -> OrientedBox {
+        let _ = studio.update(crate::Message::SetSectionEnabled(true));
+        let _ = studio.update(crate::Message::SectionMax(0, 30.0));
+        let _ = studio.update(crate::Message::SectionMax(1, 30.0));
+        studio.section_box().unwrap()
     }
 
     #[test]
@@ -802,6 +830,49 @@ mod tests {
         assert_eq!(drawn_frame(&studio, &state), added);
         assert!(refine(&mut studio, |_| {}).is_none());
         assert_eq!(drawn_frame(&studio, &state), added);
+    }
+
+    #[test]
+    fn a_box_is_read_again_once_the_view_was_read_anew() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = indexed_floor(directory.path());
+        let state = RefCell::new(RenderCache::default());
+        let _ = studio.update(crate::Message::CameraPreset(CameraPreset::Top));
+        refine(&mut studio, |_| {});
+        let region = small_box(&mut studio);
+        let (plan, read) = refine(&mut studio, |_| {}).unwrap();
+        assert!(matches!(plan, DetailPlan::Inside { .. }) && read);
+        let _ = studio.update(crate::Message::SetSectionEnabled(false));
+        assert!(refine(&mut studio, |_| {}).is_none());
+
+        // Another view and back, each read in full with the box off: the
+        // points read inside the box are let go.
+        let _ = studio.update(crate::Message::CameraPreset(CameraPreset::Front));
+        assert_eq!(refine(&mut studio, |_| {}), Some((DetailPlan::Whole, true)));
+        assert!(studio.focus.is_none());
+        let _ = studio.update(crate::Message::CameraPreset(CameraPreset::Top));
+        assert_eq!(refine(&mut studio, |_| {}), Some((DetailPlan::Whole, true)));
+        let view = drawn_frame(&studio, &state);
+
+        // The box on again for the view it was read for before: it is read
+        // again, as the sets it was read beside are gone.
+        let _ = studio.update(crate::Message::SetSectionEnabled(true));
+        assert_eq!(studio.section_box(), Some(region));
+        let boxed = drawn_frame(&studio, &state);
+        assert_eq!(
+            refine(&mut studio, |_| {}),
+            Some((
+                DetailPlan::Inside {
+                    region,
+                    strict: true
+                },
+                true
+            ))
+        );
+        let added = drawn_frame(&studio, &state);
+        assert_eq!(added.points, view.points);
+        assert!(added.drawn > boxed.drawn * 3, "{added:?} {boxed:?}");
+        assert!(added.drawn <= BUDGET as usize);
     }
 
     /// The points of the floor drawn inside a box: of the sets of the view
