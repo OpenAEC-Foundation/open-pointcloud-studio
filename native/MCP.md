@@ -106,7 +106,7 @@ They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
 edits, meshing (a closed mesh included), mesh export, a face detection, a
-faces export, a section drawing or its preview, a drawing file being read, steps of Mesh to Plans, a colouring from photos, merging, a 3D BAG download,
+faces export, a section drawing or its preview, a drawing file being read, steps of Pointcloud to Drawing, a colouring from photos, merging, a 3D BAG download,
 point loading for the camera, the fill of the cut of a mesh by the section
 box, the listing and decoding of photos and view snapshots have finished; call it after
 `open`, before `screenshot` when the camera changed, and before `export_bcf`.
@@ -114,7 +114,7 @@ box, the listing and decoding of photos and view snapshots have finished; call i
 fill of the cut and the photo that is entered, and so does the snapshot of a view. `screenshot` returns MCP image content (`type: "image"`,
 `mimeType: "image/png"`, base64 data) followed by a text part with the image
 size. While the Drawing view is shown, `screenshot` captures the drawing
-instead of the 3D viewport. While the File view, Settings, the card of the Mesh to Plans wizard or the card of Mesh Pointcloud covers the model, `screenshot` answers
+instead of the 3D viewport. While the File view, Settings, the card of the Pointcloud to Drawing wizard or the card of Mesh Pointcloud covers the model, `screenshot` answers
 with an error; `file_view` with `open: false` returns to the model, `mesh_to_plans_view` with `minimized: true` leaves the wizard as a strip above the scene that is not captured, and `mesh_wizard` with `open: false` takes the card of Mesh Pointcloud away. While the
 window is minimised there is no picture to take: `screenshot`
 then answers with an error, and the snapshot of a view saved meanwhile
@@ -122,7 +122,7 @@ follows when that view is restored.
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `status` | — | State of the window: layers (each with its mesh, its detected faces and its points with photo colours), imports and tasks, camera, viewport size, section box, the Section drawing, Closed mesh, Detect faces and Colour from photos tools, the Mesh to Plans wizard, the card of Mesh Pointcloud, selection, measurement, views, photos, settings |
+| `status` | — | State of the window: layers (each with its mesh, its detected faces and its points with photo colours), imports and tasks, camera, viewport size, section box, the Section drawing, Closed mesh, Detect faces and Colour from photos tools, the Pointcloud to Drawing wizard, the card of Mesh Pointcloud, selection, measurement, views, photos, settings |
 | `job` | `id` | Reads a background job once |
 | `wait_for_job` | `id`, optional `timeout_seconds` (default 60) | Waits until the job no longer runs |
 | `wait_until_idle` | optional `timeout_seconds` (default 60) | Waits until no work is under way; reports what is still busy |
@@ -221,7 +221,7 @@ follows when that view is restored.
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
 | `set_browser_group` | `group` (`scans`, `classes`, `views`, `bcf`, `3d`, `plans`, `elevations`, `sections`, `files` or `folder:` and a path), `open` | Opens or collapses a group of the Project Browser |
 | `list_tabs` | — | The tabs above the main area in their order, the 3D model first, with the active one |
-| `show_tab` | `name` or `index` as `list_tabs` gives them | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job to wait for. Refused while Settings, the dialog of Create 2D or the card of the Mesh to Plans wizard is open |
+| `show_tab` | `name` or `index` as `list_tabs` gives them | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job to wait for. Refused while Settings, the dialog of Create 2D or the card of the Pointcloud to Drawing wizard is open |
 | `close_tab` | `name` or `index` as `list_tabs` gives them | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |
 | `set_sheet_crop` | optional `name`, `rect` (`[[left, bottom], [right, top]]` in drawing units), `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` (0.1–100) | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before when its cut, depth and points used stay |
 | `select_crop_region` | `selected` | Selects the crop region of the drawing shown, as a click on its outline does, so that Properties shows its figures at the top and its handles can be dragged; `false` deselects it, as Escape does |
@@ -238,8 +238,8 @@ follows when that view is restored.
 | `set_extension_enabled` | `id` (`bag3d`), `enabled` | Switches a built-in optional feature on or off; kept for later sessions, unless the answer has `saved: false` with `save_error` |
 | `file_view` | `open`, optional `page` (`new`, `open`, `import`, `export`, `workspace`, `extensions` or `about`) | Opens the File view, on a page, or returns to the model |
 | `mesh_wizard` | `open`, optional `step` (`method`, `options` or `run`) and `method` (`closed`, `terrain`, `surface` or `faces`) | Shows the card of Mesh Pointcloud, on a step and with a method, or takes it away; a job of the card goes on, and with `open: true` the card opens on the Run step of a job that runs |
-| `mesh_to_plans_view` | `open`, optional `step` (`prepare`, `mesh`, `views`, `walls`, `openings`, `rooms`, `sheet`, `site` or `result`) and `minimized` | Shows the Mesh to Plans wizard as its card or as a strip above the scene, on a step, or takes it away |
-| `mesh_to_plans_action` | `action` (`run`, `run_all`, `confirm`, `skip`, `cancel`, `back`, `next` or `resume`), optional `folder` (absolute: for a new project, or the project to resume) | Does what a button of the Mesh to Plans wizard does on the step it shows, or opens a saved project; `run` and `run_all` answer with a `job_id` |
+| `mesh_to_plans_view` | `open`, optional `step` (`prepare`, `mesh`, `views`, `walls`, `openings`, `rooms`, `sheet`, `site` or `result`) and `minimized` | Shows the Pointcloud to Drawing wizard as its card or as a strip above the scene, on a step, or takes it away |
+| `mesh_to_plans_action` | `action` (`run`, `run_all`, `confirm`, `skip`, `cancel`, `back`, `next` or `resume`), optional `folder` (absolute: for a new project, or the project to resume) | Does what a button of the Pointcloud to Drawing wizard does on the step it shows, or opens a saved project; `run` and `run_all` answer with a `job_id` |
 | `mesh_to_plans_level` | optional `level` (its id), `action` (`select`, `show`, `set_peil`, `add`, `merge` or `remove`), `name`, `cut_height` (0.3 to 3 m) and `floor_above_p` | Selects, renames, moves, shows in the model, makes P, adds, merges or removes a level of step 0 of the wizard |
 | `list_instances` | — | Running windows and the one in use |
 | `select_instance` | `pid` or `port`, at least one | Chooses the window to drive |

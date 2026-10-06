@@ -1,6 +1,6 @@
 //! What the window tells about scans that are still being opened or indexed
 //! and about a section drawing, a closed mesh, a face detection or a step of
-//! Mesh to Plans that is under way: a line per task with how far it is and
+//! Pointcloud to Drawing that is under way: a line per task with how far it is and
 //! how long it will still take.
 
 use std::sync::atomic::Ordering;
@@ -35,7 +35,7 @@ pub enum Phase {
     ClosedMesh,
     /// The stages of a face detection; the bar starts again with each stage.
     Faces,
-    /// The steps of a Mesh to Plans job; the bar starts again with each step.
+    /// The steps of a Pointcloud to Drawing job; the bar starts again with each step.
     MeshToPlans,
     /// Several octree builds, side by side or waiting for a place.
     Indexing,

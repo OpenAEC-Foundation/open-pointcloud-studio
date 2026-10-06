@@ -1,5 +1,5 @@
-//! The project of Mesh to Plans: a folder the user chooses, by default
-//! `Documents\OPS Mesh to Plans\<name>`, with `project.ops-m2p.json` in it
+//! The project of Pointcloud to Drawing: a folder the user chooses, by default
+//! `Documents\OPS Pointcloud to Drawing\<name>`, with `project.ops-m2p.json` in it
 //! and what the steps write beside it. The file keeps the scans it was made
 //! from, the frame of the building, its datum, its boxes, the settings, the
 //! state of every step with the basis it was computed on, what the survey
@@ -32,7 +32,7 @@ pub(crate) const VERSION: u32 = 1;
 /// The file of a project in its folder.
 pub(crate) const FILE_NAME: &str = "project.ops-m2p.json";
 /// The folder in Documents that holds the projects by default.
-pub(crate) const PROJECTS_FOLDER: &str = "OPS Mesh to Plans";
+pub(crate) const PROJECTS_FOLDER: &str = "OPS Pointcloud to Drawing";
 /// How many projects the list of recent ones keeps.
 pub(crate) const MAX_RECENT: usize = 8;
 /// A larger file is no project.
@@ -357,7 +357,7 @@ pub(crate) fn now_seconds() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// The folder that holds the projects by default: `OPS Mesh to Plans` in the
+/// The folder that holds the projects by default: `OPS Pointcloud to Drawing` in the
 /// Documents folder of the user. The tests give one of their own, or none.
 pub(crate) fn default_root() -> Option<PathBuf> {
     if cfg!(test) {
@@ -517,7 +517,7 @@ pub(crate) fn load(path: &Path) -> Result<MeshToPlansProject, String> {
     let value: serde_json::Value =
         serde_json::from_slice(json).map_err(|error| error.to_string())?;
     if value["format"] != FORMAT {
-        return Err("the file is no Mesh to Plans project".into());
+        return Err("the file is no Pointcloud to Drawing project".into());
     }
     if value["version"]
         .as_u64()
@@ -759,7 +759,7 @@ mod tests {
         fs::write(&file, "{\"format\": \"something else\", \"version\": 1}").unwrap();
         assert_eq!(
             load(&file).unwrap_err(),
-            "the file is no Mesh to Plans project"
+            "the file is no Pointcloud to Drawing project"
         );
         let mut newer = serde_json::to_value(sample()).unwrap();
         newer["version"] = serde_json::json!(VERSION + 1);

@@ -120,7 +120,7 @@ pub enum FileAction {
     ExportBcf,
     MergeVisible,
     CancelMerge,
-    /// Open the Mesh to Plans wizard.
+    /// Open the Pointcloud to Drawing wizard.
     MeshToPlans,
 }
 
@@ -224,7 +224,7 @@ impl Studio {
         }
         // The card would lie over the view; as a strip the wizard waits.
         if open && self.mesh_to_plans.covers_model() {
-            return refuse("the Mesh to Plans wizard is open; minimize it first".into());
+            return refuse("the Pointcloud to Drawing wizard is open; minimize it first".into());
         }
         if open && self.mesh_wizard.is_open() {
             return refuse("the Mesh Pointcloud card is open; close it first".into());
@@ -371,11 +371,11 @@ impl Studio {
         .into()
     }
 
-    /// The tile that opens the Mesh to Plans wizard, on the New page and
+    /// The tile that opens the Pointcloud to Drawing wizard, on the New page and
     /// among the drawings and models of the Export page.
     fn mesh_to_plans_tile(&self) -> Element<'_, Message> {
         self.file_tile(
-            key("Mesh to Plans…"),
+            key("Pointcloud to Drawing…"),
             key("Plans, sections, elevations, a site plan and a model of a building from its scan, step by step"),
             FileAction::MeshToPlans,
             true,

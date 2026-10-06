@@ -1664,7 +1664,7 @@ impl Studio {
             self.key_sequence.typed(value, now, true);
             return Task::none();
         }
-        // While the File view, Settings or the card of Mesh to Plans covers
+        // While the File view, Settings or the card of Pointcloud to Drawing covers
         // the model, RO starts nothing; F and the walk keys say so themselves.
         if self.model_covered() {
             self.key_sequence.typed(value, now, true);
@@ -2028,7 +2028,7 @@ enum Message {
     ClosedMesh(closed_mesh::ClosedMeshAction),
     Faces(faces::FaceAction),
     PhotoColours(photo_colours::PhotoColourAction),
-    /// The Mesh to Plans wizard.
+    /// The Pointcloud to Drawing wizard.
     MeshToPlans(mesh_to_plans::WizardAction),
     /// The Mesh Pointcloud wizard.
     MeshWizard(mesh_wizard::MeshWizardAction),
@@ -2210,7 +2210,7 @@ struct Studio {
     /// are kept with their scan.
     faces: faces::FaceTool,
     photo_colours: photo_colours::PhotoColourTool,
-    /// The Mesh to Plans wizard: its card and where its steps stand.
+    /// The Pointcloud to Drawing wizard: its card and where its steps stand.
     mesh_to_plans: mesh_to_plans::Wizard,
     /// The Mesh Pointcloud wizard: its card, its step and its method.
     mesh_wizard: mesh_wizard::MeshWizard,
@@ -2906,10 +2906,10 @@ impl Studio {
     }
 
     /// Whether the model is out of sight behind the File view, the Settings
-    /// dialog, the card of the Mesh to Plans wizard or that of Mesh
+    /// dialog, the card of the Pointcloud to Drawing wizard or that of Mesh
     /// Pointcloud. Keys then leave the model alone, and a screenshot or a
     /// view snapshot is not taken, as it would show what covers the model.
-    /// The strip of the Mesh to Plans wizard lies beside the scene and
+    /// The strip of the Pointcloud to Drawing wizard lies beside the scene and
     /// covers nothing.
     fn model_covered(&self) -> bool {
         self.file_open
@@ -6012,7 +6012,7 @@ impl Studio {
                 }
             }
             Message::Exit => {
-                // A change of the Mesh to Plans project that waits for its
+                // A change of the Pointcloud to Drawing project that waits for its
                 // moment is written before the window goes.
                 self.flush_mesh_to_plans();
                 self.stop_background_work();
@@ -9941,10 +9941,10 @@ impl Studio {
         // The group is as wide as its name, which is wider than its one
         // button.
         let mesh_to_plans = opencad_ribbon::render_group_items(
-            "MESH TO PLANS",
+            "POINTCLOUD TO DRAWING",
             vec![RibbonItem::Large(
                 container(large_tool_button(
-                    "Mesh to Plans",
+                    "Pointcloud to Drawing",
                     Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
                     self.mesh_to_plans.is_open(),
                 ))
@@ -10831,7 +10831,7 @@ impl Studio {
         self.with_dialogs(window.into())
     }
 
-    /// The window with the card of the Mesh to Plans wizard or of Mesh
+    /// The window with the card of the Pointcloud to Drawing wizard or of Mesh
     /// Pointcloud over it, and the dialog of a 2D drawing or the Settings
     /// dialog over both, while they are shown.
     fn with_dialogs<'a>(&'a self, window: Element<'a, Message>) -> Element<'a, Message> {
@@ -11430,7 +11430,7 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::ClosedMesh => include_bytes!("../../assets/opencad-icons/closed_mesh.svg"),
         // And so is the icon of the Detect faces tool.
         ToolIcon::Faces => include_bytes!("../../assets/opencad-icons/detect_faces.svg"),
-        // And so is the icon of the Mesh to Plans wizard.
+        // And so is the icon of the Pointcloud to Drawing wizard.
         ToolIcon::MeshToPlans => include_bytes!("../../assets/opencad-icons/mesh_to_plans.svg"),
         // And so are the icons of Mesh Pointcloud and of its terrain mesh
         // and 3D surface.

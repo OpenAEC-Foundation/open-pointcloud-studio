@@ -1,4 +1,4 @@
-//! The worker of the Mesh to Plans wizard. One job at a time runs the steps
+//! The worker of the Pointcloud to Drawing wizard. One job at a time runs the steps
 //! it was given one after the other on a thread of its own, so that the
 //! machine is not swamped and the window stays free to look at other steps.
 //! The window reads how far it is four times a second, and a cancel stops it
@@ -245,11 +245,11 @@ impl PipelineJob {
     /// The line of the status bar while the job runs.
     fn status_text(&self) -> String {
         if self.control.cancelling() {
-            return "Cancelling Mesh to Plans…".into();
+            return "Cancelling Pointcloud to Drawing…".into();
         }
         match self.current() {
-            Some(step) => format!("Mesh to Plans: {} {}…", step.number(), step.label()),
-            None => "Mesh to Plans…".into(),
+            Some(step) => format!("Pointcloud to Drawing: {} {}…", step.number(), step.label()),
+            None => "Pointcloud to Drawing…".into(),
         }
     }
 
@@ -347,17 +347,19 @@ impl Last {
         };
         match self {
             Self::Done(finished) => format!(
-                "Mesh to Plans: {} done in {:.1} s",
+                "Pointcloud to Drawing: {} done in {:.1} s",
                 counted(finished.len()),
                 finished.iter().map(|done| done.seconds).sum::<f64>()
             ),
-            Self::Cancelled(finished) if finished.is_empty() => "Mesh to Plans cancelled".into(),
+            Self::Cancelled(finished) if finished.is_empty() => {
+                "Pointcloud to Drawing cancelled".into()
+            }
             Self::Cancelled(finished) => format!(
-                "Mesh to Plans cancelled after {}; those keep their result",
+                "Pointcloud to Drawing cancelled after {}; those keep their result",
                 counted(finished.len())
             ),
             Self::Failed { step, error, .. } => format!(
-                "Mesh to Plans failed in {} {}: {error}",
+                "Pointcloud to Drawing failed in {} {}: {error}",
                 step.number(),
                 step.label()
             ),
@@ -399,17 +401,17 @@ impl Studio {
         confirm: bool,
     ) -> Task<Message> {
         if self.mesh_to_plans.job.is_some() {
-            self.status = "Mesh to Plans is already running a step".into();
+            self.status = "Pointcloud to Drawing is already running a step".into();
             return Task::none();
         }
         if let Some(task) = self.heavy_work() {
             self.status = format!(
-                "Mesh to Plans waits: {task} is being made; wait for it or cancel it first"
+                "Pointcloud to Drawing waits: {task} is being made; wait for it or cancel it first"
             );
             return Task::none();
         }
         let Some(first) = steps.first().copied() else {
-            self.status = "Every step of Mesh to Plans is confirmed or skipped".into();
+            self.status = "Every step of Pointcloud to Drawing is confirmed or skipped".into();
             return Task::none();
         };
         let work = self.mesh_to_plans.work;
@@ -418,7 +420,10 @@ impl Studio {
             self.default_project_place();
             // What step 0 writes never goes over another project.
             if let Some(taken) = self.folder_taken() {
-                self.status = format!("Mesh to Plans cannot prepare: {}", taken.translated());
+                self.status = format!(
+                    "Pointcloud to Drawing cannot prepare: {}",
+                    taken.translated()
+                );
                 return Task::none();
             }
             match self.prepare_input(self.project_folder()) {
@@ -444,7 +449,7 @@ impl Studio {
                 }
                 Err(reason) => {
                     let reason = reason.translated();
-                    self.status = format!("Mesh to Plans cannot prepare: {reason}");
+                    self.status = format!("Pointcloud to Drawing cannot prepare: {reason}");
                     self.mesh_to_plans
                         .set_status(WizardStep::Prepare, StepStatus::Failed(reason));
                     return Task::none();
@@ -648,7 +653,7 @@ impl Studio {
             title: if cancelling {
                 "Cancelling…".to_owned()
             } else {
-                "Mesh to Plans".to_owned()
+                "Pointcloud to Drawing".to_owned()
             },
             detail: job.detail(),
             fraction: job.control.snapshot().fraction(),

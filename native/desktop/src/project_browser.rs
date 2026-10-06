@@ -735,7 +735,7 @@ impl Studio {
             panel = panel.push(classes);
         }
         panel = panel.push(self.views_group()).push(self.bcf_group());
-        // Mesh to Plans projects of the open scans can be taken up again.
+        // Pointcloud to Drawing projects of the open scans can be taken up again.
         if let Some(resume) = self.mesh_to_plans_browser() {
             panel = panel.push(resume);
         }

@@ -822,7 +822,7 @@ no drawing. `status.result.view_tabs` holds the same. `show_tab` shows an open
 tab as a click on it does, by its `index` or its `name` in any case; a drawing
 that is not made in this session yet is made, and the answer then has
 `accepted: true` and a `job_id`. It is refused while Settings, the dialog of
-Create 2D or the card of the Mesh to Plans wizard is open, as Ctrl+Tab does
+Create 2D or the card of the Pointcloud to Drawing wizard is open, as Ctrl+Tab does
 nothing then. `close_tab` closes a tab as its × does, by
 `index` or `name`; the view or drawing stays under VIEWS, and when the tab
 was active the tab after it is shown, else the one before it. The tab of the
@@ -920,7 +920,7 @@ shows. The answer holds `file_view` with `open` and `page`, as
 `status.result.file_view` does; `page` is `null` while the view is closed. The
 3D BAG panel is not part of the File view and is not opened by this command.
 A `page` with `open: false`, an unknown page, and opening while the Settings
-dialog, the card of the Mesh to Plans wizard or the card of Mesh Pointcloud is
+dialog, the card of the Pointcloud to Drawing wizard or the card of Mesh Pointcloud is
 open are refused. The Settings dialog is not opened or closed
 through this API.
 `status.result.mesh_export_pending` is true from the moment the window asks
@@ -975,10 +975,12 @@ metres and about how many points of the active layer and of the visible
 layers lie inside it, `active_points` and `visible_points`, from the
 overview sample of each layer) and `selected` (the selected points).
 
-## Mesh to Plans
+## Pointcloud to Drawing
 
-`mesh_to_plans_view` shows the Mesh to Plans wizard or takes it away, as the
-button in the MESH TO PLANS group, its tiles in the File view, **Show in
+The wizard was called Mesh to Plans while it was built; its commands, the `mesh_to_plans` part of `status` and the format of its project file keep that name, so that scripts and projects made before go on working.
+
+`mesh_to_plans_view` shows the Pointcloud to Drawing wizard or takes it away, as the
+button in the POINTCLOUD TO DRAWING group, its tiles in the File view, **Show in
 model**, **Back to wizard** and **Close** do. With `open: true` the wizard is
 shown as its card over the window, on the step `step` names (`prepare`,
 `mesh`, `views`, `walls`, `openings`, `rooms`, `sheet`, `site` or `result`)
@@ -1055,13 +1057,13 @@ shows, whether the wizard is shown or not: `run` (Run this step), `run_all`
 disabled is refused with the reason, for example `next` before the step is
 confirmed or `run` while a job runs. `folder` sets the absolute folder of a
 new project before it is first written; by default that is
-`Documents/OPS Mesh to Plans/<name>`, named after the first shown scan, or
+`Documents/OPS Pointcloud to Drawing/<name>`, named after the first shown scan, or
 `<name> 2` and so on when a project is there. A folder that holds another
 project is refused by `run` and `run_all` with the reason, and `folder` is
 refused while a job runs. `run`
 and `run_all` answer with the `job_id` of the job. `resume` opens the project
 in the absolute `folder`, or the project file `folder` names, as **Resume
-Mesh to Plans** in the Project Browser does: on the first step that is not
+Pointcloud to Drawing** in the Project Browser does: on the first step that is not
 confirmed or skipped, or on step 0 when that is `stale`. A file that is no
 project, or one made by a newer version, is refused with the reason.
 
@@ -1095,7 +1097,7 @@ before it started. The steps after step 0 compute nothing yet: of them only
 `not_run`. Step 0 also writes
 `survey/profile.csv` (the horizontal area per height) and `survey/top.png`
 (the view from above) in the folder. The newest eight project files are kept
-in the preferences; the Project Browser offers **Resume Mesh to Plans (step
+in the preferences; the Project Browser offers **Resume Pointcloud to Drawing (step
 n)** for those whose scans are all open, also when a scan was opened by a
 path written with other separators. A resumed project whose scans changed
 since step 0 ran has step 0 `stale`. Run again, step 0 keeps the levels that
@@ -1264,7 +1266,7 @@ is true. Without a `path` the image is returned as base64; with a `path` only
 when `base64` is true as well. An image whose longer edge exceeds `max_edge`
 (16–8192, default 1920 pixels) is scaled down. A file that exists at `path`
 is replaced. The command fails while the File view, Settings, the card of
-the Mesh to Plans wizard or the card of Mesh Pointcloud covers the viewport
+the Pointcloud to Drawing wizard or the card of Mesh Pointcloud covers the viewport
 (`file_view` with `open: false` returns to the model, `mesh_to_plans_view`
 with `minimized: true` leaves the wizard as a strip that is not captured, and
 `mesh_wizard` with `open: false` takes the card away), and while the
@@ -1272,7 +1274,7 @@ window is minimised (`"the window is minimised;
 restore it to take a screenshot"`); a view snapshot due meanwhile is taken
 when the view is restored. With `window: true` the image is the whole window
 as the application draws it, with ribbon, panels and status bar, also while
-the File view, Settings, the Mesh to Plans wizard or the card of Mesh
+the File view, Settings, the Pointcloud to Drawing wizard or the card of Mesh
 Pointcloud covers the model; `view` is then `window` and
 `viewport_size` the size of the window in logical pixels. It is drawn by the
 application itself, so it does not depend on the window being visible on a
@@ -1377,8 +1379,8 @@ layer with photo colours.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), the tabs above the main area (`view_tabs`, as `list_tabs` gives them), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (`mesh_wizard`: whether it is shown, its step and method, the method whose job runs and what the methods work on; see [Mesh Pointcloud](#mesh-pointcloud)), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), and current status text |
-| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, colouring from photos, merge, 3D BAG download or Mesh to Plans task's state and result |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), the tabs above the main area (`view_tabs`, as `list_tabs` gives them), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Pointcloud to Drawing wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (`mesh_wizard`: whether it is shown, its step and method, the method whose job runs and what the methods work on; see [Mesh Pointcloud](#mesh-pointcloud)), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), and current status text |
+| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, colouring from photos, merge, 3D BAG download or Pointcloud to Drawing task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |
@@ -1464,9 +1466,9 @@ layer with photo colours.
 | `set_extension_enabled` | `id`, `enabled` | Switches a built-in optional feature (`bag3d`) on or off and persists that; `saved` in the answer is false, with `save_error`, when it could not be persisted |
 | `file_view` | `open`, optional `page` | Opens the File view, on the page `new`, `open`, `import`, `export`, `workspace`, `extensions` or `about` when one is named, or closes it and returns to the model |
 | `mesh_wizard` | `open`, optional `step`, `method` | Shows the card of Mesh Pointcloud on a step (`method`, `options` or `run`) with a method (`closed`, `terrain`, `surface` or `faces`), or takes it away; a job goes on. With `open: true` and no `step` the card shows the Run step of a job that runs. Answers with `mesh_wizard` |
-| `mesh_to_plans_view` | `open`, optional `step`, `minimized` | Shows the Mesh to Plans wizard as its card, on a step when one is named, or with `minimized: true` as a strip above the scene, or takes it away; answers with `mesh_to_plans` |
-| `mesh_to_plans_action` | `action`, optional `folder` | Does what a button of the Mesh to Plans wizard does on the step it shows: `run`, `run_all`, `confirm`, `skip`, `cancel`, `back` or `next`; `folder` is the absolute folder of a new project. `resume` opens the project in the absolute `folder` instead. `run` and `run_all` return a job ID; answers with `mesh_to_plans` |
-| `mesh_to_plans_level` | optional `level`, `action`, `name`, `cut_height`, `floor_above_p` | Does what the page of step 0 of the Mesh to Plans wizard does with the level whose id is `level`: selects it, gives it `name`, `cut_height` (0.3 to 3 m above its floor) and `floor_above_p`, then does `action`: `select` (the default), `show`, `set_peil`, `add`, `merge` or `remove`; answers with `mesh_to_plans` |
+| `mesh_to_plans_view` | `open`, optional `step`, `minimized` | Shows the Pointcloud to Drawing wizard as its card, on a step when one is named, or with `minimized: true` as a strip above the scene, or takes it away; answers with `mesh_to_plans` |
+| `mesh_to_plans_action` | `action`, optional `folder` | Does what a button of the Pointcloud to Drawing wizard does on the step it shows: `run`, `run_all`, `confirm`, `skip`, `cancel`, `back` or `next`; `folder` is the absolute folder of a new project. `resume` opens the project in the absolute `folder` instead. `run` and `run_all` return a job ID; answers with `mesh_to_plans` |
+| `mesh_to_plans_level` | optional `level`, `action`, `name`, `cut_height`, `floor_above_p` | Does what the page of step 0 of the Pointcloud to Drawing wizard does with the level whose id is `level`: selects it, gives it `name`, `cut_height` (0.3 to 3 m above its floor) and `floor_above_p`, then does `action`: `select` (the default), `show`, `set_peil`, `add`, `merge` or `remove`; answers with `mesh_to_plans` |
 | `export` | `path` | Exports the active source, honoring deleted points |
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |
@@ -1483,7 +1485,7 @@ layer with photo colours.
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
 | `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
 | `list_tabs` | — | The tabs above the main area in their order, the 3D model first, and the active one |
-| `show_tab` | `name` or `index` | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job ID. Refused while Settings, the dialog of Create 2D or the card of the Mesh to Plans wizard is open |
+| `show_tab` | `name` or `index` | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job ID. Refused while Settings, the dialog of Create 2D or the card of the Pointcloud to Drawing wizard is open |
 | `close_tab` | `name` or `index` | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |
 | `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before as long as its cut, depth and points used stay; returns a job ID. See [Crop region, duplicates and RO](#crop-region-duplicates-and-ro) |
 | `select_crop_region` | `selected` | Selects (`true`) or deselects (`false`) the crop region of the drawing shown, as a click on its outline or Escape does; Properties shows its figures while it is selected |

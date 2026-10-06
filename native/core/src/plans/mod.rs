@@ -1,4 +1,4 @@
-//! Mesh to Plans: from a scan of a building to its plans, sections and
+//! Pointcloud to Drawing: from a scan of a building to its plans, sections and
 //! model. The steps are deterministic: every accumulation is an integer
 //! sum, a minimum, a maximum or a bitwise or, so that the result does not
 //! depend on the order in which points arrive or on the number of threads,

@@ -16,7 +16,7 @@ use crate::{views, Message, Studio};
 
 /// Why no screenshot is taken while something covers the scene.
 pub const COVERED: &str =
-    "the File view, Settings, the Mesh to Plans wizard or the Mesh Pointcloud card covers the viewport";
+    "the File view, Settings, the Pointcloud to Drawing wizard or the Mesh Pointcloud card covers the viewport";
 /// Longest edge of a screenshot when the command names none.
 pub const DEFAULT_MAX_EDGE: u32 = 1920;
 pub const MIN_MAX_EDGE: u32 = 16;

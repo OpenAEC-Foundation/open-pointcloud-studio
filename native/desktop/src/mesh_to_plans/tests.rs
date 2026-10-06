@@ -1,4 +1,4 @@
-//! Tests of the Mesh to Plans wizard: its card, its steps and how it sits
+//! Tests of the Pointcloud to Drawing wizard: its card, its steps and how it sits
 //! among the other parts of the window.
 
 use super::*;
@@ -224,7 +224,7 @@ fn api_shows_the_wizard_as_card_or_strip_on_a_step_and_takes_it_away() {
     );
     assert_eq!(
         file_view["error"],
-        "the Mesh to Plans wizard is open; minimize it first"
+        "the Pointcloud to Drawing wizard is open; minimize it first"
     );
     let (reply, receive) = std::sync::mpsc::channel();
     let _ = studio.api_screenshot(reply, None, None, None, false);
@@ -431,7 +431,7 @@ fn card_and_ribbon_build_in_dutch() {
     let _ = studio.view();
     let _ = studio.update(wizard(WizardAction::Open));
     let _ = studio.view();
-    assert_eq!(tr("Mesh to Plans"), "Mesh to Plans");
+    assert_eq!(tr("Pointcloud to Drawing"), "Puntenwolk naar tekening");
     assert_eq!(tr(WizardStep::Prepare.label()), "Voorbereiding");
     assert_eq!(StepStatus::Skipped.text(), "Overgeslagen");
     assert_eq!(
@@ -524,7 +524,7 @@ fn a_step_runs_on_the_worker_and_then_waits_for_confirmation() {
         *studio.mesh_to_plans.status(WizardStep::Prepare),
         StepStatus::Running
     );
-    assert_eq!(studio.status, "Mesh to Plans: 0 Preparation…");
+    assert_eq!(studio.status, "Pointcloud to Drawing: 0 Preparation…");
     assert_eq!(
         studio.mesh_to_plans.step_ready().unwrap_err().english(),
         "Wait until this step has finished"
@@ -532,7 +532,7 @@ fn a_step_runs_on_the_worker_and_then_waits_for_confirmation() {
     let lines = studio.progress_lines();
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].phase, crate::open_progress::Phase::MeshToPlans);
-    assert_eq!(lines[0].title, "Mesh to Plans");
+    assert_eq!(lines[0].title, "Pointcloud to Drawing");
     assert_eq!(lines[0].detail, "Step 1 of 1  ·  0 Preparation");
     assert!(matches!(
         lines[0].cancel,
@@ -544,7 +544,10 @@ fn a_step_runs_on_the_worker_and_then_waits_for_confirmation() {
     // One job at a time; the status reports it as work under way, and its
     // job of the local API follows it.
     let _ = studio.update(wizard(WizardAction::Run));
-    assert_eq!(studio.status, "Mesh to Plans is already running a step");
+    assert_eq!(
+        studio.status,
+        "Pointcloud to Drawing is already running a step"
+    );
     assert_eq!(busy(&mut studio), ["mesh_to_plans"]);
     let reported = status(&mut studio);
     assert_eq!(reported["job"]["state"], "running");
@@ -565,7 +568,9 @@ fn a_step_runs_on_the_worker_and_then_waits_for_confirmation() {
         *studio.mesh_to_plans.status(WizardStep::Prepare),
         StepStatus::Done
     );
-    assert!(studio.status.starts_with("Mesh to Plans: 1 step done in "));
+    assert!(studio
+        .status
+        .starts_with("Pointcloud to Drawing: 1 step done in "));
     assert_eq!(
         studio.mesh_to_plans.step_ready().unwrap_err().english(),
         "Confirm the result of this step first"
@@ -617,14 +622,16 @@ fn run_all_confirms_each_step_it_runs_and_leaves_skipped_ones() {
         };
         assert_eq!(*studio.mesh_to_plans.status(step), expected, "{step:?}");
     }
-    assert!(studio.status.starts_with("Mesh to Plans: 8 steps done in "));
+    assert!(studio
+        .status
+        .starts_with("Pointcloud to Drawing: 8 steps done in "));
     let _ = studio.view();
 
     let _ = studio.update(wizard(WizardAction::RunAll));
     assert!(!studio.mesh_to_plans.is_running());
     assert_eq!(
         studio.status,
-        "Every step of Mesh to Plans is confirmed or skipped"
+        "Every step of Pointcloud to Drawing is confirmed or skipped"
     );
 }
 
@@ -652,7 +659,7 @@ fn a_cancelled_job_keeps_the_steps_it_finished() {
         }
         let _ = studio.update(wizard(WizardAction::Poll));
         let _ = studio.update(wizard(WizardAction::Cancel));
-        assert_eq!(studio.status, "Cancelling Mesh to Plans…");
+        assert_eq!(studio.status, "Cancelling Pointcloud to Drawing…");
         PipelineEnd::of(worker.join().unwrap())
     });
     assert_eq!(ended, PipelineEnd::Cancelled);
@@ -667,7 +674,9 @@ fn a_cancelled_job_keeps_the_steps_it_finished() {
         };
         assert_eq!(*studio.mesh_to_plans.status(step), expected, "{step:?}");
     }
-    assert!(studio.status.starts_with("Mesh to Plans cancelled after "));
+    assert!(studio
+        .status
+        .starts_with("Pointcloud to Drawing cancelled after "));
     assert_eq!(status(&mut studio)["last"]["state"], "cancelled");
 
     // A message of a job that is no longer under way changes nothing.
@@ -697,7 +706,7 @@ fn a_failed_step_says_why_and_exit_cancels_a_job() {
     );
     assert_eq!(
         studio.status,
-        "Mesh to Plans failed in 2 Sections, elevations and raw plans: disk full"
+        "Pointcloud to Drawing failed in 2 Sections, elevations and raw plans: disk full"
     );
     let last = status(&mut studio)["last"].clone();
     assert_eq!(last["state"], "failed");
@@ -725,7 +734,7 @@ fn a_job_waits_for_other_heavy_work() {
     assert!(!studio.mesh_to_plans.is_running());
     assert_eq!(
         studio.status,
-        "Mesh to Plans waits: an octree is being made; wait for it or cancel it first"
+        "Pointcloud to Drawing waits: an octree is being made; wait for it or cancel it first"
     );
 }
 
@@ -923,7 +932,7 @@ fn a_new_project_never_takes_the_folder_of_another() {
     assert!(!second.mesh_to_plans.is_running());
     assert_eq!(
         second.status,
-        format!("Mesh to Plans cannot prepare: {reason}")
+        format!("Pointcloud to Drawing cannot prepare: {reason}")
     );
     assert_eq!(std::fs::read(&file).unwrap(), before);
     let answer = send(
@@ -933,7 +942,7 @@ fn a_new_project_never_takes_the_folder_of_another() {
     assert_eq!(answer["ok"], false);
     assert_eq!(
         answer["error"],
-        format!("Mesh to Plans cannot prepare: {reason}")
+        format!("Pointcloud to Drawing cannot prepare: {reason}")
     );
 
     // Resume that project goes on with it.
@@ -1149,7 +1158,10 @@ fn a_project_resumes_on_its_next_step_and_finds_a_changed_scan() {
     assert_eq!(wizard_state.prepare.levels[1].name, "First floor");
     assert!(wizard_state.prepare.top.is_some(), "the view from above");
     assert_eq!(wizard_state.project_name, "building");
-    assert_eq!(second.status, "Mesh to Plans project building opened");
+    assert_eq!(
+        second.status,
+        "Pointcloud to Drawing project building opened"
+    );
 
     // The scan opened by a path typed with other separators is the same
     // scan: offered, and step 0 is as it was.

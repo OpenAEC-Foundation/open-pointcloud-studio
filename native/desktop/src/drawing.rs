@@ -5803,7 +5803,7 @@ mod tests {
         let _ = studio.update(Message::Escape);
         assert!(!studio.file_open);
         assert_eq!(selected(&mut studio), true, "hidden, it stays selected");
-        // So does the card of the Mesh to Plans wizard.
+        // So does the card of the Pointcloud to Drawing wizard.
         let _ = studio.update(Message::MeshToPlans(
             crate::mesh_to_plans::WizardAction::Open,
         ));

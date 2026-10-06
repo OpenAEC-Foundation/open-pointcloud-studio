@@ -42,7 +42,7 @@ pub(crate) struct Preferences {
     pub cap_color: [u8; 3],
     /// Two faces farther apart than this, in metres, are not filled.
     pub cap_max_thickness: f64,
-    /// The project files of Mesh to Plans worked on last, newest first.
+    /// The project files of Pointcloud to Drawing worked on last, newest first.
     pub recent_mesh_to_plans: Vec<PathBuf>,
     /// The groups of the Project Browser that are collapsed. A value that
     /// is no list of texts reads as none, and leaves the other settings.

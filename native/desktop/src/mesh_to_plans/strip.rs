@@ -63,7 +63,7 @@ impl Studio {
                 .padding([2, 10])
         };
         let line = row![
-            text(tr("Mesh to Plans")).size(12).color(ink),
+            text(tr("Pointcloud to Drawing")).size(12).color(ink),
             text(format!(
                 "{}  {}  ·  {}",
                 step.number(),

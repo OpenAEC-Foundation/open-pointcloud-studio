@@ -126,7 +126,7 @@ pub const MODES: &[Mode] = &[
         short: None,
         arguments: "INPUT OUTPUT.json",
         description: key(
-            "Surveys a scanned building for Mesh to Plans and writes what was found as JSON.",
+            "Surveys a scanned building for Pointcloud to Drawing and writes what was found as JSON.",
         ),
     },
     Mode {

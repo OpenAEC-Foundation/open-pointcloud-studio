@@ -644,7 +644,7 @@ impl Studio {
 
     /// Show the card. A job that runs is shown on the Run step; otherwise
     /// the card shows the step and the method it showed last. The File view
-    /// steps aside, and the card of Mesh to Plans becomes its strip.
+    /// steps aside, and the card of Pointcloud to Drawing becomes its strip.
     fn open_mesh_wizard(&mut self) {
         self.file_open = false;
         if self.mesh_to_plans.minimize() {

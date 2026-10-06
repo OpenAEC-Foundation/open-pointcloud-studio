@@ -1,7 +1,7 @@
 //! What of the window a job reads: the layers where they stand, their
 //! deleted points, the classes shown, and the box it reads in. The Section
 //! drawing, Closed mesh and Detect faces tools make one from the section box
-//! of the window; a job of the Mesh to Plans wizard reads a box of its own,
+//! of the window; a job of the Pointcloud to Drawing wizard reads a box of its own,
 //! such as one storey, whatever the section box is.
 
 use std::sync::Arc;

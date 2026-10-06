@@ -1,4 +1,4 @@
-//! Mesh to Plans: the wizard that makes plans, sections, elevations, a site
+//! Pointcloud to Drawing: the wizard that makes plans, sections, elevations, a site
 //! plan and a model of a building from its scan, one step at a time. It is a
 //! card over the window with the steps in a sidebar, the settings of the
 //! step in the middle, its preview at the right and the buttons that move
@@ -883,7 +883,7 @@ impl Studio {
     /// were.
     fn resume_project(&mut self, file: &Path) -> Task<Message> {
         if self.mesh_to_plans.is_running() {
-            self.status = tr("Mesh to Plans is already running a step").into();
+            self.status = tr("Pointcloud to Drawing is already running a step").into();
             return Task::none();
         }
         let project = match project::load(file) {
@@ -968,7 +968,7 @@ impl Studio {
         wizard.minimized = false;
         self.file_open = false;
         self.status = tr_args(
-            "Mesh to Plans project {name} opened",
+            "Pointcloud to Drawing project {name} opened",
             &[("name", &project.name)],
         );
         Task::batch([written, self.queue_preferences_save()])
@@ -1089,7 +1089,7 @@ impl Studio {
         }
     }
 
-    /// The Mesh to Plans part of the Project Browser: the recent projects
+    /// The Pointcloud to Drawing part of the Project Browser: the recent projects
     /// made from the scans that are open, each with the step to go on with.
     /// Nothing when there is none.
     pub(crate) fn mesh_to_plans_browser(&self) -> Option<Element<'_, Message>> {
@@ -1114,7 +1114,7 @@ impl Studio {
             return None;
         }
         let muted = self.ui_theme.colors().muted;
-        let mut list = column![text(tr("MESH TO PLANS")).size(11).color(muted)].spacing(2);
+        let mut list = column![text(tr("POINTCLOUD TO DRAWING")).size(11).color(muted)].spacing(2);
         for recent in resumable {
             let current = self
                 .mesh_to_plans
@@ -1125,7 +1125,7 @@ impl Studio {
                 button(
                     column![
                         text(tr_args(
-                            "Resume Mesh to Plans (step {number})",
+                            "Resume Pointcloud to Drawing (step {number})",
                             &[("number", &recent.step.number())],
                         ))
                         .size(11),
@@ -1216,7 +1216,7 @@ impl Studio {
                 return refuse("folder must be an absolute path".into());
             }
             if self.mesh_to_plans.is_running() {
-                return refuse("Mesh to Plans is already running a step".into());
+                return refuse("Pointcloud to Drawing is already running a step".into());
             }
             self.mesh_to_plans.project_folder = folder.display().to_string();
             self.find_existing_project();
@@ -1225,7 +1225,7 @@ impl Studio {
         let step = wizard.step;
         let refused = match action.as_str() {
             "run" | "run_all" if wizard.is_running() => {
-                Some("Mesh to Plans is already running a step".to_owned())
+                Some("Pointcloud to Drawing is already running a step".to_owned())
             }
             "confirm" if *wizard.status(step) != StepStatus::Done => {
                 Some("the step shown waits for no confirmation".to_owned())
@@ -1281,7 +1281,7 @@ impl Studio {
             return refuse("folder must be an absolute path".into());
         }
         if self.mesh_to_plans.is_running() {
-            return refuse("Mesh to Plans is already running a step".into());
+            return refuse("Pointcloud to Drawing is already running a step".into());
         }
         let file = if folder.is_file() {
             folder
@@ -1312,7 +1312,7 @@ impl Studio {
         let send = Message::MeshToPlans;
         let colors = self.ui_theme.colors();
         let header = row![
-            text(tr("Mesh to Plans")).size(15),
+            text(tr("Pointcloud to Drawing")).size(15),
             text(format!(
                 "{}  {}",
                 wizard.step.number(),

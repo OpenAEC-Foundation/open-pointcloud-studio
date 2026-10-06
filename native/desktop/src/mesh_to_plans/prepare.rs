@@ -1,4 +1,4 @@
-//! Step 0 of Mesh to Plans, the preparation. The worker finds the box
+//! Step 0 of Pointcloud to Drawing, the preparation. The worker finds the box
 //! around what was scanned, the main direction of the walls, reads the scene
 //! once into a volume of occupied cells, proposes the footprint and finds
 //! and refines the levels. The page shows what it found: a histogram of the

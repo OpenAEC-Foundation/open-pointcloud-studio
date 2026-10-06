@@ -420,7 +420,7 @@ impl Studio {
             TabAction::Cycle(forward) => {
                 // Not under what covers the tabs or the main area: the File
                 // view, Settings, the dialog of Create 2D and the card of
-                // the Mesh to Plans wizard.
+                // the Pointcloud to Drawing wizard.
                 if self.tabs_covered() {
                     return Task::none();
                 }
@@ -434,7 +434,7 @@ impl Studio {
     }
 
     /// Whether the File view, Settings, the dialog of Create 2D or the card
-    /// of the Mesh to Plans wizard lies over the tabs or what they show.
+    /// of the Pointcloud to Drawing wizard lies over the tabs or what they show.
     pub(crate) fn tabs_covered(&self) -> bool {
         self.model_covered() || self.sheet_dialog.is_some()
     }
@@ -1080,7 +1080,7 @@ impl Studio {
             return refused("the dialog of Create 2D is open".into());
         }
         if self.mesh_to_plans.covers_model() {
-            return refused("the card of the Mesh to Plans wizard is open".into());
+            return refused("the card of the Pointcloud to Drawing wizard is open".into());
         }
         let tab = match self.tab_asked(name, index) {
             Ok(tab) => tab,

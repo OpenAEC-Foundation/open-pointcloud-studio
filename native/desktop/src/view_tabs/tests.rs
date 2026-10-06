@@ -563,7 +563,7 @@ fn ctrl_tab_and_show_tab_leave_what_lies_under_a_dialog_or_the_wizard_card() {
     let _ = studio.update(Message::Escape);
     assert!(studio.sheet_dialog.is_none());
 
-    // The card of the Mesh to Plans wizard.
+    // The card of the Pointcloud to Drawing wizard.
     let _ = studio.update(Message::MeshToPlans(
         crate::mesh_to_plans::WizardAction::Open,
     ));
