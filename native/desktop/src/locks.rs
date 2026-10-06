@@ -11,9 +11,11 @@
 //!   uses stay; it pans, zooms and takes annotations.
 //! - A locked viewport on a sheet is not moved, resized, scaled or removed.
 //!
-//! The lock is kept with the view, the drawing or the sheet. The row of a
-//! view or a drawing has a padlock that switches it, as has its tab while it
-//! is locked and Properties while it is shown.
+//! The lock is kept with the view, the drawing or the sheet. Properties
+//! switches it while it is shown or selected, as does the padlock of the
+//! shown row of a drawing and that of the tab of what is locked; a saved
+//! view keeps the room on its row for its name, and shows its lock in the
+//! icon of the row.
 
 use iced::widget::{button, checkbox, container, row, text, tooltip};
 use iced::{Element, Fill, Task};

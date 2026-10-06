@@ -231,7 +231,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - Drag a saved 3D view, a plan, an elevation or a section from VIEWS onto the paper, or use **Place view** in Properties. A drawing is placed as vectors at 1:100 or another scale, a 3D view as the picture of the view at about 200 dpi; each has its title under it, can be moved, scaled or resized, and follows its view.
 - **Export PDF…** writes the sheet as a PDF the size of its paper.
 - **Text**, **Dimension**, **Leader** and **Line** in the VIEWS group of the ribbon annotate a plan, an elevation or a section: a dimension snaps to the ends and corners of the lines and shows the distance in millimetres, rounded to the scale. Annotations stay with the drawing when it is made again, show on sheets and in the PDF, and are written to DXF and DWG as texts, real dimensions and leaders with **Export DXF/DWG…**.
-- A padlock locks a saved 3D view, a drawing or a view on a sheet: a locked 3D view keeps its camera and section box while it is shown, a locked drawing its crop region, and a locked view on a sheet its place and scale.
+- **Locked** in Properties locks a saved 3D view, a drawing or a view on a sheet: a locked 3D view keeps its camera and section box, also while a drawing or a sheet lies in front of it, a locked drawing its crop region, and a locked view on a sheet its place and scale.
 
 ### Mesh
 

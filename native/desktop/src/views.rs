@@ -1854,7 +1854,6 @@ impl Studio {
             i18n::tr("Rename"),
             Message::Views(ViewAction::StartRename(guid())),
         ));
-        controls.push(self.lock_button(crate::locks::LockTarget::View(guid())));
         controls.push(self.update_view_button(&view.guid));
         controls.push(crate::project_browser::duplicate_button(Message::Browser(
             crate::project_browser::BrowserAction::Duplicate(
