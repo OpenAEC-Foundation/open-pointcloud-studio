@@ -433,7 +433,7 @@ fn table() -> Vec<Tool> {
             required("path", path(BCF_FILE)),
         ]),
         tool("set_theme", Command, "Chooses and keeps the colour theme of the window.", vec![
-            required("theme", choice("forge (Deep Forge), light (Blueprint Light), night (Night Build), blueprint (Blueprint Blue) or contrast (High Contrast); openaec is the same as night and is what status.result.theme reports for it", &["forge", "light", "night", "blueprint", "contrast", "openaec"])),
+            required("theme", choice("light (Light), forge (Forge (dark)), openaec (OpenAEC (dark)), blueprint (Blueprint) or contrast (High contrast); night is the same as openaec, which is what status.result.theme reports for it", &["forge", "light", "night", "blueprint", "contrast", "openaec"])),
         ]),
         tool("set_language", Command, "Sets the language of the user interface and keeps it for later sessions.", vec![
             required("language", choice("auto for the language of the system when there is a translation for it, en for English, or the code of a translation such as nl for Dutch; status.result.language reports the choice", &crate::i18n::Language::keys())),

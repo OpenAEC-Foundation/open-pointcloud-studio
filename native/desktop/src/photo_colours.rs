@@ -1102,8 +1102,9 @@ impl Studio {
         let tool = &self.photo_colours;
         let settings = &tool.settings;
         let colors = self.ui_theme.colors();
-        let note =
-            |content: String| container(text(content).size(10).color(colors.muted)).padding([4, 8]);
+        let note = |content: String| {
+            container(text(content).size(10).color(colors.text_muted)).padding([4, 8])
+        };
         let warning = |content: String| {
             container(text(content).size(10).color(colors.accent)).padding([4, 8])
         };

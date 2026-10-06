@@ -440,7 +440,7 @@ impl Studio {
         let accent = colors.accent;
         let track = Color {
             a: 0.25,
-            ..colors.scene_muted
+            ..colors.dom.scene_muted
         };
         let mut strip = column![].spacing(7);
         for line in lines {
@@ -461,10 +461,10 @@ impl Studio {
             let mut heading = row![
                 text(line.title)
                     .size(12)
-                    .color(colors.scene_text)
+                    .color(colors.dom.scene_text)
                     .height(16)
                     .width(Fill),
-                text(pace).size(11).color(colors.scene_text),
+                text(pace).size(11).color(colors.dom.scene_text),
             ]
             .spacing(14)
             .align_y(iced::Alignment::Center);
@@ -480,7 +480,7 @@ impl Studio {
             // pushing the scene down.
             let mut task = column![
                 container(heading).height(20).clip(true),
-                container(text(line.detail).size(11).color(colors.scene_muted))
+                container(text(line.detail).size(11).color(colors.dom.scene_muted))
                     .height(15)
                     .width(Fill)
                     .clip(true),

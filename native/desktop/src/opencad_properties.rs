@@ -16,15 +16,13 @@ const FONT_SZ: f32 = ROW_H * 0.42;
 pub fn property_row(label: &'static str, value: String) -> Element<'static, Message> {
     let label = crate::i18n::tr(label);
     let label_col = container(text(label).size(FONT_SZ).style(|theme| text::Style {
-        color: Some(ui_theme::colors(theme).muted),
+        color: Some(ui_theme::colors(theme).text_secondary),
     }))
-    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel_alt))
     .width(Length::FillPortion(5))
     .height(ROW_H)
     .align_y(iced::Alignment::Center)
     .padding([0, 6]);
     let value_col = container(text(value).size(FONT_SZ))
-        .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel))
         .width(Length::FillPortion(6))
         .height(ROW_H)
         .align_y(iced::Alignment::Center)
@@ -34,7 +32,7 @@ pub fn property_row(label: &'static str, value: String) -> Element<'static, Mess
         .width(Fill)
         .style(|theme: &Theme| container::Style {
             border: Border {
-                color: ui_theme::colors(theme).border,
+                color: ui_theme::colors(theme).border_subtle,
                 width: 1.0,
                 radius: 0.0.into(),
             },
@@ -46,9 +44,8 @@ pub fn property_row(label: &'static str, value: String) -> Element<'static, Mess
 /// Keep survey bounds readable within OpenCADStudio's narrow properties dock.
 pub fn bounds_row(axis: &'static str, min: f64, max: f64) -> Element<'static, Message> {
     let axis = container(text(axis).size(FONT_SZ).style(|theme| text::Style {
-        color: Some(ui_theme::colors(theme).muted),
+        color: Some(ui_theme::colors(theme).text_secondary),
     }))
-    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel_alt))
     .width(Length::Fixed(30.0))
     .height(ROW_H)
     .align_y(iced::Alignment::Center)
@@ -61,7 +58,7 @@ pub fn bounds_row(axis: &'static str, min: f64, max: f64) -> Element<'static, Me
             text("→")
                 .size(FONT_SZ)
                 .style(|theme| text::Style {
-                    color: Some(ui_theme::colors(theme).muted),
+                    color: Some(ui_theme::colors(theme).text_secondary),
                 })
                 .width(Length::Fixed(22.0)),
             text(format!("{max:.3}"))
@@ -70,7 +67,6 @@ pub fn bounds_row(axis: &'static str, min: f64, max: f64) -> Element<'static, Me
         ]
         .align_y(iced::Alignment::Center),
     )
-    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel))
     .width(Fill)
     .height(ROW_H)
     .align_y(iced::Alignment::Center)
@@ -80,7 +76,7 @@ pub fn bounds_row(axis: &'static str, min: f64, max: f64) -> Element<'static, Me
         .width(Fill)
         .style(|theme: &Theme| container::Style {
             border: Border {
-                color: ui_theme::colors(theme).border,
+                color: ui_theme::colors(theme).border_subtle,
                 width: 1.0,
                 radius: 0.0.into(),
             },
@@ -98,9 +94,8 @@ pub fn property_input<'a>(
 ) -> Element<'a, Message> {
     let label = crate::i18n::tr(label);
     let label_col = container(text(label).size(FONT_SZ).style(|theme| text::Style {
-        color: Some(ui_theme::colors(theme).muted),
+        color: Some(ui_theme::colors(theme).text_secondary),
     }))
-    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel_alt))
     .width(Length::FillPortion(5))
     .height(ROW_H)
     .align_y(iced::Alignment::Center)
@@ -111,7 +106,6 @@ pub fn property_input<'a>(
             .size(FONT_SZ)
             .padding([2, 4]),
     )
-    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel))
     .width(Length::FillPortion(6))
     .height(ROW_H)
     .align_y(iced::Alignment::Center)
@@ -121,7 +115,7 @@ pub fn property_input<'a>(
         .width(Fill)
         .style(|theme: &Theme| container::Style {
             border: Border {
-                color: ui_theme::colors(theme).border,
+                color: ui_theme::colors(theme).border_subtle,
                 width: 1.0,
                 radius: 0.0.into(),
             },
@@ -138,15 +132,13 @@ pub fn property_control<'a>(
 ) -> Element<'a, Message> {
     let label = crate::i18n::tr(label);
     let label_col = container(text(label).size(FONT_SZ).style(|theme| text::Style {
-        color: Some(ui_theme::colors(theme).muted),
+        color: Some(ui_theme::colors(theme).text_secondary),
     }))
-    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel_alt))
     .width(Length::FillPortion(5))
     .height(ROW_H)
     .align_y(iced::Alignment::Center)
     .padding([0, 6]);
     let value_col = container(control)
-        .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel))
         .width(Length::FillPortion(6))
         .height(ROW_H)
         .align_y(iced::Alignment::Center)
@@ -156,7 +148,7 @@ pub fn property_control<'a>(
         .width(Fill)
         .style(|theme: &Theme| container::Style {
             border: Border {
-                color: ui_theme::colors(theme).border,
+                color: ui_theme::colors(theme).border_subtle,
                 width: 1.0,
                 radius: 0.0.into(),
             },
@@ -170,7 +162,7 @@ pub fn section_header(title: &'static str) -> Element<'static, Message> {
         .width(Fill)
         .padding([4, 6])
         .style(|theme| container::Style {
-            background: Some(Background::Color(ui_theme::colors(theme).panel_title)),
+            background: Some(Background::Color(ui_theme::colors(theme).bg_lighter)),
             ..Default::default()
         })
         .into()
@@ -184,13 +176,9 @@ fn tip_box<'a>(lines: &[String]) -> Element<'a, Message> {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel_alt)
-                .color(colors.text)
-                .border(Border {
-                    color: colors.border,
-                    width: 1.0,
-                    radius: 3.0.into(),
-                })
+                .background(colors.tooltip_bg)
+                .color(colors.tooltip_text)
+                .border(Border::default().rounded(4))
         })
         .into()
 }

@@ -34,22 +34,14 @@ const ZOOM_STEP: f32 = 1.25;
 /// Texts smaller than this many pixels are not drawn.
 const MIN_TEXT_PIXELS: f32 = 2.5;
 
-/// What lies around the paper.
+/// What lies around the paper: the same grey in every theme.
 pub(crate) fn desk(theme: UiTheme) -> Color {
-    match theme {
-        UiTheme::Light | UiTheme::Contrast => Color::from_rgb8(163, 163, 170),
-        UiTheme::Blueprint => Color::from_rgb8(70, 82, 104),
-        UiTheme::Forge | UiTheme::Night => Color::from_rgb8(74, 74, 82),
-    }
+    theme.colors().dom.desk
 }
 
-/// What is written on the desk: dark on the light grey of the light
-/// themes, light on the dark grey of the others.
+/// What is written on the desk.
 pub(crate) fn desk_ink(theme: UiTheme) -> Color {
-    match theme {
-        UiTheme::Light | UiTheme::Contrast => Color::from_rgb8(24, 24, 27),
-        UiTheme::Blueprint | UiTheme::Forge | UiTheme::Night => Color::from_rgb8(245, 245, 244),
-    }
+    theme.colors().dom.desk_text
 }
 
 /// An iced colour from a colour of the plot.

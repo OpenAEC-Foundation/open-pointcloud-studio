@@ -1885,8 +1885,8 @@ impl Studio {
                         .style(|theme| {
                             let colors = crate::ui_theme::colors(theme);
                             container::Style::default()
-                                .background(colors.panel_alt)
-                                .color(colors.text)
+                                .background(colors.tooltip_bg)
+                                .color(colors.tooltip_text)
                         }),
                     tooltip::Position::Bottom,
                 )
@@ -1942,7 +1942,7 @@ impl Studio {
             save = save.push(
                 text(i18n::tr("Open a scan to save views of it"))
                     .size(10)
-                    .color(self.ui_theme.colors().muted),
+                    .color(self.ui_theme.colors().text_muted),
             );
         }
         save.into()
@@ -2064,7 +2064,7 @@ impl Studio {
         .style(|theme| {
             let colors = crate::ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel)
+                .background(colors.bg_lighter)
                 .border(iced::Border {
                     color: mark_color(),
                     width: 1.0,

@@ -1966,7 +1966,12 @@ impl Studio {
             .padding([4, 8])
         };
         let note = |content: &'static str| {
-            container(text(content).size(10).color(self.ui_theme.colors().muted)).padding([4, 8])
+            container(
+                text(content)
+                    .size(10)
+                    .color(self.ui_theme.colors().text_muted),
+            )
+            .padding([4, 8])
         };
         let mut block = column![
             opencad_properties::section_header("Section drawing"),

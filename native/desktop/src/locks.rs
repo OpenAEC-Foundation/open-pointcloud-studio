@@ -373,7 +373,7 @@ impl Studio {
                 text(explanation)
                     .size(10)
                     .width(Fill)
-                    .color(self.ui_theme.colors().muted),
+                    .color(self.ui_theme.colors().text_muted),
             ]
             .spacing(6)
             .align_y(iced::Alignment::Center),

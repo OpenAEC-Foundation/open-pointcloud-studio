@@ -563,12 +563,12 @@ impl Studio {
             .align_y(iced::Alignment::Center),
             text(tr("Download buildings in RD New + NAP (EPSG:7415)."))
                 .size(11)
-                .color(colors.muted),
+                .color(colors.text_muted),
             text(tr(
                 "At most 2 × 2 km and about 5,000 buildings per download."
             ))
             .size(11)
-            .color(colors.muted),
+            .color(colors.text_muted),
             container(map)
                 .width(Fill)
                 .height(bag_map::HEIGHT)
@@ -627,7 +627,7 @@ impl Studio {
                     "The scan is not in RD New coordinates; draw the area on the map.",
                 ))
                 .size(11)
-                .color(colors.muted),
+                .color(colors.text_muted),
             );
         }
         for (index, name) in [key("X min"), key("Y min"), key("X max"), key("Y max")]
@@ -648,7 +648,7 @@ impl Studio {
         let area = self.bag_area_note();
         let problem = area.as_ref().and_then(|(_, problem)| *problem);
         if let Some((size, _)) = area {
-            panel = panel.push(text(size).size(11).color(colors.muted));
+            panel = panel.push(text(size).size(11).color(colors.text_muted));
         }
         if let Some(problem) = problem {
             panel = panel.push(text(tr(problem)).size(11).color(colors.accent));

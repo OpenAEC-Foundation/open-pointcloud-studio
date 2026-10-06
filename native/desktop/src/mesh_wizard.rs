@@ -435,14 +435,14 @@ fn option_row<'a>(
             .size(12)
             .width(LABEL_W)
             .style(|theme: &Theme| text::Style {
-                color: Some(ui_theme::colors(theme).muted),
+                color: Some(ui_theme::colors(theme).dialog_content_secondary),
             }),
         control,
         text(tr_args("Default: {value}", &[("value", &default)]))
             .size(11)
             .width(DEFAULT_W)
             .style(|theme: &Theme| text::Style {
-                color: Some(ui_theme::colors(theme).muted),
+                color: Some(ui_theme::colors(theme).text_muted),
             }),
         // The mark says that the row explains itself under the pointer.
         container(text("?").size(10))
@@ -452,7 +452,7 @@ fn option_row<'a>(
             .style(|theme: &Theme| {
                 let colors = ui_theme::colors(theme);
                 container::Style::default()
-                    .color(colors.muted)
+                    .color(colors.text_muted)
                     .border(Border {
                         color: colors.border,
                         width: 1.0,
@@ -503,7 +503,7 @@ fn scope_row<'a>(
             .size(12)
             .width(LABEL_W)
             .style(|theme: &Theme| text::Style {
-                color: Some(ui_theme::colors(theme).muted),
+                color: Some(ui_theme::colors(theme).dialog_content_secondary),
             }),
         text(value).size(12).width(Fill),
     ]
@@ -533,10 +533,7 @@ fn plain_btn_style(theme: &Theme, status: button::Status) -> button::Style {
     let colors = ui_theme::colors(theme);
     if matches!(status, button::Status::Disabled) {
         style.border.color = Color::TRANSPARENT;
-        style.text_color = Color {
-            a: 0.5,
-            ..colors.muted
-        };
+        style.text_color = colors.text.scale_alpha(0.5);
     } else if style.border.color == Color::TRANSPARENT {
         style.border.color = colors.border;
     }
@@ -560,7 +557,11 @@ fn note<'a>(content: String, warning: bool) -> Element<'a, Message> {
         .style(move |theme: &Theme| {
             let colors = ui_theme::colors(theme);
             text::Style {
-                color: Some(if warning { colors.accent } else { colors.muted }),
+                color: Some(if warning {
+                    colors.accent
+                } else {
+                    colors.text_muted
+                }),
             }
         })
         .into()
@@ -568,7 +569,9 @@ fn note<'a>(content: String, warning: bool) -> Element<'a, Message> {
 
 fn rule<'a>() -> Element<'a, Message> {
     container(Space::new(Fill, 1))
-        .style(|theme| container::Style::default().background(ui_theme::colors(theme).border))
+        .style(|theme| {
+            container::Style::default().background(ui_theme::colors(theme).dialog_section_border)
+        })
         .into()
 }
 
@@ -1258,17 +1261,17 @@ impl Studio {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel)
-                .color(colors.text)
+                .background(colors.dialog_bg)
+                .color(colors.dialog_content_text)
                 .border(Border {
-                    color: colors.border,
+                    color: colors.dialog_border,
                     width: 1.0,
                     radius: 8.0.into(),
                 })
         });
         Some(opaque(
-            mouse_area(center(opaque(card)).padding(20).style(|_| {
-                container::Style::default().background(Color::from_rgba8(0, 0, 0, 0.45))
+            mouse_area(center(opaque(card)).padding(20).style(|theme| {
+                container::Style::default().background(ui_theme::colors(theme).dialog_overlay)
             }))
             .on_press(send(MeshWizardAction::Close)),
         ))
@@ -1295,10 +1298,10 @@ impl Studio {
                         .background(if active {
                             colors.accent
                         } else {
-                            colors.panel_alt
+                            colors.btn_secondary_bg
                         })
                         .color(if active {
-                            colors.file_tab_text
+                            colors.accent_text
                         } else {
                             colors.text
                         })
@@ -1344,7 +1347,7 @@ impl Studio {
                 "Choose how to mesh the points. Each method keeps its own options."
             ))
             .size(12)
-            .color(colors.muted),
+            .color(colors.dialog_content_secondary),
             cards,
             self.scope_view(),
         ]
@@ -1385,11 +1388,11 @@ impl Studio {
             button::Style {
                 background: Some(
                     if chosen {
-                        colors.panel_alt
+                        colors.hover_strong
                     } else if hovered {
                         colors.hover
                     } else {
-                        colors.panel
+                        colors.accent_soft
                     }
                     .into(),
                 ),
@@ -1501,7 +1504,7 @@ impl Studio {
             .style(|theme| {
                 let colors = ui_theme::colors(theme);
                 container::Style::default()
-                    .background(colors.panel_alt)
+                    .background(colors.accent_soft)
                     .border(Border {
                         color: colors.border,
                         width: 1.0,
@@ -1675,7 +1678,7 @@ impl Studio {
                             .style(|theme: &Theme| {
                                 let colors = ui_theme::colors(theme);
                                 progress_bar::Style {
-                                    background: colors.panel_alt.into(),
+                                    background: colors.border_strong.into(),
                                     bar: colors.accent.into(),
                                     border: Border::default(),
                                 }

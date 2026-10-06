@@ -62,7 +62,7 @@ The design follows [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio
 
 Each file states its source and what was changed. OpenCADStudio is GPL-3.0, so the desktop crate is GPL-3.0-only; the licence text is [`desktop/LICENSE-GPL-3.0`](desktop/LICENSE-GPL-3.0). The core stays LGPL-3.0-or-later.
 
-Colours, group captions, active and hover states and the Settings dialog follow the [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-book) (`themes.css` at commit `dfdcd41`): the palettes Deep Forge, Blueprint Light, Night Build, Blueprint Blue and High Contrast, with Blueprint Light as the default. Inter and Space Grotesk are bundled under the SIL Open Font License; see [`assets/fonts/README.md`](assets/fonts/README.md).
+Colours, group captions, active and hover states and the Settings dialog follow the [OpenAEC style book](https://github.com/OpenAEC-Foundation/OpenAEC-style-book). The five themes Light, Forge (dark), OpenAEC (dark), Blueprint and High contrast, with Light as the default, are the five columns of `themes.css` of its desktop template (commit `dfdcd41`): `ui_theme.rs` holds every variable of that file as a token of the same name, unchanged, with the semantic colours of the brand beside them and, under `dom`, the colours of the application itself (the scene, the paper of a drawing and of a sheet, and what is drawn on them). Inter and Space Grotesk are bundled under the SIL Open Font License; see [`assets/fonts/README.md`](assets/fonts/README.md).
 
 ## User interface
 

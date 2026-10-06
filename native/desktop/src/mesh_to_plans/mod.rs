@@ -279,11 +279,11 @@ impl StepStatus {
         let colors = ui_theme::colors(theme);
         let palette = theme.palette();
         match self {
-            Self::NotRun => (colors.muted, false),
+            Self::NotRun => (colors.text_muted, false),
             Self::Running => (colors.accent, true),
             Self::Done => (palette.success, false),
             Self::Confirmed => (palette.success, true),
-            Self::Skipped => (colors.muted, true),
+            Self::Skipped => (colors.text_muted, true),
             Self::Stale => (Color::from_rgb8(217, 119, 6), true),
             Self::Failed(_) => (palette.danger, true),
         }
@@ -1113,7 +1113,7 @@ impl Studio {
         if resumable.is_empty() {
             return None;
         }
-        let muted = self.ui_theme.colors().muted;
+        let muted = self.ui_theme.colors().text_muted;
         let mut list = column![text(tr("POINTCLOUD TO DRAWING")).size(11).color(muted)].spacing(2);
         for recent in resumable {
             let current = self
@@ -1319,7 +1319,7 @@ impl Studio {
                 tr(wizard.step.label())
             ))
             .size(12)
-            .color(colors.muted),
+            .color(colors.text_secondary),
             horizontal_space(),
             button(text(tr("Show in model")).size(12))
                 .on_press(send(WizardAction::Minimize))
@@ -1356,10 +1356,10 @@ impl Studio {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel)
-                .color(colors.text)
+                .background(colors.dialog_bg)
+                .color(colors.dialog_content_text)
                 .border(Border {
-                    color: colors.border,
+                    color: colors.dialog_border,
                     width: 1.0,
                     radius: 8.0.into(),
                 })
@@ -1369,8 +1369,8 @@ impl Studio {
             container(Share::new(opaque(card), CARD_SHARE, CARD_MIN))
                 .width(Fill)
                 .height(Fill)
-                .style(|_| {
-                    container::Style::default().background(Color::from_rgba8(0, 0, 0, 0.55))
+                .style(|theme| {
+                    container::Style::default().background(ui_theme::colors(theme).dialog_overlay)
                 }),
         ))
     }
@@ -1389,7 +1389,7 @@ impl Studio {
                     )
                     .padding([7, 12])
                     .style(|theme| {
-                        container::Style::default().color(ui_theme::colors(theme).muted)
+                        container::Style::default().color(ui_theme::colors(theme).text_muted)
                     }),
                 );
             }
@@ -1416,13 +1416,19 @@ impl Studio {
                     button::Style {
                         background: (active || hovered).then_some(
                             if active {
-                                colors.panel_alt
+                                colors.dialog_tab_active_bg
                             } else {
-                                colors.hover
+                                colors.dialog_tab_hover
                             }
                             .into(),
                         ),
-                        text_color: if active { colors.accent } else { colors.text },
+                        text_color: if active {
+                            colors.dialog_tab_active_text
+                        } else if hovered {
+                            colors.dialog_tab_hover_text
+                        } else {
+                            colors.dialog_tab_text
+                        },
                         border: Border::default().rounded(4),
                         ..button::Style::default()
                     }
@@ -1445,9 +1451,14 @@ impl Studio {
         let colors = self.ui_theme.colors();
         let mut page = column![
             text(tr(step.label())).size(14).color(colors.accent),
-            text(tr(step.lead())).size(12).color(colors.muted),
+            text(tr(step.lead()))
+                .size(12)
+                .color(colors.dialog_content_secondary),
             row![
-                text(tr("Status")).size(12).color(colors.muted).width(90),
+                text(tr("Status"))
+                    .size(12)
+                    .color(colors.dialog_content_secondary)
+                    .width(90),
                 text(wizard.status(step).text()).size(12),
             ]
             .spacing(8),
@@ -1460,12 +1471,12 @@ impl Studio {
         })
         .width(Fill);
         if let StepStatus::Failed(reason) = wizard.status(step) {
-            page = page.push(text(reason.clone()).size(11).color(colors.muted));
+            page = page.push(text(reason.clone()).size(11).color(colors.text_muted));
         }
         if let Some(line) = self.mesh_to_plans_progress_line() {
             page = page.push(
                 column![
-                    text(line.detail).size(11).color(colors.muted),
+                    text(line.detail).size(11).color(colors.text_muted),
                     progress_bar(0.0..=1.0, line.fraction.unwrap_or(0.0)).height(6),
                 ]
                 .spacing(4),
@@ -1490,7 +1501,7 @@ impl Studio {
             page = page.push(
                 text(tr("The settings of this step come in a later version."))
                     .size(11)
-                    .color(colors.muted),
+                    .color(colors.text_muted),
             );
         }
         let running = *wizard.status(step) == StepStatus::Running;
@@ -1550,7 +1561,7 @@ impl Studio {
             horizontal_space(),
             text(reason)
                 .size(11)
-                .color(self.ui_theme.colors().muted)
+                .color(self.ui_theme.colors().text_muted)
                 .width(Length::Shrink),
             plain(
                 key("Previous"),
@@ -1602,7 +1613,9 @@ fn status_dot(status: StepStatus) -> Element<'static, Message> {
 
 fn rule_vertical<'a>() -> Element<'a, Message> {
     container(Space::new(1, Fill))
-        .style(|theme| container::Style::default().background(ui_theme::colors(theme).border))
+        .style(|theme| {
+            container::Style::default().background(ui_theme::colors(theme).dialog_sidebar_border)
+        })
         .into()
 }
 

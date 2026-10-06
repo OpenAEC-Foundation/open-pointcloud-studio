@@ -7,14 +7,15 @@ use iced::widget::{
     button, center, checkbox, column, container, horizontal_space, mouse_area, opaque,
     progress_bar, row, svg, text, tooltip, Column, Space,
 };
-use iced::{Border, Color, Element, Fill, Font, Length};
+use iced::{Border, Element, Fill, Font, Length};
 
 use super::manifest::{Commands, EntryPage, Manifest};
 use super::{Dialog, ExtensionAction, Installed, BUILT_IN};
 use crate::file_view::FilePage;
 use crate::i18n::{tr, tr_args};
 use crate::{
-    flat_tool_style, muted_checkbox_style, opencad_ribbon, ui_theme, Message, Studio, VERSION_LABEL,
+    flat_tool_style, muted_checkbox_style, opencad_ribbon, status_button_style, ui_theme, Message,
+    Studio, VERSION_LABEL,
 };
 
 /// The widest the cards of the page grow.
@@ -32,9 +33,9 @@ fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel)
+                .background(colors.accent_soft)
                 .border(Border {
-                    color: colors.border,
+                    color: colors.border_subtle,
                     width: 1.0,
                     radius: 6.0.into(),
                 })
@@ -49,7 +50,7 @@ fn chip<'a>(label: String) -> Element<'a, Message> {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel_alt)
+                .background(colors.accent_soft)
                 .color(colors.accent)
                 .border(Border {
                     color: colors.border,
@@ -139,11 +140,13 @@ impl Studio {
         let colors = self.ui_theme.colors();
         let host = &self.extension_host;
         let caption = |label: &str| {
-            container(text(label.to_owned()).size(10).color(colors.muted)).padding(iced::Padding {
-                top: 18.0,
-                bottom: 4.0,
-                ..iced::Padding::ZERO
-            })
+            container(text(label.to_owned()).size(10).color(colors.text_muted)).padding(
+                iced::Padding {
+                    top: 18.0,
+                    bottom: 4.0,
+                    ..iced::Padding::ZERO
+                },
+            )
         };
 
         let install_label = if host.preparing {
@@ -164,7 +167,7 @@ impl Studio {
             install_row = install_row.push(
                 text(tr("There is no settings folder to install extensions in."))
                     .size(12)
-                    .color(colors.muted),
+                    .color(colors.text_muted),
             );
         }
         let mut top = column![
@@ -175,7 +178,7 @@ impl Studio {
                 "Features you can switch off, and programs that add buttons and work through the local API of the application."
             ))
             .size(13)
-            .color(colors.muted),
+            .color(colors.text_secondary),
             Space::with_height(10),
             install_row,
         ]
@@ -198,10 +201,13 @@ impl Studio {
                 .fold(column![].spacing(10).width(Fill), |cards, extension| {
                     let enabled = self.extensions.enabled(extension.id);
                     let mut origin =
-                        row![text(extension.author).size(11).color(colors.muted)].spacing(14);
+                        row![text(extension.author).size(11).color(colors.text_faint)].spacing(14);
                     if extension.uses_network {
-                        origin =
-                            origin.push(text(tr("Uses the internet")).size(11).color(colors.muted));
+                        origin = origin.push(
+                            text(tr("Uses the internet"))
+                                .size(11)
+                                .color(colors.text_muted),
+                        );
                     }
                     cards.push(card(
                         column![
@@ -222,12 +228,12 @@ impl Studio {
                             .align_y(iced::Alignment::Center),
                             text(format!("{VERSION_LABEL} · {}", tr("built in")))
                                 .size(11)
-                                .color(colors.muted),
+                                .color(colors.text_faint),
                             // A switched-off extension reads as set aside.
                             text(tr(extension.description)).size(12).color(if enabled {
                                 colors.text
                             } else {
-                                colors.muted
+                                colors.text_muted
                             }),
                             origin,
                         ]
@@ -275,7 +281,7 @@ impl Studio {
                     "No extensions are installed. An extension is a folder with an extension.json, or a .zip archive of one."
                 ))
                 .size(12)
-                .color(colors.muted),
+                .color(colors.text_muted),
             );
         }
 
@@ -290,7 +296,7 @@ impl Studio {
                     "An installed extension is a program that runs with your rights when you start it. Install only extensions whose author you trust. Each run writes a log in the logs folder of the extension."
                 ))
                 .size(12)
-                .color(colors.muted),
+                .color(colors.text_muted),
             )
             .max_width(CARD_W)
             .padding(iced::Padding {
@@ -332,26 +338,30 @@ impl Studio {
                 manifest.version, manifest.author, manifest.id
             ))
             .size(11)
-            .color(colors.muted),
+            .color(colors.text_faint),
             text(manifest.description.get().to_owned())
                 .size(12)
-                .color(if enabled { colors.text } else { colors.muted }),
+                .color(if enabled {
+                    colors.text
+                } else {
+                    colors.text_muted
+                }),
             text(tr_args(
                 "Runs: {command}",
                 &[("command", &manifest.launch.describe())]
             ))
             .size(11)
-            .color(colors.muted),
+            .color(colors.text_muted),
         ]
         .spacing(6);
         for line in uses_lines(manifest) {
-            details = details.push(text(line).size(11).color(colors.muted));
+            details = details.push(text(line).size(11).color(colors.text_muted));
         }
         if let Some(adds) = adds_line(manifest) {
             details = details.push(
                 text(tr_args("Adds {what}", &[("what", &adds)]))
                     .size(11)
-                    .color(colors.muted),
+                    .color(colors.text_muted),
             );
         }
         if let Some(run) = run {
@@ -399,7 +409,7 @@ impl Studio {
         let label = |name: &str| {
             text(name.to_owned())
                 .size(12)
-                .color(colors.muted)
+                .color(colors.text_secondary)
                 .width(150)
         };
         let (title, body, confirm): (&str, Element<'_, Message>, &str) = match dialog {
@@ -452,11 +462,11 @@ impl Studio {
                         .font(Font::with_name("Space Grotesk")),
                     text(manifest.description.get().to_owned()).size(12),
                     container(Space::new(Fill, 1)).style(|theme| {
-                        container::Style::default().background(ui_theme::colors(theme).border)
+                        container::Style::default().background(ui_theme::colors(theme).dialog_section_border)
                     }),
                     Column::with_children(facts).spacing(8),
                     container(Space::new(Fill, 1)).style(|theme| {
-                        container::Style::default().background(ui_theme::colors(theme).border)
+                        container::Style::default().background(ui_theme::colors(theme).dialog_section_border)
                     }),
                     text(tr(
                         "An extension is a program. It runs with your rights when you start it, and can read and change your files. Install it only when you trust its author."
@@ -516,17 +526,17 @@ impl Studio {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel)
-                .color(colors.text)
+                .background(colors.dialog_bg)
+                .color(colors.dialog_content_text)
                 .border(Border {
-                    color: colors.border,
+                    color: colors.dialog_border,
                     width: 1.0,
                     radius: 8.0.into(),
                 })
         });
         Some(opaque(
-            mouse_area(center(opaque(card)).style(|_| {
-                container::Style::default().background(Color::from_rgba8(0, 0, 0, 0.55))
+            mouse_area(center(opaque(card)).style(|theme| {
+                container::Style::default().background(ui_theme::colors(theme).dialog_overlay)
             }))
             .on_press(send(ExtensionAction::CloseDialog)),
         ))
@@ -582,8 +592,8 @@ impl Studio {
                             .style(|theme| {
                                 let colors = ui_theme::colors(theme);
                                 container::Style::default()
-                                    .background(colors.panel_alt)
-                                    .color(colors.text)
+                                    .background(colors.tooltip_bg)
+                                    .color(colors.tooltip_text)
                             }),
                         tooltip::Position::Bottom,
                     )
@@ -629,7 +639,7 @@ impl Studio {
                 .on_press_maybe(
                     (!run.control.stopping()).then(|| send(ExtensionAction::Stop(id.clone()))),
                 )
-                .style(flat_tool_style)
+                .style(status_button_style)
                 .padding([1, 6]),
         );
         Some(segment.into())
@@ -637,7 +647,7 @@ impl Studio {
 
     /// The tiles the enabled extensions add to a page of the File view.
     pub(crate) fn extension_tiles(&self, page: EntryPage) -> Vec<Element<'_, Message>> {
-        let muted = self.ui_theme.colors().muted;
+        let muted = self.ui_theme.colors().text_secondary;
         let mut tiles = Vec::new();
         for installed in &self.extension_host.installed {
             let manifest = &installed.manifest;
@@ -676,7 +686,7 @@ impl Studio {
                         style.border.width = 1.0;
                         style.border.radius = 4.0.into();
                         if style.background.is_none() {
-                            style.background = Some(colors.panel.into());
+                            style.background = Some(colors.accent_soft.into());
                         }
                         style
                     })

@@ -162,7 +162,7 @@ follows when that view is restored.
 | `annotate_screen` | `pointer` | Clicks with the annotation tool at a viewport pixel |
 | `submit_note` | `text` | Gives the waiting note its text |
 | `export_bcf` | `path` (`.bcf`) | Writes the views of the active scan as BCF |
-| `set_theme` | `theme` | `forge`, `light`, `night`, `blueprint` or `contrast`; `openaec`, as `status` reports Night Build, is the same as `night` |
+| `set_theme` | `theme` | `light` (Light), `forge` (Forge (dark)), `openaec` (OpenAEC (dark)), `blueprint` (Blueprint) or `contrast` (High contrast); `night` is the same as `openaec`, which is what `status` reports |
 | `set_language` | `language` | `auto` (the language of the system), `en` or `nl`; kept for later sessions |
 | `set_color` | `mode` | `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code` (0–255), `visible` | Shows or hides a classification code |

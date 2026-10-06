@@ -1583,7 +1583,7 @@ impl Studio {
                     "Enter applies a value and makes the drawing again, from the points it read as long as the cut, the view depth and the points used stay. Drag a handle of the crop region on the drawing; RO turns the crop region of a plan; Escape deselects it.",
                 ))
                 .size(10)
-                .color(colors.muted),
+                .color(colors.text_muted),
             )
             .padding([4, 8]),
         );

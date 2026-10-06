@@ -2,7 +2,7 @@
 
 How each part of Open Pointcloud Studio works. The [README](../README.md) has the installation, a first walk through the application and the file formats; this guide goes into each tool.
 
-The interface is in English or Dutch. The guide uses the English names. Its pictures show the Dutch interface in one of the dark themes; a new installation starts in the light theme Blueprint Light, see [Settings, language and extensions](#settings-language-and-extensions).
+The interface is in English or Dutch. The guide uses the English names. Its pictures show the Dutch interface in one of the dark themes; a new installation starts in the theme Light, see [Settings, language and extensions](#settings-language-and-extensions).
 
 ## Contents
 
@@ -1030,10 +1030,10 @@ While the camera moves, the points on screen stay. Shortly after it stops, the d
 The **Settings** button at the right of the top strip, **Settings…** in the File view and Ctrl+, (Command+, on macOS) open the same dialog:
 
 - **General** has the language and the CAD viewer: the program that opens exported DXF and DWG files, see [Viewing a drawing in Open CAD Studio](#viewing-a-drawing-in-open-cad-studio). The language is Auto-detect, English or Nederlands. With Auto-detect the language is that of the system: the first of the user's preferred languages on macOS, the locale of the user on Windows and of the environment on Linux.
-- **Appearance** has the theme: Deep Forge, Blueprint Light, Night Build, Blueprint Blue or High Contrast. A new installation starts in Blueprint Light. The scene stays dark in every theme.
+- **Appearance** has the theme, one of the five of the OpenAEC style book: Light, Forge (dark), OpenAEC (dark), Blueprint or High contrast. A new installation starts in Light. The scene is white in Light and dark in the other themes; the paper of a drawing and of a sheet is white in every theme.
 - **About** has the name, the version, what the application is built with, the licences and a link to the source code.
 
-A choice shows at once. **Save** keeps it, **Cancel** or Escape puts back what was in use, and **Reset to Defaults** chooses Auto-detect, Blueprint Light and the Open CAD Studio that is found.
+A choice shows at once. **Save** keeps it, **Cancel** or Escape puts back what was in use, and **Reset to Defaults** chooses Auto-detect, Light and the Open CAD Studio that is found.
 
 A text without a Dutch translation stays English. That holds for the messages in the status bar and for most texts with a count in them.
 

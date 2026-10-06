@@ -8,7 +8,7 @@ A desktop application for viewing, measuring, editing and converting laser scans
 
 ![The window of Open Pointcloud Studio in the Dutch interface: the ribbon along the top, the project panel at the left, the scan of an office building with trees around it in the scene, and the Properties panel at the right](docs/images/overview.jpg)
 
-*One scan of 455 million points, six million of them on screen. The picture was taken with a build from before 0.8.0: the title bar does not yet show the file name and the version, and **Section drawing** is not yet in the SECTION BOX group. It shows the Dutch interface in one of the dark themes; a new installation starts in the light theme Blueprint Light, and **Settings** changes the language and the theme.*
+*One scan of 455 million points, six million of them on screen. The picture was taken with a build from before 0.8.0: the title bar does not yet show the file name and the version, and **Section drawing** is not yet in the SECTION BOX group. It shows the Dutch interface in one of the dark themes; a new installation starts in the theme Light, and **Settings** changes the language and the theme.*
 
 [![A frame of the teaser: the scan of the office building turning in the window of Open Pointcloud Studio. Click to watch the 24-second video.](docs/media/teaser-poster.jpg)](docs/media/open-pointcloud-studio-teaser-en.mp4)
 
@@ -268,7 +268,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 
 - **3D BAG buildings…** in the File view downloads building models of the Netherlands for an area in RD New coordinates and shows them with a scan. It is a built-in extension that can be switched off on the Extensions page.
 - **Extensions** from other authors add tasks: a folder or `.zip` with an `extension.json` and a program in any language, such as a PowerShell or Python script, that drives the window through the command API in a process of its own. **Install extension…** on the Extensions page checks it and shows what it declares before it is installed; its buttons appear in the EXTENSIONS group of the ribbon and its tiles on the New and Export pages. [Writing an extension](docs/extensions.md) describes the format, with an [example](native/extensions/examples/point-count-report).
-- **Settings** has the language (the language of the system, English or Dutch) and five colour themes.
+- **Settings** has the language (the language of the system, English or Dutch) and the five colour themes of the OpenAEC style book.
 - Display settings are kept between sessions. Settings and indexes are stored in the folders that the [user guide](docs/guide.md#where-settings-and-indexes-are-stored) names.
 
 ## File formats

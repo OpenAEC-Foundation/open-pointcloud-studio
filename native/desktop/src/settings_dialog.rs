@@ -45,7 +45,10 @@ pub struct SettingsDialog {
 pub(crate) fn about<'a>(colors: UiColors) -> iced::widget::Column<'a, Message> {
     let fact = |name: &'static str, value: &'static str| {
         row![
-            text(tr(name)).size(12).color(colors.muted).width(120),
+            text(tr(name))
+                .size(12)
+                .color(colors.text_secondary)
+                .width(120),
             text(value).size(12)
         ]
         .spacing(12)
@@ -54,13 +57,13 @@ pub(crate) fn about<'a>(colors: UiColors) -> iced::widget::Column<'a, Message> {
         text(crate::APP_NAME).size(16),
         text(tr("Native viewer and editor for point clouds."))
             .size(12)
-            .color(colors.muted),
+            .color(colors.text_secondary),
         fact("Version", env!("CARGO_PKG_VERSION")),
         fact("Framework", "Rust · iced · wgpu"),
         fact("License", "GPL-3.0-only · LGPL-3.0-or-later"),
         text(tr("Built on the OpenAEC platform"))
             .size(12)
-            .color(colors.muted),
+            .color(colors.text_secondary),
         button(text(tr("Source code ↗")).size(12))
             .on_press(Message::OpenUrl(crate::SOURCE_URL))
             .style(flat_tool_style)
@@ -152,13 +155,19 @@ impl Studio {
                     button::Style {
                         background: (active || hovered).then_some(
                             if active {
-                                colors.panel_alt
+                                colors.dialog_tab_active_bg
                             } else {
-                                colors.hover
+                                colors.dialog_tab_hover
                             }
                             .into(),
                         ),
-                        text_color: if active { colors.accent } else { colors.text },
+                        text_color: if active {
+                            colors.dialog_tab_active_text
+                        } else if hovered {
+                            colors.dialog_tab_hover_text
+                        } else {
+                            colors.dialog_tab_text
+                        },
                         border: Border::default().rounded(4),
                         ..button::Style::default()
                     }
@@ -173,7 +182,12 @@ impl Studio {
         .width(150);
 
         let heading = |label: &'static str| text(tr(label)).size(13).color(colors.accent);
-        let label = |name: &'static str| text(tr(name)).size(12).color(colors.muted).width(120);
+        let label = |name: &'static str| {
+            text(tr(name))
+                .size(12)
+                .color(colors.dialog_content_secondary)
+                .width(120)
+        };
         let content: Element<'_, Message> = match dialog.tab {
             SettingsTab::General => column![
                 heading("Application"),
@@ -191,7 +205,7 @@ impl Studio {
                 heading("CAD viewer"),
                 text(tr("The program that opens exported DXF and DWG drawings when the Open CAD Studio that comes with the application is missing. Leave it empty to use Open CAD Studio where it is installed."))
                     .size(11)
-                    .color(colors.muted),
+                    .color(colors.dialog_content_secondary),
                 self.cad_viewer_setting(),
             ]
             .spacing(14)
@@ -201,11 +215,11 @@ impl Studio {
                     heading("Theme"),
                     text(tr("Choose a color theme for the application."))
                         .size(11)
-                        .color(colors.muted),
+                        .color(colors.dialog_content_secondary),
                 ]
                 .spacing(8);
                 for theme in UiTheme::ALL {
-                    let palette = theme.colors();
+                    let [shell, lighter, accent, ink] = theme.swatches();
                     let swatch = |color: Color| {
                         container(Space::new(14, 14)).style(move |_| {
                             container::Style::default()
@@ -221,10 +235,10 @@ impl Studio {
                     themes = themes.push(
                         button(
                             row![
-                                swatch(palette.shell),
-                                swatch(palette.panel),
-                                swatch(palette.accent),
-                                swatch(palette.text),
+                                swatch(shell),
+                                swatch(lighter),
+                                swatch(accent),
+                                swatch(ink),
                                 text(tr(&theme.to_string()).to_owned()).size(12),
                             ]
                             .spacing(6)
@@ -239,16 +253,16 @@ impl Studio {
                             button::Style {
                                 background: (chosen || hovered).then_some(
                                     if chosen {
-                                        colors.panel_alt
+                                        colors.dialog_tab_active_bg
                                     } else {
-                                        colors.hover
+                                        colors.dialog_tab_hover
                                     }
                                     .into(),
                                 ),
-                                text_color: colors.text,
+                                text_color: colors.dialog_content_text,
                                 border: Border {
                                     color: if chosen {
-                                        colors.accent
+                                        colors.focus
                                     } else {
                                         Color::TRANSPARENT
                                     },
@@ -309,18 +323,18 @@ impl Studio {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel)
-                .color(colors.text)
+                .background(colors.dialog_bg)
+                .color(colors.dialog_content_text)
                 .border(Border {
-                    color: colors.border,
+                    color: colors.dialog_border,
                     width: 1.0,
                     radius: 8.0.into(),
                 })
         });
 
         Some(opaque(
-            mouse_area(center(opaque(card)).style(|_| {
-                container::Style::default().background(Color::from_rgba8(0, 0, 0, 0.55))
+            mouse_area(center(opaque(card)).style(|theme| {
+                container::Style::default().background(ui_theme::colors(theme).dialog_overlay)
             }))
             .on_press(send(SettingsAction::Cancel)),
         ))

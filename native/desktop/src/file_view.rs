@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use crate::extensions::manifest::EntryPage;
 use crate::i18n::{key, tr};
 use crate::{
-    display_name, extensions, format_count, opencad_ribbon, settings_dialog, sidebar_style,
+    display_name, extensions, format_count, opencad_ribbon, settings_dialog,
     themed_pick_list_style, ui_theme, views, CloudEntry, Message, Studio,
 };
 
@@ -174,8 +174,7 @@ impl Studio {
                 .padding([30, 40])
                 .width(Fill)
                 .height(Fill)
-                .style(|theme| container::Style::default()
-                    .background(ui_theme::colors(theme).panel_alt)),
+                .style(|theme| container::Style::default().background(ui_theme::colors(theme).bg)),
         ]
         .height(Fill)
         .into()
@@ -247,7 +246,7 @@ impl Studio {
     fn file_menu(&self) -> Element<'_, Message> {
         let rule = || {
             container(Space::new(Fill, 1)).style(|theme| {
-                container::Style::default().background(ui_theme::colors(theme).border)
+                container::Style::default().background(ui_theme::colors(theme).border_subtle)
             })
         };
         let item = |label: &'static str, message: Message| {
@@ -266,7 +265,7 @@ impl Studio {
                     container::Style::default().background(if open {
                         colors.accent
                     } else {
-                        colors.panel
+                        iced::Color::TRANSPARENT
                     })
                 }),
                 button(text(tr(page.label())).size(14))
@@ -312,7 +311,16 @@ impl Studio {
         container(column![scrollable(top).height(Fill), footer].height(Fill))
             .width(260)
             .height(Fill)
-            .style(sidebar_style)
+            .style(|theme| {
+                let colors = ui_theme::colors(theme);
+                container::Style::default()
+                    .background(colors.bg_lighter)
+                    .border(iced::Border {
+                        color: colors.border,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    })
+            })
             .into()
     }
 
@@ -322,20 +330,26 @@ impl Studio {
             text(tr(title))
                 .size(26)
                 .font(Font::with_name("Space Grotesk")),
-            text(tr(lead)).size(13).color(self.ui_theme.colors().muted),
+            text(tr(lead))
+                .size(13)
+                .color(self.ui_theme.colors().text_secondary),
         ]
         .spacing(6)
     }
 
     /// A small heading above a group of tiles.
     fn group_caption(&self, label: &'static str) -> Element<'_, Message> {
-        container(text(tr(label)).size(10).color(self.ui_theme.colors().muted))
-            .padding(iced::Padding {
-                top: 26.0,
-                bottom: 6.0,
-                ..iced::Padding::ZERO
-            })
-            .into()
+        container(
+            text(tr(label))
+                .size(10)
+                .color(self.ui_theme.colors().text_muted),
+        )
+        .padding(iced::Padding {
+            top: 26.0,
+            bottom: 6.0,
+            ..iced::Padding::ZERO
+        })
+        .into()
     }
 
     /// A task as a tile: its name, and under it what it writes or what it
@@ -347,7 +361,7 @@ impl Studio {
         action: FileAction,
         available: bool,
     ) -> Element<'_, Message> {
-        let muted = self.ui_theme.colors().muted;
+        let muted = self.ui_theme.colors().text_secondary;
         button(
             column![
                 text(tr(title)).size(15),
@@ -363,7 +377,7 @@ impl Studio {
             style.border.width = 1.0;
             style.border.radius = 4.0.into();
             if style.background.is_none() {
-                style.background = Some(colors.panel.into());
+                style.background = Some(colors.accent_soft.into());
             }
             style
         })
@@ -640,7 +654,7 @@ impl Studio {
                             horizontal_space(),
                             text(format!("{} points", format_count(entry.remaining_count())))
                                 .size(11)
-                                .color(colors.muted),
+                                .color(colors.text_muted),
                         ]
                         .spacing(16)
                         .align_y(iced::Alignment::Center),
@@ -665,7 +679,7 @@ impl Studio {
                 format_count(self.selected_total()),
             ))
             .size(13)
-            .color(colors.muted),
+            .color(colors.text_secondary),
             self.group_caption(key("CURRENT SCAN")),
             text(active_name).size(16),
             self.group_caption(key("OPEN SCANS")),

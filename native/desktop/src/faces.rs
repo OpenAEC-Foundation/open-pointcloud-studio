@@ -2671,8 +2671,9 @@ impl Studio {
     /// that is highlighted and the buttons that save and clear.
     fn faces_result<'a>(&'a self, index: usize, layer: &'a FaceLayer) -> Vec<Element<'a, Message>> {
         let colors = self.ui_theme.colors();
-        let note =
-            |content: String| container(text(content).size(10).color(colors.muted)).padding([4, 8]);
+        let note = |content: String| {
+            container(text(content).size(10).color(colors.text_muted)).padding([4, 8])
+        };
         let warning = |content: String| {
             container(text(content).size(10).color(colors.accent)).padding([4, 8])
         };

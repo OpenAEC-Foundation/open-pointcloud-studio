@@ -930,7 +930,7 @@ impl Studio {
                             .color(colors.text),
                         text(caption)
                             .size(11)
-                            .color(colors.muted)
+                            .color(colors.text_muted)
                             .wrapping(iced::widget::text::Wrapping::None),
                     ]
                     .spacing(10)
@@ -949,7 +949,7 @@ impl Studio {
             })
             .width(Fill)
             .style(|theme| {
-                container::Style::default().background(ui_theme::colors(theme).panel_alt)
+                container::Style::default().background(ui_theme::colors(theme).docbar_bg)
             })
             .into()
     }
@@ -1183,8 +1183,8 @@ fn active_surface(theme: ui_theme::UiTheme, drawing: bool) -> (Color, Color) {
             Color::from_rgb8(28, 25, 23),
         )
     } else {
-        let colors = theme.colors();
-        (colors.scene, colors.scene_text)
+        let dom = theme.colors().dom;
+        (dom.scene, dom.scene_text)
     }
 }
 
@@ -1206,7 +1206,7 @@ fn tab_style(
     } else if hovered {
         (colors.hover, colors.text)
     } else {
-        (Color::TRANSPARENT, colors.muted)
+        (Color::TRANSPARENT, colors.text_muted)
     };
     button::Style {
         background: Some(Background::Color(background)),
@@ -1236,7 +1236,7 @@ fn close_style(
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     let (quiet, hover, ink) = match active {
         Some((surface, ink)) => (mixed(ink, surface, 0.7), Color { a: 0.12, ..ink }, ink),
-        None => (colors.muted, colors.ribbon_hover, colors.text),
+        None => (colors.text_muted, colors.ribbon_btn_hover, colors.text),
     };
     button::Style {
         background: hovered.then_some(Background::Color(hover)),

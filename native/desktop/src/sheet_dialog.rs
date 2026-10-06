@@ -11,7 +11,7 @@ use iced::widget::{
     button, center, column, container, horizontal_space, mouse_area, opaque, pick_list, row, text,
     text_input,
 };
-use iced::{Border, Color, Element, Task};
+use iced::{Border, Element, Task};
 use pointcloud_core::{DrawingView, OrientedBox};
 use serde::{Deserialize, Serialize};
 
@@ -518,7 +518,12 @@ impl Studio {
         let dialog = self.sheet_dialog.as_ref()?;
         let colors = self.ui_theme.colors();
         let send = Message::Sheet;
-        let label = |name: &'static str| text(tr(name)).size(12).color(colors.muted).width(130);
+        let label = |name: &'static str| {
+            text(tr(name))
+                .size(12)
+                .color(colors.dialog_content_secondary)
+                .width(130)
+        };
         let kinds = SheetKind::ALL
             .into_iter()
             .fold(row![].spacing(4), |kinds, kind| {
@@ -591,7 +596,7 @@ impl Studio {
                                     &[("height", &format!("{floor:.2}"))],
                                 ))
                                 .size(11)
-                                .color(colors.muted),
+                                .color(colors.text_muted),
                             ]
                             .align_y(iced::Alignment::Center),
                         );
@@ -659,17 +664,17 @@ impl Studio {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel)
-                .color(colors.text)
+                .background(colors.dialog_bg)
+                .color(colors.dialog_content_text)
                 .border(Border {
-                    color: colors.border,
+                    color: colors.dialog_border,
                     width: 1.0,
                     radius: 8.0.into(),
                 })
         });
         Some(opaque(
-            mouse_area(center(opaque(card)).style(|_| {
-                container::Style::default().background(Color::from_rgba8(0, 0, 0, 0.45))
+            mouse_area(center(opaque(card)).style(|theme| {
+                container::Style::default().background(ui_theme::colors(theme).dialog_overlay)
             }))
             .on_press(send(SheetAction::Close)),
         ))

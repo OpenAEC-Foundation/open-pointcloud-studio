@@ -1251,8 +1251,8 @@ impl Studio {
                     .style(|theme| {
                         let colors = crate::ui_theme::colors(theme);
                         container::Style::default()
-                            .background(colors.panel_alt)
-                            .color(colors.text)
+                            .background(colors.tooltip_bg)
+                            .color(colors.tooltip_text)
                     }),
                 tooltip::Position::Bottom,
             )
@@ -1292,7 +1292,7 @@ impl Studio {
             container(container(panel).padding([4, 8]).style(|theme| {
                 let colors = crate::ui_theme::colors(theme);
                 container::Style::default()
-                    .background(colors.panel)
+                    .background(colors.bg_lighter)
                     .color(colors.text)
                     .border(iced::Border {
                         color: mark_color(),

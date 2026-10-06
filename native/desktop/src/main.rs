@@ -63,6 +63,8 @@ mod sheet_dialog;
 mod shell_tests;
 mod station_photos;
 mod survey;
+#[cfg(test)]
+mod test_render;
 mod ui_theme;
 mod view_cube;
 mod view_tabs;
@@ -114,6 +116,12 @@ const VERSION_LABEL: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 /// the name of the desktop entry the packages install.
 #[cfg(target_os = "linux")]
 const APPLICATION_ID: &str = "org.openaec.OpenPointcloudStudio";
+
+/// The fonts the window brings along; Inter is the font of the interface.
+const FONTS: [&[u8]; 2] = [
+    include_bytes!("../../assets/fonts/Inter.ttf"),
+    include_bytes!("../../assets/fonts/SpaceGrotesk.ttf"),
+];
 
 /// The name and the version of the application as one text.
 pub(crate) fn app_title() -> String {
@@ -1168,6 +1176,7 @@ fn main() -> iced::Result {
         // Controls without an explicit size match the compact property rows.
         .settings(iced::Settings {
             default_text_size: iced::Pixels(12.0),
+            fonts: FONTS.into_iter().map(std::borrow::Cow::Borrowed).collect(),
             ..iced::Settings::default()
         })
         .subscription(|studio| {
@@ -1298,8 +1307,6 @@ fn main() -> iced::Result {
             };
             iced::Subscription::batch([keyboard, api, opened, walking, clock])
         })
-        .font(include_bytes!("../../assets/fonts/Inter.ttf").as_slice())
-        .font(include_bytes!("../../assets/fonts/SpaceGrotesk.ttf").as_slice())
         .default_font(Font::with_name("Inter"))
         .theme(|studio: &Studio| studio.ui_theme.iced())
         .antialiasing(true)
@@ -5953,7 +5960,7 @@ impl Studio {
         let bytes = |color: Color| [color.r, color.g, color.b].map(|c| (c * 255.0).round() as u8);
         native_chrome::apply(
             self.ui_theme != UiTheme::Light,
-            bytes(colors.tabs),
+            bytes(colors.bg_lighter),
             bytes(colors.text),
         )
     }
@@ -9970,7 +9977,7 @@ impl Studio {
         )
         .width(Fill)
         .height(29)
-        .style(|theme| container::Style::default().background(ui_theme::colors(theme).tabs));
+        .style(|theme| container::Style::default().background(ui_theme::colors(theme).bg_lighter));
         if self.file_open {
             return container(top_strip).width(Fill).style(ribbon_style).into();
         }
@@ -10389,7 +10396,7 @@ impl Studio {
                     .on_press_maybe(
                         (!job.cancel.load(Ordering::Relaxed)).then_some(Message::CancelImport(id)),
                     )
-                    .style(flat_tool_style),
+                    .style(status_button_style),
             );
         }
         if let Some(runs) = self.extension_runs_status() {
@@ -10401,7 +10408,7 @@ impl Studio {
             details,
             text(VERSION_LABEL)
                 .size(11)
-                .color(self.ui_theme.colors().muted),
+                .color(self.ui_theme.colors().status_text_label),
         ]
         .spacing(24)
         .padding([7, 12])
@@ -10517,7 +10524,7 @@ impl Studio {
                 .padding([5, 8])
                 .width(Fill)
                 .style(|theme| container::Style::default()
-                    .background(ui_theme::colors(theme).panel_alt)),
+                    .background(ui_theme::colors(theme).bg_lighter)),
         ]
         .spacing(0)
         .width(270);
@@ -10582,7 +10589,7 @@ impl Studio {
                         .style(|theme| {
                             let colors = ui_theme::colors(theme);
                             iced::widget::progress_bar::Style {
-                                background: colors.panel_alt.into(),
+                                background: colors.border_strong.into(),
                                 bar: colors.accent.into(),
                                 border: iced::Border::default(),
                             }
@@ -10640,7 +10647,7 @@ impl Studio {
                         .style(|theme| {
                             let colors = ui_theme::colors(theme);
                             iced::widget::progress_bar::Style {
-                                background: colors.panel_alt.into(),
+                                background: colors.border_strong.into(),
                                 bar: colors.accent.into(),
                                 border: iced::Border::default(),
                             }
@@ -10929,7 +10936,7 @@ impl Studio {
                             "The limits are those of the box before it is turned about its centre.",
                         ))
                         .size(10)
-                        .color(self.ui_theme.colors().muted),
+                        .color(self.ui_theme.colors().text_muted),
                     )
                     .padding([2, 8]),
                 );
@@ -11313,7 +11320,11 @@ impl canvas::Program<Message> for ColorModeGlyph {
         // The glyphs are drawn on an 18-unit square.
         frame.scale(bounds.width.min(bounds.height) / 18.0);
         let colors = ui_theme::colors(theme);
-        let highlight = if self.1 { colors.accent } else { colors.muted };
+        let highlight = if self.1 {
+            colors.accent
+        } else {
+            colors.text_muted
+        };
         let stroke = canvas::Stroke::default()
             .with_color(colors.text)
             .with_width(1.35);
@@ -11329,8 +11340,8 @@ impl canvas::Program<Message> for ColorModeGlyph {
             ColorMode::Rgb => {
                 frame.stroke(&canvas::Path::circle(UiPoint::new(9.0, 9.0), 6.5), stroke);
                 for (point, color) in [
-                    ([6.3, 6.5], colors.muted),
-                    ([11.7, 6.5], colors.muted),
+                    ([6.3, 6.5], colors.text_muted),
+                    ([11.7, 6.5], colors.text_muted),
                     ([9.0, 11.6], highlight),
                 ] {
                     frame.fill(
@@ -11369,7 +11380,7 @@ impl canvas::Program<Message> for ColorModeGlyph {
                         }
                         path.close();
                     }),
-                    colors.muted,
+                    colors.text_muted,
                 );
                 frame.stroke(&canvas::Path::circle(UiPoint::new(9.0, 9.0), 6.5), stroke);
                 frame.stroke(&line(&[[9.0, 2.5], [9.0, 15.5]]), stroke);
@@ -11406,7 +11417,7 @@ fn ribbon_group<'a>(label: &'static str, contents: Element<'a, Message>) -> Elem
 }
 
 fn ribbon_style(theme: &Theme) -> container::Style {
-    container::Style::default().background(ui_theme::colors(theme).shell)
+    container::Style::default().background(ui_theme::colors(theme).bg)
 }
 
 #[cfg(test)]
@@ -11481,7 +11492,7 @@ mod ribbon_tests {
 fn sidebar_style(theme: &Theme) -> container::Style {
     let colors = ui_theme::colors(theme);
     container::Style::default()
-        .background(colors.panel)
+        .background(colors.bg)
         .border(iced::Border {
             color: colors.border,
             width: 1.0,
@@ -11490,11 +11501,29 @@ fn sidebar_style(theme: &Theme) -> container::Style {
 }
 
 fn viewport_style(theme: &Theme) -> container::Style {
-    container::Style::default().background(ui_theme::colors(theme).scene)
+    container::Style::default().background(ui_theme::colors(theme).dom.scene)
 }
 
 fn status_style(theme: &Theme) -> container::Style {
-    container::Style::default().background(ui_theme::colors(theme).panel)
+    let colors = ui_theme::colors(theme);
+    container::Style::default()
+        .background(colors.status_bg)
+        .color(colors.status_text)
+}
+
+/// A button in the status bar, such as Cancel import.
+fn status_button_style(theme: &Theme, status: button::Status) -> button::Style {
+    let colors = ui_theme::colors(theme);
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: hovered.then_some(iced::Background::Color(colors.status_hover)),
+        text_color: if status == button::Status::Disabled {
+            colors.status_text_label
+        } else {
+            colors.status_text
+        },
+        ..button::Style::default()
+    }
 }
 
 fn themed_pick_list_style(
@@ -11503,15 +11532,15 @@ fn themed_pick_list_style(
 ) -> iced::widget::pick_list::Style {
     let colors = ui_theme::colors(theme);
     iced::widget::pick_list::Style {
-        text_color: colors.text,
-        placeholder_color: colors.muted,
-        handle_color: colors.muted,
-        background: iced::Background::Color(colors.panel_alt),
+        text_color: colors.dialog_input_text,
+        placeholder_color: colors.text_faint,
+        handle_color: colors.text_secondary,
+        background: iced::Background::Color(colors.dialog_input_bg),
         border: iced::Border {
             color: if matches!(status, iced::widget::pick_list::Status::Opened) {
-                colors.accent
+                colors.focus
             } else {
-                colors.border
+                colors.dialog_input_border
             },
             width: 1.0,
             radius: 2.0.into(),
@@ -11540,15 +11569,15 @@ fn muted_checkbox_style(theme: &Theme, status: checkbox::Status) -> checkbox::St
         background: iced::Background::Color(if checked {
             colors.accent
         } else {
-            colors.panel_alt
+            colors.dialog_input_bg
         }),
-        icon_color: if colors.shell == Color::BLACK {
-            Color::BLACK
-        } else {
-            Color::WHITE
-        },
+        icon_color: colors.btn_primary_text,
         border: iced::Border {
-            color: colors.border,
+            color: if checked {
+                colors.accent
+            } else {
+                colors.dialog_input_border
+            },
             width: 1.0,
             radius: 2.0.into(),
         },
@@ -13062,7 +13091,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 horizontal_alignment: iced::alignment::Horizontal::Center,
                 vertical_alignment: iced::alignment::Vertical::Center,
                 size: iced::Pixels(16.0),
-                color: self.scene.scene_text,
+                color: self.scene.dom.scene_text,
                 ..canvas::Text::default()
             });
             if let Some(status) = self.loading_status {
@@ -13072,7 +13101,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     horizontal_alignment: iced::alignment::Horizontal::Center,
                     vertical_alignment: iced::alignment::Vertical::Center,
                     size: iced::Pixels(12.0),
-                    color: self.scene.scene_muted,
+                    color: self.scene.dom.scene_muted,
                     ..canvas::Text::default()
                 });
             }
@@ -13206,7 +13235,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             content: format!("{name}{}", if is_min { "-" } else { "+" }),
                             position: UiPoint::new(x + 8.0, y + 3.0),
                             size: iced::Pixels(10.0),
-                            color: self.scene.scene_label,
+                            color: self.scene.dom.scene_label,
                             ..canvas::Text::default()
                         });
                     }
@@ -13234,7 +13263,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         content: label,
                         position: UiPoint::new(x + 12.0, y - 12.0),
                         size: iced::Pixels(16.0),
-                        color: self.scene.scene_label,
+                        color: self.scene.dom.scene_label,
                         ..canvas::Text::default()
                     });
                 }

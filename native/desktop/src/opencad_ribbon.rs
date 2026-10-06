@@ -33,8 +33,8 @@ pub fn quick_access_btn<'a>(
             .style(|theme| {
                 let colors = ui_theme::colors(theme);
                 container::Style::default()
-                    .background(colors.panel_alt)
-                    .color(colors.text)
+                    .background(colors.tooltip_bg)
+                    .color(colors.tooltip_text)
             }),
         tooltip::Position::Bottom,
     )
@@ -63,16 +63,17 @@ pub fn flush_small_col<'a>(
 pub fn tool_btn_style(theme: &Theme, is_active: bool, status: button::Status) -> button::Style {
     let colors = ui_theme::colors(theme);
     let (background, text_color, border) = match (is_active, status) {
-        (_, button::Status::Disabled) => (None, colors.muted, Color::TRANSPARENT),
+        // A button that cannot be pressed is drawn at 40 %.
+        (_, button::Status::Disabled) => (None, colors.text.scale_alpha(0.4), Color::TRANSPARENT),
         (true, _) => (
-            Some(colors.ribbon_active_bg),
-            colors.ribbon_active_text,
-            colors.ribbon_active_border,
+            Some(colors.ribbon_btn_active_bg),
+            colors.ribbon_btn_active_text,
+            colors.ribbon_btn_active_border,
         ),
         (_, button::Status::Hovered | button::Status::Pressed) => (
-            Some(colors.ribbon_hover),
-            colors.text,
-            colors.ribbon_hover_border,
+            Some(colors.ribbon_btn_hover),
+            colors.ribbon_text_hover,
+            colors.ribbon_btn_hover_border,
         ),
         _ => (None, colors.text, Color::TRANSPARENT),
     };
@@ -94,15 +95,15 @@ pub fn tool_btn_style(theme: &Theme, is_active: bool, status: button::Status) ->
 pub fn primary_btn_style(theme: &Theme, status: button::Status) -> button::Style {
     let colors = ui_theme::colors(theme);
     let (background, text_color, border) = match status {
-        button::Status::Disabled => (None, colors.muted, colors.border),
+        button::Status::Disabled => (None, colors.text_muted, colors.border),
         button::Status::Hovered | button::Status::Pressed => (
-            Some(colors.file_tab_hover),
-            colors.file_tab_text,
+            Some(colors.btn_primary_hover_bg),
+            colors.btn_primary_hover_text,
             Color::TRANSPARENT,
         ),
         button::Status::Active => (
-            Some(colors.accent),
-            colors.file_tab_text,
+            Some(colors.btn_primary_bg),
+            colors.btn_primary_text,
             Color::TRANSPARENT,
         ),
     };
@@ -192,15 +193,13 @@ pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button:
     let hovered = matches!(status, button::Status::Hovered);
     button::Style {
         background: Some(Background::Color(if active {
-            colors.shell
+            colors.bg
         } else if hovered {
-            colors.ribbon_hover
+            colors.ribbon_btn_hover
         } else {
-            colors.tabs
+            colors.bg_lighter
         })),
-        text_color: if active {
-            colors.ribbon_active_text
-        } else if hovered {
+        text_color: if active || hovered {
             colors.accent
         } else {
             colors.text
@@ -222,7 +221,7 @@ pub fn file_tab_style(theme: &Theme, _open: bool, status: button::Status) -> but
             if matches!(status, button::Status::Hovered) {
                 colors.file_tab_hover
             } else {
-                colors.accent
+                colors.file_tab_bg
             },
         )),
         text_color: colors.file_tab_text,

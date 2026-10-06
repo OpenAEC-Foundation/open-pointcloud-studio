@@ -129,7 +129,7 @@ impl Studio {
     /// SHEETS in the Project Browser: a row per sheet with Rename, Duplicate
     /// and ×, and "New sheet…" with what a new sheet gets.
     pub(crate) fn sheets_group(&self) -> Element<'_, Message> {
-        use crate::project_browser::{band, hint, Mark};
+        use crate::project_browser::{band, hint};
         let open = self.browser.is_open(SHEETS);
         let new = tooltip(
             button(icon_svg(ToolIcon::Sheet, 15.0))
@@ -147,7 +147,6 @@ impl Studio {
             tr("SHEETS").to_owned(),
             self.layouts.list.len().to_string(),
             vec![new.into()],
-            Mark::Views,
             false,
         )]
         .spacing(3);
@@ -229,7 +228,7 @@ impl Studio {
                 text(caption.to_owned())
                     .size(11)
                     .width(64)
-                    .color(colors.muted),
+                    .color(colors.text_secondary),
                 field
             ]
             .spacing(4)
@@ -293,7 +292,7 @@ impl Studio {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel_alt)
+                .background(colors.bg_lighter)
                 .border(iced::Border {
                     color: colors.border,
                     width: 1.0,
@@ -309,8 +308,9 @@ impl Studio {
         let guid = self.drawing_view.shown_layout()?;
         let layout = self.layouts.layout(guid)?;
         let colors = self.ui_theme.colors();
-        let note =
-            |content: String| container(text(content).size(10).color(colors.muted)).padding([4, 8]);
+        let note = |content: String| {
+            container(text(content).size(10).color(colors.text_muted)).padding([4, 8])
+        };
         if let Some(viewport) = self
             .layouts
             .selected
@@ -447,8 +447,9 @@ impl Studio {
         viewport: &'a Viewport,
     ) -> iced::widget::Column<'a, Message> {
         let colors = self.ui_theme.colors();
-        let note =
-            |content: String| container(text(content).size(10).color(colors.muted)).padding([4, 8]);
+        let note = |content: String| {
+            container(text(content).size(10).color(colors.text_muted)).padding([4, 8])
+        };
         let typed = |field: Field, value: String| -> String {
             let edits = &self.layouts.edits;
             if edits.0.as_deref() == Some(viewport.id.as_str()) {
@@ -594,9 +595,8 @@ fn typed_row<'a>(
     on_input: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message> {
     let label = container(text(label.to_owned()).size(11).style(|theme| text::Style {
-        color: Some(ui_theme::colors(theme).muted),
+        color: Some(ui_theme::colors(theme).text_secondary),
     }))
-    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel_alt))
     .width(iced::Length::FillPortion(5))
     .height(26)
     .align_y(iced::Alignment::Center)
@@ -607,7 +607,6 @@ fn typed_row<'a>(
             .size(11)
             .padding([2, 4]),
     )
-    .style(|theme| container::Style::default().background(ui_theme::colors(theme).panel))
     .width(iced::Length::FillPortion(6))
     .height(26)
     .align_y(iced::Alignment::Center)
@@ -617,7 +616,7 @@ fn typed_row<'a>(
         .width(Fill)
         .style(|theme| container::Style {
             border: iced::Border {
-                color: ui_theme::colors(theme).border,
+                color: ui_theme::colors(theme).border_subtle,
                 width: 1.0,
                 radius: 0.0.into(),
             },

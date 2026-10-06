@@ -18,7 +18,7 @@ fn faded(color: Color, alpha: f32) -> Color {
 /// A button of the strip: the text colour of the scene, light on the dark
 /// scene of a dark theme and dark on the white one of the light theme.
 fn strip_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
-    let ink = ui_theme::colors(theme).scene_text;
+    let ink = ui_theme::colors(theme).dom.scene_text;
     let (background, text_color) = match status {
         button::Status::Disabled => (None, faded(ink, 0.35)),
         button::Status::Hovered | button::Status::Pressed => {
@@ -48,7 +48,7 @@ impl Studio {
         }
         let send = Message::MeshToPlans;
         let colors = self.ui_theme.colors();
-        let (ink, muted) = (colors.scene_text, colors.scene_muted);
+        let (ink, muted) = (colors.dom.scene_text, colors.dom.scene_muted);
         let step = wizard.step;
         let ready = wizard.step_ready();
         let reason = ready

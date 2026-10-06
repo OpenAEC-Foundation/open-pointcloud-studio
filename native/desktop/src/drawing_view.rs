@@ -469,14 +469,9 @@ pub(crate) fn ink(rgb: [u8; 3]) -> Color {
     }
 }
 
-/// The sheet of a theme: white for the light themes, warm or cool off-white
-/// beside the dark ones.
+/// The sheet of a drawing: the paper of the theme, white in every theme.
 pub(crate) fn paper(theme: UiTheme) -> Color {
-    match theme {
-        UiTheme::Light | UiTheme::Contrast => Color::WHITE,
-        UiTheme::Blueprint => Color::from_rgb8(242, 246, 252),
-        UiTheme::Forge | UiTheme::Night => Color::from_rgb8(248, 247, 244),
-    }
+    theme.colors().dom.paper
 }
 
 /// The geometry that was built last, and for what.
@@ -2424,8 +2419,9 @@ impl Studio {
             return None;
         }
         let colors = self.ui_theme.colors();
-        let note =
-            |content: String| container(text(content).size(10).color(colors.muted)).padding([4, 8]);
+        let note = |content: String| {
+            container(text(content).size(10).color(colors.text_muted)).padding([4, 8])
+        };
         let mut block = column![].spacing(0).width(Fill);
         // A selected crop region comes first, where it is seen at once.
         if let Some(crop) = self.crop_properties() {

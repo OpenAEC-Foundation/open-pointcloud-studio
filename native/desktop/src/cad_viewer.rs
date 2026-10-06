@@ -626,7 +626,7 @@ impl Studio {
                     &[("name", &name.to_string_lossy())],
                 ))
                 .size(10)
-                .color(colors.muted),
+                .color(colors.text_muted),
             );
         }
         container(block).padding([4, 8]).into()
@@ -666,7 +666,7 @@ impl Studio {
             ]
             .spacing(6)
             .align_y(iced::Alignment::Center),
-            text(found).size(11).color(colors.muted),
+            text(found).size(11).color(colors.text_muted),
         ]
         .spacing(6)
         .into()

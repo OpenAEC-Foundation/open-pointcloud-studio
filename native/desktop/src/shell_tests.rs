@@ -1,6 +1,7 @@
-//! Tests of the shell of the window: its title, its status bar, the header
-//! of the model space, the keys while the File view is open, the language
-//! command of the local API and what its status says is under way.
+//! Tests of the shell of the window: its title, its status bar, its colours
+//! in each theme, the header of the model space, the keys while the File
+//! view is open, the language and theme commands of the local API and what
+//! its status says is under way.
 
 use std::sync::Arc;
 
@@ -10,6 +11,7 @@ use serde_json::Value;
 use crate::i18n::{self, Language, TestLanguage};
 use crate::native_api::{ApiCommand, ApiRequest};
 use crate::selection::SelectionMask;
+use crate::ui_theme::UiTheme;
 use crate::{
     app_title, title_for, view_cube, CameraPreset, CloudEntry, Message, ModelKey, Studio, APP_NAME,
     VERSION_LABEL,
@@ -267,6 +269,79 @@ fn status_reports_a_mesh_export_and_a_wait_counts_it_as_work() {
     let _ = studio.update(Message::MeshExported(None, Err("disk full".into())));
     let status = send(&mut studio, ApiCommand::Status);
     assert!(crate::mcp::busy(&status["result"]).is_empty());
+}
+
+#[test]
+fn the_window_is_drawn_in_the_tokens_of_each_theme() {
+    let mut studio = Studio::default();
+    let size = iced::Size::new(1440.0, 900.0);
+    for theme in UiTheme::ALL {
+        studio.ui_theme = theme;
+        let colors = theme.colors();
+        let picture = crate::test_render::render_window(&studio, size);
+        // The scene: white in Light, Night Build in the dark themes.
+        let scene = if theme == UiTheme::Light {
+            iced::Color::WHITE
+        } else {
+            iced::Color::from_rgb8(0x2A, 0x2A, 0x32)
+        };
+        assert_eq!(colors.dom.scene, scene);
+        assert!(
+            picture.is(500, 750, scene),
+            "{}: the scene is {:?}",
+            theme.key(),
+            picture.rgb(500, 750)
+        );
+        // The panel at the left lies on the shell, the strip at the top on
+        // the lighter shell.
+        assert!(
+            picture.is(100, 700, colors.bg),
+            "{}: the panel is {:?}",
+            theme.key(),
+            picture.rgb(100, 700)
+        );
+        assert!(
+            picture.is(700, 14, colors.bg_lighter),
+            "{}: the strip is {:?}",
+            theme.key(),
+            picture.rgb(700, 14)
+        );
+    }
+}
+
+#[test]
+fn api_chooses_a_theme_by_its_key_and_reports_that_key() {
+    let mut studio = Studio::default();
+    for theme in UiTheme::ALL {
+        let answer = send(
+            &mut studio,
+            ApiCommand::SetTheme {
+                theme: theme.key().to_uppercase(),
+            },
+        );
+        assert_eq!(answer["ok"], true);
+        assert_eq!(answer["theme"], theme.key());
+        assert_eq!(studio.ui_theme, theme);
+        let status = send(&mut studio, ApiCommand::Status);
+        assert_eq!(status["result"]["theme"], theme.key());
+    }
+    let answer = send(
+        &mut studio,
+        ApiCommand::SetTheme {
+            theme: "night".into(),
+        },
+    );
+    assert_eq!(answer["theme"], "openaec");
+    for unknown in ["dark", "deep forge", ""] {
+        let answer = send(
+            &mut studio,
+            ApiCommand::SetTheme {
+                theme: unknown.into(),
+            },
+        );
+        assert_eq!(answer["ok"], false, "{unknown}");
+    }
+    assert_eq!(studio.ui_theme, UiTheme::OpenAec);
 }
 
 #[test]

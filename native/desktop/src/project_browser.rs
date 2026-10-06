@@ -20,7 +20,7 @@ use crate::drawing_view::DrawingViewAction;
 use crate::i18n::{key, tr, tr_args};
 use crate::saved_drawings::SavedDrawing;
 use crate::sheet_dialog::SheetKind;
-use crate::ui_theme::{self, UiColors};
+use crate::ui_theme;
 use crate::{
     compact_count, display_name, faces, flat_tool_style, format_count, icon_svg,
     muted_checkbox_style, opencad_ribbon, project_open, CloudEntry, Message, Studio, ToolIcon,
@@ -340,26 +340,6 @@ pub enum BrowserAction {
     Duplicate(ViewRow),
 }
 
-/// What each group's band marks it with: the colour of its strip.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum Mark {
-    Scans,
-    Classes,
-    Views,
-    Bcf,
-}
-
-impl Mark {
-    fn color(self, colors: &UiColors) -> Color {
-        match self {
-            Self::Scans => colors.scan_mark,
-            Self::Classes => colors.class_mark,
-            Self::Views => colors.view_mark,
-            Self::Bcf => colors.bcf_mark,
-        }
-    }
-}
-
 /// The band over a group or a sub-group: a chevron, the icon of what it
 /// holds, its caption and a count, which open or collapse it on a click,
 /// and controls of its own beside them.
@@ -371,7 +351,6 @@ pub(crate) fn band<'a>(
     caption: String,
     count: String,
     controls: Vec<Element<'a, Message>>,
-    mark: Mark,
     sub: bool,
 ) -> Element<'a, Message> {
     let chevron = if open {
@@ -394,19 +373,25 @@ pub(crate) fn band<'a>(
                 .size(10)
                 .wrapping(iced::widget::text::Wrapping::None)
                 .style(|theme| text::Style {
-                    color: Some(ui_theme::colors(theme).muted),
+                    color: Some(ui_theme::colors(theme).text_muted),
                 }),
         ]
         .spacing(5)
         .align_y(iced::Alignment::Center),
     )
     .on_press(Message::Browser(BrowserAction::Toggle(group)))
-    .style(|theme, status| {
+    .style(move |theme, status| {
         let colors = ui_theme::colors(theme);
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
-            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
-                .then_some(iced::Background::Color(colors.hover)),
-            text_color: colors.browser_band_text,
+            background: hovered.then_some(iced::Background::Color(colors.hover)),
+            // The head of a group in the amber of a section head, the head
+            // of a sub-group as a row of the tree.
+            text_color: match (sub, hovered) {
+                (true, _) => colors.text,
+                (false, true) => colors.accent,
+                (false, false) => colors.accent_tint,
+            },
             border: iced::Border::default().rounded(3.0),
             ..button::Style::default()
         }
@@ -425,29 +410,17 @@ pub(crate) fn band<'a>(
     .height(height)
     .align_y(iced::Alignment::Center)
     .width(Fill);
-    let strip = container(text(""))
-        .width(if sub { 2.0 } else { 3.0 })
-        .height(height)
-        .style(move |theme| {
-            let colors = ui_theme::colors(theme);
-            let mut strip = mark.color(&colors);
-            if sub {
-                strip.a *= 0.55;
-            }
-            container::Style::default().background(strip)
-        });
-    container(row![strip, body].align_y(iced::Alignment::Center))
+    container(body)
         .width(Fill)
         .style(move |theme| {
             let colors = ui_theme::colors(theme);
-            container::Style::default()
-                .background(if sub {
-                    colors.browser_sub_band
-                } else {
-                    colors.browser_band
-                })
-                .color(colors.browser_band_text)
-                .border(iced::Border::default().rounded(2.0))
+            if sub {
+                container::Style::default().color(colors.text)
+            } else {
+                container::Style::default()
+                    .background(colors.bg_lighter)
+                    .color(colors.accent_tint)
+            }
         })
         .into()
 }
@@ -488,13 +461,9 @@ pub(crate) fn hint<'a>(content: String) -> Element<'a, Message> {
         .style(|theme| {
             let colors = ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel_alt)
-                .color(colors.text)
-                .border(iced::Border {
-                    color: colors.border,
-                    width: 1.0,
-                    radius: 3.0.into(),
-                })
+                .background(colors.tooltip_bg)
+                .color(colors.tooltip_text)
+                .border(iced::Border::default().rounded(4))
         })
         .into()
 }
@@ -542,7 +511,7 @@ pub fn view_row<'a>(
         .size(11)
         .wrapping(iced::widget::text::Wrapping::None)
         .style(move |theme| text::Style {
-            color: quiet.then(|| ui_theme::colors(theme).muted),
+            color: quiet.then(|| ui_theme::colors(theme).text_muted),
         });
     let pick = button(
         row![icon_svg(icon, 14.0), label]
@@ -827,7 +796,6 @@ impl Studio {
             tr("SCANS").to_owned(),
             count,
             controls,
-            Mark::Scans,
             false,
         )]
         .spacing(3);
@@ -845,14 +813,14 @@ impl Studio {
                         ],
                     ))
                     .size(10)
-                    .color(colors.muted),
+                    .color(colors.text_muted),
                     progress_bar(0.0..=1.0, summary.fraction)
                         .height(2)
                         .style(|theme| {
                             let colors = ui_theme::colors(theme);
                             progress_bar::Style {
-                                background: colors.border.into(),
-                                bar: colors.scan_mark.into(),
+                                background: colors.border_strong.into(),
+                                bar: colors.accent.into(),
                                 border: iced::Border::default(),
                             }
                         }),
@@ -885,7 +853,7 @@ impl Studio {
             group = group.push(indented(
                 text(tr_args("{count} selected", &[("count", &picked)]))
                     .size(10)
-                    .color(colors.muted),
+                    .color(colors.text_muted),
                 7.0,
             ));
         }
@@ -921,7 +889,6 @@ impl Studio {
                     vec![shown_checkbox(state, move |visible| {
                         Message::Browser(BrowserAction::FolderVisible(target.clone(), visible))
                     })],
-                    Mark::Scans,
                     true,
                 ),
                 hint(folder.display().to_string()),
@@ -1011,7 +978,9 @@ impl Studio {
                 .style(muted_checkbox_style)
                 .size(14),
             file_button,
-            text(compact_count(remaining)).size(10).color(colors.muted),
+            text(compact_count(remaining))
+                .size(10)
+                .color(colors.text_muted),
             button(text("×").size(12))
                 .on_press(Message::LayerRemove(index))
                 .style(flat_tool_style)
@@ -1038,7 +1007,7 @@ impl Studio {
         }
         if !notes.is_empty() {
             item = item.push(indented(
-                text(notes.join("  ·  ")).size(10).color(colors.muted),
+                text(notes.join("  ·  ")).size(10).color(colors.text_muted),
                 20.0,
             ));
         }
@@ -1047,7 +1016,7 @@ impl Studio {
                 container(progress_bar(0.0..=1.0, fraction).height(2).style(|theme| {
                     let colors = ui_theme::colors(theme);
                     progress_bar::Style {
-                        background: colors.border.into(),
+                        background: colors.border_strong.into(),
                         bar: colors.accent.into(),
                         border: iced::Border::default(),
                     }
@@ -1081,11 +1050,15 @@ impl Studio {
             .width(Fill)
             .style(move |theme| {
                 let colors = ui_theme::colors(theme);
+                // The active scan as the active item of a list of the style
+                // book, chosen scans as its chosen item.
                 container::Style::default()
-                    .background(if active || picked {
-                        colors.panel_alt
+                    .background(if active {
+                        colors.hover_strong
+                    } else if picked {
+                        colors.dialog_tab_active_bg
                     } else {
-                        colors.panel
+                        Color::TRANSPARENT
                     })
                     .border(iced::Border {
                         color: if active {
@@ -1115,7 +1088,6 @@ impl Studio {
             tr("CLASSES").to_owned(),
             classes.len().to_string(),
             Vec::new(),
-            Mark::Classes,
             false,
         )]
         .spacing(3);
@@ -1191,7 +1163,6 @@ impl Studio {
             tr("VIEWS").to_owned(),
             count.to_string(),
             vec![new_drawing, open_drawing, show_model.into()],
-            Mark::Views,
             false,
         )]
         .spacing(3);
@@ -1208,7 +1179,6 @@ impl Studio {
                 tr(kind.label()).to_owned(),
                 rows.len().to_string(),
                 Vec::new(),
-                Mark::Views,
                 true,
             )]
             .spacing(2);
@@ -1336,7 +1306,6 @@ impl Studio {
             "BCF".to_owned(),
             self.listed_views().len().to_string(),
             Vec::new(),
-            Mark::Bcf,
             false,
         )]
         .spacing(3);

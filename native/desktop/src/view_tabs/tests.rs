@@ -365,7 +365,7 @@ fn what_views_shows_opens_a_tab_and_a_click_on_a_tab_shows_it_again() {
     // when they have to scroll.
     for theme in [
         crate::ui_theme::UiTheme::Light,
-        crate::ui_theme::UiTheme::Night,
+        crate::ui_theme::UiTheme::OpenAec,
     ] {
         studio.ui_theme = theme;
         let _ = studio.view();

@@ -1814,7 +1814,7 @@ impl Studio {
         .style(|theme| {
             let colors = crate::ui_theme::colors(theme);
             container::Style::default()
-                .background(colors.panel)
+                .background(colors.bg_lighter)
                 .border(iced::Border {
                     color: ACTIVE,
                     width: 1.0,
@@ -2000,7 +2000,7 @@ impl Studio {
                     "Place a Text, a Dimension, a Leader or a Line from the ribbon",
                 ))
                 .size(10)
-                .color(colors.muted),
+                .color(colors.text_muted),
             );
         }
         for (id, kind, reading) in rows {

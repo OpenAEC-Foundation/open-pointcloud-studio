@@ -127,7 +127,7 @@ fn next_looks_ready_only_when_it_is() {
         Some(iced::Background::Color(colors.accent))
     );
     assert_eq!(waiting.background, None);
-    assert_eq!(waiting.text_color, colors.muted);
+    assert_eq!(waiting.text_color, colors.text_muted);
     assert_ne!(waiting.text_color, ready.text_color);
 }
 

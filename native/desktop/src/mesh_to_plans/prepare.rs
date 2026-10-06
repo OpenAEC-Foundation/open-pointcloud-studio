@@ -1196,7 +1196,7 @@ impl Studio {
         let colors = self.ui_theme.colors();
         let locked = self.levels_locked();
         let heading = |label: &'static str| text(tr(label)).size(12).color(colors.accent);
-        let note = |content: String| text(content).size(11).color(colors.muted);
+        let note = |content: String| text(content).size(11).color(colors.text_muted);
         let field =
             |label: &'static str, input: Element<'static, Message>| -> Element<'static, Message> {
                 row![text(tr(label)).size(11).width(110), input]
