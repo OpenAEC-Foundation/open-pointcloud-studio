@@ -813,7 +813,7 @@
   "Use it for ground, streets and other surfaces seen from above.": "Voor maaiveld, straten en andere oppervlakken die van bovenaf gezien zijn.",
   "Use it for a quick impression of a whole scan.": "Voor een snelle indruk van een hele scan.",
   "Use it to measure and draw: areas, heights, whether a wall is plumb. It makes no mesh.": "Om te meten en te tekenen: oppervlaktes, hoogtes, of een wand te lood staat. Het maakt geen mesh.",
-  "Recommended for a room or a building: automatic voxel, holes closed up to 0.25 m, automatic simplification, every source point and sides from the stations.": "Aanbevolen voor een kamer of een gebouw: automatische voxel, gaten gedicht tot 0,25 m, automatisch vereenvoudigen, elk bronpunt en zijden vanuit de stations.",
+  "Recommended for a room or a building: automatic voxel, holes closed up to 0.25 m, automatic simplification, every source point and automatic sides: from the stations where the scan knows them, else towards the centre.": "Aanbevolen voor een kamer of een gebouw: automatische voxel, gaten gedicht tot 0,25 m, automatisch vereenvoudigen, elk bronpunt en automatische zijden: vanuit de stations waar de scan ze kent, anders naar het midden.",
   "A terrain mesh has no settings to choose.": "Een terreinmesh heeft geen instellingen om te kiezen.",
   "Recommended: 50,000 vertices, 12 neighbors, edge factor 4 and an automatic mesh size.": "Aanbevolen: 50.000 hoekpunten, 12 buren, randfactor 4 en een automatische meshgrootte.",
   "Recommended for a building: 20 mm, 10 degrees, faces from 0.25 m², with columns and pipes.": "Aanbevolen voor een gebouw: 20 mm, 10 graden, vlakken vanaf 0,25 m², met kolommen en leidingen.",

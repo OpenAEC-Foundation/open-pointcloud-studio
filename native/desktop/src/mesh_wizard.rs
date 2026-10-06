@@ -125,7 +125,7 @@ impl MeshMethod {
     fn preset(self) -> &'static str {
         match self {
             Self::Closed => key(
-                "Recommended for a room or a building: automatic voxel, holes closed up to 0.25 m, automatic simplification, every source point and sides from the stations.",
+                "Recommended for a room or a building: automatic voxel, holes closed up to 0.25 m, automatic simplification, every source point and automatic sides: from the stations where the scan knows them, else towards the centre.",
             ),
             Self::Terrain => key("A terrain mesh has no settings to choose."),
             Self::Surface => key(
