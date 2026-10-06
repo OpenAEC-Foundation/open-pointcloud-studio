@@ -224,7 +224,7 @@ follows when that view is restored.
 | `drag_crop_handle` | `handle` (`left`, `right`, `bottom`, `top`, `bottom_left`, `bottom_right`, `top_left` or `top_right`), `to` (`[u, v]` in drawing units), optional `release` | Drags a handle of the crop region of the drawing shown, as the pointer does |
 | `duplicate_view` | `name`, optional `kind` (`model`, `view` or `drawing`) | Duplicates the 3D model, a saved view or a drawing under VIEWS, right below it, and shows the copy |
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as R and then O do |
-| `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, in Open CAD Studio or the program chosen in Settings, read-only; without a viewer in the system program |
+| `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, read-only in the Open CAD Studio that comes with the application, else in the program chosen in Settings or an installed Open CAD Studio; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |
 | `cancel_merge` | — | Cancels the merge |

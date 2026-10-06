@@ -189,7 +189,7 @@ impl Studio {
                 .spacing(12)
                 .align_y(iced::Alignment::Center),
                 heading("CAD viewer"),
-                text(tr("The program that opens exported DXF and DWG drawings. Leave it empty to use Open CAD Studio where it is installed."))
+                text(tr("The program that opens exported DXF and DWG drawings when the Open CAD Studio that comes with the application is missing. Leave it empty to use Open CAD Studio where it is installed."))
                     .size(11)
                     .color(colors.muted),
                 self.cad_viewer_setting(),

@@ -25,7 +25,9 @@ pub(crate) struct Preferences {
     pub filter_vegetation: bool,
     pub filter_buildings: bool,
     pub filter_other: bool,
-    /// The program that opens exported DXF and DWG files; `None` looks for
+    /// The program chosen in Settings to open exported DXF and DWG files.
+    /// The Open CAD Studio that comes with the application comes first: the
+    /// choice counts only without it. `None` then looks for an installed
     /// Open CAD Studio.
     pub cad_viewer: Option<PathBuf>,
     /// Whether every exported DXF or DWG file opens in that program.

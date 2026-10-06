@@ -117,7 +117,7 @@ fn window_program(
 
 /// Whether a resolved path lies in a folder, which may be named through a
 /// link.
-fn lies_in(path: &Path, folder: &Path) -> bool {
+pub(crate) fn lies_in(path: &Path, folder: &Path) -> bool {
     // An empty path is the start of every path.
     !folder.as_os_str().is_empty()
         && (path.starts_with(folder)
@@ -127,7 +127,7 @@ fn lies_in(path: &Path, folder: &Path) -> bool {
 /// Whether a folder is where a file system is mounted: it then lies on
 /// another device than the folder that holds it.
 #[cfg(unix)]
-fn is_mount_point(folder: &Path) -> bool {
+pub(crate) fn is_mount_point(folder: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     match (folder.metadata(), folder.parent().map(Path::metadata)) {
         (Ok(own), Some(Ok(parent))) => own.dev() != parent.dev(),
@@ -137,7 +137,7 @@ fn is_mount_point(folder: &Path) -> bool {
 
 /// AppImages exist on Linux only.
 #[cfg(not(unix))]
-fn is_mount_point(_: &Path) -> bool {
+pub(crate) fn is_mount_point(_: &Path) -> bool {
     false
 }
 

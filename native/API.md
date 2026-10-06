@@ -754,21 +754,32 @@ Open in CAD viewer of the Section drawing, Detect faces, Closed mesh and
 Surface mesh blocks does. Without `path` it opens the last file that a section
 drawing, faces export, closed mesh or mesh export wrote, through the window or
 through this API; `path` is an absolute `.dxf` or `.dwg` file that exists.
-The viewer is the program chosen in Settings, otherwise Open CAD Studio where
-it is installed: `%ProgramFiles%\Open CAD Studio` or
-`%LOCALAPPDATA%\Programs\Open CAD Studio` on Windows,
-`/Applications/OpenCADStudio.app` or `~/Applications` on macOS, `/snap/bin`
-on Linux, or the search path. It is started with `--read-only` and the file,
-without waiting for it; a running Open CAD Studio takes the file as a further
-tab. Without a viewer the file goes to the program the system has for it.
-The answer has `path`, `viewer` (the program, or `null` for the system
-program) and `read_only`. It is refused when no file was exported yet, for a
-path that is not absolute, has another extension or does not exist, and when
-the program cannot be started.
+The viewer is the Open CAD Studio that comes with the application:
+`OpenCADStudio` (`OpenCADStudio.exe` on Windows) beside the executable of the
+application, as the Windows installer, the archives and the macOS bundle put
+it, or in `../lib/open-pointcloud-studio` from the folder of the executable,
+as the `.deb` and the AppImage put it. A development build in
+`target/PROFILE/` uses the program in `target/open-cad-studio/release/` that
+`packaging/build-open-cad-studio.sh` builds. Without it the viewer is the
+program chosen in Settings, otherwise Open CAD Studio where it is installed:
+`%ProgramFiles%\Open CAD Studio` or `%LOCALAPPDATA%\Programs\Open CAD Studio`
+on Windows, `/Applications/OpenCADStudio.app` or `~/Applications` on macOS,
+`/snap/bin` on Linux, or the search path. It is started with `--read-only`
+and the file, without waiting for it. Open CAD Studio gives a file opened
+read-only a window and a process of its own, also while it is already
+running. A program inside a mounted AppImage is first copied to
+`open-pointcloud-studio-native/open-cad-studio-VERSION/` in the cache folder
+(`$XDG_CACHE_HOME`, else `~/.cache`) and started from there, so that it stays
+open when the application ends. Without a viewer the file goes to the program
+the system has for it. The answer has `path`, `viewer` (the program that was
+started, or `null` for the system program) and `read_only`. It is refused
+when no file was exported yet, for a path that is not absolute, has another
+extension or does not exist, and when the program cannot be started.
 
 `status.result.cad_viewer` holds `path` (the program found, or `null`),
-`source` (`setting`, `installed` or `system_default`), `chosen` (the program
-chosen in Settings, or `null`), `chosen_missing`, `open_after_export` (whether
+`source` (`bundled` for the Open CAD Studio that comes with the application,
+`setting`, `installed` or `system_default`), `chosen` (the program chosen in
+Settings, or `null`), `chosen_missing`, `open_after_export` (whether
 every DXF or DWG export opens by itself, the switch Open after export of the
 blocks) and `last_export`.
 
@@ -1336,7 +1347,7 @@ layer with photo colours.
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as the keys R and then O do |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view; answers with the `camera` |
 | `set_drawing_layer` | `layer`, `visible` | Shows or hides a layer of the drawing in the Drawing view by its name, or every layer with `*` |
-| `open_in_cad_viewer` | optional `path` | Opens a `.dxf` or `.dwg` file, by default the last one exported, read-only in Open CAD Studio or the program chosen in Settings, else in the system program; returns `path`, `viewer` and `read_only` |
+| `open_in_cad_viewer` | optional `path` | Opens a `.dxf` or `.dwg` file, by default the last one exported, read-only in the Open CAD Studio that comes with the application, else in the program chosen in Settings or an installed Open CAD Studio, else in the system program; returns `path`, `viewer` and `read_only` |
 | `screenshot` | optional `path`, `base64`, `max_edge`, `window` | Captures the 3D viewport, or the drawing while the Drawing view is shown, or with `window: true` the whole window, as a PNG image: written atomically to an absolute `.png` path, replacing a file there, and/or returned as base64 in `png_base64` |
 
 ## Exports, stored settings and the server

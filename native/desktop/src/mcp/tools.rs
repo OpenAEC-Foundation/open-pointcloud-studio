@@ -530,7 +530,7 @@ fn table() -> Vec<Tool> {
             optional("degrees", number_in("The turn in degrees, counter-clockwise", -3600.0, 3600.0)),
             optional("apply", boolean("false to start the turn and show it without applying it; true by default")),
         ]),
-        tool("open_in_cad_viewer", Command, "Opens a DXF or DWG file in the CAD viewer: the program chosen in Settings, else an installed Open CAD Studio, started read-only and without waiting for it; without either the file goes to the program the system has for it. Without a path it opens the last file that a drawing, faces or mesh export wrote. Answers with the path, the viewer program (null for the system program) and read_only. status.result.cad_viewer tells which viewer was found.", vec![
+        tool("open_in_cad_viewer", Command, "Opens a DXF or DWG file in the CAD viewer: the Open CAD Studio that comes with the application, else the program chosen in Settings, else an installed Open CAD Studio, started read-only and without waiting for it; without any of them the file goes to the program the system has for it. Without a path it opens the last file that a drawing, faces or mesh export wrote. Answers with the path, the viewer program (null for the system program) and read_only. status.result.cad_viewer tells which viewer was found.", vec![
             optional("path", path("Absolute path of an existing .dxf or .dwg file; without it the last exported one")),
         ]),
         tool("cancel_drawing", Command, "Cancels the running section drawing or preview; the step under way ends first, and an existing file at the destination is left as it is.", vec![]),

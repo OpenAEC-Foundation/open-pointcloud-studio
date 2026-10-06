@@ -894,13 +894,15 @@ The Project Browser lists under **MESH TO PLANS** the recent projects whose scan
 
 ## Viewing a drawing in Open CAD Studio
 
-A drawing, faces or a mesh saved as DXF or DWG can be looked at in Open CAD Studio, the open-source CAD application, without leaving the scan.
+A drawing, faces or a mesh saved as DXF or DWG can be looked at in Open CAD Studio, the open-source CAD application, without leaving the scan. Open CAD Studio comes with the application: every package carries it, so nothing else has to be installed.
 
 - **Open in CAD viewer** in the blocks Section drawing, Detect faces, Closed mesh and Surface mesh opens the last DXF or DWG file that was exported. The line under it names that file. The button is greyed until a DXF or DWG file was written in this session.
 - **Open after export** beside it opens every DXF or DWG export as soon as it is written. The switch is kept for later sessions and is off in a new installation.
-- Open CAD Studio shows the file read-only: it can be looked at, measured and changed on screen, but not saved over. An Open CAD Studio that is already running takes the file as a further tab.
-- The application finds Open CAD Studio where its installer puts it: `C:\Program Files\Open CAD Studio` or `%LOCALAPPDATA%\Programs\Open CAD Studio` on Windows, `/Applications/OpenCADStudio.app` or `~/Applications` on macOS, `/snap/bin` on Linux, or a folder on the search path. Another program, or an Open CAD Studio somewhere else, is chosen under **CAD viewer** on the **General** page of Settings, by typing its path or with **Browse…**. The page says which program was found.
-- Without Open CAD Studio and without a chosen program, the file opens in the program the system has for DXF or DWG files, and the status bar says so. A message there also tells when the file no longer exists or the program cannot be started.
+- Open CAD Studio shows the file read-only: it can be looked at, measured and changed on screen, but not saved over. Every file opens in a window of its own, also while Open CAD Studio is already open, because a file opened read-only gets a program of its own.
+- The application uses the Open CAD Studio it comes with: `OpenCADStudio.exe` beside the application in the Windows installation and the zip, `OpenCADStudio` beside it in the macOS application bundle and the archives, and `/usr/lib/open-pointcloud-studio/OpenCADStudio` from the `.deb` and the AppImage. From an AppImage it is copied once to `~/.cache/open-pointcloud-studio-native` and started from there, so that it stays open when the application is closed. The **General** page of Settings says which program opens exported drawings.
+- That Open CAD Studio is updated with the application, not on its own. When it says that a newer version of Open CAD Studio is published, the application still opens drawings in the one it comes with. At its first start it can ask whether it should open DWG and DXF files by default; **Not now** leaves the system as it is.
+- Without that Open CAD Studio, as in a build from source that did not build it, the application uses the program chosen under **CAD viewer** on the **General** page of Settings, typed as a path or chosen with **Browse…**, and otherwise an Open CAD Studio where its installer puts it: `C:\Program Files\Open CAD Studio` or `%LOCALAPPDATA%\Programs\Open CAD Studio` on Windows, `/Applications/OpenCADStudio.app` or `~/Applications` on macOS, `/snap/bin` on Linux, or a folder on the search path.
+- Without any of them, the file opens in the program the system has for DXF or DWG files, and the status bar says so. A message there also tells when the file no longer exists or the program cannot be started.
 
 The local API and the MCP server have `open_in_cad_viewer` for the same, and `status` reports the viewer that was found.
 

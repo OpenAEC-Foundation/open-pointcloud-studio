@@ -1,8 +1,9 @@
 //! Opening a drawing or 3D geometry that was written as DXF or DWG in a CAD
-//! program: Open CAD Studio, the open-source CAD application, when it is
-//! installed or chosen in Settings, and otherwise the program the system
-//! opens such files with. The window shows the file read-only, so looking
-//! at an export never changes it.
+//! program: Open CAD Studio, the open-source CAD application, which every
+//! package carries beside the application. Without it, the program chosen in
+//! Settings, an installed Open CAD Studio, or else the program the system
+//! opens such files with. The window shows the file read-only, so looking at
+//! an export never changes it.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -40,10 +41,56 @@ pub(crate) fn is_cad_file(path: &Path) -> bool {
         })
 }
 
-/// Where an installed Open CAD Studio is looked for. Read from the system
-/// once per lookup; the tests fill it with folders of their own.
+/// The folder under `lib` beside the folder of the executable where the
+/// Linux packages keep the Open CAD Studio they carry, out of the search path.
+const PRIVATE_FOLDER: &str = "open-pointcloud-studio";
+
+/// Where the Open CAD Studio that comes with the application can be, for the
+/// executable of the application at `own`, in the order they are tried: on
+/// Linux the private folder of the .deb and the AppImage, which the search
+/// path does not reach; beside the executable (the Windows installer, the
+/// archives and the macOS bundle); and for a development build in
+/// `target/PROFILE/` the program that `packaging/build-open-cad-studio.sh`
+/// writes to `target/open-cad-studio/release/`.
+pub(crate) fn bundled_candidates(own: &Path) -> Vec<PathBuf> {
+    let Some(folder) = own.parent() else {
+        return Vec::new();
+    };
+    let above = folder.parent();
+    let mut found = Vec::new();
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        if let Some(above) = above {
+            found.push(above.join("lib").join(PRIVATE_FOLDER).join(EXECUTABLE));
+        }
+    }
+    found.push(folder.join(EXECUTABLE));
+    if let Some(above) = above {
+        found.push(
+            above
+                .join("open-cad-studio")
+                .join("release")
+                .join(EXECUTABLE),
+        );
+    }
+    found
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What the tests let `Places::of_system` find as the Open CAD Studio
+    /// that comes with the application. Nothing is looked for beside the
+    /// test program, so a build on the machine cannot change the outcome.
+    pub(crate) static BUNDLED_IN_TESTS: std::cell::RefCell<Vec<PathBuf>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Where Open CAD Studio is looked for. Read from the system once per
+/// lookup; the tests fill it with folders of their own.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Places {
+    /// Where the Open CAD Studio that comes with the application can be:
+    /// [`bundled_candidates`] of this executable.
+    pub(crate) bundled: Vec<PathBuf>,
     /// Folders of programs installed for every user: `%ProgramFiles%` on
     /// Windows, `/Applications` on macOS.
     pub(crate) system_programs: Vec<PathBuf>,
@@ -61,7 +108,14 @@ impl Places {
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         };
+        #[cfg(not(test))]
+        let bundled = std::env::current_exe()
+            .map(|own| bundled_candidates(&own))
+            .unwrap_or_default();
+        #[cfg(test)]
+        let bundled = BUNDLED_IN_TESTS.with(|bundled| bundled.borrow().clone());
         let mut places = Self {
+            bundled,
             search_path: std::env::var_os("PATH"),
             ..Self::default()
         };
@@ -141,6 +195,8 @@ fn chosen_executable(chosen: &Path) -> Option<PathBuf> {
 /// How the viewer was found, as `status` reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Found {
+    /// The Open CAD Studio that comes with the application.
+    Bundled(PathBuf),
     /// The program chosen in Settings.
     Chosen(PathBuf),
     /// An Open CAD Studio found where it is installed or on the search path.
@@ -153,13 +209,14 @@ pub(crate) enum Found {
 impl Found {
     pub(crate) fn executable(&self) -> Option<&Path> {
         match self {
-            Self::Chosen(path) | Self::Installed(path) => Some(path),
+            Self::Bundled(path) | Self::Chosen(path) | Self::Installed(path) => Some(path),
             Self::SystemDefault { .. } => None,
         }
     }
 
     fn source(&self) -> &'static str {
         match self {
+            Self::Bundled(_) => "bundled",
             Self::Chosen(_) => "setting",
             Self::Installed(_) => "installed",
             Self::SystemDefault { .. } => "system_default",
@@ -167,11 +224,15 @@ impl Found {
     }
 }
 
-/// Find the viewer: the program chosen in Settings when it exists, else an
-/// installed Open CAD Studio, else none. A chosen program that is missing
-/// does not fall back to another Open CAD Studio, so that the choice is not
+/// Find the viewer: the Open CAD Studio that comes with the application,
+/// else the program chosen in Settings when it exists, else an installed
+/// Open CAD Studio, else none. A chosen program that is missing does not
+/// fall back to an installed Open CAD Studio, so that the choice is not
 /// silently overruled; the system program opens the file instead.
 pub(crate) fn find(chosen: Option<&Path>, places: &Places) -> Found {
+    if let Some(bundled) = places.bundled.iter().find(|path| path.is_file()) {
+        return Found::Bundled(bundled.clone());
+    }
     if let Some(chosen) = chosen {
         return chosen_executable(chosen).map_or_else(
             || Found::SystemDefault {
@@ -195,9 +256,62 @@ pub(crate) enum Opened {
 }
 
 /// The arguments the viewer is started with: read-only, so that saving is
-/// off, and the file. A running viewer takes the file as a further tab.
+/// off, and the file. Open CAD Studio gives a file opened read-only a
+/// process of its own, also while another one is running.
 pub(crate) fn viewer_arguments(file: &Path) -> Vec<OsString> {
     vec!["--read-only".into(), file.as_os_str().to_owned()]
+}
+
+/// The folder for files the application can make again at any time:
+/// `XDG_CACHE_HOME`, else `~/.cache`, with a folder of the application.
+/// `variable` reads the environment.
+fn cache_directory(variable: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let set = |name: &str| {
+        variable(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let base = set("XDG_CACHE_HOME").or_else(|| set("HOME").map(|home| home.join(".cache")))?;
+    Some(base.join("open-pointcloud-studio-native"))
+}
+
+/// The program to start for `executable`. A program inside a mounted
+/// AppImage lies in a mount that goes away when the application ends, and a
+/// viewer started from there would end with it; it is started from a copy in
+/// `cache` instead, made once for each version of the application. `appdir`
+/// is the folder the AppImage runtime announces. Every program an AppImage
+/// starts inherits it, so it counts only when the executable lies in it and
+/// it is a mount.
+fn runnable(
+    executable: &Path,
+    appdir: Option<&Path>,
+    is_mount: impl Fn(&Path) -> bool,
+    cache: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let in_mount =
+        appdir.is_some_and(|appdir| crate::mcp::lies_in(executable, appdir) && is_mount(appdir));
+    if !in_mount {
+        return Ok(executable.to_path_buf());
+    }
+    let folder = cache
+        .ok_or("there is no cache folder to start it from outside the AppImage")?
+        .join(format!("open-cad-studio-{}", env!("CARGO_PKG_VERSION")));
+    let copy = folder.join(EXECUTABLE);
+    let size = |path: &Path| std::fs::metadata(path).map(|metadata| metadata.len()).ok();
+    if size(&copy).is_none() || size(&copy) != size(executable) {
+        // Written beside and renamed, so that a copy cut short is never run.
+        let partial = folder.join(format!("{EXECUTABLE}.partial"));
+        std::fs::create_dir_all(&folder)
+            .and_then(|()| std::fs::copy(executable, &partial))
+            .and_then(|_| std::fs::rename(&partial, &copy))
+            .map_err(|error| {
+                format!(
+                    "{} could not be copied out of the AppImage: {error}",
+                    executable.display()
+                )
+            })?;
+    }
+    Ok(copy)
 }
 
 /// Start the viewer with a file, or hand the file to the system, without
@@ -206,18 +320,24 @@ pub(crate) fn viewer_arguments(file: &Path) -> Vec<OsString> {
 fn launch(found: &Found, file: &Path) -> Result<Opened, String> {
     match found.executable() {
         Some(executable) => {
-            let mut child = std::process::Command::new(executable)
+            let program = runnable(
+                executable,
+                std::env::var_os("APPDIR").map(PathBuf::from).as_deref(),
+                crate::mcp::is_mount_point,
+                cache_directory(|name| std::env::var_os(name)).as_deref(),
+            )?;
+            let mut child = std::process::Command::new(&program)
                 .args(viewer_arguments(file))
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
-                .map_err(|error| format!("{} could not start: {error}", executable.display()))?;
+                .map_err(|error| format!("{} could not start: {error}", program.display()))?;
             // Collect its exit so that no finished child is left behind.
             std::thread::spawn(move || {
                 let _ = child.wait();
             });
-            Ok(Opened::Viewer(executable.to_path_buf()))
+            Ok(Opened::Viewer(program))
         }
         None => open::that_detached(file)
             .map(|()| Opened::SystemDefault)
@@ -463,6 +583,10 @@ impl Studio {
     pub(crate) fn cad_viewer_setting(&self) -> Element<'_, Message> {
         let colors = self.ui_theme.colors();
         let found = match self.cad_viewer.found() {
+            Found::Bundled(path) => tr_args(
+                "The Open CAD Studio that comes with the application opens exported drawings: {path}",
+                &[("path", &path.display().to_string())],
+            ),
             Found::Chosen(_) => tr("The chosen program opens exported drawings.").to_owned(),
             Found::Installed(path) => tr_args(
                 "Found: {path}",
@@ -533,6 +657,7 @@ mod tests {
         let user = directory.path().join("user");
         let bin = directory.path().join("bin");
         let places = Places {
+            bundled: Vec::new(),
             system_programs: vec![system.clone()],
             user_programs: vec![user.clone()],
             search_path: Some(std::env::join_paths([&bin]).unwrap()),
@@ -582,6 +707,142 @@ mod tests {
     }
 
     #[test]
+    fn bundled_viewer_lies_beside_the_application_or_in_the_build_folder() {
+        let bin = Path::new("/opt/ops/bin");
+        let candidates = bundled_candidates(&bin.join("open-pointcloud-studio"));
+        let private = Path::new("/opt/ops/lib/open-pointcloud-studio").join(EXECUTABLE);
+        if cfg!(all(unix, not(target_os = "macos"))) {
+            assert_eq!(candidates[..2], [private, bin.join(EXECUTABLE)]);
+        } else {
+            assert_eq!(candidates.first(), Some(&bin.join(EXECUTABLE)));
+            assert!(!candidates.contains(&private));
+        }
+        // A development build in target/debug finds the program that the
+        // build script writes to target/open-cad-studio.
+        let target = Path::new("/src/native/target");
+        let candidates = bundled_candidates(&target.join("debug").join("open-pointcloud-studio"));
+        assert_eq!(
+            candidates.last(),
+            Some(
+                &target
+                    .join("open-cad-studio")
+                    .join("release")
+                    .join(EXECUTABLE)
+            )
+        );
+        assert!(bundled_candidates(Path::new("")).is_empty());
+    }
+
+    #[test]
+    fn bundled_viewer_comes_before_the_chosen_and_the_installed_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let system = directory.path().join("system");
+        let installed = installed_path(&system);
+        executable_at(&installed);
+        let chosen = directory.path().join("tools").join("viewer.exe");
+        executable_at(&chosen);
+        let application = directory.path().join("app").join("bin");
+        let places = Places {
+            bundled: bundled_candidates(&application.join("open-pointcloud-studio")),
+            system_programs: vec![system],
+            ..Places::default()
+        };
+        assert_eq!(find(Some(&chosen), &places), Found::Chosen(chosen.clone()));
+        assert_eq!(find(None, &places), Found::Installed(installed));
+
+        let built = directory
+            .path()
+            .join("app")
+            .join("open-cad-studio")
+            .join("release")
+            .join(EXECUTABLE);
+        executable_at(&built);
+        assert_eq!(find(Some(&chosen), &places), Found::Bundled(built.clone()));
+        assert_eq!(find(None, &places), Found::Bundled(built));
+
+        // The program beside the application comes before the build, and a
+        // chosen program that is missing changes nothing while it is there.
+        let beside = application.join(EXECUTABLE);
+        executable_at(&beside);
+        let missing = directory.path().join("gone.exe");
+        assert_eq!(
+            find(Some(&missing), &places),
+            Found::Bundled(beside.clone())
+        );
+        assert_eq!(find(Some(&chosen), &places), Found::Bundled(beside));
+    }
+
+    #[test]
+    fn viewer_inside_a_mounted_appimage_runs_from_a_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let mount = directory.path().join("mount");
+        let inside = mount
+            .join("usr")
+            .join("lib")
+            .join("open-pointcloud-studio")
+            .join(EXECUTABLE);
+        executable_at(&inside);
+        let cache = directory.path().join("cache");
+        let mounted = |_: &Path| true;
+
+        // Outside the folder the runtime announces, or when that folder is no
+        // mount, the program runs where it is.
+        assert_eq!(
+            runnable(&inside, None, mounted, Some(&cache)),
+            Ok(inside.clone())
+        );
+        assert_eq!(
+            runnable(&inside, Some(&mount), |_: &Path| false, Some(&cache)),
+            Ok(inside.clone())
+        );
+        let elsewhere = directory.path().join("opt").join(EXECUTABLE);
+        assert_eq!(
+            runnable(&elsewhere, Some(&mount), mounted, Some(&cache)),
+            Ok(elsewhere)
+        );
+
+        let copy = runnable(&inside, Some(&mount), mounted, Some(&cache)).unwrap();
+        assert!(copy.starts_with(&cache), "{}", copy.display());
+        assert_eq!(copy.file_name(), inside.file_name());
+        assert_eq!(std::fs::read(&copy).unwrap(), b"not a real program");
+        // Made once: a copy of the same size is used as it is.
+        std::fs::write(&copy, b"NOT A REAL PROGRAM").unwrap();
+        assert_eq!(
+            runnable(&inside, Some(&mount), mounted, Some(&cache)),
+            Ok(copy.clone())
+        );
+        assert_eq!(std::fs::read(&copy).unwrap(), b"NOT A REAL PROGRAM");
+        // Another program is copied again.
+        std::fs::write(&inside, b"another program").unwrap();
+        runnable(&inside, Some(&mount), mounted, Some(&cache)).unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"another program");
+
+        assert!(runnable(&inside, Some(&mount), mounted, None).is_err());
+    }
+
+    #[test]
+    fn cache_folder_follows_the_environment() {
+        let environment = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        let folder = "open-pointcloud-studio-native";
+        assert_eq!(
+            cache_directory(environment(&[("XDG_CACHE_HOME", "/c"), ("HOME", "/h")])),
+            Some(Path::new("/c").join(folder))
+        );
+        assert_eq!(
+            cache_directory(environment(&[("XDG_CACHE_HOME", ""), ("HOME", "/h")])),
+            Some(Path::new("/h").join(".cache").join(folder))
+        );
+        assert_eq!(cache_directory(environment(&[])), None);
+    }
+
+    #[test]
     fn viewer_starts_read_only_with_the_file() {
         let file = Path::new("/out/plan.dxf");
         assert_eq!(
@@ -611,6 +872,7 @@ mod tests {
     /// switch off whatever the settings of the user say.
     fn studio_with_viewer(directory: &Path) -> (Studio, PathBuf) {
         LAUNCHED.with(|launched| launched.borrow_mut().clear());
+        BUNDLED_IN_TESTS.with(|bundled| bundled.borrow_mut().clear());
         let viewer = directory.join("viewer").join(EXECUTABLE);
         executable_at(&viewer);
         let mut studio = Studio::default();
@@ -659,6 +921,42 @@ mod tests {
         assert_eq!(reported["chosen_missing"], false);
         assert_eq!(reported["open_after_export"], false);
         assert_eq!(reported["last_export"], json!(drawing));
+    }
+
+    #[test]
+    fn api_opens_drawings_in_the_bundled_viewer_before_the_chosen_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, chosen) = studio_with_viewer(directory.path());
+        let bundled = directory.path().join("application").join(EXECUTABLE);
+        executable_at(&bundled);
+        BUNDLED_IN_TESTS.with(|candidates| *candidates.borrow_mut() = vec![bundled.clone()]);
+
+        let drawing = directory.path().join("plan.dxf");
+        std::fs::write(&drawing, b"0\nEOF\n").unwrap();
+        let answer = send(&mut studio, open(Some(drawing.clone())));
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["viewer"], json!(bundled));
+        assert_eq!(answer["read_only"], true);
+        assert_eq!(
+            launched(),
+            [(Some(bundled.clone()), viewer_arguments(&drawing))]
+        );
+
+        let status = send(&mut studio, ApiCommand::Status);
+        let reported = &status["result"]["cad_viewer"];
+        assert_eq!(reported["source"], "bundled");
+        assert_eq!(reported["path"], json!(bundled));
+        assert_eq!(reported["chosen"], json!(chosen));
+        assert_eq!(reported["chosen_missing"], false);
+        for language in [Language::English, Language::from_key("nl").unwrap()] {
+            let _language = crate::i18n::TestLanguage::hold(language);
+            let _ = studio.cad_viewer_setting();
+        }
+
+        // Without it the chosen program is used again.
+        BUNDLED_IN_TESTS.with(|candidates| candidates.borrow_mut().clear());
+        studio.cad_viewer.refresh();
+        assert_eq!(studio.cad_viewer.found(), &Found::Chosen(chosen));
     }
 
     #[test]
