@@ -651,7 +651,10 @@ the opened DXF and DWG files, each with `name`, `source`, `path` and `shown`.
 `show_drawing` shows a drawing by its name in any case; one that is not made
 in this session yet is made again from how it was made, from its scans,
 which must all be open, and the answer then has `accepted: true` and a
-`job_id`. `delete_drawing` forgets a drawing by its name. The previews,
+`job_id`. `show_drawing` with the name `3D model` shows the 3D model as a
+click on its row does: the active view lets go and its annotations are
+hidden, and the answer has `shown: "3D model"`. `delete_drawing` forgets a
+drawing by its name. The previews,
 exports and files are limited to the 16 newest; the drawings of
 `create_drawing` stay, however many there are.
 
@@ -736,9 +739,11 @@ under VIEWS (`3d`, `plans`, `elevations`, `sections` or `files`), or the
 scans of one folder as `folder:` followed by the path of the folder as the
 scans lie in it. Collapsing changes nothing that is loaded or shown, and the
 window keeps the choice for the next session. `status.result.project_browser`
-reports which groups are `open`, the `collapsed` groups, and under `views`
-each kind VIEWS lists with its `group`, whether it is `open` and the names in
-its `rows`, the 3D model first.
+reports which groups are `open`, the `collapsed` groups, under `views` each
+kind VIEWS lists with its `group`, whether it is `open` and the names in its
+`rows`, the 3D model first, and as `shown` the name of the row that is
+highlighted: the drawing the Drawing view shows, else the active view, else
+`3D model`.
 
 ## CAD viewer
 
@@ -1195,7 +1200,7 @@ screen.
 | `open_drawing` | `path` | Reads an absolute `.dxf` or `.dwg` file into the Drawing view and shows it; returns a job ID whose complete job reports units, layers, entities drawn and skipped |
 | `create_drawing` | `kind`, optional `basis`, `side`, `height`, `position`, `thickness`, `name` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; returns a job ID. See [Drawings of the Project Browser](#drawings-of-the-project-browser) |
 | `list_drawings` | — | Lists the drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |
-| `show_drawing` | `name` | Shows a drawing of `create_drawing`, made again from how it was made when it is not made in this session yet (then with a job ID) |
+| `show_drawing` | `name` | Shows a drawing of `create_drawing`, made again from how it was made when it is not made in this session yet (then with a job ID); `3D model` shows the 3D model as a click on its row does, letting go of the active view |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
 | `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
 | `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth` | Sets the crop region of a drawing of `create_drawing` and makes it again in place; returns a job ID. See [Crop region, duplicates and RO](#crop-region-duplicates-and-ro) |

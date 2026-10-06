@@ -591,6 +591,10 @@ impl Studio {
             BrowserAction::ShowModel => {
                 self.drawing_view.shown = false;
                 self.file_open = false;
+                // The 3D model is no saved view: the active one lets go, as
+                // Hide under its annotations does, so that the row of the
+                // 3D model is the one highlighted.
+                self.deactivate_view();
                 self.status = "3D model".into();
             }
             BrowserAction::Duplicate(row) => {
@@ -693,6 +697,7 @@ impl Studio {
             },
             "collapsed": self.browser.collapsed(),
             "views": groups,
+            "shown": self.shown_row().map(|row| name_of(&row)),
         })
     }
 
@@ -1145,14 +1150,36 @@ impl Studio {
         group.push(indented(body, 4.0)).into()
     }
 
+    /// The row of VIEWS of what the window shows, which is highlighted: in
+    /// the Drawing view its drawing, else the active view, else the 3D
+    /// model.
+    pub(crate) fn shown_row(&self) -> Option<ViewRow> {
+        let view = &self.drawing_view;
+        if view.shown {
+            if let Some(guid) = view.shown_guid() {
+                return Some(ViewRow::Drawing(guid.to_owned()));
+            }
+            return view
+                .sheets()
+                .iter()
+                .position(|sheet| view.is_current(sheet))
+                .map(ViewRow::File);
+        }
+        Some(match self.active_view_index() {
+            Some(index) => ViewRow::Saved(self.views.list[index].guid.clone()),
+            None => ViewRow::Model,
+        })
+    }
+
     /// One row of VIEWS.
     fn view_group_row(&self, listed: &ViewRow) -> Element<'_, Message> {
-        let shown_drawing = self.drawing_view.shown_guid();
+        let shown = self.shown_row();
+        let highlighted = shown.as_ref() == Some(listed);
         match listed {
             ViewRow::Model => view_row(
                 ToolIcon::Model,
                 tr("3D model").to_owned(),
-                !self.drawing_view.shown && self.active_view_index().is_none(),
+                highlighted,
                 false,
                 Message::Browser(BrowserAction::ShowModel),
                 if self.active.is_some() {
@@ -1182,7 +1209,7 @@ impl Studio {
                 view_row(
                     ViewKind::of(drawing.kind).icon(),
                     drawing.name.clone(),
-                    shown_drawing == Some(guid.as_str()),
+                    highlighted,
                     !made,
                     Message::DrawingView(DrawingViewAction::ShowDrawing(guid.clone())),
                     vec![
@@ -1202,7 +1229,7 @@ impl Studio {
                 view_row(
                     ToolIcon::DrawingFile,
                     sheet.source.caption(),
-                    self.drawing_view.shown && self.drawing_view.is_current(sheet),
+                    highlighted,
                     false,
                     Message::DrawingView(DrawingViewAction::ShowSheet(*place)),
                     vec![remove_button(Message::DrawingView(
@@ -1517,5 +1544,46 @@ mod tests {
         assert_eq!(listed["views"][0]["rows"][1], "View 1");
         assert_eq!(listed["views"][0]["rows"][2], "View 2");
         let _ = studio.view();
+    }
+
+    #[test]
+    fn the_row_of_the_3d_model_is_highlighted_once_it_is_chosen_over_a_view() {
+        use crate::views::ViewAction;
+
+        let (mut studio, _directory) = studio_with_folders();
+        assert_eq!(studio.shown_row(), Some(ViewRow::Model));
+        let _ = studio.update(Message::Views(ViewAction::Save));
+        let guid = studio.listed_views()[0].guid.clone();
+        let _ = studio.update(Message::Views(ViewAction::Restore(guid.clone())));
+        assert_eq!(studio.shown_row(), Some(ViewRow::Saved(guid.clone())));
+        assert_eq!(studio.browser_value()["shown"], "View 1");
+        // Orbiting keeps the view active; a click on the 3D model lets go
+        // of it and highlights the 3D model, in 3D as from a drawing.
+        studio.yaw += 0.3;
+        let _ = studio.update(Message::Browser(BrowserAction::ShowModel));
+        assert_eq!(studio.shown_row(), Some(ViewRow::Model));
+        assert_eq!(studio.browser_value()["shown"], "3D model");
+        assert!(studio.active_view_index().is_none());
+        let _ = studio.view();
+        let _ = studio.update(Message::Views(ViewAction::Restore(guid.clone())));
+        studio.drawing_view.shown = true;
+        assert_eq!(studio.shown_row(), None, "no drawing is held");
+        let _ = studio.update(Message::Browser(BrowserAction::ShowModel));
+        assert!(!studio.drawing_view.shown);
+        assert_eq!(studio.shown_row(), Some(ViewRow::Model));
+        // A click on the view shows it again.
+        let _ = studio.update(Message::Views(ViewAction::Restore(guid.clone())));
+        assert_eq!(studio.shown_row(), Some(ViewRow::Saved(guid)));
+        // The local API shows the 3D model by the name of its row.
+        let (reply, receive) = std::sync::mpsc::channel();
+        let command =
+            serde_json::from_str(r#"{"command":"show_drawing","name":"3d MODEL"}"#).unwrap();
+        let _ = studio.update(Message::ApiRequest(crate::native_api::ApiRequest {
+            command,
+            reply,
+        }));
+        let answer = receive.recv().unwrap();
+        assert_eq!(answer["shown"], "3D model", "{answer}");
+        assert_eq!(studio.shown_row(), Some(ViewRow::Model));
     }
 }

@@ -2058,9 +2058,16 @@ impl Studio {
             .map(|drawing| drawing.guid.clone())
     }
 
-    /// The `show_drawing` command of the local API.
+    /// The `show_drawing` command of the local API. `3D model` shows the 3D
+    /// model, as a click on its row under VIEWS does.
     pub(crate) fn api_show_drawing(&mut self, name: &str) -> (Value, Task<Message>) {
         let Some(guid) = self.drawing_named(name) else {
+            let model = name.trim();
+            if model.eq_ignore_ascii_case("3D model") || model.eq_ignore_ascii_case(tr("3D model"))
+            {
+                let task = self.update_browser(crate::project_browser::BrowserAction::ShowModel);
+                return (json!({"ok": true, "shown": "3D model"}), task);
+            }
             return (
                 json!({"ok": false, "error": format!("no drawing {name} of an open scan")}),
                 Task::none(),

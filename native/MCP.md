@@ -209,7 +209,7 @@ follows when that view is restored.
 | `set_drawing_layer` | `layer` (name or `*`), `visible` | Shows or hides a layer of the drawing in the Drawing view |
 | `create_drawing` | `kind` (`plan`, `elevation` or `section`), optional `basis` (`model`, `section_box` or the name of a saved view with a section box), `side` (`front`, `back`, `left` or `right`), `height`, `position`, `thickness` (0.005–5 m), `name`, `wait_seconds` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; job |
 | `list_drawings` | — | The drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |
-| `show_drawing` | `name` | Shows a drawing of `create_drawing`; one not made in this session yet is made again from its scans, with a job to wait for |
+| `show_drawing` | `name` | Shows a drawing of `create_drawing`; one not made in this session yet is made again from its scans, with a job to wait for. `3D model` shows the 3D model |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
 | `set_browser_group` | `group` (`scans`, `classes`, `views`, `bcf`, `3d`, `plans`, `elevations`, `sections`, `files` or `folder:` and a path), `open` | Opens or collapses a group of the Project Browser |
 | `set_sheet_crop` | optional `name`, `rect` (`[[left, bottom], [right, top]]` in drawing units), `width`, `height`, `center`, `rotation`, `cut`, `depth` | Sets the crop region of a drawing of `create_drawing` and makes it again in place |

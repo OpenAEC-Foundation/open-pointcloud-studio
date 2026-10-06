@@ -474,13 +474,13 @@ fn table() -> Vec<Tool> {
             optional("name", text("Name of the drawing; without it the drawing is named after its kind and what it was made from", 1, 96)),
         ]),
         tool("list_drawings", Command, "Lists the drawings of create_drawing made from an open scan, with how each was made and whether it is made and shown in this session, and the previews, exports and opened files of this session.", vec![]),
-        tool("show_drawing", Command, "Shows a drawing of create_drawing in the Drawing view by its name, any case. A drawing that is not made in this session yet is made again from how it was made, from its scans, which must be open; the answer then has accepted and a job_id to wait for.", vec![
+        tool("show_drawing", Command, "Shows a drawing of create_drawing in the Drawing view by its name, any case. A drawing that is not made in this session yet is made again from how it was made, from its scans, which must be open; the answer then has accepted and a job_id to wait for. The name 3D model shows the 3D model, as a click on its row does: the active view lets go and its annotations are hidden.", vec![
             required("name", text("Name of the drawing as list_drawings gives it", 1, 96)),
         ]),
         tool("delete_drawing", Command, "Deletes a drawing of create_drawing by its name, any case, with how it was made.", vec![
             required("name", text("Name of the drawing as list_drawings gives it", 1, 96)),
         ]),
-        tool("set_browser_group", Command, "Opens or collapses a group of the Project Browser: scans, classes, views or bcf, a kind under views (3d, plans, elevations, sections, files), or the scans of one folder as folder: followed by the path of the folder. Collapsing changes nothing that is loaded or shown; the window keeps the choice. status.result.project_browser reports the groups.", vec![
+        tool("set_browser_group", Command, "Opens or collapses a group of the Project Browser: scans, classes, views or bcf, a kind under views (3d, plans, elevations, sections, files), or the scans of one folder as folder: followed by the path of the folder. Collapsing changes nothing that is loaded or shown; the window keeps the choice. status.result.project_browser reports the groups, what VIEWS lists and, as shown, the row that is highlighted.", vec![
             required("group", text("The group", 1, 4096)),
             required("open", boolean("true to open the group, false to collapse it")),
         ]),

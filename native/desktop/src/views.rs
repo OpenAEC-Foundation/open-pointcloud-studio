@@ -480,6 +480,13 @@ impl Studio {
             .map(|index| &self.views.list[index])
     }
 
+    /// No view is the active one any more: its annotations are hidden and
+    /// a half-placed annotation is dropped.
+    pub(crate) fn deactivate_view(&mut self) {
+        self.views.active = None;
+        self.views.shown = None;
+        self.views.drop_placing();
+    }
     fn activate_view(&mut self, guid: &str) {
         let path = self
             .active
@@ -1227,9 +1234,7 @@ impl Studio {
             }
             ViewAction::CancelRename => self.views.renaming = None,
             ViewAction::Deactivate => {
-                self.views.active = None;
-                self.views.shown = None;
-                self.views.drop_placing();
+                self.deactivate_view();
                 self.status = "Annotations hidden; restore a view to show them again".into();
             }
             ViewAction::Tool(kind) => {
