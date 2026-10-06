@@ -8,7 +8,8 @@
 # CAD Studio has to lie beside it (Windows, the archives, the macOS bundle) or
 # in ../lib/open-pointcloud-studio (the .deb and the unpacked AppImage), print
 # its version, and convert a small drawing without a window: a DXF file with
-# one line, written again as DXF.
+# one line, written again as DXF. On Windows it must not load the C++ runtime
+# of MinGW, which no package carries.
 #
 # Runs with bash 3.2 (macOS) and with the bash of Git for Windows.
 set -euo pipefail
@@ -29,6 +30,12 @@ for candidate in "$folder/$CAD_BINARY_NAME.exe" "$folder/$CAD_BINARY_NAME" \
 done
 [[ -n "$program" ]] || fail "no $CAD_BINARY_NAME beside $binary or in ../lib/$BINARY_NAME"
 [[ -x "$program" ]] || fail "$program is not executable"
+# Starting it proves little on a machine that has the C++ runtime of MinGW on
+# the search path, as a Windows development machine may: the package does
+# not carry it, so a program that loads it is refused before it is started.
+if [[ "$program" == *.exe ]]; then
+    refuse_mingw_runtime "$program"
+fi
 
 # A program that opens a window where it should print and exit must fail the
 # check, not hang it.

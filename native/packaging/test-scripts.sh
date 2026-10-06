@@ -393,6 +393,51 @@ else
     passed "build-archive.sh refuses to pack an archive without Open CAD Studio"
 fi
 
+# For Windows, an Open CAD Studio that loads the C++ runtime of MinGW is
+# refused before anything is packed; one built with MSVC is packed with 7z,
+# here a stand-in that lists what the archive would hold.
+cat > "$work/bin/7z" <<'EOF'
+#!/usr/bin/env bash
+find "$4" -type f | sort > "$3"
+EOF
+chmod +x "$work/bin/7z"
+cp "$work/built/$CAD_BINARY_NAME" "$work/built/msvc.exe"
+{ cat "$work/built/$CAD_BINARY_NAME"; echo "# loads libstdc++-6.dll"; } > "$work/built/gnu.exe"
+chmod +x "$work/built/gnu.exe"
+windows_package=$work/packages/${BINARY_NAME}_9.9.9_windows-x64
+if PATH="$work/bin:$PATH" bash "$packaging_dir/build-archive.sh" "$work/built/$BINARY_NAME" "$work/built/gnu.exe" \
+    9.9.9 windows-x64 "$work/packages" > "$work/archive.log" 2>&1; then
+    wrong "build-archive.sh packs for Windows an Open CAD Studio that loads the C++ runtime of MinGW"
+elif ! grep -qF 'libstdc++-6.dll of MinGW' "$work/archive.log" || [[ -e "$windows_package" ]]; then
+    wrong "build-archive.sh refuses an Open CAD Studio that loads the C++ runtime of MinGW only after it began, or without saying why:"
+    sed 's/^/        /' "$work/archive.log"
+else
+    passed "build-archive.sh refuses for Windows an Open CAD Studio that loads the C++ runtime of MinGW"
+fi
+if PATH="$work/bin:$PATH" bash "$packaging_dir/build-archive.sh" "$work/built/$BINARY_NAME" "$work/built/msvc.exe" \
+    9.9.9 windows-x64 "$work/packages" > "$work/archive.log" 2>&1 \
+    && grep -qF "/$CAD_BINARY_NAME.exe" "$windows_package.zip" \
+    && grep -qF "/$CAD_BINARY_NAME-NOTICE.txt" "$windows_package.zip"; then
+    passed "build-archive.sh packs for Windows an Open CAD Studio built with MSVC as $CAD_BINARY_NAME.exe"
+else
+    wrong "build-archive.sh does not pack for Windows an Open CAD Studio built with MSVC:"
+    sed 's/^/        /' "$work/archive.log"
+fi
+
+# An installed or unpacked Windows package is refused for the same reason,
+# also where the C++ runtime of MinGW is on the search path.
+mkdir -p "$work/mingw"
+cp "$work/built/$BINARY_NAME" "$work/mingw/"
+cp "$work/built/gnu.exe" "$work/mingw/$CAD_BINARY_NAME.exe"
+if output=$(bash "$packaging_dir/check-open-cad-studio.sh" "$work/mingw/$BINARY_NAME" 2>&1); then
+    wrong "check-open-cad-studio.sh accepts an Open CAD Studio that loads the C++ runtime of MinGW"
+elif grep -qF 'libstdc++-6.dll of MinGW' <<< "$output"; then
+    passed "check-open-cad-studio.sh refuses an Open CAD Studio that loads the C++ runtime of MinGW"
+else
+    wrong "check-open-cad-studio.sh refuses an Open CAD Studio that loads the C++ runtime of MinGW for another reason:"
+    sed 's/^/        /' <<< "$output"
+fi
+
 # The .deb and the AppImage keep it out of the search path, where the
 # application looks for it too.
 mkdir -p "$work/icons/hicolor/scalable/apps"

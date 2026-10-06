@@ -64,6 +64,10 @@ tested on build machines with software rendering only.
   window. `OpenCADStudio-NOTICE.txt.in` is its notice.
 - `build-archive.sh` packs the binary with Open CAD Studio and the licence
   texts; the Windows installer is built from the folder it leaves behind.
+  For Windows it takes Open CAD Studio built with the MSVC toolchain, as the
+  workflow builds it: a build with the GNU toolchain loads the C++ runtime of
+  MinGW, which no package carries, and is refused here and by
+  `check-open-cad-studio.sh`.
 - `linux/` has the desktop entry, the file types for the shared MIME
   database, the AppStream metadata and the control and copyright files of the
   `.deb`. `stage-tree.sh` lays them out under `usr/`, and `build-deb.sh` and
@@ -135,6 +139,7 @@ On a developer machine, with a built binary:
 bash native/packaging/test-scripts.sh                      # needs no binary
 bash native/packaging/smoke-test.sh native/target/release/open-pointcloud-studio 0.8.0
 bash native/packaging/build-open-cad-studio.sh -j 4        # native/target/open-cad-studio/release
+bash native/packaging/build-open-cad-studio.sh --target x86_64-pc-windows-msvc   # for a Windows package
 bash native/packaging/archive-open-cad-studio-source.sh /tmp/packages
 bash native/packaging/make-icons.sh /tmp/icons            # needs rsvg-convert
 bash native/packaging/linux/build-deb.sh native/target/release/open-pointcloud-studio \

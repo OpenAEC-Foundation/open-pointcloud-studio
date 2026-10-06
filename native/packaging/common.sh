@@ -145,6 +145,30 @@ cad_source_archive_name() {
     echo "open-cad-studio-source_${cad_commit:0:8}.tar.gz"
 }
 
+# mingw_runtime_of PROGRAM prints, one per line, the libraries of the C++
+# runtime of MinGW that the Windows program PROGRAM loads by name. A build of
+# Open CAD Studio with the GNU toolchain loads libstdc++-6.dll, and through it
+# the other two; build-open-cad-studio.sh puts them beside it for a
+# development build. No package carries them, nor their licences, so a
+# package takes a build with the MSVC toolchain, which loads none of them.
+mingw_runtime_of() {
+    local library
+    for library in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
+        if LC_ALL=C grep -aqF "$library" "$1"; then
+            echo "$library"
+        fi
+    done
+}
+
+# refuse_mingw_runtime PROGRAM fails when PROGRAM loads a library of the C++
+# runtime of MinGW (see mingw_runtime_of).
+refuse_mingw_runtime() {
+    local libraries
+    libraries=$(mingw_runtime_of "$1" | tr '\n' ' ')
+    [[ -z "$libraries" ]] \
+        || fail "$1 loads ${libraries% } of MinGW, which no package carries: it was built with the GNU toolchain; build it with build-open-cad-studio.sh --target x86_64-pc-windows-msvc, as the Packages workflow does"
+}
+
 # The licences travel with every copy of the binary, and those of Open CAD
 # Studio with it: copy_licences DESTINATION NUMBER, where NUMBER is the
 # version of the package.

@@ -4,7 +4,11 @@
 #
 #   build-archive.sh BINARY CAD_BINARY NUMBER TARGET OUT_DIR
 #
-# CAD_BINARY is what build-open-cad-studio.sh built for the same system.
+# CAD_BINARY is what build-open-cad-studio.sh built for the same system; for
+# Windows a build with the MSVC toolchain (--target x86_64-pc-windows-msvc),
+# as the Packages workflow makes it. A build with the GNU toolchain is
+# refused: it loads the C++ runtime of MinGW, which the package does not
+# carry, and would start only where that lies on the search path.
 # TARGET is windows-x64, macos-universal, linux-amd64 or linux-arm64. Writes
 # OUT_DIR/open-pointcloud-studio_NUMBER_TARGET.zip for Windows and .tar.gz for
 # the others, each with a .sha256, and leaves the packed folder of the same
@@ -22,16 +26,19 @@ out_dir=$5
 
 [[ -f "$binary" ]] || fail "$binary does not exist"
 [[ -f "$cad_binary" ]] || fail "$cad_binary does not exist; build it with build-open-cad-studio.sh"
+case "$target" in
+    windows-*)
+        cad_name=$CAD_BINARY_NAME.exe
+        refuse_mingw_runtime "$cad_binary"
+        ;;
+    *) cad_name=$CAD_BINARY_NAME ;;
+esac
 package="${BINARY_NAME}_${number}_${target}"
 
 mkdir -p "$out_dir"
 rm -rf "${out_dir:?}/$package"
 mkdir "$out_dir/$package"
 cp "$binary" "$out_dir/$package/"
-case "$target" in
-    windows-*) cad_name=$CAD_BINARY_NAME.exe ;;
-    *) cad_name=$CAD_BINARY_NAME ;;
-esac
 # A binary downloaded from another job has lost its executable bit.
 install -m755 "$cad_binary" "$out_dir/$package/$cad_name"
 copy_licences "$out_dir/$package" "$number"
