@@ -715,3 +715,67 @@ fn file_names_from_captions_hold_no_separators() {
     assert_eq!(file_stem("..."), "sheet");
     let _ = PathBuf::new();
 }
+
+#[test]
+fn the_picture_of_a_view_keeps_its_proportions_when_its_snapshot_changes() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+    let (mut studio, _directory) = studio_with_scan();
+    let _ = studio.update(Message::Views(crate::views::ViewAction::Save));
+    let view = studio.listed_views()[0].guid.clone();
+    camera_views::remove_snapshot(&view);
+    let sheet = studio
+        .create_layout("01", "Views", Paper::A3, true)
+        .unwrap();
+    let _ = studio.show_layout(&sheet);
+    // Placed before it has a picture, its frame takes a guess.
+    let id = studio
+        .place_on_layout(&sheet, PlacedKind::View, &view, Some([200.0, 150.0]), None)
+        .unwrap();
+    let guessed = studio.layouts.list[0].viewport(&id).unwrap().size;
+    assert!((guessed[1] / guessed[0] - 1000.0 / 1600.0).abs() < 1e-9);
+    // The view shown in another window size gets a picture of other
+    // proportions: the frame keeps its width and takes them.
+    camera_views::write_snapshot(&view, &png(1348, 1041)).unwrap();
+    studio.layouts.pictures_checked = None;
+    let _ = studio.update(Message::Layouts(LayoutAction::Fit));
+    let size = studio.layouts.list[0].viewport(&id).unwrap().size;
+    assert!((size[0] - guessed[0]).abs() < 1e-9, "{size:?}");
+    assert!(
+        (size[1] / size[0] - 1041.0 / 1348.0).abs() < 1e-9,
+        "{size:?}"
+    );
+    let image = |studio: &Studio| {
+        studio
+            .shown_plot()
+            .unwrap()
+            .marks()
+            .find_map(|(mark, _)| match mark {
+                Mark::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("the picture is drawn")
+    };
+    let rect = image(&studio);
+    let drawn = [rect[1][0] - rect[0][0], rect[1][1] - rect[0][1]];
+    assert!((drawn[1] / drawn[0] - 1041.0 / 1348.0).abs() < 1e-9);
+    // Both sides given: the largest of its proportions within them.
+    let sized = send(
+        &mut studio,
+        json!({"command": "update_viewport", "viewport": 0, "size": [100, 100]}),
+    );
+    let size = &sized["sheet"]["viewports"][0]["size"];
+    assert!((size[0].as_f64().unwrap() - 100.0).abs() < 1e-9, "{sized}");
+    assert!((size[1].as_f64().unwrap() - 100.0 * 1041.0 / 1348.0).abs() < 1e-9);
+    // A frame of other proportions shows the picture in its own, in the
+    // middle.
+    assert_eq!(
+        model::contained([[0.0, 0.0], [100.0, 100.0]], [200, 100]),
+        [[0.0, 25.0], [100.0, 75.0]]
+    );
+    assert_eq!(
+        model::contained([[0.0, 0.0], [100.0, 100.0]], [100, 200]),
+        [[25.0, 0.0], [75.0, 100.0]]
+    );
+}

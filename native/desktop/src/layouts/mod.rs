@@ -1031,7 +1031,8 @@ impl Studio {
     }
 
     /// The size of the image of a 3D view on a sheet, its proportions kept
-    /// by the side given: a width or a height.
+    /// by the side given: a width or a height; with both, the largest that
+    /// fits within them.
     pub(crate) fn set_viewport_size(
         &mut self,
         sheet: &str,
@@ -1055,7 +1056,13 @@ impl Studio {
             }
             let ratio = viewport.size[1] / viewport.size[0].max(1e-9);
             viewport.size = match (width, height) {
-                (Some(width), Some(height)) => [width, height],
+                (Some(width), Some(height)) => {
+                    if width * ratio <= height {
+                        [width, width * ratio]
+                    } else {
+                        [height / ratio, height]
+                    }
+                }
                 (Some(width), None) => [width, width * ratio],
                 (None, Some(height)) => [height / ratio, height],
                 (None, None) => viewport.size,
@@ -1212,8 +1219,10 @@ impl Studio {
                 self.layouts.unmade.insert(making, self.status.clone());
             }
         }
+        if self.pictures_due() {
+            self.read_pictures(&guid);
+        }
         self.follow_views(&guid);
-        self.read_pictures(&guid);
         let task = self.make_next_drawing(&guid);
         let fingerprint = self.sheet_fingerprint(&guid);
         if fingerprint != self.layouts.fingerprint {
@@ -1223,9 +1232,11 @@ impl Studio {
         task
     }
 
-    /// Keep the names of the views and the sizes of the drawings on a sheet
-    /// as they are now.
-    fn follow_views(&mut self, sheet: &str) {
+    /// Keep the names of the views on a sheet as they are now, the sizes of
+    /// its drawings as their crop regions make them, and the images of its
+    /// 3D views in the proportions of their pictures as read, their widths
+    /// kept.
+    pub(crate) fn follow_views(&mut self, sheet: &str) {
         let Some(layout) = self.layouts.layout(sheet) else {
             return;
         };
@@ -1238,7 +1249,13 @@ impl Studio {
                     .iter()
                     .find(|view| view.guid == viewport.guid)
                 {
-                    Some(view) => (view.name.clone(), None),
+                    Some(view) => (
+                        view.name.clone(),
+                        self.layouts
+                            .images
+                            .get(&viewport.guid)
+                            .map(|picture| model::proportioned(viewport.size, picture.pixels)),
+                    ),
                     None => continue,
                 },
                 PlacedKind::Drawing => match self
@@ -1280,18 +1297,24 @@ impl Studio {
         }
     }
 
-    /// Read the snapshots of the 3D views on a sheet that are new or
-    /// changed since they were read, now and then.
-    fn read_pictures(&mut self, sheet: &str) {
+    /// Whether the pictures of the sheet shown are looked at again: now and
+    /// then.
+    fn pictures_due(&mut self) -> bool {
         let now = Instant::now();
         if self
             .layouts
             .pictures_checked
             .is_some_and(|checked| now.duration_since(checked) < PICTURE_CHECK)
         {
-            return;
+            return false;
         }
         self.layouts.pictures_checked = Some(now);
+        true
+    }
+
+    /// Read the snapshots of the 3D views on a sheet that are new or
+    /// changed since they were read.
+    fn read_pictures(&mut self, sheet: &str) {
         let Some(layout) = self.layouts.layout(sheet) else {
             return;
         };
@@ -1422,6 +1445,11 @@ impl Studio {
         path: PathBuf,
         job: Option<String>,
     ) -> Result<Task<Message>, String> {
+        // The sheet as it shows now, also when it is not the one shown: the
+        // pictures as they are, and the names and sizes as its views have
+        // them.
+        self.read_pictures(sheet);
+        self.follow_views(sheet);
         let layout = self
             .layouts
             .layout(sheet)
@@ -1446,29 +1474,17 @@ impl Studio {
                 waiting.join(", ")
             ));
         }
-        // The pictures as the sheet shows them; a view not shown yet reads
-        // its snapshot now.
-        let mut pictures: HashMap<String, Arc<Vec<u8>>> = HashMap::new();
-        for viewport in layout
+        // The pictures as the sheet shows them.
+        let pictures: HashMap<String, Arc<Vec<u8>>> = layout
             .viewports
             .iter()
             .filter(|viewport| viewport.kind == PlacedKind::View)
-        {
-            let png = match self.layouts.images.get(&viewport.guid) {
-                Some(picture) => Some(Arc::clone(&picture.png)),
-                None => crate::camera_views::read_snapshot(&viewport.guid).map(Arc::new),
-            };
-            if let Some(png) = png {
-                pictures.insert(viewport.guid.clone(), png);
-            }
-        }
-        let plot = plot::plot(&layout, |viewport| match viewport.kind {
-            PlacedKind::View if pictures.contains_key(&viewport.guid) => Content::Image {
-                key: viewport.guid.clone(),
-                pixels: [1, 1],
-            },
-            _ => self.viewport_content(viewport),
-        });
+            .filter_map(|viewport| {
+                let picture = self.layouts.images.get(&viewport.guid)?;
+                Some((viewport.guid.clone(), Arc::clone(&picture.png)))
+            })
+            .collect();
+        let plot = plot::plot(&layout, |viewport| self.viewport_content(viewport));
         let title = layout.caption();
         self.layouts.export_pending = true;
         self.status = format!("Writing the sheet {title} as PDF…");

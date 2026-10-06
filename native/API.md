@@ -821,11 +821,16 @@ layer at `scale` (a number such as `100`, or `"1:100"`; 1:100 by default),
 so that a metre of the model is 10 mm on the paper at 1:100. A 3D view shows
 its snapshot, the picture the viewport took when it last showed the view, at
 about 200 dpi, made smaller to fit the paper; the picture is a screenshot of
-the viewport, not a render of its own. Without `at` the viewport goes to the
+the viewport, not a render of its own, taken without the view cube, the
+handles of the section box and the other controls of the viewport. The
+image keeps the proportions of its picture: when the view gets a picture of
+other proportions, its viewport keeps its width and takes them. Without `at` the viewport goes to the
 first free place inside the border, clear of the title block and the other
 viewports. `update_viewport` moves it to `at`, sets the `scale` of a drawing
-(its size follows), the `size` of the image of a 3D view (`[width, null]`
-keeps its proportions) and its `title`; `remove_viewport` takes it off.
+(its size follows), the `size` of the image of a 3D view (`[width, null]` or
+`[null, height]` keeps its proportions; with both it takes the largest size
+of its proportions within them) and its `title`; `remove_viewport` takes it
+off.
 
 A viewport follows its view: a drawing made again or with another crop
 region, a view renamed or updated show on the sheet as they are now. A

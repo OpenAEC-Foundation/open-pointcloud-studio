@@ -250,7 +250,11 @@ pub fn plot<'a>(layout: &Layout, content: impl Fn(&Viewport) -> Content<'a>) -> 
                 drawing_marks(scene, crop, viewport, &mut group.marks);
                 note_marks(notes, &frame, crop, viewport, value_scale, &mut group.marks);
             }
-            Content::Image { key, .. } => group.marks.push(Mark::Image { rect, key }),
+            // A picture keeps its proportions in a frame of others.
+            Content::Image { key, pixels } => group.marks.push(Mark::Image {
+                rect: super::model::contained(rect, pixels),
+                key,
+            }),
             Content::Waiting(why) => absent(rect, &why, &mut group.marks),
             Content::Missing => absent(rect, tr("view missing"), &mut group.marks),
         }

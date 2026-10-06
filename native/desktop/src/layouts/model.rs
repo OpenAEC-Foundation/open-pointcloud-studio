@@ -446,6 +446,37 @@ pub fn image_size(pixels: [u32; 2], room: [f64; 2]) -> [f64; 2] {
     [(width * fit).max(MIN_SIDE), (height * fit).max(MIN_SIDE)]
 }
 
+/// The largest size of the proportions of an image of `pixels` within
+/// `room`.
+pub fn fitted_size(pixels: [u32; 2], room: [f64; 2]) -> [f64; 2] {
+    let ratio = f64::from(pixels[1].max(1)) / f64::from(pixels[0].max(1));
+    if room[0] * ratio <= room[1] {
+        [room[0], room[0] * ratio]
+    } else {
+        [room[1] / ratio, room[1]]
+    }
+}
+
+/// The size of the image of a 3D view in the proportions of its picture of
+/// `pixels`: as wide as `size`, as high as that width makes it, and no
+/// side under `MIN_SIDE`.
+pub fn proportioned(size: [f64; 2], pixels: [u32; 2]) -> [f64; 2] {
+    let ratio = f64::from(pixels[1].max(1)) / f64::from(pixels[0].max(1));
+    let height = (size[0] * ratio).max(MIN_SIDE);
+    [height / ratio, height]
+}
+
+/// Where an image of `pixels` lies in `rect`: in its proportions, as large
+/// as fits, in the middle.
+pub fn contained(rect: [[f64; 2]; 2], pixels: [u32; 2]) -> [[f64; 2]; 2] {
+    let room = [rect[1][0] - rect[0][0], rect[1][1] - rect[0][1]];
+    let centre = [
+        (rect[0][0] + rect[1][0]) / 2.0,
+        (rect[0][1] + rect[1][1]) / 2.0,
+    ];
+    rect_around(centre, fitted_size(pixels, room))
+}
+
 /// The dots per inch an image of `pixels` gets at `size` millimetres.
 pub fn dots_per_inch(pixels: [u32; 2], size: [f64; 2]) -> f64 {
     let across = f64::from(pixels[0].max(1)) / (size[0].max(1e-9) / 25.4);
