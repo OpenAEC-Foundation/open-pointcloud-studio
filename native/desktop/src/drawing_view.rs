@@ -1913,6 +1913,8 @@ impl Studio {
         copy.guid = crate::camera_views::new_guid();
         copy.name = name;
         copy.created = crate::camera_views::now_seconds();
+        // A copy is a drawing of its own to change.
+        copy.locked = false;
         let made = self.drawing_view.made(guid).cloned();
         // A copy that is to be made is kept only when its job can start: a
         // copy that cannot be made would be left behind otherwise.
@@ -2196,6 +2198,7 @@ impl Studio {
                     "sources": drawing.sources,
                     "created": drawing.created,
                     "crop": crate::drawing_crop::crop_value(drawing),
+                    "locked": drawing.locked,
                     "made": self.drawing_view.made(&drawing.guid).is_some(),
                     "shown": shown == Some(drawing.guid.as_str()),
                 })
@@ -2325,6 +2328,9 @@ impl Studio {
             block = block.push(crop);
         }
         block = block.push(opencad_properties::section_header("Drawing view"));
+        if let Some(guid) = tool.shown_guid() {
+            block = block.push(self.lock_row(crate::locks::LockTarget::Drawing(guid.to_owned())));
+        }
         let open = button(text(tr("Open drawing…")).size(11))
             .on_press(Message::DrawingView(DrawingViewAction::OpenFile))
             .style(flat_tool_style);

@@ -892,7 +892,8 @@ impl Studio {
         }
         let shift = self.modifiers.shift();
         let mut corners = turned_corners(rect, 0.0);
-        let mut editable = !self.drawing.busy();
+        // A locked drawing keeps its crop region.
+        let mut editable = !self.drawing.busy() && !definition.locked;
         if let Some(turn) = turning {
             corners = turned_corners(rect, turn.degrees(shift).unwrap_or_default());
             editable = false;
@@ -1046,6 +1047,9 @@ impl Studio {
     /// made again already.
     fn editable_definition(&self, guid: &str) -> Result<SavedDrawing, String> {
         let definition = self.crop_definition(guid)?;
+        if definition.locked {
+            return Err(format!("{} is locked", definition.name));
+        }
         if self
             .drawing_view
             .remake
@@ -1278,6 +1282,14 @@ impl Studio {
             self.section_box().is_some(),
         );
         match start {
+            TurnStart::Plan(guid) if self.drawing_locked(&guid) => {
+                if let Some(definition) = self.shown_sheet() {
+                    self.status = format!("{} is locked", definition.name);
+                }
+            }
+            TurnStart::SectionBox if self.locked_view_shown().is_some() => {
+                self.status = format!("{} is locked", self.locked_view_shown().unwrap_or_default());
+            }
             TurnStart::Plan(guid) => {
                 if self.drawing.busy() {
                     self.status =

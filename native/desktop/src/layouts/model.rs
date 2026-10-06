@@ -135,6 +135,9 @@ pub struct Viewport {
     /// The name the view had when it was last seen, for when it is gone.
     #[serde(default)]
     pub name: String,
+    /// Not moved, resized, scaled or removed while it is locked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
 }
 
 fn default_scale() -> f64 {
@@ -152,6 +155,7 @@ impl Viewport {
             scale: DEFAULT_SCALE,
             title: None,
             name: name.to_owned(),
+            locked: false,
         }
     }
 

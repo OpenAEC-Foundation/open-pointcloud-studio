@@ -101,7 +101,7 @@ fn scale_of(value: &Value) -> Option<f64> {
 
 impl Studio {
     /// The sheet a command names, else the sheet shown.
-    fn sheet_asked(&self, sheet: Option<&str>) -> Result<String, String> {
+    pub(crate) fn sheet_asked(&self, sheet: Option<&str>) -> Result<String, String> {
         match sheet.map(str::trim).filter(|sheet| !sheet.is_empty()) {
             Some(name) => self
                 .layouts
@@ -116,7 +116,11 @@ impl Studio {
         }
     }
 
-    fn viewport_asked(&self, sheet: &str, viewport: &ViewportRef) -> Result<String, String> {
+    pub(crate) fn viewport_asked(
+        &self,
+        sheet: &str,
+        viewport: &ViewportRef,
+    ) -> Result<String, String> {
         let layout = self
             .layouts
             .layout(sheet)
@@ -149,6 +153,7 @@ impl Studio {
             "title": viewport.shown_title(),
             "centre": viewport.centre,
             "size": viewport.size,
+            "locked": viewport.locked,
         });
         if viewport.kind == PlacedKind::Drawing {
             value["scale"] = json!(viewport.scale);

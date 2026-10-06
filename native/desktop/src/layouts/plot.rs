@@ -86,6 +86,8 @@ pub struct Group {
 pub struct Placed {
     pub id: String,
     pub rect: [[f64; 2]; 2],
+    /// A locked viewport is selected by a click but not dragged.
+    pub locked: bool,
 }
 
 /// A sheet as it is drawn.
@@ -246,6 +248,7 @@ pub fn plot<'a>(layout: &Layout, content: impl Fn(&Viewport) -> Content<'a>) -> 
         plot.viewports.push(Placed {
             id: viewport.id.clone(),
             rect,
+            locked: viewport.locked,
         });
     }
     plot

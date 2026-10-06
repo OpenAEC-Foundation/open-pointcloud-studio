@@ -849,6 +849,31 @@ block as vectors, the 3D views as images and the texts in Helvetica. It is
 refused while a drawing on the sheet is not made; `show_sheet` makes it. The
 complete job has `path` and `bytes`.
 
+## Locks
+
+`lock_view` locks, and `unlock_view` unlocks, the saved 3D view of the active
+scan or the drawing of `create_drawing` named `name` in any case (a saved view
+of that name first, unless `kind` is `view` or `drawing`), or with
+`viewport` (or `kind: "viewport"`) a viewport on the sheet `sheet` (or the
+sheet shown). Both answer with the `kind`, the `name` and `locked`. The lock
+is kept with the view, the drawing or the sheet.
+
+While a locked 3D view is shown, the commands that would change its camera
+or its section box are refused with `<name> is locked`: `camera`,
+`set_camera`, `orbit`, `zoom_all`, `zoom_selection`, `set_section`,
+`clear_section`, `align_section_to_walls`, `walk`, `open_panorama`,
+`set_panorama`, `close_panorama`, `enter_photo`, `next_photo`,
+`previous_photo` and `rotate_crop` of the section box; so is
+`update_camera_view` of a locked view whatever is shown. Renaming,
+duplicating (the copy is unlocked), deleting and annotating go on. A locked
+drawing refuses `set_sheet_crop`, `drag_crop_handle` and `rotate_crop`, and
+still pans, zooms and takes annotations. A locked viewport refuses
+`update_viewport` of its place, size and scale, and `remove_viewport`.
+
+`status.result.views.active.locked`, `locked` of a drawing in
+`list_drawings`, of a viewport in `list_sheets` and of a tab in `list_tabs`
+report the locks.
+
 ## View tabs
 
 The tabs above the main area show the 3D model and the views and drawings
@@ -1644,6 +1669,8 @@ layer with photo colours.
 | `update_viewport` | optional `sheet`, `viewport`, optional `at`, `size`, `scale`, `title` | Moves a viewport, or sets the scale of a drawing, the size of a 3D view or the title |
 | `remove_viewport` | optional `sheet`, `viewport` | Takes a viewport off a sheet |
 | `export_sheet_pdf` | optional `sheet`, `path` | Writes a sheet as a PDF; returns a job ID |
+| `lock_view` | optional `name`, `kind`, `sheet`, `viewport` | Locks a saved 3D view, a drawing or a viewport on a sheet; see [Locks](#locks) |
+| `unlock_view` | optional `name`, `kind`, `sheet`, `viewport` | Unlocks it again |
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as the keys R and then O do |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view; answers with the `camera` |
 | `set_drawing_layer` | `layer`, `visible` | Shows or hides a layer of the drawing in the Drawing view by its name, or every layer with `*` |

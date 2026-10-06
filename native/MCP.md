@@ -238,6 +238,8 @@ follows when that view is restored.
 | `update_viewport` | optional `sheet`, `viewport`, optional `at`, `size`, `scale`, `title` | Moves a viewport, sets the scale of a drawing, the size of a 3D view or the title |
 | `remove_viewport` | optional `sheet`, `viewport` | Takes a viewport off a sheet |
 | `export_sheet_pdf` | optional `sheet`, `path` (`.pdf`) | Writes a sheet as a PDF of the size of its paper; a job |
+| `lock_view` | optional `name`, `kind` (`view`, `drawing` or `viewport`), `sheet`, `viewport` | Locks a saved 3D view, a drawing or a viewport on a sheet |
+| `unlock_view` | optional `name`, `kind`, `sheet`, `viewport` | Unlocks it again |
 | `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, read-only in the Open CAD Studio that comes with the application, else in the program chosen in Settings or an installed Open CAD Studio; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |

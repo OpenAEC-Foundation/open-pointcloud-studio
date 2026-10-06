@@ -74,6 +74,9 @@ pub struct SavedDrawing {
     /// Seconds since 1970, UTC.
     #[serde(default)]
     pub created: u64,
+    /// Its crop region, its turn and the points it uses stay; see `locks`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
 }
 
 impl SavedDrawing {
@@ -113,6 +116,7 @@ impl SavedDrawing {
             },
             sources,
             created: camera_views::now_seconds(),
+            locked: false,
         }
     }
 

@@ -962,6 +962,7 @@ impl Studio {
             let viewport = layout
                 .viewport_mut(id)
                 .ok_or_else(|| "That viewport is no longer on the sheet".to_owned())?;
+            refuse_locked(viewport)?;
             viewport.centre = [centre[0].clamp(0.0, width), centre[1].clamp(0.0, height)];
             Ok(())
         })
@@ -975,6 +976,7 @@ impl Studio {
                 .iter()
                 .position(|viewport| viewport.id == id)
                 .ok_or_else(|| "That viewport is no longer on the sheet".to_owned())?;
+            refuse_locked(&layout.viewports[place])?;
             name = layout.viewports.remove(place).shown_title().to_owned();
             Ok(())
         })?;
@@ -1005,6 +1007,7 @@ impl Studio {
             let viewport = layout
                 .viewport_mut(id)
                 .ok_or_else(|| "That viewport is no longer on the sheet".to_owned())?;
+            refuse_locked(viewport)?;
             if viewport.kind != PlacedKind::Drawing {
                 return Err("A 3D view on a sheet has no scale; set its size instead".into());
             }
@@ -1033,6 +1036,7 @@ impl Studio {
             let viewport = layout
                 .viewport_mut(id)
                 .ok_or_else(|| "That viewport is no longer on the sheet".to_owned())?;
+            refuse_locked(viewport)?;
             if viewport.kind != PlacedKind::View {
                 return Err(
                     "A drawing on a sheet takes the size of its crop region at its scale".into(),
@@ -1479,6 +1483,14 @@ impl Studio {
         }
         false
     }
+}
+
+/// A locked viewport is not moved, resized, scaled or removed.
+fn refuse_locked(viewport: &Viewport) -> Result<(), String> {
+    if viewport.locked {
+        return Err(format!("{} is locked", viewport.shown_title()));
+    }
+    Ok(())
 }
 
 fn rename_input_id() -> text_input::Id {

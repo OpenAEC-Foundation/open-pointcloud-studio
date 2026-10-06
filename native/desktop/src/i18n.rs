@@ -476,6 +476,7 @@ mod tests {
         ("layouts/model.rs", include_str!("layouts/model.rs")),
         ("layouts/panels.rs", include_str!("layouts/panels.rs")),
         ("layouts/plot.rs", include_str!("layouts/plot.rs")),
+        ("locks.rs", include_str!("locks.rs")),
     ];
 
     /// The functions and local helpers that translate a text they are given,

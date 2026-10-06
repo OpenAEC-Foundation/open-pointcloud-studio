@@ -529,6 +529,14 @@ A click on a view selects it: it is outlined in the accent colour, and Propertie
 
 A view on a sheet follows its view: a drawing made again or with another crop region, and a view renamed or updated, show on the sheet as they are now. A view or drawing that is deleted leaves its frame on the sheet with **view missing**. A drawing placed on a sheet is made in the background, one after another, when the sheet is shown and the drawing is not made in this session yet; until then its frame says it is being made, or which scans to open.
 
+### Locking a view
+
+A saved 3D view, a drawing and a view placed on a sheet can be locked, so that it stays as it was set up. The padlock on its row under VIEWS locks or unlocks it; a locked view or drawing shows a padlock on its tab too, which unlocks it, and **Locked** in Properties switches it while it is shown or selected.
+
+- While a locked 3D view is shown, orbiting, panning, zooming, walking, the view cube and the section box leave it as it is, and the status bar says "*name* is locked". **Update** is dimmed. The view can still be renamed, duplicated, deleted and annotated; its copy is not locked. A click on the tab of the 3D model gives back the camera of the 3D model, which is free.
+- A locked drawing keeps its crop region: its handles do not drag, RO does not turn it, and its figures and **Points used** are refused. It still pans and zooms, and takes annotations.
+- A locked view on a sheet is selected by a click, but not moved, resized, scaled or taken off the sheet.
+
 ### Printing a sheet
 
 **Export PDF…** in Properties writes the sheet as a PDF of one page of the size of its paper: the drawings, the border and the title block as vectors, the 3D views as images, and the texts in Helvetica, a font every PDF reader has. A drawing on the sheet that is not made yet is refused until it is.

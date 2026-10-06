@@ -973,6 +973,9 @@ impl Studio {
         ]
         .spacing(6)
         .align_y(iced::Alignment::Center);
+        if let Some(padlock) = self.tab_padlock(&tab) {
+            content = content.push(padlock);
+        }
         if closable {
             content = content.push(
                 button(text("×").size(12))
@@ -1045,6 +1048,7 @@ impl Studio {
                     "kind": tab.kind(),
                     "active": shown.as_ref() == Some(tab),
                     "closable": tab.closable(),
+                    "locked": self.tab_locked(tab),
                 });
                 match tab {
                     TabId::View(guid) | TabId::Drawing(guid) | TabId::Layout(guid) => {

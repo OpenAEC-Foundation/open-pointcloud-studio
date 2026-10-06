@@ -732,6 +732,8 @@ impl Studio {
         copy.guid = camera_views::new_guid();
         copy.name = name;
         copy.created = camera_views::now_seconds();
+        // A copy is a view of its own to change.
+        copy.locked = false;
         copy.annotations = original
             .annotations
             .iter()
@@ -975,6 +977,7 @@ impl Studio {
         view.guid = old.guid.clone();
         view.created = old.created;
         view.annotations = old.annotations.clone();
+        view.locked = old.locked;
         view.snapshot_due = true;
         self.views.list[index] = view;
         if let Err(error) = self.store_views() {
@@ -1207,6 +1210,10 @@ impl Studio {
             }
             ViewAction::Update(guid) => {
                 if let Some(index) = self.view_index(&guid) {
+                    if self.views.list[index].locked {
+                        self.status = format!("{} is locked", self.views.list[index].name);
+                        return Task::none();
+                    }
                     match self.update_view(index) {
                         Ok(task) => return task,
                         Err(error) => self.status = error,
@@ -1722,6 +1729,7 @@ impl Studio {
                 "name": view.name,
                 "guid": view.guid,
                 "annotations": view.annotations,
+                "locked": view.locked,
             })),
             "annotation_tool": self.views.tool.map(AnnotationKind::key),
             "placing": self.views.note_point
@@ -1854,11 +1862,8 @@ impl Studio {
             i18n::tr("Rename"),
             Message::Views(ViewAction::StartRename(guid())),
         ));
-        controls.push(crate::project_browser::row_button(
-            ToolIcon::Update,
-            i18n::tr("Update to the current 3D view"),
-            Message::Views(ViewAction::Update(guid())),
-        ));
+        controls.push(self.lock_button(crate::locks::LockTarget::View(guid())));
+        controls.push(self.update_view_button(&view.guid));
         controls.push(crate::project_browser::duplicate_button(Message::Browser(
             crate::project_browser::BrowserAction::Duplicate(
                 crate::project_browser::ViewRow::Saved(guid()),

@@ -230,6 +230,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - **SHEETS** in the Project Browser holds sheets: paper from A4 to A0, lying or standing, with a border and a title block with the project, the name, the number, the scale, the date and who drew it. A sheet opens in a tab of its own.
 - Drag a saved 3D view, a plan, an elevation or a section from VIEWS onto the paper, or use **Place view** in Properties. A drawing is placed as vectors at 1:100 or another scale, a 3D view as the picture of the view at about 200 dpi; each has its title under it, can be moved, scaled or resized, and follows its view.
 - **Export PDF…** writes the sheet as a PDF the size of its paper.
+- A padlock locks a saved 3D view, a drawing or a view on a sheet: a locked 3D view keeps its camera and section box while it is shown, a locked drawing its crop region, and a locked view on a sheet its place and scale.
 
 ### Mesh
 

@@ -374,6 +374,15 @@ pub enum ApiCommand {
         #[serde(flatten)]
         options: crate::drawing_crop::SheetCropOptions,
     },
+    /// Lock a saved view, a drawing or a viewport on a sheet, or unlock it.
+    LockView {
+        #[serde(flatten)]
+        options: crate::locks::LockOptions,
+    },
+    UnlockView {
+        #[serde(flatten)]
+        options: crate::locks::LockOptions,
+    },
     /// The sheets of SHEETS with the views placed on them.
     ListSheets,
     CreateSheet {

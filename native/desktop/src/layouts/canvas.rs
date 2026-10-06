@@ -295,6 +295,8 @@ pub(crate) struct OverlayState {
     pan: Option<UiPoint>,
     click: Option<UiPoint>,
     moving: Option<Moving>,
+    /// A press on a locked viewport, which a click selects.
+    locked_click: Option<String>,
 }
 
 /// What is drawn over the paper every frame, and the pointer.
@@ -358,6 +360,14 @@ impl canvas::Program<Message> for Overlay<'_> {
                         .viewports
                         .iter()
                         .rposition(|placed| super::model::contains(placed.rect, at));
+                    // A locked viewport is selected, not moved.
+                    let hit = hit.filter(|place| {
+                        let placed = &self.plot.viewports[*place];
+                        if placed.locked {
+                            state.locked_click = Some(placed.id.clone());
+                        }
+                        !placed.locked
+                    });
                     if let Some(place) = hit {
                         state.pan = None;
                         state.moving = Some(Moving {
@@ -404,7 +414,14 @@ impl canvas::Program<Message> for Overlay<'_> {
                         action(LayoutAction::Move(id, centre)),
                     );
                 }
+                let locked = state.locked_click.take();
                 if state.pan.take().is_some() {
+                    if let (Some(_), Some(id)) = (click, locked) {
+                        return (
+                            event::Status::Captured,
+                            action(LayoutAction::Select(Some(id))),
+                        );
+                    }
                     if click.is_some() && self.selected.is_some() {
                         return (event::Status::Captured, action(LayoutAction::Select(None)));
                     }

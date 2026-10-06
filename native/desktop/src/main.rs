@@ -30,6 +30,7 @@ mod index_jobs;
 mod job_scene;
 mod kept_slabs;
 mod layouts;
+mod locks;
 mod lod_pace;
 #[cfg(target_os = "macos")]
 mod macos_open;
@@ -2049,6 +2050,8 @@ enum Message {
     DrawingView(drawing_view::DrawingViewAction),
     /// The sheets that views and drawings are placed on.
     Layouts(layouts::LayoutAction),
+    /// A padlock was clicked: lock what is unlocked, unlock what is locked.
+    Lock(locks::LockTarget),
     ClosedMesh(closed_mesh::ClosedMeshAction),
     Faces(faces::FaceAction),
     PhotoColours(photo_colours::PhotoColourAction),
@@ -3748,6 +3751,11 @@ impl Studio {
     fn handle_api(&mut self, request: native_api::ApiRequest) -> Task<Message> {
         use native_api::ApiCommand;
 
+        if let Some(refusal) = self.api_locked_refusal(&request.command) {
+            self.status.clone_from(&refusal);
+            let _ = request.reply.send(json!({"ok": false, "error": refusal}));
+            return Task::none();
+        }
         let (response, task) = match request.command {
             ApiCommand::Status => {
                 let clouds: Vec<_> = self
@@ -4834,6 +4842,8 @@ impl Studio {
             ApiCommand::ShowTab { name, index } => self.api_show_tab(name.as_deref(), index),
             ApiCommand::CloseTab { name, index } => self.api_close_tab(name.as_deref(), index),
             ApiCommand::SetSheetCrop { options } => self.api_set_sheet_crop(&options),
+            ApiCommand::LockView { options } => self.api_lock(&options, true),
+            ApiCommand::UnlockView { options } => self.api_lock(&options, false),
             ApiCommand::ListSheets => self.api_list_sheets(),
             ApiCommand::CreateSheet { options } => self.api_create_sheet(&options),
             ApiCommand::UpdateSheet { options } => self.api_update_sheet(&options),
@@ -5875,6 +5885,11 @@ impl Studio {
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
+        // A locked view keeps its camera and its section box.
+        if let Some(refusal) = self.locked_refusal(&message) {
+            self.status = refusal;
+            return Task::none();
+        }
         match message {
             Message::SyncWindowChrome(retries) => {
                 if !self.sync_window_chrome() && retries > 0 {
@@ -8793,6 +8808,7 @@ impl Studio {
             Message::Drawing(action) => return self.update_drawing(action),
             Message::DrawingView(action) => return self.update_drawing_view(action),
             Message::Layouts(action) => return self.update_layouts(action),
+            Message::Lock(target) => return self.update_lock(target),
             Message::Crop(action) => return self.update_crop(action),
             Message::KeyTyped(value, captured) => return self.key_typed(&value, captured),
             Message::NamedKey(named, ignored) => return self.named_key(named, ignored),
@@ -10692,6 +10708,9 @@ impl Studio {
             properties = properties.push(section);
         }
         properties = properties.push(self.views_properties());
+        if let Some(lock) = self.view_lock_properties() {
+            properties = properties.push(lock);
+        }
         if self.section_enabled {
             properties = properties.push(opencad_properties::section_header("Section box"));
             for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
@@ -11466,6 +11485,9 @@ enum ToolIcon {
     Update,
     /// A sheet of SHEETS.
     Sheet,
+    /// The padlock of something locked, and of something that is not.
+    Locked,
+    Unlocked,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -11546,6 +11568,8 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Rename => include_bytes!("../../assets/opencad-icons/browser_rename.svg"),
         ToolIcon::Update => include_bytes!("../../assets/opencad-icons/browser_update.svg"),
         ToolIcon::Sheet => include_bytes!("../../assets/opencad-icons/browser_sheet.svg"),
+        ToolIcon::Locked => include_bytes!("../../assets/opencad-icons/browser_locked.svg"),
+        ToolIcon::Unlocked => include_bytes!("../../assets/opencad-icons/browser_unlocked.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)

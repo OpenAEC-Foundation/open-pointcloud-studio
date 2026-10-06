@@ -124,6 +124,28 @@ fn at_least_one(mut tool: Tool) -> Tool {
     tool
 }
 
+fn lock_arguments() -> Vec<Argument> {
+    vec![
+        optional(
+            "name",
+            text(
+                "The saved view or the drawing by its name, any case; with a viewport, the sheet",
+                1,
+                128,
+            ),
+        ),
+        optional(
+            "kind",
+            choice(
+                "What the name is; without it a saved view of that name, else a drawing",
+                &["view", "drawing", "viewport"],
+            ),
+        ),
+        optional("sheet", sheet_name()),
+        optional("viewport", viewport_name()),
+    ]
+}
+
 fn sheet_name() -> Value {
     text("The sheet by its guid, number or name, any case, as list_sheets gives them; without it the sheet shown", 1, 128)
 }
@@ -634,6 +656,8 @@ fn table() -> Vec<Tool> {
             optional("sheet", sheet_name()),
             required("path", path("Absolute destination ending in .pdf")),
         ]),
+        at_least_one(tool("lock_view", Command, "Locks a saved 3D view of the active scan, a drawing of create_drawing or a viewport on a sheet, as the padlock of its row, its tab or Properties does. While a locked 3D view is shown, orbiting, panning, zooming, walking, the view cube and the section box leave it as it is, and update_camera_view and the commands that move the camera or the box are refused with \"<name> is locked\"; it can still be renamed, duplicated (the copy is unlocked), deleted and annotated. A locked drawing keeps its crop region, its turn and the points it uses (set_sheet_crop, drag_crop_handle and rotate_crop are refused) and still pans, zooms and takes annotations. A locked viewport is not moved, resized, scaled or removed. The lock is kept. Answers with kind, name and locked.", lock_arguments())),
+        at_least_one(tool("unlock_view", Command, "Unlocks what lock_view locked, named the same way. Answers with kind, name and locked.", lock_arguments())),
         tool("open_in_cad_viewer", Command, "Opens a DXF or DWG file in the CAD viewer: the Open CAD Studio that comes with the application, else the program chosen in Settings, else an installed Open CAD Studio, started read-only and without waiting for it; without any of them the file goes to the program the system has for it. Without a path it opens the last file that a drawing, faces or mesh export wrote. Answers with the path, the viewer program (null for the system program) and read_only. status.result.cad_viewer tells which viewer was found.", vec![
             optional("path", path("Absolute path of an existing .dxf or .dwg file; without it the last exported one")),
         ]),

@@ -1280,6 +1280,7 @@ impl Studio {
                     !made,
                     Message::DrawingView(DrawingViewAction::ShowDrawing(guid.clone())),
                     vec![
+                        self.lock_button(crate::locks::LockTarget::Drawing(guid.clone())),
                         duplicate_button(Message::Browser(BrowserAction::Duplicate(
                             ViewRow::Drawing(guid.clone()),
                         ))),

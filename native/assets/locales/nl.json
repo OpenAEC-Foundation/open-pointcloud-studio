@@ -962,5 +962,13 @@
   "Deselect": "Deselecteren",
   "Drag the viewport on the paper to move it; Delete takes it off.": "Sleep de viewport over het papier om hem te verplaatsen; Delete haalt hem van het blad.",
   "SHEET": "BLAD",
-  "Sheets": "Bladen"
+  "Sheets": "Bladen",
+  "Locked: click to unlock": "Vergrendeld: klik om te ontgrendelen",
+  "Lock": "Vergrendelen",
+  "Locked: unlock the view to update it": "Vergrendeld: ontgrendel de view om hem bij te werken",
+  "Orbit, zoom, walk and the section box leave the view as it is": "Draaien, zoomen, lopen en de snedebox laten de view zoals hij is",
+  "The crop region, its turn and the points used stay": "Het bijsnijgebied, de draaiing en de gebruikte punten blijven",
+  "It is not moved, resized, scaled or removed": "Hij wordt niet verplaatst, vergroot, geschaald of weggehaald",
+  "Locked": "Vergrendeld",
+  "Saved view": "Opgeslagen view"
 }

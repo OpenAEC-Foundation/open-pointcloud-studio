@@ -451,10 +451,19 @@ impl Studio {
             PlacedKind::Drawing => tr("Drawing"),
         };
         let missing = matches!(self.viewport_content(viewport), Content::Missing);
+        let sheet = self
+            .drawing_view
+            .shown_layout()
+            .unwrap_or_default()
+            .to_owned();
         let mut block = column![
             opencad_properties::section_header("Viewport"),
             opencad_properties::property_row("Placed view", viewport.name.clone()),
             opencad_properties::property_row("Kind", kind.to_owned()),
+            self.lock_row(crate::locks::LockTarget::Viewport {
+                sheet,
+                id: viewport.id.clone(),
+            }),
         ]
         .spacing(0)
         .width(Fill);

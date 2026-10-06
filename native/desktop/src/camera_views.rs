@@ -167,6 +167,10 @@ pub struct SavedView {
     /// snapshot is taken when the viewport next shows the view.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub snapshot_due: bool,
+    /// Orbit, zoom, walk and the section box leave the view as it is while
+    /// it is shown, and Update is refused; see `locks`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
 }
 
 impl SavedView {
@@ -194,6 +198,7 @@ impl SavedView {
             color_mode: None,
             annotations: Vec::new(),
             snapshot_due: false,
+            locked: false,
         }
     }
 
