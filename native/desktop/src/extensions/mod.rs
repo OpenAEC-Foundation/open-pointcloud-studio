@@ -693,7 +693,8 @@ impl Studio {
             "selected_points": self.selected_total(),
             "section_box": self.section_value(),
             "shown": shown,
-            "drawing_view": self.drawing_view.shown,
+            // A sheet in the main area is in `shown`, not a drawing.
+            "drawing_view": self.drawing_view.drawing_shown(),
             "file_view": self.file_open,
         })
     }
