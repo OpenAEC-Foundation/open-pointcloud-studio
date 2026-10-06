@@ -707,5 +707,6 @@
   "Cut height": "Snedehoogte",
   "Cut position": "Snedepositie",
   "View depth (m)": "Zichtdiepte (m)",
-  "Enter applies a value and makes the drawing again. Drag a handle of the crop region on the sheet; RO turns the crop region of a plan.": "Enter past een waarde toe en maakt de tekening opnieuw. Sleep een greep van het bijsnijgebied op het blad; RO draait het bijsnijgebied van een plattegrond."
+  "Enter applies a value and makes the drawing again. Drag a handle of the crop region on the sheet; RO turns the crop region of a plan.": "Enter past een waarde toe en maakt de tekening opnieuw. Sleep een greep van het bijsnijgebied op het blad; RO draait het bijsnijgebied van een plattegrond.",
+  "Duplicate": "Dupliceren"
 }

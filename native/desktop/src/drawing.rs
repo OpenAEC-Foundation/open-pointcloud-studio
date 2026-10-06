@@ -4607,6 +4607,104 @@ mod tests {
     }
 
     #[test]
+    fn a_duplicate_of_a_drawing_is_listed_below_it_without_making_it_again() {
+        use crate::drawing_crop::CropAction;
+        use crate::project_browser::{BrowserAction, ViewKind, ViewRow};
+
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        let plan = make_plan(&mut studio, 1.05);
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::Pan([30.0, 10.0])));
+        let camera = studio.drawing_view.camera();
+
+        let _ = studio.update(Message::Browser(BrowserAction::Duplicate(
+            ViewRow::Drawing(plan.clone()),
+        )));
+        assert!(studio.drawing.job.is_none(), "nothing is computed");
+        let saved = studio.drawing_view.saved.clone();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved[1].name, "Plan +1.05 (2)");
+        assert_ne!(saved[1].guid, plan);
+        assert_eq!(saved[1].section, saved[0].section);
+        let copy = saved[1].guid.clone();
+        assert_eq!(studio.drawing_view.shown_guid(), Some(copy.as_str()));
+        assert_eq!(studio.drawing_view.camera(), camera);
+        assert_eq!(
+            studio.drawing_view.made(&copy).unwrap().totals(),
+            studio.drawing_view.made(&plan).unwrap().totals()
+        );
+        assert_eq!(studio.drawing_view_caption(), "Plan +1.05 (2)");
+        assert_eq!(crate::saved_drawings::load(), saved, "kept on disk");
+
+        // The copy changes on its own.
+        let unit = saved[1].request().unwrap().units.factor();
+        let crop = studio.crop_overlay().unwrap();
+        let mut smaller = crop.rect;
+        smaller[1][0] = 2.0 * unit;
+        let _ = studio.update(Message::Crop(CropAction::Set(copy.clone(), smaller)));
+        finish(&mut studio);
+        assert!((definition(&studio, &copy).section.max[0] - 2.0).abs() < 1e-9);
+        assert_eq!(definition(&studio, &plan).section, saved[0].section);
+
+        // Another copy of the original comes right below it.
+        let answer = send(
+            &mut studio,
+            serde_json::from_str(
+                r#"{"command":"duplicate_view","name":"Plan +1.05","kind":"drawing"}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["name"], "Plan +1.05 (3)");
+        assert!(answer["job_id"].is_null(), "{answer}");
+        let groups = studio.view_groups();
+        let (kind, rows) = &groups[1];
+        assert_eq!(*kind, ViewKind::Plans);
+        let names: Vec<String> = rows
+            .iter()
+            .map(|row| match row {
+                ViewRow::Drawing(guid) => definition(&studio, guid).name,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(names, ["Plan +1.05", "Plan +1.05 (3)", "Plan +1.05 (2)"]);
+
+        // After a restart a duplicate of a drawing not made yet is made.
+        let mut restarted = Studio::default();
+        let cloud = Arc::new(pointcloud_core::open(&studio.clouds[0].cloud.path, 1_000).unwrap());
+        let _ = restarted.update(Message::Loaded(Ok(cloud)));
+        let answer = send(
+            &mut restarted,
+            serde_json::from_str(r#"{"command":"duplicate_view","name":"plan +1.05 (2)"}"#)
+                .unwrap(),
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["name"], "Plan +1.05 (4)");
+        assert_eq!(answer["accepted"], true);
+        finish(&mut restarted);
+        let made = job(&mut restarted, answer["job_id"].as_str().unwrap());
+        assert_eq!(made["state"], "complete", "{made}");
+        let names: Vec<&str> = restarted
+            .drawing_view
+            .saved
+            .iter()
+            .map(|drawing| drawing.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Plan +1.05",
+                "Plan +1.05 (3)",
+                "Plan +1.05 (2)",
+                "Plan +1.05 (4)"
+            ]
+        );
+        let _ = studio.view();
+    }
+
+    #[test]
     fn ro_turns_the_crop_region_of_a_plan_and_the_walls_come_along_the_sheet() {
         use crate::drawing_crop::{CropAction, TurnTarget};
 

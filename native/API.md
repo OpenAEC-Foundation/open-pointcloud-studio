@@ -655,7 +655,7 @@ which must all be open, and the answer then has `accepted: true` and a
 exports and files are limited to the 16 newest; the drawings of
 `create_drawing` stay, however many there are.
 
-### Crop region and RO
+### Crop region, duplicates and RO
 
 The crop region of a drawing of `create_drawing` is the face of its box as the
 drawing shows it: for a plan the box along its own two horizontal axes, for an
@@ -693,6 +693,18 @@ side or sides go to. The size goes in whole centimetres and is at least
 as during a drag, with its size, and the answer has `held: true`, the `rect`
 and the `width` and `height` in metres. Let go (the default), the drawing is
 made again as with `set_sheet_crop`, and the answer has its `job_id`.
+
+`duplicate_view` duplicates a row of VIEWS by its `name` in any case: a saved
+view of the active scan, a drawing of `create_drawing`, or `3D model`, which
+saves the current 3D view (its camera, and the section box while it is on) as
+a view. `kind` (`model`, `view` or `drawing`) picks one when names are alike;
+without it a saved view is taken first, then a drawing. The copy is named with
+" (2)" after the name, or the next number no other name of the same scans
+takes (the copy of "Plan (2)" is "Plan (3)"), is listed right below the
+original, is shown and changes on its own. A drawing is copied as it is made,
+without making it again; one that is not made in this session yet is made,
+and the answer has `accepted: true` and a `job_id`. The answer has the `kind`,
+`name` and `guid` of the copy.
 
 `rotate_crop` turns what the keys R and then O turn. With `name`, or while the
 Drawing view shows a plan of `create_drawing`, it turns the crop region of
@@ -1178,8 +1190,9 @@ screen.
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`, made again from how it was made when it is not made in this session yet (then with a job ID) |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
 | `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
-| `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth` | Sets the crop region of a drawing of `create_drawing` and makes it again in place; returns a job ID. See [Crop region and RO](#crop-region-and-ro) |
+| `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth` | Sets the crop region of a drawing of `create_drawing` and makes it again in place; returns a job ID. See [Crop region, duplicates and RO](#crop-region-duplicates-and-ro) |
 | `drag_crop_handle` | `handle`, `to`, optional `release` | Drags a handle of the crop region of the drawing shown to a point of the drawing, as the pointer does; held with `release: false`, else the drawing is made again (job ID) |
+| `duplicate_view` | `name`, optional `kind` | Duplicates the 3D model, a saved view or a drawing under VIEWS, right below it, and shows the copy |
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as the keys R and then O do |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view; answers with the `camera` |
 | `set_drawing_layer` | `layer`, `visible` | Shows or hides a layer of the drawing in the Drawing view by its name, or every layer with `*` |

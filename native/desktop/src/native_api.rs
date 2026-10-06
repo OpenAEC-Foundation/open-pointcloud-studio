@@ -322,6 +322,14 @@ pub enum ApiCommand {
         #[serde(flatten)]
         options: crate::drawing_crop::SheetCropOptions,
     },
+    /// Duplicate a row of VIEWS: the 3D model, a saved view or a drawing.
+    DuplicateView {
+        name: String,
+        /// `model`, `view` or `drawing`; without it a saved view of that
+        /// name, else a drawing, else the 3D model.
+        #[serde(default)]
+        kind: Option<String>,
+    },
     /// Drag a handle of the crop region of the drawing shown, as the
     /// pointer does.
     DragCropHandle {

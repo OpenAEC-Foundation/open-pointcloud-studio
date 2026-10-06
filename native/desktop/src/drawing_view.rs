@@ -1701,6 +1701,68 @@ impl Studio {
         Ok(removed.name)
     }
 
+    /// Duplicate a drawing of Create 2D: a copy with a name of its own and
+    /// its own box, listed right below it and shown. A drawing made in this
+    /// session is copied as it is, without making it again; one not made yet
+    /// is made, with the job that makes it in the answer.
+    pub(crate) fn duplicate_saved_drawing(
+        &mut self,
+        guid: &str,
+        api_job_id: Option<String>,
+    ) -> Result<(SavedDrawing, Option<Task<Message>>), String> {
+        let view = &mut self.drawing_view;
+        let place = view
+            .saved
+            .iter()
+            .position(|drawing| drawing.guid == guid)
+            .ok_or_else(|| "That drawing is no longer kept".to_owned())?;
+        let original = view.saved[place].clone();
+        let name = crate::project_browser::duplicate_name(
+            &original.name,
+            crate::saved_drawings::MAX_NAME_CHARS,
+            |candidate| {
+                view.saved.iter().any(|drawing| {
+                    drawing.name.eq_ignore_ascii_case(candidate)
+                        && drawing
+                            .sources
+                            .iter()
+                            .any(|source| original.sources.contains(source))
+                })
+            },
+        );
+        let mut copy = original.clone();
+        copy.guid = crate::camera_views::new_guid();
+        copy.name = name;
+        copy.created = crate::camera_views::now_seconds();
+        view.saved.insert(place + 1, copy.clone());
+        if let Err(error) = crate::saved_drawings::save(&view.saved) {
+            view.saved.remove(place + 1);
+            return Err(format!("The drawings could not be stored: {error}"));
+        }
+        let Some(made) = view.made(guid).cloned() else {
+            let task = self.show_saved_drawing(&copy.guid, api_job_id)?;
+            self.status = format!("Drawing {} duplicated as {}", original.name, copy.name);
+            return Ok((copy, task));
+        };
+        // The same drawing under the name of the copy, at the same place on
+        // the sheet when the original was the one shown.
+        let kept =
+            (view.shown && view.is_current(&made)).then(|| (view.camera(), view.layer_switches()));
+        let mut scene = (*made).clone();
+        scene.source = DrawingSource::Sheet {
+            guid: copy.guid.clone(),
+            name: copy.name.clone(),
+        };
+        view.set_scene(Arc::new(scene));
+        if let Some((camera, layers)) = kept {
+            view.keep_view(Some(camera), &layers);
+        }
+        view.shown = true;
+        self.file_open = false;
+        self.status = format!("Drawing {} duplicated as {}", original.name, copy.name);
+        Ok((copy, None))
+    }
+
     /// Keep how a drawing of Create 2D was made, in place of what was kept
     /// for it before.
     pub(crate) fn keep_saved_drawing(&mut self, definition: SavedDrawing) {

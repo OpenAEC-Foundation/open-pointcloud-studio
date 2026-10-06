@@ -4321,6 +4321,9 @@ impl Studio {
             ApiCommand::DeleteDrawing { name } => (self.api_delete_drawing(&name), Task::none()),
             ApiCommand::SetBrowserGroup { group, open } => self.api_set_browser_group(&group, open),
             ApiCommand::SetSheetCrop { options } => self.api_set_sheet_crop(&options),
+            ApiCommand::DuplicateView { name, kind } => {
+                self.api_duplicate_view(&name, kind.as_deref())
+            }
             ApiCommand::DragCropHandle {
                 handle,
                 to,
@@ -10626,6 +10629,8 @@ enum ToolIcon {
     /// The chevron of an open and of a collapsed group.
     ChevronOpen,
     ChevronClosed,
+    /// Duplicate a row of VIEWS.
+    Duplicate,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -10695,6 +10700,7 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Bcf => include_bytes!("../../assets/opencad-icons/browser_bcf.svg"),
         ToolIcon::ChevronOpen => include_bytes!("../../assets/opencad-icons/chevron_open.svg"),
         ToolIcon::ChevronClosed => include_bytes!("../../assets/opencad-icons/chevron_closed.svg"),
+        ToolIcon::Duplicate => include_bytes!("../../assets/opencad-icons/browser_duplicate.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)

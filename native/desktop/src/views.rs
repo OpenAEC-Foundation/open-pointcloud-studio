@@ -630,6 +630,12 @@ impl Studio {
     /// make it the active view. An empty name gives the first free
     /// "View 1", "View 2", ….
     pub fn save_view(&mut self, name: &str) -> Result<Task<Message>, String> {
+        self.save_view_at(name, None)
+    }
+
+    /// Save the current view as `save_view` does, at a place in the list of
+    /// views; without one at the end.
+    fn save_view_at(&mut self, name: &str, place: Option<usize>) -> Result<Task<Message>, String> {
         let source = self
             .active_camera_source()
             .ok_or_else(|| "Open a scan before saving a view".to_owned())?;
@@ -665,15 +671,173 @@ impl Studio {
         let mut view = self.current_view(source, &name);
         view.snapshot_due = true;
         let guid = view.guid.clone();
-        self.views.list.push(view);
+        let place = place
+            .filter(|place| *place <= self.views.list.len())
+            .unwrap_or(self.views.list.len());
+        self.views.list.insert(place, view);
         if let Err(error) = self.store_views() {
-            self.views.list.pop();
+            self.views.list.remove(place);
             return Err(error);
         }
         self.activate_view(&guid);
         self.views.shown = Some(self.showing(&guid));
         self.status = format!("Saved view {name}");
         Ok(self.schedule_snapshot(&guid))
+    }
+
+    /// Duplicate a saved view of the active scan: a copy with a name of its
+    /// own, its own camera and section box and its annotations and
+    /// snapshot, listed right below it and shown.
+    pub(crate) fn duplicate_view(&mut self, guid: &str) -> Result<Task<Message>, String> {
+        let index = self
+            .view_index(guid)
+            .ok_or_else(|| "That view is no longer saved".to_owned())?;
+        let original = self.views.list[index].clone();
+        let views = &self.views.list;
+        if views
+            .iter()
+            .filter(|view| view.source == original.source)
+            .count()
+            >= MAX_VIEWS_PER_SOURCE
+        {
+            return Err(format!(
+                "A scan can have at most {MAX_VIEWS_PER_SOURCE} saved views"
+            ));
+        }
+        let name = crate::project_browser::duplicate_name(&original.name, MAX_NAME_CHARS, |name| {
+            views
+                .iter()
+                .any(|view| view.source == original.source && view.name.eq_ignore_ascii_case(name))
+        });
+        let mut copy = original.clone();
+        copy.guid = camera_views::new_guid();
+        copy.name = name;
+        copy.created = camera_views::now_seconds();
+        copy.annotations = original
+            .annotations
+            .iter()
+            .map(|annotation| match annotation {
+                // A note of the copy is a note of its own.
+                Annotation::Note {
+                    point,
+                    text,
+                    created,
+                    ..
+                } => Annotation::Note {
+                    point: *point,
+                    text: text.clone(),
+                    guid: camera_views::new_guid(),
+                    created: *created,
+                },
+                line => line.clone(),
+            })
+            .collect();
+        // The picture of the view comes along; without one it is taken
+        // when the copy is shown.
+        let pictured = camera_views::read_snapshot(&original.guid)
+            .is_some_and(|png| camera_views::write_snapshot(&copy.guid, &png).is_ok());
+        copy.snapshot_due = original.snapshot_due || !pictured;
+        self.views.list.insert(index + 1, copy.clone());
+        if let Err(error) = self.store_views() {
+            self.views.list.remove(index + 1);
+            camera_views::remove_snapshot(&copy.guid);
+            return Err(error);
+        }
+        let task = self.restore_view(index + 1);
+        self.status = format!("View {} duplicated as {}", original.name, copy.name);
+        Ok(task)
+    }
+
+    /// Duplicate the 3D model: the current 3D view, its camera and the
+    /// section box while it is on, saved as a view named after the 3D model,
+    /// listed right below it and shown.
+    pub(crate) fn duplicate_model_view(&mut self) -> Result<Task<Message>, String> {
+        let source = self
+            .active_camera_source()
+            .ok_or_else(|| "Open a scan before saving a view".to_owned())?;
+        let views = &self.views.list;
+        let name =
+            crate::project_browser::duplicate_name(i18n::tr("3D model"), MAX_NAME_CHARS, |name| {
+                views
+                    .iter()
+                    .any(|view| view.source == source && view.name.eq_ignore_ascii_case(name))
+            });
+        // Right below the 3D model: before the other views of the scan.
+        let place = views.iter().position(|view| view.source == source);
+        self.drawing_view.shown = false;
+        self.file_open = false;
+        let task = self.save_view_at(&name, place)?;
+        self.status = format!("3D model duplicated as the view {name}");
+        Ok(task)
+    }
+
+    /// The `duplicate_view` command of the local API: a row of VIEWS by its
+    /// name in any case, of the kind `kind` names (`model`, `view` or
+    /// `drawing`); without a kind a saved view of the active scan of that
+    /// name, else a drawing, else the 3D model.
+    pub(crate) fn api_duplicate_view(
+        &mut self,
+        name: &str,
+        kind: Option<&str>,
+    ) -> (Value, Task<Message>) {
+        let refuse = |error: String| (json!({"ok": false, "error": error}), Task::none());
+        let name = name.trim();
+        let kind = kind.map(|kind| kind.trim().to_ascii_lowercase());
+        if kind
+            .as_deref()
+            .is_some_and(|kind| !matches!(kind, "model" | "view" | "drawing"))
+        {
+            return refuse("kind must be model, view or drawing".into());
+        }
+        let wants = |wanted: &str| kind.as_deref().is_none_or(|kind| kind == wanted);
+        let copied_view = |studio: &Studio| {
+            studio
+                .active_view()
+                .map(|view| json!({"ok": true, "kind": "view", "name": view.name, "guid": view.guid}))
+                .unwrap_or_else(|| json!({"ok": true, "kind": "view"}))
+        };
+        if wants("view") {
+            if let Some(index) = self.view_named(name) {
+                let guid = self.views.list[index].guid.clone();
+                return match self.duplicate_view(&guid) {
+                    Ok(task) => (copied_view(self), task),
+                    Err(error) => refuse(error),
+                };
+            }
+        }
+        if wants("drawing") {
+            if let Some(guid) = self.drawing_named(name) {
+                let id =
+                    self.record_api_job(json!({"state": "running", "operation": "create_drawing"}));
+                return match self.duplicate_saved_drawing(&guid, Some(id.clone())) {
+                    Ok((copy, Some(task))) => (
+                        json!({"ok": true, "kind": "drawing", "name": copy.name, "guid": copy.guid, "accepted": true, "job_id": id}),
+                        task,
+                    ),
+                    Ok((copy, None)) => {
+                        self.forget_api_job(&id);
+                        (
+                            json!({"ok": true, "kind": "drawing", "name": copy.name, "guid": copy.guid}),
+                            Task::none(),
+                        )
+                    }
+                    Err(error) => {
+                        self.forget_api_job(&id);
+                        refuse(error)
+                    }
+                };
+            }
+        }
+        let model = name.eq_ignore_ascii_case("3D model")
+            || name.eq_ignore_ascii_case(i18n::tr("3D model"))
+            || kind.as_deref() == Some("model");
+        if wants("model") && model {
+            return match self.duplicate_model_view() {
+                Ok(task) => (copied_view(self), task),
+                Err(error) => refuse(error),
+            };
+        }
+        refuse(format!("no view or drawing {name} under VIEWS"))
     }
 
     /// Put the limits of a saved section box back, as far as they lie inside
@@ -1668,6 +1832,11 @@ impl Studio {
                 .into(),
             );
         }
+        controls.push(crate::project_browser::duplicate_button(Message::Browser(
+            crate::project_browser::BrowserAction::Duplicate(
+                crate::project_browser::ViewRow::Saved(guid()),
+            ),
+        )));
         controls.push(crate::project_browser::remove_button(Message::Views(
             ViewAction::Delete(guid()),
         )));
@@ -2408,6 +2577,98 @@ mod tests {
         studio.views.list.push(older.clone());
         act(&mut studio, ViewAction::Restore(older.guid.clone()));
         assert!(!studio.section_enabled);
+        let _ = studio.view();
+    }
+
+    #[test]
+    fn a_duplicate_of_a_view_or_the_3d_model_is_a_view_of_its_own_below_it() {
+        use crate::project_browser::{BrowserAction, ViewRow};
+
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+        let (mut studio, _directory) = studio_with_scan();
+        let section = send(
+            &mut studio,
+            command(
+                r#"{"command":"set_section","min":[1,0.5,0.25],"max":[3,2.5,1.5],"rotation":20}"#,
+            ),
+        );
+        assert_eq!(section["ok"], true, "{section}");
+        act(&mut studio, ViewAction::Name("Room".into()));
+        act(&mut studio, ViewAction::Save);
+        act(&mut studio, ViewAction::Name("Hall".into()));
+        act(&mut studio, ViewAction::Save);
+        let room = guid_of(&studio, "Room");
+
+        // The copy of a view: below it, shown, with a name and identity of
+        // its own and the camera and turned box of the original.
+        let _ = studio.update(Message::Browser(BrowserAction::Duplicate(ViewRow::Saved(
+            room.clone(),
+        ))));
+        let names: Vec<&str> = studio
+            .views
+            .list
+            .iter()
+            .map(|view| view.name.as_str())
+            .collect();
+        assert_eq!(names, ["Room", "Room (2)", "Hall"]);
+        let (original, copy) = (studio.views.list[0].clone(), studio.views.list[1].clone());
+        assert_ne!(copy.guid, original.guid);
+        assert_eq!(studio.active_view().unwrap().guid, copy.guid);
+        assert_eq!(copy.section, original.section);
+        assert_eq!(
+            (copy.yaw, copy.pitch, copy.zoom),
+            (original.yaw, original.pitch, original.zoom)
+        );
+        assert_eq!(studio.section_box().unwrap().rotation_degrees, 20.0);
+        assert_eq!(camera_views::load(), studio.views.list, "kept on disk");
+        // A copy of the copy counts on.
+        let _ = studio.update(Message::Browser(BrowserAction::Duplicate(ViewRow::Saved(
+            copy.guid.clone(),
+        ))));
+        assert_eq!(studio.views.list[2].name, "Room (3)");
+        // The copy changes on its own: the original keeps its box.
+        let _ = studio.update(Message::SetSectionEnabled(false));
+        act(&mut studio, ViewAction::Update(copy.guid.clone()));
+        assert!(studio.views.list[1].section.is_none());
+        assert_eq!(studio.views.list[0].section, original.section);
+
+        // The 3D model: the current 3D view saved as a view right below it,
+        // in front of the other views, and shown in 3D.
+        studio.drawing_view.shown = true;
+        let _ = studio.update(Message::Browser(BrowserAction::Duplicate(ViewRow::Model)));
+        assert!(!studio.drawing_view.shown);
+        assert_eq!(studio.views.list[0].name, "3D model (2)");
+        assert!(studio.views.list[0].section.is_none(), "the box is off");
+        assert_eq!(studio.active_view().unwrap().name, "3D model (2)");
+        let groups = studio.view_groups();
+        assert_eq!(groups[0].1[0], ViewRow::Model);
+        assert_eq!(
+            groups[0].1[1],
+            ViewRow::Saved(studio.views.list[0].guid.clone())
+        );
+        // By the local API, in any case.
+        let answer = send(
+            &mut studio,
+            command(r#"{"command":"duplicate_view","name":"3d MODEL"}"#),
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["name"], "3D model (3)");
+        assert_eq!(answer["kind"], "view");
+        let answer = send(
+            &mut studio,
+            command(r#"{"command":"duplicate_view","name":"hall"}"#),
+        );
+        assert_eq!(answer["name"], "Hall (2)", "{answer}");
+        let refused = send(
+            &mut studio,
+            command(r#"{"command":"duplicate_view","name":"Hall","kind":"drawing"}"#),
+        );
+        assert_eq!(refused["ok"], false);
+        let refused = send(
+            &mut studio,
+            command(r#"{"command":"duplicate_view","name":"Hall","kind":"sheet"}"#),
+        );
+        assert_eq!(refused["ok"], false);
         let _ = studio.view();
     }
 

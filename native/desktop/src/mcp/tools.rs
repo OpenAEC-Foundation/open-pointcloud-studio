@@ -499,6 +499,10 @@ fn table() -> Vec<Tool> {
             required("to", numbers("The point [u, v] of the drawing, in its units and coordinates, as list_drawings gives crop.rect", 2)),
             optional("release", boolean("false to hold the handle there without letting go; true by default")),
         ]),
+        tool("duplicate_view", Command, "Duplicates a row of VIEWS in the Project Browser: a saved view of the active scan, a drawing of create_drawing (with the drawing as it is made, without computing it again) or the 3D model (the current 3D view, with the section box while it is on, saved as a view). The copy is named with \" (2)\" or the next free number after the name, listed right below the original, shown, and changes on its own. Answers with its kind, name and guid; a drawing that is not made yet is made, with a job_id.", vec![
+            required("name", text("Name of the view or drawing, any case; 3D model for the default 3D view", 1, 96)),
+            optional("kind", choice("What the name is; without it a saved view of that name, else a drawing, else the 3D model", &["model", "view", "drawing"])),
+        ]),
         tool("rotate_crop", Command, "Turns what the keys R and then O turn: the crop region of a plan of create_drawing, counter-clockwise on the sheet (its box turns as far about the vertical through the centre of the region and the plan is made again upright in it, with a job_id), or in the 3D view the section box about its centre. With apply false the turn starts as RO starts it, shown at the angle given, and waits for Enter, a click, Escape or this command with apply true and no degrees. status.result.turning reports a turn under way.", vec![
             optional("name", text("Name of a plan as list_drawings gives it; without it the plan shown in the Drawing view, or the section box in the 3D view", 1, 96)),
             optional("degrees", number_in("The turn in degrees, counter-clockwise", -3600.0, 3600.0)),

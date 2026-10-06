@@ -291,6 +291,26 @@ pub fn view_groups(
         .collect()
 }
 
+/// The name of a copy: the name with " (2)" after it, or with the next
+/// number no name takes. A name that ends in such a number counts on from
+/// it, so that the copy of "Plan (2)" is "Plan (3)". The name is shortened
+/// to stay within `max_chars`.
+pub fn duplicate_name(name: &str, max_chars: usize, taken: impl Fn(&str) -> bool) -> String {
+    let name = name.trim();
+    let numbered = name
+        .strip_suffix(')')
+        .and_then(|rest| rest.rsplit_once(" ("))
+        .filter(|(base, number)| {
+            !base.trim().is_empty() && number.parse::<u32>().is_ok_and(|number| number >= 2)
+        });
+    let base = numbered.map_or(name, |(base, _)| base);
+    let base: String = base.chars().take(max_chars.saturating_sub(7)).collect();
+    (2..10_000)
+        .map(|number| format!("{base} ({number})"))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or_else(|| format!("{base} (2)"))
+}
+
 /// The group key an API name stands for.
 pub fn group_named(name: &str) -> Option<String> {
     let name = name.trim();
@@ -315,6 +335,9 @@ pub enum BrowserAction {
     FolderVisible(PathBuf, bool),
     /// Show the 3D scene in place of a drawing.
     ShowModel,
+    /// Duplicate a row of VIEWS: the 3D model as a saved view of the
+    /// current 3D view, a saved view or a drawing.
+    Duplicate(ViewRow),
 }
 
 /// What each group's band marks it with: the colour of its strip.
@@ -512,6 +535,20 @@ pub fn view_row<'a>(
     line.into()
 }
 
+/// The small button of a row that makes a copy of it.
+pub fn duplicate_button<'a>(message: Message) -> Element<'a, Message> {
+    tooltip(
+        button(icon_svg(ToolIcon::Duplicate, 12.0))
+            .on_press(message)
+            .style(flat_tool_style)
+            .padding([3, 4]),
+        hint(tr("Duplicate").to_owned()),
+        tooltip::Position::Bottom,
+    )
+    .gap(4)
+    .into()
+}
+
 /// The × of a row, which takes it off the list.
 pub fn remove_button<'a>(message: Message) -> Element<'a, Message> {
     button(text("×").size(11))
@@ -555,6 +592,20 @@ impl Studio {
                 self.drawing_view.shown = false;
                 self.file_open = false;
                 self.status = "3D model".into();
+            }
+            BrowserAction::Duplicate(row) => {
+                let done = match row {
+                    ViewRow::Model => self.duplicate_model_view(),
+                    ViewRow::Saved(guid) => self.duplicate_view(&guid),
+                    ViewRow::Drawing(guid) => self
+                        .duplicate_saved_drawing(&guid, None)
+                        .map(|(_, task)| task.unwrap_or_else(Task::none)),
+                    ViewRow::File(_) => Ok(Task::none()),
+                };
+                match done {
+                    Ok(task) => return task,
+                    Err(reason) => self.status = reason,
+                }
             }
         }
         Task::none()
@@ -1104,7 +1155,13 @@ impl Studio {
                 !self.drawing_view.shown && self.active_view_index().is_none(),
                 false,
                 Message::Browser(BrowserAction::ShowModel),
-                Vec::new(),
+                if self.active.is_some() {
+                    vec![duplicate_button(Message::Browser(
+                        BrowserAction::Duplicate(ViewRow::Model),
+                    ))]
+                } else {
+                    Vec::new()
+                },
             ),
             ViewRow::Saved(guid) => match self.views.list.iter().find(|view| view.guid == *guid) {
                 Some(view) => self.saved_view_row(view),
@@ -1128,9 +1185,14 @@ impl Studio {
                     shown_drawing == Some(guid.as_str()),
                     !made,
                     Message::DrawingView(DrawingViewAction::ShowDrawing(guid.clone())),
-                    vec![remove_button(Message::DrawingView(
-                        DrawingViewAction::DeleteDrawing(guid.clone()),
-                    ))],
+                    vec![
+                        duplicate_button(Message::Browser(BrowserAction::Duplicate(
+                            ViewRow::Drawing(guid.clone()),
+                        ))),
+                        remove_button(Message::DrawingView(DrawingViewAction::DeleteDrawing(
+                            guid.clone(),
+                        ))),
+                    ],
                 )
             }
             ViewRow::File(place) => {
@@ -1296,6 +1358,49 @@ mod tests {
         // With nothing saved the 3D model is there all the same.
         let empty = view_groups(&[], &[], 0);
         assert_eq!(empty, [(ViewKind::ThreeD, vec![ViewRow::Model])]);
+    }
+
+    #[test]
+    fn a_copy_is_named_with_the_next_free_number() {
+        let taken = |names: &'static [&'static str]| {
+            move |candidate: &str| {
+                names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(candidate))
+            }
+        };
+        assert_eq!(
+            duplicate_name("Plan +1.20", 96, taken(&["Plan +1.20"])),
+            "Plan +1.20 (2)"
+        );
+        assert_eq!(
+            duplicate_name("Plan +1.20", 96, taken(&["Plan +1.20", "plan +1.20 (2)"])),
+            "Plan +1.20 (3)"
+        );
+        // A copy of a copy counts on from its number.
+        assert_eq!(
+            duplicate_name(
+                "Plan +1.20 (2)",
+                96,
+                taken(&["Plan +1.20", "Plan +1.20 (2)"])
+            ),
+            "Plan +1.20 (3)"
+        );
+        assert_eq!(duplicate_name("3D model", 64, taken(&[])), "3D model (2)");
+        assert_eq!(
+            duplicate_name("3D model", 64, taken(&["3D model (2)"])),
+            "3D model (3)"
+        );
+        // Brackets that hold no number of a copy are part of the name.
+        assert_eq!(duplicate_name("Room (A)", 64, taken(&[])), "Room (A) (2)");
+        assert_eq!(duplicate_name("Floor (1)", 64, taken(&[])), "Floor (1) (2)");
+        // A long name is shortened to leave room for the number.
+        let long = "x".repeat(70);
+        let copy = duplicate_name(&long, 64, taken(&[]));
+        assert!(
+            copy.chars().count() <= 64 && copy.ends_with(" (2)"),
+            "{copy}"
+        );
     }
 
     #[test]
