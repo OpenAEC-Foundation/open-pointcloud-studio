@@ -948,7 +948,7 @@ impl Studio {
             .iter()
             .map(|entry| {
                 self.layer_progress(entry)
-                    .filter(|(note, _)| note != "index queued")
+                    .filter(|(note, _)| note != tr(crate::open_progress::INDEX_QUEUED))
                     .map(|(_, fraction)| fraction)
             })
             .collect();
@@ -1016,11 +1016,17 @@ impl Studio {
         let mut notes: Vec<String> = progress.iter().map(|(note, _)| note.clone()).collect();
         let selected = entry.selection.as_ref().map_or(0, |mask| mask.count);
         if selected > 0 {
-            notes.push(format!("{} selected", format_count(selected)));
+            notes.push(tr_args(
+                "{count} selected",
+                &[("count", &format_count(selected))],
+            ));
         }
         let deleted = entry.deleted_count();
         if deleted > 0 {
-            notes.push(format!("{} deleted", format_count(deleted)));
+            notes.push(tr_args(
+                "{count} deleted",
+                &[("count", &format_count(deleted))],
+            ));
         }
         if !notes.is_empty() {
             item = item.push(indented(

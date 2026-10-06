@@ -1002,5 +1002,21 @@
   "Annotation scale": "Schaal van aantekeningen",
   "Text height (mm)": "Teksthoogte (mm)",
   "{name} is locked": "{name} is vergrendeld",
-  "{name} is unlocked": "{name} is ontgrendeld"
+  "{name} is unlocked": "{name} is ontgrendeld",
+  "about {seconds} s left": "nog ongeveer {seconds} s",
+  "about {minutes} min left": "nog ongeveer {minutes} min",
+  "{done} of {total} points": "{done} van {total} punten",
+  "{count} points read": "{count} punten gelezen",
+  "{done} of {files} done": "{done} van {files} klaar",
+  "Opening {count} scans": "{count} scans openen",
+  "Opening {name}": "{name} openen",
+  "Indexing {name}": "{name} indexeren",
+  "Preparing…": "Voorbereiden…",
+  "Step 1 of 2  ·  reading  ·  {points}": "Stap 1 van 2  ·  lezen  ·  {points}",
+  "Step 2 of 2  ·  building the octree  ·  {placed} of {total} points placed": "Stap 2 van 2  ·  index opbouwen  ·  {placed} van {total} punten geplaatst",
+  "reading": "lezen",
+  "indexing": "indexeren",
+  "loading points": "punten laden",
+  "index queued": "index in de wachtrij",
+  "{count} deleted": "{count} verwijderd"
 }

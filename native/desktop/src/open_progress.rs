@@ -62,6 +62,9 @@ pub struct Line {
     pub cancel: Option<Message>,
 }
 
+/// What the row of a scan says while its octree waits for a place.
+pub(crate) const INDEX_QUEUED: &str = i18n::key("index queued");
+
 fn fraction(done: u64, total: u64) -> Option<f32> {
     (total > 0).then(|| (done as f64 / total as f64).min(1.0) as f32)
 }
@@ -79,9 +82,11 @@ fn time_left(mark: Mark, fraction: f32, now: Instant) -> Option<Duration> {
 fn time_text(left: Duration) -> String {
     let seconds = left.as_secs();
     if seconds < 55 {
-        format!("about {} s left", seconds.div_ceil(5).max(1) * 5)
+        let seconds = seconds.div_ceil(5).max(1) * 5;
+        i18n::tr_args("about {seconds} s left", &[("seconds", &seconds)])
     } else {
-        format!("about {} min left", (seconds + 30) / 60)
+        let minutes = (seconds + 30) / 60;
+        i18n::tr_args("about {minutes} min left", &[("minutes", &minutes)])
     }
 }
 
@@ -103,12 +108,14 @@ fn build_fraction(job: &IndexJob) -> f32 {
 
 fn points_text(done: u64, total: Option<u64>) -> String {
     match total {
-        Some(total) => format!(
-            "{} of {} points",
-            compact_count(done.min(total)),
-            compact_count(total)
+        Some(total) => i18n::tr_args(
+            "{done} of {total} points",
+            &[
+                ("done", &compact_count(done.min(total))),
+                ("total", &compact_count(total)),
+            ],
         ),
-        None => format!("{} points read", compact_count(done)),
+        None => i18n::tr_args("{count} points read", &[("count", &compact_count(done))]),
     }
 }
 
@@ -152,23 +159,30 @@ impl Studio {
                 .count();
             let mut detail = points_text(read, expected);
             let title = if cancelling {
-                "Cancelling…".to_owned()
+                i18n::tr("Cancelling…").to_owned()
             } else if files > 1 {
+                let counted = i18n::tr_args(
+                    "{done} of {files} done",
+                    &[("done", &done), ("files", &files)],
+                );
                 detail = if waiting > 0 {
                     format!(
-                        "{done} of {files} done  ·  {}  ·  {detail}",
+                        "{counted}  ·  {}  ·  {detail}",
                         i18n::tr_args("{waiting} waiting to be read", &[("waiting", &waiting)])
                     )
                 } else {
-                    format!("{done} of {files} done  ·  {detail}")
+                    format!("{counted}  ·  {detail}")
                 };
-                format!("Opening {files} scans")
+                i18n::tr_args("Opening {count} scans", &[("count", &files)])
             } else {
                 if waiting > 0 {
                     detail =
                         i18n::tr("Waiting for the scan opened before it on this disk").to_owned();
                 }
-                format!("Opening {}", display_name(&plain[0].1.path))
+                i18n::tr_args(
+                    "Opening {name}",
+                    &[("name", &display_name(&plain[0].1.path))],
+                )
             };
             lines.push(Line {
                 phase: Phase::Opening,
@@ -210,10 +224,10 @@ impl Studio {
             Some(import) => display_name(&import.path),
             None => display_name(&job.path),
         };
-        let verb = if job.import_id.is_some() {
-            "Opening"
+        let title = if job.import_id.is_some() {
+            i18n::tr_args("Opening {name}", &[("name", &name)])
         } else {
-            "Indexing"
+            i18n::tr_args("Indexing {name}", &[("name", &name)])
         };
         let cancelling = job.cancelling();
         let (phase, detail, fraction) = match progress.stage {
@@ -231,25 +245,33 @@ impl Studio {
             // Nothing read yet: the source is being opened, or an octree
             // kept from an earlier session is being attached.
             IndexStage::ReadingSource if progress.completed == 0 => {
-                (Phase::Reading, "Preparing…".to_owned(), None)
+                (Phase::Reading, i18n::tr("Preparing…").to_owned(), None)
             }
             IndexStage::ReadingSource => (
                 Phase::Reading,
-                format!(
-                    "Step 1 of 2  ·  reading  ·  {}",
-                    points_text(
-                        progress.completed,
-                        (progress.total > 0).then_some(progress.total)
-                    )
+                i18n::tr_args(
+                    "Step 1 of 2  ·  reading  ·  {points}",
+                    &[(
+                        "points",
+                        &points_text(
+                            progress.completed,
+                            (progress.total > 0).then_some(progress.total),
+                        ),
+                    )],
                 ),
                 progress.fraction(),
             ),
             IndexStage::BuildingTree | IndexStage::Ready => (
                 Phase::Building,
-                format!(
-                    "Step 2 of 2  ·  building the octree  ·  {} of {} points placed",
-                    compact_count(progress.settled.min(progress.total)),
-                    compact_count(progress.total)
+                i18n::tr_args(
+                    "Step 2 of 2  ·  building the octree  ·  {placed} of {total} points placed",
+                    &[
+                        (
+                            "placed",
+                            &compact_count(progress.settled.min(progress.total)),
+                        ),
+                        ("total", &compact_count(progress.total)),
+                    ],
                 ),
                 progress.fraction(),
             ),
@@ -257,9 +279,9 @@ impl Studio {
         Some(Line {
             phase,
             title: if cancelling {
-                "Cancelling…".to_owned()
+                i18n::tr("Cancelling…").to_owned()
             } else {
-                format!("{verb} {name}")
+                title
             },
             detail,
             fraction,
@@ -302,7 +324,7 @@ impl Studio {
         Line {
             phase: Phase::Indexing,
             title: if cancelling {
-                "Cancelling…".to_owned()
+                i18n::tr("Cancelling…").to_owned()
             } else {
                 i18n::tr_args("Indexing {count} scans", &[("count", &count)])
             },
@@ -371,17 +393,17 @@ impl Studio {
             return match job.progress().map(|progress| (progress.stage, progress)) {
                 Some((IndexStage::WaitingToRead, _)) => percent(i18n::tr("waiting to read"), None),
                 Some((IndexStage::ReadingSource, progress)) => {
-                    percent("reading", progress.fraction())
+                    percent(i18n::tr("reading"), progress.fraction())
                 }
                 Some((IndexStage::WaitingToBuild, _)) => {
                     percent(i18n::tr("waiting to index"), None)
                 }
-                Some((_, progress)) => percent("indexing", progress.fraction()),
-                None => percent("indexing", None),
+                Some((_, progress)) => percent(i18n::tr("indexing"), progress.fraction()),
+                None => percent(i18n::tr("indexing"), None),
             };
         }
         if entry.index_building || entry.index_import_id.is_some() {
-            return percent("indexing", None);
+            return percent(i18n::tr("indexing"), None);
         }
         let import = self
             .import_headers
@@ -394,16 +416,16 @@ impl Studio {
             }
             let expected = import.and_then(|id| self.import_expected.get(&id));
             return percent(
-                "reading",
+                i18n::tr("reading"),
                 expected
                     .and_then(|expected| fraction(job.decoded.load(Ordering::Relaxed), *expected)),
             );
         }
         if entry.cloud.points.is_empty() && entry.cloud.total_points > 0 && entry.mesh.is_none() {
-            return percent("loading points", None);
+            return percent(i18n::tr("loading points"), None);
         }
         self.index_queued(entry)
-            .then(|| ("index queued".to_owned(), None))
+            .then(|| (i18n::tr(INDEX_QUEUED).to_owned(), None))
     }
 
     /// The strip above the scene with a line per task.
@@ -541,6 +563,7 @@ mod tests {
 
     #[test]
     fn time_left_follows_the_pace_since_the_task_was_first_seen() {
+        let _language = TestLanguage::hold(Language::English);
         let start = Instant::now();
         let mark = Mark {
             since: start,
@@ -567,6 +590,7 @@ mod tests {
 
     #[test]
     fn imports_report_how_many_scans_are_ready_and_how_far_the_rest_is() {
+        let _language = TestLanguage::hold(Language::English);
         let mut studio = Studio::default();
         assert!(studio.progress_lines().is_empty());
 
@@ -626,6 +650,7 @@ mod tests {
 
     #[test]
     fn an_indexed_import_reports_its_two_steps() {
+        let _language = TestLanguage::hold(Language::English);
         let mut studio = Studio::default();
         let import = job("merged.e57", 0);
         let progress = Arc::new(Mutex::new(reading(100_000_000, 400_000_000)));

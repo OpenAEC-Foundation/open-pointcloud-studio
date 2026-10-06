@@ -16231,6 +16231,7 @@ property list uchar int vertex_indices
 
     #[test]
     fn a_scan_read_and_indexed_in_one_pass_can_be_cancelled_while_it_shows_its_points() {
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("scan.xyz");
         std::fs::write(&path, "1 2 3\n2 3 4\n3 4 5\n").unwrap();
