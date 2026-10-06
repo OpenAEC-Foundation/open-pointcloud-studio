@@ -431,6 +431,14 @@ struct Scene {
     job: JobScene,
 }
 
+/// What the job that makes a drawing of the Project Browser needs, worked
+/// out before it starts, so that what goes with the job is kept only when
+/// it can start.
+pub(crate) struct SheetStart {
+    scene: Scene,
+    request: DrawingRequest,
+}
+
 impl std::ops::Deref for Scene {
     type Target = JobScene;
 
@@ -1396,6 +1404,25 @@ impl Studio {
         definition: SavedDrawing,
         api_job_id: Option<String>,
     ) -> Result<Task<Message>, String> {
+        let start = self.sheet_start(&definition)?;
+        Ok(self.start_sheet(start, definition, api_job_id))
+    }
+
+    /// Start the job that makes a drawing of the Project Browser, with what
+    /// `sheet_start` worked out for it.
+    pub(crate) fn start_sheet(
+        &mut self,
+        start: SheetStart,
+        definition: SavedDrawing,
+        api_job_id: Option<String>,
+    ) -> Task<Message> {
+        self.start_sheet_job(start.scene, start.request, definition, api_job_id)
+    }
+
+    /// What the job that makes a drawing of the Project Browser from how it
+    /// was made needs, or why it cannot start: every scan it was made from
+    /// is open and no other job runs.
+    pub(crate) fn sheet_start(&self, definition: &SavedDrawing) -> Result<SheetStart, String> {
         let open: Vec<PathBuf> = self
             .clouds
             .iter()
@@ -1433,7 +1460,7 @@ impl Studio {
                 definition.uses(&self.views.source_of(&entry.cloud.path))
             })
             .map_err(|refusal| refusal.status())?;
-        Ok(self.start_sheet_job(scene, request, definition, api_job_id))
+        Ok(SheetStart { scene, request })
     }
 
     fn start_sheet_job(
@@ -4670,11 +4697,29 @@ mod tests {
         let mut restarted = Studio::default();
         let cloud = Arc::new(pointcloud_core::open(&studio.clouds[0].cloud.path, 1_000).unwrap());
         let _ = restarted.update(Message::Loaded(Ok(cloud)));
-        let answer = send(
-            &mut restarted,
-            serde_json::from_str(r#"{"command":"duplicate_view","name":"plan +1.05 (2)"}"#)
-                .unwrap(),
+        let duplicate = || {
+            serde_json::from_str::<ApiCommand>(
+                r#"{"command":"duplicate_view","name":"plan +1.05 (2)"}"#,
+            )
+            .unwrap()
+        };
+        // While another job runs the copy cannot be made, and none is kept.
+        restarted.drawing.dialog_pending = true;
+        let refused = send(&mut restarted, duplicate());
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(refused["error"], BUSY);
+        let _ = restarted.update(Message::Browser(BrowserAction::Duplicate(
+            ViewRow::Drawing(saved[1].guid.clone()),
+        )));
+        assert_eq!(restarted.status, BUSY);
+        assert_eq!(restarted.drawing_view.saved.len(), 3);
+        assert_eq!(
+            crate::saved_drawings::load().len(),
+            3,
+            "nothing kept on disk"
         );
+        restarted.drawing.dialog_pending = false;
+        let answer = send(&mut restarted, duplicate());
         assert_eq!(answer["ok"], true, "{answer}");
         assert_eq!(answer["name"], "Plan +1.05 (4)");
         assert_eq!(answer["accepted"], true);

@@ -1715,24 +1715,24 @@ impl Studio {
     /// Duplicate a drawing of Create 2D: a copy with a name of its own and
     /// its own box, listed right below it and shown. A drawing made in this
     /// session is copied as it is, without making it again; one not made yet
-    /// is made, with the job that makes it in the answer.
+    /// is made, with the job that makes it in the answer, and is copied only
+    /// when that job can start.
     pub(crate) fn duplicate_saved_drawing(
         &mut self,
         guid: &str,
         api_job_id: Option<String>,
     ) -> Result<(SavedDrawing, Option<Task<Message>>), String> {
-        let view = &mut self.drawing_view;
-        let place = view
-            .saved
+        let saved = &self.drawing_view.saved;
+        let place = saved
             .iter()
             .position(|drawing| drawing.guid == guid)
             .ok_or_else(|| "That drawing is no longer kept".to_owned())?;
-        let original = view.saved[place].clone();
+        let original = saved[place].clone();
         let name = crate::project_browser::duplicate_name(
             &original.name,
             crate::saved_drawings::MAX_NAME_CHARS,
             |candidate| {
-                view.saved.iter().any(|drawing| {
+                saved.iter().any(|drawing| {
                     drawing.name.eq_ignore_ascii_case(candidate)
                         && drawing
                             .sources
@@ -1745,16 +1745,25 @@ impl Studio {
         copy.guid = crate::camera_views::new_guid();
         copy.name = name;
         copy.created = crate::camera_views::now_seconds();
+        let made = self.drawing_view.made(guid).cloned();
+        // A copy that is to be made is kept only when its job can start: a
+        // copy that cannot be made would be left behind otherwise.
+        let start = match made {
+            Some(_) => None,
+            None => Some(self.sheet_start(&copy)?),
+        };
+        let view = &mut self.drawing_view;
         view.saved.insert(place + 1, copy.clone());
         if let Err(error) = crate::saved_drawings::save(&view.saved) {
             view.saved.remove(place + 1);
             return Err(format!("The drawings could not be stored: {error}"));
         }
-        let Some(made) = view.made(guid).cloned() else {
-            let task = self.show_saved_drawing(&copy.guid, api_job_id)?;
+        let Some(made) = made else {
+            let task = start.map(|start| self.start_sheet(start, copy.clone(), api_job_id));
             self.status = format!("Drawing {} duplicated as {}", original.name, copy.name);
             return Ok((copy, task));
         };
+        let view = &mut self.drawing_view;
         // The same drawing under the name of the copy, at the same place on
         // the sheet when the original was the one shown.
         let kept =

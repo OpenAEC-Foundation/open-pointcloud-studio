@@ -706,8 +706,10 @@ without it a saved view is taken first, then a drawing. The copy is named with
 takes (the copy of "Plan (2)" is "Plan (3)"), is listed right below the
 original, is shown and changes on its own. A drawing is copied as it is made,
 without making it again; one that is not made in this session yet is made,
-and the answer has `accepted: true` and a `job_id`. The answer has the `kind`,
-`name` and `guid` of the copy.
+and the answer has `accepted: true` and a `job_id`. When it cannot be made
+now, because another drawing is being made or not all its scans are open, the
+answer is `ok: false` with the reason and no copy is kept. The answer has the
+`kind`, `name` and `guid` of the copy.
 
 `rotate_crop` turns what the keys R and then O turn. With `name`, or while the
 Drawing view shows a plan of `create_drawing`, it turns the crop region of
