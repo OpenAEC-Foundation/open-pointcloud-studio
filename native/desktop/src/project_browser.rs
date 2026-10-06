@@ -1274,7 +1274,10 @@ impl Studio {
                 // quieter; a click makes it.
                 let made = self.drawing_view.made(guid).is_some();
                 view_row(
-                    ViewKind::of(drawing.kind).icon(),
+                    self.row_icon(
+                        &crate::locks::LockTarget::Drawing(guid.clone()),
+                        ViewKind::of(drawing.kind).icon(),
+                    ),
                     drawing.name.clone(),
                     highlighted,
                     !made,

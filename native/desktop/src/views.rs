@@ -1865,7 +1865,7 @@ impl Studio {
             ViewAction::Delete(guid()),
         )));
         crate::project_browser::view_row(
-            ToolIcon::SavedView,
+            self.row_icon(&crate::locks::LockTarget::View(guid()), ToolIcon::SavedView),
             view.name.clone(),
             shown,
             false,

@@ -546,7 +546,7 @@ On a sheet, **Text** and **Line** draw on the paper itself, and a drawing shows 
 
 ### Locking a view
 
-A saved 3D view, a drawing and a view placed on a sheet can be locked, so that it stays as it was set up. The padlock on its row under VIEWS locks or unlocks it; a locked view or drawing shows a padlock on its tab too, which unlocks it, and **Locked** in Properties switches it while it is shown or selected.
+A saved 3D view, a drawing and a view placed on a sheet can be locked, so that it stays as it was set up. The padlock among the buttons of its row under VIEWS, on the row of what the window shows, locks or unlocks it; the row of a locked view or drawing has a padlock for its icon, its tab shows a padlock too, which unlocks it, and **Locked** in Properties switches it while it is shown or selected.
 
 - While a locked 3D view is shown, orbiting, panning, zooming, walking, the view cube and the section box leave it as it is, and the status bar says "*name* is locked". **Update** is dimmed. The view can still be renamed, duplicated, deleted and annotated; its copy is not locked. A click on the tab of the 3D model gives back the camera of the 3D model, which is free.
 - A locked drawing keeps its crop region: its handles do not drag, RO does not turn it, and its figures and **Points used** are refused. It still pans and zooms, and takes annotations.

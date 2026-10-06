@@ -280,6 +280,17 @@ impl Studio {
         padlock(locked, Message::Lock(target))
     }
 
+    /// The icon of a row of VIEWS: a padlock while what it stands for is
+    /// locked, so that every row shows it, also those without their
+    /// buttons; otherwise the icon of its kind.
+    pub(crate) fn row_icon(&self, target: &LockTarget, icon: ToolIcon) -> ToolIcon {
+        if self.is_locked(target) {
+            ToolIcon::Locked
+        } else {
+            icon
+        }
+    }
+
     /// The padlock on the tab of a locked view or drawing, which unlocks it.
     pub(crate) fn tab_padlock<'a>(
         &self,
