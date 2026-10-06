@@ -8,12 +8,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::Task;
-use pointcloud_core::PointCloud;
+use pointcloud_core::{Bounds, PointCloud};
 
 use crate::{combined_bounds, format_count, Message, Studio};
 
 /// Shortest time between two showings of snapshots.
 pub(crate) const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
+/// Longest time the first points of an empty scene wait for the first points
+/// of the other scans being opened, and how often they look again.
+pub(crate) const FIRST_FRAME_WAIT: Duration = Duration::from_millis(600);
+const FIRST_FRAME_POLL: Duration = Duration::from_millis(40);
 
 /// The camera as the application or the user left it.
 struct Camera {
@@ -94,6 +98,13 @@ impl Studio {
             self.last_snapshot_flush = Some(Instant::now());
             return self.plan_snapshot_flush();
         }
+        if self.first_points_wait() {
+            self.snapshot_flush_scheduled = true;
+            return Task::perform(async { tokio::time::sleep(FIRST_FRAME_POLL).await }, |()| {
+                Message::FlushSnapshots
+            });
+        }
+        self.first_points_since = None;
         self.last_snapshot_flush = Some(Instant::now());
         let camera = self.camera();
         let had_points = self.scene_has_points();
@@ -240,6 +251,47 @@ impl Studio {
         Some(task)
     }
 
+    /// Place the camera after the checked cloud of a scan took the place of
+    /// what was shown while it was read. Points shown before framed the
+    /// camera when they appeared, and it stays where it is: the checked
+    /// cloud only reaches a little farther than they did. A layer that
+    /// showed only its metadata is framed anew, as its first points are,
+    /// unless the user moved the camera.
+    pub(crate) fn place_camera_for_checked_cloud(
+        &mut self,
+        scene: Option<Bounds>,
+        points_shown: bool,
+    ) {
+        if !points_shown {
+            self.reframe_after_replacement(scene);
+            return;
+        }
+        let automatic = self.auto_camera == Some(self.camera_key());
+        self.preserve_camera_for_scene_change(scene);
+        if automatic {
+            self.auto_camera = Some(self.camera_key());
+        }
+    }
+
+    /// Whether the first points of an empty scene wait for the other scans
+    /// being opened that have shown nothing yet, for at most
+    /// `FIRST_FRAME_WAIT`: the camera then frames the scans opened together
+    /// once, when their first points appear, instead of framing the first
+    /// alone and making up for every further scan after it.
+    fn first_points_wait(&mut self) -> bool {
+        if self.scene_has_points() {
+            self.first_points_since = None;
+            return false;
+        }
+        let since = *self.first_points_since.get_or_insert_with(Instant::now);
+        if since.elapsed() >= FIRST_FRAME_WAIT {
+            return false;
+        }
+        self.imports.iter().any(|(id, job)| {
+            !job.cancel.load(Ordering::Relaxed) && !self.pending_snapshots.contains_key(id)
+        })
+    }
+
     fn scene_has_points(&self) -> bool {
         self.clouds
             .iter()
@@ -307,15 +359,19 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut studio = Studio::default();
         let mut scans = Vec::new();
+        let mut jobs = Vec::new();
         for id in 1..=3u64 {
             let path = directory.path().join(format!("scan{id}.xyz"));
             let text: String = (0..10)
                 .map(|index| format!("{} {} 1\n", index, id * 10))
                 .collect();
             std::fs::write(&path, text).unwrap();
-            studio.imports.insert(id, job(&path));
+            jobs.push(job(&path));
             scans.push(pointcloud_core::open(&path, 10).unwrap());
         }
+        // The first scan is opened alone, the others once it shows points.
+        let mut jobs = jobs.into_iter();
+        studio.imports.insert(1, jobs.next().unwrap());
 
         // The first snapshot is shown at once: its flush needs no wait.
         let _ = studio.update(Message::ImportSnapshot(1, look(&scans[0], 3)));
@@ -328,6 +384,9 @@ mod tests {
         assert_eq!(studio.clouds.len(), 1);
         let first_frame = (studio.zoom, studio.pan);
         let revision = studio.revision;
+        for id in 2..=3 {
+            studio.imports.insert(id, jobs.next().unwrap());
+        }
 
         // Later snapshots of all scans wait for one flush; of each scan only
         // the latest is shown.
@@ -376,6 +435,91 @@ mod tests {
         let _ = studio.update(Message::FlushSnapshots);
         assert_eq!(studio.clouds[2].cloud.points.len(), 2);
         assert_eq!(studio.clouds[1].cloud.points.len(), 8);
+    }
+
+    #[test]
+    fn the_checked_cloud_of_a_scan_shown_while_it_is_read_leaves_the_camera_as_framed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scan.xyz");
+        // A row of points and one far beyond them, which the looks miss.
+        let text: String = (0..10)
+            .map(|index| format!("{index} 0 1\n"))
+            .chain(["60 30 1\n".to_owned()])
+            .collect();
+        std::fs::write(&path, text).unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 20).unwrap());
+        let mut studio = Studio::default();
+        studio.imports.insert(5, job(&path));
+        // The first look frames the camera.
+        let _ = studio.update(Message::IndexedImportPreview(5, look(&cloud, 4)));
+        let _ = studio.update(Message::FlushSnapshots);
+        assert_eq!(studio.clouds.len(), 1);
+        assert_eq!(studio.auto_camera, Some(studio.camera_key()));
+        let framed = (studio.zoom, studio.pan);
+        let _ = studio.update(Message::IndexedImportPreview(5, look(&cloud, 8)));
+        let _ = studio.update(Message::FlushSnapshots);
+
+        // The checked cloud takes its place at once, and the camera keeps
+        // showing what it showed instead of framing the scene anew.
+        let _ = studio.update(Message::IndexedImportPreview(5, Arc::clone(&cloud)));
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
+        assert!(!studio.imports.contains_key(&5));
+        assert_ne!((studio.zoom, studio.pan), framed);
+        assert_eq!(
+            studio.auto_camera,
+            Some(studio.camera_key()),
+            "the camera is still the one the application left"
+        );
+        let kept = (studio.zoom, studio.pan);
+        studio.frame_new_scene();
+        assert_ne!(
+            (studio.zoom, studio.pan),
+            kept,
+            "framing anew would have moved the camera"
+        );
+    }
+
+    #[test]
+    fn scans_opened_together_are_framed_once_when_their_first_points_appear() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = Studio::default();
+        let mut scans = Vec::new();
+        // Two scans far apart, opened together.
+        for id in 1..=2u64 {
+            let path = directory.path().join(format!("scan{id}.xyz"));
+            let text: String = (0..10)
+                .map(|index| format!("{} {} 1\n", index + id * 1000, index))
+                .collect();
+            std::fs::write(&path, text).unwrap();
+            studio.imports.insert(id, job(&path));
+            scans.push(pointcloud_core::open(&path, 10).unwrap());
+        }
+        // The first points of the first wait for those of the second.
+        let _ = studio.update(Message::ImportSnapshot(1, look(&scans[0], 5)));
+        let _ = studio.update(Message::FlushSnapshots);
+        assert!(studio.clouds.is_empty());
+        assert!(studio.snapshot_flush_scheduled, "it looks again shortly");
+        let _ = studio.update(Message::ImportSnapshot(2, look(&scans[1], 5)));
+        let _ = studio.update(Message::FlushSnapshots);
+        assert_eq!(studio.clouds.len(), 2);
+        // One frame holds both: framing anew would not move the camera.
+        let framed = (studio.zoom, studio.pan);
+        studio.frame_new_scene();
+        assert_eq!((studio.zoom, studio.pan), framed);
+        assert_eq!(studio.first_points_since, None);
+
+        // A scan that shows nothing for a while does not keep the others
+        // from view.
+        let mut studio = Studio::default();
+        for (id, scan) in (1..=2u64).zip(&scans) {
+            studio.imports.insert(id, job(&scan.path));
+        }
+        let _ = studio.update(Message::ImportSnapshot(1, look(&scans[0], 5)));
+        let _ = studio.update(Message::FlushSnapshots);
+        assert!(studio.clouds.is_empty());
+        studio.first_points_since = Some(Instant::now() - FIRST_FRAME_WAIT);
+        let _ = studio.update(Message::FlushSnapshots);
+        assert_eq!(studio.clouds.len(), 1);
     }
 
     #[test]

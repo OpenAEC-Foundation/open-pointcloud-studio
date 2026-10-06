@@ -2285,6 +2285,10 @@ struct Studio {
     pending_layer_snapshots: Vec<(Arc<PointCloud>, Arc<PointCloud>)>,
     snapshot_flush_scheduled: bool,
     last_snapshot_flush: Option<Instant>,
+    /// When the first points of an empty scene arrived: they wait a moment
+    /// for the first points of the other scans being opened, so that the
+    /// camera frames them all at once.
+    first_points_since: Option<Instant>,
     detail_pending: bool,
     detail_cancel: Arc<AtomicBool>,
     detail_loaded_revision: Option<u64>,
@@ -2889,6 +2893,7 @@ impl Default for Studio {
             pending_layer_snapshots: Vec::new(),
             snapshot_flush_scheduled: false,
             last_snapshot_flush: None,
+            first_points_since: None,
             detail_pending: false,
             detail_cancel: Arc::new(AtomicBool::new(false)),
             detail_loaded_revision: None,
@@ -3094,6 +3099,10 @@ impl Studio {
         match (shown, result) {
             (Some(header), Ok(cloud)) => {
                 let scene = combined_bounds(&self.clouds);
+                let points_shown = self
+                    .clouds
+                    .iter()
+                    .any(|entry| entry.matches_source(&header) && !entry.cloud.points.is_empty());
                 let photos = self.station_photos_task(&cloud);
                 let refined = self.update(Message::Refined(header, Ok(Arc::clone(&cloud))));
                 if let Some(entry) = self
@@ -3104,7 +3113,7 @@ impl Studio {
                     entry.bag_source = is_bag3d_mesh(&cloud.path);
                 }
                 self.revision += 1;
-                self.reframe_after_replacement(scene);
+                self.place_camera_for_checked_cloud(scene, points_shown);
                 let detail = Self::mesh_task(&cloud).unwrap_or_else(|| self.schedule_detail());
                 Task::batch([refined, photos, detail])
             }
@@ -6380,9 +6389,10 @@ impl Studio {
                     .iter_mut()
                     .find(|entry| entry.index_import_id == Some(id) && entry.cloud.provisional)
                 {
+                    let points_shown = !entry.cloud.points.is_empty();
                     entry.replace_cloud(Arc::clone(&cloud));
                     self.revision += 1;
-                    self.reframe_after_replacement(scene);
+                    self.place_camera_for_checked_cloud(scene, points_shown);
                     let mesh = Self::mesh_task(&cloud).unwrap_or_else(Task::none);
                     return Task::batch([self.schedule_detail(), mesh]);
                 }
