@@ -227,14 +227,14 @@ fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
         tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), the Detect faces tool (faces: its settings, a running job, the last job, export_pending and result, the faces of the active layer in figures; clouds[].faces has those figures per layer, or null), the photos of the files and the one that is entered (photos), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view), the Mesh to Plans wizard (mesh_to_plans: whether it is shown as card or strip, its step and the status of every step) and the status line.", vec![]),
-        tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, detect_faces, export_faces, merge_visible or bag3d returned, or that status.result.mesh_to_plans.job names: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
+        tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, detect_faces, export_faces, colour_from_photos, merge_visible or bag3d returned, or that status.result.mesh_to_plans.job names: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
         tool("wait_for_job", WaitForJob, "Waits until a background job is no longer running and returns it, polling it four times a second. Answers with timed_out: true and the running job when the time is up.", vec![
             required("id", text("The job_id", 1, 64)),
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, a drawing file being read, steps of Mesh to Plans, merging, 3D BAG download, station photos, the photos of a file being listed or decoded, view snapshots, the fill of the cut of a mesh by the section box or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
+        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, a drawing file being read, steps of Mesh to Plans, colouring points from photos, merging, 3D BAG download, station photos, the photos of a file being listed or decoded, view snapshots, the fill of the cut of a mesh by the section box or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
         tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load and the fill of the cut of a mesh to be made; while the Drawing view is shown it captures the drawing instead, and the answer says which in view (model or drawing). The text part gives the width and height in pixels. Fails while the window is minimised, and while the File view, Settings or the card of the Mesh to Plans wizard covers the viewport; file_view with open false returns to the model, mesh_to_plans_view with minimized true leaves the wizard as a strip that is not captured.", vec![
@@ -303,6 +303,15 @@ fn table() -> Vec<Tool> {
         ]),
         tool("next_photo", Command, "Enters the next photo along the path of the entered photo, as Page Down does; fails at the last photo.", vec![]),
         tool("previous_photo", Command, "Enters the previous photo along the path of the entered photo, as Page Up does; fails at the first photo.", vec![]),
+        tool("colour_from_photos", Job, "Gives the points of a layer the colours its photos see them with (E57 panoramas, photos along a path and the photos of scanner stations): the remaining points inside the section box and class filters, or all of them without a section box. A photo colours a point when no point of the layer lies in front of it, within max_distance of the photo; with blend (the default) every photo that sees a point adds to its colour, weighted strongly to the nearest, otherwise the nearest alone, a pinhole photo preferring its middle over its edges. The colours replace those of the file in the viewport and in exports, as one edit that undo_delete takes back; color_mode becomes RGB. Answers with a job_id; the running job reports its stage (loading, reading, photos), part and parts, completed and total; the complete job reports points, coloured, unseen and unseen_share, photos (in reach), photos_used, photos_failed, seconds with times per stage, and compared: against the colours the points had, per channel R G B, mean_difference (photo minus stored), mean_abs_difference and median_abs_difference, or null when they had none.", vec![
+            optional("layer", ordinal("Zero-based layer index; without it the active layer when it has photos, else the first layer with photos")),
+            optional("max_distance", number_in("Largest distance from a photo to a point it colours, in metres, from 0.5 to 500; default 20", 0.5, 500.0)),
+            optional("blend", boolean("Blend every photo that sees a point, weighted to the nearest (default true), or take the nearest alone")),
+        ]),
+        tool("cancel_colour_from_photos", Command, "Cancels the running colouring from photos; the colours stay as they were.", vec![]),
+        tool("clear_photo_colours", Command, "Takes the photo colours of a layer away, as Remove photo colours in Properties does; undo_delete brings them back.", vec![
+            optional("layer", ordinal("Zero-based layer index; without it the active layer")),
+        ]),
         tool("list_camera_views", Command, "Lists the saved views of the active scan with their camera, section box, colour mode and annotations, and the name of the active view.", vec![]),
         tool("save_camera_view", Command, "Saves what the 3D viewport shows of the active scan (camera, the section box while it is on, colour mode) as a view and makes it the active view, showing the 3D scene when a drawing or the File view was in front. A snapshot image follows shortly after; wait_until_idle waits for it.", vec![
             optional("name", text("Name of the new view, unique within the scan; without it the first free \"View N\" is used", 1, 64)),
@@ -397,8 +406,8 @@ fn table() -> Vec<Tool> {
         tool("clear_measure", Command, "Removes the measurement.", vec![]),
         tool("zoom_selection", Command, "Frames the selected points in the viewport without changing the section box; the camera follows once status.result.selection_bounds_pending is false.", vec![]),
         tool("delete_selection", Command, "Hides the selected points; the source file is not changed and undo_delete restores them.", vec![]),
-        tool("undo_delete", Command, "Restores the latest deleted or thinned points.", vec![]),
-        tool("redo_delete", Command, "Deletes again what undo_delete restored.", vec![]),
+        tool("undo_delete", Command, "Takes back the latest edit: restores the latest deleted or thinned points, or gives a layer back the colours it had before its latest colouring from photos or removal of its photo colours.", vec![]),
+        tool("redo_delete", Command, "Does again what undo_delete took back.", vec![]),
         tool("thin", Command, "Keeps an exact percentage of the active layer's remaining points, in the background (status.result.thin_pending); undo_delete restores them.", vec![
             required("percent", integer_in("Percentage of the points to keep, from 1 to 100", 1, 100)),
         ]),
@@ -847,6 +856,9 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
     }
     if result["mesh_to_plans"]["job"].is_object() {
         busy.push("mesh_to_plans");
+    }
+    if result["colour_from_photos"]["job"].is_object() {
+        busy.push("colour_from_photos");
     }
     busy
 }

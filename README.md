@@ -173,6 +173,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - A view cube, seven camera directions, **Zoom all** and a right-click menu in the scene.
 - Scanner stations of E57, PCD and PTX scans are shown as markers. Stations with photos are drawn as balls: click one to stand in that station and look around.
 - Panoramas and photos taken along a path in an E57 file are marked along their path. Double-click a mark, or a photo under its scan in the project panel, to stand where it was taken: the photo lies over the points, a **Photo** slider sets how much, `Page Up` and `Page Down` step along the path, and `Esc` returns. Measuring and picking work on the points under the photo.
+- **Colour from photos** gives the points of a scan the colours its photos see them with, for a scan without colours or to replace them: only from photos that see a point unhidden, in the background, with Undo; exports write the new colours.
 - Walk through the scene with `W`, `A`, `S`, `D`, down and up with `Q` and `E`, faster with Shift.
 
 ### Section box
@@ -263,7 +264,7 @@ Three meshers in the SURFACE group turn the points of a scan, or the part of the
 | Format | Read | Write | Notes |
 | --- | --- | --- | --- |
 | LAS, LAZ | yes | yes | Opens from the header; exports keep the original point records |
-| E57 | yes | yes | Scanner positions, station photos, panoramas (spherical and cylindrical) and photos taken along a path are read, with the coordinate system the file states. A pinhole photo with a pixel size of zero gives its focal length in pixels |
+| E57 | yes | yes | Scanner positions, station photos, panoramas (spherical and cylindrical) and photos taken along a path are read, with the coordinate system the file states, and can colour the points. A pinhole photo with a pixel size of zero gives its focal length in pixels |
 | PLY | yes | yes | Reads ASCII and little-endian binary; writes either |
 | PCD | yes | no | ASCII, binary and compressed binary |
 | PTX | yes | no | With the scanner position of each scan |

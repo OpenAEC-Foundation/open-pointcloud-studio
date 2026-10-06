@@ -1347,6 +1347,84 @@ fn face_detection_is_a_job_with_a_list_a_highlight_an_export_and_a_clear() {
 }
 
 #[test]
+fn colouring_from_photos_is_a_job_that_can_be_cancelled_and_cleared() {
+    let colour = tools::find("colour_from_photos").unwrap();
+    assert_eq!(colour.kind, Kind::Job);
+    assert!(!colour.read_only());
+    for accepted in [
+        json!({}),
+        json!({"layer": 1, "max_distance": 12.5, "blend": false, "wait_seconds": 30}),
+    ] {
+        schema::validate_arguments(&colour.schema, &accepted).unwrap();
+    }
+    for refused in [
+        json!({"max_distance": 0.1}),
+        json!({"max_distance": 501}),
+        json!({"blend": "yes"}),
+        json!({"layer": -1}),
+    ] {
+        assert!(
+            schema::validate_arguments(&colour.schema, &refused).is_err(),
+            "{refused}"
+        );
+    }
+    assert_eq!(
+        tools::find("cancel_colour_from_photos").unwrap().kind,
+        Kind::Command
+    );
+    let clear = tools::find("clear_photo_colours").unwrap();
+    schema::validate_arguments(&clear.schema, &json!({"layer": 0})).unwrap();
+    assert!(tools::find("job")
+        .unwrap()
+        .description
+        .contains("colour_from_photos"));
+    // A colouring under way is work; how the last one ended is not.
+    assert_eq!(
+        tools::busy(&json!({"colour_from_photos": {"job": {"stage": "photos"}, "last": null}})),
+        ["colour_from_photos"]
+    );
+    assert!(tools::busy(&json!({"colour_from_photos": {
+        "job": null, "last": {"state": "complete"},
+    }}))
+    .is_empty());
+
+    let link = FakeLink::new(|command| {
+        Ok(match command["command"].as_str().unwrap() {
+            "colour_from_photos" => json!({"ok": true, "accepted": true, "job_id": "c-1"}),
+            "job" => json!({"ok": true, "job": {"state": "complete", "coloured": 9}}),
+            _ => json!({"ok": true}),
+        })
+    });
+    let commands = Arc::clone(&link.commands);
+    let answers = session(
+        &[
+            initialize(1, "2025-06-18"),
+            call(
+                2,
+                "colour_from_photos",
+                json!({"max_distance": 8, "wait_seconds": 5}),
+            ),
+            call(3, "cancel_colour_from_photos", json!({})),
+            call(4, "clear_photo_colours", json!({"layer": 0})),
+        ],
+        link,
+    );
+    assert_eq!(
+        text_of(&by_id(&answers, 2)["result"], 0)["job"]["coloured"],
+        9
+    );
+    assert_eq!(
+        *commands.lock().unwrap(),
+        [
+            json!({"command": "colour_from_photos", "max_distance": 8}),
+            json!({"command": "job", "id": "c-1"}),
+            json!({"command": "cancel_colour_from_photos"}),
+            json!({"command": "clear_photo_colours", "layer": 0}),
+        ]
+    );
+}
+
+#[test]
 fn extension_and_file_view_tools_offer_what_the_window_knows() {
     let list = tools::find("list_extensions").unwrap();
     assert_eq!(list.kind, Kind::Command);

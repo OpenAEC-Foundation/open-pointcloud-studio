@@ -39,6 +39,8 @@ pub enum Phase {
     MeshToPlans,
     /// Several octree builds, side by side or waiting for a place.
     Indexing,
+    /// Colouring points from photos; the bar starts again with each part.
+    PhotoColours,
 }
 
 /// When a task was first seen, and how far it was then.
@@ -174,6 +176,7 @@ impl Studio {
         lines.extend(self.drawing.progress_line());
         lines.extend(self.closed_mesh.progress_line());
         lines.extend(self.faces.progress_line());
+        lines.extend(self.photo_colours.progress_line());
         lines.extend(self.mesh_to_plans_progress_line());
         lines
     }
@@ -294,6 +297,7 @@ impl Studio {
                 && !self.drawing.is_running()
                 && !self.closed_mesh.is_running()
                 && !self.faces.is_running()
+                && !self.photo_colours.is_running()
                 && !self.mesh_to_plans.is_running()
             {
                 self.progress_marks.clear();

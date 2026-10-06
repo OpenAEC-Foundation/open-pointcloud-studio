@@ -445,6 +445,7 @@ mod tests {
             include_str!("mesh_to_plans/strip.rs"),
         ),
         ("open_progress.rs", include_str!("open_progress.rs")),
+        ("photo_colours.rs", include_str!("photo_colours.rs")),
         (
             "opencad_properties.rs",
             include_str!("opencad_properties.rs"),

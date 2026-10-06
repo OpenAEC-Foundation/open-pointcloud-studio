@@ -13,6 +13,7 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 - [Scanner stations](#scanner-stations)
 - [Station photos and walking](#station-photos-and-walking)
 - [Panoramas and photos along a path](#panoramas-and-photos-along-a-path)
+- [Colour from photos](#colour-from-photos)
 - [Section box](#section-box)
 - [Selecting and editing](#selecting-and-editing)
 - [Measuring distances and areas](#measuring-distances-and-areas)
@@ -34,7 +35,7 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 
 ## The window
 
-- The **top strip** starts with the application logo, the **File** button and the **Home** tab. At its right end are five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo delete and Redo delete), and the **Settings** button. Actions that are not available are shown muted.
+- The **top strip** starts with the application logo, the **File** button and the **Home** tab. At its right end are five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo and Redo), and the **Settings** button. Actions that are not available are shown muted.
 - The **ribbon** holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE, MESH TO PLANS and INDEX. The ribbon is wider than the default window of 1440 pixels. The groups that do not fit scroll sideways, with the wheel, the scrollbar or the arrow buttons that appear at both ends; in a window wide enough for all groups the arrows go away.
 - The **Project Browser** at the left has four groups, each under a band of its own colour with an icon, its name and a count: **SCANS**, **CLASSES**, **VIEWS** and **BCF**. A click on a band collapses the group or opens it again; the window remembers which groups are collapsed. Collapsing never closes or hides anything.
   - **SCANS** lists the open clouds in name order, one row each with a visibility switch, the icon of a scan, the point count and a button to close the cloud. A second line appears only while a cloud is loading or indexing, or when it has selected or deleted points. Its band shows how many scans are open and their points, a switch that shows or hides every scan (with a dash while only some are shown; a click on the dash shows them all), and buttons to add a point cloud and to open a scan folder. While scans open or index, a line under the band says how many are ready, with a thin bar, also while the group is collapsed. Scans from more than one folder are grouped per folder, each folder with its own band, switch and count.
@@ -167,6 +168,21 @@ An E57 file can also hold photos that belong to no station: equirectangular (sph
 
 The colours stored with the points of such files are usually taken from these photos. The way each kind of photo is read, which direction the middle of a panorama looks and which way its columns run, was chosen because it makes the photos agree with those colours.
 
+## Colour from photos
+
+A scan with photos, panoramas and photos along a path as well as the photos of its scanner stations, can give its points the colours those photos see them with: for a cloud that was stored without colours, or to replace the colours it has. Properties shows the block **Colour from photos** for the active scan when it has photos.
+
+1. Put the section box around the part to colour, or switch the section box off to colour the whole scan. Deleted points and hidden classes are left out.
+2. Set the **Largest distance (m)**: a photo gives no colour to points further from it than this, 20 m unless changed.
+3. Choose whether to **Blend** the photos (on by default): each photo that sees a point then adds to its colour, weighted strongly to the nearest. This evens out the exposure of photos taken one after another and a small error in where they were taken. Without it the nearest photo alone gives the colour; a pinhole photo sees what lies in its middle better than what lies at its edges.
+4. Choose **Colour points**. The job runs in the background, with its progress and a **Cancel** button above the scene.
+
+A photo only colours a point that it sees: for every photo the scan itself is laid out as seen from where the photo was taken, about a fifth of a degree per pixel, and a point that lies more than a few centimetres behind what is nearest in that direction is hidden from it. Points that no photo sees keep the colour they had. For a large scan the points are read from its index at a detail that follows their distance to each photo; a scan without an index of more than 5,000,000 points needs its index first (INDEX > **Build index**). A large region is coloured in parts of at most 8,000,000 points.
+
+When the job is done the scene shows the colours, in **RGB**. They take the place of the colours of the file for this scan until it is closed: **Undo** takes them back and **Redo** gives them again, and **Remove photo colours** takes them away, which can be undone as well. A later colouring is laid over the colours of an earlier one. The file itself is not changed; an export writes the points with their photo colours. An E57 is then written as one scan of coordinates, colours and intensity, and points that no photo saw are written black when the file had no colours.
+
+The block then reports the points coloured and the share that no photo sees. When the points had colours, it also gives the mean and the median difference per channel (red, green and blue, from 0 to 255) between the photo colours and the colours they had. The colours a file stores are often made from the same photos with an exposure and a processing of their own, so a difference of a few tens remains even where the photos sit exactly right.
+
 ## Section box
 
 **Section box** in the SECTION BOX group switches on a box that clips what is shown: points and meshes outside it are not drawn.
@@ -202,7 +218,7 @@ Selections honour the section box, the hidden classes and the points deleted bef
 
 ### Editing
 
-- **Delete**, or the Delete key, hides the selected points. **Undo** and **Redo** (the Undo delete and Redo delete icons in the top strip, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z; Command on macOS) restore and repeat up to eight deletions.
+- **Delete**, or the Delete key, hides the selected points. **Undo** and **Redo** (the Undo and Redo icons in the top strip, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z; Command on macOS) restore and repeat up to eight edits: deletions, and the colours given from photos (see [Colour from photos](#colour-from-photos)).
 - **Thin** reduces the number of points: it keeps the percentage set with the **Keep** slider, from 1 to 100, of the points that remain, taken at even steps through the file, so every part of the scan thins by the same share. Keep 25 % removes three points in four. It counts as a deletion and can be undone. To write a reduced copy without thinning the open scan, use **Every Nth point…** among the exports.
 - **Move** shifts the active scan by the X, Y and Z values typed beside it.
 - **Scale** scales the active scan by the X, Y and Z factors typed beside it, around the centre of gravity of the points that remain. For a large cloud that centre is calculated in the background, with progress in Properties and a **Cancel** button in place of Scale.
@@ -980,7 +996,7 @@ Nothing is written beside the scans, and the scans themselves are never changed.
 | `F` | Isometric overview of the whole model (Zoom all) |
 | `R` then `O` | Turn the crop region of the plan in the Drawing view, or the section box in the 3D view; then type an angle, Enter applies, Escape cancels |
 | Delete | Hide the selected points |
-| Ctrl+Z | Undo the last deletion |
+| Ctrl+Z | Undo the last deletion or colouring from photos |
 | Ctrl+Y, Ctrl+Shift+Z | Redo |
 | Enter | Finish a measurement; place a note |
 | Backspace | Remove the last point of a measurement |

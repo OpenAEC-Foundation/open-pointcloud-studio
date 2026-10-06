@@ -41,6 +41,7 @@ mod open_progress;
 mod opencad_properties;
 mod opencad_ribbon;
 mod orbit_point;
+mod photo_colours;
 mod photo_overlay;
 mod preferences;
 mod progressive;
@@ -73,6 +74,7 @@ use iced::{Color, Element, Fill, Font, Point as UiPoint, Rectangle, Renderer, Si
 use lod_pace::{
     first_pass_budget, plan_first_pass, preview_improves, preview_tier_points, LodPace, ScreenFill,
 };
+use pointcloud_core::photo_colour::PointColours;
 use pointcloud_core::{
     BagBounds, BagLod, Bounds, ExportFormat, IndexConfig, IndexProgress, IndexStage, IndexedPoint,
     MeshGeometry, OctreeIndex, OrientedBox, Point, PointCloud, SurfaceMeshConfig,
@@ -259,14 +261,51 @@ fn export_station_photos(
     Ok(lines)
 }
 
+/// The cloud as an export with photo colours writes it: with colours, also
+/// when its source stores none.
+fn painted(cloud: &PointCloud) -> PointCloud {
+    let mut painted = cloud.clone();
+    painted.has_rgb = true;
+    painted
+}
+
+/// A point of the source where the layer puts it, with the colour the
+/// photos gave it.
+fn painted_point(
+    point: Point,
+    ordinal: u64,
+    transform: CloudTransform,
+    colours: &PointColours,
+) -> Point {
+    let mut point = transform.point(point);
+    if let Some(rgb) = colours.get(ordinal) {
+        point.rgb = Some(rgb);
+    }
+    point
+}
+
 fn export_edited_where(
     cloud: &PointCloud,
     destination: &Path,
     format: ExportFormat,
     transform: CloudTransform,
+    colours: Option<&PointColours>,
     expected_count: u64,
     mut include: impl FnMut(u64, &Point) -> bool,
 ) -> Result<(), pointcloud_core::LoadError> {
+    // Photo colours are written point by point; an E57 is then written as
+    // one scan of coordinates, colours and intensity.
+    if let Some(colours) = colours {
+        return pointcloud_core::export_map(
+            &painted(cloud),
+            destination,
+            format,
+            expected_count,
+            |ordinal, point| {
+                include(ordinal, &point).then(|| painted_point(point, ordinal, transform, colours))
+            },
+        );
+    }
     if transform.is_identity() {
         pointcloud_core::export_where(cloud, destination, format, expected_count, include)
     } else {
@@ -314,9 +353,24 @@ fn export_edited_section(
     destination: &Path,
     format: ExportFormat,
     transform: CloudTransform,
+    colours: Option<&PointColours>,
     section: OrientedBox,
     deleted: Option<&DeletionMask>,
 ) -> Result<u64, pointcloud_core::LoadError> {
+    if let Some(colours) = colours {
+        return pointcloud_core::export_map_auto_count(
+            &painted(cloud),
+            destination,
+            format,
+            |ordinal, point| {
+                if deleted.is_some_and(|mask| mask.contains(ordinal)) {
+                    return None;
+                }
+                let point = painted_point(point, ordinal, transform, colours);
+                section.contains(point.xyz).then_some(point)
+            },
+        );
+    }
     if transform.is_identity() {
         pointcloud_core::export_section_where(cloud, destination, format, section, |ordinal, _| {
             deleted.is_none_or(|mask| !mask.contains(ordinal))
@@ -1741,6 +1795,7 @@ enum Message {
         ExportFormat,
         CloudTransform,
         Option<Arc<DeletionMask>>,
+        Option<Arc<PointColours>>,
         Option<PathBuf>,
     ),
     SectionExported(Result<(PathBuf, u64), String>),
@@ -1943,6 +1998,7 @@ enum Message {
     DrawingView(drawing_view::DrawingViewAction),
     ClosedMesh(closed_mesh::ClosedMeshAction),
     Faces(faces::FaceAction),
+    PhotoColours(photo_colours::PhotoColourAction),
     /// The Mesh to Plans wizard.
     MeshToPlans(mesh_to_plans::WizardAction),
     ClearSelection,
@@ -2114,6 +2170,7 @@ struct Studio {
     /// The Detect faces tool: its settings and its job. The faces it finds
     /// are kept with their scan.
     faces: faces::FaceTool,
+    photo_colours: photo_colours::PhotoColourTool,
     /// The Mesh to Plans wizard: its card and where its steps stand.
     mesh_to_plans: mesh_to_plans::Wizard,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
@@ -2185,6 +2242,9 @@ struct CloudEntry {
     visible: bool,
     selection: Option<Arc<SelectionMask>>,
     deleted: Option<Arc<DeletionMask>>,
+    /// Colours the photos of the scan gave its points, in place of those of
+    /// its file.
+    colours: Option<Arc<PointColours>>,
     index: Option<Arc<OctreeIndex>>,
     auto_index_queued: bool,
     index_building: bool,
@@ -2388,6 +2448,11 @@ fn same_deletion_mask(a: Option<&Arc<DeletionMask>>, b: Option<&Arc<DeletionMask
 
 struct EditBatch {
     members: Vec<(Arc<PointCloud>, Arc<SelectionMask>)>,
+    /// Photo colours of layers, by the identity of the layer: the colours
+    /// a layer had before the edit while the batch waits for Undo, and the
+    /// ones it had before Undo while it waits for Redo. Undo and Redo swap
+    /// them with what the layer has.
+    colours: Vec<(Arc<PointCloud>, Option<Arc<PointColours>>)>,
 }
 
 impl CloudEntry {
@@ -2414,7 +2479,9 @@ impl CloudEntry {
 
     fn view_records(&self) -> Box<dyn Iterator<Item = IndexedPoint> + '_> {
         let transform = self.transform;
-        if let Some(detail) = &self.detail_points {
+        let records: Box<dyn Iterator<Item = IndexedPoint> + '_> = if let Some(detail) =
+            &self.detail_points
+        {
             Box::new(
                 detail
                     .iter()
@@ -2430,6 +2497,10 @@ impl CloudEntry {
                     .zip(self.cloud.point_ordinals.iter().copied())
                     .map(move |(point, ordinal)| transform.record(IndexedPoint { point, ordinal })),
             )
+        };
+        match &self.colours {
+            Some(colours) => Box::new(records.map(move |record| colours.paint(record))),
+            None => records,
         }
     }
 
@@ -2595,6 +2666,7 @@ impl Default for Studio {
             viewport_pointer: std::cell::Cell::new(None),
             closed_mesh: closed_mesh::ClosedMeshTool::default(),
             faces: faces::FaceTool::default(),
+            photo_colours: photo_colours::PhotoColourTool::default(),
             mesh_to_plans: mesh_to_plans::Wizard::with_recent(
                 settings.recent_mesh_to_plans.clone(),
             ),
@@ -2674,6 +2746,35 @@ impl Studio {
         !self.section_export_pending && self.turn.is_none()
     }
 
+    /// Keep an edit for Undo: at most eight are kept, and a new edit ends
+    /// what Redo could repeat.
+    fn push_edit(&mut self, batch: EditBatch) {
+        self.undo_deletions.push(batch);
+        if self.undo_deletions.len() > 8 {
+            self.undo_deletions.remove(0);
+        }
+        self.redo_deletions.clear();
+        self.revision += 1;
+    }
+
+    /// Give the layers of an edit the photo colours the edit holds, and
+    /// keep the ones they had in it instead; the file name of the last such
+    /// layer that is still open.
+    fn swap_photo_colours(&mut self, batch: &mut EditBatch) -> Option<String> {
+        let mut named = None;
+        for (source, colours) in &mut batch.colours {
+            if let Some(entry) = self
+                .clouds
+                .iter_mut()
+                .find(|entry| entry.matches_source(source))
+            {
+                std::mem::swap(&mut entry.colours, colours);
+                named = Some(display_name(&entry.cloud.path).to_owned());
+            }
+        }
+        named
+    }
+
     fn mesh_filter(&self) -> ClassFilter {
         ClassFilter {
             ground: self.filter_ground,
@@ -2736,6 +2837,7 @@ impl Studio {
             visible: true,
             selection: None,
             deleted: None,
+            colours: None,
             index: None,
             auto_index_queued: false,
             picked: false,
@@ -3447,6 +3549,7 @@ impl Studio {
                             "station_photos": entry.cloud.scan_images.len(),
                             "photos": self.photos.files.get(&entry.cloud.path)
                                 .map_or(0, |photos| photos.photos.len()),
+                            "photo_colours": entry.colours.as_ref().map_or(0, |colours| colours.len()),
                             "view_sample": entry.view_len(),
                             "bounds": {"min": entry.bounds().min, "max": entry.bounds().max},
                             "transform": {"scale": entry.transform.scale, "offset": entry.transform.offset},
@@ -3537,6 +3640,7 @@ impl Studio {
                 answer.0["result"]["faces"] = self.faces_value();
                 answer.0["result"]["mesh_to_plans"] = self.mesh_to_plans.value();
                 answer.0["result"]["photos"] = self.photos_value();
+                answer.0["result"]["colour_from_photos"] = self.photo_colours_value();
                 answer
             }
             ApiCommand::Job { id } => {
@@ -4470,6 +4574,13 @@ impl Studio {
             }
             ApiCommand::DetectFaces { options } => self.api_detect_faces(&options),
             ApiCommand::CancelDetectFaces => (self.api_cancel_detect_faces(), Task::none()),
+            ApiCommand::ColourFromPhotos { options } => self.api_colour_from_photos(&options),
+            ApiCommand::CancelColourFromPhotos => {
+                (self.api_cancel_colour_from_photos(), Task::none())
+            }
+            ApiCommand::ClearPhotoColours { layer } => {
+                (self.api_clear_photo_colours(layer), Task::none())
+            }
             ApiCommand::ListFaces { boundaries } => (self.api_list_faces(boundaries), Task::none()),
             ApiCommand::SelectFace { id } => (self.api_select_face(id), Task::none()),
             ApiCommand::ExportFaces { path } => self.api_export_faces(path),
@@ -4640,6 +4751,7 @@ impl Studio {
         let cloud = Arc::clone(&entry.cloud);
         let deleted = entry.deleted.as_ref().map(Arc::clone);
         let transform = entry.transform;
+        let colours = entry.colours.as_ref().map(Arc::clone);
         let section = if mode == ApiExportMode::Section {
             let Some(section) = self.section_box() else {
                 return (
@@ -4679,6 +4791,7 @@ impl Studio {
                             &path,
                             format,
                             transform,
+                            colours.as_deref(),
                             section,
                             deleted.as_deref(),
                         )
@@ -4714,6 +4827,7 @@ impl Studio {
                             &path,
                             format,
                             transform,
+                            colours.as_deref(),
                             expected_count,
                             |ordinal, _| {
                                 if selected {
@@ -4744,20 +4858,22 @@ impl Studio {
                     tokio::task::spawn_blocking(move || {
                         let expected_count =
                             cloud.total_points - deleted.as_ref().map_or(0, |mask| mask.count);
-                        let result = if deleted.is_none() && transform.is_identity() {
-                            pointcloud_core::export_full(&cloud, &path, format)
-                        } else {
-                            export_edited_where(
-                                &cloud,
-                                &path,
-                                format,
-                                transform,
-                                expected_count,
-                                |ordinal, _| {
-                                    deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
-                                },
-                            )
-                        };
+                        let result =
+                            if deleted.is_none() && transform.is_identity() && colours.is_none() {
+                                pointcloud_core::export_full(&cloud, &path, format)
+                            } else {
+                                export_edited_where(
+                                    &cloud,
+                                    &path,
+                                    format,
+                                    transform,
+                                    colours.as_deref(),
+                                    expected_count,
+                                    |ordinal, _| {
+                                        deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
+                                    },
+                                )
+                            };
                         result
                             .map(|()| (path, expected_count))
                             .map_err(|error| error.to_string())
@@ -5124,6 +5240,7 @@ impl Studio {
                         visible: true,
                         selection: None,
                         deleted: None,
+                        colours: None,
                         index: None,
                         auto_index_queued: false,
                         picked: false,
@@ -6106,6 +6223,7 @@ impl Studio {
                         visible: true,
                         selection: None,
                         deleted: None,
+                        colours: None,
                         index: None,
                         auto_index_queued: false,
                         picked: false,
@@ -6192,21 +6310,25 @@ impl Studio {
                     let cloud = Arc::clone(&entry.cloud);
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
                     let transform = entry.transform;
+                    let colours = entry.colours.as_ref().map(Arc::clone);
                     return save_task(suggested, format, move |path| {
-                        let result = if deleted.is_none() && transform.is_identity() {
-                            pointcloud_core::export_full(&cloud, &path, format)
-                        } else {
-                            export_edited_where(
-                                &cloud,
-                                &path,
-                                format,
-                                transform,
-                                cloud.total_points - deleted.as_ref().map_or(0, |mask| mask.count),
-                                |ordinal, _| {
-                                    deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
-                                },
-                            )
-                        };
+                        let result =
+                            if deleted.is_none() && transform.is_identity() && colours.is_none() {
+                                pointcloud_core::export_full(&cloud, &path, format)
+                            } else {
+                                export_edited_where(
+                                    &cloud,
+                                    &path,
+                                    format,
+                                    transform,
+                                    colours.as_deref(),
+                                    cloud.total_points
+                                        - deleted.as_ref().map_or(0, |mask| mask.count),
+                                    |ordinal, _| {
+                                        deleted.as_ref().is_none_or(|mask| !mask.contains(ordinal))
+                                    },
+                                )
+                            };
                         result.map(|()| path).map_err(|error| error.to_string())
                     });
                 }
@@ -6227,6 +6349,7 @@ impl Studio {
                     let cloud = Arc::clone(&entry.cloud);
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
                     let transform = entry.transform;
+                    let colours = entry.colours.as_ref().map(Arc::clone);
                     self.status = "Choose where to export the full-resolution section…".into();
                     return Task::perform(
                         async move {
@@ -6244,6 +6367,7 @@ impl Studio {
                                 format,
                                 transform,
                                 deleted.as_ref().map(Arc::clone),
+                                colours.as_ref().map(Arc::clone),
                                 path,
                             )
                         },
@@ -6256,6 +6380,7 @@ impl Studio {
                 format,
                 transform,
                 deleted,
+                colours,
                 Some(path),
             ) => {
                 self.section_export_pending = true;
@@ -6271,6 +6396,7 @@ impl Studio {
                                 &path,
                                 format,
                                 transform,
+                                colours.as_deref(),
                                 section,
                                 deleted.as_deref(),
                             )
@@ -6283,7 +6409,7 @@ impl Studio {
                     Message::SectionExported,
                 );
             }
-            Message::SectionExportPathChosen(_, _, _, _, _, None) => {
+            Message::SectionExportPathChosen(_, _, _, _, _, _, None) => {
                 self.status = "Section export cancelled".into();
             }
             Message::SectionExported(result) => {
@@ -6628,6 +6754,7 @@ impl Studio {
                         let cloud = Arc::clone(&entry.cloud);
                         let mask = Arc::clone(mask);
                         let transform = entry.transform;
+                        let colours = entry.colours.as_ref().map(Arc::clone);
                         self.status =
                             format!("Choose where to export {} selected points…", mask.count);
                         return save_task(suggestion, format, move |path| {
@@ -6636,6 +6763,7 @@ impl Studio {
                                 &path,
                                 format,
                                 transform,
+                                colours.as_deref(),
                                 mask.count,
                                 |ordinal, _| mask.contains(ordinal),
                             )
@@ -6660,6 +6788,7 @@ impl Studio {
                         let mask = Arc::clone(mask);
                         let deleted = entry.deleted.as_ref().map(Arc::clone);
                         let transform = entry.transform;
+                        let colours = entry.colours.as_ref().map(Arc::clone);
                         let expected = entry.remaining_count().saturating_sub(mask.count);
                         self.status =
                             format!("Choose output file without {} selected points…", mask.count);
@@ -6669,6 +6798,7 @@ impl Studio {
                                 &path,
                                 format,
                                 transform,
+                                colours.as_deref(),
                                 expected,
                                 |ordinal, _| {
                                     !mask.contains(ordinal)
@@ -6744,7 +6874,10 @@ impl Studio {
                     entry.selection = None;
                     members.push((cloud, selection));
                 }
-                self.undo_deletions.push(EditBatch { members });
+                self.undo_deletions.push(EditBatch {
+                    members,
+                    colours: Vec::new(),
+                });
                 if self.undo_deletions.len() > 8 {
                     self.undo_deletions.remove(0);
                 }
@@ -6757,7 +6890,7 @@ impl Studio {
                 return self.schedule_detail();
             }
             Message::UndoDelete => {
-                let Some(batch) = self.undo_deletions.pop() else {
+                let Some(mut batch) = self.undo_deletions.pop() else {
                     return Task::none();
                 };
                 let mut restored = 0u64;
@@ -6778,13 +6911,17 @@ impl Studio {
                         }
                     }
                 }
+                let recoloured = self.swap_photo_colours(&mut batch);
                 self.redo_deletions.push(batch);
                 self.revision += 1;
-                self.status = format!("Restored {} points", format_count(restored));
+                self.status = match recoloured {
+                    Some(name) => format!("Undid the photo colours of {name}"),
+                    None => format!("Restored {} points", format_count(restored)),
+                };
                 return self.schedule_detail();
             }
             Message::RedoDelete => {
-                let Some(batch) = self.redo_deletions.pop() else {
+                let Some(mut batch) = self.redo_deletions.pop() else {
                     return Task::none();
                 };
                 let mut removed = 0u64;
@@ -6805,9 +6942,13 @@ impl Studio {
                         }
                     }
                 }
+                let recoloured = self.swap_photo_colours(&mut batch);
                 self.undo_deletions.push(batch);
                 self.revision += 1;
-                self.status = format!("Deleted {} points again", format_count(removed));
+                self.status = match recoloured {
+                    Some(name) => format!("Redid the photo colours of {name}"),
+                    None => format!("Deleted {} points again", format_count(removed)),
+                };
                 return self.schedule_detail();
             }
             Message::DecimationStride(stride) => self.decimation_stride = stride,
@@ -6909,6 +7050,7 @@ impl Studio {
                 entry.selection = None;
                 self.undo_deletions.push(EditBatch {
                     members: vec![(source, mask)],
+                    colours: Vec::new(),
                 });
                 if self.undo_deletions.len() > 8 {
                     self.undo_deletions.remove(0);
@@ -6935,6 +7077,7 @@ impl Studio {
                     let cloud = Arc::clone(&entry.cloud);
                     let deleted = entry.deleted.as_ref().map(Arc::clone);
                     let transform = entry.transform;
+                    let colours = entry.colours.as_ref().map(Arc::clone);
                     let expected = entry.remaining_count().div_ceil(stride);
                     self.status = format!("Choose output for one point in every {stride}…");
                     return save_task(suggestion, format, move |path| {
@@ -6944,6 +7087,7 @@ impl Studio {
                             &path,
                             format,
                             transform,
+                            colours.as_deref(),
                             expected,
                             |ordinal, _| {
                                 if deleted.as_ref().is_some_and(|mask| mask.contains(ordinal)) {
@@ -8460,6 +8604,7 @@ impl Studio {
             Message::NamedKey(named, ignored) => return self.named_key(named, ignored),
             Message::ClosedMesh(action) => return self.update_closed_mesh(action),
             Message::Faces(action) => return self.update_faces(action),
+            Message::PhotoColours(action) => return self.update_photo_colours(action),
             Message::MeshToPlans(action) => return self.update_mesh_to_plans(action),
             Message::ClearSelection => {
                 self.pending_delete = false;
@@ -9145,12 +9290,12 @@ impl Studio {
             ),
             opencad_ribbon::quick_access_btn(
                 icon_svg(ToolIcon::Undo, 20.0),
-                "Undo delete",
+                "Undo",
                 (!self.undo_deletions.is_empty()).then_some(Message::UndoDelete),
             ),
             opencad_ribbon::quick_access_btn(
                 icon_svg(ToolIcon::Redo, 20.0),
-                "Redo delete",
+                "Redo",
                 (!self.redo_deletions.is_empty()).then_some(Message::RedoDelete),
             ),
         ]
@@ -10078,6 +10223,12 @@ impl Studio {
             }
         }
         if let Some(section) = active_cloud.and_then(|entry| self.photo_properties(entry)) {
+            properties = properties.push(section);
+        }
+        if let Some(section) = self
+            .active
+            .and_then(|index| self.photo_colour_properties(index))
+        {
             properties = properties.push(section);
         }
         if let Some(section) = self.measure.properties() {
@@ -13780,6 +13931,7 @@ mod section_box_tests {
             &destination,
             ExportFormat::PlyBinary,
             CloudTransform::default(),
+            None,
             turned,
             None,
         )
@@ -13803,6 +13955,7 @@ mod section_box_tests {
             &directory.path().join("moved.ply"),
             ExportFormat::PlyBinary,
             moved,
+            None,
             turned,
             None,
         )
@@ -14071,6 +14224,7 @@ mod editing_tests {
             &full,
             ExportFormat::PlyBinary,
             entry.transform,
+            None,
             3,
             |_, _| true,
         )
@@ -14084,6 +14238,7 @@ mod editing_tests {
                 &section,
                 ExportFormat::PlyBinary,
                 entry.transform,
+                None,
                 select_bounds.into(),
                 None,
             )

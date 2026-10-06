@@ -340,6 +340,11 @@ impl PhotoTool {
         self.failed.clear();
     }
 
+    /// Whether the photos of a source are still being listed.
+    pub(crate) fn is_listing(&self, source: &Path) -> bool {
+        self.listing.contains(source)
+    }
+
     /// Whether the photo that is entered is still being decoded, so that a
     /// picture of the view would lack it.
     pub(crate) fn waiting(&self) -> bool {

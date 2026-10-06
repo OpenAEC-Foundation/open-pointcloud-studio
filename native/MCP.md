@@ -100,13 +100,13 @@ JSON answer as text (and as `structuredContent` from protocol version
 `2025-06-18`).
 
 Exports, section drawings and their previews, selections, picks, meshes, mesh
-exports, face detections, faces exports, merges and 3D BAG downloads answer
-at once with a `job_id`.
+exports, face detections, faces exports, colourings from photos, merges and
+3D BAG downloads answer at once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
 edits, meshing (a closed mesh included), mesh export, a face detection, a
-faces export, a section drawing or its preview, a drawing file being read, steps of Mesh to Plans, merging, a 3D BAG download,
+faces export, a section drawing or its preview, a drawing file being read, steps of Mesh to Plans, a colouring from photos, merging, a 3D BAG download,
 point loading for the camera, the fill of the cut of a mesh by the section
 box, the listing and decoding of photos and view snapshots have finished; call it after
 `open`, before `screenshot` when the camera changed, and before `export_bcf`.
@@ -122,7 +122,7 @@ follows when that view is restored.
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `status` | — | State of the window: layers (each with its mesh and its detected faces), imports and tasks, camera, viewport size, section box, the Section drawing, Closed mesh and Detect faces tools, the Mesh to Plans wizard, selection, measurement, views, photos, settings |
+| `status` | — | State of the window: layers (each with its mesh, its detected faces and its points with photo colours), imports and tasks, camera, viewport size, section box, the Section drawing, Closed mesh, Detect faces and Colour from photos tools, the Mesh to Plans wizard, selection, measurement, views, photos, settings |
 | `job` | `id` | Reads a background job once |
 | `wait_for_job` | `id`, optional `timeout_seconds` (default 60) | Waits until the job no longer runs |
 | `wait_until_idle` | optional `timeout_seconds` (default 60) | Waits until no work is under way; reports what is still busy |
@@ -146,6 +146,9 @@ follows when that view is restored.
 | `photo_blend` | `value` (0–1) | How much of the photo covers the points: 0 the points only, 1 the photo only |
 | `next_photo` | — | The next photo along the path, as Page Down |
 | `previous_photo` | — | The previous photo along the path, as Page Up |
+| `colour_from_photos` | optional `layer`, `max_distance` (0.5–500 m, default 20), `blend` (default true) and `wait_seconds` | Gives the points of a layer the colours its photos see them with, the photos of its file and of its stations: the remaining points in the section box and class filters, or all; a photo colours a point that no point of the layer hides from it, within `max_distance`, the nearest first or, with `blend`, weighted to the nearest; job. The colours take the place of those of the file in the viewport and in exports, as an edit `undo_delete` takes back. The job reports the points, those coloured and the share no photo sees, the photos in reach and used, the times, and against the colours the points had the mean and median difference per channel |
+| `cancel_colour_from_photos` | — | Cancels the running colouring; the colours stay as they were |
+| `clear_photo_colours` | optional `layer` | Takes the photo colours of a layer (default the active one) away; `undo_delete` brings them back |
 | `list_camera_views` | — | Saved views of the active scan |
 | `save_camera_view` | optional `name` | Saves the current 3D view, with the section box while it is on, and makes it active; shows the 3D scene when a drawing was shown |
 | `update_camera_view` | `name` | Overwrites a view with the current 3D view; shows the 3D scene when a drawing was shown |
@@ -179,8 +182,8 @@ follows when that view is restored.
 | `clear_measure` | — | Removes the measurement |
 | `zoom_selection` | — | Frames the selected points |
 | `delete_selection` | — | Hides the selected points |
-| `undo_delete` | — | Restores the latest deleted points |
-| `redo_delete` | — | Deletes them again |
+| `undo_delete` | — | Takes back the latest edit: restores the latest deleted or thinned points, or the colours a layer had before photo colours were given or removed |
+| `redo_delete` | — | Does that edit again |
 | `thin` | `percent` (1–100) | Keeps a percentage of the active layer's points |
 | `translate` | `offset` | Moves the active layer |
 | `scale` | `factors` | Scales the active layer around its centroid |

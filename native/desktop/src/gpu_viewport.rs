@@ -16,6 +16,7 @@ use iced::widget::shader::{self, Shader};
 use iced::{event, mouse, window, Rectangle};
 use iced_wgpu::primitive::{Primitive, Storage};
 use iced_wgpu::wgpu;
+use pointcloud_core::photo_colour::PointColours;
 use pointcloud_core::{
     section_caps, Bounds, CapOptions, IndexedPoint, MeshGeometry, OrientedBox, PointCloud,
 };
@@ -188,6 +189,7 @@ struct CloudKey {
     transform: CloudTransform,
     detail: Option<Arc<[IndexedPoint]>>,
     deleted: Option<Arc<DeletionMask>>,
+    colours: Option<Arc<PointColours>>,
     mesh: Option<Arc<MeshGeometry>>,
     /// The mesh of the detected faces as it is shown: nothing while the
     /// faces are switched off.
@@ -215,6 +217,7 @@ impl SceneKey {
                     transform: entry.transform,
                     detail: entry.detail_points.clone(),
                     deleted: entry.deleted.clone(),
+                    colours: entry.colours.clone(),
                     mesh: entry.mesh.clone(),
                     faces: shown_faces(entry).cloned(),
                     visible: entry.visible,
@@ -263,6 +266,7 @@ impl CloudKey {
             && self.transform == entry.transform
             && same_arc(&self.detail, &entry.detail_points)
             && same_arc(&self.deleted, &entry.deleted)
+            && same_arc(&self.colours, &entry.colours)
             && same_arc(&self.mesh, &entry.mesh)
             && match (&self.faces, shown_faces(entry)) {
                 (Some(kept), Some(shown)) => Arc::ptr_eq(kept, shown),
@@ -2137,6 +2141,7 @@ mod tests {
             visible: true,
             selection: None,
             deleted: None,
+            colours: None,
             index: None,
             auto_index_queued: false,
             picked: false,

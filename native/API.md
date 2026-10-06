@@ -34,8 +34,8 @@ Commands use absolute file paths. They return JSON with `ok: true` or
 `ok: false` and an `error`. File opening returns `accepted: true` as soon as
 the GUI starts loading; poll `status` for the new layer. `open` answers after
 a folder or scan project file has been read on a worker thread, with the list
-of files it started loading. Exports, section drawings and face detections
-return `accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
+of files it started loading. Exports, section drawings, face detections and
+colourings from photos return `accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
 for a durable `running`, `complete` (with point count), or `failed` result.
 The newest 32 jobs remain queryable even if the GUI status line changes.
 Non-LAS/LAZ imports return an `import_id`; `status.result.imports` lists active
@@ -963,7 +963,9 @@ until the set of remaining points changes.
 `thin` accepts a keep percentage from 1 to 100 and runs in the background.
 Poll `status.result.thin_pending`; after it becomes false, the active cloud's
 `remaining` and `deleted` counts reflect the exact edit. `undo_delete` restores
-the removed points without changing the source file.
+the removed points without changing the source file. Photo colours given or
+removed are an edit as well: `undo_delete` takes back the latest edit of
+either kind, at most eight, and `redo_delete` does it again.
 
 ## Index
 
@@ -1156,12 +1158,67 @@ the camera back where it was before the first photo was entered; `walk` and
 walking on leave the photo where it was. `screenshot` and view snapshots wait
 for the photo as they wait for the points of the camera.
 
+## Colour from photos
+
+`colour_from_photos` gives the points of a layer the colours its photos see
+them with: the photos of its file (see [Photos of a file](#photos-of-a-file))
+and the pinhole photos of its scanner stations. It takes the remaining points
+of the layer inside the section box and the class filters, or all of them
+without a section box, and works on a worker thread in parts of at most
+8,000,000 points. Without `layer` it takes the active layer when that has
+photos, else the first layer with photos; a layer without an index of more
+than 5,000,000 points is refused until its index is built.
+
+A photo colours a point when nothing of the layer lies in front of it, seen
+from where the photo was taken, and the point lies within `max_distance`
+metres of the photo (0.5 to 500, default 20). For every photo a depth image of
+about a fifth of a degree per pixel is made from the points of the layer,
+read from its octree index at a detail that follows their distance to the
+photo; a point further than its pixel says by more than 5 cm, or more for a
+point further away, is hidden. A point takes the colour of the nearest photo
+that sees it, a pinhole photo seeing what lies in its middle better than what
+lies at its edges; with `blend` (the default) every photo that sees it adds
+to its colour, weighted strongly to the nearest, which evens out the exposure
+of photos taken one after another and a small error in their poses. The
+settings left out keep what the Properties block has, and those given stay
+in it.
+
+The colours take the place of those of the file: the viewport draws them,
+`color_mode` becomes `RGB`, and `export` and the other exports of a layer
+write them (an E57 then holds one scan of coordinates, colours and
+intensity; points that no photo saw are written black when the file had no
+colours). The file itself is not changed. The colours of a later colouring are
+laid over those of an earlier one. They are one edit: `undo_delete` takes them
+back and `redo_delete` gives them again; `clear_photo_colours` takes the photo
+colours of a layer away, as an edit too.
+
+The running job, which `status.result.colour_from_photos.job` holds as well,
+has `state` (`running`), `operation` (`colour_from_photos`), `source`, `stage`
+(`loading` for a layer without an index read into memory, `reading` and
+`photos`), `part` and `parts`, `completed` and `total` (points read or photos
+done), `fraction`, `cancel_requested` and `elapsed_seconds`. The complete job
+has `region` (`section_box` or `layer`), `points`, `coloured`, `unseen` and
+`unseen_share` (no photo sees them), `photos` (the photos within reach of the
+points), `photos_used` (that coloured a point best), `photos_failed` (that
+could not be read or decoded, and were left out), `parts`, `max_distance`,
+`blend`, `seconds`, `times` in seconds (`reading`, `photos`, and `decoding`,
+`depth` and `colouring` added up per photo), `source`, `kept` (false when
+nothing was seen or the layer was closed while the job ran) and `compared`:
+for the points that had a colour and were seen, the photo colours against
+those colours per channel R, G and B, as `mean_difference` (photo minus
+stored), `mean_abs_difference` and `median_abs_difference`, or `null` when no
+point had a colour. `cancel_colour_from_photos` stops the job after the step
+under way; the colours stay as they were. `status.result.colour_from_photos`
+holds the `settings` (`max_distance`, `blend`), the running `job` and the
+`last` job; `status.result.clouds[].photo_colours` counts the points of a
+layer with photo colours.
+
 ## Commands
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), and current status text |
-| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge, 3D BAG download or Mesh to Plans task's state and result |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), and current status text |
+| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, colouring from photos, merge, 3D BAG download or Mesh to Plans task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |
@@ -1181,6 +1238,9 @@ for the photo as they wait for the points of the camera.
 | `photo_blend` | `value` | How much of the entered photo covers the points, from 0 (the points only) to 1 (the photo only); it stays for later photos |
 | `next_photo` | — | Enters the next photo along the path of the entered photo; refused at the last photo and while no photo is entered |
 | `previous_photo` | — | Enters the previous photo along the path; refused at the first photo and while no photo is entered |
+| `colour_from_photos` | optional `layer`, `max_distance`, `blend` | Gives the remaining points of a layer in the section box and class filters, or all of them, the colours its photos see them with; returns a job ID. See [Colour from photos](#colour-from-photos) |
+| `cancel_colour_from_photos` | — | Stops the running colouring from photos; the colours stay as they were |
+| `clear_photo_colours` | optional `layer` | Takes the photo colours of a layer, by default the active one, away as an edit `undo_delete` takes back |
 | `list_camera_views` | — | Lists the saved views of the active scan with everything they hold, and the name of the `active` view |
 | `save_camera_view` | optional `name` | Saves the current view of the active scan (camera, the section box while it is on, colour mode) and makes it the active view, showing the 3D scene when the Drawing view or the File view was in front; returns its `name` and `guid`. The name must be unique within that scan and 1–64 characters long; without a name the first free "View 1", "View 2", … is used (maximum 64 views per scan) |
 | `update_camera_view` | `name` | Overwrites a named view with the current 3D view, keeping its name, identifier, time and annotations, and makes it the active view, showing the 3D scene when the Drawing view or the File view was in front |
@@ -1214,8 +1274,8 @@ for the photo as they wait for the points of the camera.
 | `clear_measure` | — | Removes the current measurement |
 | `zoom_selection` | — | Frames the exact selected source points in the 3D view without changing the section box; poll `selection_bounds_pending` in status until the camera updates |
 | `delete_selection` | — | Hides selected points in the open view; may first queue an octree build for LAZ |
-| `undo_delete` | — | Restores the latest deletion batch |
-| `redo_delete` | — | Reapplies the latest undone deletion batch |
+| `undo_delete` | — | Takes back the latest edit: restores the latest deletion batch, or gives a layer back the colours it had before its latest photo colours were given or removed |
+| `redo_delete` | — | Does the latest edit that was taken back again |
 | `thin` | `percent` | Keeps an exact percentage of the active cloud's remaining points, with Undo support |
 | `translate` | `offset` | Applies three finite XYZ offsets to the active cloud view |
 | `scale` | `factors` | Scales the active view around the exact centroid of remaining points; large sources stream from the disk octree in the background |

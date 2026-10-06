@@ -258,6 +258,20 @@ pub enum ApiCommand {
         options: crate::faces::FaceOptions,
     },
     CancelDetectFaces,
+    /// Colour the points of a layer from its photos.
+    ColourFromPhotos {
+        /// The layer and the settings of the Colour from photos block;
+        /// settings left out keep what the block has.
+        #[serde(flatten)]
+        options: crate::photo_colours::ColourOptions,
+    },
+    CancelColourFromPhotos,
+    /// Take the photo colours of a layer away, as Remove photo colours does.
+    ClearPhotoColours {
+        /// The layer; without it the active layer.
+        #[serde(default)]
+        layer: Option<usize>,
+    },
     ListFaces {
         /// Whether every face comes with its outline and the answer with the
         /// edges between the faces.
