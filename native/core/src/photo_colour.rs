@@ -780,7 +780,12 @@ impl DepthImage {
             Some((angle, height)) => ((height * 0.5 - (pixel[1] + 0.5)) * angle).cos().max(0.05),
             None => 1.0,
         };
-        let across = ((down as f64 / squeeze).round() as i64).clamp(down, self.width / 2);
+        // At most half the image each way, so that a splat does not come
+        // round a panorama to itself; an image of a pixel or two across, of
+        // a narrow photo, still takes one.
+        let across = ((down as f64 / squeeze).round() as i64)
+            .max(down)
+            .min((self.width / 2).max(1));
         let rise = f64::from(range) * self.angle * SLOPE;
         for y in (row - down).max(0)..=(row + down).min(self.height - 1) {
             for x in column - across..=column + across {
@@ -1978,6 +1983,41 @@ mod tests {
             &|| false,
         );
         assert!(matches!(moved, Err(LoadError::InvalidData(_))));
+    }
+
+    /// A photo whose depth image is a few pixels across, narrower than the
+    /// splat of a point it sees, still marks its points and colours them.
+    #[test]
+    fn a_narrow_photo_has_a_depth_image_of_a_few_pixels() {
+        let points = scene(0.25, false);
+        // A photo of one pixel.
+        let speck = FilePhoto {
+            width: 1,
+            height: 1,
+            projection: PhotoProjection::Pinhole {
+                focal: [1.0, 1.0],
+                principal: [0.0, 0.0],
+            },
+            ..pinhole(NEAR)
+        };
+        // Two degrees across, aimed at a point of the panel: a depth image of
+        // ten pixels, where that point covers more than ten.
+        let tele = FilePhoto {
+            width: 600,
+            height: 450,
+            projection: PhotoProjection::Pinhole {
+                focal: [17_000.0, 17_000.0],
+                principal: [299.5, 224.5],
+            },
+            ..pinhole([3.0, 1.875, 1.625])
+        };
+        let image = DepthImage::new(&View::new(&tele, 0, [0.0; 3]));
+        assert_eq!((image.width, image.height), (10, 8));
+        for photo in [speck, tele] {
+            let run = run(&points, &[photo], best_photo());
+            assert_eq!(run.result.photos_used, 1);
+            assert!(run.result.seen > 0, "{:?}", run.result);
+        }
     }
 
     #[test]
