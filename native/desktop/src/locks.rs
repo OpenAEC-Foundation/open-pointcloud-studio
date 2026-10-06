@@ -3,8 +3,10 @@
 //!
 //! - While a locked 3D view is shown, orbiting, panning, zooming, walking,
 //!   the view cube and the section box leave it as it is, and the status
-//!   bar says "<name> is locked"; Update is refused. It can still be renamed,
-//!   duplicated (the copy is unlocked), deleted and annotated.
+//!   bar says "<name> is locked"; Update is refused. So they do while a
+//!   drawing or a sheet lies in front of the scene that holds it, so that
+//!   its tab shows it as it was locked. It can still be renamed, duplicated
+//!   (the copy is unlocked), deleted and annotated.
 //! - The crop region of a locked drawing, its turn with RO and the points it
 //!   uses stay; it pans, zooms and takes annotations.
 //! - A locked viewport on a sheet is not moved, resized, scaled or removed.
@@ -130,28 +132,31 @@ fn lock_status(name: &str, locked: bool) -> String {
 }
 
 impl Studio {
-    /// The name of the locked saved view the 3D scene shows, while it shows
-    /// one.
-    pub(crate) fn locked_view_shown(&self) -> Option<String> {
-        if self.drawing_view.shown || self.file_open {
-            return None;
-        }
+    /// The name of the locked saved view the 3D scene holds: the one it
+    /// shows, also while a drawing, a sheet or the File view lies in front
+    /// of it. The camera and the section box of the scene are that view's;
+    /// a click on its tab shows the scene as it was left.
+    pub(crate) fn locked_scene_view(&self) -> Option<String> {
         let index = self.active_view_index()?;
         let view = &self.views.list[index];
         view.locked.then(|| view.name.clone())
     }
 
     /// Why a message is refused: it would change the locked view the scene
-    /// shows.
+    /// holds, whatever lies in front of it.
     pub(crate) fn locked_refusal(&self, message: &Message) -> Option<String> {
         if !changes_the_view(message) {
             return None;
         }
-        self.locked_view_shown().map(|name| locked_status(&name))
+        // A covered model ignores the walk keys by itself.
+        if self.model_covered() && matches!(message, Message::WalkKey(..)) {
+            return None;
+        }
+        self.locked_scene_view().map(|name| locked_status(&name))
     }
 
     /// The name of the locked view a command of the local API would change:
-    /// the one the scene shows, or the one it would update. The command is
+    /// the one the scene holds, or the one it would update. The command is
     /// refused.
     pub(crate) fn api_locked_refusal(&self, command: &ApiCommand) -> Option<String> {
         if let ApiCommand::UpdateCameraView { name } = command {
@@ -187,7 +192,7 @@ impl Studio {
         if !changes {
             return None;
         }
-        self.locked_view_shown()
+        self.locked_scene_view()
     }
 
     /// Whether what a tab shows is locked.
@@ -594,6 +599,75 @@ mod tests {
         );
         let _ = studio.update(Message::Orbit(20.0, 5.0));
         assert_ne!(camera(&studio), shown);
+    }
+
+    #[test]
+    fn a_locked_view_behind_a_sheet_keeps_its_camera_and_box_and_its_tab_shows_it_so() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+        let (mut studio, _directory) = studio_with_scan();
+        // A view of its own: turned, zoomed in, with a section box.
+        let _ = studio.update(Message::SetSectionEnabled(true));
+        let _ = studio.update(Message::Orbit(40.0, 15.0));
+        let _ = studio.update(Message::Zoom(2.0, [300.0, 200.0], Size::new(800.0, 600.0)));
+        let _ = studio.update(Message::Views(ViewAction::Save));
+        let guid = studio.listed_views()[0].guid.clone();
+        let _ = studio.update(Message::Lock(LockTarget::View(guid.clone())));
+        let shown = camera(&studio);
+        let section = studio.section_box();
+        assert!(section.is_some());
+        // A sheet in front of the scene that holds the locked view.
+        let sheet = studio
+            .create_layout("01", "Plans", crate::layouts::Paper::A3, true)
+            .unwrap();
+        let _ = studio.show_layout(&sheet);
+        assert!(studio.drawing_view.shown_layout().is_some());
+        for message in [
+            Message::ResetCamera,
+            Message::CameraPreset(CameraPreset::Top),
+            Message::ToggleOrthographic,
+            Message::SetSectionEnabled(false),
+            Message::ResetSectionBox,
+            Message::KeyTyped("w".into(), false),
+        ] {
+            studio.status.clear();
+            let _ = studio.update(message);
+            assert_eq!(camera(&studio), shown);
+            assert_eq!(studio.section_box(), section);
+            assert!(studio.walk.is_none());
+            assert_eq!(studio.status, "View 1 is locked");
+        }
+        for body in [
+            json!({"command": "orbit", "yaw": 0.4, "pitch": 0.1}),
+            json!({"command": "zoom_all"}),
+            json!({"command": "set_section", "min": [0, 0, 0], "max": [1, 1, 1]}),
+            json!({"command": "clear_section"}),
+        ] {
+            let answer = send(&mut studio, body.clone());
+            assert_eq!(answer["error"], "View 1 is locked", "{body}");
+        }
+        // The sheet itself still pans and zooms.
+        let _ = studio.update(Message::Layouts(crate::layouts::LayoutAction::Pan([
+            10.0, 5.0,
+        ])));
+        assert_eq!(studio.drawing_view.shown_layout(), Some(sheet.as_str()));
+        // Its tab shows the view as it was locked.
+        let task = studio.show_tab(&crate::view_tabs::TabId::View(guid.clone()));
+        assert!(task.is_ok());
+        assert!(studio.drawing_view.shown_layout().is_none());
+        assert_eq!(camera(&studio), shown);
+        assert_eq!(studio.section_box(), section);
+        // The 3D model holds the scene of its own, which is free.
+        let _ = studio.update(Message::Browser(
+            crate::project_browser::BrowserAction::ShowModel,
+        ));
+        let _ = studio.show_layout(&sheet);
+        let before = camera(&studio);
+        let _ = studio.update(Message::ResetCamera);
+        assert_ne!(studio.status, "View 1 is locked");
+        let _ = studio.update(Message::Orbit(20.0, 5.0));
+        assert_ne!(camera(&studio), before);
     }
 
     #[test]

@@ -858,8 +858,9 @@ of that name first, unless `kind` is `view` or `drawing`), or with
 sheet shown). Both answer with the `kind`, the `name` and `locked`. The lock
 is kept with the view, the drawing or the sheet.
 
-While a locked 3D view is shown, the commands that would change its camera
-or its section box are refused with `<name> is locked`: `camera`,
+While a locked 3D view holds the scene, shown or behind a drawing, a sheet or
+the File view, the commands that would change its camera or its section box
+are refused with `<name> is locked`: `camera`,
 `set_camera`, `orbit`, `zoom_all`, `zoom_selection`, `set_section`,
 `clear_section`, `align_section_to_walls`, `walk`, `open_panorama`,
 `set_panorama`, `close_panorama`, `enter_photo`, `next_photo`,

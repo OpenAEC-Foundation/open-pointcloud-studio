@@ -1287,9 +1287,9 @@ impl Studio {
                     self.status = crate::locks::locked_status(&definition.name);
                 }
             }
-            TurnStart::SectionBox if self.locked_view_shown().is_some() => {
+            TurnStart::SectionBox if self.locked_scene_view().is_some() => {
                 self.status =
-                    crate::locks::locked_status(&self.locked_view_shown().unwrap_or_default());
+                    crate::locks::locked_status(&self.locked_scene_view().unwrap_or_default());
             }
             TurnStart::Plan(guid) => {
                 if self.drawing.busy() {
