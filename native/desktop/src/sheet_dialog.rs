@@ -633,7 +633,9 @@ impl Studio {
         let card = container(
             column![
                 row![
-                    text(tr("Create 2D plan / elevation / section")).size(15),
+                    text(tr("Create 2D plan / elevation / section"))
+                        .size(15)
+                        .font(crate::fonts::SEMIBOLD),
                     horizontal_space(),
                     button(text("×").size(14))
                         .on_press(send(SheetAction::Close))

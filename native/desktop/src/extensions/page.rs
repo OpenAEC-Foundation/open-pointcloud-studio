@@ -7,11 +7,12 @@ use iced::widget::{
     button, center, checkbox, column, container, horizontal_space, mouse_area, opaque,
     progress_bar, row, svg, text, tooltip, Column, Space,
 };
-use iced::{Border, Element, Fill, Font, Length};
+use iced::{Border, Element, Fill, Length};
 
 use super::manifest::{Commands, EntryPage, Manifest};
 use super::{Dialog, ExtensionAction, Installed, BUILT_IN};
 use crate::file_view::FilePage;
+use crate::fonts;
 use crate::i18n::{tr, tr_args};
 use crate::{
     flat_tool_style, muted_checkbox_style, opencad_ribbon, status_button_style, ui_theme, Message,
@@ -172,8 +173,8 @@ impl Studio {
         }
         let mut top = column![
             text(tr(FilePage::Extensions.label()))
-                .size(26)
-                .font(Font::with_name("Space Grotesk")),
+                .size(22)
+                .font(fonts::HEADING),
             text(tr(
                 "Features you can switch off, and programs that add buttons and work through the local API of the application."
             ))
@@ -212,7 +213,7 @@ impl Studio {
                     cards.push(card(
                         column![
                             row![
-                                text(tr(extension.name)).size(15),
+                                text(tr(extension.name)).size(15).font(fonts::SEMIBOLD),
                                 chip(tr(extension.category).to_owned()),
                                 horizontal_space(),
                                 checkbox(tr("Enabled"), enabled)
@@ -249,7 +250,7 @@ impl Studio {
             installed = installed.push(card(
                 column![
                     row![
-                        text(problem.id.clone()).size(15),
+                        text(problem.id.clone()).size(15).font(fonts::SEMIBOLD),
                         chip(tr("Not loaded").to_owned()),
                     ]
                     .spacing(10)
@@ -319,7 +320,9 @@ impl Studio {
         let run = self.extension_host.runs.get(&id);
         let mut details = column![
             row![
-                text(manifest.name.get().to_owned()).size(15),
+                text(manifest.name.get().to_owned())
+                    .size(15)
+                    .font(fonts::SEMIBOLD),
                 chip(tr("Installed").to_owned()),
                 horizontal_space(),
                 checkbox(tr("Enabled"), enabled)
@@ -459,7 +462,7 @@ impl Studio {
                 let body = column![
                     text(manifest.name.get().to_owned())
                         .size(20)
-                        .font(Font::with_name("Space Grotesk")),
+                        .font(fonts::SEMIBOLD),
                     text(manifest.description.get().to_owned()).size(12),
                     container(Space::new(Fill, 1)).style(|theme| {
                         container::Style::default().background(ui_theme::colors(theme).dialog_section_border)
@@ -496,7 +499,7 @@ impl Studio {
         let card = container(
             column![
                 row![
-                    text(title.to_owned()).size(15),
+                    text(title.to_owned()).size(15).font(fonts::SEMIBOLD),
                     horizontal_space(),
                     button(text("×").size(14))
                         .on_press(send(ExtensionAction::CloseDialog))
@@ -668,7 +671,9 @@ impl Studio {
                 tiles.push(
                     button(
                         column![
-                            text(tile.title.get().to_owned()).size(15),
+                            text(tile.title.get().to_owned())
+                                .size(15)
+                                .font(fonts::SEMIBOLD),
                             text(detail).size(12).color(muted),
                         ]
                         .spacing(3),

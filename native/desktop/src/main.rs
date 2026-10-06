@@ -25,6 +25,7 @@ mod extensions;
 mod faces;
 mod file_photos;
 mod file_view;
+mod fonts;
 mod gpu_viewport;
 mod i18n;
 mod index_jobs;
@@ -79,7 +80,7 @@ use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
 use iced::widget::{
     button, checkbox, column, container, row, scrollable, slider, stack, svg, text, text_input,
 };
-use iced::{Color, Element, Fill, Font, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
+use iced::{Color, Element, Fill, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 use lod_pace::{
     first_pass_budget, plan_first_pass, preview_improves, preview_tier_points, LodPace, ScreenFill,
 };
@@ -116,12 +117,6 @@ const VERSION_LABEL: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 /// the name of the desktop entry the packages install.
 #[cfg(target_os = "linux")]
 const APPLICATION_ID: &str = "org.openaec.OpenPointcloudStudio";
-
-/// The fonts the window brings along; Inter is the font of the interface.
-const FONTS: [&[u8]; 2] = [
-    include_bytes!("../../assets/fonts/Inter.ttf"),
-    include_bytes!("../../assets/fonts/SpaceGrotesk.ttf"),
-];
 
 /// The name and the version of the application as one text.
 pub(crate) fn app_title() -> String {
@@ -1176,7 +1171,10 @@ fn main() -> iced::Result {
         // Controls without an explicit size match the compact property rows.
         .settings(iced::Settings {
             default_text_size: iced::Pixels(12.0),
-            fonts: FONTS.into_iter().map(std::borrow::Cow::Borrowed).collect(),
+            fonts: fonts::FILES
+                .into_iter()
+                .map(std::borrow::Cow::Borrowed)
+                .collect(),
             ..iced::Settings::default()
         })
         .subscription(|studio| {
@@ -1307,7 +1305,7 @@ fn main() -> iced::Result {
             };
             iced::Subscription::batch([keyboard, api, opened, walking, clock])
         })
-        .default_font(Font::with_name("Inter"))
+        .default_font(fonts::REGULAR)
         .theme(|studio: &Studio| studio.ui_theme.iced())
         .antialiasing(true)
         .window(iced::window::Settings {
@@ -9912,7 +9910,7 @@ impl Studio {
         use opencad_ribbon::RibbonItem;
 
         let file_button = container(
-            button(text(i18n::tr("File")).size(12))
+            button(text(i18n::tr("File")).size(12).font(fonts::SEMIBOLD))
                 .on_press(Message::ToggleFile)
                 .style(|theme, status| {
                     opencad_ribbon::file_tab_style(theme, self.file_open, status)
@@ -9921,7 +9919,7 @@ impl Studio {
         )
         .padding([1, 8]);
         // The one tab of the ribbon; it also leads back from the File view.
-        let home_tab = button(text(i18n::tr("Home")).size(12))
+        let home_tab = button(text(i18n::tr("Home")).size(12).font(fonts::MEDIUM))
             .on_press_maybe(self.file_open.then_some(Message::ToggleFile))
             .style(|theme, status| opencad_ribbon::tab_style(theme, !self.file_open, status))
             .padding([5, 13]);
@@ -9953,7 +9951,7 @@ impl Studio {
             ),
         ]
         .spacing(4);
-        let settings_button = button(text(i18n::tr("Settings")).size(12))
+        let settings_button = button(text(i18n::tr("Settings")).size(12).font(fonts::MEDIUM))
             .on_press(Message::Settings(settings_dialog::SettingsAction::Open))
             .style(|theme, status| opencad_ribbon::tab_style(theme, false, status))
             .padding([5, 13]);
@@ -10513,13 +10511,9 @@ impl Studio {
             display_name(&entry.cloud.path)
         });
         let mut properties = column![
-            container(
-                text(i18n::tr("Properties"))
-                    .size(12)
-                    .font(Font::with_name("Space Grotesk"))
-            )
-            .padding([5, 8])
-            .width(Fill),
+            container(text(i18n::tr("Properties")).size(11).font(fonts::SEMIBOLD))
+                .padding([5, 8])
+                .width(Fill),
             container(text(filename).size(11))
                 .padding([5, 8])
                 .width(Fill)
@@ -11176,6 +11170,7 @@ fn large_tool_button_when(
             iced::widget::Space::with_height(4),
             text(i18n::tr(label))
                 .size(11)
+                .font(label_font(active))
                 .wrapping(iced::widget::text::Wrapping::None),
             iced::widget::Space::with_width(LARGE_TOOL_MIN_WIDTH),
         ]
@@ -11190,6 +11185,15 @@ fn large_tool_button_when(
 
 /// The narrowest a large ribbon button gets, for a short name.
 const LARGE_TOOL_MIN_WIDTH: f32 = 46.0;
+
+/// The font of the name of a ribbon button: medium while it is on.
+fn label_font(active: bool) -> iced::Font {
+    if active {
+        fonts::MEDIUM
+    } else {
+        fonts::REGULAR
+    }
+}
 
 /// A tool as its icon alone, named in its tooltip: for a narrow panel.
 fn icon_tool_button_when(
@@ -11217,9 +11221,12 @@ fn small_tool_button_when(
 ) -> Element<'static, Message> {
     let icon = tool_icon(&message);
     button(
-        row![icon_svg(icon, 18.0), text(i18n::tr(label)).size(12),]
-            .spacing(4)
-            .align_y(iced::Alignment::Center),
+        row![
+            icon_svg(icon, 18.0),
+            text(i18n::tr(label)).size(12).font(label_font(active)),
+        ]
+        .spacing(4)
+        .align_y(iced::Alignment::Center),
     )
     .on_press_maybe(enabled.then_some(message))
     .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
@@ -11288,7 +11295,9 @@ fn small_color_button(
             Canvas::new(ColorModeGlyph(mode, mode == current))
                 .width(24)
                 .height(24),
-            text(i18n::tr(label)).size(12),
+            text(i18n::tr(label))
+                .size(12)
+                .font(label_font(mode == current)),
         ]
         .spacing(6)
         .align_y(iced::Alignment::Center),

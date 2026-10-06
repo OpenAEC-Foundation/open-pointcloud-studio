@@ -11,12 +11,13 @@ use iced::widget::canvas::Canvas;
 use iced::widget::{
     button, column, container, image, pick_list, progress_bar, row, stack, text, text_input,
 };
-use iced::{Element, Fill, Font, Point as UiPoint, Task};
+use iced::{Element, Fill, Point as UiPoint, Task};
 use pointcloud_core::{BagBounds, BagLod, BagProgress, BagStats};
 use serde_json::{json, Value};
 
 use crate::bag_map::{self, BagMap};
 use crate::extensions;
+use crate::fonts;
 use crate::i18n::{key, tr, tr_args};
 use crate::{flat_tool_style, opencad_ribbon, themed_pick_list_style, CloudEntry, Message, Studio};
 
@@ -553,8 +554,8 @@ impl Studio {
         let mut panel = column![
             row![
                 text(tr("3D BAG"))
-                    .size(15)
-                    .font(Font::with_name("Space Grotesk"))
+                    .size(11)
+                    .font(fonts::SEMIBOLD)
                     .width(Fill),
                 button("×")
                     .on_press(Message::ToggleBagPanel)

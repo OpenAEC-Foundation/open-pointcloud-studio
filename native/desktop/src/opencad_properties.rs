@@ -158,14 +158,18 @@ pub fn property_control<'a>(
 }
 
 pub fn section_header(title: &'static str) -> Element<'static, Message> {
-    container(text(crate::i18n::tr(title)).size(FONT_SZ))
-        .width(Fill)
-        .padding([4, 6])
-        .style(|theme| container::Style {
-            background: Some(Background::Color(ui_theme::colors(theme).bg_lighter)),
-            ..Default::default()
-        })
-        .into()
+    container(
+        text(crate::i18n::tr(title))
+            .size(11)
+            .font(crate::fonts::SEMIBOLD),
+    )
+    .width(Fill)
+    .padding([4, 6])
+    .style(|theme| container::Style {
+        background: Some(Background::Color(ui_theme::colors(theme).bg_lighter)),
+        ..Default::default()
+    })
+    .into()
 }
 
 /// The box a tooltip of the panels is shown in.

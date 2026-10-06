@@ -153,6 +153,7 @@ pub fn render_group_items<'a>(
     // the group.
     let title = text(crate::i18n::tr(title))
         .size(10)
+        .font(crate::fonts::MEDIUM)
         .wrapping(iced::widget::text::Wrapping::None)
         .style(|theme| text::Style {
             color: Some(ui_theme::colors(theme).ribbon_group_label),

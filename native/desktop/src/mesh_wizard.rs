@@ -1224,7 +1224,9 @@ impl Studio {
         let send = Message::MeshWizard;
         let header = row![
             icon_svg(ToolIcon::MeshPointcloud, 22.0),
-            text(tr("Mesh Pointcloud")).size(15),
+            text(tr("Mesh Pointcloud"))
+                .size(15)
+                .font(crate::fonts::SEMIBOLD),
             horizontal_space(),
             button(text("×").size(14))
                 .on_press(send(MeshWizardAction::Close))
@@ -1361,7 +1363,9 @@ impl Studio {
         let chosen = self.mesh_wizard.method == method;
         let mut heading = row![
             icon_svg(method.icon(), 28.0),
-            text(tr(method.label())).size(14),
+            text(tr(method.label()))
+                .size(14)
+                .font(crate::fonts::SEMIBOLD),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center);
@@ -1559,7 +1563,10 @@ impl Studio {
         column![
             row![
                 icon_svg(method.icon(), 22.0),
-                text(tr(method.label())).size(14).color(colors.accent),
+                text(tr(method.label()))
+                    .size(14)
+                    .font(crate::fonts::SEMIBOLD)
+                    .color(colors.accent),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
@@ -1627,7 +1634,10 @@ impl Studio {
         );
         let mut page = column![row![
             icon_svg(method.icon(), 22.0),
-            text(tr(method.label())).size(14).color(colors.accent),
+            text(tr(method.label()))
+                .size(14)
+                .font(crate::fonts::SEMIBOLD)
+                .color(colors.accent),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center)]

@@ -54,7 +54,10 @@ pub(crate) fn about<'a>(colors: UiColors) -> iced::widget::Column<'a, Message> {
         .spacing(12)
     };
     column![
-        text(crate::APP_NAME).size(16),
+        text(crate::APP_NAME)
+            .size(20)
+            .font(crate::fonts::SEMIBOLD)
+            .color(colors.accent),
         text(tr("Native viewer and editor for point clouds."))
             .size(12)
             .color(colors.text_secondary),
@@ -145,7 +148,7 @@ impl Studio {
 
         let tab = |label: &'static str, tab: SettingsTab| {
             let active = dialog.tab == tab;
-            button(text(tr(label)).size(12))
+            button(text(tr(label)).size(12).font(crate::fonts::MEDIUM))
                 .on_press(send(SettingsAction::Tab(tab)))
                 .width(Fill)
                 .padding([7, 12])
@@ -181,7 +184,12 @@ impl Studio {
         .spacing(2)
         .width(150);
 
-        let heading = |label: &'static str| text(tr(label)).size(13).color(colors.accent);
+        let heading = |label: &'static str| {
+            text(tr(label))
+                .size(13)
+                .font(crate::fonts::SEMIBOLD)
+                .color(colors.accent)
+        };
         let label = |name: &'static str| {
             text(tr(name))
                 .size(12)
@@ -300,7 +308,7 @@ impl Studio {
         let card = container(
             column![
                 row![
-                    text(tr("Settings")).size(15),
+                    text(tr("Settings")).size(15).font(crate::fonts::SEMIBOLD),
                     horizontal_space(),
                     button(text("×").size(14))
                         .on_press(send(SettingsAction::Cancel))

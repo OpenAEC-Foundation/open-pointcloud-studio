@@ -12,11 +12,12 @@ use std::path::{Path, PathBuf};
 use iced::widget::{
     button, checkbox, column, container, mouse_area, progress_bar, row, text, tooltip, Column,
 };
-use iced::{Color, Element, Fill, Font, Task};
+use iced::{Color, Element, Fill, Task};
 use serde_json::{json, Value};
 
 use crate::camera_views::SavedView;
 use crate::drawing_view::DrawingViewAction;
+use crate::fonts;
 use crate::i18n::{key, tr, tr_args};
 use crate::saved_drawings::SavedDrawing;
 use crate::sheet_dialog::SheetKind;
@@ -358,12 +359,11 @@ pub(crate) fn band<'a>(
     } else {
         ToolIcon::ChevronClosed
     };
-    let mut label = text(caption)
-        .size(if sub { 11 } else { 12 })
+    // The head of a group as a section head, a sub-group as a row.
+    let label = text(caption)
+        .size(11)
+        .font(if sub { fonts::REGULAR } else { fonts::SEMIBOLD })
         .wrapping(iced::widget::text::Wrapping::None);
-    if !sub {
-        label = label.font(Font::with_name("Space Grotesk"));
-    }
     let toggle = button(
         row![
             icon_svg(chevron, 10.0),
@@ -371,6 +371,7 @@ pub(crate) fn band<'a>(
             container(label).width(Fill).clip(true),
             text(count)
                 .size(10)
+                .font(fonts::SEMIBOLD)
                 .wrapping(iced::widget::text::Wrapping::None)
                 .style(|theme| text::Style {
                     color: Some(ui_theme::colors(theme).text_muted),
@@ -478,7 +479,7 @@ fn shown_checkbox<'a>(state: Shown, on: impl Fn(bool) -> Message + 'a) -> Elemen
         .size(13);
     if state == Shown::Mixed {
         boxed = boxed.icon(checkbox::Icon {
-            font: Font::DEFAULT,
+            font: fonts::REGULAR,
             code_point: '\u{2013}',
             size: None,
             line_height: iced::widget::text::LineHeight::default(),
@@ -740,10 +741,8 @@ impl Studio {
 
     /// The panel at the left of the window.
     pub(crate) fn project_panel(&self) -> Element<'_, Message> {
-        let mut panel = column![text(tr("Project Browser"))
-            .size(14)
-            .font(Font::with_name("Space Grotesk"))]
-        .spacing(8);
+        let mut panel =
+            column![text(tr("Project Browser")).size(11).font(fonts::SEMIBOLD)].spacing(8);
         panel = panel.push(self.scans_group());
         if let Some(classes) = self.classes_group() {
             panel = panel.push(classes);

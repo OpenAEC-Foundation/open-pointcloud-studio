@@ -51,7 +51,7 @@ pub(crate) fn load_fonts() {
         let mut fonts = iced_tiny_skia::graphics::text::font_system()
             .write()
             .expect("the font system");
-        for bytes in crate::FONTS {
+        for bytes in crate::fonts::FILES {
             fonts.load_font(std::borrow::Cow::Borrowed(bytes));
         }
     });
@@ -61,7 +61,7 @@ pub(crate) fn load_fonts() {
 pub(crate) fn render(element: Element<'_, Message>, theme: &Theme, size: Size) -> Picture {
     load_fonts();
     let mut renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
-        iced::Font::with_name("Inter"),
+        crate::fonts::REGULAR,
         iced::Pixels(12.0),
     ));
     let mut tree = Tree::new(&element);

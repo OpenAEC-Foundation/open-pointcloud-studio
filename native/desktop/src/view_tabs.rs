@@ -18,10 +18,11 @@ use std::path::{Path, PathBuf};
 
 use iced::widget::scrollable::{self, AbsoluteOffset, Direction, Scrollbar};
 use iced::widget::{button, container, mouse_area, row, text, tooltip};
-use iced::{Background, Border, Color, Element, Fill, Font, Padding, Task, Theme};
+use iced::{Background, Border, Color, Element, Fill, Padding, Task, Theme};
 use pointcloud_core::Bounds;
 use serde_json::{json, Value};
 
+use crate::fonts;
 use crate::i18n::tr;
 use crate::project_browser::{ViewKind, ViewRow};
 use crate::station_photos::WalkView;
@@ -924,10 +925,7 @@ impl Studio {
             line = line.push(
                 container(
                     row![
-                        text(title)
-                            .size(11)
-                            .font(Font::with_name("Space Grotesk"))
-                            .color(colors.text),
+                        text(title).size(11).font(fonts::MEDIUM).color(colors.text),
                         text(caption)
                             .size(11)
                             .color(colors.text_muted)

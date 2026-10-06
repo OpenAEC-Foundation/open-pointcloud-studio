@@ -9,11 +9,12 @@ use std::sync::atomic::Ordering;
 use iced::widget::{
     button, column, container, horizontal_space, pick_list, row, scrollable, text, Column, Space,
 };
-use iced::{Element, Fill, Font, Task};
+use iced::{Element, Fill, Task};
 use pointcloud_core::ExportFormat;
 use serde_json::{json, Value};
 
 use crate::extensions::manifest::EntryPage;
+use crate::fonts;
 use crate::i18n::{key, tr};
 use crate::{
     display_name, extensions, format_count, opencad_ribbon, settings_dialog,
@@ -296,11 +297,15 @@ impl Studio {
                 "Settings…",
                 Message::Settings(settings_dialog::SettingsAction::Open),
             ),
-            button(text(tr("←  Return to model")).size(13))
-                .on_press(Message::ToggleFile)
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
-                .width(Fill)
-                .padding([13, 18]),
+            button(
+                text(tr("←  Return to model"))
+                    .size(13)
+                    .font(fonts::SEMIBOLD),
+            )
+            .on_press(Message::ToggleFile)
+            .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+            .width(Fill)
+            .padding([13, 18]),
             // Exit ends the session at once: it stands apart, below the entry
             // that is used most.
             rule(),
@@ -327,9 +332,7 @@ impl Studio {
     /// The title of a page with one line under it that says what it is for.
     fn page_heading(&self, title: &'static str, lead: &'static str) -> Column<'_, Message> {
         column![
-            text(tr(title))
-                .size(26)
-                .font(Font::with_name("Space Grotesk")),
+            text(tr(title)).size(22).font(fonts::HEADING),
             text(tr(lead))
                 .size(13)
                 .color(self.ui_theme.colors().text_secondary),
@@ -364,7 +367,7 @@ impl Studio {
         let muted = self.ui_theme.colors().text_secondary;
         button(
             column![
-                text(tr(title)).size(15),
+                text(tr(title)).size(15).font(fonts::SEMIBOLD),
                 text(tr(detail)).size(12).color(muted),
             ]
             .spacing(3),
@@ -670,8 +673,8 @@ impl Studio {
         );
         column![
             text(tr("Point cloud workspace"))
-                .size(26)
-                .font(Font::with_name("Space Grotesk")),
+                .size(22)
+                .font(fonts::HEADING),
             text(format!(
                 "{} files  ·  {} points  ·  {} selected",
                 self.clouds.len(),
@@ -694,8 +697,8 @@ impl Studio {
     fn about_page(&self) -> Element<'_, Message> {
         column![
             text(tr(FilePage::About.label()))
-                .size(26)
-                .font(Font::with_name("Space Grotesk")),
+                .size(22)
+                .font(fonts::HEADING),
             settings_dialog::about(self.ui_theme.colors()),
         ]
         .spacing(18)

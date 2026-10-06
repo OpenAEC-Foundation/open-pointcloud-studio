@@ -6,8 +6,9 @@
 use std::sync::OnceLock;
 
 use iced::widget::canvas::{self, Frame, Path};
-use iced::{alignment, Color, Font, Point, Rectangle, Size, Vector};
+use iced::{alignment, Color, Point, Rectangle, Size, Vector};
 
+use crate::fonts;
 use crate::i18n::key;
 use crate::CameraPreset;
 
@@ -451,7 +452,7 @@ fn draw_compass(frame: &mut Frame, basis: Basis, center: Point) {
             vertical_alignment: alignment::Vertical::Center,
             size: iced::Pixels(8.5),
             color,
-            font: Font::with_name("Space Grotesk"),
+            font: fonts::MEDIUM,
             ..canvas::Text::default()
         });
     }
@@ -566,7 +567,7 @@ pub fn draw(
                 vertical_alignment: alignment::Vertical::Center,
                 size: iced::Pixels(9.0),
                 color: Color::from_rgb8(248, 248, 246),
-                font: Font::with_name("Space Grotesk"),
+                font: fonts::MEDIUM,
                 ..canvas::Text::default()
             });
         });
@@ -598,7 +599,7 @@ pub fn draw(
         vertical_alignment: alignment::Vertical::Center,
         size: iced::Pixels(9.5),
         color: Color::from_rgb8(245, 245, 244),
-        font: Font::with_name("Space Grotesk"),
+        font: fonts::MEDIUM,
         ..canvas::Text::default()
     });
 }

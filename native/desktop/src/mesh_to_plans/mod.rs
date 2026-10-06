@@ -1312,7 +1312,9 @@ impl Studio {
         let send = Message::MeshToPlans;
         let colors = self.ui_theme.colors();
         let header = row![
-            text(tr("Pointcloud to Drawing")).size(15),
+            text(tr("Pointcloud to Drawing"))
+                .size(15)
+                .font(crate::fonts::SEMIBOLD),
             text(format!(
                 "{}  {}",
                 wizard.step.number(),
@@ -1450,7 +1452,10 @@ impl Studio {
         let step = wizard.step;
         let colors = self.ui_theme.colors();
         let mut page = column![
-            text(tr(step.label())).size(14).color(colors.accent),
+            text(tr(step.label()))
+                .size(14)
+                .font(crate::fonts::SEMIBOLD)
+                .color(colors.accent),
             text(tr(step.lead()))
                 .size(12)
                 .color(colors.dialog_content_secondary),
