@@ -955,7 +955,10 @@ and `context`. `status.result.extensions.running` lists the runs under way
 with their `entry`, `seconds`, `percent`, `text`, `stopping`, `log` and
 `pid`. An extension runs once at a time. `stop_extension` stops a run and
 what it started: at once on Windows, otherwise after 1.5 seconds at the
-latest. When the window closes, every run is ended.
+latest, also what is left of it after the program itself ended. When the
+window closes, every run under way is ended the same way. A run that ends by
+itself leaves what it started running, such as a file it opened in another
+program.
 
 The token in `OPS_API_TOKEN` belongs to that run alone and stops working
 when it ends. With it the server accepts the commands the extension

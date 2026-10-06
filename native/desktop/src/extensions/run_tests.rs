@@ -313,6 +313,91 @@ fn a_run_can_be_stopped_and_a_failure_shows_its_code_and_error() {
     assert_eq!(logs.len(), 3);
 }
 
+/// A program that a script starts and that writes a file a moment later,
+/// on its own: a hidden Windows PowerShell on Windows, a subshell that
+/// ignores `SIGTERM` elsewhere.
+fn starts_a_program(file: &str, then_ps1: &str, then_sh: &str) -> (String, String) {
+    let powershell = format!(
+        "$target = Join-Path (Get-Location).Path '{file}'\n\
+         Start-Process -FilePath \"$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -WindowStyle Hidden -ArgumentList \"-NoProfile -NonInteractive -Command `\"Start-Sleep -Seconds 4; Set-Content -LiteralPath '$target' -Value alive`\"\"\n\
+         Write-Output 'started'\n\
+         {then_ps1}"
+    );
+    let sh = format!(
+        "( trap '' TERM; sleep 4; echo alive > {file} ) >/dev/null 2>&1 &\n\
+         echo started\n\
+         {then_sh}"
+    );
+    (powershell, sh)
+}
+
+/// Wait until a file is there, or until the time is up; whether it came.
+fn appears(path: &Path, within: Duration) -> bool {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        if path.is_file() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    path.is_file()
+}
+
+#[test]
+fn what_a_run_started_stays_when_it_ends_and_is_ended_when_it_is_stopped() {
+    let _language = TestLanguage::hold(Language::English);
+    // The window and its server end before another test starts one.
+    let _server = crate::native_api::one_server_at_a_time();
+    let bench = Bench::new();
+    let mut studio = bench.studio();
+    let mut receiver = with_api(&mut studio);
+
+    // A run that ends by itself leaves what it started running, as a report
+    // it opened in another program; also once nothing holds the run.
+    let id = "org.example.starter";
+    let (powershell, sh) = starts_a_program("survivor.txt", "exit 0", "exit 0");
+    script_extension(&mut studio, &bench, id, &powershell, &sh);
+    let _ = studio.update(Message::Extension(ExtensionAction::Press(id.into(), None)));
+    let driven = drive(&mut studio, &mut receiver, id);
+    assert!(driven.end.succeeded(), "{:?}\n{}", driven.end, driven.log);
+    assert!(driven.log.contains("started"), "{}", driven.log);
+    assert!(studio.extension_host.runs.is_empty());
+    assert!(
+        appears(
+            &bench.root.join(id).join("survivor.txt"),
+            Duration::from_secs(30)
+        ),
+        "the program the run started was ended with it"
+    );
+
+    // A stopped run ends what it started, also what outlives its own
+    // process by ignoring the request to end.
+    let id = "org.example.holder";
+    let (powershell, sh) = starts_a_program("stopped.txt", "Start-Sleep -Seconds 120", "sleep 120");
+    script_extension(&mut studio, &bench, id, &powershell, &sh);
+    let _ = studio.update(Message::Extension(ExtensionAction::Press(id.into(), None)));
+    let log = studio.extension_host.runs[id].control.log_path.clone();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !fs::read_to_string(&log)
+        .unwrap_or_default()
+        .contains("started")
+    {
+        assert!(Instant::now() < deadline, "the script did not start");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = studio.update(Message::Extension(ExtensionAction::Stop(id.into())));
+    let driven = drive(&mut studio, &mut receiver, id);
+    assert!(driven.end.stopped, "{:?}", driven.end);
+    assert_eq!(studio.status, "Script stopped");
+    assert!(
+        !appears(
+            &bench.root.join(id).join("stopped.txt"),
+            Duration::from_secs(8)
+        ),
+        "the program the stopped run started went on"
+    );
+}
+
 #[test]
 fn closing_the_window_ends_the_runs() {
     let _language = TestLanguage::hold(Language::English);

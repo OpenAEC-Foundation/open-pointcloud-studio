@@ -297,7 +297,10 @@ pub fn tail_text(bytes: &[u8]) -> String {
 }
 
 /// A Windows job that holds the process and whatever it starts, so that
-/// stopping the run, and closing the window, ends all of them.
+/// stopping the run, and closing the window during it, ends all of them. A
+/// run that ends by itself releases the job first: what it started then
+/// stays, as a report it opened in another program, and as on macOS and
+/// Linux.
 #[cfg(windows)]
 mod job {
     use std::ffi::c_void;
@@ -387,12 +390,27 @@ mod job {
                 TerminateJobObject(self.0, 1);
             }
         }
+
+        /// Let the processes in the job run on once it is closed.
+        pub fn release(&self) {
+            let mut limits = ExtendedLimits::default();
+            // SAFETY: the handle is a job this value owns, and the structure
+            // has the size the call expects; no limit flags clears them all.
+            unsafe {
+                SetInformationJobObject(
+                    self.0,
+                    EXTENDED_LIMIT_INFORMATION,
+                    (&mut limits as *mut ExtendedLimits).cast(),
+                    std::mem::size_of::<ExtendedLimits>() as u32,
+                );
+            }
+        }
     }
 
     impl Drop for Job {
         fn drop(&mut self) {
             // SAFETY: the handle is a job this value owns; closing it ends
-            // the processes that are still in it.
+            // the processes that are still in it, unless it was released.
             unsafe {
                 CloseHandle(self.0);
             }
@@ -405,14 +423,14 @@ extern "C" {
     fn kill(pid: i32, signal: i32) -> i32;
 }
 
-/// Send a signal to the process group of a run, which its process leads.
+/// Send a signal to the process group of a run, which its process leads;
+/// whether a process of the group received it.
 #[cfg(unix)]
-fn signal_group(pid: u32, signal: i32) {
-    if let Ok(pid) = i32::try_from(pid) {
+fn signal_group(pid: u32, signal: i32) -> bool {
+    match i32::try_from(pid) {
         // SAFETY: a plain system call; a group that is gone is no error.
-        unsafe {
-            kill(-pid, signal);
-        }
+        Ok(pid) => unsafe { kill(-pid, signal) == 0 },
+        Err(_) => false,
     }
 }
 
@@ -428,6 +446,9 @@ pub struct RunControl {
     /// Set, under the lock of the child, once its exit was collected: its
     /// process id may then belong to another process.
     exited: AtomicBool,
+    /// Set once nothing is left of the process group of a stopped run.
+    #[cfg(unix)]
+    group_ended: AtomicBool,
     tail: Arc<Mutex<VecDeque<u8>>>,
     log: Arc<Mutex<Log>>,
     pumps: Mutex<Vec<Receiver<()>>>,
@@ -530,6 +551,8 @@ pub fn start(request: &RunRequest<'_>) -> Result<Arc<RunControl>, String> {
         stop_requested: Mutex::new(None),
         killed: AtomicBool::new(false),
         exited: AtomicBool::new(false),
+        #[cfg(unix)]
+        group_ended: AtomicBool::new(false),
         tail,
         log,
         pumps: Mutex::new(pumps),
@@ -582,6 +605,35 @@ impl RunControl {
         self.stop.load(Ordering::SeqCst)
     }
 
+    fn stop_overdue(&self) -> bool {
+        lock(&self.stop_requested).is_some_and(|requested| requested.elapsed() >= GRACE)
+    }
+
+    /// Whether nothing is left of the process group of a stopped run once
+    /// its process has ended. What it started may outlive it there, as a
+    /// program that ignores `SIGTERM` does; that is killed when the moment
+    /// to end has passed.
+    #[cfg(unix)]
+    fn group_ended(&self) -> bool {
+        if self.group_ended.load(Ordering::SeqCst) {
+            return true;
+        }
+        // The group keeps the number of its first process while one of its
+        // processes is left, so no other process can have it meanwhile.
+        let ended = if !signal_group(self.pid, 0) {
+            true
+        } else if self.stop_overdue() {
+            signal_group(self.pid, 9);
+            true
+        } else {
+            false
+        };
+        if ended {
+            self.group_ended.store(true, Ordering::SeqCst);
+        }
+        ended
+    }
+
     /// How the run ended, once it has; a stopped run that does not end is
     /// killed after a moment.
     pub fn try_end(&self) -> Option<RunEnd> {
@@ -601,9 +653,7 @@ impl RunControl {
         let status = match collected {
             Ok(Some(status)) => status,
             Ok(None) => {
-                let overdue = lock(&self.stop_requested)
-                    .is_some_and(|requested| requested.elapsed() >= GRACE);
-                if overdue {
+                if self.stop_overdue() {
                     self.kill();
                 }
                 return None;
@@ -613,6 +663,11 @@ impl RunControl {
                 return None;
             }
         };
+        // The status is kept by the child, so a later call finds it again.
+        #[cfg(unix)]
+        if self.stopping() && !self.group_ended() {
+            return None;
+        }
         // The output is read to its end, unless something the process
         // started keeps it open.
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -621,6 +676,14 @@ impl RunControl {
             let _ = pump.recv_timeout(left);
         }
         let stopped = self.stopping();
+        // A run that ended by itself leaves what it started running, such
+        // as a report it opened in another program.
+        #[cfg(windows)]
+        if !stopped {
+            if let Some(job) = &self.job {
+                job.release();
+            }
+        }
         let tail: Vec<u8> = lock(&self.tail).iter().copied().collect();
         let end = RunEnd {
             code: status.code(),
