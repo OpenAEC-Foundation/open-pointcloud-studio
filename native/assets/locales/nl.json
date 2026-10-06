@@ -689,7 +689,6 @@
   "{done} of {total} · {percent}%": "{done} van {total} · {percent}%",
   "{count} selected": "{count} geselecteerd",
   "3D views": "3D-views",
-  "Plans": "Plattegronden",
   "Elevations": "Aanzichten",
   "Sections": "Doorsneden",
   "Files": "Bestanden",
@@ -715,5 +714,6 @@
   "{ready} of {count} ready  ·  {running} at once  ·  {waiting} waiting": "{ready} van {count} klaar  ·  {running} tegelijk  ·  {waiting} wachtend",
   "{ready} of {count} ready  ·  {running} at once": "{ready} van {count} klaar  ·  {running} tegelijk",
   "Indexing {count} scans": "{count} scans indexeren",
-  "{name} gets its octree once it has been read": "{name} krijgt zijn index zodra de scan is gelezen"
+  "{name} gets its octree once it has been read": "{name} krijgt zijn index zodra de scan is gelezen",
+  "Floor found at {height} m": "Vloer gevonden op {height} m"
 }

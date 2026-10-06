@@ -25,6 +25,92 @@ use crate::{
 /// from.
 const CUT_ABOVE_FLOOR: f64 = 1.20;
 
+/// The height steps in which the floor of the model is looked for, in
+/// metres.
+const FLOOR_STEP: f64 = 0.10;
+
+/// How many points a height step needs, as a share of the fullest step, to
+/// be a floor: a floor or a ceiling holds as many as the fullest step, stray
+/// points below the building far fewer.
+const FLOOR_SHARE: f64 = 0.3;
+
+/// A floor is a centimetre with at least this many times the points of a
+/// typical centimetre around it.
+const FLOOR_PEAK: usize = 3;
+
+/// The floor of the model as its points show it. The heights are counted in
+/// steps of `FLOOR_STEP`; the lowest step that holds about as many points as
+/// a floor is the floor's step, and within it and the step above, the
+/// centimetre with clearly the most points is the floor, at the middle of
+/// its points; without such a peak the floor is the lowest point there. Stray
+/// points below a building, and a model that lies far above or below zero,
+/// as a surveyed scan does, both give the floor itself. Nothing for no
+/// heights.
+fn floor_from_heights(heights: impl IntoIterator<Item = f64>) -> Option<f64> {
+    let heights: Vec<f64> = heights.into_iter().filter(|z| z.is_finite()).collect();
+    let low = heights.iter().copied().reduce(f64::min)?;
+    let high = heights.iter().copied().reduce(f64::max)?;
+    let step_of = |z: f64, size: f64, steps: usize| (((z - low) / size) as usize).min(steps - 1);
+    let steps = (((high - low) / FLOOR_STEP).floor() as usize + 1).min(100_000);
+    let mut counts = vec![0usize; steps];
+    for &z in &heights {
+        counts[step_of(z, FLOOR_STEP, steps)] += 1;
+    }
+    let fullest = counts.iter().copied().max()?;
+    let floor_step = counts
+        .iter()
+        .position(|&count| count as f64 >= fullest as f64 * FLOOR_SHARE)?;
+    // A floor on the edge between two steps falls into both.
+    let near: Vec<f64> = heights
+        .iter()
+        .copied()
+        .filter(|&z| (floor_step..=floor_step + 1).contains(&step_of(z, FLOOR_STEP, steps)))
+        .collect();
+    let near_low = near.iter().copied().reduce(f64::min)?;
+    let centimetre = |z: f64| ((z - near_low) / 0.01) as usize;
+    let mut fine = vec![0usize; centimetre(low + FLOOR_STEP * (floor_step + 2) as f64) + 2];
+    for &z in &near {
+        if let Some(count) = fine.get_mut(centimetre(z)) {
+            *count += 1;
+        }
+    }
+    let most = fine.iter().copied().max()?;
+    let mut filled: Vec<usize> = fine.iter().copied().filter(|&count| count > 0).collect();
+    filled.sort_unstable();
+    let typical = filled[filled.len() / 2];
+    // Without a clear peak, as along walls without a floor slab, the floor is
+    // where the points begin.
+    if most < typical * FLOOR_PEAK {
+        return Some(near_low);
+    }
+    let floor_centimetre = fine.iter().position(|&count| count == most)?;
+    let mut on_floor: Vec<f64> = near
+        .iter()
+        .copied()
+        .filter(|&z| centimetre(z) == floor_centimetre)
+        .collect();
+    on_floor.sort_by(f64::total_cmp);
+    on_floor.get(on_floor.len() / 2).copied()
+}
+
+/// The floor of the visible scans, from the points each keeps in memory.
+fn model_floor(clouds: &[crate::CloudEntry]) -> Option<f64> {
+    let any_visible = clouds.iter().any(|entry| entry.visible);
+    floor_from_heights(
+        clouds
+            .iter()
+            .filter(|entry| entry.visible || !any_visible)
+            .flat_map(|entry| {
+                let transform = entry.transform;
+                entry
+                    .cloud
+                    .points
+                    .iter()
+                    .map(move |point| transform.xyz(point.xyz)[2])
+            }),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SheetKind {
@@ -123,6 +209,9 @@ pub struct SheetDialog {
     side: Side,
     /// Height of the cut of a plan made from the 3D model, in scene units.
     height: String,
+    /// The floor found in the points of the model, which the cut height
+    /// starts from.
+    floor: Option<f64>,
     /// Where a section made from the 3D model cuts, along the axis it looks.
     position: String,
     thickness: String,
@@ -155,9 +244,11 @@ impl Studio {
         if let SheetAction::Open = action {
             let section = self.section_box();
             let model = combined_bounds(&self.clouds);
+            let model_floor = model_floor(&self.clouds);
             let floor = section
                 .map(|section| section.bounds.min[2])
-                .or_else(|| model.map(|_| 0.0))
+                .or(model_floor)
+                .or_else(|| model.map(|model| model.min[2]))
                 .unwrap_or(0.0);
             let middle = model.map_or(0.0, |model| (model.min[1] + model.max[1]) / 2.0);
             self.sheet_dialog = Some(SheetDialog {
@@ -169,6 +260,7 @@ impl Studio {
                 },
                 side: Side(DrawingView::Front),
                 height: format!("{:.2}", floor + CUT_ABOVE_FLOOR),
+                floor: model_floor,
                 position: format!("{middle:.2}"),
                 thickness: "0.10".into(),
             });
@@ -462,6 +554,20 @@ impl Studio {
                         ]
                         .align_y(iced::Alignment::Center),
                     );
+                    if let Some(floor) = dialog.floor {
+                        form = form.push(
+                            row![
+                                iced::widget::Space::with_width(130),
+                                text(crate::i18n::tr_args(
+                                    "Floor found at {height} m",
+                                    &[("height", &format!("{floor:.2}"))],
+                                ))
+                                .size(11)
+                                .color(colors.muted),
+                            ]
+                            .align_y(iced::Alignment::Center),
+                        );
+                    }
                 }
                 SheetKind::Section => {
                     form = form.push(
@@ -611,5 +717,63 @@ mod tests {
 
         let _ = studio.update_sheet_dialog(SheetAction::Close);
         assert!(studio.sheet_dialog.is_none());
+    }
+
+    #[test]
+    fn the_floor_is_the_lowest_height_as_full_as_a_floor() {
+        // A surveyed building far above zero: a floor at 100, a ceiling at
+        // 103, walls in between and a few stray points well below.
+        let mut heights = Vec::new();
+        for step in 0..2_000 {
+            let t = f64::from(step) / 2_000.0;
+            heights.push(100.0 + 0.004 * (t - 0.5));
+            heights.push(103.0 + 0.004 * (t - 0.5));
+            heights.push(100.0 + 3.0 * t);
+        }
+        heights.extend([80.0, 80.3, 91.7, 95.2]);
+        let floor = floor_from_heights(heights).unwrap();
+        assert!((floor - 99.998).abs() < 0.01, "{floor}");
+        // Nothing to go by.
+        assert_eq!(floor_from_heights(Vec::<f64>::new()), None);
+        assert_eq!(floor_from_heights([f64::NAN]), None);
+        // One height is its own floor.
+        assert_eq!(floor_from_heights([16.4]), Some(16.4));
+    }
+
+    #[test]
+    fn a_plan_of_a_surveyed_model_is_cut_above_its_own_floor() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("street.xyz");
+        let mut lines = String::new();
+        for step in 0..600 {
+            let t = f64::from(step) / 600.0;
+            // A street at 16.2 m with a pit down to 14.1 m and a wall.
+            lines.push_str(&format!(
+                "{} {} 16.2
+",
+                313790.0 + t * 12.0,
+                5426773.0 + t * 12.0
+            ));
+            lines.push_str(&format!(
+                "{} 5426779 {}
+",
+                313796.0,
+                14.1 + t * 2.1
+            ));
+            lines.push_str(&format!(
+                "{} 5426785 {}
+",
+                313790.0 + t * 12.0,
+                16.2 + t * 3.2
+            ));
+        }
+        std::fs::write(&source, lines).unwrap();
+        let cloud = pointcloud_core::open(&source, 10_000).unwrap();
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::new(cloud))));
+        let _ = studio.update_sheet_dialog(SheetAction::Open);
+        let dialog = studio.sheet_dialog.clone().unwrap();
+        assert_eq!(dialog.height, "17.40");
+        assert!(studio.sheet_job(&dialog).is_ok());
     }
 }
