@@ -2513,7 +2513,7 @@ impl Studio {
         let unselected = self.crop_overlay().is_some_and(|crop| !crop.selected);
         if unselected {
             block = block.push(note(
-                tr("Click the outline of the crop region on the sheet to select it and set its figures.")
+                tr("Click the outline of the crop region on the drawing to select it and set its figures.")
                     .to_owned(),
             ));
         }
