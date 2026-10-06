@@ -817,7 +817,10 @@ mod tests {
             &source,
             500,
             config,
-            Some(0),
+            Some(crate::snapshots::Showing {
+                dense_from: 0,
+                ..crate::snapshots::Showing::DEFAULT
+            }),
             |preview| {
                 previews.push(preview.clone());
                 Ok(())

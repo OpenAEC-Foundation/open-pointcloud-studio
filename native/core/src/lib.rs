@@ -7,6 +7,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use snapshots::Snapshots;
+
 mod bag3d;
 pub mod cad3d;
 mod closed_mesh;
@@ -446,32 +448,63 @@ pub fn open_with_progress(
     open_showing(path.as_ref(), sample_limit, progress, None)
 }
 
-/// Source size from which a file is shown while it is still being read.
+/// Source size from which a file is shown densely while it is still being
+/// read, as `open_with_snapshots` describes.
 pub const LARGE_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Open a point cloud like `open_with_progress`, and show a source of at
-/// least `LARGE_SOURCE_BYTES` while it is being read: `snapshot` receives the
-/// points known so far every few seconds, first those spread through an E57
-/// scan that allows it and then, added to them, the ones the pass has read.
-/// These clouds are provisional: each replaces the one before, and the
-/// returned cloud replaces the last. For a source that was shown, the
-/// returned cloud keeps up to two million points instead of `sample_limit`,
-/// so that it is as dense as the last snapshot. At most two sources are
-/// shown at a time; further ones are read without snapshots.
+/// Open a point cloud like `open_with_progress`, and show it while it is
+/// being read: `snapshot` receives provisional clouds of the points known so
+/// far, each replacing the one before, and the returned cloud replaces the
+/// last. A source that states how many points it holds, at least a million,
+/// is shown at every tenth of them from the sample the pass keeps anyway,
+/// which is spread over everything read so far; a large file that states no
+/// count is shown every few seconds. The returned cloud is then the one
+/// `open_with_progress` returns. A source of at least `LARGE_SOURCE_BYTES`
+/// is instead shown every few seconds from a denser sample, first with the
+/// points spread through an E57 scan that allows it: its returned cloud keeps
+/// up to two million points instead of `sample_limit`, so that it is as
+/// dense as the last snapshot. At most two sources are shown densely at a
+/// time; further ones are shown in steps.
 pub fn open_with_snapshots(
     path: impl AsRef<Path>,
     sample_limit: usize,
     progress: impl FnMut(u64) -> Result<(), LoadError>,
     mut snapshot: impl FnMut(&PointCloud) -> Result<(), LoadError>,
 ) -> Result<PointCloud, LoadError> {
-    open_showing(path.as_ref(), sample_limit, progress, Some(&mut snapshot))
+    open_showing(
+        path.as_ref(),
+        sample_limit,
+        progress,
+        Some((&mut snapshot, snapshots::Showing::DEFAULT)),
+    )
+}
+
+/// Open a point cloud like `open_with_snapshots`, and show it in steps only,
+/// never densely: the returned cloud is always the one `open_with_progress`
+/// returns, whatever the size of the source.
+pub fn open_with_steps(
+    path: impl AsRef<Path>,
+    sample_limit: usize,
+    progress: impl FnMut(u64) -> Result<(), LoadError>,
+    mut snapshot: impl FnMut(&PointCloud) -> Result<(), LoadError>,
+) -> Result<PointCloud, LoadError> {
+    let showing = snapshots::Showing {
+        dense_from: u64::MAX,
+        ..snapshots::Showing::DEFAULT
+    };
+    open_showing(
+        path.as_ref(),
+        sample_limit,
+        progress,
+        Some((&mut snapshot, showing)),
+    )
 }
 
 fn open_showing(
     path: &Path,
     sample_limit: usize,
     mut progress: impl FnMut(u64) -> Result<(), LoadError>,
-    mut snapshot: Option<snapshots::Show>,
+    mut snapshot: Option<(snapshots::Show, snapshots::Showing)>,
 ) -> Result<PointCloud, LoadError> {
     if sample_limit == 0 {
         return Err(LoadError::InvalidData(
@@ -502,15 +535,13 @@ fn open_showing(
     }
     let before = SourceStamp::read(path)?;
     let mut snapshots = match &mut snapshot {
-        Some(show) if before.length >= LARGE_SOURCE_BYTES => {
-            snapshots::Snapshots::begin(path, before, &mut **show)?
-        }
-        _ => None,
+        Some((show, showing)) => showing.begin(path, before, &mut **show)?,
+        None => None,
     };
-    // A source that is shown keeps enough points for its snapshots, and its
-    // checked cloud is as dense as the last of them.
-    let mut collector = Collector::new(if snapshots.is_some() {
-        snapshots::Snapshots::sample_limit(sample_limit)
+    // A source that is shown densely keeps enough points for its snapshots,
+    // and its checked cloud is as dense as the last of them.
+    let mut collector = Collector::new(if snapshots.as_ref().is_some_and(Snapshots::dense) {
+        Snapshots::sample_limit(sample_limit)
     } else {
         sample_limit
     });
@@ -523,9 +554,14 @@ fn open_showing(
         &mut |point| {
             collector.push(point)?;
             read.set(collector.total);
-            if collector.total.is_multiple_of(65_536) {
+            let counted = collector.total.is_multiple_of(65_536);
+            if counted {
                 progress(collector.total)?;
-                if let (Some(snapshots), Some(show)) = (&mut snapshots, &mut snapshot) {
+            }
+            // A step can be due after any point; the clock is looked at only
+            // where progress is reported.
+            if let (Some(snapshots), Some((show, _))) = (&mut snapshots, &mut snapshot) {
+                if counted || snapshots.stepped() {
                     snapshots.tick(&collector, &mut **show)?;
                 }
             }
@@ -1029,6 +1065,170 @@ fn read_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The parts of two opened clouds that the window shows and keeps.
+    fn assert_same_cloud(left: &PointCloud, right: &PointCloud) {
+        assert_eq!(left.total_points, right.total_points);
+        assert_eq!(left.bounds, right.bounds);
+        assert_eq!(left.points.len(), right.points.len());
+        assert!(left.points.iter().zip(&right.points).all(|(a, b)| {
+            a.xyz == b.xyz
+                && a.rgb == b.rgb
+                && a.intensity == b.intensity
+                && a.classification == b.classification
+        }));
+        assert_eq!(left.point_ordinals, right.point_ordinals);
+        assert_eq!(
+            (left.has_rgb, left.has_intensity, left.has_classification),
+            (right.has_rgb, right.has_intensity, right.has_classification)
+        );
+        assert_eq!(left.scan_poses, right.scan_poses);
+        assert_eq!(left.scan_ranges, right.scan_ranges);
+        assert!(!left.provisional && !right.provisional);
+    }
+
+    /// Open a source with snapshots in steps from `steps_from` stated points.
+    fn open_in_steps(
+        path: &Path,
+        sample_limit: usize,
+        steps_from: u64,
+    ) -> (PointCloud, Vec<PointCloud>) {
+        let mut shown = Vec::new();
+        let mut show = |cloud: &PointCloud| {
+            shown.push(cloud.clone());
+            Ok(())
+        };
+        let showing = snapshots::Showing {
+            dense_from: u64::MAX,
+            steps_from,
+        };
+        let cloud =
+            open_showing(path, sample_limit, |_| Ok(()), Some((&mut show, showing))).unwrap();
+        (cloud, shown)
+    }
+
+    /// A PLY file of 20,000 points with every attribute.
+    fn steps_source(directory: &Path) -> PathBuf {
+        let source = directory.join("steps.ply");
+        let points: Vec<Point> = (0..20_000u32)
+            .map(|index| Point {
+                xyz: [
+                    f64::from(index) * 0.01,
+                    f64::from(index % 97),
+                    f64::from(index / 97) * 0.5,
+                ],
+                rgb: Some([(index % 256) as u8, 7, 9]),
+                intensity: Some((index % 4_000) as u16),
+                classification: Some(2),
+            })
+            .collect();
+        test_shapes::write_cloud(&points, &source);
+        source
+    }
+
+    #[test]
+    fn showing_a_source_in_steps_leaves_the_opened_cloud_as_it_was() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = steps_source(directory.path());
+        let plain = open(&source, 500).unwrap();
+        let (stepped, shown) = open_in_steps(&source, 500, 1);
+        assert_same_cloud(&stepped, &plain);
+        // A snapshot at every tenth of the stated points but the last, each
+        // from the same sample as the checked cloud, spread over what was
+        // read and counting what the source states.
+        assert_eq!(shown.len(), 9);
+        for (step, cloud) in shown.iter().enumerate() {
+            let read = 2_000 * (step as u64 + 1);
+            assert!(cloud.provisional);
+            assert_eq!(cloud.total_points, 20_000);
+            assert_eq!(cloud.points.len(), 500);
+            assert!(cloud.point_ordinals.iter().all(|ordinal| *ordinal < read));
+            assert!(cloud
+                .point_ordinals
+                .iter()
+                .any(|ordinal| *ordinal < read / 10));
+            assert!(cloud
+                .point_ordinals
+                .iter()
+                .any(|ordinal| *ordinal >= read * 9 / 10));
+            assert!(cloud.has_rgb && cloud.has_intensity);
+        }
+        // Too small for the minimum the window uses: no snapshot at all.
+        let (unshown, none) = open_in_steps(&source, 500, snapshots::STEP_MIN_POINTS);
+        assert!(none.is_empty());
+        assert_same_cloud(&unshown, &plain);
+        let mut called = false;
+        let public = open_with_snapshots(
+            &source,
+            500,
+            |_| Ok(()),
+            |_| {
+                called = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(!called);
+        assert_same_cloud(&public, &plain);
+        let steps = open_with_steps(&source, 500, |_| Ok(()), |_| Ok(())).unwrap();
+        assert_same_cloud(&steps, &plain);
+    }
+
+    #[test]
+    fn a_scan_indexed_while_it_is_read_is_shown_in_the_same_steps() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = steps_source(directory.path());
+        let plain = open(&source, 500).unwrap();
+        let mut previews = Vec::new();
+        let showing = snapshots::Showing {
+            dense_from: u64::MAX,
+            steps_from: 1,
+        };
+        let (cloud, index) = octree::OctreeIndex::open_and_build(
+            &source,
+            500,
+            octree::IndexConfig {
+                scratch_dir: Some(directory.path().join("cache")),
+                ..octree::IndexConfig::default()
+            },
+            Some(showing),
+            |preview| {
+                previews.push(preview.clone());
+                Ok(())
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_same_cloud(&cloud, &plain);
+        assert_eq!(index.root.total_points, 20_000);
+        // Nine steps, then the checked cloud before the tree is built.
+        assert_eq!(previews.len(), 10);
+        assert!(previews[..9].iter().all(|preview| preview.provisional));
+        assert_same_cloud(&previews[9], &plain);
+    }
+
+    #[test]
+    fn an_e57_scan_shown_in_steps_keeps_its_stations_and_its_result() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("stations.e57");
+        let first: Vec<bool> = (0..400).map(|record| record % 4 != 0).collect();
+        let second = vec![true; 400];
+        e57_points::tests::write_scans(&source, &[(true, &first), (true, &second)]);
+        let plain = open(&source, 50).unwrap();
+        let (stepped, shown) = open_in_steps(&source, 50, 1);
+        assert_same_cloud(&stepped, &plain);
+        assert_eq!(plain.scan_poses.len(), 2);
+        // The stated count is the records, of which a quarter of the first
+        // scan's hold no point: the pass ends before the last step.
+        assert_eq!(plain.total_points, 700);
+        assert_eq!(shown.len(), 8);
+        for cloud in &shown {
+            assert!(cloud.provisional);
+            assert_eq!(cloud.total_points, 800);
+            assert_eq!(cloud.scan_poses, plain.scan_poses);
+            assert!(cloud.scan_ranges.is_empty());
+        }
+    }
 
     #[test]
     fn reservoir_keeps_bound_and_count() {

@@ -15,7 +15,7 @@ use std::time::UNIX_EPOCH;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::snapshots::Snapshots;
+use super::snapshots::{self, Showing, Snapshots};
 use super::{
     e57_points, pcd, visit_points_with_poses, Bounds, Collector, LoadError, Point, PointCloud,
     ScanLog, ScanPose, ScanRange, SourceStamp,
@@ -457,10 +457,10 @@ impl OctreeIndex {
     /// Publish a preview while the single source pass and the partitioning of
     /// the octree on disk continue on the same worker. The preview is the
     /// checked cloud once the pass finishes, or one kept from an earlier
-    /// open. A source of at least `LARGE_SOURCE_BYTES` without either is
-    /// shown while it is read, as `open_with_snapshots` does: `preview` is
-    /// then called every few seconds with a provisional cloud that replaces
-    /// the one before, and with the checked cloud when the pass ends.
+    /// open. A source without the latter is shown while it is read, as
+    /// `open_with_snapshots` does: `preview` is then called with provisional
+    /// clouds that each replace the one before, and with the checked cloud
+    /// when the pass ends.
     pub fn open_and_build_cached_with_preview(
         path: &Path,
         sample_limit: usize,
@@ -472,19 +472,18 @@ impl OctreeIndex {
             path,
             sample_limit,
             config,
-            Some(super::LARGE_SOURCE_BYTES),
+            Some(Showing::DEFAULT),
             preview,
             progress,
         )
     }
 
-    /// `spread_from` is the source size from which the source is shown while
-    /// it is read.
+    /// `showing` says from what size the source is shown while it is read.
     pub(crate) fn open_and_build(
         path: &Path,
         sample_limit: usize,
         config: IndexConfig,
-        spread_from: Option<u64>,
+        showing: Option<Showing>,
         mut preview: impl FnMut(&PointCloud) -> Result<(), LoadError>,
         mut progress: impl FnMut(IndexProgress) -> Result<(), LoadError>,
     ) -> Result<(PointCloud, Self), LoadError> {
@@ -517,17 +516,17 @@ impl OctreeIndex {
             }
             _ => false,
         };
-        // A large source otherwise shows nothing until all of it has been read.
-        let mut snapshots = None;
-        if !previewed && spread_from.is_some_and(|minimum| stamp.length >= minimum) {
-            snapshots = Snapshots::begin(path, stamp, &mut preview)?;
-        }
-        let shown = snapshots.is_some();
+        // A source otherwise shows nothing until all of it has been read.
+        let mut snapshots = match showing.filter(|_| !previewed) {
+            Some(showing) => showing.begin(path, stamp, &mut preview)?,
+            None => None,
+        };
+        let dense = snapshots.as_ref().is_some_and(Snapshots::dense);
         let storage = tempfile::Builder::new()
             .prefix("open-pointcloud-index-")
             .tempdir_in(&cache_root)?;
         let root_path = storage.path().join("r.bin");
-        let mut collector = Collector::new(if shown {
+        let mut collector = Collector::new(if dense {
             Snapshots::sample_limit(sample_limit)
         } else {
             sample_limit
@@ -536,14 +535,10 @@ impl OctreeIndex {
         // The scan callback cannot look into the collector while the point
         // callback holds it, so the count of points read is kept beside it.
         let read = Cell::new(0u64);
-        // An E57 file states how many records it holds, which tells the pass
-        // how far it is. Records that hold no valid point make the count of
-        // points smaller, never larger.
-        let stated = if super::is_e57(path) {
-            e57_points::summary(path).map_or(0, |summary| summary.records)
-        } else {
-            0
-        };
+        // A source that states how many points it holds tells the pass how
+        // far it is. The records of an E57 file that hold no valid point make
+        // the count of points smaller, never larger.
+        let stated = snapshots::stated_points(path).unwrap_or(0);
         progress(IndexProgress::reading(0, stated))?;
         {
             let mut writer =
@@ -555,14 +550,17 @@ impl OctreeIndex {
                     collector.push(point)?;
                     read.set(collector.total);
                     write_record(&mut writer, IndexedPoint { point, ordinal })?;
-                    if collector.total.is_multiple_of(65_536) {
+                    let counted = collector.total.is_multiple_of(65_536);
+                    if counted {
                         let total = if stated == 0 {
                             0
                         } else {
                             stated.max(collector.total)
                         };
                         progress(IndexProgress::reading(collector.total, total))?;
-                        if let Some(snapshots) = &mut snapshots {
+                    }
+                    if let Some(snapshots) = &mut snapshots {
+                        if counted || snapshots.stepped() {
                             snapshots.tick(&collector, &mut preview)?;
                         }
                     }
@@ -587,7 +585,7 @@ impl OctreeIndex {
         write_preview_cache(&cloud);
         // The checked cloud takes the place of the snapshots before the tree
         // is built, so that it remains when the build fails or is cancelled.
-        if shown || !previewed {
+        if !previewed {
             preview(&cloud)?;
         }
 
