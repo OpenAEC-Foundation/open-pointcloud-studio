@@ -228,6 +228,9 @@ pub(crate) struct ReturnCamera {
     orbit_point: Option<[f64; 3]>,
     view_label: &'static str,
     walk: Option<WalkView>,
+    /// The photo station the walking camera stood in, whose panorama comes
+    /// back with it.
+    station: Option<(usize, usize)>,
 }
 
 impl ReturnCamera {
@@ -240,6 +243,7 @@ impl ReturnCamera {
             orbit_point: studio.orbit_point,
             view_label: studio.view_label,
             walk: studio.walk,
+            station: studio.walk_station,
         }
     }
 }
@@ -779,9 +783,18 @@ impl Studio {
         self.orbit_point = back.orbit_point;
         self.view_label = back.view_label;
         self.walk = back.walk;
+        // The panorama of the station the photo was entered from is shown
+        // again.
+        let station = match back.station.filter(|_| back.walk.is_some()) {
+            Some((cloud, station)) => {
+                self.walk_station = Some((cloud, station));
+                self.panorama_task(cloud, station)
+            }
+            None => Task::none(),
+        };
         self.revision += 1;
         self.status = tr("Back where the camera was before the photo").into();
-        Some(self.schedule_detail())
+        Some(Task::batch([station, self.schedule_detail()]))
     }
 
     /// Start decoding what the entered photo needs: the photo itself first,
@@ -1957,6 +1970,55 @@ mod tests {
             Ok(decoded(&source, 0)),
         )));
         assert!(studio.photos.cache.is_empty());
+    }
+
+    #[test]
+    fn leaving_a_photo_entered_from_a_station_panorama_shows_that_panorama_again() {
+        let (mut studio, _directory, _source) = studio_with_photos();
+        let mut cloud = (*studio.clouds[0].cloud).clone();
+        cloud.scan_poses = vec![pointcloud_core::ScanPose {
+            label: "Station 1".into(),
+            position: [8.0, 5.0, 1.5],
+            axes: None,
+        }];
+        cloud.scan_images = vec![pointcloud_core::ScanImage {
+            station: Some(0),
+            position: [8.0, 5.0, 1.5],
+            axes: ALONG_X,
+            width: 64,
+            height: 64,
+            focal: [32.0, 32.0],
+            principal: [31.5, 31.5],
+            format: ScanImageFormat::Jpeg,
+            offset: 0,
+            length: 1,
+        }];
+        studio.clouds[0].cloud = Arc::new(cloud);
+        let opened = send(
+            &mut studio,
+            json!({"command": "open_panorama", "index": 0, "station": 0}),
+        );
+        assert_eq!(opened["ok"], true, "{opened}");
+        let turned = send(
+            &mut studio,
+            json!({"command": "set_panorama", "yaw": 0.8, "pitch": 0.1, "field_of_view": 1.2}),
+        );
+        assert_eq!(turned["ok"], true, "{turned}");
+        let at_station = studio.walk.unwrap();
+
+        let entered = send(&mut studio, json!({"command": "enter_photo", "index": 1}));
+        assert_eq!(entered["ok"], true, "{entered}");
+        assert_eq!(entered["walk"]["station"], Value::Null);
+        // Esc goes back to the station, with its panorama.
+        let closed = send(&mut studio, json!({"command": "close_panorama"}));
+        assert_eq!(closed["ok"], true);
+        assert_eq!(studio.walk, Some(at_station));
+        assert_eq!(studio.walk_station, Some((0, 0)));
+        let status = send(&mut studio, json!({"command": "status"}));
+        assert_eq!(status["result"]["walk"]["station"]["label"], "Station 1");
+        // A second time leaves the panorama.
+        let _ = send(&mut studio, json!({"command": "close_panorama"}));
+        assert!(studio.walk.is_none() && studio.walk_station.is_none());
     }
 
     #[test]

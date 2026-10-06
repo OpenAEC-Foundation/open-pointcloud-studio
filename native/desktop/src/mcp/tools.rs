@@ -290,7 +290,7 @@ fn table() -> Vec<Tool> {
             required("yaw", heading()),
             required("pitch", walk_pitch()),
         ]),
-        tool("close_panorama", Command, "Leaves the walking camera and returns to the orbit view. While a photo is entered it leaves the photo and puts the camera back where it was before the first photo was entered.", vec![]),
+        tool("close_panorama", Command, "Leaves the walking camera and returns to the orbit view. While a photo is entered it leaves the photo and puts the camera back where it was before the first photo was entered, into the station panorama it stood in then.", vec![]),
         tool("list_photos", Command, "Lists the photos of a layer that stand on their own, apart from the photos of scanner stations: panoramas and photos taken along a path (E57). Each has its index, kind (pinhole, spherical or cylindrical), name, width and height in pixels, position and viewing direction in scene coordinates, and station when the file names one; the answer also gives the coordinate_system the file states. The photos are in the order of the file, which is the order of the path.", vec![
             optional("layer", ordinal("Zero-based layer index; without it the active layer when it has photos, else the first layer with photos")),
         ]),

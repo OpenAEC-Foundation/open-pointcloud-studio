@@ -1154,7 +1154,8 @@ could be shown) and `decode_ms`; `status.result.photos` also has the `blend`,
 the photos `listing` and `decoding`, and the decoded photos kept (`cached`,
 at most four, and `cached_bytes`). `pick_screen`, measuring and annotations
 work on the points under the photo. `close_panorama` leaves the photo and puts
-the camera back where it was before the first photo was entered; `walk` and
+the camera back where it was before the first photo was entered, into the
+station panorama it stood in then, which is decoded again; `walk` and
 walking on leave the photo where it was. `screenshot` and view snapshots wait
 for the photo as they wait for the points of the camera.
 

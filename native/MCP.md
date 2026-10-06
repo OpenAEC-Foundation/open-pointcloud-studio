@@ -140,7 +140,7 @@ follows when that view is restored.
 | `open_panorama` | `index`, `station` | Stands in a scanner station and shows its photos |
 | `set_panorama` | `yaw`, `pitch`, `field_of_view` (radians) | Turns the walking camera |
 | `walk` | `eye` (`[x, y, z]`), `yaw`, `pitch` | Places the walking camera |
-| `close_panorama` | — | Returns to the orbit view; after `enter_photo`, to the camera before the first photo |
+| `close_panorama` | — | Returns to the orbit view; after `enter_photo`, to the camera before the first photo, into the station panorama it stood in then |
 | `list_photos` | optional `layer` | The photos of a layer apart from its station photos (panoramas and photos along a path): index, kind, size, position, viewing direction; and the file's coordinate system |
 | `enter_photo` | `index`, optional `layer` | Stands where a photo was taken and lays it over the points |
 | `photo_blend` | `value` (0–1) | How much of the photo covers the points: 0 the points only, 1 the photo only |
