@@ -498,7 +498,17 @@ fn ids_and_names_are_ones_every_system_keeps() {
     ] {
         assert!(!manifest::valid_id(id), "{id}");
     }
-    for name in ["report.ps1", ".gitignore", "a b.txt", "Ünïcode.txt"] {
+    for name in [
+        "report.ps1",
+        ".gitignore",
+        "a b.txt",
+        "Ünïcode.txt",
+        "com",
+        "com10",
+        "lpt¹²",
+        "computer.txt",
+        "com¹x",
+    ] {
         assert!(manifest::valid_component(name), "{name}");
     }
     for name in [
@@ -508,6 +518,12 @@ fn ids_and_names_are_ones_every_system_keeps() {
         "nul",
         "NUL.txt",
         "com3.log",
+        "com0",
+        "COM¹.txt",
+        "com².log",
+        "lpt³",
+        "LPT¹",
+        "lpt9.tar.gz",
         "a:b",
         "a*b",
         "trailing.",

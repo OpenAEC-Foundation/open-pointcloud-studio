@@ -35,7 +35,8 @@ does not fit:
   paths of at most 200 characters;
 - no links of any kind, and names that every system keeps: no `:`, `\`, `*`,
   `?`, `"`, `<`, `>` or `|`, no name that ends in a dot or a space, and none
-  of the device names of Windows such as `con` or `nul`;
+  of the device names of Windows such as `con`, `nul`, `com1` or `lpt³`,
+  also not with an extension after them;
 - an archive of at most 64 MiB with stored or deflated entries, without
   encryption and without ZIP64, whose entries all stay inside the folder:
   no `..`, no absolute path, no drive letter, no `\` between folders, and no

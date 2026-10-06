@@ -404,12 +404,14 @@ fn reserved_name(name: &str) -> bool {
     matches!(
         stem.as_str(),
         "con" | "prn" | "aux" | "nul" | "conin$" | "conout$"
-    ) || ((stem.starts_with("com") || stem.starts_with("lpt"))
-        && stem.len() == 4
-        && stem
-            .chars()
-            .last()
-            .is_some_and(|last| last.is_ascii_digit() || "¹²³".contains(last)))
+    ) || ["com", "lpt"].iter().any(|device| {
+        // One digit after the name, which may be a superscript ¹, ² or ³.
+        let mut rest = stem.strip_prefix(device).unwrap_or_default().chars();
+        matches!(
+            (rest.next(), rest.next()),
+            (Some(digit), None) if digit.is_ascii_digit() || "¹²³".contains(digit)
+        )
+    })
 }
 
 /// Whether one part of a path is a name every system can keep as it is.
