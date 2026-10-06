@@ -95,7 +95,10 @@ pub use obj_mesh::{
 pub use octree::{IndexConfig, IndexProgress, IndexStage, IndexedNode, IndexedPoint, OctreeIndex};
 pub use oriented_box::{bounds_corners, normalized_degrees, OrientedBox};
 pub use ply_mesh::read_ply_mesh;
-pub use scan_image::{select_scan_image, ScanImage, ScanImageFormat};
+pub use scan_image::{
+    select_scan_image, FilePhoto, FilePhotos, PhotoKind, PhotoProjection, ScanImage,
+    ScanImageFormat,
+};
 pub use section_caps::{
     section_caps, CapOptions, DEFAULT_CAP_MAX_THICKNESS, MAX_CAP_MAX_THICKNESS,
     MIN_CAP_MAX_THICKNESS,
@@ -717,6 +720,28 @@ pub fn scan_stations(path: impl AsRef<Path>) -> Result<(Vec<ScanPose>, Vec<ScanI
         e57_points::scan_poses(path)?,
         e57_points::scan_images(path)?,
     ))
+}
+
+/// List the photos of a source that are not the pinhole photos of a scanner
+/// station, from its metadata alone, with the coordinate system it states.
+/// Formats without photos have none.
+pub fn file_photos(path: impl AsRef<Path>) -> Result<FilePhotos, LoadError> {
+    let path = path.as_ref();
+    if !is_e57(path) {
+        return Ok(FilePhotos::default());
+    }
+    e57_points::file_photos(path)
+}
+
+/// Read the encoded bytes (JPEG or PNG) of one photo `file_photos` listed.
+pub fn read_file_photo(path: impl AsRef<Path>, photo: &FilePhoto) -> Result<Vec<u8>, LoadError> {
+    let path = path.as_ref();
+    if !is_e57(path) {
+        return Err(LoadError::InvalidData(
+            "this format stores no photos".into(),
+        ));
+    }
+    e57_points::read_photo(path, photo)
 }
 
 /// Read the encoded bytes (JPEG or PNG) of station photos from their source

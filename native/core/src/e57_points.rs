@@ -3,11 +3,15 @@
 use std::io::{Read, Seek};
 use std::path::Path;
 
-use e57::{Blob, CartesianCoordinate, E57Reader, ImageFormat, PointCloud, Projection, RecordName};
+use e57::{
+    Blob, CartesianCoordinate, E57Reader, ImageFormat, PinholeImageProperties, PointCloud,
+    Projection, RecordName,
+};
 
 use super::window_reader::WindowReader;
 use super::{
-    quaternion_axes, Bounds, LoadError, Point, ScanImage, ScanImageFormat, ScanPose, ScanRange,
+    quaternion_axes, Bounds, FilePhoto, FilePhotos, LoadError, PhotoProjection, Point, ScanImage,
+    ScanImageFormat, ScanPose, ScanRange,
 };
 
 /// A stored photo larger than this is treated as damaged metadata.
@@ -218,11 +222,43 @@ pub(crate) fn summary(path: &Path) -> Result<Summary, LoadError> {
     Ok(summary)
 }
 
-/// Read the station photos listed in E57 metadata without decoding them.
-/// Only pinhole photos with a pose are returned.
+/// Read the station photos listed in E57 metadata without decoding them:
+/// the pinhole photos with a pose that a scanner station took.
 pub(crate) fn scan_images(path: &Path) -> Result<Vec<ScanImage>, LoadError> {
-    let file = open_reader(path)?;
-    // Stations are numbered like `scan_poses`: scans without a pose are skipped.
+    Ok(placed_images(&open_reader(path)?).0)
+}
+
+/// Read the other photos listed in E57 metadata without decoding them, with
+/// the coordinate system the file states.
+pub(crate) fn file_photos(path: &Path) -> Result<FilePhotos, LoadError> {
+    Ok(placed_images(&open_reader(path)?).1)
+}
+
+/// Focal length of a pinhole photo in pixels along its columns and rows.
+/// The standard gives the focal length and the size of a pixel in metres; a
+/// file that states a pixel size of zero gives the focal length in pixels.
+/// A negative pixel size gives no focal length.
+fn pinhole_focal(properties: &PinholeImageProperties) -> [f64; 2] {
+    let along = |pixel: f64| {
+        if pixel > 0.0 {
+            properties.focal_length / pixel
+        } else if pixel == 0.0 {
+            properties.focal_length
+        } else {
+            f64::NAN
+        }
+    };
+    [
+        along(properties.pixel_width),
+        along(properties.pixel_height),
+    ]
+}
+
+/// Every photo of a file that has a pose and a projection, without decoding
+/// it: the pinhole photos of scanner stations, and the other photos with the
+/// coordinate system the file states. Stations are numbered like
+/// `scan_poses`: scans without a pose are skipped.
+fn placed_images<T: Read + Seek>(file: &E57Reader<T>) -> (Vec<ScanImage>, FilePhotos) {
     let scans = file.pointclouds();
     let stations: Vec<_> = scans
         .iter()
@@ -230,10 +266,17 @@ pub(crate) fn scan_images(path: &Path) -> Result<Vec<ScanImage>, LoadError> {
         .filter_map(|(scan, pose)| Some((scan.guid.clone(), pose?.position)))
         .collect();
     let mut images = Vec::new();
+    let mut photos = FilePhotos {
+        coordinate_system: file
+            .coordinate_metadata()
+            .map(str::trim)
+            .filter(|system| !system.is_empty())
+            .map(str::to_owned),
+        ..FilePhotos::default()
+    };
     for image in file.images() {
-        let (Some(Projection::Pinhole(pinhole)), Some(transform)) =
-            (&image.projection, &image.transform)
-        else {
+        let (Some(projection), Some(transform)) = (&image.projection, &image.transform) else {
+            photos.skipped += 1;
             continue;
         };
         let position = [
@@ -247,26 +290,72 @@ pub(crate) fn scan_images(path: &Path) -> Result<Vec<ScanImage>, LoadError> {
             transform.rotation.y,
             transform.rotation.z,
         ]) else {
+            photos.skipped += 1;
             continue;
         };
-        let properties = &pinhole.properties;
-        let focal = [
-            properties.focal_length / properties.pixel_width,
-            properties.focal_length / properties.pixel_height,
-        ];
-        let principal = [properties.principal_x, properties.principal_y];
-        let blob = &pinhole.blob.data;
-        if properties.width == 0
-            || properties.height == 0
-            || blob.length == 0
-            || blob.length > MAX_IMAGE_BYTES
+        let (blob, width, height, projection) = match projection {
+            Projection::Pinhole(pinhole) => {
+                let properties = &pinhole.properties;
+                (
+                    &pinhole.blob,
+                    properties.width,
+                    properties.height,
+                    PhotoProjection::Pinhole {
+                        focal: pinhole_focal(properties),
+                        principal: [properties.principal_x, properties.principal_y],
+                    },
+                )
+            }
+            Projection::Spherical(spherical) => {
+                let properties = &spherical.properties;
+                (
+                    &spherical.blob,
+                    properties.width,
+                    properties.height,
+                    PhotoProjection::Spherical {
+                        pixel_size: [properties.pixel_width, properties.pixel_height],
+                    },
+                )
+            }
+            Projection::Cylindrical(cylindrical) => {
+                let properties = &cylindrical.properties;
+                (
+                    &cylindrical.blob,
+                    properties.width,
+                    properties.height,
+                    PhotoProjection::Cylindrical {
+                        pixel_size: [properties.pixel_width, properties.pixel_height],
+                        radius: properties.radius,
+                        principal_row: properties.principal_y,
+                    },
+                )
+            }
+        };
+        // Lengths and angles that place the photo, which are all positive,
+        // and the pixels it is placed from.
+        let (sizes, offsets) = match projection {
+            PhotoProjection::Pinhole { focal, principal } => ([focal[0], focal[1], 1.0], principal),
+            PhotoProjection::Spherical { pixel_size } => {
+                ([pixel_size[0], pixel_size[1], 1.0], [0.0; 2])
+            }
+            PhotoProjection::Cylindrical {
+                pixel_size,
+                radius,
+                principal_row,
+            } => ([pixel_size[0], pixel_size[1], radius], [principal_row, 0.0]),
+        };
+        if width == 0
+            || height == 0
+            || blob.data.length == 0
+            || blob.data.length > MAX_IMAGE_BYTES
             || !position
                 .iter()
-                .chain(&focal)
-                .chain(&principal)
+                .chain(&sizes)
+                .chain(&offsets)
                 .all(|value| value.is_finite())
-            || focal.iter().any(|value| *value <= 0.0)
+            || sizes.iter().any(|value| *value <= 0.0)
         {
+            photos.skipped += 1;
             continue;
         }
         let station = image
@@ -284,23 +373,62 @@ pub(crate) fn scan_images(path: &Path) -> Result<Vec<ScanImage>, LoadError> {
                     })
                 })
             });
-        images.push(ScanImage {
-            station,
-            position,
-            axes,
-            width: properties.width,
-            height: properties.height,
-            focal,
-            principal,
-            format: match pinhole.blob.format {
-                ImageFormat::Png => ScanImageFormat::Png,
-                ImageFormat::Jpeg => ScanImageFormat::Jpeg,
-            },
-            offset: blob.offset,
-            length: blob.length,
-        });
+        let format = match blob.format {
+            ImageFormat::Png => ScanImageFormat::Png,
+            ImageFormat::Jpeg => ScanImageFormat::Jpeg,
+        };
+        match (projection, station) {
+            (PhotoProjection::Pinhole { focal, principal }, Some(station)) => {
+                images.push(ScanImage {
+                    station: Some(station),
+                    position,
+                    axes,
+                    width,
+                    height,
+                    focal,
+                    principal,
+                    format,
+                    offset: blob.data.offset,
+                    length: blob.data.length,
+                })
+            }
+            (projection, station) => photos.photos.push(FilePhoto {
+                name: image.name.clone().filter(|name| !name.trim().is_empty()),
+                station,
+                position,
+                axes,
+                width,
+                height,
+                projection,
+                format,
+                offset: blob.data.offset,
+                length: blob.data.length,
+            }),
+        }
     }
-    Ok(images)
+    (images, photos)
+}
+
+/// Read the stored bytes of one photo from a reader of its file.
+fn read_blob<T: Read + Seek>(
+    file: &mut E57Reader<T>,
+    source_length: u64,
+    offset: u64,
+    length: u64,
+) -> Result<Vec<u8>, LoadError> {
+    if length > MAX_IMAGE_BYTES
+        || offset
+            .checked_add(length)
+            .is_none_or(|end| end > source_length)
+    {
+        return Err(LoadError::InvalidData("photo lies outside the file".into()));
+    }
+    let mut bytes = Vec::with_capacity(length as usize);
+    let written = file.blob(&Blob::new(offset, length), &mut bytes)?;
+    if written != length {
+        return Err(LoadError::InvalidData("photo is truncated".into()));
+    }
+    Ok(bytes)
 }
 
 /// Read the encoded bytes of station photos, in the order given.
@@ -309,25 +437,15 @@ pub(crate) fn read_images(path: &Path, images: &[ScanImage]) -> Result<Vec<Vec<u
     let source_length = std::fs::metadata(path)?.len();
     images
         .iter()
-        .map(|image| {
-            if image.length > MAX_IMAGE_BYTES
-                || image
-                    .offset
-                    .checked_add(image.length)
-                    .is_none_or(|end| end > source_length)
-            {
-                return Err(LoadError::InvalidData(
-                    "station photo lies outside the file".into(),
-                ));
-            }
-            let mut bytes = Vec::with_capacity(image.length as usize);
-            let written = file.blob(&Blob::new(image.offset, image.length), &mut bytes)?;
-            if written != image.length {
-                return Err(LoadError::InvalidData("station photo is truncated".into()));
-            }
-            Ok(bytes)
-        })
+        .map(|image| read_blob(&mut file, source_length, image.offset, image.length))
         .collect()
+}
+
+/// Read the encoded bytes of one photo of a file.
+pub(crate) fn read_photo(path: &Path, photo: &FilePhoto) -> Result<Vec<u8>, LoadError> {
+    let mut file = open_reader(path)?;
+    let source_length = std::fs::metadata(path)?.len();
+    read_blob(&mut file, source_length, photo.offset, photo.length)
 }
 
 pub fn read(
@@ -388,7 +506,9 @@ pub(crate) mod tests {
     use std::fs;
 
     use e57::{
-        CartesianBounds, E57Writer, PointCloudWriter, Record, RecordValue, Transform, Translation,
+        CartesianBounds, CylindricalImageProperties, E57Writer, PointCloudWriter, Quaternion,
+        Record, RecordValue, SphericalImageProperties, Transform, Translation,
+        VisualReferenceImageProperties,
     };
 
     use super::*;
@@ -568,6 +688,323 @@ pub(crate) mod tests {
             crate::open(&source, 8).unwrap().scan_poses,
             header.scan_poses
         );
+    }
+
+    const SCAN_GUID: &str = "{00000000-0000-4000-8000-000000000200}";
+
+    /// Write one scan of four points, a station when `station` is given and
+    /// a scan placed only by its pose otherwise, let `photos` add images and
+    /// let `xml` change the metadata before it is written.
+    pub(crate) fn write_with_photos(
+        path: &Path,
+        station: Option<[f64; 3]>,
+        coordinate_system: Option<&str>,
+        photos: impl FnOnce(&mut E57Writer<fs::File>),
+        xml: impl Fn(String) -> String,
+    ) {
+        let mut writer =
+            E57Writer::from_file(path, "{00000000-0000-4000-8000-000000000100}").unwrap();
+        writer.set_coordinate_metadata(coordinate_system.map(str::to_owned));
+        let mut scan = writer
+            .add_pointcloud(
+                SCAN_GUID,
+                vec![
+                    Record::CARTESIAN_X_F64,
+                    Record::CARTESIAN_Y_F64,
+                    Record::CARTESIAN_Z_F64,
+                ],
+            )
+            .unwrap();
+        let [x, y, z] = station.unwrap_or([1_000.0, 2_000.0, 50.0]);
+        if station.is_some() {
+            scan.set_name(Some("Station 0".into()));
+        }
+        scan.set_transform(Some(Transform {
+            rotation: Default::default(),
+            translation: Translation { x, y, z },
+        }));
+        for index in 0..4 {
+            scan.add_point(vec![
+                RecordValue::Double(f64::from(index)),
+                RecordValue::Double(1.0),
+                RecordValue::Double(0.5),
+            ])
+            .unwrap();
+        }
+        scan.finalize().unwrap();
+        photos(&mut writer);
+        writer
+            .finalize_customized_xml(|text| Ok(xml(text)))
+            .unwrap();
+    }
+
+    pub(crate) fn pose(rotation: [f64; 4], position: [f64; 3]) -> Transform {
+        let [w, x, y, z] = rotation;
+        let [px, py, pz] = position;
+        Transform {
+            rotation: Quaternion { w, x, y, z },
+            translation: Translation {
+                x: px,
+                y: py,
+                z: pz,
+            },
+        }
+    }
+
+    fn image_guid(index: usize) -> String {
+        format!("{{00000000-0000-4000-8000-0000000003{index:02}}}")
+    }
+
+    /// The rotation of a cube face of a scanner station turned 27.44
+    /// degrees about the vertical.
+    const FACE: [f64; 4] = [0.6869, 0.6869, 0.1677, 0.1677];
+    const STATION: [f64; 3] = [-2.19, 3.81, 0.0];
+
+    /// The station photos of a scanner keep exactly the numbers the reader
+    /// has always taken from them: the focal length divided by the size of a
+    /// pixel, both in metres, and the principal point as stated.
+    #[test]
+    fn station_photos_keep_their_focal_length_and_principal_point() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("station-photos.e57");
+        let bytes = b"stand-in for a stored JPEG".to_vec();
+        write_with_photos(
+            &source,
+            Some(STATION),
+            None,
+            |writer| {
+                // One photo names its scan; the other stands at the station.
+                for (index, (named, position)) in [(true, STATION), (false, [-2.19, 3.81, 0.005])]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut image = writer.add_image(&image_guid(index)).unwrap();
+                    image.set_transform(pose(FACE, position));
+                    if named {
+                        image.set_pointcloud_guid(SCAN_GUID);
+                    }
+                    image
+                        .add_pinhole(
+                            ImageFormat::Jpeg,
+                            &mut bytes.as_slice(),
+                            PinholeImageProperties {
+                                width: 2048,
+                                height: 2048,
+                                focal_length: 0.002_047,
+                                pixel_width: 0.000_002,
+                                pixel_height: 0.000_002,
+                                principal_x: 1023.5,
+                                principal_y: 1023.5,
+                            },
+                            None,
+                        )
+                        .unwrap();
+                    image.finalize().unwrap();
+                }
+            },
+            |xml| xml,
+        );
+        let images = scan_images(&source).unwrap();
+        assert_eq!(images.len(), 2);
+        for (image, position) in images.iter().zip([STATION, [-2.19, 3.81, 0.005]]) {
+            assert_eq!(image.station, Some(0));
+            assert_eq!(image.position, position);
+            assert_eq!(image.axes, quaternion_axes(FACE).unwrap());
+            assert_eq!((image.width, image.height), (2048, 2048));
+            assert_eq!(image.focal, [0.002_047 / 0.000_002; 2]);
+            assert!((image.focal[0] - 1023.5).abs() < 1e-9);
+            assert_eq!(image.principal, [1023.5, 1023.5]);
+            assert_eq!(image.format, ScanImageFormat::Jpeg);
+            assert_eq!(image.length, bytes.len() as u64);
+        }
+        assert_eq!(
+            read_images(&source, &images).unwrap(),
+            vec![bytes.clone(), bytes]
+        );
+        // They are station photos, not photos of their own.
+        let photos = file_photos(&source).unwrap();
+        assert!(photos.photos.is_empty());
+        assert_eq!(photos.skipped, 0);
+        assert_eq!(photos.coordinate_system, None);
+    }
+
+    /// Photos taken along a path by a camera that measured no points, as
+    /// some files store them: no pixel size, so the focal length and the
+    /// principal point are in pixels.
+    #[test]
+    fn a_pinhole_photo_without_a_pixel_size_states_its_focal_length_in_pixels() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("path-photos.e57");
+        let bytes = b"another stand-in".to_vec();
+        let rotation = [0.86, 0.33, -0.13, -0.36];
+        write_with_photos(
+            &source,
+            None,
+            Some(" EPSG:28992 "),
+            |writer| {
+                let mut image = writer.add_image(&image_guid(0)).unwrap();
+                image.set_transform(pose(rotation, [1_001.0, 2_002.0, 51.5]));
+                image
+                    .add_pinhole(
+                        ImageFormat::Png,
+                        &mut bytes.as_slice(),
+                        PinholeImageProperties {
+                            width: 1500,
+                            height: 2000,
+                            focal_length: 1_100.0,
+                            pixel_width: 0.0,
+                            pixel_height: 0.0,
+                            principal_x: 750.0,
+                            principal_y: 1000.0,
+                        },
+                        None,
+                    )
+                    .unwrap();
+                image.finalize().unwrap();
+            },
+            // Such files leave the elements empty.
+            |xml| {
+                xml.replace(
+                    "<pixelWidth type=\"Float\">0</pixelWidth>",
+                    "<pixelWidth type=\"Float\"/>",
+                )
+                .replace(
+                    "<pixelHeight type=\"Float\">0</pixelHeight>",
+                    "<pixelHeight type=\"Float\"/>",
+                )
+            },
+        );
+        let xml = E57Reader::raw_xml(fs::File::open(&source).unwrap()).unwrap();
+        assert!(String::from_utf8(xml)
+            .unwrap()
+            .contains("<pixelWidth type=\"Float\"/>"));
+        assert!(scan_images(&source).unwrap().is_empty());
+        let photos = file_photos(&source).unwrap();
+        assert_eq!(photos.coordinate_system.as_deref(), Some("EPSG:28992"));
+        assert_eq!(photos.skipped, 0);
+        assert_eq!(
+            photos.photos,
+            [FilePhoto {
+                name: None,
+                station: None,
+                position: [1_001.0, 2_002.0, 51.5],
+                axes: quaternion_axes(rotation).unwrap(),
+                width: 1500,
+                height: 2000,
+                projection: PhotoProjection::Pinhole {
+                    focal: [1_100.0, 1_100.0],
+                    principal: [750.0, 1000.0],
+                },
+                format: ScanImageFormat::Png,
+                offset: photos.photos[0].offset,
+                length: bytes.len() as u64,
+            }]
+        );
+        assert_eq!(read_photo(&source, &photos.photos[0]).unwrap(), bytes);
+        let moved = FilePhoto {
+            offset: u64::MAX - 4,
+            ..photos.photos[0].clone()
+        };
+        assert!(read_photo(&source, &moved).is_err());
+    }
+
+    #[test]
+    fn panoramas_of_every_kind_are_listed_and_previews_are_skipped() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("panoramas.e57");
+        let bytes = b"panorama".to_vec();
+        let station = [5.0, 6.0, 7.0];
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        write_with_photos(
+            &source,
+            Some(station),
+            None,
+            |writer| {
+                let mut image = writer.add_image(&image_guid(0)).unwrap();
+                image.set_name("Panorama 1");
+                image.set_transform(pose([half, 0.0, 0.0, half], [1.0, 2.0, 3.0]));
+                let spherical = SphericalImageProperties {
+                    width: 64,
+                    height: 32,
+                    pixel_width: std::f64::consts::TAU / 64.0,
+                    pixel_height: std::f64::consts::PI / 32.0,
+                };
+                image
+                    .add_spherical(
+                        ImageFormat::Jpeg,
+                        &mut bytes.as_slice(),
+                        spherical.clone(),
+                        None,
+                    )
+                    .unwrap();
+                image.finalize().unwrap();
+                // A cylinder at the station.
+                let mut image = writer.add_image(&image_guid(1)).unwrap();
+                image.set_transform(pose([1.0, 0.0, 0.0, 0.0], station));
+                image
+                    .add_cylindrical(
+                        ImageFormat::Jpeg,
+                        &mut bytes.as_slice(),
+                        CylindricalImageProperties {
+                            width: 360,
+                            height: 100,
+                            radius: 1.0,
+                            principal_y: 50.0,
+                            pixel_width: std::f64::consts::TAU / 360.0,
+                            pixel_height: 0.01,
+                        },
+                        None,
+                    )
+                    .unwrap();
+                image.finalize().unwrap();
+                // A preview cannot be placed.
+                let mut image = writer.add_image(&image_guid(2)).unwrap();
+                image.set_transform(pose([1.0, 0.0, 0.0, 0.0], station));
+                image
+                    .add_visual_reference(
+                        ImageFormat::Jpeg,
+                        &mut bytes.as_slice(),
+                        VisualReferenceImageProperties {
+                            width: 64,
+                            height: 32,
+                        },
+                        None,
+                    )
+                    .unwrap();
+                image.finalize().unwrap();
+                // Nor can a panorama without a pose.
+                let mut image = writer.add_image(&image_guid(3)).unwrap();
+                image
+                    .add_spherical(ImageFormat::Jpeg, &mut bytes.as_slice(), spherical, None)
+                    .unwrap();
+                image.finalize().unwrap();
+            },
+            // The writer misspells one element that the reader requires.
+            |xml| xml.replace("readius", "radius"),
+        );
+        let photos = file_photos(&source).unwrap();
+        assert_eq!(photos.skipped, 2);
+        assert_eq!(photos.photos.len(), 2);
+        let panorama = &photos.photos[0];
+        assert_eq!(panorama.name.as_deref(), Some("Panorama 1"));
+        assert_eq!(panorama.station, None);
+        assert_eq!(panorama.kind(), crate::PhotoKind::Spherical);
+        assert_eq!((panorama.width, panorama.height), (64, 32));
+        assert_eq!(panorama.position, [1.0, 2.0, 3.0]);
+        let middle = panorama.project([0.0, 1.0, 0.0]).unwrap();
+        assert!((middle[0] - 31.5).abs() < 1e-9 && (middle[1] - 15.5).abs() < 1e-9);
+        let cylinder = &photos.photos[1];
+        assert_eq!(cylinder.station, Some(0));
+        assert_eq!(
+            cylinder.projection,
+            PhotoProjection::Cylindrical {
+                pixel_size: [std::f64::consts::TAU / 360.0, 0.01],
+                radius: 1.0,
+                principal_row: 50.0,
+            }
+        );
+        assert!(scan_images(&source).unwrap().is_empty());
+        assert_eq!(read_photo(&source, cylinder).unwrap(), bytes);
     }
 
     #[test]
