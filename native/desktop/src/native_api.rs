@@ -350,6 +350,23 @@ pub enum ApiCommand {
         group: String,
         open: bool,
     },
+    /// The tabs above the main area, in their order, and the active one.
+    ListTabs,
+    /// Show an open tab, by its place as `list_tabs` gives it or by its
+    /// name, as a click on it does.
+    ShowTab {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    /// Close an open tab as its × does; its view or drawing stays.
+    CloseTab {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        index: Option<usize>,
+    },
     /// Set the crop region of a drawing of Create 2D, which is made again.
     SetSheetCrop {
         #[serde(flatten)]

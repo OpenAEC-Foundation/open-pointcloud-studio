@@ -92,7 +92,7 @@ impl DrawingSource {
         }
     }
 
-    fn path(&self) -> Option<&Path> {
+    pub(crate) fn path(&self) -> Option<&Path> {
         match self {
             Self::Preview | Self::Sheet { .. } => None,
             Self::Export(path) | Self::File(path) => Some(path),
@@ -487,8 +487,8 @@ pub(crate) struct DrawingViewTool {
     /// A handle of the crop region the local API holds dragged.
     pub(crate) held: Option<CropDrag>,
     /// Where the view looked at each drawing it showed before and which
-    /// layers were on, by `look_key`: shown again from its row, a drawing
-    /// comes back as it was left.
+    /// layers were on, by `look_key`: shown again from its tab or its row,
+    /// a drawing comes back as it was left.
     looks: HashMap<String, (ViewCamera, Vec<(String, bool)>)>,
 }
 
@@ -719,8 +719,9 @@ impl DrawingViewTool {
         }
     }
 
-    /// Forget where the view looked at a drawing: also the drawing the view
-    /// holds starts from its extents when it is shown again.
+    /// Forget where the view looked at a drawing, when its tab closes: also
+    /// the drawing the view holds starts from its extents when it is shown
+    /// again.
     pub(crate) fn forget_look(&mut self, key: &str) {
         self.looks.remove(key);
         if self
@@ -1810,16 +1811,21 @@ impl Studio {
             .find(|drawing| drawing.guid == guid)
             .cloned()
             .ok_or_else(|| "That drawing is no longer kept".to_owned())?;
+        let tab = crate::view_tabs::TabId::Drawing(guid.to_owned());
         if let Some(scene) = self.drawing_view.made(guid).cloned() {
             if !self.drawing_view.is_current(&scene) {
                 self.drawing_view.show_again(scene);
             }
             self.drawing_view.shown = true;
             self.file_open = false;
+            self.tabs.add(tab);
             self.status = format!("Drawing {}", definition.name);
             return Ok(None);
         }
-        self.remake_sheet(definition, api_job_id).map(Some)
+        let task = self.remake_sheet(definition, api_job_id)?;
+        // Its tab opens at once, while it is being made.
+        self.tabs.add(tab);
+        Ok(Some(task))
     }
 
     /// Forget how a drawing of Create 2D was made, and the drawing.

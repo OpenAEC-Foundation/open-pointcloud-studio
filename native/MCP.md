@@ -220,6 +220,9 @@ follows when that view is restored.
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`; one not made in this session yet is made again from its scans, with a job to wait for. `3D model` shows the 3D model |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
 | `set_browser_group` | `group` (`scans`, `classes`, `views`, `bcf`, `3d`, `plans`, `elevations`, `sections`, `files` or `folder:` and a path), `open` | Opens or collapses a group of the Project Browser |
+| `list_tabs` | — | The tabs above the main area in their order, the 3D model first, with the active one |
+| `show_tab` | `name` or `index` as `list_tabs` gives them | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job to wait for |
+| `close_tab` | `name` or `index` as `list_tabs` gives them | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |
 | `set_sheet_crop` | optional `name`, `rect` (`[[left, bottom], [right, top]]` in drawing units), `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` (0.1–100) | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before when its cut, depth and points used stay |
 | `select_crop_region` | `selected` | Selects the crop region of the drawing shown, as a click on its outline does, so that Properties shows its figures at the top and its handles can be dragged; `false` deselects it, as Escape does |
 | `drag_crop_handle` | `handle` (`left`, `right`, `bottom`, `top`, `bottom_left`, `bottom_right`, `top_left` or `top_right`), `to` (`[u, v]` in drawing units), optional `release` | Drags a handle of the crop region of the drawing shown, as the pointer does |

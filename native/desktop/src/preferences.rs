@@ -48,6 +48,22 @@ pub(crate) struct Preferences {
     /// is no list of texts reads as none, and leaves the other settings.
     #[serde(deserialize_with = "texts_or_none")]
     pub browser_collapsed: Vec<String>,
+    /// The tabs open above the main area after the 3D model, as
+    /// `model`, `view:` or `drawing:` and an identifier, read in the same
+    /// way.
+    #[serde(deserialize_with = "texts_or_none")]
+    pub view_tabs: Vec<String>,
+    /// The tab that was active; a value that is no text reads as none.
+    #[serde(deserialize_with = "text_or_none")]
+    pub view_tab: Option<String>,
+}
+
+/// A text, or none when the value is no text.
+fn text_or_none<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_str().map(str::to_owned))
 }
 
 /// The texts of a list, or none when the value is no list.
@@ -89,6 +105,8 @@ impl Default for Preferences {
             cap_max_thickness: pointcloud_core::DEFAULT_CAP_MAX_THICKNESS,
             recent_mesh_to_plans: Vec::new(),
             browser_collapsed: Vec::new(),
+            view_tabs: Vec::new(),
+            view_tab: None,
         }
     }
 }
@@ -110,6 +128,7 @@ impl Preferences {
         }
         self.recent_mesh_to_plans
             .truncate(crate::mesh_to_plans::MAX_RECENT_PROJECTS);
+        self.view_tabs.truncate(crate::view_tabs::MAX_TABS);
         self
     }
 }
@@ -218,6 +237,23 @@ mod tests {
             load_from(&path).browser_collapsed,
             ["views", "folder:C:/scans"]
         );
+        // The tabs are read in the same way.
+        fs::write(
+            &path,
+            r#"{"budget": 3000000, "view_tabs": "view:a1", "view_tab": 7}"#,
+        )
+        .unwrap();
+        let damaged = load_from(&path);
+        assert!(damaged.view_tabs.is_empty() && damaged.view_tab.is_none());
+        assert_eq!(damaged.budget, 3_000_000);
+        fs::write(
+            &path,
+            r#"{"view_tabs": ["view:a1", 3, "drawing:b2"], "view_tab": "view:a1"}"#,
+        )
+        .unwrap();
+        let read = load_from(&path);
+        assert_eq!(read.view_tabs, ["view:a1", "drawing:b2"]);
+        assert_eq!(read.view_tab.as_deref(), Some("view:a1"));
     }
 
     #[test]
@@ -239,6 +275,8 @@ mod tests {
             cap_max_thickness: 0.35,
             recent_mesh_to_plans: vec![PathBuf::from("/projects/office/project.ops-m2p.json")],
             browser_collapsed: vec!["scans".into(), "views.plans".into()],
+            view_tabs: vec!["view:a1".into(), "drawing:b2".into()],
+            view_tab: Some("drawing:b2".into()),
             ..Preferences::default()
         };
         save_to(&path, &settings).unwrap();

@@ -525,7 +525,7 @@ impl Studio {
 
     /// Size of the viewport as it was last drawn, which is what a view
     /// shows; before anything has been drawn, the size last reported.
-    fn drawn_viewport(&self) -> Size {
+    pub(crate) fn drawn_viewport(&self) -> Size {
         self.views
             .canvas
             .get()

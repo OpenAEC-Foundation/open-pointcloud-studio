@@ -61,6 +61,7 @@ mod station_photos;
 mod survey;
 mod ui_theme;
 mod view_cube;
+mod view_tabs;
 mod views;
 
 use bag_map::{MapView, TileKey};
@@ -1167,13 +1168,24 @@ fn main() -> iced::Result {
         })
         .subscription(|studio| {
             let keyboard = iced::event::listen_with(|event, status, _| match event {
-                iced::Event::Window(iced::window::Event::Resized(_)) => Some(Message::RibbonReset),
+                iced::Event::Window(
+                    iced::window::Event::Resized(size) | iced::window::Event::Opened { size, .. },
+                ) => Some(Message::WindowResized(size)),
                 // The window is closed by the application itself, so work
                 // that is under way is asked to stop first.
                 iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::Exit),
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                     Some(Message::FileDropped(path))
                 }
+                // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs above
+                // the main area.
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+                    modifiers,
+                    ..
+                }) if modifiers.control() => Some(Message::Tabs(view_tabs::TabAction::Cycle(
+                    !modifiers.shift(),
+                ))),
                 // Escape, Delete, Backspace and Enter, and every other key
                 // without a character but Shift and the like, which end a
                 // half-typed RO.
@@ -1749,7 +1761,9 @@ enum Message {
     Exit,
     RibbonScroll(f32),
     RibbonViewport(f32, f32, f32),
-    RibbonReset,
+    /// The window opened or got another size: the ribbon measures its
+    /// overflow again.
+    WindowResized(Size),
     Theme(UiTheme),
     PersistSettings(u64),
     Open,
@@ -1982,6 +1996,8 @@ enum Message {
     /// the orbit point.
     PickOrbitPoint([f32; 2], Size),
     Browser(project_browser::BrowserAction),
+    /// A tab above the main area was clicked or closed, or Ctrl+Tab pressed.
+    Tabs(view_tabs::TabAction),
     Sheet(sheet_dialog::SheetAction),
     OrbitPointPicked(Option<[f64; 3]>),
     /// A single click at a pixel of the scene with no tool on: the point
@@ -2150,8 +2166,16 @@ struct Studio {
     views: views::ViewTool,
     /// Which groups of the Project Browser are collapsed.
     browser: project_browser::BrowserState,
+    /// The tabs above the main area: the 3D model and the views and
+    /// drawings opened from VIEWS.
+    tabs: view_tabs::ViewTabs,
+    /// How deep `update` is called within itself; the tabs follow what the
+    /// window shows only when the outermost call ends.
+    update_depth: u32,
     sheet_dialog: Option<sheet_dialog::SheetDialog>,
     viewport_size: Size,
+    /// The size of the window, once it opened.
+    window_size: Option<Size>,
     ribbon_viewport: Option<(f32, f32, f32)>,
     file_open: bool,
     /// The page the File view shows.
@@ -2764,8 +2788,11 @@ impl Default for Studio {
             view_label: "ISOMETRIC",
             views: views::ViewTool::load(),
             browser: project_browser::BrowserState::new(settings.browser_collapsed.clone()),
+            tabs: view_tabs::ViewTabs::new(&settings.view_tabs, settings.view_tab.as_deref()),
+            update_depth: 0,
             sheet_dialog: None,
             viewport_size: Size::new(915.0, 743.0),
+            window_size: None,
             ribbon_viewport: None,
             file_open: false,
             file_page: FilePage::default(),
@@ -2829,6 +2856,16 @@ impl Default for Studio {
 }
 
 impl Studio {
+    /// The width of the panel at the right: Properties, or the wider panel
+    /// of the 3D BAG.
+    fn properties_width(&self) -> f32 {
+        if self.bag_panel {
+            440.0
+        } else {
+            270.0
+        }
+    }
+
     fn preferences(&self) -> preferences::Preferences {
         preferences::Preferences {
             color_mode: self.color_mode,
@@ -2851,6 +2888,8 @@ impl Studio {
             cap_max_thickness: self.section_fill.max_thickness,
             recent_mesh_to_plans: self.mesh_to_plans.recent.clone(),
             browser_collapsed: self.browser.collapsed().to_vec(),
+            view_tabs: self.tabs.kept().0.clone(),
+            view_tab: self.tabs.kept().1.clone(),
         }
     }
 
@@ -3754,6 +3793,7 @@ impl Studio {
                 answer.0["result"]["drawing"] = self.drawing.value();
                 answer.0["result"]["drawing_view"] = self.drawing_view.value();
                 answer.0["result"]["project_browser"] = self.browser_value();
+                answer.0["result"]["view_tabs"] = self.tabs_value();
                 answer.0["result"]["turning"] = self.turn_value();
                 answer.0["result"]["section_align_pending"] =
                     Value::Bool(self.section_align_pending);
@@ -4728,6 +4768,9 @@ impl Studio {
             ApiCommand::ShowDrawing { name } => self.api_show_drawing(&name),
             ApiCommand::DeleteDrawing { name } => (self.api_delete_drawing(&name), Task::none()),
             ApiCommand::SetBrowserGroup { group, open } => self.api_set_browser_group(&group, open),
+            ApiCommand::ListTabs => self.api_list_tabs(),
+            ApiCommand::ShowTab { name, index } => self.api_show_tab(name.as_deref(), index),
+            ApiCommand::CloseTab { name, index } => self.api_close_tab(name.as_deref(), index),
             ApiCommand::SetSheetCrop { options } => self.api_set_sheet_crop(&options),
             ApiCommand::DuplicateView { name, kind } => {
                 self.api_duplicate_view(&name, kind.as_deref())
@@ -5711,7 +5754,9 @@ impl Studio {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        self.update_depth += 1;
         let task = self.handle(message);
+        self.update_depth -= 1;
         self.track_progress();
         self.settle_views();
         self.settle_drawing();
@@ -5719,8 +5764,17 @@ impl Studio {
         self.settle_mesh_to_plans();
         self.settle_turn();
         self.settle_focus();
-        match self.ask_box_sample() {
+        let task = match self.ask_box_sample() {
             Some(count) => Task::batch([task, count]),
+            None => task,
+        };
+        // A message handled within another leaves the window halfway: the
+        // tabs follow once the outermost one is done.
+        if self.update_depth > 0 {
+            return task;
+        }
+        match self.settle_tabs() {
+            Some(tabs) => Task::batch([task, tabs]),
             None => task,
         }
     }
@@ -5944,7 +5998,10 @@ impl Studio {
             Message::RibbonViewport(offset, width, content_width) => {
                 self.ribbon_viewport = Some((offset, width, content_width));
             }
-            Message::RibbonReset => self.ribbon_viewport = None,
+            Message::WindowResized(size) => {
+                self.window_size = Some(size);
+                self.ribbon_viewport = None;
+            }
             Message::Theme(theme) => {
                 self.ui_theme = theme;
                 theme.save();
@@ -8488,6 +8545,7 @@ impl Studio {
             }
             Message::Views(action) => return self.update_views(action),
             Message::Browser(action) => return self.update_browser(action),
+            Message::Tabs(action) => return self.update_tabs(action),
             Message::Photos(action) => return self.update_photos(action),
             Message::Sheet(action) => return self.update_sheet_dialog(action),
             Message::ShowContextMenu(point) => self.context_menu = Some(point),
@@ -10728,24 +10786,9 @@ impl Studio {
             properties.into()
         };
 
-        let (title, caption) = if self.drawing_view.shown {
-            (i18n::tr("DRAWING"), self.drawing_view_caption())
-        } else {
-            (i18n::tr("MODEL SPACE"), self.view_caption().to_owned())
-        };
-        let scene_colors = self.ui_theme.colors();
-        let viewport_header = row![
-            text(title)
-                .size(12)
-                .font(Font::with_name("Space Grotesk"))
-                .color(scene_colors.scene_text),
-            text(caption).size(11).color(scene_colors.scene_muted),
-            iced::widget::horizontal_space(),
-        ]
-        .spacing(16)
-        .align_y(iced::Alignment::Center)
-        .padding([5, 14]);
-        let mut viewport = column![viewport_header].height(Fill).width(Fill);
+        // The tabs of the 3D model and of the views and drawings opened from
+        // VIEWS, with what the main area shows at their right.
+        let mut viewport = column![self.tab_strip()].height(Fill).width(Fill);
         if let Some(progress) = self.progress_strip() {
             viewport = viewport.push(progress);
         }
@@ -10783,7 +10826,7 @@ impl Studio {
                 .height(Fill)
                 .style(viewport_style),
             container(scrollable(properties).height(Fill))
-                .width(if self.bag_panel { 440 } else { 270 })
+                .width(self.properties_width())
                 .height(Fill)
                 .style(sidebar_style),
         ]
@@ -11178,7 +11221,7 @@ mod ribbon_tests {
         assert_eq!(studio.ribbon_viewport, Some((0.0, 900.0, 1400.0)));
         let _ = studio.view();
 
-        let _ = studio.update(Message::RibbonReset);
+        let _ = studio.update(Message::WindowResized(Size::new(1200.0, 800.0)));
         assert_eq!(studio.ribbon_viewport, None);
     }
 

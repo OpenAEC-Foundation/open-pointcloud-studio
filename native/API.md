@@ -785,6 +785,42 @@ kind VIEWS lists with its `group`, whether it is `open` and the names in its
 highlighted: the drawing the Drawing view shows, else the active view, else
 `3D model`.
 
+## View tabs
+
+The tabs above the main area show the 3D model and the views and drawings
+side by side, as the pages of a document. The tab of the 3D model comes first
+and never closes; after it come the views and drawings opened from VIEWS of
+the Project Browser, in the order they were opened: saved 3D views, plans,
+elevations, sections, the preview, exports and opened DXF and DWG files.
+Whatever is shown, by a click on a row, by `restore_view`, `show_drawing`,
+`open_drawing` or `duplicate_view`, opens its tab, or makes it active when it
+is open, and the row of VIEWS of the active tab is the one highlighted.
+`create_drawing` opens the tab of its drawing. A view of a scan that is not the
+active one, or a drawing of scans that are not open, keeps its tab, which is
+listed again with its scan. The open tabs and the active one are kept for the
+next session, as the collapsed groups are; the tab of a preview, an export or
+a file lasts for the session, as its row does. Once the scans are read, the
+tab that was active is shown again unless another was chosen first.
+
+The 3D model keeps its own camera, section box and colour mode while a saved
+view is shown in the scene, and gets them back when its tab is shown again. A
+saved view that the scene still has comes back as it was left; otherwise its
+tab shows it as it was saved, as a click on its row does. A drawing comes back
+zoomed as it was left, with its layers as they were, also from its row.
+
+`list_tabs` answers with `tabs`, each with its `index`, `name`, `kind`
+(`model`, `view`, `drawing` or `file`), the `guid` of a view or drawing or the
+`path` of a file (`null` for the preview), `active` and `closable`, and with
+`active`, the index of the active tab or `null` while the Drawing view holds
+no drawing. `status.result.view_tabs` holds the same. `show_tab` shows an open
+tab as a click on it does, by its `index` or its `name` in any case; a drawing
+that is not made in this session yet is made, and the answer then has
+`accepted: true` and a `job_id`. `close_tab` closes a tab as its × does, by
+`index` or `name`; the view or drawing stays under VIEWS, and when the tab
+was active the tab after it is shown, else the one before it. The tab of the
+3D model does not close. Both answer with the tabs as `list_tabs` gives them,
+and with `shown` or `closed`, the name of the tab.
+
 ## CAD viewer
 
 `open_in_cad_viewer` opens a DXF or DWG file in the CAD viewer, as the button
@@ -1282,7 +1318,7 @@ layer with photo colours.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), the tabs above the main area (`view_tabs`, as `list_tabs` gives them), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, colouring from photos, merge, 3D BAG download or Mesh to Plans task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -1386,6 +1422,9 @@ layer with photo colours.
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`, made again from how it was made when it is not made in this session yet (then with a job ID); `3D model` shows the 3D model as a click on its row does, letting go of the active view |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
 | `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
+| `list_tabs` | — | The tabs above the main area in their order, the 3D model first, and the active one |
+| `show_tab` | `name` or `index` | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job ID |
+| `close_tab` | `name` or `index` | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |
 | `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before as long as its cut, depth and points used stay; returns a job ID. See [Crop region, duplicates and RO](#crop-region-duplicates-and-ro) |
 | `select_crop_region` | `selected` | Selects (`true`) or deselects (`false`) the crop region of the drawing shown, as a click on its outline or Escape does; Properties shows its figures while it is selected |
 | `drag_crop_handle` | `handle`, `to`, optional `release` | Drags a handle of the crop region of the drawing shown to a point of the drawing, as the pointer does; held with `release: false`, else the drawing is made again (job ID) |

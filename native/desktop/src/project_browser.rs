@@ -221,7 +221,7 @@ impl ViewKind {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::ThreeD => key("3D views"),
             Self::Plans => key("Plans"),
@@ -231,7 +231,7 @@ impl ViewKind {
         }
     }
 
-    fn icon(self) -> ToolIcon {
+    pub(crate) fn icon(self) -> ToolIcon {
         match self {
             Self::ThreeD => ToolIcon::Model,
             Self::Plans => ToolIcon::PlanSheet,
@@ -241,7 +241,7 @@ impl ViewKind {
         }
     }
 
-    fn of(kind: SheetKind) -> Self {
+    pub(crate) fn of(kind: SheetKind) -> Self {
         match kind {
             SheetKind::Plan => Self::Plans,
             SheetKind::Elevation => Self::Elevations,
@@ -467,7 +467,7 @@ fn icon_button<'a>(icon: ToolIcon, tip: &str, message: Message) -> Element<'a, M
 }
 
 /// The box a tooltip of the Project Browser shows its text in.
-fn hint<'a>(content: String) -> Element<'a, Message> {
+pub(crate) fn hint<'a>(content: String) -> Element<'a, Message> {
     container(text(content).size(11))
         .padding([4, 7])
         .style(|theme| {
@@ -593,15 +593,10 @@ impl Studio {
                     .collect();
                 return self.set_scans_visible(&rows, visible);
             }
-            BrowserAction::ShowModel => {
-                self.drawing_view.shown = false;
-                self.file_open = false;
-                // The 3D model is no saved view: the active one lets go, as
-                // Hide under its annotations does, so that the row of the
-                // 3D model is the one highlighted.
-                self.deactivate_view();
-                self.status = "3D model".into();
-            }
+            // As a click on its tab: the 3D model is no saved view, so the
+            // active one lets go, as Hide under its annotations does, and the
+            // row of the 3D model is the one highlighted.
+            BrowserAction::ShowModel => return self.show_model_tab(),
             BrowserAction::Duplicate(row) => {
                 let done = match row {
                     ViewRow::Model => self.duplicate_model_view(),
