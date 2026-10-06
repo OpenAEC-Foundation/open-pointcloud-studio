@@ -202,7 +202,8 @@ jobs:
           case "$RUNNER_OS" in
             # The newest MSVC toolset, which the build takes, from the folder
             # of the build tools: Program Files[ (x86)]/VENDOR/YEAR/EDITION.
-            Windows) compiler=$(ls -d "/c/Program Files"*/*/20*/*/VC/Tools/MSVC/* 2>/dev/null | sed 's|.*/||' | sort -V | tail -n 1) ;;
+            # ls fails when one of the two Program Files folders has no match.
+            Windows) compiler=$({ ls -d "/c/Program Files"*/*/20*/*/VC/Tools/MSVC/* 2>/dev/null || true; } | sed 's|.*/||' | sort -V | tail -n 1) ;;
             macOS) compiler="$(c++ --version | sed -n 1p), SDK $(xcrun --show-sdk-version)" ;;
             *) compiler=$(c++ --version | sed -n 1p) ;;
           esac
