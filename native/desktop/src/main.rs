@@ -2108,6 +2108,10 @@ struct Studio {
     detail_pending: bool,
     detail_cancel: Arc<AtomicBool>,
     detail_loaded_revision: Option<u64>,
+    /// Revisions from the first to the second of which every one after the
+    /// first changed only layers without an octree, such as the points of
+    /// scans still being read: detail read for any of them still fits.
+    detail_neutral: Option<(u64, u64)>,
     detail_urgent_revision: Option<u64>,
     /// Revision the last viewport LOD request was started for.
     detail_request_revision: Option<u64>,
@@ -2153,6 +2157,11 @@ struct CloudEntry {
 
 /// The points read for each cloud of a refinement, by cloud index.
 type LodSets = Vec<(usize, Vec<IndexedPoint>)>;
+
+/// The visible layers with an octree as the detail read for them knows
+/// them: their place in the list, their octree, their cloud and how they
+/// are placed.
+type DetailLayers = Vec<(usize, usize, usize, CloudTransform)>;
 
 struct LodRefinement {
     sources: Vec<(usize, Arc<OctreeIndex>, CloudTransform, f32)>,
@@ -2567,6 +2576,7 @@ impl Default for Studio {
             detail_pending: false,
             detail_cancel: Arc::new(AtomicBool::new(false)),
             detail_loaded_revision: None,
+            detail_neutral: None,
             detail_urgent_revision: None,
             detail_request_revision: None,
             lod_pace: Arc::default(),
@@ -7328,15 +7338,12 @@ impl Studio {
                 });
             }
             Message::RefreshDetail(revision) => {
-                if revision == self.revision
-                    && !self.detail_pending
-                    && self.detail_loaded_revision != Some(revision)
-                {
+                if self.detail_current(revision) && !self.detail_pending && !self.detail_loaded() {
                     return self.update(Message::LoadDetail);
                 }
             }
             Message::DetailPreview(revision, details) => {
-                if revision == self.revision {
+                if self.detail_current(revision) {
                     let mut count = 0usize;
                     for (index, points) in details {
                         count += points.len();
@@ -7355,7 +7362,7 @@ impl Studio {
             Message::DetailReady(revision, result) => {
                 self.detail_pending = false;
                 let urgent = self.detail_urgent_revision.take() == Some(self.revision);
-                if revision != self.revision {
+                if !self.detail_current(revision) {
                     return if urgent {
                         self.update(Message::LoadDetail)
                     } else {
@@ -7371,7 +7378,7 @@ impl Studio {
                                 entry.detail_points = Some(points.into());
                             }
                         }
-                        self.detail_loaded_revision = Some(revision);
+                        self.detail_loaded_revision = Some(self.revision);
                         if self.reports_detail() {
                             self.status = format!(
                                 "Viewport LOD ready: {} points from disk octree",
@@ -8146,7 +8153,7 @@ impl Studio {
                 return Task::batch([move_task, self.update(Message::NavigationFinished)]);
             }
             Message::NavigationFinished => {
-                if self.detail_loaded_revision == Some(self.revision)
+                if self.detail_loaded()
                     || !self
                         .clouds
                         .iter()
@@ -8157,7 +8164,9 @@ impl Studio {
                 // A release without movement: the running request already
                 // reads this view, so restarting it would only lose time.
                 if self.detail_pending
-                    && self.detail_request_revision == Some(self.revision)
+                    && self
+                        .detail_request_revision
+                        .is_some_and(|revision| self.detail_current(revision))
                     && !self.detail_cancel.load(Ordering::Relaxed)
                 {
                     return Task::none();
@@ -8882,6 +8891,52 @@ impl Studio {
             })
             .flatten()
             .unwrap_or_else(|| distribute_lod_budget(budget, source_weights))
+    }
+
+    /// Whether detail read for this revision fits what the viewport shows:
+    /// it is the current one, or only layers without an octree changed since.
+    fn detail_current(&self, revision: u64) -> bool {
+        revision == self.revision
+            || self.detail_neutral.is_some_and(|(first, last)| {
+                last == self.revision && (first..=last).contains(&revision)
+            })
+    }
+
+    /// Whether the detail of the current view has been read.
+    fn detail_loaded(&self) -> bool {
+        self.detail_loaded_revision
+            .is_some_and(|revision| self.detail_current(revision))
+    }
+
+    /// What the detail read for the camera rests on besides the camera: the
+    /// visible layers with an octree, their places in the list, their clouds
+    /// and how they are placed, and the section box.
+    fn detail_basis(&self) -> (DetailLayers, Option<OrientedBox>) {
+        let layers = self
+            .clouds
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.visible)
+            .filter_map(|(index, entry)| {
+                let tree = entry.index.as_ref()?;
+                Some((
+                    index,
+                    Arc::as_ptr(tree) as usize,
+                    Arc::as_ptr(&entry.cloud) as usize,
+                    entry.transform,
+                ))
+            })
+            .collect();
+        (layers, self.section_box())
+    }
+
+    /// Take the revisions since `before` as changes of layers without an
+    /// octree alone, which leave the detail read for the camera as it is.
+    fn keep_detail_since(&mut self, before: u64) {
+        self.detail_neutral = match self.detail_neutral {
+            Some((first, last)) if last == before => Some((first, self.revision)),
+            _ => Some((before, self.revision)),
+        };
     }
 
     fn schedule_detail(&self) -> Task<Message> {
@@ -14516,6 +14571,95 @@ mod lod_transition_tests {
         running.store(true, Ordering::Relaxed);
         let _ = studio.update(Message::NavigationFinished);
         assert_eq!(studio.detail_urgent_revision, Some(revision));
+    }
+
+    #[test]
+    fn points_of_other_scans_coming_in_leave_the_detail_of_an_indexed_scan_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut studio, records) = indexed_studio(directory.path());
+        // Another scan is being read and shows its points in steps.
+        let other = directory.path().join("other.xyz");
+        std::fs::write(&other, "0 5 0\n1 5 0\n2 5 1\n3 6 1\n").unwrap();
+        let read = pointcloud_core::open(&other, 10).unwrap();
+        let step = |points: usize| {
+            let mut step = read.clone();
+            step.points.truncate(points);
+            step.point_ordinals.truncate(points);
+            step.provisional = true;
+            Arc::new(step)
+        };
+        studio.imports.insert(
+            7,
+            ImportJob {
+                path: other.clone(),
+                decoded: Arc::new(AtomicU64::new(0)),
+                cancel: Arc::new(AtomicBool::new(false)),
+            },
+        );
+
+        // A refinement runs for the current view.
+        let _ = studio.update(Message::LoadDetail);
+        assert!(studio.detail_pending);
+        let requested = studio.revision;
+        let running = Arc::clone(&studio.detail_cancel);
+
+        // The points of the other scan arrive: a layer of its own, then a
+        // further step in it. The scene changes, the refinement goes on.
+        for points in [2, 3] {
+            let _ = studio.update(Message::ImportSnapshot(7, step(points)));
+            let _ = studio.update(Message::FlushSnapshots);
+            assert!(!running.load(Ordering::Relaxed), "the refinement goes on");
+        }
+        assert_eq!(studio.clouds.len(), 2);
+        assert!(studio.revision > requested);
+        let _ = studio.update(Message::DetailPreview(
+            requested,
+            vec![(0, records[..2].to_vec())],
+        ));
+        assert_eq!(studio.clouds[0].view_len(), 2);
+        let _ = studio.update(Message::DetailReady(
+            requested,
+            Ok(vec![(0, records.clone())]),
+        ));
+        assert!(!studio.detail_pending);
+        assert_eq!(studio.clouds[0].view_len(), records.len());
+        assert!(studio.detail_loaded());
+
+        // What was read stays while further points come in: nothing is read
+        // again, after a release of the mouse neither.
+        let _ = studio.update(Message::ImportSnapshot(7, step(4)));
+        let _ = studio.update(Message::FlushSnapshots);
+        assert!(studio.detail_loaded());
+        let _ = studio.update(Message::RefreshDetail(studio.revision));
+        let _ = studio.update(Message::NavigationFinished);
+        assert!(!studio.detail_pending);
+        assert_eq!(studio.clouds[0].view_len(), records.len());
+
+        // Moving the camera does read it anew, and a change of the camera
+        // ends what a later flush can keep.
+        let _ = studio.update(Message::Pan(10.0, 0.0));
+        assert!(!studio.detail_loaded());
+        assert!(!studio.detail_current(requested));
+        let _ = studio.update(Message::NavigationFinished);
+        assert!(studio.detail_pending);
+        let moved = studio.revision;
+        let running = Arc::clone(&studio.detail_cancel);
+
+        // New points of the layer with the octree itself are another
+        // matter, as for a LAS file with a kept octree that is still read.
+        let mut provisional = (*studio.clouds[0].cloud).clone();
+        provisional.provisional = true;
+        let provisional = Arc::new(provisional);
+        studio.clouds[0].cloud = Arc::clone(&provisional);
+        let identity = Arc::clone(&studio.clouds[0].load_identity);
+        let _ = studio.update(Message::LayerSnapshot(
+            identity,
+            Arc::new((*provisional).clone()),
+        ));
+        let _ = studio.update(Message::FlushSnapshots);
+        assert!(!Arc::ptr_eq(&studio.clouds[0].cloud, &provisional));
+        assert!(running.load(Ordering::Relaxed), "the refinement stops");
+        assert!(!studio.detail_current(moved));
     }
 }
 

@@ -80,7 +80,9 @@ impl Studio {
 
     /// Show every snapshot that arrived since the last flush. The camera
     /// frames the scene when its first points appear; after that it stays
-    /// where it is while further points come in.
+    /// where it is while further points come in. The detail that the
+    /// viewport reads for the layers with an octree goes on, or stays, while
+    /// only layers without one change.
     pub(crate) fn flush_snapshots(&mut self) -> Task<Message> {
         self.snapshot_flush_scheduled = false;
         if self.pending_snapshots.is_empty() && self.pending_layer_snapshots.is_empty() {
@@ -97,6 +99,9 @@ impl Studio {
         let had_points = self.scene_has_points();
         let fresh = self.clouds.is_empty();
         let scene = combined_bounds(&self.clouds);
+        let revision = self.revision;
+        let basis = self.detail_basis();
+        let detail_cancelled = self.detail_cancel.load(Ordering::Relaxed);
         let mut pending: Vec<_> = self.pending_snapshots.drain().collect();
         pending.sort_unstable_by_key(|(id, _)| *id);
         let mut tasks = Vec::new();
@@ -117,7 +122,8 @@ impl Studio {
         // Layers that were added or filled moved nothing yet.
         self.restore_camera(camera);
         let automatic = fresh || self.auto_camera == Some(self.camera_key());
-        if automatic && !had_points && self.scene_has_points() {
+        let framed = automatic && !had_points && self.scene_has_points();
+        if framed {
             self.auto_camera = Some(self.camera_key());
             self.frame_new_scene();
         } else {
@@ -127,7 +133,17 @@ impl Studio {
             }
         }
         self.revision += 1;
-        tasks.push(self.schedule_detail());
+        if !framed && self.detail_basis() == basis {
+            // The camera shows what it showed and the layers with an octree
+            // are as they were: a running refinement goes on, which a new
+            // layer stopped, and the detail that was read stays.
+            self.keep_detail_since(revision);
+            if !detail_cancelled {
+                self.detail_cancel.store(false, Ordering::Relaxed);
+            }
+        } else {
+            tasks.push(self.schedule_detail());
+        }
         Task::batch(tasks)
     }
 
