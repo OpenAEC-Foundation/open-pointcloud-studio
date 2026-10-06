@@ -1044,9 +1044,10 @@ impl Studio {
     }
 
     /// Make a drawing again from a changed definition, under its name, in
-    /// place: when it is the drawing shown, the point `anchor` of the model
-    /// stays where it is on the sheet, at the same zoom, and the layers that
-    /// were switched off stay off.
+    /// place: when it is the drawing the Drawing view holds, the point
+    /// `anchor` of the model stays where it is on the sheet, at the same
+    /// zoom, and the layers that were switched off stay off. The window
+    /// stays on what it shows when the drawing is made.
     pub(crate) fn remake_in_place(
         &mut self,
         definition: SavedDrawing,
@@ -1069,7 +1070,8 @@ impl Studio {
         let request = definition
             .request()
             .ok_or_else(|| "The settings of the drawing cannot be used".to_owned())?;
-        let shown = self.drawing_view.shown_guid() == Some(definition.guid.as_str());
+        // The view holds the drawing, shown or behind the 3D scene.
+        let shown = self.drawing_view.current_guid() == Some(definition.guid.as_str());
         let camera = shown
             .then(|| {
                 let old = crop_frame(kept.oriented(), request.view, request.origin)?;

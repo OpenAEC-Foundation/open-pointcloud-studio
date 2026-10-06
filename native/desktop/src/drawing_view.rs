@@ -605,12 +605,8 @@ impl DrawingViewTool {
     /// takes the place of the last one, and a file the place of an earlier
     /// drawing of the same file.
     pub(crate) fn set_scene(&mut self, scene: Arc<DrawScene>) {
-        if let Some(guid) = scene.source.sheet_guid() {
-            // A drawing of Create 2D takes the place of the one made before
-            // in the same way, and is never dropped for want of room.
-            self.made
-                .retain(|earlier| earlier.source.sheet_guid() != Some(guid));
-            self.made.push(Arc::clone(&scene));
+        if scene.source.sheet_guid().is_some() {
+            self.keep_made(Arc::clone(&scene));
             self.show_scene(scene);
             return;
         }
@@ -623,6 +619,16 @@ impl DrawingViewTool {
         self.sheets.insert(0, Arc::clone(&scene));
         self.sheets.truncate(MAX_SHEETS);
         self.show_scene(scene);
+    }
+
+    /// List a drawing of Create 2D as made in this session without showing
+    /// it: it takes the place of the one made before in the same way, and is
+    /// never dropped for want of room.
+    pub(crate) fn keep_made(&mut self, scene: Arc<DrawScene>) {
+        let guid = scene.source.sheet_guid();
+        self.made
+            .retain(|earlier| earlier.source.sheet_guid() != guid);
+        self.made.push(scene);
     }
 
     /// The previews, exports and opened files the project browser lists,
@@ -648,9 +654,14 @@ impl DrawingViewTool {
     /// The identifier of the drawing of Create 2D the view shows, while it
     /// is shown.
     pub(crate) fn shown_guid(&self) -> Option<&str> {
+        self.current_guid().filter(|_| self.shown)
+    }
+
+    /// The identifier of the drawing of Create 2D the view holds, also
+    /// while the 3D scene is shown in its place.
+    pub(crate) fn current_guid(&self) -> Option<&str> {
         self.scene
             .as_ref()
-            .filter(|_| self.shown)
             .and_then(|scene| scene.source.sheet_guid())
     }
 
@@ -1897,6 +1908,27 @@ impl Studio {
         self.drawing_view.set_scene(scene);
         if exported && self.drawing_view.show_after_export {
             self.drawing_view.shown = true;
+        }
+    }
+
+    /// A drawing of Create 2D arrived. Made to be shown, it is shown. Made
+    /// again in place after its crop region changed, it takes the place of
+    /// the one the view holds, keeping where the view looks and its layers,
+    /// and the window stays on what it shows: when the 3D model, a view,
+    /// another drawing or the File view was chosen while it was made, the
+    /// drawing is only listed as made.
+    pub(crate) fn sheet_drawing_built(&mut self, scene: Arc<DrawScene>, remade: Option<Remake>) {
+        let Some(remake) = remade else {
+            self.drawing_view.set_scene(scene);
+            self.drawing_view.shown = true;
+            self.file_open = false;
+            return;
+        };
+        if self.drawing_view.current_guid() == Some(remake.guid.as_str()) {
+            self.drawing_view.set_scene(scene);
+            self.drawing_view.keep_view(remake.camera, &remake.layers);
+        } else {
+            self.drawing_view.keep_made(scene);
         }
     }
 

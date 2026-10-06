@@ -682,7 +682,10 @@ is made again under its name: the answer has `accepted: true`, a `job_id`, its
 `name`, `guid` and the new `crop`, or `changed: false` when nothing changed.
 The complete job has `operation: "set_sheet_crop"` and the `crop`. While it is
 made the Drawing view keeps its camera and its layer switches, and the drawing
-cannot change again until it is made.
+cannot change again until it is made. The drawing made takes the place of the
+one the Drawing view holds, shown or behind the 3D scene; when the view holds
+another drawing by then, or none, it is only listed as made, and the window
+stays on what it shows.
 
 `drag_crop_handle` drags a handle of the crop region of the drawing the
 Drawing view shows, as the pointer does: `handle` is `left`, `right`,

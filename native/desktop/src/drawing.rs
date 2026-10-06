@@ -1729,17 +1729,12 @@ impl Studio {
         };
         self.drawing.last = Some(last);
         if let Some((scene, exported)) = built {
-            if let Some(definition) = sheet {
-                self.keep_saved_drawing(definition);
-            }
-            self.section_drawing_built(scene, exported);
-            if matches!(job.input.target, Target::Sheet(_)) {
-                self.drawing_view.shown = true;
-                self.file_open = false;
-            }
-            // In place: the view keeps where it looked and its layers.
-            if let Some(remake) = remade {
-                self.drawing_view.keep_view(remake.camera, &remake.layers);
+            match sheet {
+                Some(definition) => {
+                    self.keep_saved_drawing(definition);
+                    self.sheet_drawing_built(scene, remade);
+                }
+                None => self.section_drawing_built(scene, exported),
             }
         }
         if let Some(path) = written {
@@ -4963,6 +4958,94 @@ mod tests {
         let _ = studio.view();
     }
 
+    /// The corners of the frame of a drawing made in this session.
+    fn frame_of(studio: &Studio, guid: &str) -> Vec<[f64; 2]> {
+        studio
+            .drawing_view
+            .made(guid)
+            .unwrap()
+            .layers
+            .iter()
+            .find(|layer| layer.name == pointcloud_core::LAYER_FRAME)
+            .unwrap()
+            .lines[0]
+            .points
+            .clone()
+    }
+
+    #[test]
+    fn a_drawing_made_again_in_place_leaves_the_window_on_what_was_chosen_meanwhile() {
+        use crate::drawing_crop::CropAction;
+        use crate::project_browser::BrowserAction;
+
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        let plan = make_plan(&mut studio, 1.05);
+        let unit = definition(&studio, &plan).request().unwrap().units.factor();
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::Pan([30.0, 10.0])));
+        let camera = studio.drawing_view.camera();
+        let crop = |low: f64, high: f64| [[low * unit, low * unit], [high * unit, 3.5 * unit]];
+
+        // The 3D model chosen while the plan is made again: the window stays
+        // on the model, and the plan made again waits in the Drawing view
+        // with the place on the sheet it had.
+        let room = crop(-0.5, 4.5);
+        let _ = studio.update(Message::Crop(CropAction::Set(plan.clone(), room)));
+        assert!(studio.drawing.job.is_some(), "{}", studio.status);
+        let _ = studio.update(Message::Browser(BrowserAction::ShowModel));
+        finish(&mut studio);
+        assert!(!studio.drawing_view.shown, "the window stays on the model");
+        assert!(
+            studio
+                .status
+                .starts_with("Crop region of Plan +1.05 set to"),
+            "{}",
+            studio.status
+        );
+        let made = Arc::clone(studio.drawing_view.made(&plan).unwrap());
+        assert!(studio.drawing_view.is_current(&made));
+        assert!(frame_of(&studio, &plan).contains(&room[0]));
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+            plan.clone(),
+        )));
+        assert_eq!(studio.drawing_view.shown_guid(), Some(plan.as_str()));
+        assert_eq!(studio.drawing_view.camera(), camera, "in place");
+
+        // Another drawing shown meanwhile stays shown; the plan is only
+        // listed as made again.
+        let other = make_plan(&mut studio, 2.0);
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+            plan.clone(),
+        )));
+        let smaller = crop(0.0, 3.0);
+        let _ = studio.update(Message::Crop(CropAction::Set(plan.clone(), smaller)));
+        assert!(studio.drawing.job.is_some(), "{}", studio.status);
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+            other.clone(),
+        )));
+        finish(&mut studio);
+        assert_eq!(studio.drawing_view.shown_guid(), Some(other.as_str()));
+        assert!(frame_of(&studio, &plan).contains(&smaller[0]));
+        let remade = Arc::clone(studio.drawing_view.made(&plan).unwrap());
+        assert!(!studio.drawing_view.is_current(&remade));
+
+        // The File view opened meanwhile stays open over the plan, which is
+        // made again in place behind it.
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+            plan.clone(),
+        )));
+        let _ = studio.update(Message::Crop(CropAction::Set(plan.clone(), room)));
+        assert!(studio.drawing.job.is_some(), "{}", studio.status);
+        let _ = studio.update(Message::ToggleFile);
+        assert!(studio.file_open);
+        finish(&mut studio);
+        assert!(studio.file_open, "the File view stays open");
+        assert_eq!(studio.drawing_view.shown_guid(), Some(plan.as_str()));
+        assert!(frame_of(&studio, &plan).contains(&room[0]));
+        let _ = studio.view();
+    }
     #[test]
     fn the_open_block_shows_its_slab_and_the_file_view_opens_the_block_first() {
         let directory = tempfile::tempdir().unwrap();
