@@ -583,7 +583,8 @@ mod tests {
                 pixel_size: [std::f64::consts::PI / 64.0, std::f64::consts::PI / 64.0],
             },
         );
-        // Half a turn of azimuth over 32 columns: a quarter turn each way.
+        // A quarter turn of azimuth over 32 columns: an eighth of a turn
+        // each way.
         assert!(near(photo.project([1.0, 0.0, 0.0]), [15.5, 7.5]));
         assert!(photo.project([0.0, 1.0, 0.0]).is_none());
         assert!(photo.project([-1.0, 0.0, 0.0]).is_none());
@@ -593,30 +594,30 @@ mod tests {
     /// A pinhole photo of a file keeps the convention of the station photos.
     #[test]
     fn a_pinhole_photo_of_a_file_looks_along_minus_z_with_y_up() {
-        // Tilted down and turned, as a camera held by hand is.
-        let axes = quaternion_axes([0.86, 0.33, -0.13, -0.36]).unwrap();
+        // Turned about all three axes, as a camera held by hand can be.
+        let axes = quaternion_axes([0.7, 0.5, 0.1, 0.5]).unwrap();
         let photo = photo(
             axes,
-            1500,
-            2000,
+            1200,
+            900,
             PhotoProjection::Pinhole {
-                focal: [1100.0, 1100.0],
-                principal: [749.5, 999.5],
+                focal: [1000.0, 1000.0],
+                principal: [599.5, 449.5],
             },
         );
         assert_eq!(photo.kind(), PhotoKind::Pinhole);
         let forward = photo.view_direction();
-        assert!(near(photo.project(forward), [749.5, 999.5]));
+        assert!(near(photo.project(forward), [599.5, 449.5]));
         let right: [f64; 3] = std::array::from_fn(|axis| forward[axis] + 0.1 * axes[0][axis]);
         let up: [f64; 3] = std::array::from_fn(|axis| forward[axis] + 0.1 * axes[1][axis]);
-        assert!(near(photo.project(right), [859.5, 999.5]));
-        assert!(near(photo.project(up), [749.5, 889.5]));
+        assert!(near(photo.project(right), [699.5, 449.5]));
+        assert!(near(photo.project(up), [599.5, 349.5]));
         assert!(photo.project(forward.map(|value| -value)).is_none());
         assert!(close(photo.up_direction(), axes[1]));
         assert_rays_invert(&photo, &[forward, right, up]);
         let [across, down] = photo.field_of_view();
-        assert!((across - 2.0 * (750.0f64 / 1100.0).atan()).abs() < 1e-12);
-        assert!((down - 2.0 * (1000.0f64 / 1100.0).atan()).abs() < 1e-12);
+        assert!((across - 2.0 * (600.0f64 / 1000.0).atan()).abs() < 1e-12);
+        assert!((down - 2.0 * (450.0f64 / 1000.0).atan()).abs() < 1e-12);
     }
 
     #[test]

@@ -836,7 +836,7 @@ pub(crate) mod tests {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("path-photos.e57");
         let bytes = b"another stand-in".to_vec();
-        let rotation = [0.86, 0.33, -0.13, -0.36];
+        let rotation = [0.7, 0.5, 0.1, 0.5];
         write_with_photos(
             &source,
             None,
@@ -849,13 +849,13 @@ pub(crate) mod tests {
                         ImageFormat::Png,
                         &mut bytes.as_slice(),
                         PinholeImageProperties {
-                            width: 1500,
-                            height: 2000,
-                            focal_length: 1_100.0,
+                            width: 1200,
+                            height: 900,
+                            focal_length: 1_000.0,
                             pixel_width: 0.0,
                             pixel_height: 0.0,
-                            principal_x: 750.0,
-                            principal_y: 1000.0,
+                            principal_x: 600.0,
+                            principal_y: 450.0,
                         },
                         None,
                     )
@@ -889,11 +889,11 @@ pub(crate) mod tests {
                 station: None,
                 position: [1_001.0, 2_002.0, 51.5],
                 axes: quaternion_axes(rotation).unwrap(),
-                width: 1500,
-                height: 2000,
+                width: 1200,
+                height: 900,
                 projection: PhotoProjection::Pinhole {
-                    focal: [1_100.0, 1_100.0],
-                    principal: [750.0, 1000.0],
+                    focal: [1_000.0, 1_000.0],
+                    principal: [600.0, 450.0],
                 },
                 format: ScanImageFormat::Png,
                 offset: photos.photos[0].offset,
