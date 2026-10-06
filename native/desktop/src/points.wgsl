@@ -81,7 +81,10 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.normal = vec3<f32>(0.0, 0.0, 0.0);
     output.point_depth = depth;
     output.point_world_radius = 0.0;
-    if depth <= 0.01 {
+    // A point outside the section box is dropped here, before any of its
+    // pixels: the points stay on the device whatever the box does, and the
+    // box is only this test.
+    if depth <= 0.01 || outside_section(input.relative.xyz) {
         output.position = vec4<f32>(2.0, 2.0, 1.0, 1.0);
         return output;
     }

@@ -174,10 +174,13 @@ impl MeshKey {
     }
 }
 
+/// What the points on the graphics device are made from. The section box is
+/// not among it: the shader clips the points to the box, so switching the box
+/// on or off, dragging a face or turning it changes no point and sends none
+/// to the device again.
 struct SceneKey {
     clouds: Vec<CloudKey>,
     bounds: Option<Bounds>,
-    section: Option<OrientedBox>,
     color_mode: ColorMode,
     budget: usize,
     filters: [bool; 4],
@@ -225,7 +228,6 @@ impl SceneKey {
                 })
                 .collect(),
             bounds,
-            section: view.section,
             color_mode: view.color_mode,
             budget: view.budget,
             filters: [
@@ -240,7 +242,6 @@ impl SceneKey {
 
     fn matches(&self, view: PointViewport<'_>, bounds: Option<Bounds>) -> bool {
         self.bounds == bounds
-            && self.section == view.section
             && self.color_mode == view.color_mode
             && self.budget == view.budget
             && self.filters
@@ -384,6 +385,9 @@ impl<'a> GpuViewport<'a> {
         Shader::new(self)
     }
 
+    /// The points of the sets read for the view, thinned to the budget. The
+    /// section box does not drop any: the shader clips them, so that the box
+    /// can change without a point being built or sent again.
     fn build_points(&self, overall_bounds: Option<Bounds>) -> Vec<GpuPoint> {
         let mut points = Vec::new();
         if let Some(overall_bounds) = overall_bounds {
@@ -411,7 +415,7 @@ impl<'a> GpuViewport<'a> {
                 .step_by(stride)
             {
                 let point = &record.point;
-                if !self.overlay.accepts(point) {
+                if !self.overlay.accepts_class(point) {
                     continue;
                 }
                 let color = self.overlay.color(point, overall_bounds);
@@ -425,10 +429,10 @@ impl<'a> GpuViewport<'a> {
                     color: [color.r, color.g, color.b, color.a],
                 });
             }
-            // The pace counts the records walked, not the points kept: the
-            // section box, class filters and deletions drop a record after
-            // the work of reaching it. A build thinned to the budget skips
-            // records unseen, so only a full one is a measure.
+            // The pace counts the records walked, not the points kept: class
+            // filters and deletions drop a record after the work of reaching
+            // it. A build thinned to the budget skips records unseen, so only
+            // a full one is a measure.
             if stride == 1 {
                 self.overlay
                     .lod_pace
@@ -2198,12 +2202,17 @@ mod tests {
         assert!(filtered.geometry.points.is_empty());
 
         studio.filter_other = true;
+        let unboxed = draw(&studio);
+        assert!(!Arc::ptr_eq(&filtered.geometry, &unboxed.geometry));
+        assert_eq!(unboxed.geometry.points.len(), 4);
+        // The section box changes no point: it is the clip of the shader.
         studio.section_enabled = true;
         studio.section_reference_bounds = Some(studio.clouds[0].cloud.bounds);
         studio.section_max_percent[0] = 0.0;
         let clipped = draw(&studio);
-        assert!(!Arc::ptr_eq(&filtered.geometry, &clipped.geometry));
-        assert_eq!(clipped.geometry.points.len(), 2);
+        assert!(Arc::ptr_eq(&unboxed.geometry, &clipped.geometry));
+        assert_eq!(clipped.camera.clip_enabled[0], 1.0);
+        assert_eq!(unboxed.camera.clip_enabled[0], 0.0);
 
         studio.section_enabled = false;
         studio.clouds[0].detail_points = Some(
@@ -2247,8 +2256,9 @@ mod tests {
         );
 
         // The buffers of a mesh are kept while only the points change: a
-        // refinement from the octree, the section box, a class filter. A
-        // mesh of millions of triangles is then not built and sent again.
+        // refinement from the octree or a class filter; the section box
+        // changes neither. A mesh of millions of triangles is then not built
+        // and sent again.
         studio.clouds[0].detail_points = Some(
             vec![IndexedPoint {
                 point: studio.clouds[0].cloud.points[1],
@@ -2264,8 +2274,7 @@ mod tests {
         ));
         studio.section_enabled = true;
         let cut = draw(&studio);
-        assert!(!Arc::ptr_eq(&refined.geometry, &cut.geometry));
-        assert!(Arc::ptr_eq(&refined.geometry.mesh, &cut.geometry.mesh));
+        assert!(Arc::ptr_eq(&refined.geometry, &cut.geometry));
         studio.filter_other = false;
         let unfiltered = draw(&studio);
         assert!(!Arc::ptr_eq(&cut.geometry, &unfiltered.geometry));
@@ -2365,12 +2374,12 @@ mod tests {
         assert_eq!(draw(&studio).geometry.points.len(), 70_000);
         assert_eq!(studio.lod_pace.build_points_per_ms(), None);
 
-        // A section box that keeps a quarter of the points: all of them are
-        // walked, and that is the work the pace is about.
+        // A section box that shows a quarter of the points: all of them are
+        // built, as the shader clips them, and walked for the pace.
         studio.budget = 140_000;
         studio.section_enabled = true;
         studio.section_min_percent[2] = 50.0;
-        assert_eq!(draw(&studio).geometry.points.len(), 35_000);
+        assert_eq!(draw(&studio).geometry.points.len(), 140_000);
         assert!(studio.lod_pace.build_points_per_ms().is_some());
 
         studio.section_enabled = false;
@@ -2379,5 +2388,211 @@ mod tests {
             .lod_pace
             .build_points_per_ms()
             .is_some_and(|pace| pace > 0.0));
+    }
+}
+
+#[cfg(test)]
+mod section_box_tests {
+    use super::*;
+    use crate::selection::{pick_displayed, pick_surface, PickTarget, PickView};
+    use crate::{CameraPreset, Studio};
+    use std::sync::atomic::AtomicBool;
+
+    /// A scan of 10 by 10 by 10 points in the middle of the unit cubes from
+    /// 0 to 10, and a column of ten more at the middle of the scene, seen in
+    /// a view of 800 by 600 pixels.
+    fn studio_with_grid() -> (Studio, tempfile::TempDir) {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("grid.xyz");
+        let mut text = String::new();
+        for x in 0..10 {
+            for y in 0..10 {
+                for z in 0..10 {
+                    text.push_str(&format!("{x}.5 {y}.5 {z}.5\n"));
+                }
+            }
+        }
+        for z in 0..10 {
+            text.push_str(&format!("5 5 {z}.5\n"));
+        }
+        std::fs::write(&source, text).unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 2_000).unwrap());
+        assert_eq!(cloud.points.len(), 1_010);
+        let mut studio = Studio {
+            viewport_size: iced::Size::new(800.0, 600.0),
+            ..Studio::default()
+        };
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        (studio, directory)
+    }
+
+    /// The points of the scan that lie inside the section box, all of them
+    /// while it is off.
+    fn inside(studio: &Studio) -> usize {
+        let section = studio.section_box();
+        studio.clouds[0]
+            .view_records()
+            .filter(|record| section.is_none_or(|section| section.contains(record.point.xyz)))
+            .count()
+    }
+
+    /// Whether the shader leaves out a point at `relative`: what
+    /// `outside_section` in points.wgsl does, in the same order and
+    /// precision.
+    fn clipped(camera: &CameraUniform, relative: [f32; 4]) -> bool {
+        if camera.clip_enabled[0] < 0.5 {
+            return false;
+        }
+        let mut at = [relative[0], relative[1], relative[2]];
+        if camera.clip_enabled[0] > 1.5 {
+            let center = [
+                (camera.clip_min[0] + camera.clip_max[0]) * 0.5,
+                (camera.clip_min[1] + camera.clip_max[1]) * 0.5,
+            ];
+            let offset = [at[0] - center[0], at[1] - center[1]];
+            let (sine, cosine) = (camera.clip_min[3], camera.clip_max[3]);
+            at[0] = center[0] + cosine * offset[0] + sine * offset[1];
+            at[1] = center[1] - sine * offset[0] + cosine * offset[1];
+        }
+        (0..3).any(|axis| at[axis] < camera.clip_min[axis] || at[axis] > camera.clip_max[axis])
+    }
+
+    /// A frame of the view: its geometry, and how many of its points the
+    /// shader draws.
+    fn frame(studio: &Studio, state: &RefCell<RenderCache>) -> (Arc<RenderGeometry>, usize) {
+        let viewport = GpuViewport {
+            overlay: studio.point_viewport(),
+        };
+        let bounds = Rectangle::new(iced::Point::ORIGIN, studio.viewport_size);
+        let frame = shader::Program::draw(&viewport, state, mouse::Cursor::Unavailable, bounds);
+        let drawn = frame
+            .geometry
+            .points
+            .iter()
+            .filter(|point| !clipped(&frame.camera, point.relative))
+            .count();
+        (frame.geometry, drawn)
+    }
+
+    #[test]
+    fn the_section_box_is_a_clip_of_the_shader_and_sends_no_point() {
+        let (mut studio, _directory) = studio_with_grid();
+        let state = RefCell::new(RenderCache::default());
+        let (open, drawn) = frame(&studio, &state);
+        assert_eq!(drawn, 1_010);
+
+        // Switching the box on, moving a face with its slider and with its
+        // handle, turning it and switching it off: every frame draws the
+        // points it drew before, and the shader keeps exactly those inside
+        // the box.
+        type Change = Box<dyn Fn(&mut Studio)>;
+        let changes: [(&str, Change); 5] = [
+            (
+                "on",
+                Box::new(|studio| {
+                    let _ = studio.update(Message::SetSectionEnabled(true));
+                }),
+            ),
+            (
+                "slider",
+                Box::new(|studio| {
+                    let _ = studio.update(Message::SectionMax(0, 55.0));
+                }),
+            ),
+            (
+                "handle",
+                Box::new(|studio| {
+                    let _ = studio.update(Message::SectionHandleDelta(2, true, 31.0));
+                }),
+            ),
+            (
+                "turn",
+                Box::new(|studio| assert!(studio.turn_section(30.0))),
+            ),
+            (
+                "off",
+                Box::new(|studio| {
+                    let _ = studio.update(Message::SetSectionEnabled(false));
+                }),
+            ),
+        ];
+        let mut counts = Vec::new();
+        for (change, apply) in changes {
+            apply(&mut studio);
+            let (geometry, drawn) = frame(&studio, &state);
+            assert!(
+                Arc::ptr_eq(&geometry, &open),
+                "{change} sent points to the device"
+            );
+            assert_eq!(drawn, inside(&studio), "{change}");
+            counts.push(drawn);
+        }
+        // The box did clip: on it holds everything, the slider and the
+        // handle take points away, the turn changes what is inside, and off
+        // shows all again.
+        assert_eq!(counts[0], 1_010);
+        assert!(counts[1] < counts[0] && counts[2] < counts[1], "{counts:?}");
+        assert_ne!(counts[3], counts[2]);
+        assert_eq!(counts[4], 1_010);
+    }
+
+    #[test]
+    fn picking_honours_the_box_that_only_the_shader_applies() {
+        let (mut studio, _directory) = studio_with_grid();
+        // From above, the column in the middle of the scene stands on one
+        // pixel, and its highest point is the nearest to the eye.
+        let (yaw, pitch, _) = CameraPreset::Top.orientation();
+        (studio.yaw, studio.pitch) = (yaw, pitch);
+        let picked = |studio: &Studio| {
+            let scene = crate::combined_bounds(&studio.clouds).unwrap();
+            let projection = studio.projection(scene, 800.0, 600.0);
+            let (x, y, _) = projection.project([5.0, 5.0, 0.5]).unwrap();
+            let views: Vec<_> = studio
+                .clouds
+                .iter()
+                .map(|entry| PickView {
+                    cloud: Arc::clone(&entry.cloud),
+                    detail: entry.detail_points.clone(),
+                    deleted: entry.deleted.clone(),
+                    transform: entry.transform,
+                    visible: entry.visible,
+                })
+                .collect();
+            let target = PickTarget {
+                pointer: [x, y],
+                radius: 1.0,
+                sphere_radius: 0.0,
+            };
+            let budget = studio.budget as usize;
+            let filter = studio.mesh_filter();
+            let point = pick_displayed(
+                &views,
+                0,
+                budget,
+                projection,
+                target,
+                filter,
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+            .map(|record| record.point.xyz);
+            let surface = pick_surface(&views, budget, projection, [x, y], 1.0, filter);
+            assert_eq!(point, surface);
+            point.map(|xyz| xyz[2])
+        };
+        assert_eq!(picked(&studio), Some(9.5));
+
+        // The box ends at half the height: the points above it are still
+        // sent to the device, but neither drawn nor picked.
+        let _ = studio.update(Message::SetSectionEnabled(true));
+        let _ = studio.update(Message::SectionMax(2, 50.0));
+        let state = RefCell::new(RenderCache::default());
+        let (geometry, drawn) = frame(&studio, &state);
+        assert_eq!(geometry.points.len(), 1_010);
+        assert_eq!(drawn, inside(&studio));
+        assert!(drawn < 1_010);
+        assert_eq!(picked(&studio), Some(4.5));
+        let _ = studio.update(Message::SetSectionEnabled(false));
+        assert_eq!(picked(&studio), Some(9.5));
     }
 }

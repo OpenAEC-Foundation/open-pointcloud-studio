@@ -13177,12 +13177,18 @@ impl PointViewport<'_> {
         badge(frame, title, UiPoint::new(14.0, size.height - 24.0));
     }
 
+    /// Whether a point in scene coordinates is shown: inside the section box
+    /// while it is on, and of a class that is shown.
     fn accepts(&self, point: &Point) -> bool {
-        if let Some(section) = self.section {
-            if !section.contains(point.xyz) {
-                return false;
-            }
-        }
+        self.section
+            .is_none_or(|section| section.contains(point.xyz))
+            && self.accepts_class(point)
+    }
+
+    /// Whether the class filters show a point. The points sent to the
+    /// graphics device are chosen with this alone; the shader clips them to
+    /// the section box.
+    fn accepts_class(&self, point: &Point) -> bool {
         if !self.class_visibility.allows(point.classification) {
             return false;
         }

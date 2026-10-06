@@ -14,6 +14,7 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- Switching the section box on or off, dragging one of its faces or turning it no longer builds the points on screen again and sends them to the graphics card: the box only clips what is drawn, in the next frame, and the points stay as they are.
 - With the section box on, the photo marks, their path and the rings to step into show only the photos taken inside the box, as the points do.
 - The **Select** button left the ribbon: without a tool the mouse selects, and Escape returns to it.
 - A click on the mark of a photo enters it; a double click is no longer needed. Inside a photo, or while walking, the nearest photos ahead show as rings, and a click on a ring steps into that photo.
