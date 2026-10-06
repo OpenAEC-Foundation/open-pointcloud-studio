@@ -75,6 +75,26 @@ impl ScanImage {
         })
     }
 
+    /// The same photo as a photo of the file: a pinhole photo with the
+    /// station's number, which projects and casts rays as this one does.
+    pub fn as_file_photo(&self) -> FilePhoto {
+        FilePhoto {
+            name: None,
+            station: self.station,
+            position: self.position,
+            axes: self.axes,
+            width: self.width,
+            height: self.height,
+            projection: PhotoProjection::Pinhole {
+                focal: self.focal,
+                principal: self.principal,
+            },
+            format: self.format,
+            offset: self.offset,
+            length: self.length,
+        }
+    }
+
     /// Distance, in image fractions, from a pixel to the nearest photo edge.
     fn border_margin(&self, pixel: [f64; 2]) -> f64 {
         let column = (pixel[0] + 0.5) / f64::from(self.width);
@@ -432,6 +452,35 @@ mod tests {
         assert!(near(pixel(0, down_edge), [1023.5, 2047.0]));
         assert!(near(pixel(5, down_edge), [1023.5, 0.0]));
         assert!(images[0].project(forward.map(|value| -value)).is_none());
+    }
+
+    #[test]
+    fn a_station_photo_as_a_file_photo_sees_what_it_sees() {
+        let heading = 27.44f64.to_radians();
+        let directions = [
+            [heading.cos(), heading.sin(), 0.1],
+            [-heading.sin(), heading.cos(), 0.3],
+            [0.2, -0.1, 1.0],
+            [0.3, 0.2, -1.0],
+            [-1.0, 0.4, -0.2],
+        ];
+        for image in station() {
+            let photo = image.as_file_photo();
+            assert_eq!(photo.kind(), PhotoKind::Pinhole);
+            assert_eq!(photo.view_direction(), image.view_direction());
+            for direction in directions {
+                match (image.project(direction), photo.project(direction)) {
+                    (Some(a), Some(b)) => {
+                        assert!((a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
+                    }
+                    (a, b) => assert_eq!(a.is_some(), b.is_some()),
+                }
+            }
+            for pixel in [[0.0, 0.0], [1023.5, 1023.5], [2047.0, 100.0]] {
+                let (a, b) = (image.ray(pixel[0], pixel[1]), photo.ray(pixel[0], pixel[1]));
+                assert!((0..3).all(|axis| (a[axis] - b[axis]).abs() < 1e-12));
+            }
+        }
     }
 
     fn photo(

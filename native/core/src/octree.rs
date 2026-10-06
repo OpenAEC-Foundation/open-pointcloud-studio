@@ -696,16 +696,32 @@ impl OctreeIndex {
         limit: usize,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Vec<IndexedPoint>, LoadError> {
+        let node = self
+            .root
+            .find(id)
+            .ok_or_else(|| LoadError::InvalidData(format!("octree node not found: {id}")))?;
+        self.read_node_sample(node, limit, cancelled)
+    }
+
+    /// Read `limit` points of a node of this index, or all it stores when
+    /// that is fewer, spread evenly over what it stores, with their source
+    /// ordinals: an inner node stores a sample of the points below it, a
+    /// leaf all of its own. A small read of a large leaf takes a sample kept
+    /// beside it, which is made on first use. For a caller that walked the
+    /// tree itself; `read_node_indexed` finds a node by its id first.
+    pub fn read_node_sample(
+        &self,
+        node: &IndexedNode,
+        limit: usize,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Vec<IndexedPoint>, LoadError> {
+        let id = node.id.as_str();
         if limit == 0 {
             return Err(LoadError::InvalidData("read limit must be positive".into()));
         }
         if cancelled() {
             return Err(LoadError::Cancelled);
         }
-        let node = self
-            .root
-            .find(id)
-            .ok_or_else(|| LoadError::InvalidData(format!("octree node not found: {id}")))?;
         let target = limit.min(usize::try_from(node.stored_points).unwrap_or(usize::MAX));
         let mut points = Vec::with_capacity(target);
         let path = self.storage.path().join(&node.data_path);
@@ -885,7 +901,7 @@ impl OctreeIndex {
         let mut points = Vec::with_capacity(limit - remaining);
         for ((node, _), allocation) in frontier.into_iter().zip(allocations) {
             if allocation > 0 {
-                points.extend(self.read_node_indexed_where(&node.id, allocation, &cancelled)?);
+                points.extend(self.read_node_sample(node, allocation, &cancelled)?);
             }
         }
         if cancelled() {
