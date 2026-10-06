@@ -770,5 +770,13 @@
   "The largest distance must be a number of metres from {min} to {max}": "De grootste afstand moet een aantal meter van {min} tot {max} zijn",
   "Points are already being coloured from photos": "Er worden al punten uit foto's gekleurd",
   "Blend": "Mengen",
-  "Every photo that sees a point adds to its colour, weighted strongly to the nearest: this evens out the exposure of photos taken one after another. Without it the nearest photo alone gives the colour.": "Elke foto die een punt ziet draagt bij aan de kleur, sterk gewogen naar de dichtstbijzijnde: zo vallen verschillen in belichting tussen opeenvolgende foto's weg. Zonder dit geeft de dichtstbijzijnde foto alleen de kleur."
+  "Every photo that sees a point adds to its colour, weighted strongly to the nearest: this evens out the exposure of photos taken one after another. Without it the nearest photo alone gives the colour.": "Elke foto die een punt ziet draagt bij aan de kleur, sterk gewogen naar de dichtstbijzijnde: zo vallen verschillen in belichting tussen opeenvolgende foto's weg. Zonder dit geeft de dichtstbijzijnde foto alleen de kleur.",
+  "Reading the octree nodes inside the section box in {count} cloud(s)…": "De octreeknopen binnen de snedebox worden gelezen in {count} wolk(en)…",
+  "Reading the octree nodes outside the section box in {count} cloud(s)…": "De octreeknopen buiten de snedebox worden gelezen in {count} wolk(en)…",
+  "Section box: {count} points added inside the box": "Snedebox: {count} punten toegevoegd binnen de box",
+  "Section box: {count} points added inside the box; reading on…": "Snedebox: {count} punten toegevoegd binnen de box; er wordt verder gelezen…",
+  "Viewport LOD ready outside the section box: {count} points": "Detail buiten de snedebox gereed: {count} punten",
+  "Viewport LOD outside the section box: {count} points; adding detail…": "Detail buiten de snedebox: {count} punten; er komt detail bij…",
+  "Nothing to add inside the section box: it shows as many points as the budget allows or the scan has": "Niets toe te voegen binnen de snedebox: die toont zoveel punten als het budget toelaat of de scan heeft",
+  "Nothing to add outside the section box: the points shown stay": "Niets toe te voegen buiten de snedebox: de getoonde punten blijven staan"
 }

@@ -15,6 +15,7 @@ drops those that begin with the name of an operating system or with
 ## Unreleased
 
 - Switching the section box on or off, dragging one of its faces or turning it no longer builds the points on screen again and sends them to the graphics card: the box only clips what is drawn, in the next frame, and the points stay as they are.
+- The section box no longer makes the points load again: a moment after it stops changing, only the part of the scan inside it is read from the index, in more detail, and the points this adds are drawn beside those shown, without a frame that shows fewer points than the one before. Nothing is read when the box shows about a whole budget or all the points there already, or was read for the same view before. Switched off, the box keeps that detail, and when the view moved while it was on, only the part outside it is read again. **View sample** in Properties counts the points added inside the box, and `status` in the local API reports them per scan as `focus_sample`. **Refresh LOD** reads the view again also when nothing changed.
 - With the section box on, the photo marks, their path and the rings to step into show only the photos taken inside the box, as the points do.
 - The **Select** button left the ribbon: without a tool the mouse selects, and Escape returns to it.
 - A click on the mark of a photo enters it; a double click is no longer needed. Inside a photo, or while walking, the nearest photos ahead show as rings, and a click on a ring steps into that photo.

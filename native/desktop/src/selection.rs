@@ -24,12 +24,37 @@ type PickHit = (IndexedPoint, bool, f64, f32);
 pub(crate) struct PickView {
     pub cloud: Arc<PointCloud>,
     pub detail: Option<Arc<[IndexedPoint]>>,
+    /// The points read inside the section box besides `detail`, all drawn.
+    pub focus: Option<Arc<[IndexedPoint]>>,
     pub deleted: Option<Arc<DeletionMask>>,
     pub transform: CloudTransform,
     pub visible: bool,
 }
 
 impl PickView {
+    /// The drawn sample of a layer as the renderer and the picker see it.
+    pub(crate) fn of(entry: &crate::CloudEntry) -> Self {
+        Self {
+            cloud: Arc::clone(&entry.cloud),
+            detail: entry.detail_points.clone(),
+            focus: entry.focus_points.clone(),
+            deleted: entry.deleted.clone(),
+            transform: entry.transform,
+            visible: entry.visible,
+        }
+    }
+
+    /// The points read inside the section box, which are drawn without
+    /// thinning.
+    fn focus_records(&self) -> impl Iterator<Item = IndexedPoint> + '_ {
+        let transform = self.transform;
+        self.focus
+            .iter()
+            .flat_map(|points| points.iter().copied())
+            .map(move |record| transform.record(record))
+            .filter(|record| self.record_visible(*record))
+    }
+
     fn len(&self) -> usize {
         self.detail
             .as_ref()
@@ -358,7 +383,7 @@ impl ScreenRect {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Projection {
     center: [f64; 3],
     pub(crate) right: [f64; 3],
@@ -783,6 +808,8 @@ fn validate_pick(pointer: [f32; 2], radius: f32) -> Result<(), String> {
 /// Prefer the point actually drawn under the cursor. The renderer strides the
 /// flattened visible-layer stream before class and section filtering, so the
 /// same stride and ordering are applied here before any full-source fallback.
+/// The points read inside the section box are drawn whole beside that
+/// stream, and are looked at whole.
 pub(crate) fn pick_displayed(
     views: &[PickView],
     active: usize,
@@ -815,6 +842,12 @@ pub(crate) fn pick_displayed(
             position += 1;
         }
         if index == active {
+            for (seen, record) in view.focus_records().enumerate() {
+                if seen & 0xfff == 0 && cancel.load(Ordering::Relaxed) {
+                    return Err(LoadError::Cancelled.to_string());
+                }
+                consider_pick(record, projection, target, filter, None, &mut best);
+            }
             break;
         }
     }
@@ -845,22 +878,31 @@ pub(crate) fn pick_surface(
     let stride = sampled.div_ceil(budget.max(1)).max(1);
     let mut position = 0usize;
     let mut best: Option<([f64; 3], f64)> = None;
+    let mut consider = |record: IndexedPoint| {
+        if !filter.accepts(&record.point) {
+            return;
+        }
+        let Some((x, y, depth)) = projection.project(record.point.xyz) else {
+            return;
+        };
+        if (x - pointer[0]).hypot(y - pointer[1]) <= radius
+            && best.is_none_or(|(_, nearest)| depth < nearest)
+        {
+            best = Some((record.point.xyz, depth));
+        }
+    };
     for view in views.iter().filter(|view| view.visible) {
         for record in view.records().filter(|record| view.record_visible(*record)) {
             let drawn = position.is_multiple_of(stride);
             position += 1;
-            if !drawn || !filter.accepts(&record.point) {
-                continue;
-            }
-            let Some((x, y, depth)) = projection.project(record.point.xyz) else {
-                continue;
-            };
-            if (x - pointer[0]).hypot(y - pointer[1]) <= radius
-                && best.is_none_or(|(_, nearest)| depth < nearest)
-            {
-                best = Some((record.point.xyz, depth));
+            if drawn {
+                consider(record);
             }
         }
+    }
+    // The points read inside the section box are all drawn.
+    for view in views.iter().filter(|view| view.visible) {
+        view.focus_records().for_each(&mut consider);
     }
     best.map(|(xyz, _)| xyz)
 }
@@ -1347,6 +1389,7 @@ mod tests {
         let view = PickView {
             cloud: Arc::clone(&cloud),
             detail: Some(vec![far, near].into()),
+            focus: None,
             deleted: None,
             transform: CloudTransform::default(),
             visible: true,
@@ -1397,6 +1440,7 @@ mod tests {
                 }]
                 .into(),
             ),
+            focus: None,
             deleted: None,
             transform: CloudTransform::default(),
             visible: true,
@@ -1404,6 +1448,7 @@ mod tests {
         let active = PickView {
             cloud,
             detail: Some(vec![far, near].into()),
+            focus: None,
             deleted: None,
             transform: CloudTransform::default(),
             visible: true,

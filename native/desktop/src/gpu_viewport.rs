@@ -191,6 +191,8 @@ struct CloudKey {
     source: Arc<PointCloud>,
     transform: CloudTransform,
     detail: Option<Arc<[IndexedPoint]>>,
+    /// The points read inside the section box besides `detail`.
+    focus: Option<Arc<[IndexedPoint]>>,
     deleted: Option<Arc<DeletionMask>>,
     colours: Option<Arc<PointColours>>,
     mesh: Option<Arc<MeshGeometry>>,
@@ -219,6 +221,7 @@ impl SceneKey {
                     source: Arc::clone(&entry.cloud),
                     transform: entry.transform,
                     detail: entry.detail_points.clone(),
+                    focus: entry.focus_points.clone(),
                     deleted: entry.deleted.clone(),
                     colours: entry.colours.clone(),
                     mesh: entry.mesh.clone(),
@@ -241,9 +244,32 @@ impl SceneKey {
     }
 
     fn matches(&self, view: PointViewport<'_>, bounds: Option<Bounds>) -> bool {
+        self.budget == view.budget
+            && self.matches_where(view, bounds, |key, entry| {
+                key.points_match(entry) && key.focus_matches(entry) && key.meshes_match(entry)
+            })
+    }
+
+    /// Whether the points drawn for the view would be the same.
+    fn points_match(&self, view: PointViewport<'_>, bounds: Option<Bounds>) -> bool {
+        self.budget == view.budget
+            && self.matches_where(view, bounds, |key, entry| key.points_match(entry))
+    }
+
+    /// Whether the points read inside the section box would be the same.
+    fn focus_match(&self, view: PointViewport<'_>, bounds: Option<Bounds>) -> bool {
+        self.matches_where(view, bounds, |key, entry| key.focus_matches(entry))
+    }
+
+    /// The settings that every point depends on, and `cloud` for each layer.
+    fn matches_where(
+        &self,
+        view: PointViewport<'_>,
+        bounds: Option<Bounds>,
+        cloud: impl Fn(&CloudKey, &CloudEntry) -> bool,
+    ) -> bool {
         self.bounds == bounds
             && self.color_mode == view.color_mode
-            && self.budget == view.budget
             && self.filters
                 == [
                     view.filter_ground,
@@ -257,24 +283,36 @@ impl SceneKey {
                 .clouds
                 .iter()
                 .zip(view.clouds)
-                .all(|(key, entry)| key.matches(entry))
+                .all(|(key, entry)| cloud(key, entry))
     }
 }
 
 impl CloudKey {
-    fn matches(&self, entry: &CloudEntry) -> bool {
+    /// What a point of the layer is drawn from: its place, its colour and
+    /// whether it was deleted.
+    fn drawn_alike(&self, entry: &CloudEntry) -> bool {
         Arc::ptr_eq(&self.source, &entry.cloud)
             && self.transform == entry.transform
-            && same_arc(&self.detail, &entry.detail_points)
             && same_arc(&self.deleted, &entry.deleted)
             && same_arc(&self.colours, &entry.colours)
-            && same_arc(&self.mesh, &entry.mesh)
+            && self.visible == entry.visible
+    }
+
+    fn points_match(&self, entry: &CloudEntry) -> bool {
+        self.drawn_alike(entry) && same_arc(&self.detail, &entry.detail_points)
+    }
+
+    fn focus_matches(&self, entry: &CloudEntry) -> bool {
+        self.drawn_alike(entry) && same_arc(&self.focus, &entry.focus_points)
+    }
+
+    fn meshes_match(&self, entry: &CloudEntry) -> bool {
+        same_arc(&self.mesh, &entry.mesh)
             && match (&self.faces, shown_faces(entry)) {
                 (Some(kept), Some(shown)) => Arc::ptr_eq(kept, shown),
                 (None, None) => true,
                 _ => false,
             }
-            && self.visible == entry.visible
             && self.mesh_visible == entry.mesh_visible
     }
 }
@@ -391,7 +429,6 @@ impl<'a> GpuViewport<'a> {
     fn build_points(&self, overall_bounds: Option<Bounds>) -> Vec<GpuPoint> {
         let mut points = Vec::new();
         if let Some(overall_bounds) = overall_bounds {
-            let center = overall_bounds.center();
             let sampled: usize = self
                 .overlay
                 .clouds
@@ -402,33 +439,20 @@ impl<'a> GpuViewport<'a> {
             let stride = sampled.div_ceil(self.overlay.budget.max(1)).max(1);
             points.reserve(sampled.div_ceil(stride));
             let started = Instant::now();
-            for record in self
-                .overlay
-                .clouds
-                .iter()
-                .filter(|entry| entry.visible)
-                .flat_map(|entry| {
-                    entry
-                        .view_records()
-                        .filter(move |record| entry.record_visible(*record))
-                })
-                .step_by(stride)
-            {
-                let point = &record.point;
-                if !self.overlay.accepts_class(point) {
-                    continue;
-                }
-                let color = self.overlay.color(point, overall_bounds);
-                points.push(GpuPoint {
-                    relative: [
-                        (point.xyz[0] - center[0]) as f32,
-                        (point.xyz[1] - center[1]) as f32,
-                        (point.xyz[2] - center[2]) as f32,
-                        0.0,
-                    ],
-                    color: [color.r, color.g, color.b, color.a],
-                });
-            }
+            self.push_points(
+                &mut points,
+                overall_bounds,
+                self.overlay
+                    .clouds
+                    .iter()
+                    .filter(|entry| entry.visible)
+                    .flat_map(|entry| {
+                        entry
+                            .view_records()
+                            .filter(move |record| entry.record_visible(*record))
+                    })
+                    .step_by(stride),
+            );
             // The pace counts the records walked, not the points kept: class
             // filters and deletions drop a record after the work of reaching
             // it. A build thinned to the budget skips records unseen, so only
@@ -440,6 +464,54 @@ impl<'a> GpuViewport<'a> {
             }
         }
         points
+    }
+
+    /// The points read inside the section box besides the sets of the view,
+    /// all of them: the refinement that read them kept them within the
+    /// budget of what the box shows.
+    fn build_focus_points(&self, overall_bounds: Option<Bounds>) -> Vec<GpuPoint> {
+        let mut points = Vec::new();
+        if let Some(overall_bounds) = overall_bounds {
+            let shown = || self.overlay.clouds.iter().filter(|entry| entry.visible);
+            points.reserve(shown().map(CloudEntry::focus_len).sum());
+            self.push_points(
+                &mut points,
+                overall_bounds,
+                shown().flat_map(|entry| {
+                    entry
+                        .focus_records()
+                        .filter(move |record| entry.record_visible(*record))
+                }),
+            );
+        }
+        points
+    }
+
+    /// Add the records that the class filters let through, relative to the
+    /// centre of the scene and in the chosen colours.
+    fn push_points(
+        &self,
+        points: &mut Vec<GpuPoint>,
+        overall_bounds: Bounds,
+        records: impl Iterator<Item = IndexedPoint>,
+    ) {
+        let center = overall_bounds.center();
+        for record in records {
+            let point = &record.point;
+            if !self.overlay.accepts_class(point) {
+                continue;
+            }
+            let color = self.overlay.color(point, overall_bounds);
+            points.push(GpuPoint {
+                relative: [
+                    (point.xyz[0] - center[0]) as f32,
+                    (point.xyz[1] - center[1]) as f32,
+                    (point.xyz[2] - center[2]) as f32,
+                    0.0,
+                ],
+                color: [color.r, color.g, color.b, color.a],
+            });
+        }
     }
 
     /// The buffers of every mesh that is drawn, relative to the centre of
@@ -683,8 +755,21 @@ impl shader::Program<Message> for GpuViewport<'_> {
                     cache.mesh = Some(Arc::clone(&mesh));
                     mesh
                 });
+                // The points of the view and those read inside the section
+                // box are built and sent on their own: new detail in the box
+                // leaves the points of the view on the device.
+                let previous = cache.key.as_ref().zip(cache.geometry.as_ref());
+                let points = previous
+                    .filter(|(key, _)| key.points_match(self.overlay, overall_bounds))
+                    .map(|(_, geometry)| Arc::clone(&geometry.points))
+                    .unwrap_or_else(|| self.build_points(overall_bounds).into());
+                let focus = previous
+                    .filter(|(key, _)| key.focus_match(self.overlay, overall_bounds))
+                    .map(|(_, geometry)| Arc::clone(&geometry.focus))
+                    .unwrap_or_else(|| self.build_focus_points(overall_bounds).into());
                 cache.geometry = Some(Arc::new(RenderGeometry {
-                    points: self.build_points(overall_bounds),
+                    points,
+                    focus,
                     mesh,
                 }));
                 cache.key = Some(SceneKey::capture(self.overlay, overall_bounds));
@@ -880,7 +965,12 @@ struct CameraUniform {
 
 #[derive(Debug)]
 struct RenderGeometry {
-    points: Vec<GpuPoint>,
+    /// The points of the sets read for the view.
+    points: Arc<[GpuPoint]>,
+    /// The points read inside the section box besides them. Each of the two
+    /// is shared with the geometry before it while it did not change, and
+    /// is then not sent to the device again.
+    focus: Arc<[GpuPoint]>,
     /// Shared with the geometry before it when no mesh, layer transform or
     /// scene centre changed.
     mesh: Arc<MeshBuffers>,
@@ -898,6 +988,65 @@ struct PointBufferChunk {
     buffer: wgpu::Buffer,
     capacity: u64,
     count: u32,
+}
+
+/// Points on the device, in buffers of at most `POINTS_PER_BUFFER` points.
+/// They are sent again only when the set they are made from changes.
+#[derive(Default)]
+struct PointUpload {
+    chunks: Vec<PointBufferChunk>,
+    uploaded: Option<Arc<[GpuPoint]>>,
+}
+
+impl PointUpload {
+    /// Send `points` unless they are on the device already; answers the
+    /// bytes sent.
+    fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        points: &Arc<[GpuPoint]>,
+    ) -> u64 {
+        if self
+            .uploaded
+            .as_ref()
+            .is_some_and(|previous| Arc::ptr_eq(previous, points))
+        {
+            return 0;
+        }
+        let mut sent = 0;
+        for (index, part) in points.chunks(POINTS_PER_BUFFER).enumerate() {
+            let byte_count = std::mem::size_of_val(part) as u64;
+            let capacity = byte_count.next_power_of_two();
+            let buffer = || {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("pointcloud points"),
+                    size: capacity,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            if index == self.chunks.len() {
+                self.chunks.push(PointBufferChunk {
+                    buffer: buffer(),
+                    capacity,
+                    count: 0,
+                });
+            }
+            let chunk = &mut self.chunks[index];
+            if byte_count > chunk.capacity {
+                chunk.buffer = buffer();
+                chunk.capacity = capacity;
+            }
+            queue.write_buffer(&chunk.buffer, 0, bytemuck::cast_slice(part));
+            chunk.count = part.len() as u32;
+            sent += byte_count;
+        }
+        self.chunks
+            .truncate(points.len().div_ceil(POINTS_PER_BUFFER));
+        self.uploaded = Some(Arc::clone(points));
+        sent
+    }
 }
 
 #[repr(C)]
@@ -1136,10 +1285,12 @@ struct GpuState {
     scene_group: Option<wgpu::BindGroup>,
     camera_buffer: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
-    point_buffers: Vec<PointBufferChunk>,
+    /// The points of the sets read for the view.
+    points: PointUpload,
+    /// The points read inside the section box besides them.
+    focus: PointUpload,
     mesh: MeshUpload,
     caps: MeshUpload,
-    uploaded_geometry: Option<Arc<RenderGeometry>>,
     depth_texture: Option<wgpu::Texture>,
     depth_view: Option<wgpu::TextureView>,
     color_texture: Option<wgpu::Texture>,
@@ -1446,10 +1597,10 @@ impl GpuState {
             scene_group: None,
             camera_buffer,
             camera_group,
-            point_buffers: Vec::new(),
+            points: PointUpload::default(),
+            focus: PointUpload::default(),
             mesh: MeshUpload::new(device, "terrain mesh"),
             caps: MeshUpload::new(device, "section caps"),
-            uploaded_geometry: None,
             depth_texture: None,
             depth_view: None,
             color_texture: None,
@@ -1616,45 +1767,11 @@ impl Primitive for CloudPrimitive {
             storage.store(GpuState::new(device, format));
         }
         let state = storage.get_mut::<GpuState>().expect("pointcloud GPU state");
-        if state
-            .uploaded_geometry
-            .as_ref()
-            .is_none_or(|previous| !Arc::ptr_eq(previous, &self.geometry))
-        {
-            let geometry = &self.geometry;
-            for (index, points) in geometry.points.chunks(POINTS_PER_BUFFER).enumerate() {
-                let byte_count = std::mem::size_of_val(points) as u64;
-                let capacity = byte_count.next_power_of_two();
-                if index == state.point_buffers.len() {
-                    state.point_buffers.push(PointBufferChunk {
-                        buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("pointcloud points"),
-                            size: capacity,
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                            mapped_at_creation: false,
-                        }),
-                        capacity,
-                        count: 0,
-                    });
-                }
-                let chunk = &mut state.point_buffers[index];
-                if byte_count > chunk.capacity {
-                    chunk.buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("pointcloud points"),
-                        size: capacity,
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                    chunk.capacity = capacity;
-                }
-                queue.write_buffer(&chunk.buffer, 0, bytemuck::cast_slice(points));
-                chunk.count = points.len() as u32;
-            }
-            state
-                .point_buffers
-                .truncate(geometry.points.len().div_ceil(POINTS_PER_BUFFER));
-            state.uploaded_geometry = Some(Arc::clone(&self.geometry));
-        }
+        // Each set of points is sent only when it changed: a change of the
+        // section box sends none, and detail read inside the box sends only
+        // that detail.
+        state.points.upload(device, queue, &self.geometry.points);
+        state.focus.upload(device, queue, &self.geometry.focus);
         // The meshes are sent only when they changed: a refinement of the
         // points keeps the buffers of a mesh of millions of triangles.
         state.mesh.upload(device, queue, &self.geometry.mesh);
@@ -1749,7 +1866,8 @@ impl Primitive for CloudPrimitive {
             .ball_photos
             .as_ref()
             .filter(|_| !self.photos.balls.is_empty());
-        if state.point_buffers.is_empty()
+        if state.points.chunks.is_empty()
+            && state.focus.chunks.is_empty()
             && state.mesh.index_count == 0
             && state.caps.index_count == 0
             && balls.is_none()
@@ -1796,9 +1914,10 @@ impl Primitive for CloudPrimitive {
                     pass.draw_indexed(0..meshes.index_count, 0, 0..1);
                 }
             }
-            if !state.point_buffers.is_empty() {
+            let chunks = || state.points.chunks.iter().chain(&state.focus.chunks);
+            if chunks().next().is_some() {
                 pass.set_pipeline(&state.pipeline);
-                for chunk in &state.point_buffers {
+                for chunk in chunks() {
                     pass.set_vertex_buffer(0, chunk.buffer.slice(..));
                     pass.draw(0..6, 0..chunk.count);
                 }
@@ -1845,6 +1964,79 @@ impl Primitive for CloudPrimitive {
                 .render(encoder, target, clip_bounds, &state.camera_group);
         }
     }
+}
+
+/// A frame of the 3D view as a test elsewhere sees it: which sets of points
+/// it sends to the device, and how many of their points the shader draws.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DrawnFrame {
+    /// The points of the sets of the view, by identity: a frame that has
+    /// the same ones sends none of them to the device.
+    pub points: usize,
+    /// The points read inside the section box, by identity.
+    pub focus: usize,
+    /// The points of both that the shader draws: those inside the section
+    /// box while it is on.
+    pub drawn: usize,
+    /// Those of them that are on the screen.
+    pub in_view: usize,
+}
+
+/// Draw a frame of the 3D view of `studio` with the cache of earlier frames.
+#[cfg(test)]
+pub(crate) fn drawn_frame(studio: &crate::Studio, state: &RefCell<RenderCache>) -> DrawnFrame {
+    let viewport = GpuViewport {
+        overlay: studio.point_viewport(),
+    };
+    let bounds = Rectangle::new(iced::Point::ORIGIN, studio.viewport_size);
+    let frame = shader::Program::draw(&viewport, state, mouse::Cursor::Unavailable, bounds);
+    let geometry = &frame.geometry;
+    let drawn: Vec<_> = geometry
+        .points
+        .iter()
+        .chain(geometry.focus.iter())
+        .filter(|point| !clipped(&frame.camera, point.relative))
+        .collect();
+    let in_view = combined_bounds(&studio.clouds).map_or(0, |scene| {
+        let center = scene.center();
+        let projection = studio.projection(scene, bounds.width, bounds.height);
+        drawn
+            .iter()
+            .filter(|point| {
+                let xyz =
+                    std::array::from_fn(|axis| center[axis] + f64::from(point.relative[axis]));
+                projection.project(xyz).is_some()
+            })
+            .count()
+    });
+    DrawnFrame {
+        points: Arc::as_ptr(&geometry.points) as *const GpuPoint as usize,
+        focus: Arc::as_ptr(&geometry.focus) as *const GpuPoint as usize,
+        drawn: drawn.len(),
+        in_view,
+    }
+}
+
+/// Whether the shader leaves out a point at `relative`: what
+/// `outside_section` in points.wgsl does, in the same order and precision.
+#[cfg(test)]
+fn clipped(camera: &CameraUniform, relative: [f32; 4]) -> bool {
+    if camera.clip_enabled[0] < 0.5 {
+        return false;
+    }
+    let mut at = [relative[0], relative[1], relative[2]];
+    if camera.clip_enabled[0] > 1.5 {
+        let center = [
+            (camera.clip_min[0] + camera.clip_max[0]) * 0.5,
+            (camera.clip_min[1] + camera.clip_max[1]) * 0.5,
+        ];
+        let offset = [at[0] - center[0], at[1] - center[1]];
+        let (sine, cosine) = (camera.clip_min[3], camera.clip_max[3]);
+        at[0] = center[0] + cosine * offset[0] + sine * offset[1];
+        at[1] = center[1] - sine * offset[0] + cosine * offset[1];
+    }
+    (0..3).any(|axis| at[axis] < camera.clip_min[axis] || at[axis] > camera.clip_max[axis])
 }
 
 #[cfg(test)]
@@ -2151,6 +2343,7 @@ mod tests {
             picked: false,
             index_building: false,
             detail_points: None,
+            focus_points: None,
         });
         let state = RefCell::new(RenderCache::default());
         let bounds = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(800.0, 600.0));
@@ -2426,60 +2619,32 @@ mod section_box_tests {
         (studio, directory)
     }
 
+    /// The records of the column in the middle and those of the grid.
+    fn column_and_grid(studio: &Studio) -> (Vec<IndexedPoint>, Vec<IndexedPoint>) {
+        let (column, grid): (Vec<_>, Vec<_>) = studio.clouds[0]
+            .view_records()
+            .partition(|record| record.point.xyz[..2] == [5.0, 5.0]);
+        assert_eq!((column.len(), grid.len()), (10, 1_000));
+        (column, grid)
+    }
+
     /// The points of the scan that lie inside the section box, all of them
     /// while it is off.
     fn inside(studio: &Studio) -> usize {
         let section = studio.section_box();
         studio.clouds[0]
             .view_records()
+            .chain(studio.clouds[0].focus_records())
             .filter(|record| section.is_none_or(|section| section.contains(record.point.xyz)))
             .count()
-    }
-
-    /// Whether the shader leaves out a point at `relative`: what
-    /// `outside_section` in points.wgsl does, in the same order and
-    /// precision.
-    fn clipped(camera: &CameraUniform, relative: [f32; 4]) -> bool {
-        if camera.clip_enabled[0] < 0.5 {
-            return false;
-        }
-        let mut at = [relative[0], relative[1], relative[2]];
-        if camera.clip_enabled[0] > 1.5 {
-            let center = [
-                (camera.clip_min[0] + camera.clip_max[0]) * 0.5,
-                (camera.clip_min[1] + camera.clip_max[1]) * 0.5,
-            ];
-            let offset = [at[0] - center[0], at[1] - center[1]];
-            let (sine, cosine) = (camera.clip_min[3], camera.clip_max[3]);
-            at[0] = center[0] + cosine * offset[0] + sine * offset[1];
-            at[1] = center[1] - sine * offset[0] + cosine * offset[1];
-        }
-        (0..3).any(|axis| at[axis] < camera.clip_min[axis] || at[axis] > camera.clip_max[axis])
-    }
-
-    /// A frame of the view: its geometry, and how many of its points the
-    /// shader draws.
-    fn frame(studio: &Studio, state: &RefCell<RenderCache>) -> (Arc<RenderGeometry>, usize) {
-        let viewport = GpuViewport {
-            overlay: studio.point_viewport(),
-        };
-        let bounds = Rectangle::new(iced::Point::ORIGIN, studio.viewport_size);
-        let frame = shader::Program::draw(&viewport, state, mouse::Cursor::Unavailable, bounds);
-        let drawn = frame
-            .geometry
-            .points
-            .iter()
-            .filter(|point| !clipped(&frame.camera, point.relative))
-            .count();
-        (frame.geometry, drawn)
     }
 
     #[test]
     fn the_section_box_is_a_clip_of_the_shader_and_sends_no_point() {
         let (mut studio, _directory) = studio_with_grid();
         let state = RefCell::new(RenderCache::default());
-        let (open, drawn) = frame(&studio, &state);
-        assert_eq!(drawn, 1_010);
+        let open = drawn_frame(&studio, &state);
+        assert_eq!(open.drawn, 1_010);
 
         // Switching the box on, moving a face with its slider and with its
         // handle, turning it and switching it off: every frame draws the
@@ -2519,13 +2684,14 @@ mod section_box_tests {
         let mut counts = Vec::new();
         for (change, apply) in changes {
             apply(&mut studio);
-            let (geometry, drawn) = frame(&studio, &state);
-            assert!(
-                Arc::ptr_eq(&geometry, &open),
+            let frame = drawn_frame(&studio, &state);
+            assert_eq!(
+                (frame.points, frame.focus),
+                (open.points, open.focus),
                 "{change} sent points to the device"
             );
-            assert_eq!(drawn, inside(&studio), "{change}");
-            counts.push(drawn);
+            assert_eq!(frame.drawn, inside(&studio), "{change}");
+            counts.push(frame.drawn);
         }
         // The box did clip: on it holds everything, the slider and the
         // handle take points away, the turn changes what is inside, and off
@@ -2534,6 +2700,46 @@ mod section_box_tests {
         assert!(counts[1] < counts[0] && counts[2] < counts[1], "{counts:?}");
         assert_ne!(counts[3], counts[2]);
         assert_eq!(counts[4], 1_010);
+    }
+
+    #[test]
+    fn detail_read_inside_the_box_is_sent_on_its_own() {
+        let (mut studio, _directory) = studio_with_grid();
+        let state = RefCell::new(RenderCache::default());
+        let (column, grid) = column_and_grid(&studio);
+        studio.clouds[0].detail_points = Some(grid.clone().into());
+        let view = drawn_frame(&studio, &state);
+        assert_eq!(view.drawn, 1_000);
+
+        // The column arrives as detail read inside the box: only it is sent.
+        studio.clouds[0].focus_points = Some(column.into());
+        let added = drawn_frame(&studio, &state);
+        assert_eq!(added.points, view.points);
+        assert_ne!(added.focus, view.focus);
+        assert_eq!(added.drawn, 1_010);
+
+        // New sets for the view leave it on the device.
+        studio.clouds[0].detail_points = Some(grid[..900].into());
+        let refined = drawn_frame(&studio, &state);
+        assert_ne!(refined.points, added.points);
+        assert_eq!(refined.focus, added.focus);
+        assert_eq!(refined.drawn, 910);
+
+        // A smaller budget thins the sets of the view at once, and leaves
+        // the points read inside the box as they are.
+        studio.budget = 450;
+        let thinned = drawn_frame(&studio, &state);
+        assert_ne!(thinned.points, refined.points);
+        assert_eq!(thinned.focus, refined.focus);
+        assert_eq!(thinned.drawn, 460);
+
+        // A colour mode or a class filter changes the points of both.
+        studio.color_mode = ColorMode::Elevation;
+        let recoloured = drawn_frame(&studio, &state);
+        assert_ne!(recoloured.points, refined.points);
+        assert_ne!(recoloured.focus, refined.focus);
+        studio.filter_other = false;
+        assert_eq!(drawn_frame(&studio, &state).drawn, 0);
     }
 
     #[test]
@@ -2547,17 +2753,7 @@ mod section_box_tests {
             let scene = crate::combined_bounds(&studio.clouds).unwrap();
             let projection = studio.projection(scene, 800.0, 600.0);
             let (x, y, _) = projection.project([5.0, 5.0, 0.5]).unwrap();
-            let views: Vec<_> = studio
-                .clouds
-                .iter()
-                .map(|entry| PickView {
-                    cloud: Arc::clone(&entry.cloud),
-                    detail: entry.detail_points.clone(),
-                    deleted: entry.deleted.clone(),
-                    transform: entry.transform,
-                    visible: entry.visible,
-                })
-                .collect();
+            let views: Vec<_> = studio.clouds.iter().map(PickView::of).collect();
             let target = PickTarget {
                 pointer: [x, y],
                 radius: 1.0,
@@ -2587,10 +2783,16 @@ mod section_box_tests {
         let _ = studio.update(Message::SetSectionEnabled(true));
         let _ = studio.update(Message::SectionMax(2, 50.0));
         let state = RefCell::new(RenderCache::default());
-        let (geometry, drawn) = frame(&studio, &state);
-        assert_eq!(geometry.points.len(), 1_010);
-        assert_eq!(drawn, inside(&studio));
-        assert!(drawn < 1_010);
+        let frame = drawn_frame(&studio, &state);
+        assert_eq!(frame.drawn, inside(&studio));
+        assert!(frame.drawn < 1_010);
+        assert_eq!(picked(&studio), Some(4.5));
+
+        // The column read inside the box beside the sets of the view is
+        // drawn whole, and picked as such.
+        let (column, grid) = column_and_grid(&studio);
+        studio.clouds[0].detail_points = Some(grid.into());
+        studio.clouds[0].focus_points = Some(column.into());
         assert_eq!(picked(&studio), Some(4.5));
         let _ = studio.update(Message::SetSectionEnabled(false));
         assert_eq!(picked(&studio), Some(9.5));
