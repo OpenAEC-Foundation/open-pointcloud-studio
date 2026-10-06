@@ -4869,6 +4869,9 @@ mod tests {
         typed(&mut studio, "w", false);
         typed(&mut studio, "o", false);
         assert!(studio.turn.is_none());
+        // W walks; the orbit view comes back for the pointer to turn the box.
+        assert!(studio.walk.is_some());
+        let _ = studio.update(Message::LeaveWalk);
 
         // R and then O turn the section box with the pointer, live.
         typed(&mut studio, "r", false);
@@ -5175,6 +5178,58 @@ mod tests {
         assert!(studio.turn.is_none());
         assert_eq!(studio.section_box().unwrap().rotation_degrees, 1.0);
     }
+
+    #[test]
+    fn ro_while_walking_turns_the_section_box_by_a_typed_angle_only() {
+        use crate::drawing_crop::CropAction;
+
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        let original = studio.section_box().unwrap();
+        assert!(studio.start_walk());
+        let typed = |studio: &mut Studio, key: &str| {
+            let _ = studio.update(Message::KeyTyped(key.into(), false));
+        };
+        typed(&mut studio, "r");
+        typed(&mut studio, "o");
+        assert!(studio.turn.is_some(), "{}", studio.status);
+        assert!(
+            studio
+                .status
+                .contains("Type an angle; while walking the pointer does not turn it"),
+            "{}",
+            studio.status
+        );
+        // The pointer looks around while walking; it does not turn the box.
+        let size = Size::new(800.0, 600.0);
+        for pixel in [[600.0, 300.0], [400.0, 100.0]] {
+            let _ = studio.update(Message::Crop(CropAction::TurnPointer3d(pixel, size)));
+        }
+        assert_eq!(studio.section_box(), Some(original));
+        typed(&mut studio, "2");
+        typed(&mut studio, "0");
+        assert_eq!(studio.section_box().unwrap().rotation_degrees, 20.0);
+        assert!(studio.status.contains("20°"), "{}", studio.status);
+        // The points read for the turned box leave the angle in the status
+        // bar, the one place it shows while walking.
+        let revision = studio.revision;
+        let _ = studio.update(Message::DetailPreview(revision, Vec::new()));
+        let _ = studio.update(Message::DetailReady(revision, Ok(Vec::new())));
+        assert!(
+            studio.status.starts_with("Turning the section box: 20°"),
+            "{}",
+            studio.status
+        );
+        let _ = studio.update(Message::Crop(CropAction::TurnApply));
+        assert!(studio.turn.is_none());
+        assert_eq!(studio.section_box().unwrap().rotation_degrees, 20.0);
+        assert!(studio.walk.is_some(), "still walking");
+        let _ = studio.view();
+    }
+
     #[test]
     fn the_open_block_shows_its_slab_and_the_file_view_opens_the_block_first() {
         let directory = tempfile::tempdir().unwrap();

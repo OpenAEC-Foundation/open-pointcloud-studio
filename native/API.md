@@ -716,7 +716,10 @@ counter-clockwise seen from above, about the vertical through the centre of
 the region, and the plan is made again upright in it, the model turned the
 other way (`operation: "rotate_crop"`, with a `job_id`). An elevation or a
 section is refused. In the 3D view it turns the section box by `degrees` about
-its centre and answers with the `section`. With `apply: false` the turn
+its centre and answers with the `section`; while walking the pointer does not
+turn it, so the window turns it by a typed angle only. A section box set
+otherwise while it turns (`restore_camera_view`, `set_section`, Reset box)
+ends the turn and stays as set. With `apply: false` the turn
 starts as RO starts it and is shown at `degrees` without being applied; it
 waits for Enter, a left click, Escape or a right click in the window, or for
 `rotate_crop` with no `degrees`, which applies it and answers as a turn by

@@ -1236,8 +1236,15 @@ impl Studio {
             TurnTarget::Plan { .. } => "Turning the crop region",
             TurnTarget::SectionBox(_) => "Turning the section box",
         };
+        // While walking the pointer looks around, so only a typed angle
+        // turns the box.
+        let how = if self.walk.is_some() && matches!(turn.target, TurnTarget::SectionBox(_)) {
+            "Type an angle; while walking the pointer does not turn it"
+        } else {
+            "Move the pointer or type an angle (Shift: steps of 15°)"
+        };
         self.status = format!(
-            "{subject}: {angle}. Move the pointer or type an angle (Shift: steps of 15°); Enter or a click applies, Escape or a right click cancels"
+            "{subject}: {angle}. {how}; Enter or a click applies, Escape or a right click cancels"
         );
     }
 
@@ -1257,8 +1264,13 @@ impl Studio {
     }
 
     /// The pointer moved over the 3D view while the section box turns: the
-    /// box turns with it, as the turning handles turn it.
+    /// box turns with it, as the turning handles turn it. Not while walking:
+    /// the angle the pointer gives is of the orbit camera, which is not the
+    /// one drawn then.
     fn turn_pointer_3d(&mut self, pixel: [f32; 2], size: Size) -> Task<Message> {
+        if self.walk.is_some() {
+            return Task::none();
+        }
         let Some(turn) = &mut self.turn else {
             return Task::none();
         };

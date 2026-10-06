@@ -2578,6 +2578,13 @@ impl Studio {
         self.file_open || self.settings.is_some() || self.mesh_to_plans.covers_model()
     }
 
+    /// Whether reading the points of the viewport reports in the status
+    /// bar: not while a section export or a turn of RO, which tells there
+    /// what to do and, while walking, the only place the angle shows.
+    fn reports_detail(&self) -> bool {
+        !self.section_export_pending && self.turn.is_none()
+    }
+
     fn mesh_filter(&self) -> ClassFilter {
         ClassFilter {
             ground: self.filter_ground,
@@ -7226,7 +7233,7 @@ impl Studio {
                 self.detail_cancel = Arc::clone(&cancel);
                 self.detail_pending = true;
                 self.detail_request_revision = Some(revision);
-                if !self.section_export_pending {
+                if self.reports_detail() {
                     self.status = format!(
                         "Refining visible octree nodes in {} cloud(s)…",
                         sources.len()
@@ -7287,7 +7294,7 @@ impl Studio {
                             entry.detail_points = Some(points.into());
                         }
                     }
-                    if !self.section_export_pending {
+                    if self.reports_detail() {
                         self.status = format!(
                             "Viewport LOD: {} points; adding detail…",
                             format_count(count)
@@ -7315,7 +7322,7 @@ impl Studio {
                             }
                         }
                         self.detail_loaded_revision = Some(revision);
-                        if !self.section_export_pending {
+                        if self.reports_detail() {
                             self.status = format!(
                                 "Viewport LOD ready: {} points from disk octree",
                                 format_count(count)
@@ -11662,8 +11669,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
         let modifiers = state.modifiers;
         let last_click = &mut state.last_click;
         let state = &mut state.drag;
-        // While RO turns the section box the pointer turns it; a left click
-        // applies the turn and a right click cancels it.
+        // While RO turns the section box the pointer turns it, but not while
+        // walking, where it looks around; a left click applies the turn and
+        // a right click cancels it.
         if self.turning.is_some() && state.is_none() {
             let crop = |action| Some(Message::Crop(action));
             match event {
@@ -11683,7 +11691,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         crop(drawing_crop::CropAction::TurnCancel),
                     );
                 }
-                canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) if self.walk.is_none() => {
                     if let Some(at) = cursor.position_in(bounds) {
                         return (
                             event::Status::Ignored,
