@@ -301,6 +301,9 @@ fn names(studio: &Studio) -> Vec<String> {
 
 #[test]
 fn what_views_shows_opens_a_tab_and_a_click_on_a_tab_shows_it_again() {
+    // The tabs are named in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     assert_eq!(studio.listed_tabs(), [TabId::Model]);
     assert_eq!(studio.shown_tab(), Some(TabId::Model));
@@ -386,6 +389,9 @@ fn what_views_shows_opens_a_tab_and_a_click_on_a_tab_shows_it_again() {
 
 #[test]
 fn a_closed_tab_leaves_its_view_or_drawing_and_shows_its_neighbour() {
+    // The tabs are named in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     let _ = studio.update(Message::Views(ViewAction::Save));
     let entrance = studio.listed_views()[0].guid.clone();
@@ -435,6 +441,9 @@ fn a_closed_tab_leaves_its_view_or_drawing_and_shows_its_neighbour() {
 
 #[test]
 fn the_3d_model_keeps_its_camera_box_and_colours_and_a_drawing_its_zoom() {
+    // The tabs are named in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     // A view saved from the default camera, without a section box.
     let _ = studio.update(Message::Views(ViewAction::Save));
@@ -510,6 +519,9 @@ fn the_3d_model_keeps_its_camera_box_and_colours_and_a_drawing_its_zoom() {
 
 #[test]
 fn a_deleted_view_that_had_the_scene_gives_the_3d_model_its_camera_back() {
+    // The tabs are named in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     let _ = studio.update(Message::Views(ViewAction::Save));
     let entrance = studio.listed_views()[0].guid.clone();
@@ -542,6 +554,9 @@ fn a_deleted_view_that_had_the_scene_gives_the_3d_model_its_camera_back() {
 
 #[test]
 fn ctrl_tab_and_show_tab_leave_what_lies_under_a_dialog_or_the_wizard_card() {
+    // The tabs are named in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     let plan = made_drawing(&mut studio, "Ground floor", 4.0);
     let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
@@ -606,6 +621,9 @@ fn the_local_api_names_the_3d_model_alike_in_every_language() {
 
 #[test]
 fn the_tabs_are_kept_and_the_active_one_comes_back_once_its_scan_is_read() {
+    // The tabs are named in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, directory) = studio_with_scan();
     let _ = studio.update(Message::Views(ViewAction::Save));
     let entrance = studio.listed_views()[0].guid.clone();
@@ -663,6 +681,9 @@ fn the_tabs_are_kept_and_the_active_one_comes_back_once_its_scan_is_read() {
 
 #[test]
 fn the_local_api_lists_shows_and_closes_tabs() {
+    // The tabs are named in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     let _ = studio.update(Message::Views(ViewAction::Save));
     let plan = made_drawing(&mut studio, "Ground floor", 4.0);
