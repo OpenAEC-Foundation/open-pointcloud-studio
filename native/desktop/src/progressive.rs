@@ -423,6 +423,64 @@ mod tests {
     }
 
     #[test]
+    fn a_header_layer_whose_reading_fails_is_closed_or_keeps_only_its_header() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scan.xyz");
+        std::fs::write(&path, "0 0 1\n1 0 1\n2 0 1\n3 0 1\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+        let mut header = (*cloud).clone();
+        header.points.clear();
+        header.point_ordinals.clear();
+        let header = Arc::new(header);
+        let shown = |studio: &mut Studio| {
+            let _ = studio.update(Message::Loaded(Ok(Arc::clone(&header))));
+            let _ = studio.update(Message::LayerSnapshot(Arc::clone(&header), look(&cloud, 2)));
+            let _ = studio.update(Message::FlushSnapshots);
+            assert!(studio.clouds[0].cloud.provisional);
+        };
+
+        // Asked for its octree, it waits for the points it is read for.
+        let mut studio = Studio::default();
+        shown(&mut studio);
+        let _ = studio.update(Message::BuildIndex);
+        assert_eq!(studio.index_waiting(), 1);
+        // They cannot be read: nothing of the file can be shown, so the layer
+        // is closed and waits for nothing.
+        let failed = Message::Refined(Arc::clone(&header), Err("truncated".into()));
+        let _ = studio.update(failed);
+        assert!(studio.clouds.is_empty());
+        assert!(studio.index_requests.is_empty());
+        assert_eq!(studio.index_waiting(), 0);
+        assert!(!studio.index_pending());
+        assert_eq!(studio.status, "Open failed: scan.xyz: truncated");
+        let _ = studio.update(Message::LayerSnapshot(Arc::clone(&header), look(&cloud, 3)));
+        let _ = studio.update(Message::FlushSnapshots);
+        assert!(studio.clouds.is_empty());
+
+        // With an octree kept from before, the layer stays as its header,
+        // which the octree gives its points; the unchecked points go.
+        let index = Arc::new(
+            pointcloud_core::OctreeIndex::build_cached(
+                &cloud,
+                pointcloud_core::IndexConfig {
+                    scratch_dir: Some(directory.path().join("cache")),
+                    ..pointcloud_core::IndexConfig::default()
+                },
+            )
+            .unwrap(),
+        );
+        let mut studio = Studio::default();
+        shown(&mut studio);
+        studio.clouds[0].index = Some(index);
+        let failed = Message::Refined(Arc::clone(&header), Err("truncated".into()));
+        let _ = studio.update(failed);
+        assert_eq!(studio.clouds.len(), 1);
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &header));
+        assert!(studio.clouds[0].index.is_some());
+        assert_eq!(studio.status, "Preview failed: truncated");
+    }
+
+    #[test]
     fn snapshots_wait_for_a_selection_being_computed() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("scan.xyz");

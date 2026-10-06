@@ -2747,6 +2747,41 @@ impl Studio {
         }
     }
 
+    /// The points of a layer opened from its header, a LAS or LAZ file,
+    /// could not be read. With an octree kept from before, the layer stays
+    /// as its header, which the octree gives its points; the points of the
+    /// reading that were shown on the way go, as they were never checked.
+    /// Without one nothing could ever be shown or indexed of it, so the
+    /// layer is closed, as an import that fails is.
+    fn layer_read_failed(&mut self, source: &Arc<PointCloud>, error: &str) -> Task<Message> {
+        let Some(position) = self
+            .clouds
+            .iter()
+            .position(|entry| entry.matches_source(source))
+        else {
+            return Task::none();
+        };
+        let entry = &self.clouds[position];
+        let identity = Arc::clone(&entry.load_identity);
+        let cloud = Arc::clone(&entry.cloud);
+        self.index_requests
+            .retain(|request| !Arc::ptr_eq(request, &identity) && !Arc::ptr_eq(request, &cloud));
+        if entry.index.is_none() {
+            let closed = self.remove_clouds(vec![position]);
+            self.status = format!("Open failed: {}: {error}", display_name(&source.path));
+            return closed;
+        }
+        self.status = format!("Preview failed: {error}");
+        if !self.clouds[position].cloud.provisional {
+            return Task::none();
+        }
+        let scene = combined_bounds(&self.clouds);
+        self.clouds[position].replace_cloud(identity);
+        self.revision += 1;
+        self.preserve_camera_for_scene_change(scene);
+        self.schedule_detail()
+    }
+
     /// Read the faces of a source that can hold a mesh, for the layer that
     /// shows `cloud`. A provisional cloud of points read so far gets none:
     /// the faces are read once the checked cloud has taken its place.
@@ -6085,7 +6120,7 @@ impl Studio {
                                 cached_index_task(cloud)
                             };
                         }
-                        Err(error) => self.status = format!("Preview failed: {error}"),
+                        Err(error) => return self.layer_read_failed(&source, &error),
                     }
                 }
             }
