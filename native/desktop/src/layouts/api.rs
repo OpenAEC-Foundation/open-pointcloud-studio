@@ -210,6 +210,18 @@ impl Studio {
 
     pub(crate) fn api_list_sheets(&mut self) -> (Value, Task<Message>) {
         let task = self.settle_layouts().unwrap_or_else(Task::none);
+        // Every sheet as it shows now, also those not shown: the pictures as
+        // they are, and the names and sizes as their views have them.
+        let guids: Vec<String> = self
+            .layouts
+            .list
+            .iter()
+            .map(|layout| layout.guid.clone())
+            .collect();
+        for guid in &guids {
+            self.read_pictures(guid);
+            self.follow_views(guid);
+        }
         let sheets: Vec<Value> = self
             .layouts
             .list

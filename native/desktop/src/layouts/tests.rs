@@ -966,3 +966,50 @@ fn a_new_sheet_is_named_in_the_language_of_the_window_and_the_api_answers_in_one
     let listed = send(&mut studio, json!({"command": "list_sheets"}));
     assert_eq!(listed["sheets"][0]["scale"], "1:100");
 }
+
+#[test]
+fn a_sheet_not_shown_is_listed_and_written_with_the_names_its_views_have_now() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+    let (mut studio, directory) = studio_with_scan();
+    let _ = studio.update(Message::Views(crate::views::ViewAction::Save));
+    let view = studio.listed_views()[0].guid.clone();
+    camera_views::write_snapshot(&view, &png(160, 100)).unwrap();
+    let sheet = studio
+        .create_layout("01", "Views", Paper::A3, true)
+        .unwrap();
+    let _ = studio.show_layout(&sheet);
+    studio
+        .place_on_layout(&sheet, PlacedKind::View, &view, None, None)
+        .unwrap();
+    let rename = |studio: &mut Studio, name: &str| {
+        let _ = studio.update(Message::Views(crate::views::ViewAction::StartRename(
+            view.clone(),
+        )));
+        let _ = studio.update(Message::Views(crate::views::ViewAction::RenameText(
+            name.into(),
+        )));
+        let _ = studio.update(Message::Views(crate::views::ViewAction::FinishRename));
+    };
+    // The 3D model shown, the view is renamed.
+    let _ = studio.update(Message::Browser(
+        crate::project_browser::BrowserAction::ShowModel,
+    ));
+    assert!(studio.drawing_view.shown_layout().is_none());
+    rename(&mut studio, "Entrance");
+    let listed = send(&mut studio, json!({"command": "list_sheets"}));
+    let viewport = &listed["sheets"][0]["viewports"][0];
+    assert_eq!(viewport["name"], "Entrance", "{listed}");
+    assert_eq!(viewport["title"], "Entrance");
+    assert_eq!(viewport["shows"], "image");
+    // Written without being shown, it has the name as well.
+    rename(&mut studio, "Hall");
+    let answer = send(
+        &mut studio,
+        json!({"command": "export_sheet_pdf", "sheet": "01", "path": directory.path().join("views.pdf")}),
+    );
+    assert_eq!(answer["accepted"], true, "{answer}");
+    assert_eq!(studio.layouts.list[0].viewports[0].name, "Hall");
+    assert!(studio.drawing_view.shown_layout().is_none());
+}

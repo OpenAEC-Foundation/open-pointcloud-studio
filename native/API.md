@@ -846,7 +846,10 @@ shown, one after another; until then its viewport says so.
 and `viewports`, each with `index`, `id`, `kind`, the `guid` and `name` of
 its view, `title`, `centre`, `size`, a drawing's `scale` and `scale_label`,
 and `shows`: `drawing`, `image` (with `pixels` and `dpi`), `waiting` (with
-`waiting`, why) or `missing`. `status.result.sheets` has the `count`, the
+`waiting`, why) or `missing`. Every sheet is listed as it shows now, also
+one that is not shown: the names of its views as they are, and its images
+in the proportions of their pictures; `export_sheet_pdf` writes it so too.
+`status.result.sheets` has the `count`, the
 sheet `shown`, the `selected` viewport, the drawing it is `making` and
 `export_pending`. A tab of a sheet has the kind `sheet` in `list_tabs`.
 
