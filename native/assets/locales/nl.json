@@ -777,6 +777,7 @@
   "waiting to index": "wacht op indexeren",
   "Waiting for the scan opened before it on this disk": "Wacht op de scan die eerder op deze schijf is geopend",
   "{waiting} waiting to be read": "{waiting} wachtend op lezen",
+  "{name} waits for the scan opened before it on this disk": "{name} wacht op de scan die eerder op deze schijf is geopend",
   "Floor found at {height} m": "Vloer gevonden op {height} m",
   "pinhole photo": "camerafoto",
   "panorama": "panorama",

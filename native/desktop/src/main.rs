@@ -6315,6 +6315,11 @@ impl Studio {
                     let label = display_name(&job.path);
                     self.status = if job.cancel.load(Ordering::Relaxed) {
                         format!("Cancelling import of {label}…")
+                    } else if job.waiting.load(Ordering::Relaxed) {
+                        i18n::tr_args(
+                            "{name} waits for the scan opened before it on this disk",
+                            &[("name", &label)],
+                        )
                     } else {
                         format!(
                             "Loading {label}: {} points decoded…",

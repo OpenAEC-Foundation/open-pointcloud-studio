@@ -962,6 +962,11 @@ mod tests {
         assert_eq!(lines[0].fraction, None);
         let row = |studio: &Studio| studio.layer_progress(&studio.clouds[0]);
         assert_eq!(row(&studio), Some(("waiting to read…".to_owned(), None)));
+        let _ = studio.update(Message::OpenProgress(7));
+        assert_eq!(
+            studio.status,
+            "second.e57 waits for the scan opened before it on this disk"
+        );
 
         // Opened with another scan that is being read.
         studio.imports.insert(6, job("first.e57", 30_000_000));
