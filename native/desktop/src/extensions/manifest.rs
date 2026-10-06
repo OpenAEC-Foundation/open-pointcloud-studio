@@ -287,10 +287,10 @@ impl Version {
             None => (text, None),
         };
         if let Some(pre) = pre {
-            let fits = !pre.is_empty()
-                && pre
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '.');
+            // Parts of letters and digits between single dots.
+            let fits = pre.split('.').all(|part| {
+                !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            });
             if !fits {
                 return None;
             }
@@ -329,9 +329,44 @@ impl Ord for Version {
                 // A version before its release comes before the release.
                 (Some(_), None) => Ordering::Less,
                 (None, Some(_)) => Ordering::Greater,
-                (Some(left), Some(right)) => left.cmp(right),
+                (Some(left), Some(right)) => compare_marks(left, right),
             }
         })
+    }
+}
+
+/// The order of two marks before a release, as Semantic Versioning has it:
+/// part by part, numbers by their value and before words, words by their
+/// letters, and a mark that runs out first comes first. Marks that are
+/// equal by that, such as `beta.01` and `beta.1`, are ordered by their text.
+fn compare_marks(left: &str, right: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    /// A part of digits only, without its leading zeros.
+    fn number(part: &str) -> Option<&str> {
+        part.bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| part.trim_start_matches('0'))
+    }
+    let mut lefts = left.split('.');
+    let mut rights = right.split('.');
+    loop {
+        let ordering = match (lefts.next(), rights.next()) {
+            (None, None) => return left.cmp(right),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(left), Some(right)) => match (number(left), number(right)) {
+                // Without leading zeros, a longer number is the larger one.
+                (Some(left), Some(right)) => {
+                    left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+                }
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => left.cmp(right),
+            },
+        };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
     }
 }
 

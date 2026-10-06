@@ -424,6 +424,43 @@ fn versions_are_ordered_by_their_numbers() {
     assert!(parse("2.0.0-alpha") < parse("2.0.0-beta"));
     assert!(parse("1.0.0+build.5") == parse("1.0.0"));
     assert!(parse("1.2.3.4") > parse("1.2.3"));
+    // The marks before a release are ordered part by part, numbers by their
+    // value and before words, as Semantic Versioning orders them.
+    let ordered = [
+        "1.0.0-0",
+        "1.0.0-2",
+        "1.0.0-10",
+        "1.0.0-alpha",
+        "1.0.0-alpha.1",
+        "1.0.0-alpha.beta",
+        "1.0.0-beta",
+        "1.0.0-beta.2",
+        "1.0.0-beta.9",
+        "1.0.0-beta.10",
+        "1.0.0-beta.11",
+        "1.0.0-beta.100",
+        "1.0.0-rc.1",
+        "1.0.0",
+    ];
+    for pair in ordered.windows(2) {
+        assert!(parse(pair[0]) < parse(pair[1]), "{} < {}", pair[0], pair[1]);
+        assert!(parse(pair[1]) > parse(pair[0]), "{} > {}", pair[1], pair[0]);
+    }
+    let mut shuffled: Vec<Version> = ordered.iter().rev().map(|text| parse(text)).collect();
+    shuffled.sort();
+    assert_eq!(
+        shuffled,
+        ordered.iter().map(|text| parse(text)).collect::<Vec<_>>()
+    );
+    // A number with a leading zero is ordered by its value, and differs
+    // from the same number without it.
+    assert!(parse("1.0.0-beta.01") < parse("1.0.0-beta.2"));
+    assert_ne!(
+        parse("1.0.0-beta.01").cmp(&parse("1.0.0-beta.1")),
+        std::cmp::Ordering::Equal
+    );
+    // A number too large for any integer type is still a number.
+    assert!(parse("1.0.0-beta.99999999999999999999") > parse("1.0.0-beta.9"));
     for wrong in [
         "",
         "v1.0",
@@ -431,6 +468,9 @@ fn versions_are_ordered_by_their_numbers() {
         "1.0.0.0.0",
         "1.0-",
         "1.0-be ta",
+        "1.0-beta.",
+        "1.0-beta..1",
+        "1.0-.beta",
         "x",
         "1234567890.0",
     ] {

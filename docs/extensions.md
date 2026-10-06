@@ -98,7 +98,7 @@ language when there is one. Texts are one line without control characters.
 | --- | --- | --- |
 | `id` | yes | 3 to 64 lowercase letters and digits in parts joined by single dots or dashes, such as `org.example.room-report`; the name of its folder. Not the id of a built-in feature such as `bag3d` |
 | `name` | yes | Text of at most 60 characters |
-| `version` | yes | Up to four numbers such as `1.2.0`, optionally with a mark before its release such as `1.2.0-beta.1` |
+| `version` | yes | Up to four numbers such as `1.2.0`, optionally with a mark before its release such as `1.2.0-beta.1`: parts of letters and digits between single dots. Versions are ordered as Semantic Versioning orders them, so `1.2.0-beta.2` comes before `1.2.0-beta.10`, which comes before `1.2.0` |
 | `author` | yes | At most 100 characters |
 | `description` | yes | Text of at most 500 characters |
 | `homepage` | no | A web address that starts with `https://` or `http://` |

@@ -482,6 +482,51 @@ fn installs_updates_switches_and_uninstalls_are_kept_across_restarts() {
 }
 
 #[test]
+fn a_later_version_before_its_release_replaces_an_earlier_one() {
+    let _language = TestLanguage::hold(Language::English);
+    let bench = Bench::new();
+    let mut studio = bench.studio();
+    install_confirmed(
+        &mut studio,
+        &example_copy(bench.directory.path(), "1.0.0-beta.9", None),
+    );
+    assert_eq!(studio.status, "Installed Point count report 1.0.0-beta.9");
+
+    // beta.10 comes after beta.9, although its text sorts before it.
+    install_confirmed(
+        &mut studio,
+        &example_copy(bench.directory.path(), "1.0.0-beta.10", None),
+    );
+    assert_eq!(
+        studio.status,
+        "Updated Point count report from 1.0.0-beta.9 to 1.0.0-beta.10"
+    );
+    assert_eq!(
+        bench.stored()["installed"],
+        json!({EXAMPLE: "1.0.0-beta.10"})
+    );
+
+    stage_into(
+        &mut studio,
+        &example_copy(bench.directory.path(), "1.0.0-beta.2", None),
+    );
+    assert!(studio.extension_host.dialog.is_none());
+    assert_eq!(
+        studio.extension_host.last_error.as_deref(),
+        Some("version 1.0.0-beta.10 is installed and this is the older version 1.0.0-beta.2; uninstall it first to go back")
+    );
+
+    install_confirmed(
+        &mut studio,
+        &example_copy(bench.directory.path(), "1.0.0", None),
+    );
+    assert_eq!(
+        studio.status,
+        "Updated Point count report from 1.0.0-beta.10 to 1.0.0"
+    );
+}
+
+#[test]
 fn an_extension_that_cannot_be_read_is_listed_with_the_reason() {
     let _language = TestLanguage::hold(Language::English);
     let bench = Bench::new();
