@@ -10646,6 +10646,9 @@ enum ToolIcon {
     ChevronClosed,
     /// Duplicate a row of VIEWS.
     Duplicate,
+    /// Rename a saved view, and overwrite it with what the scene shows.
+    Rename,
+    Update,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -10716,6 +10719,8 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::ChevronOpen => include_bytes!("../../assets/opencad-icons/chevron_open.svg"),
         ToolIcon::ChevronClosed => include_bytes!("../../assets/opencad-icons/chevron_closed.svg"),
         ToolIcon::Duplicate => include_bytes!("../../assets/opencad-icons/browser_duplicate.svg"),
+        ToolIcon::Rename => include_bytes!("../../assets/opencad-icons/browser_rename.svg"),
+        ToolIcon::Update => include_bytes!("../../assets/opencad-icons/browser_update.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)

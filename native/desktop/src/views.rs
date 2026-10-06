@@ -1798,7 +1798,8 @@ impl Studio {
 
     /// The row of a saved view under 3D views: a click shows it in the 3D
     /// scene, highlighted while it is the active view there. A view with a
-    /// section box carries a mark for it. Rename, Update and × act on it.
+    /// section box carries a mark for it. Every row has its small buttons
+    /// Rename, Update (to the current 3D view), Duplicate and ×.
     pub fn saved_view_row(&self, view: &SavedView) -> Element<'_, Message> {
         let small = |label: &'static str, action: ViewAction| -> Element<'static, Message> {
             button(text(i18n::tr(label)).size(10))
@@ -1826,10 +1827,7 @@ impl Studio {
                 .into();
             }
         }
-        let active = self
-            .active_view()
-            .is_some_and(|active| active.guid == view.guid);
-        let shown = active && !self.drawing_view.shown;
+        let shown = self.shown_row() == Some(crate::project_browser::ViewRow::Saved(guid()));
         let mut controls: Vec<Element<'_, Message>> = Vec::new();
         if view.section_box().is_some() {
             controls.push(
@@ -1847,7 +1845,20 @@ impl Studio {
                 )
                 .into(),
             );
+        } else {
+            // The buttons stand in the same columns on every row.
+            controls.push(iced::widget::Space::with_width(12.0).into());
         }
+        controls.push(crate::project_browser::row_button(
+            ToolIcon::Rename,
+            i18n::tr("Rename"),
+            Message::Views(ViewAction::StartRename(guid())),
+        ));
+        controls.push(crate::project_browser::row_button(
+            ToolIcon::Update,
+            i18n::tr("Update to the current 3D view"),
+            Message::Views(ViewAction::Update(guid())),
+        ));
         controls.push(crate::project_browser::duplicate_button(Message::Browser(
             crate::project_browser::BrowserAction::Duplicate(
                 crate::project_browser::ViewRow::Saved(guid()),
@@ -1856,32 +1867,14 @@ impl Studio {
         controls.push(crate::project_browser::remove_button(Message::Views(
             ViewAction::Delete(guid()),
         )));
-        let line = crate::project_browser::view_row(
+        crate::project_browser::view_row(
             ToolIcon::SavedView,
             view.name.clone(),
             shown,
             false,
             Message::Views(ViewAction::Restore(guid())),
             controls,
-        );
-        if !active {
-            return line;
-        }
-        // The active view has its name to itself on the first line and
-        // Rename and Update under it.
-        column![
-            line,
-            crate::project_browser::indented(
-                row![
-                    small("Rename", ViewAction::StartRename(guid())),
-                    small("Update", ViewAction::Update(guid())),
-                ]
-                .spacing(2),
-                20.0,
-            ),
-        ]
-        .spacing(0)
-        .into()
+        )
     }
 
     /// Under the rows of VIEWS: the name field with Save view, which keeps
@@ -4170,5 +4163,37 @@ mod tests {
         capture(&mut studio, &guid);
         assert_eq!(studio.views.snapshots.get(&guid), Some(&serial));
         assert!(studio.shows_view(&guid));
+    }
+
+    #[test]
+    fn a_view_that_is_not_the_active_one_is_renamed_and_updated_from_its_row() {
+        let (mut studio, _directory) = studio_with_scan();
+        act(&mut studio, ViewAction::Save);
+        let first = studio.views.list[0].guid.clone();
+        studio.yaw = 0.7;
+        act(&mut studio, ViewAction::Save);
+        let second = studio.views.list[1].guid.clone();
+        assert_eq!(studio.active_view().unwrap().guid, second);
+        let _ = studio.view();
+
+        // Rename on the row of the first view leaves the camera and the
+        // active view as they are.
+        act(&mut studio, ViewAction::StartRename(first.clone()));
+        let _ = studio.view();
+        act(&mut studio, ViewAction::RenameText("Gevel noord".into()));
+        act(&mut studio, ViewAction::FinishRename);
+        assert_eq!(studio.views.list[0].name, "Gevel noord");
+        assert_eq!(studio.active_view().unwrap().guid, second);
+        assert_eq!(studio.yaw, 0.7);
+        // Update on its row overwrites it with the current camera, without
+        // restoring it first.
+        studio.yaw = 1.1;
+        act(&mut studio, ViewAction::Update(first.clone()));
+        assert_eq!(studio.views.list[0].yaw, 1.1);
+        assert_eq!(studio.views.list[0].name, "Gevel noord");
+        assert_eq!(studio.yaw, 1.1);
+        assert_eq!(studio.active_view().unwrap().guid, first);
+        assert_eq!(camera_views::load(), studio.views.list);
+        let _ = studio.view();
     }
 }

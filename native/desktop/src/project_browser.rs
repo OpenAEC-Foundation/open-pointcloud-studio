@@ -537,12 +537,17 @@ pub fn view_row<'a>(
 
 /// The small button of a row that makes a copy of it.
 pub fn duplicate_button<'a>(message: Message) -> Element<'a, Message> {
+    row_button(ToolIcon::Duplicate, tr("Duplicate"), message)
+}
+
+/// A small button with an icon on a row of VIEWS, with its tooltip.
+pub fn row_button<'a>(icon: ToolIcon, tip: &str, message: Message) -> Element<'a, Message> {
     tooltip(
-        button(icon_svg(ToolIcon::Duplicate, 12.0))
+        button(icon_svg(icon, 12.0))
             .on_press(message)
             .style(flat_tool_style)
             .padding([3, 4]),
-        hint(tr("Duplicate").to_owned()),
+        hint(tip.to_owned()),
         tooltip::Position::Bottom,
     )
     .gap(4)
