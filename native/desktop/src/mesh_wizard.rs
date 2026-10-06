@@ -520,15 +520,27 @@ fn scope_row<'a>(
 fn plain_button<'a>(label: &str, message: Option<Message>) -> Element<'a, Message> {
     button(text(label.to_owned()).size(12))
         .on_press_maybe(message)
-        .style(|theme, status| {
-            let mut style = opencad_ribbon::tool_btn_style(theme, false, status);
-            if style.border.color == Color::TRANSPARENT {
-                style.border.color = ui_theme::colors(theme).border;
-            }
-            style
-        })
+        .style(plain_btn_style)
         .padding([5, 12])
         .into()
+}
+
+/// The look of a plain button: outlined while it can be pressed; while it
+/// cannot, without an outline and with faint text, so that it does not look
+/// ready while it waits.
+fn plain_btn_style(theme: &Theme, status: button::Status) -> button::Style {
+    let mut style = opencad_ribbon::tool_btn_style(theme, false, status);
+    let colors = ui_theme::colors(theme);
+    if matches!(status, button::Status::Disabled) {
+        style.border.color = Color::TRANSPARENT;
+        style.text_color = Color {
+            a: 0.5,
+            ..colors.muted
+        };
+    } else if style.border.color == Color::TRANSPARENT {
+        style.border.color = colors.border;
+    }
+    style
 }
 
 /// The button that goes on.
@@ -1134,20 +1146,39 @@ impl Studio {
         )
     }
 
+    /// What the button of the SURFACE group says while a job of one of the
+    /// methods runs: the step under way, of how many, and how far that
+    /// step is. The percentage is that of the step, not of the whole job.
+    pub(crate) fn mesh_busy_label(&self) -> Option<String> {
+        let method = self.mesh_running()?;
+        Some(match self.method_run(method) {
+            RunState::Running(progress) => {
+                let percent = progress
+                    .fraction
+                    .map(|fraction| format!("{:.0}", (fraction * 100.0).floor()));
+                match (progress.steps, percent) {
+                    (Some((place, count)), Some(percent)) => tr_args(
+                        "Step {place}/{count} · {percent}%",
+                        &[("place", &place), ("count", &count), ("percent", &percent)],
+                    ),
+                    (Some((place, count)), None) => tr_args(
+                        "Step {place}/{count}",
+                        &[("place", &place), ("count", &count)],
+                    ),
+                    (None, Some(percent)) => {
+                        tr_args("Running {percent}%", &[("percent", &percent)])
+                    }
+                    (None, None) => tr("Running").to_owned(),
+                }
+            }
+            _ => tr("Running").to_owned(),
+        })
+    }
+
     /// The one button of the SURFACE group. While a job of one of the
     /// methods runs it is highlighted and says how far the job is.
     pub(crate) fn mesh_wizard_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
-        let running = self.mesh_running();
-        let busy = running.map(|method| match self.method_run(method) {
-            RunState::Running(progress) => match progress.fraction {
-                Some(fraction) => tr_args(
-                    "Running {percent}%",
-                    &[("percent", &format!("{:.0}", (fraction * 100.0).floor()))],
-                ),
-                None => tr("Running").to_owned(),
-            },
-            _ => tr("Running").to_owned(),
-        });
+        let busy = self.mesh_busy_label();
         let open = self.mesh_wizard.open;
         let active = open || busy.is_some();
         let enabled = self.active.is_some() || active;
@@ -1623,8 +1654,13 @@ impl Studio {
                     ));
                 }
                 if let Some(fraction) = progress.fraction {
-                    figures =
-                        figures.push(note(format!("{:.0}%", (fraction * 100.0).floor()), false));
+                    figures = figures.push(note(
+                        tr_args(
+                            "{percent}% of this step",
+                            &[("percent", &format!("{:.0}", (fraction * 100.0).floor()))],
+                        ),
+                        false,
+                    ));
                 }
                 figures = figures.push(note(
                     tr_args("{seconds} s", &[("seconds", &progress.seconds)]),

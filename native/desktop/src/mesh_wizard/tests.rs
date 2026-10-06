@@ -770,6 +770,23 @@ fn the_run_button_says_run_again_only_after_a_result() {
 }
 
 #[test]
+fn a_disabled_button_of_the_card_has_no_outline_and_faint_text() {
+    for theme in crate::ui_theme::UiTheme::ALL {
+        let iced = theme.iced();
+        let colors = theme.colors();
+        let ready = plain_btn_style(&iced, button::Status::Active);
+        let waiting = plain_btn_style(&iced, button::Status::Disabled);
+        assert_eq!(ready.border.color, colors.border, "{theme:?}");
+        assert_eq!(waiting.border.color, Color::TRANSPARENT, "{theme:?}");
+        assert_eq!(ready.text_color, colors.text, "{theme:?}");
+        assert!(waiting.text_color.a <= 0.5, "{theme:?}");
+        // Hovered, it is outlined as the ribbon outlines a button.
+        let hovered = plain_btn_style(&iced, button::Status::Hovered);
+        assert_ne!(hovered.border.color, Color::TRANSPARENT, "{theme:?}");
+    }
+}
+
+#[test]
 fn the_ribbon_has_one_button_that_shows_a_job_that_runs() {
     let directory = tempfile::tempdir().unwrap();
     let mut studio = studio_with_room(directory.path());
@@ -782,8 +799,18 @@ fn the_ribbon_has_one_button_that_shows_a_job_that_runs() {
         assert!(!source.contains(gone), "{gone}");
     }
     let _ = studio.view();
+    assert_eq!(studio.mesh_busy_label(), None);
     let _ = studio.update(Message::Faces(FaceAction::Start));
     assert_eq!(studio.mesh_running(), Some(MeshMethod::Faces));
+    // The button names the step under way, of how many, and how far that
+    // step is, never the share of the whole job.
+    let label = english(|| studio.mesh_busy_label()).unwrap();
+    assert!(label.starts_with("Step 1/"), "{label}");
+    {
+        let _language = TestLanguage::hold(Language::Table(0));
+        let label = studio.mesh_busy_label().unwrap();
+        assert!(label.starts_with("Stap 1/"), "{label}");
+    }
     // The button shows the job in both languages.
     for language in [Language::English, Language::Table(0)] {
         let _language = TestLanguage::hold(language);

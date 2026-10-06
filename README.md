@@ -227,7 +227,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 
 ### Mesh
 
-**Mesh Pointcloud**, the one button of the SURFACE group, opens a card in three steps: the **method**, four cards that say what each makes and when to use it, with what it works on (the active scan, the section box and the selection, with about how many points); its **options**, each with its default and an explanation under the pointer, and **Use recommended**; and **Run**, with the progress, **Cancel**, and at the end the figures with **Show in model**, **Export…** and **Back to options**. A job goes on when the card is closed: the button then says it runs, and opens the card on its Run step. Three of the methods turn the points of a scan, or the part of them inside the section box, into a mesh of triangles:
+**Mesh Pointcloud**, the one button of the SURFACE group, opens a card in three steps: the **method**, four cards that say what each makes and when to use it, with what it works on (the active scan, the section box and the selection, with about how many points); its **options**, each with its default and an explanation under the pointer, and **Use recommended**; and **Run**, with the progress, **Cancel**, and at the end the figures with **Show in model**, **Export…** and **Back to options**. A job goes on when the card is closed: the button then says which step runs and how far that step is, and opens the card on its Run step. Three of the methods turn the points of a scan, or the part of them inside the section box, into a mesh of triangles:
 
 | Mesher | Use it for | What it gives |
 | --- | --- | --- |
