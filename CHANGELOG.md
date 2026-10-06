@@ -44,6 +44,7 @@ drops those that begin with the name of an operating system or with
 - Indexes are built several at a time: one for every four cores of the computer, at most four, and fewer when little memory is free. Ten scans of ten million points were indexed in about 20 s instead of about 45 s one after the other. The other scans wait their turn, the active scan first, and one file is never indexed twice at once.
 - Every row of the Project Browser shows how far its own index is, and the strip above the scene says how many indexes are ready, how many are built at once and how many wait.
 - **Cancel index** stops every index that is being built or waits. A scan that was being indexed while it was opened stays open, without its index, and the scans that were open are not indexed automatically again until **Auto-index** is switched off and on. **Build index** still builds the index of one of them, and when every place is taken it puts the active scan in the queue ahead of the scans that are indexed automatically.
+- The progress strip above the scene is readable in the light theme: its text was white on the white scene.
 - The local API and the MCP server report the running and waiting index builds in `status.result.index`; `build_index` answers `queued: true` when the scan waits for a place, and `cancel_index` says how many builds it stopped and how many scans it took out of the queue.
 
 ## 0.9.1 - 2026-10-05

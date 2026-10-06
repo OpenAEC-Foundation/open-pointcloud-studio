@@ -371,7 +371,13 @@ impl Studio {
             return None;
         }
         let now = Instant::now();
-        let accent = self.ui_theme.colors().accent;
+        // The strip lies on the scene, which is white in the light theme.
+        let colors = self.ui_theme.colors();
+        let accent = colors.accent;
+        let track = Color {
+            a: 0.25,
+            ..colors.scene_muted
+        };
         let mut strip = column![].spacing(7);
         for line in lines {
             // How far and how long still, beside the title.
@@ -391,10 +397,10 @@ impl Studio {
             let mut heading = row![
                 text(line.title)
                     .size(12)
-                    .color(Color::from_rgb8(250, 250, 249))
+                    .color(colors.scene_text)
                     .height(16)
                     .width(Fill),
-                text(pace).size(11).color(Color::from_rgb8(250, 250, 249)),
+                text(pace).size(11).color(colors.scene_text),
             ]
             .spacing(14)
             .align_y(iced::Alignment::Center);
@@ -410,20 +416,16 @@ impl Studio {
             // pushing the scene down.
             let mut task = column![
                 container(heading).height(20).clip(true),
-                container(
-                    text(line.detail)
-                        .size(11)
-                        .color(Color::from_rgb8(190, 190, 198))
-                )
-                .height(15)
-                .width(Fill)
-                .clip(true),
+                container(text(line.detail).size(11).color(colors.scene_muted))
+                    .height(15)
+                    .width(Fill)
+                    .clip(true),
             ]
             .spacing(3);
             if let Some(fraction) = line.fraction {
                 task = task.push(progress_bar(0.0..=1.0, fraction).height(5).style(move |_| {
                     progress_bar::Style {
-                        background: Color::from_rgba8(255, 255, 255, 0.12).into(),
+                        background: track.into(),
                         bar: accent.into(),
                         border: iced::Border::default().rounded(2.5),
                     }
