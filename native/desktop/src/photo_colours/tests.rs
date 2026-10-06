@@ -546,6 +546,66 @@ fn closing_the_window_stops_a_colouring() {
 }
 
 #[test]
+fn undo_keeps_the_photo_colours_within_its_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut studio, _) = studio_with_photo(directory.path());
+    let total = studio.clouds[0].cloud.total_points;
+    // Tables that colour every point, so that they share no block.
+    let table = |shade: u8| {
+        let mut colours = PointColours::new(total);
+        for ordinal in 0..total {
+            colours.set(ordinal, [shade; 3]);
+        }
+        Arc::new(colours)
+    };
+    let size = table(0).bytes();
+    studio.photo_colours.undo_budget = 2 * size + size / 2;
+    for shade in 1..=3 {
+        assert_eq!(studio.set_photo_colours(0, Some(table(shade))), 0);
+    }
+    // Undo holds no colours, the first table and the second.
+    assert_eq!(studio.undo_deletions.len(), 3);
+    // A third table in Undo is beyond the budget: the oldest edits go.
+    assert_eq!(studio.set_photo_colours(0, Some(table(4))), 2);
+    assert_eq!(studio.undo_deletions.len(), 2);
+    // A table that shares all but one block with the one before adds only
+    // that block.
+    let mut changed = studio.clouds[0].colours.as_deref().unwrap().clone();
+    changed.set(0, [9, 9, 9]);
+    assert_eq!(studio.set_photo_colours(0, Some(Arc::new(changed))), 0);
+    assert_eq!(studio.undo_deletions.len(), 3);
+    // The newest edit always stays, however large.
+    studio.photo_colours.undo_budget = 0;
+    assert_eq!(studio.clear_photo_colours(0).unwrap().1, 3);
+    assert_eq!(studio.undo_deletions.len(), 1);
+    let undone = send(&mut studio, json!({"command": "undo_delete"}));
+    assert_eq!(undone["ok"], true);
+    assert_eq!(
+        studio.clouds[0].colours.as_ref().unwrap().get(0),
+        Some([9, 9, 9])
+    );
+
+    // The status bar says so when a colouring lets go of edits.
+    let (mut studio, _) = studio_with_photo(directory.path());
+    studio.photo_colours.undo_budget = 0;
+    let _ = colour(&mut studio, json!({}));
+    assert!(
+        studio.status.ends_with("Undo takes the colours back"),
+        "{}",
+        studio.status
+    );
+    let _ = colour(&mut studio, json!({}));
+    assert!(
+        studio.status.ends_with(
+            "Undo takes the colours back. To save memory, Undo let go of the oldest edit"
+        ),
+        "{}",
+        studio.status
+    );
+    assert_eq!(studio.undo_deletions.len(), 1);
+}
+
+#[test]
 fn the_block_speaks_the_language_of_the_window() {
     let _language = TestLanguage::hold(Language::Table(0));
     let refusal = Refusal::NoPhotos("room.xyz".into());

@@ -5,6 +5,7 @@
 //! colours are kept with the layer in place of those of its file: they are
 //! drawn and written by an export, and Undo takes them back.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -36,6 +37,11 @@ use crate::{
 };
 
 const BUSY: &str = key("Points are already being coloured from photos");
+
+/// Most memory the photo colours that only Undo keeps may take: about three
+/// colourings of a scan of a hundred million points. Beyond it the oldest
+/// edits are let go; the last one always stays.
+const UNDO_COLOUR_BUDGET: usize = 1 << 30;
 
 /// Reads the stored bytes of a photo of the layer: from its file, or what
 /// a test hands over.
@@ -411,6 +417,15 @@ impl ColourJob {
     }
 }
 
+/// A line of the status bar, with what Undo let go of to save memory.
+fn with_undo_note(line: String, dropped: usize) -> String {
+    match dropped {
+        0 => line,
+        1 => format!("{line}. To save memory, Undo let go of the oldest edit"),
+        _ => format!("{line}. To save memory, Undo let go of the {dropped} oldest edits"),
+    }
+}
+
 /// A number with one decimal, for the figures of a comparison.
 fn tenths(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
@@ -569,12 +584,25 @@ impl Last {
 /// What the Colour from photos block holds: its settings, a job under way
 /// and how the last job ended. The colours themselves are kept with their
 /// layer.
-#[derive(Default)]
 pub(crate) struct PhotoColourTool {
     settings: ColourSettings,
     job: Option<ColourJob>,
     next_serial: u64,
     last: Option<Last>,
+    /// Most memory the photo colours that only Undo keeps may take.
+    undo_budget: usize,
+}
+
+impl Default for PhotoColourTool {
+    fn default() -> Self {
+        Self {
+            settings: ColourSettings::default(),
+            job: None,
+            next_serial: 0,
+            last: None,
+            undo_budget: UNDO_COLOUR_BUDGET,
+        }
+    }
 }
 
 impl PhotoColourTool {
@@ -879,7 +907,10 @@ impl Studio {
                     .active
                     .and_then(|index| self.clear_photo_colours(index))
                 {
-                    Some(name) => format!("Photo colours of {name} removed; Undo brings them back"),
+                    Some((name, dropped)) => with_undo_note(
+                        format!("Photo colours of {name} removed; Undo brings them back"),
+                        dropped,
+                    ),
                     None => "The active scan has no photo colours to remove".into(),
                 };
             }
@@ -898,10 +929,11 @@ impl Studio {
     }
 
     /// Give a layer other photo colours, or none, as one edit that Undo
-    /// takes back.
-    fn set_photo_colours(&mut self, index: usize, colours: Option<Arc<PointColours>>) {
+    /// takes back; how many of the oldest edits Undo let go of to keep its
+    /// photo colours within the budget.
+    fn set_photo_colours(&mut self, index: usize, colours: Option<Arc<PointColours>>) -> usize {
         let Some(entry) = self.clouds.get_mut(index) else {
-            return;
+            return 0;
         };
         let before = std::mem::replace(&mut entry.colours, colours);
         let identity = Arc::clone(&entry.load_identity);
@@ -909,21 +941,53 @@ impl Studio {
             members: Vec::new(),
             colours: vec![(identity, before)],
         });
+        self.trim_undo_colours(self.photo_colours.undo_budget)
+    }
+
+    /// Let go of the oldest edits while the photo colours that only Undo
+    /// keeps take more than `budget` bytes: the blocks of a colour table
+    /// that the layers or a newer edit share are counted once. The newest
+    /// edit always stays. How many edits were let go.
+    fn trim_undo_colours(&mut self, budget: usize) -> usize {
+        let mut held = HashSet::new();
+        for colours in self
+            .clouds
+            .iter()
+            .filter_map(|entry| entry.colours.as_deref())
+        {
+            colours.bytes_beside(&mut held);
+        }
+        let mut kept = 0usize;
+        let newest = self.undo_deletions.len().saturating_sub(1);
+        for (place, batch) in self.undo_deletions.iter().enumerate().rev() {
+            kept += batch
+                .colours
+                .iter()
+                .filter_map(|(_, colours)| colours.as_deref())
+                .map(|colours| colours.bytes_beside(&mut held))
+                .sum::<usize>();
+            if kept > budget && place < newest {
+                self.undo_deletions.drain(..=place);
+                return place + 1;
+            }
+        }
+        0
     }
 
     /// Take the photo colours of a layer away; the name of its file when it
-    /// had any.
-    fn clear_photo_colours(&mut self, index: usize) -> Option<String> {
+    /// had any, and how many of the oldest edits Undo let go of.
+    fn clear_photo_colours(&mut self, index: usize) -> Option<(String, usize)> {
         let entry = self.clouds.get(index)?;
         entry.colours.as_ref()?;
         let name = display_name(&entry.cloud.path).to_owned();
-        self.set_photo_colours(index, None);
-        Some(name)
+        let dropped = self.set_photo_colours(index, None);
+        Some((name, dropped))
     }
 
     /// A job ended: give the colours to their layer, keep what the job
     /// reports and tell the job of the local API.
     fn photo_colours_finished(&mut self, job: ColourJob, end: ColourEnd) {
+        let mut dropped = 0;
         let last = match end {
             ColourEnd::Done(finished) => {
                 let summary = Summary::of(&finished, &job.input);
@@ -933,7 +997,8 @@ impl Studio {
                     .position(|entry| Arc::ptr_eq(&entry.load_identity, &job.input.layer.identity));
                 let kept_with = place.map(|place| {
                     if summary.seen > 0 {
-                        self.set_photo_colours(place, Some(Arc::clone(&finished.colours)));
+                        dropped =
+                            self.set_photo_colours(place, Some(Arc::clone(&finished.colours)));
                         // The colours are what the job was for.
                         self.color_mode = ColorMode::Rgb;
                     }
@@ -951,7 +1016,7 @@ impl Studio {
         {
             *entry = last.value();
         }
-        self.status = last.status();
+        self.status = with_undo_note(last.status(), dropped);
         self.photo_colours.last = Some(last);
     }
 
@@ -1015,8 +1080,11 @@ impl Studio {
             return json!({"ok": false, "error": "no active cloud"});
         };
         match self.clear_photo_colours(index) {
-            Some(name) => {
-                self.status = format!("Photo colours of {name} removed; Undo brings them back");
+            Some((name, dropped)) => {
+                self.status = with_undo_note(
+                    format!("Photo colours of {name} removed; Undo brings them back"),
+                    dropped,
+                );
                 json!({"ok": true, "layer": index, "source": name})
             }
             None => json!({"ok": false, "error": "the layer has no photo colours"}),

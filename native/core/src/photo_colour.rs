@@ -1371,6 +1371,20 @@ impl PointColours {
         self.blocks.len() * std::mem::size_of::<Option<Arc<ColourBlock>>>()
             + self.blocks.iter().flatten().count() * std::mem::size_of::<ColourBlock>()
     }
+
+    /// Bytes the table adds to those of the tables before it: its blocks
+    /// that are not among `held`, the blocks those tables hold, and that
+    /// `held` then holds as well.
+    pub fn bytes_beside(&self, held: &mut std::collections::HashSet<usize>) -> usize {
+        let blocks = self
+            .blocks
+            .iter()
+            .flatten()
+            .filter(|block| held.insert(Arc::as_ptr(block) as usize))
+            .count();
+        self.blocks.len() * std::mem::size_of::<Option<Arc<ColourBlock>>>()
+            + blocks * std::mem::size_of::<ColourBlock>()
+    }
 }
 
 #[cfg(test)]
@@ -2073,5 +2087,14 @@ mod tests {
         };
         assert_eq!(copy.paint(record).point.rgb, Some([8, 8, 8]));
         assert_eq!(colours.paint(record).point.rgb, None);
+
+        // Beside the copy, the table adds only the block that differs.
+        let block = std::mem::size_of::<ColourBlock>();
+        let list = 3 * std::mem::size_of::<Option<Arc<ColourBlock>>>();
+        assert_eq!(colours.bytes(), list + 2 * block);
+        let mut held = std::collections::HashSet::new();
+        assert_eq!(copy.bytes_beside(&mut held), list + 2 * block);
+        assert_eq!(colours.bytes_beside(&mut held), list + block);
+        assert_eq!(colours.bytes_beside(&mut held), list);
     }
 }

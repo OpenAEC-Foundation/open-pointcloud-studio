@@ -1195,8 +1195,11 @@ intensity; points that no photo saw are written black when the file had no
 colours). The file itself is not changed. The colours of a later colouring are
 laid over those of an earlier one. They are one edit: `undo_delete` takes them
 back and `redo_delete` gives them again; `clear_photo_colours` takes the photo
-colours of a layer away, as an edit too. Closing the window cancels a
-running job.
+colours of a layer away, as an edit too. Undo keeps at most 1 GiB of photo
+colours that the layers no longer show, counting a block of colours that
+several of them share once; beyond that a new colouring lets go of the oldest
+edits, always keeping the newest, and the status text says how many. Closing
+the window cancels a running job.
 
 The running job, which `status.result.colour_from_photos.job` holds as well,
 has `state` (`running`), `operation` (`colour_from_photos`), `source`, `stage`
