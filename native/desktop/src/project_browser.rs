@@ -567,8 +567,12 @@ pub fn view_row<'a>(
     line.into()
 }
 
+/// How far the rows of a sub-group sit in from its band: one step, so that
+/// they read as its contents.
+const SUB_ROW_INDENT: f32 = 18.0;
+
 /// The width a row of VIEWS has for its name when it shows no actions.
-const ROW_NAME_WIDTH: f32 = 200.0;
+const ROW_NAME_WIDTH: f32 = 188.0;
 /// The width an action button of a row takes.
 const ROW_CONTROL_WIDTH: f32 = 21.0;
 /// The mean width of a character of a row's name.
@@ -925,7 +929,7 @@ impl Studio {
                 for index in rows {
                     list = list.push(self.scan_row(index));
                 }
-                sub = sub.push(indented(list, 6.0));
+                sub = sub.push(indented(list, SUB_ROW_INDENT));
             }
             group = group.push(indented(sub, 4.0));
         }
@@ -1194,7 +1198,7 @@ impl Studio {
                 for listed in rows {
                     list = list.push(self.view_group_row(&listed));
                 }
-                sub = sub.push(indented(list, 6.0));
+                sub = sub.push(indented(list, SUB_ROW_INDENT));
             }
             body = body.push(sub);
         }
