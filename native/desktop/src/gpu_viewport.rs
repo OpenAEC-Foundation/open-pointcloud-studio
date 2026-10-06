@@ -757,16 +757,17 @@ impl shader::Program<Message> for GpuViewport<'_> {
                 });
                 // The points of the view and those read inside the section
                 // box are built and sent on their own: new detail in the box
-                // leaves the points of the view on the device.
+                // leaves the points of the view on the device. A set built
+                // anew is shared as it was built, without a copy.
                 let previous = cache.key.as_ref().zip(cache.geometry.as_ref());
                 let points = previous
                     .filter(|(key, _)| key.points_match(self.overlay, overall_bounds))
                     .map(|(_, geometry)| Arc::clone(&geometry.points))
-                    .unwrap_or_else(|| self.build_points(overall_bounds).into());
+                    .unwrap_or_else(|| Arc::new(self.build_points(overall_bounds)));
                 let focus = previous
                     .filter(|(key, _)| key.focus_match(self.overlay, overall_bounds))
                     .map(|(_, geometry)| Arc::clone(&geometry.focus))
-                    .unwrap_or_else(|| self.build_focus_points(overall_bounds).into());
+                    .unwrap_or_else(|| Arc::new(self.build_focus_points(overall_bounds)));
                 cache.geometry = Some(Arc::new(RenderGeometry {
                     points,
                     focus,
@@ -966,11 +967,11 @@ struct CameraUniform {
 #[derive(Debug)]
 struct RenderGeometry {
     /// The points of the sets read for the view.
-    points: Arc<[GpuPoint]>,
+    points: Arc<Vec<GpuPoint>>,
     /// The points read inside the section box besides them. Each of the two
     /// is shared with the geometry before it while it did not change, and
     /// is then not sent to the device again.
-    focus: Arc<[GpuPoint]>,
+    focus: Arc<Vec<GpuPoint>>,
     /// Shared with the geometry before it when no mesh, layer transform or
     /// scene centre changed.
     mesh: Arc<MeshBuffers>,
@@ -995,7 +996,7 @@ struct PointBufferChunk {
 #[derive(Default)]
 struct PointUpload {
     chunks: Vec<PointBufferChunk>,
-    uploaded: Option<Arc<[GpuPoint]>>,
+    uploaded: Option<Arc<Vec<GpuPoint>>>,
 }
 
 impl PointUpload {
@@ -1005,7 +1006,7 @@ impl PointUpload {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        points: &Arc<[GpuPoint]>,
+        points: &Arc<Vec<GpuPoint>>,
     ) -> u64 {
         if self
             .uploaded
@@ -2011,8 +2012,8 @@ pub(crate) fn drawn_frame(studio: &crate::Studio, state: &RefCell<RenderCache>) 
             .count()
     });
     DrawnFrame {
-        points: Arc::as_ptr(&geometry.points) as *const GpuPoint as usize,
-        focus: Arc::as_ptr(&geometry.focus) as *const GpuPoint as usize,
+        points: Arc::as_ptr(&geometry.points) as usize,
+        focus: Arc::as_ptr(&geometry.focus) as usize,
         drawn: drawn.len(),
         in_view,
     }
@@ -2733,11 +2734,13 @@ mod section_box_tests {
         assert_eq!(thinned.focus, refined.focus);
         assert_eq!(thinned.drawn, 460);
 
-        // A colour mode or a class filter changes the points of both.
+        // A colour mode or a class filter changes the points of both. A set
+        // is told by where it lies, so a frame is set against the one just
+        // before it, whose sets are still in memory.
         studio.color_mode = ColorMode::Elevation;
         let recoloured = drawn_frame(&studio, &state);
-        assert_ne!(recoloured.points, refined.points);
-        assert_ne!(recoloured.focus, refined.focus);
+        assert_ne!(recoloured.points, thinned.points);
+        assert_ne!(recoloured.focus, thinned.focus);
         studio.filter_other = false;
         assert_eq!(drawn_frame(&studio, &state).drawn, 0);
     }
