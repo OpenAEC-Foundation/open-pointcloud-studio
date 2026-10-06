@@ -28,8 +28,9 @@
 # stack size on Windows. Run again with nothing changed, Cargo has nothing to
 # do; only another commit in the pin file is fetched and built again.
 #
-# --pin prints url=, commit=, tree=, date= and archive= lines (the name of
-# the release file with the source), as the Packages workflow reads them.
+# --pin prints url=, commit=, tree=, date=, archive= and vendor= lines (the
+# names of the release files with the source and with the crates from git
+# repositories), as the Packages workflow reads them.
 #
 # Built with the GNU toolchain for Windows, the program links the C++ runtime
 # of MinGW, libstdc++-6.dll, for a mesh library written in C++. That library
@@ -46,8 +47,9 @@ set -euo pipefail
 read_cad_pin
 case "${1:-}" in
     --pin)
-        printf 'url=%s\ncommit=%s\ntree=%s\ndate=%s\narchive=%s\n' \
-            "$cad_url" "$cad_commit" "$cad_tree" "$cad_date" "$(cad_source_archive_name)"
+        printf 'url=%s\ncommit=%s\ntree=%s\ndate=%s\narchive=%s\nvendor=%s\n' \
+            "$cad_url" "$cad_commit" "$cad_tree" "$cad_date" "$(cad_source_archive_name)" \
+            "$(cad_vendor_archive_name)"
         exit 0
         ;;
     --fetch)

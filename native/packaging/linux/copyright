@@ -14,7 +14,10 @@ Comment:
  contributors of Open CAD Studio, licensed GPL-3. It is built without changes
  from one commit of that repository and is not part of the source repository
  of Open Pointcloud Studio; OpenCADStudio-NOTICE.txt beside this file names
- the commit and the file of the release page that holds its source.
+ the commit and the file of the release page that holds its source. It links
+ crates from git repositories, some of them under the MPL-2.0 and the
+ LGPL-2.1-or-later; that notice names them, their repositories and commits,
+ and the file of the release page that holds their source.
 
 Files: *
 Copyright: OpenAEC Foundation and the contributors of Open Pointcloud Studio

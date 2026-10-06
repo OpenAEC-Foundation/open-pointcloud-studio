@@ -45,7 +45,7 @@ install -Dm644 "$icons/hicolor/scalable/apps/$APP_ID.svg" \
     "$root/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg"
 
 docs=$root/usr/share/doc/$BINARY_NAME
-install -Dm644 "$packaging_dir/NOTICE.txt" "$docs/NOTICE.txt"
+install -Dm644 "$notice_file" "$docs/NOTICE.txt"
 install -m644 "$native_dir"/assets/fonts/*-OFL.txt "$docs/"
 # The .deb carries no licence texts of its own (see NOTICE.txt), so the
 # notice of Open CAD Studio points at the GPL text the system keeps. The

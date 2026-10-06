@@ -12,20 +12,78 @@ It was built without changes from this commit of that repository:
 
     @COMMIT@ (@DATE@)
 
-with the versions of the Rust crates that the Cargo.lock of that commit
-lists, each under its own licence, by native/packaging/build-open-cad-studio.sh
-of the source repository of Open Pointcloud Studio.
+by native/packaging/build-open-cad-studio.sh of the source repository of
+Open Pointcloud Studio, with the Rust crates that the Cargo.lock of that
+commit lists, each one unmodified and under its own licence. Most of them
+come from crates.io, which keeps the source of every version it has
+published, under the name and version that Cargo.lock gives. These come
+from git repositories instead, at the commits that Cargo.lock names:
 
-The source of that commit is published on the release page of this
-version of Open Pointcloud Studio,
+    https://github.com/HakanSeven12/opencadcodec
+    commit fe69506cb99dea6f4c4a73b690a27fdf04403ea0
+        opencadcodec 0.5.5 (MPL-2.0)
+
+    https://github.com/HakanSeven12/opencadgraph
+    commit 892f942dff7b3082c195df82e560ac9ff44cec3b
+        opencadgraph 0.1.0 (MPL-2.0)
+
+    https://github.com/HakanSeven12/opencadkernel
+    commit ae28f669f8a5673585c2c5c5b3617876c8b7bf98
+        opencadkernel 0.1.0 (MPL-2.0)
+        opencadkernel-constraints 0.1.0 (LGPL-2.1-or-later)
+
+    https://github.com/HakanSeven12/iced_aw
+    commit 9bff59df71c215abe91710870634886967fc9f1c
+        iced_aw 0.14.1 (MIT)
+
+    https://github.com/iced-rs/cryoglyph
+    commit 53ba3e879539d19ed8162942126a977ec896cc3b
+        cryoglyph 0.1.0 (MIT OR Apache-2.0 OR Zlib)
+
+    https://github.com/iced-rs/iced
+    commit 23604ff22ab0aad9e00b9327cb7b8546ed84db39
+        iced 0.15.0-dev (MIT)
+        iced_core 0.15.0-dev (MIT)
+        iced_debug 0.15.0-dev (MIT)
+        iced_futures 0.15.0-dev (MIT)
+        iced_graphics 0.15.0-dev (MIT)
+        iced_program 0.15.0-dev (MIT)
+        iced_renderer 0.15.0-dev (MIT)
+        iced_runtime 0.15.0-dev (MIT)
+        iced_selector 0.15.0-dev (MIT)
+        iced_test 0.15.0-dev (MIT)
+        iced_tiny_skia 0.15.0-dev (MIT)
+        iced_wgpu 0.15.0-dev (MIT)
+        iced_widget 0.15.0-dev (MIT)
+        iced_winit 0.15.0-dev (MIT)
+
+    https://github.com/iced-rs/winit
+    commit 05b8ff17a06562f0a10bb46e6eaacbe2a95cb5ed
+        dpi 0.1.1 (Apache-2.0)
+        winit 0.30.8 (Apache-2.0)
+
+opencadcodec, opencadgraph and opencadkernel are covered by the Mozilla
+Public License, version 2.0 (https://mozilla.org/MPL/2.0/), and
+opencadkernel-constraints by the GNU Lesser General Public License,
+version 2.1 or later
+(https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html). Each of the
+four carries its licence text in its source.
+
+The source is published on the release page of this version of Open
+Pointcloud Studio,
 
     https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v@VERSION@
 
-as the file
+as two files. @ARCHIVE@ holds every file of the commit
+of Open CAD Studio, and @VENDOR_ARCHIVE@ holds the crates
+from git repositories listed above, as Cargo vendors them, in the folder
+vendor/ of that source. Unpacked in the same folder, the two build without
+those repositories:
 
-    @ARCHIVE@
+    cargo build --release --locked --bin OpenCADStudio --config vendor/config.toml
 
-It can also be fetched from the repository above by its commit hash.
+The commit of Open CAD Studio can also be fetched from its repository by
+its hash.
 
 Source code of Open Pointcloud Studio:
 https://github.com/OpenAEC-Foundation/open-pointcloud-studio

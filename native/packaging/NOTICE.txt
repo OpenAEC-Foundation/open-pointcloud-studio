@@ -21,7 +21,13 @@ application, as the program that shows exported drawings: OpenCADStudio
 (OpenCADStudio.exe on Windows) beside the application, or in
 /usr/lib/open-pointcloud-studio in the .deb and the AppImage. It is
 licensed GPL-3.0 (OpenCADStudio-LICENSE.txt); OpenCADStudio-NOTICE.txt
-names its source and the commit it was built from.
+names its source and the commit it was built from. Among the crates it
+links, opencadcodec, opencadgraph and opencadkernel are covered by the
+Mozilla Public License, version 2.0, and opencadkernel-constraints by the
+GNU Lesser General Public License, version 2.1 or later. They come from git
+repositories rather than from crates.io: OpenCADStudio-NOTICE.txt names
+those repositories and commits, and the release page carries the source of
+these crates beside that of Open CAD Studio.
 
 A package for a Debian-based system refers to the licence texts that the
 system keeps in /usr/share/common-licenses instead of carrying the

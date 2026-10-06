@@ -123,3 +123,38 @@ check_cad_source() {
         fail "the LICENSE of commit $cad_commit is not the GPL-3.0 text of native/desktop/LICENSE-GPL-3.0, which the packages carry for Open CAD Studio; look at its licence before it is built"
     fi
 }
+
+# The crates that the pinned commit takes from git repositories, as
+# archive-open-cad-studio-source.sh vendors them for the release page: a
+# folder with one folder per crate and config.toml, which replaces those git
+# repositories by the folder. The first line of config.toml names the commit
+# that they were vendored for.
+cad_vendor_dir=$cad_target_dir/vendor
+
+# cad_vendor_header prints the comment at the top of config.toml in the
+# vendored folder. read_cad_pin first.
+cad_vendor_header() {
+    printf '# Git dependencies of Open CAD Studio commit %s\n' "$cad_commit"
+    cat <<'HEADER'
+#
+# The crates that the Cargo.lock of that commit takes from git repositories,
+# as `cargo vendor --locked --versioned-dirs` writes them. In the folder
+# vendor/ of the source of that commit, they build it without those
+# repositories:
+#
+#     cargo build --release --locked --bin OpenCADStudio --config vendor/config.toml
+#
+# Cargo downloads the crates from crates.io as usual.
+
+HEADER
+}
+
+# check_cad_vendor DIR fails unless DIR holds the crates vendored for the
+# pinned commit, as its config.toml says. read_cad_pin first.
+check_cad_vendor() {
+    local dir=$1 first
+    [[ -f "$dir/config.toml" ]] || fail "$dir/config.toml does not exist"
+    first=$(head -n 1 "$dir/config.toml" | tr -d '\r')
+    [[ "$first" == "$(cad_vendor_header | head -n 1)" ]] \
+        || fail "$dir holds no crates vendored for commit $cad_commit; its config.toml begins '$first'"
+}

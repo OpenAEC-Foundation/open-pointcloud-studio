@@ -8,7 +8,8 @@ name: Packages
 # Every package carries Open CAD Studio beside the application, built by the
 # job open-cad-studio from the commit that native/packaging/open-cad-studio.pin
 # names. The job open-cad-studio-pin checks that pin and writes the source of
-# that commit, which the release carries as package-open-cad-studio-source.
+# that commit and of the crates it takes from git repositories, which the
+# release carries as package-open-cad-studio-source.
 
 on:
   workflow_dispatch:
@@ -95,19 +96,22 @@ jobs:
   # that is not a URL, two full hashes and a date; the pinned commit is
   # fetched and checked as before a build: its tree, date, Cargo.lock and
   # licence. A pin that does not fit fails here, before the long builds. The
-  # same checkout gives the source archive of the release.
+  # same checkout gives the two source archives of the release: the commit,
+  # and the crates it takes from git repositories, which Cargo vendors; the
+  # notices have to name those crates and the ones under a copyleft licence.
   open-cad-studio-pin:
     runs-on: ubuntu-latest
     outputs:
       commit: ${{ steps.pin.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - name: Read the pin file
         id: pin
         run: bash native/packaging/build-open-cad-studio.sh --pin | tee -a "$GITHUB_OUTPUT"
       - name: Fetch and check the pinned commit
         run: bash native/packaging/build-open-cad-studio.sh --fetch
-      - name: Write the source archive
+      - name: Write the source archives
         run: bash native/packaging/archive-open-cad-studio-source.sh native/target/packages
       - uses: actions/upload-artifact@v4
         with:
@@ -115,6 +119,8 @@ jobs:
           path: |
             native/target/packages/open-cad-studio-source_*.tar.gz
             native/target/packages/open-cad-studio-source_*.tar.gz.sha256
+            native/target/packages/open-cad-studio-vendor_*.tar.gz
+            native/target/packages/open-cad-studio-vendor_*.tar.gz.sha256
           if-no-files-found: error
 
   # Open CAD Studio for each system and processor, from the pinned commit.

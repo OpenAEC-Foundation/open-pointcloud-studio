@@ -21,6 +21,12 @@ BINARY_NAME=open-pointcloud-studio
 # its repository that is built, and fetches and checks that commit.
 CAD_BINARY_NAME=OpenCADStudio
 
+# The notices that travel with every package: NOTICE.txt of the application
+# and the template of that of Open CAD Studio. The OCS_ variables move them
+# for the tests of the scripts.
+notice_file=${OCS_NOTICE:-$packaging_dir/NOTICE.txt}
+cad_notice_template=${OCS_NOTICE_TEMPLATE:-$packaging_dir/$CAD_BINARY_NAME-NOTICE.txt.in}
+
 fail() {
     echo "$(basename "$0"): $*" >&2
     exit 1
@@ -32,6 +38,13 @@ fail() {
 cad_source_archive_name() {
     read_cad_pin
     echo "open-cad-studio-source_${cad_commit:0:8}.tar.gz"
+}
+
+# The name of the release file that holds the crates that the pinned commit
+# takes from git repositories (archive-open-cad-studio-source.sh).
+cad_vendor_archive_name() {
+    read_cad_pin
+    echo "open-cad-studio-vendor_${cad_commit:0:8}.tar.gz"
 }
 
 # mingw_runtime_of PROGRAM prints, one per line, the libraries of the C++
@@ -67,7 +80,7 @@ copy_licences() {
     cp "$repo_dir/LICENSE.md" "$destination/LICENSE-LGPL-3.0.md"
     cp "$native_dir/desktop/LICENSE-GPL-3.0" "$destination/LICENSE-GPL-3.0.txt"
     cp "$native_dir"/assets/fonts/*-OFL.txt "$destination/"
-    cp "$packaging_dir/NOTICE.txt" "$destination/NOTICE.txt"
+    cp "$notice_file" "$destination/NOTICE.txt"
     copy_cad_licence "$destination"
     copy_cad_notice "$destination" "$number"
 }
@@ -81,8 +94,9 @@ copy_cad_licence() {
     cp "$native_dir/desktop/LICENSE-GPL-3.0" "$destination/$CAD_BINARY_NAME-LICENSE.txt"
 }
 
-# The notice of Open CAD Studio, which names the pinned commit and the release
-# file with its source: copy_cad_notice DESTINATION NUMBER [LICENCE_TEXT].
+# The notice of Open CAD Studio, which names the pinned commit, the crates it
+# takes from git repositories and the release files with their source:
+# copy_cad_notice DESTINATION NUMBER [LICENCE_TEXT].
 # LICENCE_TEXT is where the notice says the licence text is, by default
 # OpenCADStudio-LICENSE.txt beside it, which copy_cad_licence writes.
 copy_cad_notice() {
@@ -90,9 +104,10 @@ copy_cad_notice() {
     [[ -n "$number" ]] || fail "copy_cad_notice needs the version of the package"
     read_cad_pin
     mkdir -p "$destination"
-    fill_template "$packaging_dir/$CAD_BINARY_NAME-NOTICE.txt.in" "$destination/$CAD_BINARY_NAME-NOTICE.txt" \
+    fill_template "$cad_notice_template" "$destination/$CAD_BINARY_NAME-NOTICE.txt" \
         "URL=${cad_url%.git}" "COMMIT=$cad_commit" "DATE=$cad_date" "VERSION=$number" \
-        "ARCHIVE=$(cad_source_archive_name)" "LICENCE_TEXT=$licence_text"
+        "ARCHIVE=$(cad_source_archive_name)" "VENDOR_ARCHIVE=$(cad_vendor_archive_name)" \
+        "LICENCE_TEXT=$licence_text"
 }
 
 # Write FILE.sha256 beside FILE, naming the file without its folder so that

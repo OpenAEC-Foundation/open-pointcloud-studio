@@ -227,17 +227,80 @@ pin_upstream() {
 good=$(commit_upstream "a tree to build")
 
 # Writes down where and how it is asked to build, and leaves a program
-# where Cargo would.
+# where Cargo would. For the source archives it also vendors, lists and
+# resolves the packages of the Cargo.lock in its folder as Cargo does, with
+# the licences that CARGO_LICENCES gives as NAME|LICENCE lines.
 cat > "$work/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
-echo "$PWD|$*" >> "$CARGO_LOG"
-while [[ $# -gt 0 ]]; do
-    [[ "$1" != --target-dir ]] || folder=$2
-    shift
+echo "$PWD|$*" >> "${CARGO_LOG:-/dev/null}"
+# NAME VERSION SOURCE for each package of Cargo.lock; SOURCE is - for its own.
+packages() {
+    tr -d '\r"' < Cargo.lock | awk '
+        /^\[\[package\]\]/ { if (name != "") print name, version, (source == "" ? "-" : source); name = version = source = "" }
+        /^name = / { name = $3 }
+        /^version = / { version = $3 }
+        /^source = / { source = $3 }
+        END { if (name != "") print name, version, (source == "" ? "-" : source) }'
+}
+licence() { sed -n "s/^$1|//p" "$CARGO_LICENCES"; }
+last=${!#}
+config=
+previous=
+for argument in "$@"; do
+    [[ "$previous" != --config ]] || config=$argument
+    previous=$argument
 done
-mkdir -p "$folder/release"
-echo program > "$folder/release/OpenCADStudio"
-echo program > "$folder/release/OpenCADStudio.exe"
+case $1 in
+build)
+    while [[ $# -gt 0 ]]; do
+        [[ "$1" != --target-dir ]] || folder=$2
+        shift
+    done
+    mkdir -p "$folder/release"
+    echo program > "$folder/release/OpenCADStudio"
+    echo program > "$folder/release/OpenCADStudio.exe"
+    ;;
+vendor)
+    echo "To use vendored sources, add this to your .cargo/config.toml for this project:"
+    echo
+    echo '[source.crates-io]'
+    echo 'replace-with = "vendored-sources"'
+    packages | while read -r name version source; do
+        [[ "$source" != - ]] || continue
+        mkdir -p "$last/$name-$version"
+        printf '[package]\nname = "%s"\nversion = "%s"\nlicense = "%s"\n' \
+            "$name" "$version" "$(licence "$name")" > "$last/$name-$version/Cargo.toml"
+        echo '{"files":{},"package":null}' > "$last/$name-$version/.cargo-checksum.json"
+        echo "licence of $name" > "$last/$name-$version/LICENSE"
+    done
+    packages | awk '$3 ~ /^git\+/ { sub(/#.*/, "", $3); print $3 }' | sort -u | while read -r key; do
+        key=$(sed 's|%2F|/|g' <<< "$key")
+        url=${key#git+}
+        query=${url#*\?}
+        printf '\n[source."%s"]\ngit = "%s"\n%s = "%s"\nreplace-with = "vendored-sources"\n' \
+            "$key" "${url%%\?*}" "${query%%=*}" "${query#*=}"
+    done
+    printf '\n[source.vendored-sources]\ndirectory = "%s"\n' "$last"
+    ;;
+tree)
+    echo "upstream v0.1.0 ($PWD)|"
+    packages | while read -r name version source; do
+        case $source in
+            git+*) source=${source#git+}; echo "$name v$version (${source%%#*}#$(cut -c1-8 <<< "${source##*#}"))|$(licence "$name")" ;;
+            registry+*) echo "$name v$version|$(licence "$name")" ;;
+        esac
+    done
+    ;;
+metadata)
+    # Resolves only when the folder that --config names holds every package
+    # of a git repository.
+    missing=$(packages | awk '$3 ~ /^git\+/ { print $1 "-" $2 }' | while read -r package; do
+        [[ -f "$(dirname "$config")/$package/Cargo.toml" ]] || echo "$package"
+    done)
+    [[ -n "$config" && -z "$missing" ]] || { echo "error: no matching package $missing" >&2; exit 101; }
+    echo '{}'
+    ;;
+esac
 EOF
 printf '#!/usr/bin/env bash\necho "host: x86_64-unknown-linux-gnu"\n' > "$work/bin/rustc"
 chmod +x "$work/bin/cargo" "$work/bin/rustc"
@@ -343,6 +406,7 @@ chmod +x "$work/built/$BINARY_NAME" "$work/built/$CAD_BINARY_NAME"
 pinned=$(bash "$packaging_dir/build-open-cad-studio.sh" --pin)
 pinned_commit=$(sed -n 's/^commit=//p' <<< "$pinned")
 pinned_archive=$(sed -n 's/^archive=//p' <<< "$pinned")
+pinned_vendor=$(sed -n 's/^vendor=//p' <<< "$pinned")
 
 # The archive of Linux and macOS is packed with tar, which every system has.
 if bash "$packaging_dir/build-archive.sh" "$work/built/$BINARY_NAME" "$work/built/$CAD_BINARY_NAME" \
@@ -359,10 +423,10 @@ if bash "$packaging_dir/build-archive.sh" "$work/built/$BINARY_NAME" "$work/buil
     fi
     notice=$package/$CAD_BINARY_NAME-NOTICE.txt
     if grep -qF "$pinned_commit" "$notice" && grep -qF "$pinned_archive" "$notice" \
-        && grep -qF "releases/tag/v9.9.9" "$notice"; then
+        && grep -qF "$pinned_vendor" "$notice" && grep -qF "releases/tag/v9.9.9" "$notice"; then
         passed "the notice of Open CAD Studio names the pinned commit and where its source is"
     else
-        wrong "the notice of Open CAD Studio does not name $pinned_commit, $pinned_archive and the release page:"
+        wrong "the notice of Open CAD Studio does not name $pinned_commit, $pinned_archive, $pinned_vendor and the release page:"
         sed 's/^/        /' "$notice"
     fi
     if grep -qF "is in $CAD_BINARY_NAME-LICENSE.txt." "$notice"; then
@@ -485,42 +549,174 @@ fi
 
 # ---- archive-open-cad-studio-source.sh -----------------------------------
 
-# The source goes on the release page whole, also what the .gitattributes of
-# the commit would leave out of an archive.
+# The commit to publish has, besides the two crates from git repositories,
+# two from crates.io: one under permissive licences and one under a copyleft
+# licence only, which the notices have to name as well. Its .gitattributes
+# would leave a file out of an archive.
+cat >> "$upstream/Cargo.lock" <<'LOCK'
+
+[[package]]
+name = "plain"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "shared"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+LOCK
 printf 'src/main.rs export-ignore\n' > "$upstream/.gitattributes"
 kept=$(commit_upstream "a file that git archive would leave out")
 short=${kept:0:8}
 pin_upstream "$kept"
-if output=$(PATH="$work/bin:$PATH" OCS_PIN_FILE="$work/ocs.pin" OCS_FETCH_FROM="$upstream" \
-    OCS_TARGET_DIR="$work/ocs-target" \
-    bash "$packaging_dir/archive-open-cad-studio-source.sh" "$work/source" 2> "$work/source.log"); then
+printf '%s\n' 'followed|MIT' 'shortened|MPL-2.0' 'plain|MIT OR Apache-2.0' 'shared|LGPL-2.1-or-later' \
+    > "$work/licences"
+# Notices that name what the Cargo.lock above holds.
+cat > "$work/cad-notice.txt" <<'NOTICE'
+    https://example.org/followed
+    commit 1111111111111111111111111111111111111111
+        followed 0.1.0 (MIT)
+
+    https://example.org/short
+    commit abc1234000000000000000000000000000000000
+        shortened 0.1.0 (MPL-2.0)
+
+        shared 2.0.0 (LGPL-2.1-or-later)
+NOTICE
+echo "It links shortened and shared." > "$work/notice.txt"
+
+# archive_source [VARIABLE=VALUE...] runs the script on the commit above,
+# with the notices above unless the variables say otherwise.
+archive_source() {
+    : > "$work/cargo.log"
+    env PATH="$work/bin:$PATH" CARGO_LOG="$work/cargo.log" CARGO_LICENCES="$work/licences" \
+        OCS_PIN_FILE="$work/ocs.pin" OCS_FETCH_FROM="$upstream" OCS_TARGET_DIR="$work/ocs-target" \
+        OCS_NOTICE_TEMPLATE="$work/cad-notice.txt" OCS_NOTICE="$work/notice.txt" "$@" \
+        bash "$packaging_dir/archive-open-cad-studio-source.sh" "$work/source"
+}
+source_archive=$work/source/open-cad-studio-source_$short.tar.gz
+vendor_archive=$work/source/open-cad-studio-vendor_$short.tar.gz
+if output=$(archive_source 2> "$work/source.log"); then
+    if [[ "$output" == "$source_archive"$'\n'"$vendor_archive" ]]; then
+        passed "archive-open-cad-studio-source.sh writes the source and the vendored crates of the pinned commit"
+    else
+        wrong "archive-open-cad-studio-source.sh printed '$output'"
+    fi
     expected=$(git -C "$upstream" ls-tree -r --name-only "$kept" | sed "s|^|open-cad-studio-$short/|" | sort)
-    archived=$(tar -tzf "$output" | grep -v '/$' | sort)
-    if [[ "$output" == "$work/source/open-cad-studio-source_$short.tar.gz" && "$archived" == "$expected" ]]; then
+    archived=$(tar -tzf "$source_archive" | grep -v '/$' | sort)
+    if [[ "$archived" == "$expected" ]]; then
         passed "the source archive holds every file of the pinned commit"
     else
-        wrong "the source archive $output does not hold the files of the pinned commit:"
+        wrong "the source archive does not hold the files of the pinned commit:"
         diff <(echo "$expected") <(echo "$archived") | sed 's/^/        /'
     fi
-    if (cd "$work/source" && if command -v sha256sum >/dev/null 2>&1; then sha256sum -c --quiet ./*.sha256; else shasum -a 256 -c --quiet ./*.sha256; fi) > /dev/null 2>&1; then
-        passed "the source archive has a .sha256 beside it"
+    # Only the crates from git repositories, in the folder vendor/ of the
+    # source, with the configuration that puts them in place of those.
+    vendored=$(tar -tzf "$vendor_archive" | grep -v '/$' | sort)
+    expected=$(printf "open-cad-studio-$short/vendor/%s\n" config.toml \
+        followed-0.1.0/.cargo-checksum.json followed-0.1.0/Cargo.toml followed-0.1.0/LICENSE \
+        shortened-0.1.0/.cargo-checksum.json shortened-0.1.0/Cargo.toml shortened-0.1.0/LICENSE | sort)
+    if [[ "$vendored" == "$expected" ]]; then
+        passed "the vendored crates are those from git repositories, in the folder vendor/ of the source"
     else
-        wrong "the source archive has no fitting .sha256 beside it"
+        wrong "the archive of vendored crates does not hold the crates from git repositories alone:"
+        diff <(echo "$expected") <(echo "$vendored") | sed 's/^/        /'
+    fi
+    config=$(tar -xzOf "$vendor_archive" "open-cad-studio-$short/vendor/config.toml")
+    if [[ "$(head -n 1 <<< "$config")" == "# Git dependencies of Open CAD Studio commit $kept" ]] \
+        && grep -qxF 'directory = "vendor"' <<< "$config" \
+        && grep -qxF 'branch = "feature/one"' <<< "$config" \
+        && grep -qxF 'git = "https://example.org/short.git"' <<< "$config" \
+        && ! grep -qF 'crates-io' <<< "$config"; then
+        passed "vendor/config.toml names the commit and puts the folder in place of the git repositories only"
+    else
+        wrong "vendor/config.toml does not name the commit or does not replace the git repositories alone:"
+        sed 's/^/        /' <<< "$config"
+    fi
+    if (cd "$work/source" && if command -v sha256sum >/dev/null 2>&1; then sha256sum -c --quiet ./*.sha256; else shasum -a 256 -c --quiet ./*.sha256; fi) > /dev/null 2>&1 \
+        && [[ -f "$source_archive.sha256" && -f "$vendor_archive.sha256" ]]; then
+        passed "both archives have a .sha256 beside them"
+    else
+        wrong "the archives have no fitting .sha256 beside them"
+    fi
+    if grep -q '|metadata .*--config vendor/config.toml' "$work/cargo.log"; then
+        passed "Cargo resolves the unpacked archives with the vendored crates"
+    else
+        wrong "the unpacked archives are not resolved with the vendored crates: $(cat "$work/cargo.log")"
     fi
 else
     wrong "archive-open-cad-studio-source.sh failed:"
     sed 's/^/        /' "$work/source.log"
 fi
 
-# The release has it as its last file, under a name that the download
+# The crates vendored for the commit are used again; those of another
+# commit are not.
+cp "$vendor_archive" "$work/vendor-before.tar.gz"
+if archive_source > /dev/null 2> "$work/source.log" && ! grep -q '|vendor ' "$work/cargo.log" \
+    && cmp -s "$vendor_archive" "$work/vendor-before.tar.gz"; then
+    passed "the crates vendored before for the commit are used again, for the same archive"
+else
+    wrong "the crates vendored before for the commit are vendored again, or give another archive:"
+    sed 's/^/        /' "$work/source.log" "$work/cargo.log"
+fi
+sed -i.orig "1s/$kept/$good_hash/" "$work/ocs-target/vendor/config.toml"
+rm -f "$work/ocs-target/vendor/config.toml.orig"
+if archive_source > /dev/null 2> "$work/source.log" && grep -q '|vendor ' "$work/cargo.log"; then
+    passed "crates vendored for another commit are vendored again"
+else
+    wrong "crates vendored for another commit are used:"
+    sed 's/^/        /' "$work/source.log"
+fi
+
+# Notices that do not name a crate are refused, and so is a vendored folder
+# that misses one.
+grep -v 'shared 2.0.0' "$work/cad-notice.txt" > "$work/cad-notice-short.txt"
+if archive_source OCS_NOTICE_TEMPLATE="$work/cad-notice-short.txt" > /dev/null 2> "$work/source.log"; then
+    wrong "archive-open-cad-studio-source.sh accepts a notice that does not name a crate under a copyleft licence"
+elif grep -qF 'shared 2.0.0 (LGPL-2.1-or-later)' "$work/source.log"; then
+    passed "archive-open-cad-studio-source.sh refuses a notice that does not name a crate under a copyleft licence"
+else
+    wrong "archive-open-cad-studio-source.sh refuses a notice without a crate for another reason:"
+    sed 's/^/        /' "$work/source.log"
+fi
+grep -v 'commit 1111' "$work/cad-notice.txt" > "$work/cad-notice-short.txt"
+if archive_source OCS_NOTICE_TEMPLATE="$work/cad-notice-short.txt" > /dev/null 2> "$work/source.log"; then
+    wrong "archive-open-cad-studio-source.sh accepts a notice that does not name the commit of a git repository"
+elif grep -qF 'commit 1111111111111111111111111111111111111111' "$work/source.log"; then
+    passed "archive-open-cad-studio-source.sh refuses a notice that does not name the commit of a git repository"
+else
+    wrong "archive-open-cad-studio-source.sh refuses a notice without a commit for another reason:"
+    sed 's/^/        /' "$work/source.log"
+fi
+echo "It links shared." > "$work/notice-short.txt"
+if archive_source OCS_NOTICE="$work/notice-short.txt" > /dev/null 2> "$work/source.log"; then
+    wrong "archive-open-cad-studio-source.sh accepts a NOTICE.txt that does not name a crate under a copyleft licence"
+elif grep -qF 'copyleft licence that Open CAD Studio links: shortened' "$work/source.log"; then
+    passed "archive-open-cad-studio-source.sh refuses a NOTICE.txt that does not name a crate under a copyleft licence"
+else
+    wrong "archive-open-cad-studio-source.sh refuses a NOTICE.txt for another reason:"
+    sed 's/^/        /' "$work/source.log"
+fi
+rm -rf "$work/ocs-target/vendor/shortened-0.1.0"
+if archive_source > /dev/null 2> "$work/source.log"; then
+    wrong "archive-open-cad-studio-source.sh accepts a vendored folder without a crate"
+elif grep -qF 'remove it, and it is vendored again' "$work/source.log"; then
+    passed "archive-open-cad-studio-source.sh refuses a vendored folder without a crate"
+else
+    wrong "archive-open-cad-studio-source.sh refuses a vendored folder without a crate for another reason:"
+    sed 's/^/        /' "$work/source.log"
+fi
+
+# The release has both as its last files, under names that the download
 # buttons of the website, which look for the endings of the packages, never
 # offer.
-source_name=$(bash "$packaging_dir/expected-assets.sh" 9.9.9 | tail -n 1)
-if [[ "$source_name" == "$pinned_archive" && "$source_name" == open-cad-studio-source_*.tar.gz \
-    && "$source_name" != *linux* && "$source_name" != *macos* && "$source_name" != *windows* ]]; then
-    passed "the release carries the source of Open CAD Studio as $source_name"
+source_names=$(bash "$packaging_dir/expected-assets.sh" 9.9.9 | tail -n 2)
+if [[ "$source_names" == "$pinned_archive"$'\n'"$pinned_vendor" \
+    && "$pinned_archive" == open-cad-studio-source_*.tar.gz && "$pinned_vendor" == open-cad-studio-vendor_*.tar.gz \
+    && "$source_names" != *linux* && "$source_names" != *macos* && "$source_names" != *windows* ]]; then
+    passed "the release carries the source of Open CAD Studio as $(echo $source_names)"
 else
-    wrong "the release does not carry the source of Open CAD Studio as $pinned_archive, but '$source_name'"
+    wrong "the release does not carry the source of Open CAD Studio as $pinned_archive and $pinned_vendor, but '$(echo $source_names)'"
 fi
 
 if [[ "$failures" -ne 0 ]]; then

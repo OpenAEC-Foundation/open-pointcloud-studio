@@ -29,4 +29,10 @@ License, version 3. Its source is not part of this repository:
 packaging/open-cad-studio.pin names the commit that the packages are built
 from, without changes, and every release carries the source of that commit
 as open-cad-studio-source_SHORT.tar.gz. The crates that program links are
-recorded in the Cargo.lock of that commit, each under its own licence.
+recorded in the Cargo.lock of that commit, each under its own licence; those
+it takes from git repositories rather than from crates.io, among them
+opencadcodec, opencadgraph and opencadkernel under the Mozilla Public
+License, version 2.0, and opencadkernel-constraints under the GNU Lesser
+General Public License, version 2.1 or later, are named with their
+repositories and commits in packaging/OpenCADStudio-NOTICE.txt.in, and every
+release carries their source as open-cad-studio-vendor_SHORT.tar.gz.

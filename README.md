@@ -44,7 +44,7 @@ The files are on the [releases page](https://github.com/OpenAEC-Foundation/open-
 | | `open-pointcloud-studio_VERSION_linux-amd64.tar.gz` | The bare binaries and the licence texts |
 | Linux 64-bit ARM (experimental) | `open-pointcloud-studio_VERSION_arm64.deb`, `_arm64.AppImage`, `_linux-arm64.tar.gz` | The same three kinds of file as for x86-64. Experimental: built and tested only on build machines with software rendering, not yet on real ARM boards or laptops |
 
-Every package also carries [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio), the open-source CAD application, which shows exported DXF and DWG drawings; it does not have to be installed separately. The release page also holds `open-cad-studio-source_SHORT.tar.gz`, the source it was built from.
+Every package also carries [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio), the open-source CAD application, which shows exported DXF and DWG drawings; it does not have to be installed separately. The release page also holds `open-cad-studio-source_SHORT.tar.gz`, the source it was built from, and `open-cad-studio-vendor_SHORT.tar.gz`, the crates it was built with from git repositories.
 
 Every file has a `.sha256` file beside it; see [Checking a download](#checking-a-download).
 
@@ -439,7 +439,7 @@ It writes `native/target/open-cad-studio/release/OpenCADStudio`, where a develop
 
 - The point-cloud library `native/core` is licensed under LGPL-3.0-or-later; see [LICENSE.md](LICENSE.md).
 - The desktop application `native/desktop` is licensed under GPL-3.0-only; see [native/desktop/LICENSE-GPL-3.0](native/desktop/LICENSE-GPL-3.0). Its ribbon and properties rows are adapted from [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio), which is GPL-3.0, and it uses that project's SVG icons.
-- Open CAD Studio, which every package carries, is licensed under GPL-3.0 by its authors. Its source is not part of this repository: [native/packaging/open-cad-studio.pin](native/packaging/open-cad-studio.pin) names the commit of its repository that the packages are built from, and every release carries the source of that commit as `open-cad-studio-source_SHORT.tar.gz`. The packages carry its licence text as `OpenCADStudio-LICENSE.txt` and a notice with the commit as `OpenCADStudio-NOTICE.txt`.
+- Open CAD Studio, which every package carries, is licensed under GPL-3.0 by its authors. Its source is not part of this repository: [native/packaging/open-cad-studio.pin](native/packaging/open-cad-studio.pin) names the commit of its repository that the packages are built from, and every release carries the source of that commit as `open-cad-studio-source_SHORT.tar.gz` and the crates it takes from git repositories, some of them under the MPL-2.0 or the LGPL-2.1-or-later, as `open-cad-studio-vendor_SHORT.tar.gz`. The packages carry its licence text as `OpenCADStudio-LICENSE.txt` and a notice with the commit as `OpenCADStudio-NOTICE.txt`.
 - The fonts Inter and Space Grotesk are bundled under the SIL Open Font License 1.1; see [native/assets/fonts](native/assets/fonts/README.md).
 - The Rust libraries the application links are recorded in `native/Cargo.lock`, each under its own licence; [native/NOTICE](native/NOTICE) has the third-party notices.
 - Building models come from [3DBAG](https://docs.3dbag.nl/nl/copyright/) (CC BY 4.0), and the map in the 3D BAG panel from [Kadaster through PDOK](https://www.pdok.nl/copyright/) (CC BY 4.0). The application shows both credits, and files it saves from 3DBAG carry the credit.

@@ -60,11 +60,18 @@ tested on build machines with software rendering only.
   checks. Reading the pin and fetching and checking the source is in
   `open-cad-studio-source.sh`, which `common.sh` sources; a change there or in
   the build script builds the program again in the workflow, a change to the
-  other scripts does not. `archive-open-cad-studio-source.sh` writes the source archive of the
-  release from the same checkout. `check-open-cad-studio.sh` checks in an
-  installed or unpacked package that Open CAD Studio lies where the
-  application looks for it, starts, and converts a small DXF file without a
-  window. `OpenCADStudio-NOTICE.txt.in` is its notice.
+  other scripts does not.
+- `archive-open-cad-studio-source.sh` writes the two source archives of the
+  release from the same checkout: the commit, and the crates from git
+  repositories that `cargo vendor` writes into
+  `native/target/open-cad-studio/vendor`, which a later run for the same
+  commit uses again. It refuses to write them while the notices do not name
+  those crates, or a crate under a copyleft licence, and checks that the two
+  unpacked together resolve without the git repositories.
+- `check-open-cad-studio.sh` checks in an installed or unpacked package that
+  Open CAD Studio lies where the application looks for it, starts, and
+  converts a small DXF file without a window. `OpenCADStudio-NOTICE.txt.in` is
+  its notice.
 - `build-archive.sh` packs the binary with Open CAD Studio and the licence
   texts; the Windows installer is built from the folder it leaves behind.
   For Windows it takes Open CAD Studio built with the MSVC toolchain, as the
@@ -174,7 +181,11 @@ COMMIT`) into `open-cad-studio.pin`, build it with
 `build-open-cad-studio.sh`, open an exported DXF from a development build of
 the application, read the changes of its licence and of its git
 dependencies, and add a line to `CHANGELOG.md`. The script refuses a pin
-whose hashes or date do not fit what it fetched.
+whose hashes or date do not fit what it fetched. Then run
+`archive-open-cad-studio-source.sh`: it names the git repositories, commits
+and crates that `OpenCADStudio-NOTICE.txt.in` has to list for the new
+commit, and the crates under a copyleft licence that `NOTICE.txt` has to
+name, and writes nothing until both do.
 
 The release workflow gives every Linux package a build attestation
 (`actions/attest`) before it creates the release; the release notes and the
