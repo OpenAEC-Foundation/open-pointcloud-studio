@@ -743,6 +743,7 @@
   "Photo {number} of {count}": "Foto {number} van {count}",
   "Photo {number} of {count} · {kind}": "Foto {number} van {count} · {kind}",
   "loading…": "laden…",
+  "cannot be shown": "kan niet worden getoond",
   "Colour from photos": "Kleur uit foto's",
   "Largest distance (m)": "Grootste afstand (m)",
   "Colour points": "Punten kleuren",

@@ -1146,18 +1146,22 @@ with the walking camera, which `set_panorama` turns; a pinhole photo is first
 seen from its own camera, with its field of view and its turn about its
 viewing direction, until `set_panorama` or a drag hands the view to the
 walking camera. The photo is decoded in the background, at most 4096 pixels
-each way, and its neighbours along the path are read ahead.
-`status.result.photos.view` reports the `layer`, `index`, `count`, `kind`,
-whether it is `pinned` to its own camera, the `zoom` of that camera, `shown`
-(true once the photo is decoded), `shown_after_ms` (from entering it until it
-could be shown) and `decode_ms`; `status.result.photos` also has the `blend`,
-the photos `listing` and `decoding`, and the decoded photos kept (`cached`,
-at most four, and `cached_bytes`). `pick_screen`, measuring and annotations
-work on the points under the photo. `close_panorama` leaves the photo and puts
-the camera back where it was before the first photo was entered, into the
-station panorama it stood in then, which is decoded again; `walk` and
-walking on leave the photo where it was. `screenshot` and view snapshots wait
-for the photo as they wait for the points of the camera.
+each way, and its neighbours along the path are read ahead: two at a time,
+and one more for the photo that is entered, so that stepping on quickly does
+not start a decode for every photo passed; a photo stepped past is not decoded
+or kept. `status.result.photos.view` reports the `layer`, `index`, `count`,
+`kind`, whether it is `pinned` to its own camera, the `zoom` of that camera,
+`shown` (true once the photo is decoded), `failed` (true when it could not be
+decoded; it is not asked for again until the photos are left, and its
+neighbours are read ahead all the same), `shown_after_ms` (from entering it
+until it could be shown) and `decode_ms`; `status.result.photos` also has the
+`blend`, the photos `listing` and `decoding`, and the decoded photos kept
+(`cached`, at most four, and `cached_bytes`). `pick_screen`, measuring and
+annotations work on the points under the photo. `close_panorama` leaves the
+photo and puts the camera back where it was before the first photo was
+entered, into the station panorama it stood in then, which is decoded again;
+`walk` and walking on leave the photo where it was. `screenshot` and view
+snapshots wait for the photo as they wait for the points of the camera.
 
 ## Colour from photos
 

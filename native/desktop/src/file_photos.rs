@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame};
@@ -28,7 +28,8 @@ use crate::{CloudEntry, DragMode, DragState, Message, PointViewport, Studio};
 pub const MAX_PHOTO_EDGE: u32 = 4096;
 /// Decoded photos kept: the one shown, its neighbours and the one before.
 const CACHED_PHOTOS: usize = 4;
-/// Photos decoded at the same time.
+/// Photos read ahead at the same time. The photo that is shown takes one
+/// place more, so that it never waits for those read ahead.
 const PARALLEL_DECODES: usize = 2;
 /// How much of a photo covers the points when it is first entered.
 const DEFAULT_BLEND: f32 = 0.7;
@@ -200,22 +201,73 @@ pub(crate) fn levels(full: ::image::RgbaImage) -> Vec<PhotoLevel> {
     levels
 }
 
-/// Read and decode one photo of a source.
+/// Read and decode one photo of a source; `None` when `wanted` says, before
+/// the photo is read and again before it is decoded, that it is no longer
+/// needed.
 pub(crate) fn decode_photo(
     source: &Path,
     index: usize,
     photo: &FilePhoto,
-) -> Result<DecodedPhoto, String> {
-    let started = Instant::now();
-    let bytes =
-        pointcloud_core::read_file_photo(source, photo).map_err(|error| error.to_string())?;
-    let full = decode_pixels(&bytes, photo.format, MAX_PHOTO_EDGE)?;
-    Ok(DecodedPhoto {
-        source: source.to_path_buf(),
+    wanted: &dyn Fn() -> bool,
+) -> Option<Result<DecodedPhoto, String>> {
+    decode_read(
+        source,
         index,
-        levels: levels(full),
-        decode_time: started.elapsed(),
-    })
+        photo.format,
+        || pointcloud_core::read_file_photo(source, photo).map_err(|error| error.to_string()),
+        wanted,
+    )
+}
+
+/// Decode the bytes `read` gives, unless `wanted` says before the reading
+/// or the decoding that the photo is no longer needed.
+fn decode_read(
+    source: &Path,
+    index: usize,
+    format: ScanImageFormat,
+    read: impl FnOnce() -> Result<Vec<u8>, String>,
+    wanted: &dyn Fn() -> bool,
+) -> Option<Result<DecodedPhoto, String>> {
+    let started = Instant::now();
+    if !wanted() {
+        return None;
+    }
+    let bytes = match read() {
+        Ok(bytes) => bytes,
+        Err(error) => return Some(Err(error)),
+    };
+    if !wanted() {
+        return None;
+    }
+    Some(
+        decode_pixels(&bytes, format, MAX_PHOTO_EDGE).map(|full| DecodedPhoto {
+            source: source.to_path_buf(),
+            index,
+            levels: levels(full),
+            decode_time: started.elapsed(),
+        }),
+    )
+}
+
+/// The photo that is shown, as the decodes under way see it: a photo that
+/// was stepped past while it waited is not decoded.
+#[derive(Debug, Default)]
+pub(crate) struct Wanted(Mutex<Option<(PathBuf, usize)>>);
+
+impl Wanted {
+    fn set(&self, shown: Option<(&Path, usize)>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) =
+            shown.map(|(source, index)| (source.to_path_buf(), index));
+    }
+
+    /// Whether a photo is the one that is shown or a neighbour of it.
+    fn wants(&self, source: &Path, index: usize) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|(shown, at)| shown == source && at.abs_diff(index) <= 1)
+    }
 }
 
 /// Where the camera was before the first photo was entered.
@@ -281,6 +333,8 @@ pub(crate) struct PhotoTool {
     decoding: HashSet<(PathBuf, usize)>,
     /// Photos that could not be decoded.
     failed: HashSet<(PathBuf, usize)>,
+    /// The photo that is shown, as the decodes under way see it.
+    wanted: Arc<Wanted>,
     /// Sources whose photos the Project Browser lists one by one.
     expanded: HashSet<PathBuf>,
 }
@@ -295,6 +349,7 @@ impl Default for PhotoTool {
             cache: VecDeque::new(),
             decoding: HashSet::new(),
             failed: HashSet::new(),
+            wanted: Arc::default(),
             expanded: HashSet::new(),
         }
     }
@@ -340,8 +395,17 @@ impl PhotoTool {
     /// Leave the photo and let go of the decoded photos.
     pub(crate) fn close(&mut self) {
         self.view = None;
+        self.wanted.set(None);
         self.cache.clear();
         self.failed.clear();
+    }
+
+    /// Whether a photo is the one that is shown or a neighbour of it along
+    /// the path: the photos worth keeping once they are decoded.
+    fn near_view(&self, source: &Path, index: usize) -> bool {
+        self.view
+            .as_ref()
+            .is_some_and(|view| view.source == source && view.index.abs_diff(index) <= 1)
     }
 
     /// Whether the photos of a source are still being listed.
@@ -349,12 +413,13 @@ impl PhotoTool {
         self.listing.contains(source)
     }
 
-    /// Whether the photo that is entered is still being decoded, so that a
-    /// picture of the view would lack it.
+    /// Whether the photo that is entered is still being decoded, or waits
+    /// for its turn, so that a picture of the view would lack it.
     pub(crate) fn waiting(&self) -> bool {
-        self.view
-            .as_ref()
-            .is_some_and(|view| self.decoding.contains(&(view.source.clone(), view.index)))
+        self.view.as_ref().is_some_and(|view| {
+            self.cached(&view.source, view.index).is_none()
+                && !self.failed.contains(&(view.source.clone(), view.index))
+        })
     }
 
     /// Forget the photos of sources that are no longer open.
@@ -379,12 +444,34 @@ pub(crate) struct ShownPhoto<'a> {
     pub eye: [f64; 3],
     pub axes: [[f64; 3]; 3],
     pub decoded: Option<&'a Arc<DecodedPhoto>>,
+    /// Whether the photo could not be decoded.
+    pub failed: bool,
     pub blend: f32,
     pub pinned: bool,
     pub zoom: f32,
 }
 
 impl ShownPhoto<'_> {
+    /// The name of the photo under the scene, and whether it is still being
+    /// decoded or cannot be shown.
+    pub(crate) fn title(&self) -> String {
+        let title = tr_args(
+            "Photo {number} of {count} · {kind}",
+            &[
+                ("number", &(self.index + 1)),
+                ("count", &self.count),
+                ("kind", &tr(kind_label(self.photo.kind()))),
+            ],
+        );
+        if self.failed {
+            format!("{title} · {}", tr("cannot be shown"))
+        } else if self.decoded.is_none() {
+            format!("{title} · {}", tr("loading…"))
+        } else {
+            title
+        }
+    }
+
     /// The camera of a pinned pinhole photo in a viewport of this size: its
     /// right, up and forward directions, and the focal length in pixels at
     /// which the whole photo fits.
@@ -440,6 +527,7 @@ pub(crate) fn shown<'a>(
         eye,
         axes,
         decoded: tool.cached(&view.source, view.index),
+        failed: tool.failed.contains(&(view.source.clone(), view.index)),
         blend: tool.blend,
         pinned: view.pinned && photo.kind() == PhotoKind::Pinhole,
         zoom: view.zoom,
@@ -503,6 +591,8 @@ pub enum PhotoAction {
     Enter(PathBuf, usize),
     /// A photo was decoded, or could not be.
     Decoded(PathBuf, usize, Result<Arc<DecodedPhoto>, String>),
+    /// A photo was stepped past before it was decoded.
+    Skipped(PathBuf, usize),
     /// Go this many photos along the path.
     Step(i64),
     /// How much of the photo covers the points.
@@ -594,9 +684,9 @@ impl Studio {
                     .as_ref()
                     .is_some_and(|view| view.source == source && view.index == index);
                 match result {
-                    // A photo that arrives after the photos were left is
-                    // not kept.
-                    Ok(_) if self.photos.view.is_none() => {}
+                    // A photo that arrives after the photos were left, or
+                    // once the camera stepped on past it, is not kept.
+                    Ok(_) if !self.photos.near_view(&source, index) => {}
                     Ok(decoded) => {
                         self.photos.store(decoded);
                         if shown {
@@ -616,6 +706,10 @@ impl Studio {
                         }
                     }
                 }
+                self.fetch_photos()
+            }
+            PhotoAction::Skipped(source, index) => {
+                self.photos.decoding.remove(&(source, index));
                 self.fetch_photos()
             }
             // Page Up and Page Down mean nothing without a photo, or while
@@ -807,20 +901,23 @@ impl Studio {
             return Task::none();
         };
         let source = view.source.clone();
+        self.photos.wanted.set(Some((&source, view.index)));
         let wanted = [
             Some(view.index),
             view.index.checked_add(1),
             view.index.checked_sub(1),
         ];
-        let shown_ready = self.photos.cached(&source, view.index).is_some();
+        // The neighbours wait until the photo that is shown is decoded, or
+        // could not be.
+        let shown_done = self.photos.cached(&source, view.index).is_some()
+            || self.photos.failed.contains(&(source.clone(), view.index));
         let mut tasks = Vec::new();
         for (place, index) in wanted.into_iter().enumerate() {
             let Some(photo) = index.and_then(|index| photos.photos.get(index)) else {
                 continue;
             };
             let index = index.unwrap_or_default();
-            // The neighbours wait for the photo that is shown.
-            if place > 0 && !shown_ready {
+            if place > 0 && !shown_done {
                 break;
             }
             let key = (source.clone(), index);
@@ -830,24 +927,37 @@ impl Studio {
             {
                 continue;
             }
-            // The photo that is shown never waits for those read ahead.
-            if place > 0 && self.photos.decoding.len() >= PARALLEL_DECODES {
+            // A few at a time: while Page Down is held, the photo that is
+            // shown waits for a place and is asked for again when a decode
+            // ends.
+            let places = if place == 0 {
+                PARALLEL_DECODES + 1
+            } else {
+                PARALLEL_DECODES
+            };
+            if self.photos.decoding.len() >= places {
                 break;
             }
             self.photos.decoding.insert(key);
             let photo = photo.clone();
             let path = source.clone();
             let reply = source.clone();
+            let still = Arc::clone(&self.photos.wanted);
             tasks.push(Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
-                        decode_photo(&path, index, &photo).map(Arc::new)
+                        decode_photo(&path, index, &photo, &|| still.wants(&path, index))
+                            .map(|result| result.map(Arc::new))
                     })
                     .await
-                    .map_err(|error| error.to_string())
-                    .and_then(|result| result)
+                    .unwrap_or_else(|error| Some(Err(error.to_string())))
                 },
-                move |result| Message::Photos(PhotoAction::Decoded(reply.clone(), index, result)),
+                move |result| {
+                    Message::Photos(match result {
+                        Some(result) => PhotoAction::Decoded(reply.clone(), index, result),
+                        None => PhotoAction::Skipped(reply.clone(), index),
+                    })
+                },
             ));
         }
         Task::batch(tasks)
@@ -926,6 +1036,7 @@ impl Studio {
                 "pinned": shown.as_ref().is_some_and(|shown| shown.pinned),
                 "zoom": view.zoom,
                 "shown": shown.as_ref().is_some_and(|shown| shown.decoded.is_some()),
+                "failed": shown.as_ref().is_some_and(|shown| shown.failed),
                 "shown_after_ms": view.shown_after.map(|time| time.as_millis() as u64),
                 "decode_ms": shown
                     .as_ref()
@@ -1446,17 +1557,7 @@ impl PointViewport<'_> {
         self.draw_faces(frame, size);
         self.draw_measure(frame, size);
         self.draw_annotations(frame, size);
-        let mut title = tr_args(
-            "Photo {number} of {count} · {kind}",
-            &[
-                ("number", &(shown.index + 1)),
-                ("count", &shown.count),
-                ("kind", &tr(kind_label(shown.photo.kind()))),
-            ],
-        );
-        if shown.decoded.is_none() {
-            title = format!("{title} · {}", tr("loading…"));
-        }
+        let title = shown.title();
         let width = title.chars().count() as f32 * 6.0 + 2.0;
         let position = UiPoint::new(14.0, size.height - 24.0);
         frame.fill_rectangle(
@@ -1625,6 +1726,15 @@ mod tests {
     /// A scan of points in a box of ten metres with two panoramas and a
     /// pinhole photo along a path through it.
     fn studio_with_photos() -> (Studio, tempfile::TempDir, PathBuf) {
+        studio_with(vec![
+            panorama([2.0, 5.0, 1.5]),
+            panorama([4.0, 5.0, 1.5]),
+            pinhole([6.0, 5.0, 1.5], ALONG_X),
+        ])
+    }
+
+    /// A scan of points in a box of ten metres with these photos.
+    fn studio_with(photos: Vec<FilePhoto>) -> (Studio, tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("path.xyz");
         let mut points = String::new();
@@ -1638,11 +1748,7 @@ mod tests {
         let mut studio = Studio::default();
         let _ = studio.update(Message::Loaded(Ok(cloud)));
         let photos = FilePhotos {
-            photos: vec![
-                panorama([2.0, 5.0, 1.5]),
-                panorama([4.0, 5.0, 1.5]),
-                pinhole([6.0, 5.0, 1.5], ALONG_X),
-            ],
+            photos,
             coordinate_system: Some("EPSG:28992".into()),
             skipped: 1,
         };
@@ -1740,6 +1846,7 @@ mod tests {
         assert_eq!(walk.eye, [2.0, 5.0, 1.5]);
         let shown = studio.shown_photo().unwrap();
         assert!(shown.decoded.is_none() && !shown.pinned);
+        assert_eq!(shown.title(), "Photo 1 of 3 · panorama · loading…");
         // The photo is decoded first, and a picture waits for it.
         assert!(studio.photos.decoding.contains(&(source.clone(), 0)));
         assert_eq!(studio.photos.decoding.len(), 1);
@@ -1961,7 +2068,29 @@ mod tests {
         )));
         assert_eq!(studio.status, "Photo 2 could not be shown: broken");
         assert!(!studio.photos.waiting());
-        assert!(studio.photos.decoding.is_empty());
+        // The scene says so, instead of waiting for it.
+        let shown = studio.shown_photo().unwrap();
+        assert!(shown.failed && shown.decoded.is_none());
+        assert_eq!(shown.title(), "Photo 2 of 3 · panorama · cannot be shown");
+        let status = send(&mut studio, json!({"command": "status"}));
+        assert_eq!(status["result"]["photos"]["view"]["failed"], true);
+        assert_eq!(status["result"]["photos"]["view"]["shown"], false);
+        // Its neighbours are read ahead all the same, and it is not asked
+        // for again.
+        let decoding: HashSet<usize> = studio
+            .photos
+            .decoding
+            .iter()
+            .map(|(_, index)| *index)
+            .collect();
+        assert_eq!(decoding, HashSet::from([0, 2]));
+        let _ = studio.update(Message::Photos(PhotoAction::Decoded(
+            source.clone(),
+            2,
+            Ok(decoded(&source, 2)),
+        )));
+        assert!(studio.photos.cached(&source, 2).is_some());
+        assert!(!studio.photos.decoding.contains(&(source.clone(), 1)));
         // A photo that arrives once the photos are left is let go.
         let _ = studio.update(Message::Escape);
         let _ = studio.update(Message::Photos(PhotoAction::Decoded(
@@ -1970,6 +2099,107 @@ mod tests {
             Ok(decoded(&source, 0)),
         )));
         assert!(studio.photos.cache.is_empty());
+    }
+
+    #[test]
+    fn holding_page_down_decodes_a_few_photos_at_a_time_and_keeps_those_near_the_one_shown() {
+        let path = (0..32)
+            .map(|index| panorama([1.0 + 0.25 * f64::from(index), 5.0, 1.5]))
+            .collect();
+        let (mut studio, _directory, source) = studio_with(path);
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        // Key repeat steps on while nothing is decoded yet.
+        for _ in 0..30 {
+            let _ = studio.update(Message::Photos(PhotoAction::Step(1)));
+            assert!(
+                studio.photos.decoding.len() <= PARALLEL_DECODES + 1,
+                "{:?}",
+                studio.photos.decoding
+            );
+        }
+        assert_eq!(studio.photos.view.as_ref().unwrap().index, 30);
+        let decoding = |studio: &Studio| -> HashSet<usize> {
+            studio
+                .photos
+                .decoding
+                .iter()
+                .map(|(_, index)| *index)
+                .collect()
+        };
+        assert_eq!(decoding(&studio), HashSet::from([0, 1, 2]));
+        // The photo shown waits for a place, and a picture waits for it.
+        assert!(studio.photos.waiting());
+        // The decodes under way were stepped past: those that have yet to
+        // read or decode their photo stop there.
+        let wanted = &studio.photos.wanted;
+        assert!(!wanted.wants(&source, 2));
+        assert!(wanted.wants(&source, 29) && wanted.wants(&source, 31));
+        assert!(!wanted.wants(Path::new("other.e57"), 30));
+
+        // A photo stepped past is let go when it arrives, and the photo
+        // shown takes its place.
+        let _ = studio.update(Message::Photos(PhotoAction::Decoded(
+            source.clone(),
+            0,
+            Ok(decoded(&source, 0)),
+        )));
+        assert!(studio.photos.cache.is_empty());
+        assert_eq!(decoding(&studio), HashSet::from([1, 2, 30]));
+        let _ = studio.update(Message::Photos(PhotoAction::Skipped(source.clone(), 1)));
+        // Its neighbours wait for it.
+        assert_eq!(decoding(&studio), HashSet::from([2, 30]));
+        let _ = studio.update(Message::Photos(PhotoAction::Decoded(
+            source.clone(),
+            30,
+            Ok(decoded(&source, 30)),
+        )));
+        assert!(studio.shown_photo().unwrap().decoded.is_some());
+        assert_eq!(decoding(&studio), HashSet::from([2, 31]));
+        let _ = studio.update(Message::Photos(PhotoAction::Decoded(
+            source.clone(),
+            2,
+            Err("stepped past".into()),
+        )));
+        assert_eq!(decoding(&studio), HashSet::from([29, 31]));
+        let kept: Vec<usize> = studio
+            .photos
+            .cache
+            .iter()
+            .map(|photo| photo.index)
+            .collect();
+        assert_eq!(kept, [30]);
+    }
+
+    #[test]
+    fn a_decode_stops_where_its_photo_is_no_longer_wanted() {
+        let photo = panorama([0.0; 3]);
+        let missing = Path::new("missing.e57");
+        // Stepped past before it was read: nothing is read.
+        assert!(decode_photo(missing, 0, &photo, &|| false).is_none());
+        assert!(matches!(
+            decode_photo(missing, 0, &photo, &|| true),
+            Some(Err(_))
+        ));
+        let mut png = Vec::new();
+        ::image::DynamicImage::ImageRgb8(::image::RgbImage::new(8, 4))
+            .write_to(
+                &mut std::io::Cursor::new(&mut png),
+                ::image::ImageOutputFormat::Png,
+            )
+            .unwrap();
+        let read = || Ok(png.clone());
+        // Stepped past while it was read: it is not decoded.
+        let asked = std::cell::Cell::new(0);
+        let once = || {
+            asked.set(asked.get() + 1);
+            asked.get() == 1
+        };
+        assert!(decode_read(missing, 3, ScanImageFormat::Png, read, &once).is_none());
+        assert_eq!(asked.get(), 2);
+        let decoded = decode_read(missing, 3, ScanImageFormat::Png, read, &|| true)
+            .unwrap()
+            .unwrap();
+        assert_eq!((decoded.index, decoded.levels[0].width), (3, 8));
     }
 
     #[test]
