@@ -114,6 +114,21 @@ fn padlock<'a>(locked: bool, message: Message) -> Element<'a, Message> {
     .into()
 }
 
+/// What the status bar says of a view, a drawing or a viewport that is
+/// locked, in the language of the window.
+pub(crate) fn locked_status(name: &str) -> String {
+    crate::i18n::tr_args("{name} is locked", &[("name", &name)])
+}
+
+/// What the status bar says when a lock is set or taken off.
+fn lock_status(name: &str, locked: bool) -> String {
+    if locked {
+        locked_status(name)
+    } else {
+        crate::i18n::tr_args("{name} is unlocked", &[("name", &name)])
+    }
+}
+
 impl Studio {
     /// The name of the locked saved view the 3D scene shows, while it shows
     /// one.
@@ -132,12 +147,12 @@ impl Studio {
         if !changes_the_view(message) {
             return None;
         }
-        self.locked_view_shown()
-            .map(|name| format!("{name} is locked"))
+        self.locked_view_shown().map(|name| locked_status(&name))
     }
 
-    /// Why a command of the local API is refused: it would change the locked
-    /// view the scene shows, or update a locked view.
+    /// The name of the locked view a command of the local API would change:
+    /// the one the scene shows, or the one it would update. The command is
+    /// refused.
     pub(crate) fn api_locked_refusal(&self, command: &ApiCommand) -> Option<String> {
         if let ApiCommand::UpdateCameraView { name } = command {
             let source = self.active_camera_source()?;
@@ -147,7 +162,7 @@ impl Studio {
                 .iter()
                 .find(|view| view.source == source && view.name.eq_ignore_ascii_case(name.trim()))
                 .filter(|view| view.locked)
-                .map(|view| format!("{} is locked", view.name));
+                .map(|view| view.name.clone());
         }
         let changes = match command {
             ApiCommand::Camera { .. }
@@ -173,7 +188,6 @@ impl Studio {
             return None;
         }
         self.locked_view_shown()
-            .map(|name| format!("{name} is locked"))
     }
 
     /// Whether what a tab shows is locked.
@@ -262,13 +276,7 @@ impl Studio {
     pub(crate) fn update_lock(&mut self, target: LockTarget) -> Task<Message> {
         let locked = !self.is_locked(&target);
         match self.set_lock(&target, locked) {
-            Ok(name) => {
-                self.status = if locked {
-                    format!("{name} is locked")
-                } else {
-                    format!("{name} is unlocked")
-                };
-            }
+            Ok(name) => self.status = lock_status(&name, locked),
             Err(error) => self.status = error,
         }
         Task::none()
@@ -446,11 +454,7 @@ impl Studio {
         };
         match self.set_lock(&target, locked) {
             Ok(name) => {
-                self.status = if locked {
-                    format!("{name} is locked")
-                } else {
-                    format!("{name} is unlocked")
-                };
+                self.status = lock_status(&name, locked);
                 (
                     json!({"ok": true, "kind": kind, "name": name, "locked": locked}),
                     Task::none(),

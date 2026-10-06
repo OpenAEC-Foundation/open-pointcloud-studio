@@ -3764,9 +3764,11 @@ impl Studio {
     fn handle_api(&mut self, request: native_api::ApiRequest) -> Task<Message> {
         use native_api::ApiCommand;
 
-        if let Some(refusal) = self.api_locked_refusal(&request.command) {
-            self.status.clone_from(&refusal);
-            let _ = request.reply.send(json!({"ok": false, "error": refusal}));
+        if let Some(name) = self.api_locked_refusal(&request.command) {
+            self.status = locks::locked_status(&name);
+            let _ = request
+                .reply
+                .send(json!({"ok": false, "error": format!("{name} is locked")}));
             return Task::none();
         }
         let (response, task) = match request.command {

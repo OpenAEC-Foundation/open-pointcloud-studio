@@ -1284,11 +1284,12 @@ impl Studio {
         match start {
             TurnStart::Plan(guid) if self.drawing_locked(&guid) => {
                 if let Some(definition) = self.shown_sheet() {
-                    self.status = format!("{} is locked", definition.name);
+                    self.status = crate::locks::locked_status(&definition.name);
                 }
             }
             TurnStart::SectionBox if self.locked_view_shown().is_some() => {
-                self.status = format!("{} is locked", self.locked_view_shown().unwrap_or_default());
+                self.status =
+                    crate::locks::locked_status(&self.locked_view_shown().unwrap_or_default());
             }
             TurnStart::Plan(guid) => {
                 if self.drawing.busy() {

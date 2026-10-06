@@ -984,5 +984,7 @@
   "Leader": "Verwijzing",
   "Value; empty for the measured one": "Waarde; leeg voor de gemeten waarde",
   "Annotation scale": "Schaal van aantekeningen",
-  "Text height (mm)": "Teksthoogte (mm)"
+  "Text height (mm)": "Teksthoogte (mm)",
+  "{name} is locked": "{name} is vergrendeld",
+  "{name} is unlocked": "{name} is ontgrendeld"
 }

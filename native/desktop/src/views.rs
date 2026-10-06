@@ -1211,7 +1211,7 @@ impl Studio {
             ViewAction::Update(guid) => {
                 if let Some(index) = self.view_index(&guid) {
                     if self.views.list[index].locked {
-                        self.status = format!("{} is locked", self.views.list[index].name);
+                        self.status = crate::locks::locked_status(&self.views.list[index].name);
                         return Task::none();
                     }
                     match self.update_view(index) {
