@@ -5125,6 +5125,56 @@ mod tests {
         let _ = studio.update(Message::SetSectionEnabled(true));
         assert_eq!(studio.section_box(), Some(upright));
     }
+
+    #[test]
+    fn a_key_without_a_character_between_r_and_o_starts_ro_over() {
+        use iced::keyboard::key::Named;
+
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        let original = studio.section_box().unwrap();
+        let typed = |studio: &mut Studio, key: &str| {
+            let _ = studio.update(Message::KeyTyped(key.into(), false));
+        };
+        let named = |studio: &mut Studio, key: Named| {
+            let _ = studio.update(Message::NamedKey(key, true));
+        };
+        for between in [
+            Named::Space,
+            Named::Escape,
+            Named::Enter,
+            Named::Tab,
+            Named::ArrowUp,
+        ] {
+            typed(&mut studio, "r");
+            named(&mut studio, between);
+            typed(&mut studio, "o");
+            assert!(studio.turn.is_none(), "{between:?}");
+            assert_eq!(studio.section_box(), Some(original));
+        }
+        // Backspace and Enter type and apply the angle of a turn.
+        typed(&mut studio, "r");
+        typed(&mut studio, "o");
+        assert!(studio.turn.is_some(), "{}", studio.status);
+        typed(&mut studio, "1");
+        typed(&mut studio, "5");
+        named(&mut studio, Named::Backspace);
+        named(&mut studio, Named::Enter);
+        assert!(studio.turn.is_none());
+        assert_eq!(studio.section_box().unwrap().rotation_degrees, 1.0);
+        // Taken by a text field, Enter does not apply it; Escape cancels it.
+        typed(&mut studio, "r");
+        typed(&mut studio, "o");
+        typed(&mut studio, "9");
+        let _ = studio.update(Message::NamedKey(Named::Enter, false));
+        assert!(studio.turn.is_some());
+        named(&mut studio, Named::Escape);
+        assert!(studio.turn.is_none());
+        assert_eq!(studio.section_box().unwrap().rotation_degrees, 1.0);
+    }
     #[test]
     fn the_open_block_shows_its_slab_and_the_file_view_opens_the_block_first() {
         let directory = tempfile::tempdir().unwrap();

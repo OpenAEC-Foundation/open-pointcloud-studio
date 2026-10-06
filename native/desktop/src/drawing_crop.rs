@@ -497,8 +497,9 @@ pub fn with_figure(
 }
 
 /// The two-letter command RO: R and then O within `SEQUENCE_TIME`, both
-/// typed while no text field has the keyboard. Any other key in between, a
-/// key a text field takes or a pause too long starts it over.
+/// typed while no text field has the keyboard. Any other key in between,
+/// also one without a character such as Space or Escape, a key a text field
+/// takes or a pause too long starts it over.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct KeySequence {
     r_at: Option<Instant>,
@@ -520,6 +521,36 @@ impl KeySequence {
         }
         false
     }
+
+    /// A key without a character, such as Space, Enter, Tab, an arrow or
+    /// Escape, was pressed: RO starts over. Shift and the other modifiers
+    /// do not count.
+    pub fn interrupt(&mut self) {
+        self.r_at = None;
+    }
+}
+
+/// Whether a key without a character only changes the keys typed with it:
+/// Shift, Control, Alt and the like, and the lock keys.
+pub fn is_modifier_key(named: iced::keyboard::key::Named) -> bool {
+    use iced::keyboard::key::Named;
+    matches!(
+        named,
+        Named::Shift
+            | Named::Control
+            | Named::Alt
+            | Named::AltGraph
+            | Named::Super
+            | Named::Meta
+            | Named::Hyper
+            | Named::Fn
+            | Named::FnLock
+            | Named::Symbol
+            | Named::SymbolLock
+            | Named::CapsLock
+            | Named::NumLock
+            | Named::ScrollLock
+    )
 }
 
 /// What RO turns, by what the window shows.
@@ -2098,6 +2129,29 @@ mod tests {
         assert!(!sequence.typed("r", at(12_000), false));
         assert!(!sequence.typed("o", at(12_100), true));
         assert!(!sequence.typed("o", at(12_200), false));
+        // A key without a character starts over too.
+        assert!(!sequence.typed("r", at(13_000), false));
+        sequence.interrupt();
+        assert!(!sequence.typed("o", at(13_200), false));
+    }
+
+    #[test]
+    fn shift_and_the_like_are_no_other_key_between_r_and_o() {
+        use iced::keyboard::key::Named;
+        for named in [Named::Shift, Named::Control, Named::Alt, Named::CapsLock] {
+            assert!(is_modifier_key(named), "{named:?}");
+        }
+        for named in [
+            Named::Space,
+            Named::Enter,
+            Named::Escape,
+            Named::Tab,
+            Named::ArrowLeft,
+            Named::Backspace,
+            Named::F5,
+        ] {
+            assert!(!is_modifier_key(named), "{named:?}");
+        }
     }
 
     #[test]

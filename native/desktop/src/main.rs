@@ -1081,29 +1081,16 @@ fn main() -> iced::Result {
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                     Some(Message::FileDropped(path))
                 }
+                // Escape, Delete, Backspace and Enter, and every other key
+                // without a character but Shift and the like, which end a
+                // half-typed RO.
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    key: iced::keyboard::Key::Named(named),
                     ..
-                }) => Some(Message::Escape),
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete),
-                    ..
-                }) if status == iced::event::Status::Ignored => {
-                    Some(Message::ModelKey(ModelKey::Delete))
-                }
-                // Backspace and Enter edit and finish a measurement.
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace),
-                    ..
-                }) if status == iced::event::Status::Ignored => {
-                    Some(Message::Measure(measure::MeasureAction::RemoveLast))
-                }
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
-                    ..
-                }) if status == iced::event::Status::Ignored => {
-                    Some(Message::Measure(measure::MeasureAction::Finish))
-                }
+                }) if !drawing_crop::is_modifier_key(named) => Some(Message::NamedKey(
+                    named,
+                    status == iced::event::Status::Ignored,
+                )),
                 // With the command key of the system: Control, and Command on
                 // macOS.
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
@@ -1596,6 +1583,23 @@ impl Studio {
             None => Task::none(),
         }
     }
+
+    /// A key without a character was pressed: it starts RO over. Escape
+    /// steps back; Delete deletes the selection, and Backspace and Enter
+    /// edit and finish a measurement or a turn, while no text field took
+    /// the key.
+    fn named_key(&mut self, named: iced::keyboard::key::Named, ignored: bool) -> Task<Message> {
+        use iced::keyboard::key::Named;
+        self.key_sequence.interrupt();
+        let message = match named {
+            Named::Escape => Message::Escape,
+            Named::Delete if ignored => Message::ModelKey(ModelKey::Delete),
+            Named::Backspace if ignored => Message::Measure(measure::MeasureAction::RemoveLast),
+            Named::Enter if ignored => Message::Measure(measure::MeasureAction::Finish),
+            _ => return Task::none(),
+        };
+        self.handle(message)
+    }
 }
 
 /// Keys that move the walking camera.
@@ -1815,6 +1819,9 @@ enum Message {
     /// the keys that walk, RO and the angle of a turn. Taken by a text field
     /// when the second is true.
     KeyTyped(String, bool),
+    /// A key without a character, other than Shift and the like; with true
+    /// when no text field took it.
+    NamedKey(iced::keyboard::key::Named, bool),
     /// The crop region of a drawing and the turn RO starts.
     Crop(drawing_crop::CropAction),
     Modifiers(iced::keyboard::Modifiers),
@@ -8288,6 +8295,7 @@ impl Studio {
             Message::DrawingView(action) => return self.update_drawing_view(action),
             Message::Crop(action) => return self.update_crop(action),
             Message::KeyTyped(value, captured) => return self.key_typed(&value, captured),
+            Message::NamedKey(named, ignored) => return self.named_key(named, ignored),
             Message::ClosedMesh(action) => return self.update_closed_mesh(action),
             Message::Faces(action) => return self.update_faces(action),
             Message::MeshToPlans(action) => return self.update_mesh_to_plans(action),
