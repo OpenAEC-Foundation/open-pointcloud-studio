@@ -147,30 +147,23 @@ pub fn render_group_items<'a>(
     }
     flush_small_col(&mut small_buf, &mut items_row);
     let tools = row(items_row).spacing(2).height(Fill).width(Length::Shrink);
+    // The title counts for the width of its group, so that a long one
+    // widens the group instead of being cut off; the line above it spans
+    // the group.
+    let title = text(crate::i18n::tr(title))
+        .size(10)
+        .wrapping(iced::widget::text::Wrapping::None)
+        .style(|theme| text::Style {
+            color: Some(ui_theme::colors(theme).ribbon_group_label),
+        });
     let content = column![
         container(tools)
             .height(TOOL_BAR_H - 20.0)
             .align_y(iced::Alignment::Start),
-        container(
-            column![
-                container(text("")).width(Fill).height(1).style(|theme| {
-                    container::Style::default()
-                        .background(ui_theme::colors(theme).ribbon_group_separator)
-                }),
-                // On one line, so that a long title widens its group
-                // instead of being cut off.
-                text(crate::i18n::tr(title))
-                    .size(10)
-                    .wrapping(iced::widget::text::Wrapping::None)
-                    .style(|theme| text::Style {
-                        color: Some(ui_theme::colors(theme).ribbon_group_label),
-                    }),
-            ]
-            .align_x(iced::Alignment::Center)
-            .spacing(0),
-        )
-        .width(Fill)
-        .align_x(iced::Alignment::Center),
+        container(text("")).width(Fill).height(1).style(|theme| {
+            container::Style::default().background(ui_theme::colors(theme).ribbon_group_separator)
+        }),
+        title,
     ]
     .align_x(iced::Alignment::Center)
     .spacing(0)
