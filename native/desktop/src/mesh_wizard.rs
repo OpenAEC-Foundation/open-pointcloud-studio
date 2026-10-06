@@ -22,7 +22,7 @@ use iced::{Border, Color, Element, Fill, Length, Task, Theme};
 use pointcloud_core::{IndexedPoint, MeshTopology, SurfaceMeshConfig};
 use serde_json::{json, Value};
 
-use crate::closed_mesh::{ClosedMeshAction, Layers};
+use crate::closed_mesh::{ClosedMeshAction, Layers, MeshOf};
 use crate::faces::FaceAction;
 use crate::i18n::{key, tr, tr_args};
 use crate::selection::ClassFilter;
@@ -33,6 +33,11 @@ use crate::{
 
 #[cfg(test)]
 mod tests;
+
+/// What the Run step says when no scan holds the result it shows.
+const NOT_HELD: &str = key(
+    "No scan holds this result any more: it was replaced or cleared, or its scan was closed. Run the method again to make it anew.",
+);
 
 /// The size of the card where the window has room for it.
 const CARD_WIDTH: f32 = 900.0;
@@ -215,11 +220,11 @@ impl WizardStep {
 }
 
 /// How the last terrain mesh or 3D surface ended. The two share one job of
-/// `main`, which writes an OBJ file and gives the mesh to the active scan.
+/// `main`, which writes an OBJ file and gives the mesh to the active scan;
+/// the card keeps the end of each apart.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FileMeshLast {
     Done {
-        mode: MeshMode,
         path: PathBuf,
         source_points: u64,
         vertices: usize,
@@ -229,16 +234,18 @@ pub(crate) enum FileMeshLast {
         /// The file name of the scan that got the mesh, or nothing when it
         /// was closed while the job ran.
         shown_on: Option<String>,
+        /// The mesh it got, to find the scan that still holds it.
+        mesh: MeshOf,
     },
-    Cancelled(MeshMode),
-    Failed(MeshMode, String),
+    Cancelled,
+    Failed(String),
 }
 
-impl FileMeshLast {
-    fn mode(&self) -> MeshMode {
-        match self {
-            Self::Done { mode, .. } | Self::Cancelled(mode) | Self::Failed(mode, _) => *mode,
-        }
+/// The place of the end of a mode among those the card keeps.
+fn slot(mode: MeshMode) -> usize {
+    match mode {
+        MeshMode::Terrain => 0,
+        MeshMode::Surface => 1,
     }
 }
 
@@ -269,13 +276,19 @@ pub(crate) struct MeshWizard {
     asked: Option<MeshMethod>,
     /// What the methods work on, with a print of what it was worked out from.
     scope: Option<(u64, Scope)>,
-    /// How the last terrain mesh or 3D surface ended.
-    pub(crate) file_last: Option<FileMeshLast>,
+    /// How the last terrain mesh and the last 3D surface ended, each in the
+    /// place `slot` gives its mode.
+    file_last: [Option<FileMeshLast>; 2],
 }
 
 impl MeshWizard {
     pub(crate) fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// How the last terrain mesh or 3D surface ended.
+    pub(crate) fn file_last(&self, mode: MeshMode) -> Option<&FileMeshLast> {
+        self.file_last[slot(mode)].as_ref()
     }
 
     /// Take the card away; whether it was shown. A job goes on.
@@ -327,9 +340,12 @@ pub(crate) enum RunState {
     /// The save dialog of its OBJ file is open.
     Choosing,
     Running(Progress),
-    /// Its figures, what became of the result, and advice.
+    /// Its figures, what became of the result, and advice. `kept` is the
+    /// line that says to which scan the job gave its result, when it gave
+    /// it to one.
     Done {
         rows: Vec<Element<'static, Message>>,
+        kept: Option<String>,
         lines: Vec<String>,
         warnings: Vec<String>,
     },
@@ -599,9 +615,15 @@ impl Studio {
             MeshWizardAction::Cancel => self.cancel_mesh_method(self.mesh_wizard.method),
             MeshWizardAction::ShowInModel => return self.show_mesh_result(),
             MeshWizardAction::Export => {
-                return match self.mesh_wizard.method {
-                    MeshMethod::Faces => self.update_faces(FaceAction::Export),
-                    _ => self.export_mesh(),
+                // The result the Run step shows, whichever scan is active.
+                let method = self.mesh_wizard.method;
+                let Some(holder) = self.mesh_result_holder(method) else {
+                    self.status = NOT_HELD.into();
+                    return Task::none();
+                };
+                return match method {
+                    MeshMethod::Faces => self.export_faces_of(Some(holder)),
+                    _ => self.export_mesh_of(Some(holder)),
                 };
             }
         }
@@ -737,42 +759,57 @@ impl Studio {
         }
     }
 
-    /// Close the card and show the result: the model instead of a drawing,
-    /// and the mesh or the faces of the active scan switched on.
+    /// Close the card and show the result the Run step shows: the model
+    /// instead of a drawing, and the mesh or the faces switched on of the
+    /// scan that holds them, whichever scan is active.
     fn show_mesh_result(&mut self) -> Task<Message> {
         self.mesh_wizard.close();
         self.show_model();
-        let Some(index) = self.active.filter(|index| *index < self.clouds.len()) else {
+        let method = self.mesh_wizard.method;
+        let Some(index) = self.mesh_result_holder(method) else {
             return Task::none();
         };
-        match self.mesh_wizard.method {
-            MeshMethod::Faces => {
-                if self.clouds[index].faces.is_some() {
-                    return self.update_faces(FaceAction::Visible(index, true));
-                }
-            }
-            _ => {
-                let entry = &mut self.clouds[index];
-                if entry.mesh.is_some() {
-                    entry.mesh_visible = true;
-                }
-            }
+        match method {
+            MeshMethod::Faces => return self.update_faces(FaceAction::Visible(index, true)),
+            _ => self.clouds[index].mesh_visible = true,
         }
         Task::none()
     }
 
-    /// Whether the result of a method can be saved now: the active scan
-    /// holds it and no save is under way.
-    fn mesh_result_exportable(&self, method: MeshMethod) -> bool {
+    /// The scan that holds the result the Run step of a method shows, by
+    /// its place: the mesh or the faces its last job made. Nothing when no
+    /// scan holds them any more, because they were replaced or cleared or
+    /// their scan was closed.
+    pub(crate) fn mesh_result_holder(&self, method: MeshMethod) -> Option<usize> {
         match method {
-            MeshMethod::Faces => self.faces_entry_enabled(),
-            _ => {
-                !self.mesh_export_pending
-                    && self
-                        .active
-                        .and_then(|index| self.clouds.get(index))
-                        .is_some_and(|entry| entry.mesh.is_some())
+            MeshMethod::Closed => self.closed_mesh_holder(),
+            MeshMethod::Faces => self.faces_holder(),
+            MeshMethod::Terrain | MeshMethod::Surface => {
+                match self.mesh_wizard.file_last(method.mode()?)? {
+                    FileMeshLast::Done { mesh, .. } => mesh.holder(&self.clouds),
+                    FileMeshLast::Cancelled | FileMeshLast::Failed(_) => None,
+                }
             }
+        }
+    }
+
+    /// Whether the result of a method can be saved now: a scan holds it and
+    /// no save is under way.
+    fn mesh_result_exportable(&self, method: MeshMethod) -> bool {
+        let pending = match method {
+            MeshMethod::Faces => self.faces.is_exporting(),
+            _ => self.mesh_export_pending,
+        };
+        !pending && self.mesh_result_holder(method).is_some()
+    }
+
+    /// The name of the button of the Run step that starts the method: Run
+    /// while it has no result, Run again once it has one.
+    fn run_label(&self, method: MeshMethod) -> &'static str {
+        if matches!(self.method_run(method), RunState::Done { .. }) {
+            key("Run again")
+        } else {
+            key("Run")
         }
     }
 
@@ -815,12 +852,7 @@ impl Studio {
         if self.mesh_dialog_pending && self.mesh_wizard.asked == Some(method) {
             return RunState::Choosing;
         }
-        match self
-            .mesh_wizard
-            .file_last
-            .as_ref()
-            .filter(|last| last.mode() == mode)
-        {
+        match self.mesh_wizard.file_last(mode) {
             None => RunState::Idle,
             Some(FileMeshLast::Done {
                 path,
@@ -852,24 +884,29 @@ impl Studio {
                         format_count(topology.components),
                     ),
                 ],
-                lines: vec![
-                    match shown_on {
-                        Some(name) => tr_args(
-                            "Shown as the mesh of {name}; it takes the place of the mesh that scan had.",
-                            &[("name", name)],
-                        ),
-                        None => tr("Its scan was closed while the job ran, so nothing is shown.")
-                            .to_owned(),
-                    },
-                    tr_args("Written to {path}.", &[("path", &path.display())]),
-                ],
+                kept: shown_on.as_ref().map(|name| {
+                    tr_args(
+                        "Shown as the mesh of {name}; it takes the place of the mesh that scan had.",
+                        &[("name", name)],
+                    )
+                }),
+                lines: [
+                    shown_on.is_none().then(|| {
+                        tr("Its scan was closed while the job ran, so nothing is shown.")
+                            .to_owned()
+                    }),
+                    Some(tr_args("Written to {path}.", &[("path", &path.display())])),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
                 warnings: Vec::new(),
             },
-            Some(FileMeshLast::Cancelled(_)) => RunState::Cancelled(
+            Some(FileMeshLast::Cancelled) => RunState::Cancelled(
                 tr("The last mesh was cancelled; an existing file was left as it was.")
                     .to_owned(),
             ),
-            Some(FileMeshLast::Failed(_, error)) => RunState::Failed(error.clone()),
+            Some(FileMeshLast::Failed(error)) => RunState::Failed(error.clone()),
         }
     }
 
@@ -888,9 +925,8 @@ impl Studio {
             String,
         >,
     ) {
-        self.mesh_wizard.file_last = Some(match result {
+        self.mesh_wizard.file_last[slot(mode)] = Some(match result {
             Ok((source, path, stats, measured)) => FileMeshLast::Done {
-                mode,
                 path: path.clone(),
                 source_points: stats.source_points,
                 vertices: stats.vertices,
@@ -902,9 +938,10 @@ impl Studio {
                     .iter()
                     .find(|entry| entry.matches_source(source))
                     .map(|entry| display_name(&entry.cloud.path).to_owned()),
+                mesh: MeshOf::of(&measured.mesh),
             },
-            Err(error) if error == "Operation cancelled" => FileMeshLast::Cancelled(mode),
-            Err(error) => FileMeshLast::Failed(mode, error.clone()),
+            Err(error) if error == "Operation cancelled" => FileMeshLast::Cancelled,
+            Err(error) => FileMeshLast::Failed(error.clone()),
         });
     }
 
@@ -1012,7 +1049,8 @@ impl Studio {
     /// The card as `status` of the local API reports it: whether it is
     /// shown, its step and method, the method whose job runs, whether the
     /// method shown can run and why not, whether its options are the
-    /// recommended ones, and the state of its Run step.
+    /// recommended ones, the state of its Run step and the scan that holds
+    /// its result.
     pub(crate) fn mesh_wizard_value(&self) -> Value {
         let wizard = &self.mesh_wizard;
         let refusal = self.mesh_refusal(wizard.method);
@@ -1026,6 +1064,10 @@ impl Studio {
             "run_reason": refusal,
             "recommended": self.mesh_recommended(wizard.method),
             "run_state": self.method_run(wizard.method).key(),
+            "result_scan": self
+                .mesh_result_holder(wizard.method)
+                .and_then(|index| self.clouds.get(index))
+                .map(|entry| display_name(&entry.cloud.path)),
             "scope": scope.map(|scope| json!({
                 "active": scope.active.as_ref().map(|(name, points)| json!({"name": name, "points": points})),
                 "visible_scans": scope.visible.0,
@@ -1615,10 +1657,20 @@ impl Studio {
             }
             RunState::Done {
                 rows,
+                kept,
                 lines,
                 warnings,
             } => {
+                // Show in model and Export act on the scan that holds this
+                // result, which need not be the active scan. Once no scan
+                // holds it, the step says so instead of where it went.
+                let holder = self.mesh_result_holder(method);
                 page = page.push(container(column(rows).spacing(0)).width(Length::Fixed(460.0)));
+                match kept {
+                    Some(line) if holder.is_some() => page = page.push(note(line, false)),
+                    Some(_) => page = page.push(note(tr(NOT_HELD).to_owned(), true)),
+                    None => {}
+                }
                 for line in lines {
                     page = page.push(note(line, false));
                 }
@@ -1629,7 +1681,7 @@ impl Studio {
                     row![
                         primary_button(
                             tr("Show in model"),
-                            Some(send(MeshWizardAction::ShowInModel)),
+                            holder.map(|_| send(MeshWizardAction::ShowInModel)),
                         ),
                         plain_button(
                             tr("Export…"),
@@ -1698,7 +1750,7 @@ impl Studio {
             WizardStep::Run => {
                 let idle = !self.method_runs(wizard.method);
                 footer.push(plain_button(
-                    tr("Run again"),
+                    tr(self.run_label(wizard.method)),
                     (idle && self.mesh_refusal(wizard.method).is_none())
                         .then_some(send(MeshWizardAction::Run)),
                 ))

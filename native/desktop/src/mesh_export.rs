@@ -81,7 +81,7 @@ pub(crate) fn read_measured(path: &Path) -> Result<Option<MeasuredMesh>, String>
 /// get another mesh or close while the dialog is open or the file is written.
 #[derive(Debug, Clone)]
 pub(crate) struct MeshExportRequest {
-    mesh: Arc<MeshGeometry>,
+    pub(crate) mesh: Arc<MeshGeometry>,
     source: PathBuf,
     bag_source: bool,
     transform: CloudTransform,
@@ -294,7 +294,12 @@ pub(crate) fn convert_file(source: &Path, destination: &Path) -> Result<String, 
 impl Studio {
     /// The mesh of the active layer with what a save needs of that layer.
     fn mesh_export_request(&self) -> Option<MeshExportRequest> {
-        let entry = self.active.and_then(|index| self.clouds.get(index))?;
+        self.mesh_export_request_of(self.active)
+    }
+
+    /// What an export of the mesh of a layer, by its place, writes.
+    pub(crate) fn mesh_export_request_of(&self, index: Option<usize>) -> Option<MeshExportRequest> {
+        let entry = self.clouds.get(index?)?;
         Some(MeshExportRequest {
             mesh: Arc::clone(entry.mesh.as_ref()?),
             source: entry.cloud.path.clone(),
@@ -306,10 +311,17 @@ impl Studio {
     /// Ask where to save the mesh of the active layer. The dialog offers the
     /// three formats, and the extension of the chosen name decides.
     pub(crate) fn export_mesh(&mut self) -> Task<Message> {
+        self.export_mesh_of(self.active)
+    }
+
+    /// Ask where to save the mesh of a layer, by its place: the active layer
+    /// for Export mesh…, the scan that holds the result for the Run step of
+    /// Mesh Pointcloud.
+    pub(crate) fn export_mesh_of(&mut self, index: Option<usize>) -> Task<Message> {
         if self.mesh_export_pending {
             return Task::none();
         }
-        let Some(request) = self.mesh_export_request() else {
+        let Some(request) = self.mesh_export_request_of(index) else {
             self.status = "Select a cloud with a surface mesh first".into();
             return Task::none();
         };

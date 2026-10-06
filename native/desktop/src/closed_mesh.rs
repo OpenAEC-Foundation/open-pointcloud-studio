@@ -987,11 +987,22 @@ struct Written {
 /// The allocation stays while it is looked at, so its address is never that
 /// of another mesh.
 #[derive(Debug, Clone)]
-struct MeshOf(Weak<MeshGeometry>);
+pub(crate) struct MeshOf(Weak<MeshGeometry>);
 
 impl MeshOf {
-    fn is(&self, mesh: &Arc<MeshGeometry>) -> bool {
+    pub(crate) fn of(mesh: &Arc<MeshGeometry>) -> Self {
+        Self(Arc::downgrade(mesh))
+    }
+
+    pub(crate) fn is(&self, mesh: &Arc<MeshGeometry>) -> bool {
         std::ptr::eq(self.0.as_ptr(), Arc::as_ptr(mesh))
+    }
+
+    /// The scan that holds this mesh now, by its place.
+    pub(crate) fn holder(&self, clouds: &[CloudEntry]) -> Option<usize> {
+        clouds
+            .iter()
+            .position(|entry| entry.mesh.as_ref().is_some_and(|mesh| self.is(mesh)))
     }
 }
 
@@ -1710,7 +1721,7 @@ impl Studio {
                             origin: finished.origin,
                         }),
                     shown_on,
-                    mesh: MeshOf(Arc::downgrade(&finished.mesh.mesh)),
+                    mesh: MeshOf::of(&finished.mesh.mesh),
                 }
             }
             ClosedMeshEnd::Cancelled => Last::Cancelled,
@@ -1942,6 +1953,15 @@ impl Studio {
             }
     }
 
+    /// The scan that holds the mesh of the last job, by its place; nothing
+    /// when that mesh was replaced or its scan closed.
+    pub(crate) fn closed_mesh_holder(&self) -> Option<usize> {
+        match &self.closed_mesh.last {
+            Some(Last::Done { mesh, .. }) => mesh.holder(&self.clouds),
+            _ => None,
+        }
+    }
+
     /// A job under way, or how the last one ended, as the Run step of Mesh
     /// Pointcloud shows it.
     pub(crate) fn closed_mesh_run(&self) -> mesh_wizard::RunState {
@@ -1975,14 +1995,19 @@ impl Studio {
                 shown_on,
                 ..
             }) => {
-                let mut lines = vec![match shown_on {
-                    Some(name) => tr_args(
+                let kept = shown_on.as_ref().map(|name| {
+                    tr_args(
                         "Shown as the mesh of {name}; it takes the place of the mesh that scan had.",
                         &[("name", name)],
-                    ),
-                    None => tr("Its scan was closed while the job ran, so nothing is shown.")
-                        .to_owned(),
-                }];
+                    )
+                });
+                let mut lines = Vec::new();
+                if kept.is_none() {
+                    lines.push(
+                        tr("Its scan was closed while the job ran, so nothing is shown.")
+                            .to_owned(),
+                    );
+                }
                 if let Some(written) = written {
                     lines.push(tr_args(
                         "Also written to {path}.",
@@ -1996,6 +2021,7 @@ impl Studio {
                         .into_iter()
                         .map(|sentence| sentence.translated())
                         .collect(),
+                    kept,
                 }
             }
             Some(Last::Cancelled) => mesh_wizard::RunState::Cancelled(

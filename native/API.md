@@ -963,7 +963,10 @@ mesh or 3D surface also while its save dialog is open), `run_ready` (whether
 the method shown can start now), `run_reason` (why not, in the language in
 use, or `null`), `recommended` (whether its options are the recommended
 ones), `run_state` of the method shown (`idle`, `choosing` while the save
-dialog of its OBJ file is open, `running`, `done`, `cancelled` or `failed`)
+dialog of its OBJ file is open, `running`, `done`, `cancelled` or `failed`),
+`result_scan` (the file name of the scan that holds the result of its last
+job, which **Show in model** and **Export…** of the Run step act on whichever
+scan is active, or `null` when no scan holds it any more or there is none)
 and `scope`, what the methods work on while the card is shown, else `null`:
 `active` (`name` and `points` of the active layer, or `null`),
 `visible_scans` and `visible_points` (the shown layers without 3D BAG

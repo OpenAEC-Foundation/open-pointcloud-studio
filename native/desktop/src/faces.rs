@@ -1201,7 +1201,33 @@ fn write(
     })
 }
 
-/// How the last job ended, for the Properties block and the local API.
+/// The faces a job found, without keeping them: the Run step of Mesh
+/// Pointcloud offers them for as long as a scan keeps these faces. The
+/// allocation stays while it is looked at, so its address is never that of
+/// other faces.
+#[derive(Debug, Clone)]
+struct FacesOf(Weak<DetectedSurfaces>);
+
+impl FacesOf {
+    /// The scan that keeps these faces now, by its place.
+    fn holder(&self, clouds: &[CloudEntry]) -> Option<usize> {
+        clouds.iter().position(|entry| {
+            entry
+                .faces
+                .as_ref()
+                .is_some_and(|layer| std::ptr::eq(self.0.as_ptr(), Arc::as_ptr(&layer.detected)))
+        })
+    }
+}
+
+impl PartialEq for FacesOf {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// How the last job ended, for the Run step of Mesh Pointcloud and the
+/// local API.
 #[derive(Debug, Clone, PartialEq)]
 enum Last {
     Done {
@@ -1209,6 +1235,7 @@ enum Last {
         /// The file name of the scan that keeps the faces, or nothing when
         /// that scan was closed while the job ran.
         kept_with: Option<String>,
+        faces: FacesOf,
     },
     Cancelled,
     Failed(String),
@@ -1218,7 +1245,9 @@ impl Last {
     /// The finished job as `job` and `status` of the local API report it.
     fn value(&self) -> Value {
         match self {
-            Self::Done { summary, kept_with } => {
+            Self::Done {
+                summary, kept_with, ..
+            } => {
                 let mut value = summary.value();
                 value["state"] = "complete".into();
                 value["operation"] = "detect_faces".into();
@@ -1239,7 +1268,9 @@ impl Last {
     /// The line of the status bar when the job has ended.
     fn status(&self) -> String {
         match self {
-            Self::Done { summary, kept_with } if summary.count() == 0 => {
+            Self::Done {
+                summary, kept_with, ..
+            } if summary.count() == 0 => {
                 let scan = kept_with.as_deref().unwrap_or("the region");
                 format!(
                     "No faces found in {scan}: {} points of the region took part. Check the \
@@ -1247,7 +1278,9 @@ impl Last {
                     format_count(summary.source_points)
                 )
             }
-            Self::Done { summary, kept_with } => {
+            Self::Done {
+                summary, kept_with, ..
+            } => {
                 let faces = counted(summary.count(), "face", "faces");
                 match kept_with {
                     Some(name) => format!("Detected {faces} in {name}: {}", summary.line()),
@@ -1280,6 +1313,11 @@ pub(crate) struct FaceTool {
 impl FaceTool {
     pub(crate) fn is_running(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// The save dialog of a faces file is open or the file is written.
+    pub(crate) fn is_exporting(&self) -> bool {
+        self.export_pending
     }
 
     /// Which scans a job reads.
@@ -1943,38 +1981,7 @@ impl Studio {
                     layer.visible = visible;
                 }
             }
-            FaceAction::Export => {
-                if self.faces.export_pending {
-                    return Task::none();
-                }
-                let Some(request) = self.faces_export_request() else {
-                    self.status = NO_FACES.into();
-                    return Task::none();
-                };
-                let stem = request
-                    .source
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("scan");
-                let suggestion = format!("{stem}-faces.{}", FaceFormat::ALL[0].0.extension());
-                self.faces.export_pending = true;
-                self.status =
-                    "Choose where to save the faces as JSON, OBJ, DXF, DWG or IFC…".into();
-                return Task::perform(
-                    async move {
-                        FaceFormat::ALL
-                            .iter()
-                            .fold(rfd::AsyncFileDialog::new(), |dialog, (format, name)| {
-                                dialog.add_filter(*name, &[format.extension()])
-                            })
-                            .set_file_name(suggestion)
-                            .save_file()
-                            .await
-                            .map(|selection| selection.path().to_path_buf())
-                    },
-                    move |path| Message::Faces(FaceAction::PathChosen(request.clone(), path)),
-                );
-            }
+            FaceAction::Export => return self.export_faces_of(self.active),
             FaceAction::PathChosen(request, path) => {
                 let Some(path) = path else {
                     self.faces.export_pending = false;
@@ -2094,7 +2101,11 @@ impl Studio {
                     }
                     display_name(&entry.cloud.path).to_owned()
                 });
-                Last::Done { summary, kept_with }
+                Last::Done {
+                    summary,
+                    kept_with,
+                    faces: FacesOf(Arc::downgrade(&finished.surfaces)),
+                }
             }
             FaceEnd::Cancelled => Last::Cancelled,
             FaceEnd::Failed(error) => Last::Failed(error),
@@ -2174,7 +2185,13 @@ impl Studio {
 
     /// The faces of the active scan with what a save needs of that scan.
     fn faces_export_request(&self) -> Option<ExportRequest> {
-        let (_, entry, layer) = self.active_faces()?;
+        self.faces_export_request_of(self.active)
+    }
+
+    /// What an export of the faces of a scan, by its place, writes.
+    pub(crate) fn faces_export_request_of(&self, index: Option<usize>) -> Option<ExportRequest> {
+        let entry = self.clouds.get(index?)?;
+        let layer = entry.faces.as_ref()?;
         Some(ExportRequest {
             surfaces: Arc::clone(&layer.placed),
             source: entry.cloud.path.clone(),
@@ -2212,6 +2229,41 @@ impl Studio {
                 .map_err(|error| error.to_string())?
             },
             move |result| Message::Faces(FaceAction::Exported(api_job_id.clone(), result)),
+        )
+    }
+
+    /// Ask where to save the faces a scan keeps, by its place: the active
+    /// scan for Export faces… and the File view, the scan that keeps the
+    /// result for the Run step of Mesh Pointcloud.
+    pub(crate) fn export_faces_of(&mut self, index: Option<usize>) -> Task<Message> {
+        if self.faces.export_pending {
+            return Task::none();
+        }
+        let Some(request) = self.faces_export_request_of(index) else {
+            self.status = NO_FACES.into();
+            return Task::none();
+        };
+        let stem = request
+            .source
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("scan");
+        let suggestion = format!("{stem}-faces.{}", FaceFormat::ALL[0].0.extension());
+        self.faces.export_pending = true;
+        self.status = "Choose where to save the faces as JSON, OBJ, DXF, DWG or IFC…".into();
+        Task::perform(
+            async move {
+                FaceFormat::ALL
+                    .iter()
+                    .fold(rfd::AsyncFileDialog::new(), |dialog, (format, name)| {
+                        dialog.add_filter(*name, &[format.extension()])
+                    })
+                    .set_file_name(suggestion)
+                    .save_file()
+                    .await
+                    .map(|selection| selection.path().to_path_buf())
+            },
+            move |path| Message::Faces(FaceAction::PathChosen(request.clone(), path)),
         )
     }
 
@@ -2514,6 +2566,15 @@ impl Studio {
             }
     }
 
+    /// The scan that keeps the faces of the last job, by its place; nothing
+    /// when they were cleared or replaced, or their scan closed.
+    pub(crate) fn faces_holder(&self) -> Option<usize> {
+        match &self.faces.last {
+            Some(Last::Done { faces, .. }) => faces.holder(&self.clouds),
+            _ => None,
+        }
+    }
+
     /// A job under way, or how the last one ended, as the Run step of Mesh
     /// Pointcloud shows it.
     pub(crate) fn faces_run(&self) -> mesh_wizard::RunState {
@@ -2540,23 +2601,30 @@ impl Studio {
         }
         match &tool.last {
             None => mesh_wizard::RunState::Idle,
-            Some(Last::Done { summary, kept_with }) => {
+            Some(Last::Done {
+                summary, kept_with, ..
+            }) => {
                 let mut lines = Vec::new();
                 let mut warnings = Vec::new();
+                let mut kept = None;
                 if summary.count() == 0 {
                     warnings.push(
                         tr("The last face detection found no faces. Check the section box and the tolerances.")
                             .to_owned(),
                     );
                 } else {
-                    lines.push(match kept_with {
-                        Some(name) => tr_args(
-                            "Kept with {name}, as a layer beside its points and its mesh; faces it had are replaced.",
-                            &[("name", name)],
+                    match kept_with {
+                        Some(name) => {
+                            kept = Some(tr_args(
+                                "Kept with {name}, as a layer beside its points and its mesh; faces it had are replaced.",
+                                &[("name", name)],
+                            ));
+                        }
+                        None => lines.push(
+                            tr("Its scan was closed while the job ran, so nothing is kept.")
+                                .to_owned(),
                         ),
-                        None => tr("Its scan was closed while the job ran, so nothing is kept.")
-                            .to_owned(),
-                    });
+                    }
                 }
                 if summary.density_doublings > 0 {
                     warnings.push(
@@ -2573,6 +2641,7 @@ impl Studio {
                     rows: summary_rows(summary),
                     lines,
                     warnings,
+                    kept,
                 }
             }
             Some(Last::Cancelled) => mesh_wizard::RunState::Cancelled(

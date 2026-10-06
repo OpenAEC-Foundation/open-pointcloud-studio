@@ -55,6 +55,54 @@ fn studio_with_room(directory: &Path) -> Studio {
     studio
 }
 
+/// The room again, moved 3 m along X, as a second layer that becomes the
+/// active one.
+fn add_second_room(studio: &mut Studio, directory: &Path) {
+    let path = directory.join("room-b.xyz");
+    let text: String = room_points()
+        .iter()
+        .map(|[x, y, z]| format!("{:.4} {y:.4} {z:.4}\n", x + 3.0))
+        .collect();
+    std::fs::write(&path, text).unwrap();
+    let cloud = Arc::new(pointcloud_core::open(&path, 2_000).unwrap());
+    let _ = studio.update(Message::Loaded(Ok(cloud)));
+    assert_eq!(studio.clouds.len(), 2);
+}
+
+/// A mesh of one triangle, measured as the mesh jobs measure theirs.
+fn triangle() -> MeasuredMesh {
+    MeasuredMesh::measure(MeshGeometry {
+        vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        triangles: vec![[0, 1, 2]],
+        ..MeshGeometry::default()
+    })
+}
+
+/// A terrain mesh or 3D surface that ended with a mesh for a layer.
+fn file_mesh_done(studio: &mut Studio, mode: MeshMode, index: usize, path: &Path) {
+    let cloud = Arc::clone(&studio.clouds[index].cloud);
+    let _ = studio.update(Message::MeshReady(
+        mode,
+        Ok((
+            cloud,
+            path.to_path_buf(),
+            pointcloud_core::MeshStats {
+                source_points: 23_600,
+                vertices: 3,
+                triangles: 1,
+            },
+            triangle(),
+        )),
+    ));
+}
+
+/// What a call answers in English. The language is one setting of the
+/// whole process, which other tests change while they run.
+fn english<T>(call: impl FnOnce() -> T) -> T {
+    let _language = TestLanguage::hold(Language::English);
+    call()
+}
+
 fn act(studio: &mut Studio, action: MeshWizardAction) {
     let _ = studio.update(Message::MeshWizard(action));
 }
@@ -215,7 +263,7 @@ fn each_method_keeps_its_options_and_the_preset_resets_only_its_own() {
     // A setting that cannot be read holds the Run button back, with the
     // reason in the language in use.
     let _ = studio.update(Message::SurfaceSetting(1, "40".into()));
-    let shown = wizard(&mut studio);
+    let shown = english(|| wizard(&mut studio));
     assert_eq!(shown["run_ready"], false);
     assert_eq!(
         shown["run_reason"],
@@ -253,7 +301,7 @@ fn a_job_goes_on_while_the_card_is_closed_and_the_card_opens_on_its_run_step() {
     );
     // A second job of the same method waits for this one.
     assert_eq!(
-        studio.mesh_refusal(MeshMethod::Closed).unwrap(),
+        english(|| studio.mesh_refusal(MeshMethod::Closed)).unwrap(),
         "A closed mesh is already being made"
     );
     // So does a terrain mesh: one mesh job at a time.
@@ -283,14 +331,13 @@ fn a_job_goes_on_while_the_card_is_closed_and_the_card_opens_on_its_run_step() {
         (&shown["run_state"], &shown["running"]),
         (&json!("done"), &Value::Null)
     );
-    let RunState::Done { rows, lines, .. } = studio.method_run(MeshMethod::Closed) else {
+    let RunState::Done { rows, kept, .. } = english(|| studio.method_run(MeshMethod::Closed))
+    else {
         panic!("the job is done");
     };
     assert!(rows.len() >= 9, "{}", rows.len());
-    assert!(
-        lines[0].starts_with("Shown as the mesh of room.xyz"),
-        "{lines:?}"
-    );
+    let kept = kept.expect("the scan got the mesh");
+    assert!(kept.starts_with("Shown as the mesh of room.xyz"), "{kept}");
     view_everything(&mut studio);
     // The mesh can be saved, and Properties gives its figures under the
     // mesh of the scan, how far the points lie from it included.
@@ -436,17 +483,36 @@ fn a_terrain_mesh_asks_for_its_file_and_its_end_is_kept() {
         shown_on,
         topology,
         ..
-    }) = &studio.mesh_wizard.file_last
+    }) = studio.mesh_wizard.file_last(MeshMode::Terrain)
     else {
         panic!("the job is done");
     };
     assert_eq!((*vertices, *triangles), (3, 1));
     assert_eq!(shown_on.as_deref(), Some("room.xyz"));
     assert_eq!(topology.open_edges, 3);
-    // The 3D surface has its own Run step.
+    assert_eq!(
+        studio.mesh_result_holder(MeshMethod::Terrain),
+        Some(0),
+        "the scan holds the terrain mesh"
+    );
+    // The 3D surface has its own Run step, and its end is kept beside that
+    // of the terrain mesh instead of taking its place.
     act(&mut studio, MeshWizardAction::Method(MeshMethod::Surface));
     assert_eq!(wizard(&mut studio)["run_state"], "idle");
+    file_mesh_done(&mut studio, MeshMode::Surface, 0, &path);
+    assert_eq!(wizard(&mut studio)["run_state"], "done");
     act(&mut studio, MeshWizardAction::Method(MeshMethod::Terrain));
+    assert_eq!(wizard(&mut studio)["run_state"], "done");
+    assert!(matches!(
+        studio.mesh_wizard.file_last(MeshMode::Terrain),
+        Some(FileMeshLast::Done { vertices: 3, .. })
+    ));
+    // The scan now holds the 3D surface: the terrain mesh is no longer held,
+    // and the Run step of the terrain mesh offers nothing to show or save.
+    assert_eq!(studio.mesh_result_holder(MeshMethod::Surface), Some(0));
+    assert_eq!(studio.mesh_result_holder(MeshMethod::Terrain), None);
+    assert!(!studio.mesh_result_exportable(MeshMethod::Terrain));
+    assert!(studio.mesh_result_exportable(MeshMethod::Surface));
     view_everything(&mut studio);
     let _ = studio.update(Message::MeshReady(
         MeshMode::Terrain,
@@ -575,6 +641,132 @@ fn the_local_api_opens_the_card_on_a_step_and_a_method() {
     ));
     let refused = send(&mut studio, json!({"command": "mesh_wizard", "open": true}));
     assert_eq!(refused["error"], "the Settings dialog is open");
+}
+
+#[test]
+fn the_run_step_shows_and_saves_its_own_result_whichever_scan_is_active() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut studio = studio_with_room(directory.path());
+    add_second_room(&mut studio, directory.path());
+
+    // A closed mesh of the first room.
+    studio.active = Some(0);
+    act(&mut studio, MeshWizardAction::Open);
+    act(&mut studio, MeshWizardAction::Method(MeshMethod::Closed));
+    act(&mut studio, MeshWizardAction::Step(WizardStep::Options));
+    let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::Voxel("0.04".into())));
+    act(&mut studio, MeshWizardAction::Run);
+    studio.finish_closed_mesh_here();
+    let closed = Arc::clone(studio.clouds[0].mesh.as_ref().expect("the closed mesh"));
+    assert_eq!(studio.mesh_result_holder(MeshMethod::Closed), Some(0));
+
+    // The card is closed, the second room becomes the active scan and holds
+    // a mesh of its own, and the card is opened again on the Run step of
+    // the closed mesh.
+    act(&mut studio, MeshWizardAction::Close);
+    studio.active = Some(1);
+    studio.clouds[1].mesh = Some(Arc::clone(&triangle().mesh));
+    studio.clouds[0].mesh_visible = false;
+    studio.clouds[1].mesh_visible = false;
+    act(&mut studio, MeshWizardAction::Open);
+    assert_eq!(
+        (studio.mesh_wizard.step, studio.mesh_wizard.method),
+        (WizardStep::Run, MeshMethod::Closed)
+    );
+    // Its figures are those of the first room, and so is what Export saves
+    // and Show in model switches on.
+    assert_eq!(studio.mesh_result_holder(MeshMethod::Closed), Some(0));
+    assert_eq!(wizard(&mut studio)["result_scan"], "room.xyz");
+    assert!(studio.mesh_result_exportable(MeshMethod::Closed));
+    let request = studio.mesh_export_request_of(Some(0)).unwrap();
+    assert!(Arc::ptr_eq(&request.mesh, &closed));
+    act(&mut studio, MeshWizardAction::Export);
+    assert!(studio.mesh_export_pending, "{}", studio.status);
+    studio.mesh_export_pending = false;
+    act(&mut studio, MeshWizardAction::ShowInModel);
+    assert!(studio.clouds[0].mesh_visible);
+    assert!(!studio.clouds[1].mesh_visible);
+    assert_eq!(studio.active, Some(1), "the active scan stays");
+
+    // A terrain mesh takes the place of the closed mesh in the first room:
+    // the Run step of the closed mesh keeps its figures, says that no scan
+    // holds them, and offers nothing to show or save.
+    studio.clouds[0].mesh_visible = false;
+    let terrain = directory.path().join("terrain.obj");
+    file_mesh_done(&mut studio, MeshMode::Terrain, 0, &terrain);
+    act(&mut studio, MeshWizardAction::Open);
+    act(&mut studio, MeshWizardAction::Method(MeshMethod::Closed));
+    act(&mut studio, MeshWizardAction::Step(WizardStep::Run));
+    assert!(matches!(
+        studio.method_run(MeshMethod::Closed),
+        RunState::Done { kept: Some(_), .. }
+    ));
+    assert_eq!(studio.mesh_result_holder(MeshMethod::Closed), None);
+    assert_eq!(wizard(&mut studio)["result_scan"], Value::Null);
+    assert!(!studio.mesh_result_exportable(MeshMethod::Closed));
+    act(&mut studio, MeshWizardAction::Export);
+    assert!(!studio.mesh_export_pending);
+    assert_eq!(studio.status, NOT_HELD);
+    view_everything(&mut studio);
+    act(&mut studio, MeshWizardAction::ShowInModel);
+    assert!(!studio.clouds[0].mesh_visible && !studio.clouds[1].mesh_visible);
+    // The terrain mesh is held by the first room.
+    assert_eq!(studio.mesh_result_holder(MeshMethod::Terrain), Some(0));
+    {
+        let _language = TestLanguage::hold(Language::Table(0));
+        assert!(crate::i18n::has_entry(NOT_HELD));
+    }
+
+    // Faces kept with the first room are shown and saved from there while
+    // the second room is active, and not once they are cleared.
+    studio.active = Some(0);
+    act(&mut studio, MeshWizardAction::Method(MeshMethod::Faces));
+    act(&mut studio, MeshWizardAction::Run);
+    studio.finish_faces_here();
+    assert_eq!(studio.mesh_result_holder(MeshMethod::Faces), Some(0));
+    studio.active = Some(1);
+    assert!(studio.mesh_result_exportable(MeshMethod::Faces));
+    act(&mut studio, MeshWizardAction::Export);
+    assert!(studio.faces.is_exporting(), "{}", studio.status);
+    let _ = studio.update(Message::Faces(FaceAction::PathChosen(
+        studio.faces_export_request_of(Some(0)).unwrap(),
+        None,
+    )));
+    assert!(!studio.faces.is_exporting());
+    studio.active = Some(0);
+    let _ = studio.update(Message::Faces(FaceAction::Clear));
+    assert_eq!(studio.mesh_result_holder(MeshMethod::Faces), None);
+    assert!(!studio.mesh_result_exportable(MeshMethod::Faces));
+    assert!(matches!(
+        studio.method_run(MeshMethod::Faces),
+        RunState::Done { kept: Some(_), .. }
+    ));
+}
+
+#[test]
+fn the_run_button_says_run_again_only_after_a_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut studio = studio_with_room(directory.path());
+    act(&mut studio, MeshWizardAction::Open);
+    act(&mut studio, MeshWizardAction::Step(WizardStep::Run));
+    for method in MeshMethod::ALL {
+        assert_eq!(studio.run_label(method), "Run", "{method:?}");
+    }
+    act(&mut studio, MeshWizardAction::Method(MeshMethod::Faces));
+    act(&mut studio, MeshWizardAction::Run);
+    act(&mut studio, MeshWizardAction::Cancel);
+    studio.finish_faces_here();
+    assert_eq!(wizard(&mut studio)["run_state"], "cancelled");
+    assert_eq!(studio.run_label(MeshMethod::Faces), "Run");
+    act(&mut studio, MeshWizardAction::Run);
+    studio.finish_faces_here();
+    assert_eq!(studio.run_label(MeshMethod::Faces), "Run again");
+    assert_eq!(studio.run_label(MeshMethod::Closed), "Run");
+    let _ = studio.update(Message::MeshReady(
+        MeshMode::Terrain,
+        Err("disk full".into()),
+    ));
+    assert_eq!(studio.run_label(MeshMethod::Terrain), "Run");
 }
 
 #[test]
