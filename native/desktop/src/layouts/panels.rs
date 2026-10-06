@@ -72,6 +72,15 @@ impl Studio {
                     dropping,
                     accent: colors.accent,
                     hint,
+                    tool_kind: self.notes.kind,
+                    picked: self
+                        .notes
+                        .picked
+                        .iter()
+                        .map(|point| [point[0], point[1]])
+                        .collect(),
+                    typing: self.notes.typing.is_some(),
+                    selected_note: self.notes.selected.clone(),
                 })
                 .width(Fill)
                 .height(Fill),
@@ -406,6 +415,9 @@ impl Studio {
             block = block.push(note(
                 tr("Or drag a row of VIEWS onto the paper.").to_owned(),
             ));
+        }
+        if let Some(notes) = self.paper_notes_properties() {
+            block = block.push(notes);
         }
         block = block
             .push(opencad_properties::section_header("Output"))

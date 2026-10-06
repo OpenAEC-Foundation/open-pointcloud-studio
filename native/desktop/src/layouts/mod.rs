@@ -21,7 +21,7 @@ mod drag;
 pub(crate) mod model;
 mod panels;
 mod pdf;
-mod plot;
+pub(crate) mod plot;
 #[cfg(test)]
 mod tests;
 
@@ -253,6 +253,12 @@ impl LayoutTool {
     /// What the sheet shows changed.
     fn changed(&mut self) {
         self.revision += 1;
+    }
+
+    /// The annotations of a drawing or a sheet changed: the sheet shown
+    /// draws them again.
+    pub(crate) fn annotations_changed(&mut self) {
+        self.changed();
     }
 
     fn store(&self) -> Result<(), String> {
@@ -1102,9 +1108,18 @@ impl Studio {
                 let Some(rect) = drawing_rect(definition) else {
                     return Content::Waiting(tr("This drawing has no crop region").to_owned());
                 };
-                match self.drawing_view.made(&viewport.guid) {
-                    Some(scene) => Content::Drawing { scene, rect },
-                    None => Content::Waiting(self.why_unmade(definition)),
+                match (
+                    self.drawing_view.made(&viewport.guid),
+                    crate::drawing_notes::drawing_frame(definition),
+                ) {
+                    (Some(scene), Some(frame)) => Content::Drawing {
+                        scene,
+                        rect,
+                        notes: &definition.annotations,
+                        frame,
+                        value_scale: crate::drawing_notes::drawing_scale(definition),
+                    },
+                    _ => Content::Waiting(self.why_unmade(definition)),
                 }
             }
             PlacedKind::View => {
@@ -1368,8 +1383,11 @@ impl Studio {
         for viewport in &layout.viewports {
             viewport.id.hash(&mut hasher);
             match self.viewport_content(viewport) {
-                Content::Drawing { scene, rect } => {
+                Content::Drawing {
+                    scene, rect, notes, ..
+                } => {
                     (scene as *const _ as usize).hash(&mut hasher);
+                    notes.len().hash(&mut hasher);
                     for value in rect.iter().flatten() {
                         value.to_bits().hash(&mut hasher);
                     }
@@ -1499,7 +1517,7 @@ fn rename_input_id() -> text_input::Id {
 
 /// A name for a file from the caption of a sheet: what a file name cannot
 /// hold becomes a dash.
-fn file_stem(caption: &str) -> String {
+pub(crate) fn file_stem(caption: &str) -> String {
     let stem: String = caption
         .chars()
         .map(|character| {

@@ -295,8 +295,37 @@ pub(crate) struct OverlayState {
     pan: Option<UiPoint>,
     click: Option<UiPoint>,
     moving: Option<Moving>,
+    /// A note of the paper held by the pointer: its identifier, where it
+    /// was taken and where it is now, on the paper.
+    note: Option<(String, [f64; 2], [f64; 2], UiPoint)>,
     /// A press on a locked viewport, which a click selects.
     locked_click: Option<String>,
+}
+
+/// A mark of a note moved by `shift` on the paper.
+fn shifted(
+    mark: &crate::drawing_notes::NoteMark,
+    shift: [f64; 2],
+) -> crate::drawing_notes::NoteMark {
+    use crate::drawing_notes::NoteMark;
+    let moved = |point: &[f64; 2]| [point[0] + shift[0], point[1] + shift[1]];
+    match mark {
+        NoteMark::Line(points) => NoteMark::Line(points.iter().map(moved).collect()),
+        NoteMark::Fill(points) => NoteMark::Fill(points.iter().map(moved).collect()),
+        NoteMark::Text {
+            at,
+            height,
+            rotation,
+            value,
+            align,
+        } => NoteMark::Text {
+            at: moved(at),
+            height: *height,
+            rotation: *rotation,
+            value: value.clone(),
+            align: *align,
+        },
+    }
 }
 
 /// What is drawn over the paper every frame, and the pointer.
@@ -310,6 +339,13 @@ pub(crate) struct Overlay<'a> {
     pub accent: Color,
     /// What the paper says while no view is placed on it.
     pub hint: Option<String>,
+    /// The tool that places a text or a line on the paper, and the points
+    /// clicked with it.
+    pub tool_kind: Option<crate::drawing_notes::NoteKind>,
+    pub picked: Vec<[f64; 2]>,
+    /// The text of what is placed is being typed.
+    pub typing: bool,
+    pub selected_note: Option<String>,
 }
 
 impl Overlay<'_> {
@@ -343,6 +379,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         cursor: mouse::Cursor,
     ) -> (event::Status, Option<Message>) {
         let action = |action| Some(Message::Layouts(action));
+        let notes = |action| Some(Message::Notes(action));
         let size = bounds.size();
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(
@@ -351,6 +388,31 @@ impl canvas::Program<Message> for Overlay<'_> {
                 let Some(position) = cursor.position_in(bounds) else {
                     return (event::Status::Ignored, None);
                 };
+                if button == mouse::Button::Left {
+                    let at = self.paper_at(position, size);
+                    // A click of a tool places a text or a line on the
+                    // paper.
+                    if self.tool_kind.is_some() {
+                        if self.typing {
+                            return (event::Status::Captured, None);
+                        }
+                        return (
+                            event::Status::Captured,
+                            notes(crate::drawing_notes::NoteAction::Pick(at)),
+                        );
+                    }
+                    // A note of the paper is selected, and dragged.
+                    let reach = 6.0 / self.camera().scale;
+                    if let Some((id, _)) = self.plot.notes.iter().rev().find(|(_, marks)| {
+                        crate::drawing_notes::distance_to_marks(marks, at) <= reach
+                    }) {
+                        state.note = Some((id.clone(), at, at, position));
+                        return (
+                            event::Status::Captured,
+                            notes(crate::drawing_notes::NoteAction::Select(Some(id.clone()))),
+                        );
+                    }
+                }
                 state.pan = Some(position);
                 if button == mouse::Button::Left {
                     state.click = Some(position);
@@ -395,6 +457,18 @@ impl canvas::Program<Message> for Overlay<'_> {
                         }),
                     );
                 }
+                if let Some((id, from, to, _)) = state.note.take() {
+                    if from == to {
+                        return (event::Status::Captured, None);
+                    }
+                    return (
+                        event::Status::Captured,
+                        notes(crate::drawing_notes::NoteAction::Moved(
+                            id,
+                            [to[0] - from[0], to[1] - from[1]],
+                        )),
+                    );
+                }
                 let click = state.click.take().filter(|_| button == mouse::Button::Left);
                 if let Some(moving) = state.moving.take() {
                     let id = self.plot.viewports[moving.place].id.clone();
@@ -435,6 +509,12 @@ impl canvas::Program<Message> for Overlay<'_> {
                 };
                 if state.click.is_some_and(moved) {
                     state.click = None;
+                }
+                if let Some((_, _, to, pressed)) = &mut state.note {
+                    if moved(*pressed) || *to != self.paper_at(*pressed, size) {
+                        *to = self.paper_at(now, size);
+                    }
+                    return (event::Status::Captured, None);
                 }
                 if let Some(moving) = &mut state.moving {
                     if state.click.is_none() {
@@ -564,6 +644,51 @@ impl canvas::Program<Message> for Overlay<'_> {
                 }
             }
         }
+        // The selected note of the paper, where it is dragged to, and what
+        // a tool is placing.
+        let to_screen = |point: [f64; 2]| {
+            let [x, y] = camera.to_screen(point, size);
+            UiPoint::new(x as f32, y as f32)
+        };
+        if let Some(selected) = &self.selected_note {
+            if let Some((_, marks)) = self.plot.notes.iter().find(|(id, _)| id == selected) {
+                let shift = state.note.as_ref().map_or([0.0, 0.0], |(_, from, to, _)| {
+                    [to[0] - from[0], to[1] - from[1]]
+                });
+                let moved: Vec<crate::drawing_notes::NoteMark> =
+                    marks.iter().map(|mark| shifted(mark, shift)).collect();
+                crate::drawing_notes::draw_marks(
+                    &mut frame,
+                    &moved,
+                    to_screen,
+                    camera.scale,
+                    self.accent,
+                );
+            }
+        }
+        if self.tool_kind.is_some() {
+            let mut points = self.picked.clone();
+            if let (false, Some(position)) = (self.typing, cursor.position_in(bounds)) {
+                points.push(self.paper_at(position, size));
+            }
+            if points.len() >= 2 {
+                crate::drawing_notes::draw_marks(
+                    &mut frame,
+                    &[crate::drawing_notes::NoteMark::Line(points.clone())],
+                    to_screen,
+                    camera.scale,
+                    self.accent,
+                );
+            }
+            for point in &self.picked {
+                let at = to_screen(*point);
+                frame.fill_rectangle(
+                    UiPoint::new(at.x - 3.0, at.y - 3.0),
+                    Size::new(6.0, 6.0),
+                    self.accent,
+                );
+            }
+        }
         // Where a row of VIEWS would be placed.
         if let (Some(dropping), Some(position)) = (self.dropping, cursor.position_in(bounds)) {
             let at = self.paper_at(position, size);
@@ -604,8 +729,11 @@ impl canvas::Program<Message> for Overlay<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if state.moving.is_some_and(|_| state.click.is_none()) {
+        if state.moving.is_some_and(|_| state.click.is_none()) || state.note.is_some() {
             return mouse::Interaction::Grabbing;
+        }
+        if self.tool_kind.is_some() && cursor.is_over(bounds) {
+            return mouse::Interaction::Crosshair;
         }
         if self.dropping.is_some() && cursor.is_over(bounds) {
             return mouse::Interaction::Copy;

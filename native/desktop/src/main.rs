@@ -19,6 +19,7 @@ mod cloud_centroid;
 mod cloud_transform;
 mod drawing;
 mod drawing_crop;
+mod drawing_notes;
 mod drawing_view;
 mod extensions;
 mod faces;
@@ -1716,7 +1717,13 @@ impl Studio {
         self.key_sequence.interrupt();
         let message = match named {
             Named::Escape => Message::Escape,
-            // On a sheet Delete takes the selected view off it.
+            // A selected annotation is deleted, and on a sheet Delete takes
+            // the selected view off it.
+            Named::Delete
+                if ignored && self.notes.selected.is_some() && self.note_target().is_some() =>
+            {
+                Message::Notes(drawing_notes::NoteAction::DeleteSelected)
+            }
             Named::Delete if ignored && self.drawing_view.shown_layout().is_some() => {
                 Message::Layouts(layouts::LayoutAction::DeleteSelected)
             }
@@ -2052,6 +2059,8 @@ enum Message {
     Layouts(layouts::LayoutAction),
     /// A padlock was clicked: lock what is unlocked, unlock what is locked.
     Lock(locks::LockTarget),
+    /// The annotations of drawings and sheets.
+    Notes(drawing_notes::NoteAction),
     ClosedMesh(closed_mesh::ClosedMeshAction),
     Faces(faces::FaceAction),
     PhotoColours(photo_colours::PhotoColourAction),
@@ -2228,6 +2237,9 @@ struct Studio {
     /// The sheets that views and drawings are placed on, and the one
     /// shown.
     layouts: layouts::LayoutTool,
+    /// The texts, dimensions, leaders and lines placed on drawings and
+    /// sheets.
+    notes: drawing_notes::NoteTool,
     /// The two-letter command RO as it is typed.
     key_sequence: drawing_crop::KeySequence,
     /// A turn started with RO: of the crop region of a plan in the Drawing
@@ -2851,6 +2863,7 @@ impl Default for Studio {
                 drawing_view::DrawingViewTool::new(settings.show_drawing_after_export)
             },
             layouts: layouts::LayoutTool::load(),
+            notes: drawing_notes::NoteTool::default(),
             key_sequence: drawing_crop::KeySequence::default(),
             turn: None,
             viewport_pointer: std::cell::Cell::new(None),
@@ -3862,6 +3875,7 @@ impl Studio {
                 answer.0["result"]["project_browser"] = self.browser_value();
                 answer.0["result"]["view_tabs"] = self.tabs_value();
                 answer.0["result"]["sheets"] = self.layouts_value();
+                answer.0["result"]["drawing_annotations"] = self.notes_value();
                 answer.0["result"]["turning"] = self.turn_value();
                 answer.0["result"]["section_align_pending"] =
                     Value::Bool(self.section_align_pending);
@@ -4112,6 +4126,16 @@ impl Studio {
                 let task = self.update(Message::ResetCamera);
                 (json!({"ok": true, "camera": self.camera_value()}), task)
             }
+            // An annotation of a drawing or a sheet, by its identifier.
+            ApiCommand::DeleteAnnotation {
+                id: Some(id),
+                drawing,
+                sheet,
+                ..
+            } => (
+                self.api_delete_note(&id, drawing.as_deref(), sheet.as_deref()),
+                Task::none(),
+            ),
             command @ (ApiCommand::ListCameraViews
             | ApiCommand::SaveCameraView { .. }
             | ApiCommand::UpdateCameraView { .. }
@@ -4842,6 +4866,15 @@ impl Studio {
             ApiCommand::ShowTab { name, index } => self.api_show_tab(name.as_deref(), index),
             ApiCommand::CloseTab { name, index } => self.api_close_tab(name.as_deref(), index),
             ApiCommand::SetSheetCrop { options } => self.api_set_sheet_crop(&options),
+            ApiCommand::AnnotateDrawing { options } => {
+                (self.api_annotate_drawing(&options), Task::none())
+            }
+            ApiCommand::AnnotateSheet { options } => {
+                (self.api_annotate_sheet(&options), Task::none())
+            }
+            ApiCommand::ExportDrawingFile { name, path } => {
+                self.api_export_drawing_file(name.as_deref(), path)
+            }
             ApiCommand::LockView { options } => self.api_lock(&options, true),
             ApiCommand::UnlockView { options } => self.api_lock(&options, false),
             ApiCommand::ListSheets => self.api_list_sheets(),
@@ -5864,6 +5897,7 @@ impl Studio {
         self.settle_mesh_wizard();
         self.settle_turn();
         self.settle_focus();
+        self.settle_notes();
         let task = match self.ask_box_sample() {
             Some(count) => Task::batch([task, count]),
             None => task,
@@ -8733,8 +8767,10 @@ impl Studio {
                 if self.drawing_view.shown && self.select_crop(false) {
                     return Task::none();
                 }
-                // So does a view dragged onto a sheet or selected on it.
-                if self.layout_escape() {
+                // An annotation being placed, its tool and the selected one
+                // let go, and so does a view dragged onto a sheet or
+                // selected on it.
+                if self.notes_escape() || self.layout_escape() {
                     return Task::none();
                 }
                 // A rename or a half-placed annotation ends before anything else.
@@ -8809,6 +8845,7 @@ impl Studio {
             Message::DrawingView(action) => return self.update_drawing_view(action),
             Message::Layouts(action) => return self.update_layouts(action),
             Message::Lock(target) => return self.update_lock(target),
+            Message::Notes(action) => return self.update_notes(action),
             Message::Crop(action) => return self.update_crop(action),
             Message::KeyTyped(value, captured) => return self.key_typed(&value, captured),
             Message::NamedKey(named, ignored) => return self.named_key(named, ignored),
@@ -10369,6 +10406,10 @@ impl Studio {
             Some(prompt) => canvas.push(prompt),
             None => canvas,
         };
+        let canvas = match self.notes_prompt().filter(|_| self.drawing_view.shown) {
+            Some(prompt) => canvas.push(prompt),
+            None => canvas,
+        };
         let canvas = match self.photo_controls().filter(|_| !self.drawing_view.shown) {
             Some(controls) => canvas.push(controls),
             None => canvas,
@@ -11125,6 +11166,12 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::ZoomToSection => ToolIcon::Fit,
         Message::CameraPreset(preset) => ToolIcon::Camera(*preset),
         Message::Views(action) => action.icon(),
+        Message::Notes(drawing_notes::NoteAction::Tool(kind)) => match kind {
+            drawing_notes::NoteKind::Text => ToolIcon::Text,
+            drawing_notes::NoteKind::Dimension => ToolIcon::Dimension,
+            drawing_notes::NoteKind::Leader => ToolIcon::Leader,
+            drawing_notes::NoteKind::Line => ToolIcon::Line,
+        },
         Message::ApplyTranslation => ToolIcon::Move,
         Message::ApplyScale => ToolIcon::Scale,
         Message::ToggleBoxSelect => ToolIcon::Select,
@@ -11488,6 +11535,10 @@ enum ToolIcon {
     /// The padlock of something locked, and of something that is not.
     Locked,
     Unlocked,
+    /// A text, a dimension and a leader on a drawing.
+    Text,
+    Dimension,
+    Leader,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -11570,6 +11621,12 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Sheet => include_bytes!("../../assets/opencad-icons/browser_sheet.svg"),
         ToolIcon::Locked => include_bytes!("../../assets/opencad-icons/browser_locked.svg"),
         ToolIcon::Unlocked => include_bytes!("../../assets/opencad-icons/browser_unlocked.svg"),
+        // The annotations of drawings are drawn like those of the views.
+        ToolIcon::Text => include_bytes!("../../assets/opencad-icons/annotation_text.svg"),
+        ToolIcon::Dimension => {
+            include_bytes!("../../assets/opencad-icons/annotation_dimension.svg")
+        }
+        ToolIcon::Leader => include_bytes!("../../assets/opencad-icons/annotation_leader.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)

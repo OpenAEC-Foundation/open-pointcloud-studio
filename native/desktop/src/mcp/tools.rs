@@ -414,9 +414,12 @@ fn table() -> Vec<Tool> {
             required("from", xyz("Start [x, y, z] in scene coordinates")),
             required("to", xyz("End [x, y, z] in scene coordinates")),
         ]),
-        tool("delete_annotation", Command, "Removes an annotation from the active view.", vec![
-            required("index", ordinal("Zero-based place in the active view's annotations")),
-        ]),
+        at_least_one(tool("delete_annotation", Command, "Removes an annotation: of the active view by its index, or of a drawing or of the paper of a sheet by its id as annotate_drawing and annotate_sheet give it, from the drawing or sheet named or from the one that holds it.", vec![
+            optional("index", ordinal("Zero-based place in the active view's annotations")),
+            optional("id", text("The id of an annotation of a drawing or a sheet", 1, 64)),
+            optional("drawing", text("The drawing that holds it, by its name", 1, 96)),
+            optional("sheet", sheet_name()),
+        ])),
         tool("set_annotation_tool", Command, "Chooses the note or line tool of the viewport, or leaves it; a half-placed annotation is dropped.", vec![
             optional("tool", json!({"type": ["string", "null"], "enum": ["note", "line", null], "description": "note, line, or null (or absent) to leave the tool"})),
         ]),
@@ -658,6 +661,30 @@ fn table() -> Vec<Tool> {
         ]),
         at_least_one(tool("lock_view", Command, "Locks a saved 3D view of the active scan, a drawing of create_drawing or a viewport on a sheet, as the padlock of its row, its tab or Properties does. While a locked 3D view is shown, orbiting, panning, zooming, walking, the view cube and the section box leave it as it is, and update_camera_view and the commands that move the camera or the box are refused with \"<name> is locked\"; it can still be renamed, duplicated (the copy is unlocked), deleted and annotated. A locked drawing keeps its crop region, its turn and the points it uses (set_sheet_crop, drag_crop_handle and rotate_crop are refused) and still pans, zooms and takes annotations. A locked viewport is not moved, resized, scaled or removed. The lock is kept. Answers with kind, name and locked.", lock_arguments())),
         at_least_one(tool("unlock_view", Command, "Unlocks what lock_view locked, named the same way. Answers with kind, name and locked.", lock_arguments())),
+        tool("annotate_drawing", Command, "Places a text, a dimension, a leader or a line on a plan, an elevation or a section of create_drawing, as the Text, Dimension, Leader and Line tools of the VIEWS group do in the Drawing view. Points are in the units and coordinates of the drawing, as the Drawing view shows them under the pointer; the points of a dimension, the arrow point of a leader and the ends of a line snap to an end or a corner of a line drawn within 0.25 m unless snap is false. The annotation is kept with the drawing at points of the model on its plane, so it stays when the drawing is made again, also while the drawing is locked. Sizes are those of the paper at the annotation scale of the drawing (1:100 by default): text 2.5 mm high unless height is given. A dimension shows the distance in the model in millimetres, rounded to 10 mm at 1:100 and 5 mm at 1:50, unless text is given; its line lies offset to the left of the direction from from to to (1 m below a horizontal one by default). Answers with id, kind, reading (the text or value it shows), its points and the annotations of the drawing.", vec![
+            optional("name", text("The drawing by its name as list_drawings gives it; without it the drawing shown", 1, 96)),
+            required("kind", choice("What to place", &["text", "dimension", "leader", "line"])),
+            optional("at", numbers("The start of the baseline of a text [x, y] in drawing units", 2)),
+            optional("from", numbers("The first point of a dimension or a line, or the point a leader points at, [x, y] in drawing units", 2)),
+            optional("to", numbers("The second point of a dimension or a line, or where the text of a leader goes, [x, y] in drawing units", 2)),
+            optional("offset", number("How far the line of a dimension lies from its points, in drawing units, to the left of the direction from from to to")),
+            optional("text", text("The text of a text or a leader; for a dimension a value in place of the measured one", 1, 240)),
+            optional("height", number_in("The height of the text on the paper in millimetres, 0.5 to 50; 2.5 by default", 0.5, 50.0)),
+            optional("snap", boolean("false to keep the points as given; true by default")),
+        ]),
+        tool("annotate_sheet", Command, "Places a text or a line on the paper of a sheet, as the Text and Line tools of the VIEWS group do on a sheet. Points are in millimetres from the lower left corner of the paper. Answers with id and the notes of the sheet.", vec![
+            optional("sheet", sheet_name()),
+            required("kind", choice("What to place", &["text", "line"])),
+            optional("at", numbers("The start of the baseline of a text [x, y] in millimetres", 2)),
+            optional("from", numbers("The start of a line [x, y] in millimetres", 2)),
+            optional("to", numbers("The end of a line [x, y] in millimetres", 2)),
+            optional("text", text("The text", 1, 240)),
+            optional("height", number_in("The height of the text in millimetres, 0.5 to 50; 2.5 by default", 0.5, 50.0)),
+        ]),
+        tool("export_drawing_file", Job, "Writes a plan, an elevation or a section of create_drawing as it is made, with every layer and its annotations, as DXF or DWG, as Export DXF/DWG… in the Drawing view does: texts on OPS-TEXT, real DIMENSION entities with their definition points on OPS-DIMENSIONS with a dimension style of the annotation scale (such as OPS-1-100, the value in millimetres), leaders with their text on OPS-LEADERS and lines on OPS-LINES. The drawing must be made in this session (show_drawing makes it). Answers with a job_id; the complete job reports the path and the bytes written.", vec![
+            optional("name", text("The drawing by its name as list_drawings gives it; without it the drawing shown", 1, 96)),
+            required("path", path(DRAWING_FILE)),
+        ]),
         tool("open_in_cad_viewer", Command, "Opens a DXF or DWG file in the CAD viewer: the Open CAD Studio that comes with the application, else the program chosen in Settings, else an installed Open CAD Studio, started read-only and without waiting for it; without any of them the file goes to the program the system has for it. Without a path it opens the last file that a drawing, faces or mesh export wrote. Answers with the path, the viewer program (null for the system program) and read_only. status.result.cad_viewer tells which viewer was found.", vec![
             optional("path", path("Absolute path of an existing .dxf or .dwg file; without it the last exported one")),
         ]),

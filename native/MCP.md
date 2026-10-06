@@ -157,7 +157,7 @@ follows when that view is restored.
 | `delete_camera_view` | `name` | Deletes a view |
 | `add_note` | `point`, `text` | Adds a note to the active view |
 | `add_line` | `from`, `to` | Adds a line to the active view |
-| `delete_annotation` | `index` | Removes an annotation of the active view |
+| `delete_annotation` | `index`, or `id` with optional `drawing` or `sheet` | Removes an annotation of the active view by its place, or of a drawing or a sheet by its id |
 | `set_annotation_tool` | optional `tool` (`note`, `line` or null) | Chooses or leaves the annotation tool |
 | `annotate_screen` | `pointer` | Clicks with the annotation tool at a viewport pixel |
 | `submit_note` | `text` | Gives the waiting note its text |
@@ -240,6 +240,9 @@ follows when that view is restored.
 | `export_sheet_pdf` | optional `sheet`, `path` (`.pdf`) | Writes a sheet as a PDF of the size of its paper; a job |
 | `lock_view` | optional `name`, `kind` (`view`, `drawing` or `viewport`), `sheet`, `viewport` | Locks a saved 3D view, a drawing or a viewport on a sheet |
 | `unlock_view` | optional `name`, `kind`, `sheet`, `viewport` | Unlocks it again |
+| `annotate_drawing` | optional `name`, `kind` (`text`, `dimension`, `leader` or `line`), optional `at`, `from`, `to`, `offset`, `text`, `height`, `snap` | Places a text, a dimension, a leader or a line on a drawing; points snap to its lines |
+| `annotate_sheet` | optional `sheet`, `kind` (`text` or `line`), optional `at`, `from`, `to`, `text`, `height` | Places a text or a line on the paper of a sheet |
+| `export_drawing_file` | optional `name`, `path` (`.dxf` or `.dwg`) | Writes a drawing with its annotations as DXF or DWG, with real dimensions; a job |
 | `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, read-only in the Open CAD Studio that comes with the application, else in the program chosen in Settings or an installed Open CAD Studio; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |

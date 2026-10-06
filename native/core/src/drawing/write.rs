@@ -6,12 +6,16 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use cadcodec::entities::hatch::{BoundaryEdge, BoundaryPath, BoundaryPathFlags, PolylineEdge};
-use cadcodec::entities::{EntityType, Hatch, LwPolyline, Point, Text};
-use cadcodec::tables::{Layer, TableEntry};
+use cadcodec::entities::{
+    Dimension, DimensionAligned, EntityType, Hatch, Leader, LeaderCreationType, Line, LwPolyline,
+    Point, Text, TextHorizontalAlignment,
+};
+use cadcodec::tables::{BlockRecord, DimStyle, Layer, TableEntry};
 use cadcodec::{CadDocument, Color, DwgWriter, DxfError, DxfVersion, DxfWriter, Vector2, Vector3};
 
 use super::{
-    Drawing2d, DrawingEntity, DrawingFormat, DrawingLayer, DrawingVersion, MAX_LAYER_NAME_CHARS,
+    dimension_axes, dimension_shape, dimension_step, dimension_value, leader_shape, Drawing2d,
+    DrawingEntity, DrawingFormat, DrawingLayer, DrawingUnits, DrawingVersion, MAX_LAYER_NAME_CHARS,
 };
 use crate::LoadError;
 
@@ -142,6 +146,22 @@ fn build_document(
             .map_err(|reason| LoadError::InvalidData(format!("drawing layer: {reason}")))?;
     }
 
+    // The dimension styles of the scales and text heights the dimensions and
+    // leaders have.
+    for (scale, height) in annotation_styles(drawing) {
+        let name = dimension_style_name(scale, height, drawing.units);
+        if document.dim_styles.get(&name).is_some() {
+            continue;
+        }
+        let mut style = dimension_style(&name, scale, height, drawing.units);
+        style.dimtxsty_handle = document.header.current_text_style_handle;
+        style.set_handle(document.allocate_handle());
+        document
+            .dim_styles
+            .add(style)
+            .map_err(|reason| LoadError::InvalidData(format!("dimension style: {reason}")))?;
+    }
+
     // A drawing program paints the entities in the order of the file. A solid
     // fill written after the points and outlines of its wall would cover
     // them, so the fills go first, wherever they stand in the model.
@@ -159,7 +179,9 @@ fn build_document(
             progress(index)?;
         }
         let mut color = Color::ByLayer;
-        let mut built = match entity {
+        // A leader is written as a leader and the text at its end.
+        let mut extra = None;
+        let built = match entity {
             DrawingEntity::Point { uv, rgb } => {
                 if let Some([r, g, b]) = *rgb {
                     color = Color::from_rgb(r, g, b);
@@ -200,13 +222,207 @@ fn build_document(
                 written.rotation = *rotation;
                 EntityType::Text(written)
             }
+            DrawingEntity::Dimension {
+                from,
+                to,
+                offset,
+                height,
+                scale,
+                text: typed,
+            } => {
+                let corner = |uv: [f64; 2]| {
+                    let at = scaled(uv);
+                    Vector3::new(at.x, at.y, 0.0)
+                };
+                let mut dimension = DimensionAligned::new(corner(*from), corner(*to));
+                if let (Some((normal, _)), Some(shape)) = (
+                    dimension_axes(*from, *to),
+                    dimension_shape(*from, *to, *offset, *height),
+                ) {
+                    let foot = [to[0] + normal[0] * offset, to[1] + normal[1] * offset];
+                    dimension.definition_point = corner(foot);
+                    dimension.base.definition_point = dimension.definition_point;
+                    dimension.base.text_middle_point = corner(shape.text_at);
+                    // The picture of the dimension in a block of its own, as
+                    // a drawing program keeps it, so that a program that
+                    // does not draw dimensions itself shows it all the same.
+                    let value = typed.clone().unwrap_or_else(|| {
+                        dimension_value((to[0] - from[0]).hypot(to[1] - from[1]), *scale)
+                    });
+                    dimension.base.block_name = dimension_block(
+                        &mut document,
+                        &shape,
+                        &text(&value),
+                        height * factor,
+                        &corner,
+                    )?;
+                }
+                dimension.base.style_name = dimension_style_name(*scale, *height, drawing.units);
+                if let Some(typed) = typed {
+                    dimension.base.set_text_override(Some(text(typed)));
+                }
+                EntityType::Dimension(Dimension::Aligned(dimension))
+            }
+            DrawingEntity::Leader {
+                points,
+                height,
+                scale,
+                value,
+            } => {
+                let shape = leader_shape(points[0], points[points.len() - 1], *height);
+                let mut leader = Leader::from_vertices(
+                    shape
+                        .line
+                        .iter()
+                        .map(|point| {
+                            let at = scaled(*point);
+                            Vector3::new(at.x, at.y, 0.0)
+                        })
+                        .collect(),
+                );
+                leader.creation_type = LeaderCreationType::NoAnnotation;
+                leader.dimension_style = dimension_style_name(*scale, *height, drawing.units);
+                leader.text_height = height * factor;
+                let width = super::read::estimated_width(value, *height);
+                let start = if shape.right {
+                    [shape.text_at[0] - width, shape.text_at[1]]
+                } else {
+                    shape.text_at
+                };
+                let at = scaled(start);
+                extra = Some(EntityType::Text(
+                    Text::with_value(text(value), Vector3::new(at.x, at.y, 0.0))
+                        .with_height(height * factor),
+                ));
+                EntityType::Leader(leader)
+            }
         };
-        let common = built.common_mut();
-        common.layer = layer_names[usize::from(*layer)].clone();
-        common.color = color;
-        document.add_entity(built).map_err(codec_error)?;
+        for mut written in std::iter::once(built).chain(extra) {
+            let common = written.common_mut();
+            common.layer = layer_names[usize::from(*layer)].clone();
+            common.color = color;
+            document.add_entity(written).map_err(codec_error)?;
+        }
     }
     Ok(document)
+}
+
+/// An anonymous block, *D1, *D2 and so on, that holds the picture of a
+/// dimension: its lines and its value, drawn by block as their reference.
+/// Answers its name.
+fn dimension_block(
+    document: &mut CadDocument,
+    shape: &super::DimensionShape,
+    value: &str,
+    height: f64,
+    corner: &impl Fn([f64; 2]) -> Vector3,
+) -> Result<String, LoadError> {
+    let number = (1..)
+        .find(|number| document.block_records.get(&format!("*D{number}")).is_none())
+        .unwrap_or(1);
+    let name = format!("*D{number}");
+    let mut record = BlockRecord::new(&name);
+    record.flags.anonymous = true;
+    record.set_handle(document.allocate_handle());
+    record.block_entity_handle = document.allocate_handle();
+    record.block_end_handle = document.allocate_handle();
+    let owner = record.handle;
+    document
+        .block_records
+        .add(record)
+        .map_err(|reason| LoadError::InvalidData(format!("dimension block: {reason}")))?;
+    let mut parts: Vec<EntityType> = shape
+        .lines
+        .iter()
+        .map(|[from, to]| EntityType::Line(Line::from_points(corner(*from), corner(*to))))
+        .collect();
+    let middle = corner(shape.text_at);
+    let mut label = Text::with_value(value, middle).with_height(height);
+    label.rotation = shape.text_rotation;
+    label.horizontal_alignment = TextHorizontalAlignment::Center;
+    label.alignment_point = Some(middle);
+    parts.push(EntityType::Text(label));
+    for mut part in parts {
+        let common = part.common_mut();
+        common.owner_handle = owner;
+        common.layer = "0".into();
+        common.color = Color::ByBlock;
+        document.add_entity(part).map_err(codec_error)?;
+    }
+    Ok(name)
+}
+
+/// The scales and text heights of the dimensions and leaders of a drawing,
+/// each once.
+fn annotation_styles(drawing: &Drawing2d) -> Vec<(f64, f64)> {
+    let mut styles: Vec<(f64, f64)> = Vec::new();
+    for (_, entity) in &drawing.entities {
+        let style = match entity {
+            DrawingEntity::Dimension { scale, height, .. }
+            | DrawingEntity::Leader { scale, height, .. } => (*scale, *height),
+            _ => continue,
+        };
+        if !styles.contains(&style) {
+            styles.push(style);
+        }
+    }
+    styles
+}
+
+/// The height of a text of `height` metres in the model on the paper at a
+/// scale, in millimetres.
+fn paper_height(scale: f64, height: f64) -> f64 {
+    height * 1000.0 / scale
+}
+
+/// The name of the dimension style of a scale and a text height: OPS-1-100
+/// for text 2.5 mm high at 1:100, with the height after it when it is
+/// another, and with M for a drawing in metres.
+pub(crate) fn dimension_style_name(scale: f64, height: f64, units: DrawingUnits) -> String {
+    let paper = paper_height(scale, height);
+    let mut name = format!("OPS-1-{}", trimmed(scale));
+    if (paper - super::DEFAULT_TEXT_HEIGHT).abs() > 1e-6 {
+        name.push_str(&format!("-{}", trimmed((paper * 100.0).round() / 100.0)));
+    }
+    if units == DrawingUnits::Metres {
+        name.push_str("-M");
+    }
+    name
+}
+
+fn trimmed(value: f64) -> String {
+    let text = format!("{value:.3}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// A dimension style that draws a dimension at a scale as it is on paper:
+/// text `height` metres high in the model, ticks instead of arrows, the
+/// value in whole millimetres rounded to the step of the scale, above the
+/// line.
+fn dimension_style(name: &str, scale: f64, height: f64, units: DrawingUnits) -> DimStyle {
+    let paper = paper_height(scale, height);
+    let factor = units.factor();
+    let mut style = DimStyle::new(name);
+    // Paper sizes in drawing units: millimetres, or metres for a drawing in
+    // metres, made larger by the scale.
+    let unit = factor / 1000.0;
+    style.dimscale = scale;
+    style.dimtxt = paper * unit;
+    style.dimasz = paper * unit;
+    style.dimtsz = paper * 0.5 * unit;
+    style.dimexe = paper * 0.6 * unit;
+    style.dimexo = paper * 0.4 * unit;
+    style.dimgap = paper * 0.25 * unit;
+    style.dimdli = paper * 1.5 * unit;
+    style.dimtad = 1;
+    style.dimtih = false;
+    style.dimtoh = false;
+    // The value in millimetres whatever the units of the drawing.
+    style.dimlfac = 1000.0 / factor;
+    style.dimdec = 0;
+    style.dimrnd = dimension_step(scale);
+    style.dimzin = 8;
+    style
 }
 
 /// The width over the height of the window a CAD program is assumed to

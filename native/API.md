@@ -874,6 +874,50 @@ still pans, zooms and takes annotations. A locked viewport refuses
 `list_drawings`, of a viewport in `list_sheets` and of a tab in `list_tabs`
 report the locks.
 
+## Annotations of drawings and sheets
+
+`annotate_drawing` places an annotation of `kind` `text`, `dimension`,
+`leader` or `line` on the drawing of `create_drawing` named `name` in any
+case, or on the drawing shown. Points are in the units and coordinates of the
+drawing, as the Drawing view shows them under the pointer: `at` for a text,
+`from` and `to` for a dimension, a line and a leader (its arrow point and
+where its text goes). The points of a dimension, the arrow point of a leader
+and the ends of a line snap to an end or a corner of a line drawn within
+0.25 m unless `snap` is `false`. An annotation is kept with its drawing at
+points of the model on the plane of the drawing, so it stays in place when
+the drawing is made again; a locked drawing takes annotations too. Sizes are
+those of the paper at the annotation scale of the drawing, 1:100 unless set
+in Properties: `height` is the height of a text on the paper in millimetres,
+2.5 by default. A dimension shows the distance between its points in the
+model in whole millimetres, rounded to 10 mm at 1:100 and coarser, 5 mm at
+1:50 and 1 mm at 1:20 and finer, unless `text` gives a value; its line lies
+`offset` drawing units to the left of the direction from `from` to `to`, by
+default a metre to the right. The answer has the `id`, the `kind`, the
+`reading` it shows, its `points` and the `annotations` of the drawing.
+
+`annotate_sheet` places a `text` (at `at`) or a `line` (from `from` to `to`)
+on the paper of the sheet `sheet` or the sheet shown, in millimetres from
+the lower left corner of the paper. `delete_annotation` with an `id` deletes
+an annotation of a drawing or a sheet, from the `drawing` or `sheet` named or
+from the one that holds it; with an `index` it deletes an annotation of the
+active view, as before. `status.result.drawing_annotations` has the tool of
+the Drawing view or the sheet, what is being placed, the selected
+annotation and the annotations of the drawing shown. On a sheet a drawing
+shows its annotations at the scale of its viewport, with the sizes they
+have on paper.
+
+`export_drawing_file` writes the drawing `name`, or the drawing shown, as it
+is made, with every layer and its annotations, to the absolute `.dxf` or
+`.dwg` `path`, as a job: texts on `OPS-TEXT`, real `DIMENSION` entities with
+their definition points on `OPS-DIMENSIONS` and a dimension style of the
+annotation scale (`OPS-1-100` at 1:100: text 2.5 mm, ticks, the value in
+millimetres rounded as above), leaders with their text on `OPS-LEADERS` and
+lines on `OPS-LINES`. Every dimension also carries the block of its picture
+(`*D1`, `*D2`, …), as a CAD program keeps it, so that a reader that does not
+draw dimensions itself shows it all the same; `open_drawing` draws a
+dimension without such a block from its points and style. The drawing must
+be made in this session; `show_drawing` makes it.
+
 ## View tabs
 
 The tabs above the main area show the 3D model and the views and drawings
@@ -1572,7 +1616,7 @@ layer with photo colours.
 | `delete_camera_view` | `name` | Deletes a named view of the active scan with its snapshot, ignoring name case |
 | `add_note` | `point`, `text` | Adds a note of 1–240 characters at an `[x, y, z]` scene position to the active view and returns the view's `annotations`. The snapshot is renewed when the viewport shows the view, otherwise when the view is next restored |
 | `add_line` | `from`, `to` | Adds a line (drawn as an arrow from the first to the second `[x, y, z]` scene position) to the active view and returns the view's `annotations` |
-| `delete_annotation` | `index` | Removes the annotation at that zero-based place in the active view's list |
+| `delete_annotation` | `index`, or `id` with optional `drawing` or `sheet` | Removes the annotation at that zero-based place in the active view's list, or an annotation of a drawing or a sheet by its `id` |
 | `set_annotation_tool` | `tool` | Chooses the `note` or `line` tool of the viewport, or leaves it with `null`; a half-placed annotation is dropped |
 | `annotate_screen` | `pointer` | Clicks at viewport pixel `[x, y]` with the active annotation tool: the picked point becomes the point of a note that waits for its text, or the start or the end of a line |
 | `submit_note` | `text` | Gives the note that waits for its text its text, adds it to the active view and returns the view's `annotations` |
@@ -1671,6 +1715,9 @@ layer with photo colours.
 | `export_sheet_pdf` | optional `sheet`, `path` | Writes a sheet as a PDF; returns a job ID |
 | `lock_view` | optional `name`, `kind`, `sheet`, `viewport` | Locks a saved 3D view, a drawing or a viewport on a sheet; see [Locks](#locks) |
 | `unlock_view` | optional `name`, `kind`, `sheet`, `viewport` | Unlocks it again |
+| `annotate_drawing` | optional `name`, `kind`, optional `at`, `from`, `to`, `offset`, `text`, `height`, `snap` | Places a text, a dimension, a leader or a line on a drawing; see [Annotations of drawings and sheets](#annotations-of-drawings-and-sheets) |
+| `annotate_sheet` | optional `sheet`, `kind`, optional `at`, `from`, `to`, `text`, `height` | Places a text or a line on the paper of a sheet |
+| `export_drawing_file` | optional `name`, `path` | Writes a drawing with its annotations as DXF or DWG; returns a job ID |
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as the keys R and then O do |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view; answers with the `camera` |
 | `set_drawing_layer` | `layer`, `visible` | Shows or hides a layer of the drawing in the Drawing view by its name, or every layer with `*` |

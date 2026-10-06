@@ -6,6 +6,7 @@
 //! The unit factor is applied once, by the writer, so a preview and an export
 //! are made from the same numbers.
 
+mod annotation;
 mod kept;
 mod outline;
 mod read;
@@ -18,6 +19,10 @@ use std::path::Path;
 
 use super::LoadError;
 
+pub use annotation::{
+    dimension_axes, dimension_shape, dimension_step, dimension_value, leader_shape, DimensionShape,
+    LeaderShape, DEFAULT_TEXT_HEIGHT, LAYER_DIMENSIONS, LAYER_LEADERS, LAYER_LINES, LAYER_TEXT,
+};
 pub use kept::{collect_slab_kept, KeptSlab, KEPT_POINT_BYTES};
 pub use outline::{
     trace_cut_regions, CutOutline, CutRegion, OutlineOptions, CUT_MIN_POINTS_PER_CELL,
@@ -523,6 +528,26 @@ pub enum DrawingEntity {
         rotation: f64,
         value: String,
     },
+    /// An aligned dimension from `from` to `to`, its line `offset` to the
+    /// left of the direction from the one to the other, its text `height`
+    /// high, at the scale `scale` whose paper sizes it has; `text` in place
+    /// of the measured value. See [`dimension_shape`].
+    Dimension {
+        from: [f64; 2],
+        to: [f64; 2],
+        offset: f64,
+        height: f64,
+        scale: f64,
+        text: Option<String>,
+    },
+    /// A leader: an arrow at the first point along the others, with `value`
+    /// `height` high at its end. See [`leader_shape`].
+    Leader {
+        points: Vec<[f64; 2]>,
+        height: f64,
+        scale: f64,
+        value: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -589,6 +614,48 @@ impl Drawing2d {
                 at,
                 height,
                 rotation: 0.0,
+                value: single_line(value),
+            },
+        ));
+    }
+
+    /// An aligned dimension; see [`DrawingEntity::Dimension`].
+    pub fn add_dimension(
+        &mut self,
+        layer: u16,
+        [from, to]: [[f64; 2]; 2],
+        offset: f64,
+        [height, scale]: [f64; 2],
+        text: Option<&str>,
+    ) {
+        self.entities.push((
+            layer,
+            DrawingEntity::Dimension {
+                from,
+                to,
+                offset,
+                height,
+                scale,
+                text: text.map(single_line).filter(|text| !text.is_empty()),
+            },
+        ));
+    }
+
+    /// A leader from `tip` to `end` with a text; see
+    /// [`DrawingEntity::Leader`].
+    pub fn add_leader(
+        &mut self,
+        layer: u16,
+        [tip, end]: [[f64; 2]; 2],
+        [height, scale]: [f64; 2],
+        value: &str,
+    ) {
+        self.entities.push((
+            layer,
+            DrawingEntity::Leader {
+                points: vec![tip, end],
+                height,
+                scale,
                 value: single_line(value),
             },
         ));
@@ -690,6 +757,35 @@ impl Drawing2d {
                         return invalid("empty drawing text");
                     }
                 }
+                DrawingEntity::Dimension {
+                    from,
+                    to,
+                    offset,
+                    height,
+                    scale,
+                    ..
+                } => {
+                    let positive = |value: &f64| value.is_finite() && *value > 0.0;
+                    if dimension_axes(*from, *to).is_none() || !offset.is_finite() {
+                        return invalid("a dimension needs two points apart and an offset");
+                    }
+                    if !positive(height) || !positive(scale) {
+                        return invalid("a dimension needs a text height and a scale above zero");
+                    }
+                }
+                DrawingEntity::Leader {
+                    points,
+                    height,
+                    scale,
+                    value,
+                } => {
+                    if points.len() < 2 || value.is_empty() {
+                        return invalid("a leader needs two points and a text");
+                    }
+                    if !(height.is_finite() && *height > 0.0 && scale.is_finite() && *scale > 0.0) {
+                        return invalid("a leader needs a text height and a scale above zero");
+                    }
+                }
             }
         }
         Ok(())
@@ -707,6 +803,20 @@ impl DrawingEntity {
                 .copied()
                 .for_each(visit),
             Self::Text { at, .. } => visit(*at),
+            Self::Dimension {
+                from,
+                to,
+                offset,
+                height,
+                ..
+            } => {
+                visit(*from);
+                visit(*to);
+                if let Some(shape) = dimension_shape(*from, *to, *offset, *height) {
+                    shape.ends.into_iter().for_each(visit);
+                }
+            }
+            Self::Leader { points, .. } => points.iter().copied().for_each(visit),
         }
     }
 }

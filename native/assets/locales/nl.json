@@ -970,5 +970,19 @@
   "The crop region, its turn and the points used stay": "Het bijsnijgebied, de draaiing en de gebruikte punten blijven",
   "It is not moved, resized, scaled or removed": "Hij wordt niet verplaatst, vergroot, geschaald of weggehaald",
   "Locked": "Vergrendeld",
-  "Saved view": "Opgeslagen view"
+  "Saved view": "Opgeslagen view",
+  "Text of the annotation": "Tekst van de aantekening",
+  "A note at a point of the scan, kept with the saved view; in the 3D view": "Een notitie bij een punt van de scan, bewaard bij de opgeslagen view; in de 3D-weergave",
+  "An arrow between two points of the scan in the 3D view; a line on a drawing, snapping to its lines, or on the paper of a sheet": "Een pijl tussen twee punten van de scan in de 3D-weergave; een lijn op een tekening, die naar de lijnen ervan springt, of op het papier van een blad",
+  "A text on a plan, an elevation or a section, 2.5 mm high on the paper unless set in Properties; or on the paper of a sheet": "Een tekst op een plattegrond, aanzicht of doorsnede, 2,5 mm hoog op papier tenzij anders ingesteld in Eigenschappen; of op het papier van een blad",
+  "A dimension on a plan, an elevation or a section: two points that snap to the ends and corners of the lines, then its line; it shows the distance in millimetres": "Een maat op een plattegrond, aanzicht of doorsnede: twee punten die naar de einden en hoeken van de lijnen springen, dan de maatlijn; hij toont de afstand in millimeters",
+  "An arrow with a text on a plan, an elevation or a section: the point it points at, then where its text goes": "Een pijl met een tekst op een plattegrond, aanzicht of doorsnede: het punt waar hij naar wijst, dan waar de tekst komt",
+  "Export DXF/DWG…": "DXF/DWG exporteren…",
+  "Place a Text, a Dimension, a Leader or a Line from the ribbon": "Plaats een tekst, een maat, een verwijzing of een lijn vanuit het lint",
+  "Text": "Tekst",
+  "Dimension": "Maat",
+  "Leader": "Verwijzing",
+  "Value; empty for the measured one": "Waarde; leeg voor de gemeten waarde",
+  "Annotation scale": "Schaal van aantekeningen",
+  "Text height (mm)": "Teksthoogte (mm)"
 }

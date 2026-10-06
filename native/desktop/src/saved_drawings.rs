@@ -77,6 +77,14 @@ pub struct SavedDrawing {
     /// Its crop region, its turn and the points it uses stay; see `locks`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub locked: bool,
+    /// The texts, dimensions, leaders and lines placed on it; see
+    /// `drawing_notes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<crate::drawing_notes::DrawingNote>,
+    /// The scale its annotations have their paper sizes at, as the number
+    /// after "1:"; 1:100 without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
 }
 
 impl SavedDrawing {
@@ -117,6 +125,8 @@ impl SavedDrawing {
             sources,
             created: camera_views::now_seconds(),
             locked: false,
+            annotations: Vec::new(),
+            scale: None,
         }
     }
 
@@ -226,6 +236,8 @@ fn load_from(path: &Path) -> Vec<SavedDrawing> {
         .filter_map(|entry| serde_json::from_value::<SavedDrawing>(entry).ok())
         .filter(SavedDrawing::valid)
     {
+        let mut drawing = drawing;
+        crate::drawing_notes::repaired(&mut drawing.annotations);
         if !drawings.iter().any(|known| known.guid == drawing.guid) {
             drawings.push(drawing);
         }

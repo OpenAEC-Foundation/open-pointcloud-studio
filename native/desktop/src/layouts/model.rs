@@ -183,6 +183,69 @@ impl Viewport {
     }
 }
 
+/// A text or a line drawn on the paper itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PaperNote {
+    /// A line of text, `at` its lower left corner, `height` the height of
+    /// its capitals.
+    Text {
+        id: String,
+        at: [f64; 2],
+        height: f64,
+        value: String,
+    },
+    Line {
+        id: String,
+        from: [f64; 2],
+        to: [f64; 2],
+    },
+}
+
+impl PaperNote {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Text { id, .. } | Self::Line { id, .. } => id,
+        }
+    }
+
+    /// The same moved by `delta` millimetres.
+    pub fn moved(&self, delta: [f64; 2]) -> Self {
+        let shift = |point: [f64; 2]| [point[0] + delta[0], point[1] + delta[1]];
+        let mut note = self.clone();
+        match &mut note {
+            Self::Text { at, .. } => *at = shift(*at),
+            Self::Line { from, to, .. } => {
+                *from = shift(*from);
+                *to = shift(*to);
+            }
+        }
+        note
+    }
+
+    pub fn valid(&self) -> bool {
+        let finite = |pair: &[f64; 2]| pair.iter().all(|value| value.is_finite());
+        match self {
+            Self::Text {
+                id,
+                at,
+                height,
+                value,
+            } => {
+                camera_views::is_guid(id)
+                    && finite(at)
+                    && height.is_finite()
+                    && (0.5..=50.0).contains(height)
+                    && !value.trim().is_empty()
+                    && value.chars().count() <= crate::drawing_notes::MAX_NOTE_CHARS
+            }
+            Self::Line { id, from, to } => {
+                camera_views::is_guid(id) && finite(from) && finite(to) && from != to
+            }
+        }
+    }
+}
+
 /// A sheet: paper with a border, a title block and the views placed on it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layout {
@@ -201,6 +264,9 @@ pub struct Layout {
     pub drawn_by: String,
     #[serde(default)]
     pub viewports: Vec<Viewport>,
+    /// Texts and lines on the paper itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<PaperNote>,
     /// Seconds since 1970, UTC.
     #[serde(default)]
     pub created: u64,
@@ -219,6 +285,7 @@ impl Layout {
             date: crate::bcf::timestamp(created)[..10].to_owned(),
             drawn_by: crate::views::author(),
             viewports: Vec::new(),
+            notes: Vec::new(),
             created,
         }
     }
@@ -322,10 +389,12 @@ impl Layout {
             && self.number.chars().count() <= MAX_NUMBER_CHARS
     }
 
-    /// Drop the viewports this version cannot use.
+    /// Drop the viewports and the notes this version cannot use.
     fn repaired(mut self) -> Self {
         self.viewports.retain(Viewport::valid);
         self.viewports.truncate(MAX_VIEWPORTS);
+        self.notes.retain(PaperNote::valid);
+        self.notes.truncate(crate::drawing_notes::MAX_NOTES);
         self
     }
 }

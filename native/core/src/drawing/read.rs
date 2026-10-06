@@ -15,12 +15,15 @@ use std::path::Path;
 use cadcodec::entities::hatch::{BoundaryEdge, BoundaryPath};
 use cadcodec::entities::mtext_format::{parse_mtext, parse_plain_text};
 use cadcodec::entities::{
-    AttachmentPoint, EntityType, Hatch, Insert, MText, Text, TextHorizontalAlignment,
+    AttachmentPoint, Dimension, EntityType, Hatch, Insert, MText, Text, TextHorizontalAlignment,
     TextVerticalAlignment,
 };
 use cadcodec::{CadDocument, Color, DwgReader, DxfError, DxfReader, Vector3};
 
-use super::{Drawing2d, DrawingEntity, DrawingFormat, DrawingUnits, LAYER_RGB_CONTRAST};
+use super::{
+    dimension_axes, dimension_shape, Drawing2d, DrawingEntity, DrawingFormat, DrawingUnits,
+    LAYER_RGB_CONTRAST,
+};
 use crate::LoadError;
 
 /// Blocks inside blocks are followed this deep; a deeper or circular
@@ -673,7 +676,7 @@ impl Reader<'_> {
                 if !block.is_empty() && self.document.block_records.get(&block).is_some() {
                     let layer = super::layer_name(layer_name);
                     self.block(&block, at, Some(&layer));
-                } else {
+                } else if !self.aligned_dimension(dimension, at, layer_name, inherited) {
                     self.exploded(entity, at, inherited);
                 }
             }
@@ -698,6 +701,68 @@ impl Reader<'_> {
             | EntityType::MLine(_) => self.exploded(entity, at, inherited),
             other => self.skip(other.as_entity().entity_type()),
         }
+    }
+
+    /// An aligned dimension without the block of its geometry, as a drawing
+    /// program draws it from its points and its style: its extension lines,
+    /// its line with ticks and its value. False for another kind.
+    fn aligned_dimension(
+        &mut self,
+        dimension: &Dimension,
+        at: &Affine,
+        layer_name: &str,
+        inherited: Option<&str>,
+    ) -> bool {
+        let Dimension::Aligned(aligned) = dimension else {
+            return false;
+        };
+        let base = dimension.base();
+        let [first, second, line] = [
+            &aligned.first_point,
+            &aligned.second_point,
+            &aligned.definition_point,
+        ]
+        .map(xy);
+        let Some((normal, _)) = dimension_axes(first, second) else {
+            return false;
+        };
+        let style = self.document.dim_styles.get(&base.style_name);
+        let scale = style
+            .map(|style| style.dimscale)
+            .filter(|scale| scale.is_finite() && *scale > 0.0)
+            .unwrap_or(1.0);
+        let height = style.map_or(0.18, |style| style.dimtxt) * scale;
+        let offset = (line[0] - second[0]) * normal[0] + (line[1] - second[1]) * normal[1];
+        let Some(shape) = dimension_shape(first, second, offset, height) else {
+            return false;
+        };
+        let value = match base.text_override().filter(|text| *text != "<>") {
+            Some(text) => plain(text),
+            None => {
+                let length = (second[0] - first[0]).hypot(second[1] - first[1])
+                    * style.map_or(1.0, |style| style.dimlfac);
+                let step = style.map_or(0.0, |style| style.dimrnd);
+                let rounded = if step > 0.0 {
+                    (length / step).round() * step
+                } else {
+                    length
+                };
+                let decimals = style.map_or(2, |style| style.dimdec.clamp(0, 8)) as usize;
+                format!("{rounded:.decimals$}")
+            }
+        };
+        let layer = self.layer(layer_name, inherited);
+        for [from, to] in &shape.lines {
+            self.polyline(layer, at, &[*from, *to], false);
+        }
+        let width = estimated_width(&value, height);
+        let (sin, cos) = shape.text_rotation.sin_cos();
+        let start = [
+            shape.text_at[0] - cos * width / 2.0,
+            shape.text_at[1] - sin * width / 2.0,
+        ];
+        self.text(layer, at, start, height, shape.text_rotation, &value);
+        true
     }
 
     /// An entity drawn as the simpler entities the codec breaks it into.
@@ -897,7 +962,7 @@ impl Reader<'_> {
 }
 
 /// About how wide a line of text is.
-fn estimated_width(value: &str, height: f64) -> f64 {
+pub(crate) fn estimated_width(value: &str, height: f64) -> f64 {
     value.chars().count() as f64 * height * CHARACTER_WIDTH
 }
 
@@ -1008,6 +1073,8 @@ mod tests {
                 DrawingEntity::Polyline { .. } => "polyline",
                 DrawingEntity::Fill { .. } => "fill",
                 DrawingEntity::Text { .. } => "text",
+                DrawingEntity::Dimension { .. } => "dimension",
+                DrawingEntity::Leader { .. } => "leader",
             };
             *counts
                 .entry((drawing.layers[usize::from(*layer)].name.clone(), kind))

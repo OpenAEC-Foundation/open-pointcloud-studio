@@ -529,6 +529,21 @@ A click on a view selects it: it is outlined in the accent colour, and Propertie
 
 A view on a sheet follows its view: a drawing made again or with another crop region, and a view renamed or updated, show on the sheet as they are now. A view or drawing that is deleted leaves its frame on the sheet with **view missing**. A drawing placed on a sheet is made in the background, one after another, when the sheet is shown and the drawing is not made in this session yet; until then its frame says it is being made, or which scans to open.
 
+### Annotations
+
+On a plan, an elevation or a section of VIEWS in the Drawing view, the VIEWS group of the ribbon places annotations; its tooltips say where each tool works. They are kept with the drawing, at points of the model on the plane of the drawing, so they stay in place when the drawing is made again, also after its crop region changed. A locked drawing takes annotations too.
+
+- **Text**: click where its baseline starts, type it in the field at the top and press Enter.
+- **Dimension**: click its two points, which snap to an end or a corner of a line drawn within 10 pixels (a small square shows where), then click where its line goes. It shows the distance between the two points in the model in millimetres, rounded to 10 mm at 1:100 and 5 mm at 1:50, with ticks across its ends.
+- **Leader**: click the point it points at, then where its text goes, and type the text.
+- **Line**: click its two ends, which snap as a dimension does.
+
+Their sizes are those of the paper at the **Annotation scale** of the drawing in Properties, 1:100 unless chosen: **Text height (mm)** is 2.5 mm by default, 0.25 m in the model at 1:100. Escape cancels what is being placed and then leaves the tool. The **Annotations** section of Properties lists them: a click selects one, which is drawn in blue and can be dragged (a text and a line move, a leader moves its text and a dimension its line), × or Delete removes it, and the field under it changes its text or the value of a dimension; emptied, a dimension shows its measured value again.
+
+On a sheet, **Text** and **Line** draw on the paper itself, and a drawing shows its annotations at the scale of its viewport with the sizes they have on paper; they print in the PDF.
+
+**Export DXF/DWG…** in Properties writes the drawing as it is made, with every layer and its annotations: texts on the layer OPS-TEXT, real dimensions with their definition points on OPS-DIMENSIONS with a dimension style of the annotation scale (OPS-1-100: text 2.5 mm, ticks, the value in millimetres), leaders with their text on OPS-LEADERS and lines on OPS-LINES. Every dimension carries the picture of its lines and value as a drawing program keeps it, and **Open drawing…** shows it again.
+
 ### Locking a view
 
 A saved 3D view, a drawing and a view placed on a sheet can be locked, so that it stays as it was set up. The padlock on its row under VIEWS locks or unlocks it; a locked view or drawing shows a padlock on its tab too, which unlocks it, and **Locked** in Properties switches it while it is shown or selected.

@@ -122,8 +122,17 @@ pub enum ApiCommand {
         from: [f64; 3],
         to: [f64; 3],
     },
+    /// Remove an annotation: of the active view by its `index`, or of a
+    /// drawing or a sheet by its `id`.
     DeleteAnnotation {
-        index: usize,
+        #[serde(default)]
+        index: Option<usize>,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        drawing: Option<String>,
+        #[serde(default)]
+        sheet: Option<String>,
     },
     SetAnnotationTool {
         /// `note`, `line`, or null to leave the tool.
@@ -373,6 +382,22 @@ pub enum ApiCommand {
     SetSheetCrop {
         #[serde(flatten)]
         options: crate::drawing_crop::SheetCropOptions,
+    },
+    /// Place a text, a dimension, a leader or a line on a drawing of VIEWS.
+    AnnotateDrawing {
+        #[serde(flatten)]
+        options: crate::drawing_notes::AnnotateOptions,
+    },
+    /// Place a text or a line on the paper of a sheet.
+    AnnotateSheet {
+        #[serde(flatten)]
+        options: crate::drawing_notes::AnnotateOptions,
+    },
+    /// Write a drawing of VIEWS with its annotations as DXF or DWG.
+    ExportDrawingFile {
+        #[serde(default)]
+        name: Option<String>,
+        path: PathBuf,
     },
     /// Lock a saved view, a drawing or a viewport on a sheet, or unlock it.
     LockView {

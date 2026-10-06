@@ -223,6 +223,73 @@ impl DrawScene {
                     rotation: *rotation,
                     value: value.clone(),
                 }),
+                // A dimension and a leader as the lines and the text a
+                // drawing program draws them with.
+                DrawingEntity::Dimension {
+                    from,
+                    to,
+                    offset,
+                    height,
+                    scale,
+                    text,
+                } => {
+                    let Some(shape) =
+                        pointcloud_core::dimension_shape(*from, *to, *offset, *height)
+                    else {
+                        continue;
+                    };
+                    for line in &shape.lines {
+                        layer.lines.push(SceneLine {
+                            points: line.iter().copied().map(scaled).collect(),
+                            closed: false,
+                        });
+                    }
+                    let value = text.clone().unwrap_or_else(|| {
+                        let metres = (to[0] - from[0]).hypot(to[1] - from[1]);
+                        pointcloud_core::dimension_value(metres, *scale)
+                    });
+                    let width = crate::layouts::plot::text_width(&value, *height);
+                    let (sin, cos) = shape.text_rotation.sin_cos();
+                    layer.texts.push(SceneText {
+                        at: scaled([
+                            shape.text_at[0] - cos * width / 2.0,
+                            shape.text_at[1] - sin * width / 2.0,
+                        ]),
+                        height: height * factor,
+                        rotation: shape.text_rotation,
+                        value,
+                    });
+                }
+                DrawingEntity::Leader {
+                    points,
+                    height,
+                    value,
+                    ..
+                } => {
+                    let (Some(tip), Some(end)) = (points.first(), points.last()) else {
+                        continue;
+                    };
+                    let shape = pointcloud_core::leader_shape(*tip, *end, *height);
+                    layer.lines.push(SceneLine {
+                        points: shape.line.iter().copied().map(scaled).collect(),
+                        closed: false,
+                    });
+                    layer
+                        .fills
+                        .push(vec![shape.arrow.iter().copied().map(scaled).collect()]);
+                    let width = crate::layouts::plot::text_width(value, *height);
+                    let start = if shape.right {
+                        [shape.text_at[0] - width, shape.text_at[1]]
+                    } else {
+                        shape.text_at
+                    };
+                    layer.texts.push(SceneText {
+                        at: scaled(start),
+                        height: height * factor,
+                        rotation: 0.0,
+                        value: value.clone(),
+                    });
+                }
             }
         }
         Self {
@@ -1913,8 +1980,12 @@ impl Studio {
         copy.guid = crate::camera_views::new_guid();
         copy.name = name;
         copy.created = crate::camera_views::now_seconds();
-        // A copy is a drawing of its own to change.
+        // A copy is a drawing of its own to change, with annotations of its
+        // own.
         copy.locked = false;
+        for note in &mut copy.annotations {
+            *note = note.renewed();
+        }
         let made = self.drawing_view.made(guid).cloned();
         // A copy that is to be made is kept only when its job can start: a
         // copy that cannot be made would be left behind otherwise.
@@ -2293,7 +2364,7 @@ impl Studio {
             .turn
             .as_ref()
             .is_some_and(|turn| matches!(turn.target, TurnTarget::Plan { .. }));
-        stack![
+        let sheet = stack![
             Sheet {
                 tool,
                 paper: paper(self.ui_theme),
@@ -2307,8 +2378,12 @@ impl Studio {
             .height(Fill),
         ]
         .width(Fill)
-        .height(Fill)
-        .into()
+        .height(Fill);
+        // The annotations of a drawing of VIEWS lie over it.
+        match self.notes_layer() {
+            Some(notes) => sheet.push(notes).into(),
+            None => sheet.into(),
+        }
     }
 
     /// The block of the Drawing view in Properties, while the view is shown:
@@ -2330,6 +2405,9 @@ impl Studio {
         block = block.push(opencad_properties::section_header("Drawing view"));
         if let Some(guid) = tool.shown_guid() {
             block = block.push(self.lock_row(crate::locks::LockTarget::Drawing(guid.to_owned())));
+        }
+        if let Some(notes) = self.drawing_notes_properties() {
+            block = block.push(notes);
         }
         let open = button(text(tr("Open drawing…")).size(11))
             .on_press(Message::DrawingView(DrawingViewAction::OpenFile))

@@ -1615,10 +1615,16 @@ impl Studio {
                 Ok(task) => (self.annotations_value(), task),
                 Err(error) => failed(error),
             },
-            ApiCommand::DeleteAnnotation { index } => match self.delete_annotation(index) {
+            ApiCommand::DeleteAnnotation {
+                index: Some(index), ..
+            } => match self.delete_annotation(index) {
                 Ok(task) => (self.annotations_value(), task),
                 Err(error) => failed(error),
             },
+            ApiCommand::DeleteAnnotation { .. } => failed(
+                "give the index of an annotation of the active view, or the id of an annotation of a drawing or a sheet"
+                    .into(),
+            ),
             ApiCommand::SetAnnotationTool { tool } => {
                 let kind = match tool.as_deref().map(str::to_ascii_lowercase).as_deref() {
                     None | Some("none") => None,
@@ -1744,26 +1750,12 @@ impl Studio {
         })
     }
 
-    /// Note and Line for the ribbon's views group.
+    /// The VIEWS group of the ribbon: Note and Line in the 3D view, and the
+    /// annotations of drawings and sheets; see `drawing_notes`.
     pub fn views_ribbon(&self) -> Element<'static, Message> {
-        let has_scan = self.active.is_some();
-        let tool = |label: &'static str, kind: AnnotationKind| {
-            opencad_ribbon::RibbonItem::Small(crate::small_tool_button_when(
-                label,
-                Message::Views(ViewAction::Tool(kind)),
-                self.views.tool == Some(kind),
-                has_scan,
-            ))
-        };
-        opencad_ribbon::render_group_items(
-            "VIEWS",
-            // Saving a view is in the Project Browser, the BCF export in the
-            // File view.
-            vec![
-                tool("Note", AnnotationKind::Note),
-                tool("Line", AnnotationKind::Line),
-            ],
-        )
+        // Saving a view is in the Project Browser, the BCF export in the
+        // File view.
+        opencad_ribbon::render_group_items("VIEWS", self.annotation_tools())
     }
 
     /// Whether the active scan has views to export and no export is running.

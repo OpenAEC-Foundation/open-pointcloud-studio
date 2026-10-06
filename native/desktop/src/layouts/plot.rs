@@ -96,6 +96,8 @@ pub struct Plot {
     pub size: [f64; 2],
     pub groups: Vec<Group>,
     pub viewports: Vec<Placed>,
+    /// The notes on the paper with their marks, for the pointer.
+    pub notes: Vec<(String, Vec<crate::drawing_notes::NoteMark>)>,
 }
 
 impl Plot {
@@ -131,6 +133,11 @@ pub enum Content<'a> {
     Drawing {
         scene: &'a DrawScene,
         rect: [[f64; 2]; 2],
+        /// Its annotations, at points of the model on its plane, with that
+        /// plane and the scale their values are rounded at.
+        notes: &'a [crate::drawing_notes::DrawingNote],
+        frame: pointcloud_core::DrawingFrame,
+        value_scale: f64,
     },
     /// The picture of a 3D view, of so many pixels.
     Image { key: String, pixels: [u32; 2] },
@@ -233,8 +240,15 @@ pub fn plot<'a>(layout: &Layout, content: impl Fn(&Viewport) -> Content<'a>) -> 
             marks: Vec::new(),
         };
         match shown {
-            Content::Drawing { scene, rect: crop } => {
+            Content::Drawing {
+                scene,
+                rect: crop,
+                notes,
+                frame,
+                value_scale,
+            } => {
                 drawing_marks(scene, crop, viewport, &mut group.marks);
+                note_marks(notes, &frame, crop, viewport, value_scale, &mut group.marks);
             }
             Content::Image { key, .. } => group.marks.push(Mark::Image { rect, key }),
             Content::Waiting(why) => absent(rect, &why, &mut group.marks),
@@ -251,7 +265,80 @@ pub fn plot<'a>(layout: &Layout, content: impl Fn(&Viewport) -> Content<'a>) -> 
             locked: viewport.locked,
         });
     }
+    let mut paper = Group::default();
+    for note in &layout.notes {
+        let marks = crate::drawing_notes::paper_marks(note);
+        plot.notes.push((note.id().to_owned(), marks.clone()));
+        paper
+            .marks
+            .extend(marks.into_iter().map(|mark| paper_mark(mark, |at| at, 1.0)));
+    }
+    plot.groups.push(paper);
     plot
+}
+
+/// A mark of an annotation as a mark of the plot, its points through `place`
+/// and its text heights times `grow`.
+fn paper_mark(
+    mark: crate::drawing_notes::NoteMark,
+    place: impl Fn([f64; 2]) -> [f64; 2],
+    grow: f64,
+) -> Mark {
+    use crate::drawing_notes::NoteMark;
+    match mark {
+        NoteMark::Line(points) => Mark::Line {
+            points: points.into_iter().map(place).collect(),
+            closed: false,
+            width: THIN_WIDTH,
+            rgb: INK,
+        },
+        NoteMark::Fill(points) => Mark::Fill {
+            rings: vec![points.into_iter().map(place).collect()],
+            rgb: INK,
+        },
+        NoteMark::Text {
+            at,
+            height,
+            rotation,
+            value,
+            align,
+        } => Mark::Text {
+            at: place(at),
+            height: height * grow,
+            rotation,
+            value,
+            rgb: INK,
+            align,
+        },
+    }
+}
+
+/// The annotations of a drawing in its viewport: at its scale, with the
+/// sizes they have on paper.
+fn note_marks(
+    notes: &[crate::drawing_notes::DrawingNote],
+    frame: &pointcloud_core::DrawingFrame,
+    crop: [[f64; 2]; 2],
+    viewport: &Viewport,
+    value_scale: f64,
+    marks: &mut Vec<Mark>,
+) {
+    let middle = [
+        (crop[0][0] + crop[1][0]) / 2.0,
+        (crop[0][1] + crop[1][1]) / 2.0,
+    ];
+    let scale = viewport.scale;
+    let to_paper = |point: [f64; 2]| {
+        [
+            viewport.centre[0] + paper_mm(point[0] - middle[0], scale),
+            viewport.centre[1] + paper_mm(point[1] - middle[1], scale),
+        ]
+    };
+    for note in notes {
+        for mark in crate::drawing_notes::note_marks(note, frame, scale, value_scale) {
+            marks.push(paper_mark(mark, to_paper, 1000.0 / scale));
+        }
+    }
 }
 
 /// A viewport whose view is not shown: its outline and why, in its middle.
