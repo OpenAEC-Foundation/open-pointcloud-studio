@@ -163,7 +163,7 @@ extension has a button.
 | --- | --- |
 | `id` | 1 to 64 lowercase letters and digits in parts joined by dots or dashes, unique within the extension |
 | `label` | Text of at most 24 characters under the icon |
-| `icon` | An `.svg` file in the folder of at most 64 KiB, shown at 32 by 32 pixels. It may not hold scripts, `<image>`, `<foreignObject>`, entities or style sheet imports, and links and `url()` may only point inside the image (`#id`) |
+| `icon` | An `.svg` file in the folder of at most 64 KiB, shown at 32 by 32 pixels. It may not hold scripts, `<image>`, `<foreignObject>`, entities or style sheet imports, and links and `url()` may only point inside the image (`#id`). It is drawn as it is in every theme, light and dark: `currentColor` and a shape without a fill are black. Give it colours that read on a light and on a dark ribbon, as the grey and orange of the example do |
 | `tooltip` | Optional text of at most 200 characters |
 | `args` | Optional arguments added after those of the command |
 
