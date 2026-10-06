@@ -39,7 +39,9 @@ colourings from photos return `accepted: true` and a `job_id`. Query `{"command"
 for a durable `running`, `complete` (with point count), or `failed` result.
 The newest 32 jobs remain queryable even if the GUI status line changes.
 Non-LAS/LAZ imports return an `import_id`; `status.result.imports` lists active
-imports with decoded finite-point counts and cancellation state. An import
+imports with decoded finite-point counts, cancellation state and `waiting`,
+true while a large E57 scan waits for its turn to be read (see
+[Index](#index) for the scans that take turns). An import
 stays there until its source has been read, also while its layer shows the
 points read so far and while it builds its octree in the same pass. Use
 `cancel_import` with that ID to stop a long import. A cancelled import never
@@ -1343,15 +1345,20 @@ memory available when the window started), `builds`, the running builds in
 the order they started, and `waiting`, the layers in the queue. Each build
 has `path`, `import_id` (the import that reads its source and builds the
 octree in the same pass, or `null`), `stage` (`waiting_to_read`,
-`reading_source`, `waiting_to_build`, `building_tree` or `ready`; a file of
-512 MiB or more waits to read until the large files opened before it on the
-same disk have been read, and waits to build until their octrees are built),
-`completed`, `total`, `fraction` (how far the
-current stage is, from 0 to 1, or `null` while the size of the source is
-unknown) and `cancelling`. A build that ends gives its place to the next
-layer in the queue: those asked for with `build_index` first, then the active
-layer, then the others in the order of the list. One file is never built
-twice at once.
+`reading_source`, `waiting_to_build`, `building_tree` or `ready`),
+`completed`, `total`, `fraction` (how far the current stage is, from 0 to 1,
+or `null` while the size of the source is unknown) and `cancelling`. A build
+that ends gives its place to the next layer in the queue: those asked for
+with `build_index` first, then the active layer, then the others in the order
+of the list. One file is never built twice at once.
+
+Large E57 scans take turns: a scan of 512 MiB or more whose packets are laid
+out for the spread preview and for decoding on several threads is in
+`waiting_to_read` until the scans of that kind opened before it on the same
+drive or network share have been read, and in `waiting_to_build` until the
+octrees of the scans of that kind that were read before it, on any drive, are
+built. Other files, and such scans on different drives, are read side by
+side.
 
 `status.result.index_progress` reports the first running build: the
 source-read count and known total, then tree records handled, depth and leaf
