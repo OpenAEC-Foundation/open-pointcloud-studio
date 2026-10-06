@@ -11,7 +11,7 @@
 //! and the coordinates are drawn over it every frame.
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -486,6 +486,31 @@ pub(crate) struct DrawingViewTool {
     pointer: Cell<Option<[f64; 2]>>,
     /// A handle of the crop region the local API holds dragged.
     pub(crate) held: Option<CropDrag>,
+    /// Where the view looked at each drawing it showed before and which
+    /// layers were on, by `look_key`: shown again from its row, a drawing
+    /// comes back as it was left.
+    looks: HashMap<String, (ViewCamera, Vec<(String, bool)>)>,
+}
+
+/// The key under which the view remembers where it looked at a drawing of
+/// Create 2D.
+pub(crate) fn sheet_look_key(guid: &str) -> String {
+    format!("sheet:{guid}")
+}
+
+/// The same for the preview (no path), or an export or file by its path.
+pub(crate) fn file_look_key(path: Option<&Path>) -> String {
+    path.map_or_else(
+        || "preview".to_owned(),
+        |path| format!("file:{}", path.display()),
+    )
+}
+
+fn look_key(source: &DrawingSource) -> String {
+    match source {
+        DrawingSource::Sheet { guid, .. } => sheet_look_key(guid),
+        other => file_look_key(other.path()),
+    }
 }
 
 /// The project browser keeps this many previews, exports and opened files
@@ -527,6 +552,7 @@ impl DrawingViewTool {
             crop_edits: (None, Vec::new()),
             pointer: Cell::new(None),
             held: None,
+            looks: HashMap::new(),
         }
     }
 
@@ -683,9 +709,37 @@ impl DrawingViewTool {
         }
     }
 
+    /// Show a drawing that was shown before as it was left: zoomed and
+    /// with its layers as they were, else as a new one.
+    pub(crate) fn show_again(&mut self, scene: Arc<DrawScene>) {
+        let look = self.looks.get(&look_key(&scene.source)).cloned();
+        self.show_scene(scene);
+        if let Some((camera, layers)) = look {
+            self.keep_view(Some(camera), &layers);
+        }
+    }
+
+    /// Forget where the view looked at a drawing: also the drawing the view
+    /// holds starts from its extents when it is shown again.
+    pub(crate) fn forget_look(&mut self, key: &str) {
+        self.looks.remove(key);
+        if self
+            .scene
+            .as_ref()
+            .is_some_and(|scene| look_key(&scene.source) == key)
+        {
+            self.fit_pending.set(true);
+        }
+    }
+
     /// Show a drawing: every layer the file has on is shown, and the view
-    /// zooms to its extents.
+    /// zooms to its extents. Where the view looked at the drawing it held
+    /// is remembered, once it was drawn.
     fn show_scene(&mut self, scene: Arc<DrawScene>) {
+        if let Some(earlier) = self.scene.as_ref().filter(|_| !self.fit_pending.get()) {
+            let look = (self.camera.get(), self.layer_switches());
+            self.looks.insert(look_key(&earlier.source), look);
+        }
         self.visible = scene
             .layers
             .iter()
@@ -1716,7 +1770,7 @@ impl Studio {
             DrawingViewAction::ShowSheet(place) => {
                 if let Some(sheet) = view.sheets.get(place).cloned() {
                     if !view.is_current(&sheet) {
-                        view.show_scene(sheet);
+                        view.show_again(sheet);
                     }
                     view.shown = true;
                     self.file_open = false;
@@ -1758,7 +1812,7 @@ impl Studio {
             .ok_or_else(|| "That drawing is no longer kept".to_owned())?;
         if let Some(scene) = self.drawing_view.made(guid).cloned() {
             if !self.drawing_view.is_current(&scene) {
-                self.drawing_view.show_scene(scene);
+                self.drawing_view.show_again(scene);
             }
             self.drawing_view.shown = true;
             self.file_open = false;
@@ -1792,6 +1846,7 @@ impl Studio {
             view.drop_scene(&scene);
         }
         self.drawing_view.kept.forget(guid);
+        self.drawing_view.forget_look(&sheet_look_key(guid));
         self.status = format!("Drawing {} deleted", removed.name);
         Ok(removed.name)
     }
@@ -2437,6 +2492,49 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn a_drawing_shown_again_comes_back_as_it_was_left() {
+        let size = Size::new(800.0, 600.0);
+        let sheet = |guid: &str| {
+            Arc::new(DrawScene::from_drawing(
+                &sample(DrawingUnits::Metres),
+                DrawingSource::Sheet {
+                    guid: guid.into(),
+                    name: guid.into(),
+                },
+            ))
+        };
+        let (plan, roof) = (sheet("plan"), sheet("roof"));
+        let mut tool = DrawingViewTool::default();
+        tool.set_scene(Arc::clone(&plan));
+        tool.zoom_extents(size);
+        tool.camera
+            .set(tool.camera().zoomed(3.0, [100.0, 80.0], size));
+        tool.set_layer(1, false);
+        let zoomed = tool.camera();
+        // Another drawing starts from its extents.
+        tool.set_scene(Arc::clone(&roof));
+        assert!(tool.fit_pending.get() && tool.layer_shown(1));
+        tool.zoom_extents(size);
+        // Shown again, the first comes back zoomed and with its layers.
+        tool.show_again(Arc::clone(&plan));
+        assert_eq!(tool.camera(), zoomed);
+        assert!(!tool.fit_pending.get() && !tool.layer_shown(1));
+        // A forgotten drawing starts from its extents again, also when the
+        // view holds it.
+        tool.show_again(Arc::clone(&roof));
+        tool.forget_look(&sheet_look_key("plan"));
+        tool.show_again(Arc::clone(&plan));
+        assert!(tool.fit_pending.get() && tool.layer_shown(1));
+        tool.forget_look(&sheet_look_key("plan"));
+        assert!(tool.fit_pending.get());
+        assert_eq!(file_look_key(None), "preview");
+        assert_eq!(
+            file_look_key(Some(Path::new("C:/a.dxf"))),
+            look_key(&DrawingSource::Export(PathBuf::from("C:/a.dxf")))
+        );
     }
 
     #[test]
