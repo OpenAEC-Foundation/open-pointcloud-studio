@@ -2043,6 +2043,30 @@ impl Studio {
         }
     }
 
+    /// Keep how a drawing was made once its job is done. The job carries
+    /// the definition it started from; a drawing made again keeps what was
+    /// set on it meanwhile — its name, its lock, its annotations and their
+    /// scale — and takes from the job only how it was made.
+    pub(crate) fn keep_made_drawing(&mut self, made: SavedDrawing) {
+        let definition = match self
+            .drawing_view
+            .saved
+            .iter()
+            .find(|drawing| drawing.guid == made.guid)
+        {
+            Some(kept) => SavedDrawing {
+                name: kept.name.clone(),
+                created: kept.created,
+                locked: kept.locked,
+                annotations: kept.annotations.clone(),
+                scale: kept.scale,
+                ..made
+            },
+            None => made,
+        };
+        self.keep_saved_drawing(definition);
+    }
+
     /// Read a DXF or DWG file into the view on a worker thread.
     fn read_drawing_file(&mut self, path: PathBuf, api_job_id: Option<String>) -> Task<Message> {
         let view = &mut self.drawing_view;

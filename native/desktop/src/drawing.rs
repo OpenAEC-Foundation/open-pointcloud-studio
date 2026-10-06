@@ -1798,7 +1798,7 @@ impl Studio {
         if let Some((scene, exported)) = built {
             match sheet {
                 Some(definition) => {
-                    self.keep_saved_drawing(definition);
+                    self.keep_made_drawing(definition);
                     self.sheet_drawing_built(scene, remade);
                 }
                 None => self.section_drawing_built(scene, exported),
@@ -2591,6 +2591,22 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
             destination.display()
         )),
         Done::Preview(..) => Err((1, "Drawing failed: nothing was written".into())),
+    }
+}
+
+#[cfg(test)]
+impl Studio {
+    /// Do what the worker thread of the running job does, and hand its end
+    /// to the window: for the tests of other modules.
+    pub(crate) fn finish_drawing_job(&mut self) {
+        let running = self.drawing.job.as_ref().expect("a job runs");
+        let (serial, input, control) = (
+            running.serial,
+            Arc::clone(&running.input),
+            Arc::clone(&running.control),
+        );
+        let end = DrawingEnd::of(run(&input, &mut |step| control.report(step)));
+        let _ = self.update(Message::Drawing(DrawingAction::Finished(serial, end)));
     }
 }
 

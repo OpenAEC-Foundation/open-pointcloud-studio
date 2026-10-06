@@ -2553,6 +2553,74 @@ mod tests {
     }
 
     #[test]
+    fn what_is_set_on_a_drawing_while_it_is_made_again_stays_once_it_is_made() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+        // A room whose walls the slab under the top of the box cuts.
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let path = directory.path().join("room.xyz");
+        let mut points = Vec::new();
+        for step in 0..=200 {
+            let along = 1.0 + f64::from(step) * 0.05;
+            for z in [0.5, 1.15] {
+                points.push(format!("{along} 1 {z}"));
+                points.push(format!("{along} 7 {z}"));
+                if along <= 7.0 {
+                    points.push(format!("1 {along} {z}"));
+                    points.push(format!("11 {along} {z}"));
+                }
+            }
+        }
+        let points = points.join("\n");
+        std::fs::write(&path, points).unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        let guid = shown_plan(&mut studio);
+        // A handle of the crop region dragged: the drawing is made again.
+        let changed = send(
+            &mut studio,
+            json!({"command": "set_sheet_crop", "name": "Plan +1.20", "width": 6.0}),
+        );
+        assert_eq!(changed["accepted"], true, "{changed}");
+        assert!(studio.drawing_view.remake.is_some());
+        // Meanwhile an annotation is placed, the drawing locked and its
+        // annotation scale set.
+        let added = send(
+            &mut studio,
+            json!({"command": "annotate_drawing", "kind": "text", "at": [2000, 2000], "text": "Hall"}),
+        );
+        assert_eq!(added["ok"], true, "{added}");
+        let locked = send(
+            &mut studio,
+            json!({"command": "lock_view", "name": "Plan +1.20"}),
+        );
+        assert_eq!(locked["locked"], true, "{locked}");
+        studio.set_drawing_scale(&guid, 50.0).unwrap();
+        studio.finish_drawing_job();
+        assert!(studio.drawing_view.remake.is_none(), "{}", studio.status);
+        // The drawing has the crop region of the job, and keeps what was set
+        // on it, here and on disk.
+        for kept in [
+            studio.definition(&guid).unwrap().clone(),
+            crate::saved_drawings::load()
+                .into_iter()
+                .find(|drawing| drawing.guid == guid)
+                .unwrap(),
+        ] {
+            let width = kept.section.max[0] - kept.section.min[0];
+            assert!((width - 6.0).abs() < 1e-6, "{width}: {}", studio.status);
+            assert_eq!(kept.annotations.len(), 1);
+            assert_eq!(kept.annotations[0].id(), added["id"].as_str().unwrap());
+            assert!(kept.locked);
+            assert_eq!(kept.scale, Some(50.0));
+            assert_eq!(kept.name, "Plan +1.20");
+        }
+    }
+
+    #[test]
     fn a_drawing_with_its_annotations_is_written_with_real_dimensions() {
         // What it reads is in the language of the window; a test in Dutch
         // may run at the same time.
