@@ -39,9 +39,11 @@ return `accepted: true` and a `job_id`. Query `{"command":"job","id":"JOB_ID"}`
 for a durable `running`, `complete` (with point count), or `failed` result.
 The newest 32 jobs remain queryable even if the GUI status line changes.
 Non-LAS/LAZ imports return an `import_id`; `status.result.imports` lists active
-imports with decoded finite-point counts and cancellation state. Use
+imports with decoded finite-point counts and cancellation state. An import
+stays there until its source has been read, also while its layer shows the
+points read so far and while it builds its octree in the same pass. Use
 `cancel_import` with that ID to stop a long import. A cancelled import never
-adds a partial layer. LAS/LAZ header previews open immediately and have a null
+adds a partial layer, and the layer of the points it showed is closed. LAS/LAZ header previews open immediately and have a null
 `import_id`.
 
 ## Meshing and merging

@@ -471,9 +471,20 @@ impl Studio {
 
     /// Stop every running build and empty the queue. The scans that are
     /// open or being opened are not indexed automatically again; Build index
-    /// still builds the octree of one of them.
+    /// still builds the octree of one of them. A one-pass import that still
+    /// reads its source reads on, and is told as an opening from then on.
     pub(crate) fn cancel_all_indexes(&mut self) -> (usize, usize) {
         let waiting = self.index_waiting();
+        let reading = self
+            .index_jobs
+            .iter()
+            .filter(|job| {
+                job.import_id
+                    .is_some_and(|id| self.imports.contains_key(&id))
+                    && !job.cancelling()
+            })
+            .count();
+        self.opening_total += reading;
         for job in &self.index_jobs {
             job.stop();
         }
@@ -510,11 +521,41 @@ impl Studio {
         Some(self.index_jobs.remove(position))
     }
 
-    /// Whether an import reads its source for an octree build in one pass.
+    /// Whether an import reads its source for an octree build in one pass,
+    /// and that octree has not been cancelled.
     pub(crate) fn import_builds_index(&self, cancel: &Arc<AtomicBool>) -> bool {
         self.index_jobs
             .iter()
-            .any(|job| Arc::ptr_eq(&job.cancel, cancel))
+            .any(|job| Arc::ptr_eq(&job.cancel, cancel) && !job.stop_tree.load(Ordering::Relaxed))
+    }
+
+    /// Whether a build is a one-pass import that still reads its source
+    /// after its octree was cancelled: only an opening now.
+    pub(crate) fn only_reading(&self, job: &IndexJob) -> bool {
+        job.import_id
+            .is_some_and(|id| self.imports.contains_key(&id))
+            && job.stop_tree.load(Ordering::Relaxed)
+    }
+
+    /// The builds that are to give an octree, in the order they started.
+    pub(crate) fn tree_builds(&self) -> Vec<&IndexJob> {
+        self.index_jobs
+            .iter()
+            .filter(|job| !self.only_reading(job))
+            .collect()
+    }
+
+    /// The points an import is expected to read: what the metadata of its
+    /// source states, or the total its one-pass build knows.
+    pub(crate) fn expected_points(&self, id: u64) -> Option<u64> {
+        self.import_expected.get(&id).copied().or_else(|| {
+            self.index_jobs
+                .iter()
+                .find(|job| job.import_id == Some(id))
+                .and_then(IndexJob::progress)
+                .map(|progress| progress.total)
+                .filter(|total| *total > 0)
+        })
     }
 
     /// The running and waiting builds, for the status of the local API.

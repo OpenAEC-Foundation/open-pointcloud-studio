@@ -5749,7 +5749,14 @@ impl Studio {
                     return Task::none();
                 };
                 self.import_expected.insert(id, header.total_points);
-                if job.cancel.load(Ordering::Relaxed) || self.import_headers.contains_key(&id) {
+                // A one-pass import may show the points read so far already.
+                if job.cancel.load(Ordering::Relaxed)
+                    || self.import_headers.contains_key(&id)
+                    || self
+                        .clouds
+                        .iter()
+                        .any(|entry| entry.index_import_id == Some(id))
+                {
                     return Task::none();
                 }
                 return self.show_import_layer(id, header);
@@ -5766,25 +5773,38 @@ impl Studio {
                     return self.queue_snapshot(id, true, cloud);
                 }
                 self.pending_snapshots.remove(&id);
-                if !self.imports.contains_key(&id) {
-                    // The checked cloud of a scan whose layer is already shown.
-                    let scene = combined_bounds(&self.clouds);
-                    if let Some(entry) = self
-                        .clouds
-                        .iter_mut()
-                        .find(|entry| entry.index_import_id == Some(id) && entry.cloud.provisional)
-                    {
-                        entry.replace_cloud(Arc::clone(&cloud));
-                        self.revision += 1;
-                        self.reframe_after_replacement(scene);
-                        let mesh = Self::mesh_task(&cloud).unwrap_or_else(Task::none);
-                        return Task::batch([self.schedule_detail(), mesh]);
-                    }
+                if !self
+                    .clouds
+                    .iter()
+                    .any(|entry| entry.index_import_id == Some(id))
+                {
+                    return self
+                        .show_indexed_preview(id, cloud)
+                        .unwrap_or_else(Task::none);
+                }
+                // The checked cloud of a scan whose layer is already shown:
+                // its reading is done, unless it was cancelled.
+                if self
+                    .imports
+                    .get(&id)
+                    .is_none_or(|job| job.cancel.load(Ordering::Relaxed))
+                {
                     return Task::none();
                 }
-                return self
-                    .show_indexed_preview(id, cloud)
-                    .unwrap_or_else(Task::none);
+                self.imports.remove(&id);
+                let scene = combined_bounds(&self.clouds);
+                if let Some(entry) = self
+                    .clouds
+                    .iter_mut()
+                    .find(|entry| entry.index_import_id == Some(id) && entry.cloud.provisional)
+                {
+                    entry.replace_cloud(Arc::clone(&cloud));
+                    self.revision += 1;
+                    self.reframe_after_replacement(scene);
+                    let mesh = Self::mesh_task(&cloud).unwrap_or_else(Task::none);
+                    return Task::batch([self.schedule_detail(), mesh]);
+                }
+                return Task::none();
             }
             Message::IndexedImportReady(id, result) => {
                 self.pending_snapshots.remove(&id);
@@ -5794,11 +5814,13 @@ impl Studio {
                 let cancelled = job
                     .as_ref()
                     .is_some_and(|job| job.cancel.load(Ordering::Relaxed));
-                let stopped = job
-                    .as_ref()
-                    .is_some_and(|job| job.stop_tree.load(Ordering::Relaxed));
+                // Still listed while its source was being read.
                 let import = self.imports.remove(&id);
                 let header = self.import_headers.remove(&id);
+                let shown = self
+                    .clouds
+                    .iter()
+                    .any(|entry| entry.index_import_id == Some(id));
                 let mut loaded = Task::none();
                 // The faces of a mesh are read for the checked cloud.
                 let mut mesh = Task::none();
@@ -5809,7 +5831,7 @@ impl Studio {
                 }
                 match result {
                     Ok((cloud, index)) if !cancelled => {
-                        if import.is_some() {
+                        if import.is_some() && !shown {
                             loaded = self.finish_import(header.clone(), Ok(Arc::clone(&cloud)));
                             let position = header
                                 .and_then(|header| {
@@ -5878,7 +5900,9 @@ impl Studio {
                             // source, so the layer cannot stay.
                             self.remove_header_layer(&preview);
                         }
-                        self.status = if cancelled || stopped {
+                        // Cancel index lets the reading go on, so an error
+                        // after it is one of the reading.
+                        self.status = if cancelled {
                             if import.is_some() {
                                 "Import cancelled".into()
                             } else if preview_remains {
@@ -5889,6 +5913,20 @@ impl Studio {
                         } else {
                             format!("Import or octree failed: {error}")
                         };
+                    }
+                    Ok((cloud, _)) if import.is_some() => {
+                        // Cancelled while it was read, although the pass got
+                        // to its end: the points shown so far go, as they
+                        // would have without the end.
+                        let unchecked = self
+                            .clouds
+                            .iter()
+                            .find(|entry| entry.index_import_id == Some(id))
+                            .map(|entry| Arc::clone(&entry.cloud));
+                        if let Some(unchecked) = unchecked {
+                            self.remove_header_layer(&unchecked);
+                        }
+                        self.status = format!("Import cancelled: {}", display_name(&cloud.path));
                     }
                     Ok((cloud, _)) => {
                         let scene = combined_bounds(&self.clouds);
@@ -5914,9 +5952,7 @@ impl Studio {
                             self.revision += 1;
                             self.reframe_after_replacement(scene);
                         }
-                        self.status = if import.is_some() {
-                            "Import cancelled".into()
-                        } else if preview_remains {
+                        self.status = if preview_remains {
                             "Octree build cancelled; preview remains open".into()
                         } else {
                             "Octree build cancelled".into()
@@ -14998,6 +15034,91 @@ property list uchar int vertex_indices
         let measured = mesh_export::read_measured(&path).unwrap();
         let _ = studio.update(Message::MeshLoaded(shown, Ok(measured)));
         assert!(studio.clouds[0].mesh.is_some());
+    }
+
+    #[test]
+    fn a_scan_read_and_indexed_in_one_pass_can_be_cancelled_while_it_shows_its_points() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scan.xyz");
+        std::fs::write(&path, "1 2 3\n2 3 4\n3 4 5\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+        let mut studio = Studio::default();
+        let cancel = indexed_import(&mut studio, 51, &path);
+        let _ = studio.update(Message::IndexedImportPreview(51, step_of(&cloud, 2)));
+        let _ = studio.update(Message::FlushSnapshots);
+        assert_eq!(studio.clouds.len(), 1);
+        // Its points are on view while it still reads: it is an import yet.
+        assert!(studio.imports.contains_key(&51));
+        assert_eq!(
+            send(&mut studio, native_api::ApiCommand::Status)["result"]["imports"][0]["id"],
+            51
+        );
+        let line = studio.progress_lines().remove(0);
+        assert_eq!(line.title, "Opening scan.xyz");
+        let Some(cancel_line @ Message::CancelImport(51)) = line.cancel else {
+            panic!("the line cancels the import: {:?}", line.cancel);
+        };
+        let _ = studio.update(cancel_line);
+        assert!(cancel.load(Ordering::Relaxed), "the reading stops");
+        assert_eq!(studio.progress_lines()[0].title, "Cancelling…");
+        // A later step is not shown, and the pass ends without its layer.
+        let _ = studio.update(Message::IndexedImportPreview(51, step_of(&cloud, 3)));
+        let _ = studio.update(Message::FlushSnapshots);
+        assert_eq!(studio.clouds[0].cloud.points.len(), 2);
+        let _ = studio.update(Message::IndexedImportReady(
+            51,
+            Err("Operation cancelled".into()),
+        ));
+        assert!(studio.clouds.is_empty());
+        assert!(studio.imports.is_empty());
+        assert!(!studio.index_pending());
+        assert_eq!(studio.status, "Import cancelled");
+
+        // Cancel index lets it read on as an opening, which its line, the
+        // status bar and the local API still cancel.
+        let cancel = indexed_import(&mut studio, 52, &path);
+        let _ = studio.update(Message::IndexedImportPreview(52, step_of(&cloud, 2)));
+        let _ = studio.update(Message::FlushSnapshots);
+        let _ = studio.update(Message::CancelIndex);
+        assert!(!cancel.load(Ordering::Relaxed));
+        let lines = studio.progress_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].title, "Opening scan.xyz");
+        assert!(matches!(lines[0].cancel, Some(Message::CancelOpening)));
+        let answer = send(&mut studio, native_api::ApiCommand::CancelImport { id: 52 });
+        assert_eq!(answer["ok"], true);
+        assert!(cancel.load(Ordering::Relaxed));
+        let _ = studio.update(Message::IndexedImportReady(
+            52,
+            Err("Operation cancelled".into()),
+        ));
+        assert!(studio.clouds.is_empty());
+
+        // A pass that got to its end although it was cancelled leaves
+        // nothing either.
+        let _ = indexed_import(&mut studio, 53, &path);
+        let _ = studio.update(Message::IndexedImportPreview(53, step_of(&cloud, 2)));
+        let _ = studio.update(Message::FlushSnapshots);
+        let _ = studio.update(Message::CancelImport(53));
+        let _ = studio.update(Message::IndexedImportReady(
+            53,
+            Ok((Arc::clone(&cloud), None)),
+        ));
+        assert!(studio.clouds.is_empty());
+        assert_eq!(studio.status, "Import cancelled: scan.xyz");
+
+        // Not cancelled, the checked cloud ends the import and keeps the
+        // layer; the octree may still be cancelled after that.
+        let _ = indexed_import(&mut studio, 54, &path);
+        let _ = studio.update(Message::IndexedImportPreview(54, step_of(&cloud, 2)));
+        let _ = studio.update(Message::FlushSnapshots);
+        let _ = studio.update(Message::IndexedImportPreview(54, Arc::clone(&cloud)));
+        assert!(studio.imports.is_empty());
+        assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
+        assert!(matches!(
+            studio.progress_lines()[0].cancel,
+            Some(Message::CancelIndex)
+        ));
     }
 
     #[test]

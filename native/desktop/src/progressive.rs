@@ -164,22 +164,32 @@ impl Studio {
         Some(Task::none())
     }
 
-    /// Put the snapshot of a one-pass import in its layer. The first one
-    /// takes the place of the metadata, as the checked cloud would.
+    /// Put the snapshot of a one-pass import in its layer, while it still
+    /// reads its source. The first one takes the place of the metadata, as
+    /// the checked cloud would.
     fn show_indexed_snapshot(&mut self, id: u64, cloud: Arc<PointCloud>) -> Option<Task<Message>> {
-        if self.imports.contains_key(&id) {
-            return self.show_indexed_preview(id, cloud);
+        let job = self.imports.get(&id)?;
+        if job.cancel.load(Ordering::Relaxed) {
+            return None;
         }
-        let entry = self
+        match self
             .clouds
             .iter_mut()
-            .find(|entry| entry.index_import_id == Some(id) && entry.cloud.provisional)?;
-        entry.replace_cloud(cloud);
-        Some(Task::none())
+            .find(|entry| entry.index_import_id == Some(id))
+        {
+            Some(entry) if entry.cloud.provisional => {
+                entry.replace_cloud(cloud);
+                Some(Task::none())
+            }
+            Some(_) => None,
+            None => self.show_indexed_preview(id, cloud),
+        }
     }
 
-    /// Show the first look at a one-pass import: it ends the import as far
-    /// as the list of imports goes, and its layer waits for the octree.
+    /// Show the first look at a one-pass import in a layer of its own, which
+    /// waits for the octree. A look at the points read so far leaves the
+    /// import in the list of imports, so that it can still be cancelled
+    /// while it reads; the checked cloud ends it there.
     pub(crate) fn show_indexed_preview(
         &mut self,
         id: u64,
@@ -189,7 +199,9 @@ impl Studio {
         if job.cancel.load(Ordering::Relaxed) {
             return None;
         }
-        self.imports.remove(&id);
+        if !cloud.provisional {
+            self.imports.remove(&id);
+        }
         let header = self.import_headers.remove(&id);
         let task = self.finish_import(header.clone(), Ok(Arc::clone(&cloud)));
         let index = header

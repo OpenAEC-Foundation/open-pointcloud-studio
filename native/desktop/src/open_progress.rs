@@ -126,17 +126,15 @@ impl Studio {
                 .iter()
                 .map(|(_, job)| job.decoded.load(Ordering::Relaxed))
                 .sum();
-            let expected: Option<u64> = plain
-                .iter()
-                .map(|(id, _)| self.import_expected.get(*id).copied())
-                .sum();
+            let expected: Option<u64> =
+                plain.iter().map(|(id, _)| self.expected_points(**id)).sum();
             // Scans that are done count in full, the others as far as they are.
             let reading: f32 = plain
                 .iter()
                 .filter_map(|(id, job)| {
                     fraction(
                         job.decoded.load(Ordering::Relaxed),
-                        *self.import_expected.get(*id)?,
+                        self.expected_points(**id)?,
                     )
                 })
                 .sum();
@@ -165,8 +163,10 @@ impl Studio {
             });
         }
 
+        // A one-pass import whose octree was cancelled is told with the
+        // plain imports above.
         let waiting = self.index_waiting();
-        match self.index_jobs.as_slice() {
+        match self.tree_builds().as_slice() {
             [] => {}
             [job] if waiting == 0 => lines.extend(self.index_line(job)),
             jobs => lines.push(self.index_batch_line(jobs, waiting)),
@@ -240,11 +240,11 @@ impl Studio {
 
     /// The line of builds that run side by side or wait for a place: how
     /// many there are, how many are ready and how far the rest are.
-    fn index_batch_line(&self, jobs: &[IndexJob], waiting: usize) -> Line {
+    fn index_batch_line(&self, jobs: &[&IndexJob], waiting: usize) -> Line {
         let count = self.index_finished + jobs.len() + waiting;
         let ready = self.index_finished;
-        let running: f32 = jobs.iter().map(build_fraction).sum();
-        let cancelling = jobs.iter().all(IndexJob::cancelling);
+        let running: f32 = jobs.iter().map(|job| build_fraction(job)).sum();
+        let cancelling = jobs.iter().all(|job| job.cancelling());
         let detail = if waiting > 0 {
             i18n::tr_args(
                 "{ready} of {count} ready  ·  {running} at once  ·  {waiting} waiting",
@@ -648,6 +648,30 @@ mod tests {
         let lines = studio.progress_lines();
         assert_eq!(lines[0].title, "Cancelling…");
         assert!(lines[0].cancel.is_none());
+
+        // Cancelled while the source is read, the import reads on as an
+        // opening of its own, which can still be cancelled.
+        let import = job("station.e57", 30_000_000);
+        let progress = Arc::new(Mutex::new(reading(30_000_000, 120_000_000)));
+        studio.index_jobs.clear();
+        studio.index_jobs.push(index_job(
+            None,
+            Some(8),
+            "station.e57",
+            &progress,
+            &import.cancel,
+        ));
+        studio.imports.insert(8, import);
+        let _ = studio.update(Message::CancelIndex);
+        let lines = studio.progress_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].phase, Phase::Opening);
+        assert_eq!(lines[0].title, "Opening station.e57");
+        assert_eq!(lines[0].detail, "30.0M of 120.0M points");
+        assert_eq!(lines[0].fraction, Some(0.25));
+        assert!(matches!(lines[0].cancel, Some(Message::CancelOpening)));
+        let _ = studio.update(Message::CancelOpening);
+        assert!(studio.imports[&8].cancel.load(Ordering::Relaxed));
     }
 
     #[test]
