@@ -1014,6 +1014,9 @@ impl Studio {
         if let Some(switch) = faces::layer_switch(index, entry) {
             item = item.push(switch);
         }
+        if let Some(photos) = self.photo_rows(index) {
+            item = item.push(photos);
+        }
         let active = self.active == Some(index);
         let picked = entry.picked;
         container(item)

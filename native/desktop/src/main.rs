@@ -22,6 +22,7 @@ mod drawing_crop;
 mod drawing_view;
 mod extensions;
 mod faces;
+mod file_photos;
 mod file_view;
 mod gpu_viewport;
 mod i18n;
@@ -40,6 +41,7 @@ mod open_progress;
 mod opencad_properties;
 mod opencad_ribbon;
 mod orbit_point;
+mod photo_overlay;
 mod preferences;
 mod progressive;
 mod project_browser;
@@ -183,22 +185,19 @@ fn open_for_export(source: &Path) -> Result<PointCloud, pointcloud_core::LoadErr
     }
 }
 
-/// Save every station photo of a scan file in its stored encoding and report
-/// where each one looks, without decoding any point.
+/// Save every photo of a scan file in its stored encoding and report where
+/// each one looks, without decoding any point: the photos of its stations,
+/// then its other photos.
 fn export_station_photos(
     source: &Path,
     directory: &Path,
 ) -> Result<Vec<String>, pointcloud_core::LoadError> {
     let (poses, images) = pointcloud_core::scan_stations(source)?;
     let encoded = pointcloud_core::read_scan_images(source, &images)?;
+    let photos = pointcloud_core::file_photos(source)?;
     std::fs::create_dir_all(directory)?;
-    let mut lines = Vec::with_capacity(images.len());
-    for (index, (image, bytes)) in images.iter().zip(encoded).enumerate() {
-        let station = image
-            .station
-            .and_then(|station| poses.get(station))
-            .map_or("photo", |pose| pose.label.as_str());
-        let name: String = station
+    let file_name = |label: &str| -> String {
+        label
             .chars()
             .map(|character| {
                 if character.is_alphanumeric() || matches!(character, '-' | '_' | ' ') {
@@ -207,22 +206,54 @@ fn export_station_photos(
                     '_'
                 }
             })
-            .collect();
-        let extension = match image.format {
-            pointcloud_core::ScanImageFormat::Jpeg => "jpg",
-            pointcloud_core::ScanImageFormat::Png => "png",
-        };
-        let file = directory.join(format!("{name} photo {}.{extension}", index + 1));
-        std::fs::write(&file, bytes)?;
-        let view = image.view_direction();
-        lines.push(format!(
-            "{}: {}x{}, looks {:+.3}, {:+.3}, {:+.3}",
+            .collect()
+    };
+    let extension = |format| match format {
+        pointcloud_core::ScanImageFormat::Jpeg => "jpg",
+        pointcloud_core::ScanImageFormat::Png => "png",
+    };
+    let line = |file: &Path, width: u32, height: u32, view: [f64; 3]| {
+        format!(
+            "{}: {width}x{height}, looks {:+.3}, {:+.3}, {:+.3}",
             file.display(),
-            image.width,
-            image.height,
             view[0],
             view[1],
             view[2]
+        )
+    };
+    let mut lines = Vec::with_capacity(images.len() + photos.photos.len());
+    for (index, (image, bytes)) in images.iter().zip(encoded).enumerate() {
+        let station = image
+            .station
+            .and_then(|station| poses.get(station))
+            .map_or("photo", |pose| pose.label.as_str());
+        let file = directory.join(format!(
+            "{} photo {}.{}",
+            file_name(station),
+            index + 1,
+            extension(image.format)
+        ));
+        std::fs::write(&file, bytes)?;
+        lines.push(line(
+            &file,
+            image.width,
+            image.height,
+            image.view_direction(),
+        ));
+    }
+    for (index, photo) in photos.photos.iter().enumerate() {
+        let bytes = pointcloud_core::read_file_photo(source, photo)?;
+        let label = match &photo.name {
+            Some(name) => format!("{} {}", file_name(name), index + 1),
+            None => format!("{} {}", photo.kind().key(), index + 1),
+        };
+        let file = directory.join(format!("{label}.{}", extension(photo.format)));
+        std::fs::write(&file, bytes)?;
+        lines.push(line(
+            &file,
+            photo.width,
+            photo.height,
+            photo.view_direction(),
         ));
     }
     Ok(lines)
@@ -650,14 +681,14 @@ fn main() -> iced::Result {
         };
         match export_station_photos(&PathBuf::from(source), &PathBuf::from(directory)) {
             Ok(lines) => {
-                println!("{} station photo(s)", lines.len());
+                println!("{} photo(s)", lines.len());
                 for line in lines {
                     println!("{line}");
                 }
                 return Ok(());
             }
             Err(error) => {
-                eprintln!("Station photos failed: {error}");
+                eprintln!("Photos failed: {error}");
                 std::process::exit(1);
             }
         }
@@ -1598,6 +1629,9 @@ impl Studio {
             Named::Delete if ignored => Message::ModelKey(ModelKey::Delete),
             Named::Backspace if ignored => Message::Measure(measure::MeasureAction::RemoveLast),
             Named::Enter if ignored => Message::Measure(measure::MeasureAction::Finish),
+            // Page Up and Page Down step along the photos of a path.
+            Named::PageUp if ignored => Message::Photos(file_photos::PhotoAction::Step(-1)),
+            Named::PageDown if ignored => Message::Photos(file_photos::PhotoAction::Step(1)),
             _ => return Task::none(),
         };
         self.handle(message)
@@ -1840,6 +1874,8 @@ enum Message {
     WalkTick(Instant),
     WalkStop,
     PanoramaReady(PathBuf, usize, Result<Arc<PhotoSet>, String>),
+    /// The photos of a file that are not those of its stations.
+    Photos(file_photos::PhotoAction),
     Budget(u32),
     FilterClass(u8, bool),
     SetSectionEnabled(bool),
@@ -1996,6 +2032,9 @@ struct Studio {
     /// photos once decoded.
     walk_station: Option<(usize, usize)>,
     panorama_photos: Option<Arc<PhotoSet>>,
+    /// The photos of the open files that are not those of their stations,
+    /// and the one that is entered.
+    photos: file_photos::PhotoTool,
     /// Movement keys held down, indexed by `WalkKey`, and the faster pace.
     walk_keys: [bool; 6],
     walk_fast: bool,
@@ -2492,6 +2531,7 @@ impl Default for Studio {
             walk: None,
             walk_station: None,
             panorama_photos: None,
+            photos: file_photos::PhotoTool::default(),
             walk_keys: [false; 6],
             walk_fast: false,
             walk_tick: None,
@@ -2913,8 +2953,10 @@ impl Studio {
         self.auto_camera = Some((self.yaw, self.pitch, self.zoom, self.pan));
     }
 
-    /// Decode the small ball photos of a newly opened source in the background.
+    /// Decode the small ball photos of a newly opened source in the
+    /// background, and list the other photos it holds.
     fn station_photos_task(&mut self, cloud: &Arc<PointCloud>) -> Task<Message> {
+        let listing = self.file_photos_task(cloud);
         if cloud.scan_images.is_empty()
             || self.photo_loading.contains(&cloud.path)
             || self
@@ -2922,13 +2964,13 @@ impl Studio {
                 .iter()
                 .any(|set| set.source == cloud.path)
         {
-            return Task::none();
+            return listing;
         }
         self.photo_loading.insert(cloud.path.clone());
         let source = cloud.path.clone();
         let images = cloud.scan_images.clone();
         let key = source.clone();
-        Task::perform(
+        let balls = Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || {
                     station_photos::load_ball_photos(&source, &images)
@@ -2939,11 +2981,13 @@ impl Studio {
                 .and_then(|result| result)
             },
             move |result| Message::StationPhotosReady(key.clone(), result),
-        )
+        );
+        Task::batch([listing, balls])
     }
 
     /// Keep ball photos for open sources only and publish them to the viewport.
     fn rebuild_photo_atlas(&mut self) {
+        self.keep_open_photos();
         self.station_photos.retain(|set| {
             self.clouds
                 .iter()
@@ -3085,6 +3129,7 @@ impl Studio {
 
     fn leave_walk(&mut self) -> bool {
         self.panorama_photos = None;
+        self.photos.close();
         self.walk_station = None;
         self.walk_keys = [false; 6];
         self.walk_tick = None;
@@ -3400,6 +3445,8 @@ impl Studio {
                             "indexed": entry.index.is_some(),
                             "stations": entry.cloud.scan_poses.len(),
                             "station_photos": entry.cloud.scan_images.len(),
+                            "photos": self.photos.files.get(&entry.cloud.path)
+                                .map_or(0, |photos| photos.photos.len()),
                             "view_sample": entry.view_len(),
                             "bounds": {"min": entry.bounds().min, "max": entry.bounds().max},
                             "transform": {"scale": entry.transform.scale, "offset": entry.transform.offset},
@@ -3489,6 +3536,7 @@ impl Studio {
                 answer.0["result"]["section_fill"] = self.section_fill.value();
                 answer.0["result"]["faces"] = self.faces_value();
                 answer.0["result"]["mesh_to_plans"] = self.mesh_to_plans.value();
+                answer.0["result"]["photos"] = self.photos_value();
                 answer
             }
             ApiCommand::Job { id } => {
@@ -3671,6 +3719,10 @@ impl Studio {
                         view.yaw = yaw;
                         view.pitch = pitch;
                         view.field_of_view = field_of_view;
+                        // A pinhole photo is no longer seen from its own camera.
+                        if let Some(photo) = &mut self.photos.view {
+                            photo.pinned = false;
+                        }
                         (json!({"ok": true, "walk": self.walk_value()}), Task::none())
                     }
                     (None, _) => (
@@ -3699,6 +3751,8 @@ impl Studio {
                     view.yaw = yaw;
                     view.pitch = pitch;
                     self.walk = Some(view);
+                    // Walking elsewhere leaves a photo behind.
+                    self.photos.close();
                     self.revision += 1;
                     let station = self.sync_walk_station();
                     let detail = self.schedule_detail();
@@ -3713,6 +3767,11 @@ impl Studio {
                 let task = self.update(Message::LeaveWalk);
                 (json!({"ok": true, "closed": was_open}), task)
             }
+            command @ (ApiCommand::ListPhotos { .. }
+            | ApiCommand::EnterPhoto { .. }
+            | ApiCommand::PhotoBlend { .. }
+            | ApiCommand::NextPhoto
+            | ApiCommand::PreviousPhoto) => self.api_photos(command),
             ApiCommand::ZoomAll => {
                 let task = self.update(Message::ResetCamera);
                 (json!({"ok": true, "camera": self.camera_value()}), task)
@@ -7665,6 +7724,10 @@ impl Studio {
                 }
             }
             Message::LeaveWalk => {
+                // Leaving a photo puts the camera back where it was.
+                if let Some(task) = self.leave_photo() {
+                    return task;
+                }
                 if self.leave_walk() {
                     self.status = "Back in the 3D view".into();
                     self.revision += 1;
@@ -7741,6 +7804,8 @@ impl Studio {
                     return Task::none();
                 }
                 view.advance(forward * step, right * step, up * step);
+                // Walking on leaves the photo behind.
+                self.photos.close();
                 self.revision += 1;
                 return Task::batch([self.sync_walk_station(), self.schedule_detail()]);
             }
@@ -8265,6 +8330,7 @@ impl Studio {
             }
             Message::Views(action) => return self.update_views(action),
             Message::Browser(action) => return self.update_browser(action),
+            Message::Photos(action) => return self.update_photos(action),
             Message::Sheet(action) => return self.update_sheet_dialog(action),
             Message::ShowContextMenu(point) => self.context_menu = Some(point),
             Message::DismissContextMenu => self.context_menu = None,
@@ -9460,6 +9526,7 @@ impl Studio {
                 .filter(|turn| matches!(turn.target, drawing_crop::TurnTarget::SectionBox(_))),
             shift: self.modifiers.shift(),
             pointer: &self.viewport_pointer,
+            photos: &self.photos,
         }
     }
 
@@ -9650,6 +9717,10 @@ impl Studio {
         };
         let canvas = match self.note_prompt().filter(|_| !self.drawing_view.shown) {
             Some(prompt) => canvas.push(prompt),
+            None => canvas,
+        };
+        let canvas = match self.photo_controls().filter(|_| !self.drawing_view.shown) {
+            Some(controls) => canvas.push(controls),
             None => canvas,
         };
 
@@ -10005,6 +10076,9 @@ impl Studio {
                     }
                 }
             }
+        }
+        if let Some(section) = active_cloud.and_then(|entry| self.photo_properties(entry)) {
+            properties = properties.push(section);
         }
         if let Some(section) = self.measure.properties() {
             properties = properties.push(section);
@@ -11302,6 +11376,8 @@ struct PointViewport<'a> {
     shift: bool,
     /// Where the pointer is over the view, as it was last drawn.
     pointer: &'a std::cell::Cell<Option<[f32; 2]>>,
+    /// The photos of the files that are not those of their stations.
+    photos: &'a file_photos::PhotoTool,
 }
 
 struct ScanMarker {
@@ -11841,6 +11917,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 _ => {}
             }
         }
+        if self.shown_photo().is_some() {
+            return self.update_photo(state, event, bounds, cursor);
+        }
         if let Some(view) = self.walk {
             return self.update_walk(view, state, event, bounds, cursor);
         }
@@ -11989,6 +12068,28 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     if button == mouse::Button::Left {
                         let click =
                             orbit_click(last_click, drag, position, Instant::now(), bounds.size());
+                        // A double click on the mark of a photo enters it.
+                        if let Some(Message::PickOrbitPoint(pointer, _)) = click {
+                            let photo = combined_bounds(self.clouds)
+                                .filter(|_| self.show_scan_poses)
+                                .and_then(|overall| {
+                                    let projection = Projection::new(
+                                        overall,
+                                        self.yaw,
+                                        self.pitch,
+                                        self.zoom,
+                                        self.pan,
+                                        bounds.width,
+                                        bounds.height,
+                                    );
+                                    self.photo_mark_at(projection, pointer)
+                                });
+                            if let Some((source, index)) = photo {
+                                return Some(Message::Photos(file_photos::PhotoAction::Enter(
+                                    source, index,
+                                )));
+                            }
+                        }
                         if click.is_some() {
                             return click;
                         }
@@ -12145,6 +12246,10 @@ impl canvas::Program<Message> for PointViewport<'_> {
         self.annotate.drawn_at(bounds);
         self.pointer
             .set(_cursor.position_in(bounds).map(|at| [at.x, at.y]));
+        if let Some(shown) = self.shown_photo() {
+            self.draw_photo_overlay(&mut frame, &shown, bounds.size());
+            return vec![frame.into_geometry()];
+        }
         if let Some(view) = self.walk {
             self.draw_walk_overlay(&mut frame, view, bounds.size());
             return vec![frame.into_geometry()];
@@ -12510,6 +12615,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 }
             }
         }
+        if self.show_scan_poses {
+            self.draw_photo_marks(&mut frame, projection, bounds.size());
+        }
         self.draw_drawing(&mut frame, bounds.size());
         self.draw_faces(&mut frame, bounds.size());
         self.draw_measure(&mut frame, bounds.size());
@@ -12669,8 +12777,15 @@ impl PointViewport<'_> {
         })
     }
 
-    /// The camera in use: the walking camera when active, the orbit camera otherwise.
+    /// The camera in use: the camera of a pinhole photo seen from where it
+    /// was taken, the walking camera when active, the orbit camera otherwise.
     fn projection(&self, scene: Bounds, width: f32, height: f32) -> Projection {
+        if let Some((eye, (basis, focal))) = self
+            .shown_photo()
+            .and_then(|shown| Some((shown.eye, shown.pinned_camera(Size::new(width, height))?)))
+        {
+            return Projection::from_eye(scene, eye, basis, focal, width, height);
+        }
         match self.walk {
             Some(view) => Projection::from_eye(
                 scene,

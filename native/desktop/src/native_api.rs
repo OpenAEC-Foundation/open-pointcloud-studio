@@ -73,6 +73,25 @@ pub enum ApiCommand {
         pitch: f32,
     },
     ClosePanorama,
+    /// The photos of a layer that are not those of its stations.
+    ListPhotos {
+        /// The layer; without it the active layer when it has photos, else
+        /// the first layer with photos.
+        #[serde(default)]
+        layer: Option<usize>,
+    },
+    EnterPhoto {
+        /// Zero-based place of the photo in `list_photos`.
+        index: usize,
+        #[serde(default)]
+        layer: Option<usize>,
+    },
+    PhotoBlend {
+        /// 0 shows the points only, 1 the photo only.
+        value: f32,
+    },
+    NextPhoto,
+    PreviousPhoto,
     ZoomAll,
     ListCameraViews,
     SaveCameraView {

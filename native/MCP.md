@@ -108,10 +108,10 @@ an error. `wait_until_idle` waits until imports, octree builds, background
 edits, meshing (a closed mesh included), mesh export, a face detection, a
 faces export, a section drawing or its preview, a drawing file being read, steps of Mesh to Plans, merging, a 3D BAG download,
 point loading for the camera, the fill of the cut of a mesh by the section
-box and view snapshots have finished; call it after
+box, the listing and decoding of photos and view snapshots have finished; call it after
 `open`, before `screenshot` when the camera changed, and before `export_bcf`.
-`screenshot` itself waits up to 4 seconds for the points of the camera and the
-fill of the cut, and so does the snapshot of a view. `screenshot` returns MCP image content (`type: "image"`,
+`screenshot` itself waits up to 4 seconds for the points of the camera, the
+fill of the cut and the photo that is entered, and so does the snapshot of a view. `screenshot` returns MCP image content (`type: "image"`,
 `mimeType: "image/png"`, base64 data) followed by a text part with the image
 size. While the Drawing view is shown, `screenshot` captures the drawing
 instead of the 3D viewport. While the File view, Settings or the card of the Mesh to Plans wizard covers the model, `screenshot` answers
@@ -122,7 +122,7 @@ follows when that view is restored.
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `status` | — | State of the window: layers (each with its mesh and its detected faces), imports and tasks, camera, viewport size, section box, the Section drawing, Closed mesh and Detect faces tools, the Mesh to Plans wizard, selection, measurement, views, settings |
+| `status` | — | State of the window: layers (each with its mesh and its detected faces), imports and tasks, camera, viewport size, section box, the Section drawing, Closed mesh and Detect faces tools, the Mesh to Plans wizard, selection, measurement, views, photos, settings |
 | `job` | `id` | Reads a background job once |
 | `wait_for_job` | `id`, optional `timeout_seconds` (default 60) | Waits until the job no longer runs |
 | `wait_until_idle` | optional `timeout_seconds` (default 60) | Waits until no work is under way; reports what is still busy |
@@ -140,7 +140,12 @@ follows when that view is restored.
 | `open_panorama` | `index`, `station` | Stands in a scanner station and shows its photos |
 | `set_panorama` | `yaw`, `pitch`, `field_of_view` (radians) | Turns the walking camera |
 | `walk` | `eye` (`[x, y, z]`), `yaw`, `pitch` | Places the walking camera |
-| `close_panorama` | — | Returns to the orbit view |
+| `close_panorama` | — | Returns to the orbit view; after `enter_photo`, to the camera before the first photo |
+| `list_photos` | optional `layer` | The photos of a layer apart from its station photos (panoramas and photos along a path): index, kind, size, position, viewing direction; and the file's coordinate system |
+| `enter_photo` | `index`, optional `layer` | Stands where a photo was taken and lays it over the points |
+| `photo_blend` | `value` (0–1) | How much of the photo covers the points: 0 the points only, 1 the photo only |
+| `next_photo` | — | The next photo along the path, as Page Down |
+| `previous_photo` | — | The previous photo along the path, as Page Up |
 | `list_camera_views` | — | Saved views of the active scan |
 | `save_camera_view` | optional `name` | Saves the current 3D view, with the section box while it is on, and makes it active; shows the 3D scene when a drawing was shown |
 | `update_camera_view` | `name` | Overwrites a view with the current 3D view; shows the 3D scene when a drawing was shown |

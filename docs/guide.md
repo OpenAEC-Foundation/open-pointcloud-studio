@@ -12,6 +12,7 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 - [Display](#display)
 - [Scanner stations](#scanner-stations)
 - [Station photos and walking](#station-photos-and-walking)
+- [Panoramas and photos along a path](#panoramas-and-photos-along-a-path)
 - [Section box](#section-box)
 - [Selecting and editing](#selecting-and-editing)
 - [Measuring distances and areas](#measuring-distances-and-areas)
@@ -144,13 +145,27 @@ The only scan of an E57 file, when it has neither a scanner sweep (a row and col
 
 E57 scans often carry the photos taken at each station as pinhole images, for example six cube faces of 90 degrees. They are listed from the file metadata when a scan opens; nothing is decoded until it is shown. Every station with photos is drawn as a ball that shows its surroundings, and stays visible through walls and roofs like the station markers.
 
-Click a ball, or **Photo** beside a station in the list under **Scan positions**, to stand in that station: drag to look around, scroll to zoom, and click another station to step over to it. The photos are looked up per pixel in the image that sees each direction, so any set of pinhole photos with a pose works, not only complete cubes. Spherical and cylindrical photos are not shown.
+Click a ball, or **Photo** beside a station in the list under **Scan positions**, to stand in that station: drag to look around, scroll to zoom, and click another station to step over to it. The photos are looked up per pixel in the image that sees each direction, so any set of pinhole photos with a pose works, not only complete cubes.
 
 `W`, `A`, `S` and `D` walk through the scene, `Q` and `E` move down and up, and Shift walks faster. Forward and back follow the viewing direction, so looking down a stairwell and pressing `W` goes down it; sideways stays level. While walking, points are drawn thicker and keep a size in the scene, so that surfaces close by fill in.
 
 Walking starts from the current orbit view, or from inside a station. Walking out of a station leaves its photo and continues through the point cloud with the station behind you; walking into another ball enters its photo. Escape, **Back to 3D view**, Zoom all or a camera direction returns to the orbit view. The selection tools are not available while walking.
 
-`open-pointcloud-studio --photos INPUT OUTPUT_DIRECTORY` saves the stored photos of every station and prints where each one looks.
+`open-pointcloud-studio --photos INPUT OUTPUT_DIRECTORY` saves the stored photos of every station, and then the other photos of the file, and prints where each one looks.
+
+## Panoramas and photos along a path
+
+An E57 file can also hold photos that belong to no station: equirectangular (spherical) panoramas taken along a walked path, cylindrical panoramas, or the photos of a camera that measured no points, each with its own position and direction. They are listed from the file metadata when the scan opens; nothing is decoded until a photo is shown. A pinhole photo whose pixel size is zero or left empty gives its focal length in pixels, as some programs write them; otherwise the focal length and the pixel size are metres, as the standard says.
+
+- While **Stations** in the VIEW group is on, the photos are marked along their path, connected in the order of the file: a small ball for a panorama, a dot with a short line along its viewing direction for a pinhole photo. Marks that lie close together on screen share one label.
+- In the project panel each scan with such photos has a line such as "12 photos"; click it to list every photo, and click a photo to enter it.
+- Double-click a mark to enter its photo. The camera stands where the photo was taken and the photo lies over the points. A panorama is looked around as a station is: drag to look, scroll to zoom. A pinhole photo is first seen from its own camera, with its field of view and its tilt, so that it fills the view as it fills the photo; scrolling magnifies it, and dragging looks around from the same place.
+- The **Photo** slider at the top right sets how much the photo covers the points, from 0 (the points only) to 1 (the photo only). The arrows beside it, or `Page Up` and `Page Down`, go to the previous and next photo along the path. The photo is decoded on a separate thread at most 4096 pixels wide, and the neighbours along the path are read ahead, so that stepping along the path is quick.
+- A click on the points under the photo selects the point there, and the measuring and annotation tools work as in the 3D view.
+- Escape or **Back to 3D view** leaves the photo and puts the camera back where it was before the first photo. `W`, `A`, `S` and `D` walk on from the photo and leave it behind.
+- Properties shows under **Photos** how many panoramas and pinhole photos the active scan has, and the coordinate system the file states, such as an EPSG code.
+
+The colours stored with the points of such files are usually taken from these photos. The way each kind of photo is read, which direction the middle of a panorama looks and which way its columns run, was chosen because it makes the photos agree with those colours.
 
 ## Section box
 

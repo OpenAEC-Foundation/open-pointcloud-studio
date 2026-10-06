@@ -421,6 +421,7 @@ mod tests {
         ("drawing_view.rs", include_str!("drawing_view.rs")),
         ("extensions.rs", include_str!("extensions.rs")),
         ("faces.rs", include_str!("faces.rs")),
+        ("file_photos.rs", include_str!("file_photos.rs")),
         ("file_view.rs", include_str!("file_view.rs")),
         ("i18n.rs", include_str!("i18n.rs")),
         ("index_jobs.rs", include_str!("index_jobs.rs")),
@@ -495,6 +496,8 @@ mod tests {
         // views.rs
         ("tool", 0),
         ("small", 0),
+        // file_photos.rs
+        ("refusal", 0),
     ];
 
     /// Every text the sources hand to the translation, with the file it was

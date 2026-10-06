@@ -60,6 +60,7 @@ impl Tool {
                 | "list_camera_views"
                 | "list_drawings"
                 | "list_faces"
+                | "list_photos"
                 | "list_extensions"
                 | "list_instances"
                 | "wait_for_job"
@@ -225,7 +226,7 @@ const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (E
 fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
-        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), the Detect faces tool (faces: its settings, a running job, the last job, export_pending and result, the faces of the active layer in figures; clouds[].faces has those figures per layer, or null), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view), the Mesh to Plans wizard (mesh_to_plans: whether it is shown as card or strip, its step and the status of every step) and the status line.", vec![]),
+        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), the Detect faces tool (faces: its settings, a running job, the last job, export_pending and result, the faces of the active layer in figures; clouds[].faces has those figures per layer, or null), the photos of the files and the one that is entered (photos), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view), the Mesh to Plans wizard (mesh_to_plans: whether it is shown as card or strip, its step and the status of every step) and the status line.", vec![]),
         tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, detect_faces, export_faces, merge_visible or bag3d returned, or that status.result.mesh_to_plans.job names: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
@@ -233,7 +234,7 @@ fn table() -> Vec<Tool> {
             required("id", text("The job_id", 1, 64)),
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, a drawing file being read, steps of Mesh to Plans, merging, 3D BAG download, station photos, view snapshots, the fill of the cut of a mesh by the section box or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
+        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, a drawing file being read, steps of Mesh to Plans, merging, 3D BAG download, station photos, the photos of a file being listed or decoded, view snapshots, the fill of the cut of a mesh by the section box or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
         tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load and the fill of the cut of a mesh to be made; while the Drawing view is shown it captures the drawing instead, and the answer says which in view (model or drawing). The text part gives the width and height in pixels. Fails while the window is minimised, and while the File view, Settings or the card of the Mesh to Plans wizard covers the viewport; file_view with open false returns to the model, mesh_to_plans_view with minimized true leaves the wizard as a strip that is not captured.", vec![
@@ -289,7 +290,19 @@ fn table() -> Vec<Tool> {
             required("yaw", heading()),
             required("pitch", walk_pitch()),
         ]),
-        tool("close_panorama", Command, "Leaves the walking camera and returns to the orbit view.", vec![]),
+        tool("close_panorama", Command, "Leaves the walking camera and returns to the orbit view. While a photo is entered it leaves the photo and puts the camera back where it was before the first photo was entered.", vec![]),
+        tool("list_photos", Command, "Lists the photos of a layer that stand on their own, apart from the photos of scanner stations: panoramas and photos taken along a path (E57). Each has its index, kind (pinhole, spherical or cylindrical), name, width and height in pixels, position and viewing direction in scene coordinates, and station when the file names one; the answer also gives the coordinate_system the file states. The photos are in the order of the file, which is the order of the path.", vec![
+            optional("layer", ordinal("Zero-based layer index; without it the active layer when it has photos, else the first layer with photos")),
+        ]),
+        tool("enter_photo", Command, "Stands where a photo was taken and lays the photo over the points: a panorama is looked around like a station panorama, a pinhole photo is first seen from its own camera with its field of view. Measuring and picking work on the points under the photo. status.result.photos.view reports the photo, with shown true once it is decoded; close_panorama returns.", vec![
+            required("index", ordinal("Zero-based photo number, as list_photos gives it")),
+            optional("layer", ordinal("Zero-based layer index; without it the active layer when it has photos, else the first layer with photos")),
+        ]),
+        tool("photo_blend", Command, "Sets how much of the entered photo covers the points, as the Photo slider does: 0 shows the points only, 1 the photo only. It stays for later photos.", vec![
+            required("value", number_in("From 0 to 1", 0.0, 1.0)),
+        ]),
+        tool("next_photo", Command, "Enters the next photo along the path of the entered photo, as Page Down does; fails at the last photo.", vec![]),
+        tool("previous_photo", Command, "Enters the previous photo along the path of the entered photo, as Page Up does; fails at the first photo.", vec![]),
         tool("list_camera_views", Command, "Lists the saved views of the active scan with their camera, section box, colour mode and annotations, and the name of the active view.", vec![]),
         tool("save_camera_view", Command, "Saves what the 3D viewport shows of the active scan (camera, the section box while it is on, colour mode) as a view and makes it the active view, showing the 3D scene when a drawing or the File view was in front. A snapshot image follows shortly after; wait_until_idle waits for it.", vec![
             optional("name", text("Name of the new view, unique within the scan; without it the first free \"View N\" is used", 1, 64)),
@@ -797,6 +810,13 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
         .is_some_and(|count| count > 0)
     {
         busy.push("photos");
+    }
+    if ["listing", "decoding"].into_iter().any(|key| {
+        result["photos"][key]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    }) {
+        busy.push("file_photos");
     }
     if result["views"]["snapshots_pending"]
         .as_u64()

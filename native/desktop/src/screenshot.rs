@@ -119,10 +119,11 @@ fn settle_timer(request: Request, remaining: u8, quiet: u8) -> Task<Message> {
 
 impl Studio {
     /// Whether the 3D view is still completing its picture: reading the
-    /// points of its camera, or making the caps where the section box cuts
-    /// a mesh. A picture taken now may lack some of either.
+    /// points of its camera, making the caps where the section box cuts a
+    /// mesh, or decoding the photo that is entered. A picture taken now may
+    /// lack some of these.
     pub(crate) fn scene_pending(&self) -> bool {
-        self.detail_pending || self.section_fill.cap_jobs.running()
+        self.detail_pending || self.section_fill.cap_jobs.running() || self.photos.waiting()
     }
 
     /// Where the part of the window that a screenshot captures lies: the

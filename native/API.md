@@ -1125,11 +1125,42 @@ the File view, Settings or the Mesh to Plans wizard covers the model; `view` is 
 application itself, so it does not depend on the window being visible on a
 screen.
 
+## Photos of a file
+
+An E57 file can hold photos that belong to no scanner station: equirectangular
+panoramas taken along a walked path, cylindrical panoramas, and pinhole photos
+of a camera that measured no points. A pinhole photo whose pixel size is zero
+or empty states its focal length and principal point in pixels; otherwise the
+focal length and pixel size are metres, as the standard says. These photos
+are listed from the metadata when the file opens and marked in the scene along
+their path while Stations is on. `status.result.photos.files` has per layer
+the number of `photos`, how many are `pinhole`, `spherical` and `cylindrical`,
+the images `skipped` (a preview without a projection, one without a pose) and
+the `coordinate_system` the file states; `status.result.clouds[].photos`
+counts them too.
+
+`enter_photo` stands at the position of a photo. A panorama is looked around
+with the walking camera, which `set_panorama` turns; a pinhole photo is first
+seen from its own camera, with its field of view and its turn about its
+viewing direction, until `set_panorama` or a drag hands the view to the
+walking camera. The photo is decoded in the background, at most 4096 pixels
+each way, and its neighbours along the path are read ahead.
+`status.result.photos.view` reports the `layer`, `index`, `count`, `kind`,
+whether it is `pinned` to its own camera, the `zoom` of that camera, `shown`
+(true once the photo is decoded), `shown_after_ms` (from entering it until it
+could be shown) and `decode_ms`; `status.result.photos` also has the `blend`,
+the photos `listing` and `decoding`, and the decoded photos kept (`cached`,
+at most four, and `cached_bytes`). `pick_screen`, measuring and annotations
+work on the points under the photo. `close_panorama` leaves the photo and puts
+the camera back where it was before the first photo was entered; `walk` and
+walking on leave the photo where it was. `screenshot` and view snapshots wait
+for the photo as they wait for the points of the camera.
+
 ## Commands
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge, 3D BAG download or Mesh to Plans task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -1144,7 +1175,12 @@ screen.
 | `open_panorama` | `index`, `station` | Stands in a scanner station of a layer and shows its photos; `status.result.walk` reports the view and whether full-resolution photos are loaded |
 | `set_panorama` | `yaw`, `pitch`, `field_of_view` | Turns the walking camera; yaw within ±π, pitch within ±1.55 and a horizontal field of view from 0.35 to 2.1 radians |
 | `walk` | `eye`, `yaw`, `pitch` | Places the walking camera at a position in scene coordinates, looking along the heading `yaw` and elevation `pitch`; inside a station ball it shows that station's photos |
-| `close_panorama` | — | Leaves the walking camera and returns to the orbit view |
+| `close_panorama` | — | Leaves the walking camera and returns to the orbit view; while a photo of a file is entered, leaves it and puts the camera back where it was before the first photo was entered |
+| `list_photos` | optional `layer` | Lists the photos of a layer that are not the pinhole photos of its scanner stations: equirectangular (`spherical`) and `cylindrical` panoramas and `pinhole` photos taken along a path. Each has its `index` (the order of the file, which is the order of the path), `kind`, `name` or `null`, `width` and `height` in pixels, `position` and viewing `direction` in scene coordinates with the layer's move and scale applied, and `station` when the file names one. The answer has the `layer`, its `path`, the `coordinate_system` the file states (such as an EPSG code) or `null`, and how many images were `skipped`. Without `layer` the active layer is taken when it has photos, else the first layer with photos |
+| `enter_photo` | `index`, optional `layer` | Stands where a photo was taken and lays the photo over the points; answers with the `photo` as `list_photos` gives it and the `walk` camera. See [Photos of a file](#photos-of-a-file) |
+| `photo_blend` | `value` | How much of the entered photo covers the points, from 0 (the points only) to 1 (the photo only); it stays for later photos |
+| `next_photo` | — | Enters the next photo along the path of the entered photo; refused at the last photo and while no photo is entered |
+| `previous_photo` | — | Enters the previous photo along the path; refused at the first photo and while no photo is entered |
 | `list_camera_views` | — | Lists the saved views of the active scan with everything they hold, and the name of the `active` view |
 | `save_camera_view` | optional `name` | Saves the current view of the active scan (camera, the section box while it is on, colour mode) and makes it the active view, showing the 3D scene when the Drawing view or the File view was in front; returns its `name` and `guid`. The name must be unique within that scan and 1–64 characters long; without a name the first free "View 1", "View 2", … is used (maximum 64 views per scan) |
 | `update_camera_view` | `name` | Overwrites a named view with the current 3D view, keeping its name, identifier, time and annotations, and makes it the active view, showing the 3D scene when the Drawing view or the File view was in front |

@@ -172,6 +172,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - The classes that occur in the open clouds are listed in the project panel and can be shown or hidden one by one.
 - A view cube, seven camera directions, **Zoom all** and a right-click menu in the scene.
 - Scanner stations of E57, PCD and PTX scans are shown as markers. Stations with photos are drawn as balls: click one to stand in that station and look around.
+- Panoramas and photos taken along a path in an E57 file are marked along their path. Double-click a mark, or a photo under its scan in the project panel, to stand where it was taken: the photo lies over the points, a **Photo** slider sets how much, `Page Up` and `Page Down` step along the path, and `Esc` returns. Measuring and picking work on the points under the photo.
 - Walk through the scene with `W`, `A`, `S`, `D`, down and up with `Q` and `E`, faster with Shift.
 
 ### Section box
@@ -262,7 +263,7 @@ Three meshers in the SURFACE group turn the points of a scan, or the part of the
 | Format | Read | Write | Notes |
 | --- | --- | --- | --- |
 | LAS, LAZ | yes | yes | Opens from the header; exports keep the original point records |
-| E57 | yes | yes | Scanner positions and station photos are read; spherical and cylindrical photos are not shown |
+| E57 | yes | yes | Scanner positions, station photos, panoramas (spherical and cylindrical) and photos taken along a path are read, with the coordinate system the file states. A pinhole photo with a pixel size of zero gives its focal length in pixels |
 | PLY | yes | yes | Reads ASCII and little-endian binary; writes either |
 | PCD | yes | no | ASCII, binary and compressed binary |
 | PTX | yes | no | With the scanner position of each scan |
@@ -334,7 +335,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--list-scans PATH [PATH ...]` | Prints the scan files found in files, folders and scan project files |
 | `--index INPUT` | Builds the index of a scan and keeps it for later |
 | `--scans INPUT` | Prints the scanner positions stored in a scan |
-| `--photos INPUT OUTPUT_DIRECTORY` | Saves the station photos of a scan as image files |
+| `--photos INPUT OUTPUT_DIRECTORY` | Saves the photos of a scan as image files |
 | `--export INPUT OUTPUT` | Converts a scan; the extension of `OUTPUT` chooses the format (`.ply`, `.xyz`, `.pts`, `.csv`, `.las`, `.laz`, `.e57`) |
 | `--section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]` | Exports the points of a scan that lie inside a box; with `--rotation` the box is turned that many degrees counter-clockwise about the vertical through its centre |
 | `--drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf\|.dwg [--view plan\|front\|back\|left\|right] [--rotation DEGREES] [--thickness METRES] [--units mm\|m] [--fill on\|off]` | Draws the slab behind one face of a box in a scan as a 2D drawing in DXF or DWG: a plan with a slab of 0.10 m in millimetres unless the options say otherwise |

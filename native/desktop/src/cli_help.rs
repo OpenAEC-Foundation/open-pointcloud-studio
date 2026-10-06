@@ -65,7 +65,7 @@ pub const MODES: &[Mode] = &[
         flag: "--photos",
         short: None,
         arguments: "INPUT OUTPUT_DIRECTORY",
-        description: key("Saves the station photos of a scan as image files."),
+        description: key("Saves the photos of a scan as image files."),
     },
     Mode {
         flag: "--export",

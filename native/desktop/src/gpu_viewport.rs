@@ -819,11 +819,19 @@ impl shader::Program<Message> for GpuViewport<'_> {
             }
             photos.balls.truncate(MAX_BALLS);
         }
+        // A photo of the file seen from where it was taken lies over the
+        // points, unless a station's own photos fill the view.
+        let photo = self
+            .overlay
+            .shown_photo()
+            .filter(|_| photos.panorama.is_none())
+            .and_then(|shown| crate::photo_overlay::frame(&shown));
         CloudPrimitive {
             geometry,
             caps,
             camera,
             photos,
+            photo,
         }
     }
 }
@@ -920,6 +928,8 @@ pub struct CloudPrimitive {
     caps: Arc<MeshBuffers>,
     camera: CameraUniform,
     photos: PhotoFrame,
+    /// The photo of a file laid over the points.
+    photo: Option<crate::photo_overlay::PhotoFrame>,
 }
 
 /// Vertex and index buffers of meshes on the device. They are sent again
@@ -1127,6 +1137,7 @@ struct GpuState {
     color_texture: Option<wgpu::Texture>,
     color_view: Option<wgpu::TextureView>,
     depth_size: (u32, u32),
+    photo_overlay: crate::photo_overlay::PhotoOverlay,
 }
 
 impl GpuState {
@@ -1436,6 +1447,7 @@ impl GpuState {
             color_texture: None,
             color_view: None,
             depth_size: (0, 0),
+            photo_overlay: crate::photo_overlay::PhotoOverlay::new(device, format, &camera_layout),
         }
     }
 
@@ -1658,6 +1670,11 @@ impl Primitive for CloudPrimitive {
                 bytemuck::cast_slice(&self.photos.balls),
             );
         }
+        match &self.photo {
+            Some(frame) => state.photo_overlay.prepare(device, queue, frame),
+            // A photo on the device is large: it goes once none is shown.
+            None => state.photo_overlay.release(),
+        }
         let size = viewport.physical_size();
         state.resize_depth(device, (size.width, size.height));
         let mut camera = self.camera;
@@ -1728,6 +1745,7 @@ impl Primitive for CloudPrimitive {
             && state.mesh.index_count == 0
             && state.caps.index_count == 0
             && balls.is_none()
+            && self.photo.is_none()
         {
             return;
         }
@@ -1812,6 +1830,12 @@ impl Primitive for CloudPrimitive {
             &[],
         );
         pass.draw(0..3, 0..1);
+        drop(pass);
+        if self.photo.is_some() {
+            state
+                .photo_overlay
+                .render(encoder, target, clip_bounds, &state.camera_group);
+        }
     }
 }
 
