@@ -696,5 +696,16 @@
   "Files": "Bestanden",
   "Show the 3D model": "Het 3D-model tonen",
   "Has a section box": "Heeft een snedebox",
-  "Elevation view": "Aanzicht"
+  "Elevation view": "Aanzicht",
+  "Crop region": "Bijsnijgebied",
+  "Width (m)": "Breedte (m)",
+  "Height (m)": "Hoogte (m)",
+  "Centre X": "Midden X",
+  "Centre Y": "Midden Y",
+  "Centre along": "Midden langs",
+  "Centre height": "Midden hoogte",
+  "Cut height": "Snedehoogte",
+  "Cut position": "Snedepositie",
+  "View depth (m)": "Zichtdiepte (m)",
+  "Enter applies a value and makes the drawing again. Drag a handle of the crop region on the sheet; RO turns the crop region of a plan.": "Enter past een waarde toe en maakt de tekening opnieuw. Sleep een greep van het bijsnijgebied op het blad; RO draait het bijsnijgebied van een plattegrond."
 }

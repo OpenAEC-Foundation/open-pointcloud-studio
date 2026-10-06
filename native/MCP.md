@@ -212,6 +212,9 @@ follows when that view is restored.
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`; one not made in this session yet is made again from its scans, with a job to wait for |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
 | `set_browser_group` | `group` (`scans`, `classes`, `views`, `bcf`, `3d`, `plans`, `elevations`, `sections`, `files` or `folder:` and a path), `open` | Opens or collapses a group of the Project Browser |
+| `set_sheet_crop` | optional `name`, `rect` (`[[left, bottom], [right, top]]` in drawing units), `width`, `height`, `center`, `rotation`, `cut`, `depth` | Sets the crop region of a drawing of `create_drawing` and makes it again in place |
+| `drag_crop_handle` | `handle` (`left`, `right`, `bottom`, `top`, `bottom_left`, `bottom_right`, `top_left` or `top_right`), `to` (`[u, v]` in drawing units), optional `release` | Drags a handle of the crop region of the drawing shown, as the pointer does |
+| `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as R and then O do |
 | `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, in Open CAD Studio or the program chosen in Settings, read-only; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |

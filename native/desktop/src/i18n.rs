@@ -417,6 +417,7 @@ mod tests {
         ("cli_help.rs", include_str!("cli_help.rs")),
         ("closed_mesh.rs", include_str!("closed_mesh.rs")),
         ("drawing.rs", include_str!("drawing.rs")),
+        ("drawing_crop.rs", include_str!("drawing_crop.rs")),
         ("drawing_view.rs", include_str!("drawing_view.rs")),
         ("extensions.rs", include_str!("extensions.rs")),
         ("faces.rs", include_str!("faces.rs")),

@@ -615,8 +615,10 @@ read, or `null`), `drawing` (`null`, or its `source`: `preview`, `export`,
 `units_named`, the totals above, `extents` in
 drawing units, `inserts`, `skipped`, `skipped_3d` and `layers`, each with
 `name`, `visible`, `color` and its `points`, `polylines`, `fills` and
-`texts`), `camera` (`center` in drawing units and `pixels_per_unit`) and the
-`viewport_size` of the sheet.
+`texts`), `camera` (`center` in drawing units and `pixels_per_unit`), the
+`viewport_size` of the sheet, `crop_shown` (whether the crop region of a
+drawing of `create_drawing` is drawn) and `remaking` (the name of a drawing
+being made again after its crop region changed, or `null`).
 
 ## Drawings of the Project Browser
 
@@ -643,8 +645,8 @@ its `name`, `guid`, `kind`, the `box` it was cut from (`min`, `max` and
 `rotation`), the `view` (the face drawn), the slab `thickness`, the other
 `settings` and the `sources`, the scans it was made from as the saved views
 name them. `list_drawings` lists the drawings made from an open scan, each
-with those and with `made` (true once it is made in this session) and
-`shown`, and the `files` of this session: the last preview, the exports and
+with those, with its `crop` region and with `made` (true once it is made in
+this session) and `shown`, and the `files` of this session: the last preview, the exports and
 the opened DXF and DWG files, each with `name`, `source`, `path` and `shown`.
 `show_drawing` shows a drawing by its name in any case; one that is not made
 in this session yet is made again from how it was made, from its scans,
@@ -652,6 +654,61 @@ which must all be open, and the answer then has `accepted: true` and a
 `job_id`. `delete_drawing` forgets a drawing by its name. The previews,
 exports and files are limited to the 16 newest; the drawings of
 `create_drawing` stay, however many there are.
+
+### Crop region and RO
+
+The crop region of a drawing of `create_drawing` is the face of its box as the
+drawing shows it: for a plan the box along its own two horizontal axes, for an
+elevation or a section its width along the view and its height. In
+`list_drawings` each drawing has `crop`: its `width` and `height` in metres,
+its `center` (the model X and Y for a plan; for an elevation or a section its
+place along the box, measured from the model origin along the axis of the box
+the drawing runs along, and its height), the `rotation` of the box in degrees,
+`cut` (the height of the cut of a plan; for an elevation or a section where
+the cut lies along the direction it looks, measured along the box), `depth`
+(how deep the drawing sees behind the cut: the slab, and the whole box for an
+elevation), `rect` (`[[left, bottom], [right, top]]` in the units and
+coordinates of the drawing) and the `units`.
+
+`set_sheet_crop` changes the crop region of the drawing `name` (in any case),
+or of the drawing the Drawing view shows. `rect` sets the region as a drag of
+its handles leaves it, in drawing units; or give any of `width` and `height`
+(about the centre, at least 0.10 m), `center`, `rotation` (plans only), `cut`
+and `depth` (0.005 to 5 m for a plan or a section, whose box grows when it is
+shallower; for an elevation the depth of the box). Only the faces of the box
+in the plane of the drawing move with `rect`, `width`, `height` and `center`;
+the saved views and the section box of the 3D view never change. The drawing
+is made again under its name: the answer has `accepted: true`, a `job_id`, its
+`name`, `guid` and the new `crop`, or `changed: false` when nothing changed.
+The complete job has `operation: "set_sheet_crop"` and the `crop`. While it is
+made the Drawing view keeps its camera and its layer switches, and the drawing
+cannot change again until it is made.
+
+`drag_crop_handle` drags a handle of the crop region of the drawing the
+Drawing view shows, as the pointer does: `handle` is `left`, `right`,
+`bottom`, `top`, `bottom_left`, `bottom_right`, `top_left` or `top_right`,
+and `to` the point `[u, v]` of the drawing, in its units and coordinates, the
+side or sides go to. The size goes in whole centimetres and is at least
+0.10 m. With `release: false` the handle is held there: the region is drawn
+as during a drag, with its size, and the answer has `held: true`, the `rect`
+and the `width` and `height` in metres. Let go (the default), the drawing is
+made again as with `set_sheet_crop`, and the answer has its `job_id`.
+
+`rotate_crop` turns what the keys R and then O turn. With `name`, or while the
+Drawing view shows a plan of `create_drawing`, it turns the crop region of
+that plan by `degrees`, counter-clockwise on the sheet: the box turns as far
+counter-clockwise seen from above, about the vertical through the centre of
+the region, and the plan is made again upright in it, the model turned the
+other way (`operation: "rotate_crop"`, with a `job_id`). An elevation or a
+section is refused. In the 3D view it turns the section box by `degrees` about
+its centre and answers with the `section`. With `apply: false` the turn
+starts as RO starts it and is shown at `degrees` without being applied; it
+waits for Enter, a left click, Escape or a right click in the window, or for
+`rotate_crop` with no `degrees`, which applies it and answers as a turn by
+`degrees` does. A turn of 0 degrees answers `changed: false`.
+`status.result.turning` is
+`null`, or the turn under way with its `target` (`crop_region` or
+`section_box`), `degrees` and what was `typed`.
 
 `set_browser_group` opens (`open: true`) or collapses (`open: false`) a
 group of the Project Browser: `scans`, `classes`, `views` or `bcf`, a kind
@@ -1025,7 +1082,7 @@ screen.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge, 3D BAG download or Mesh to Plans task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -1121,6 +1178,9 @@ screen.
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`, made again from how it was made when it is not made in this session yet (then with a job ID) |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
 | `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
+| `set_sheet_crop` | optional `name`, `rect`, `width`, `height`, `center`, `rotation`, `cut`, `depth` | Sets the crop region of a drawing of `create_drawing` and makes it again in place; returns a job ID. See [Crop region and RO](#crop-region-and-ro) |
+| `drag_crop_handle` | `handle`, `to`, optional `release` | Drags a handle of the crop region of the drawing shown to a point of the drawing, as the pointer does; held with `release: false`, else the drawing is made again (job ID) |
+| `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as the keys R and then O do |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view; answers with the `camera` |
 | `set_drawing_layer` | `layer`, `visible` | Shows or hides a layer of the drawing in the Drawing view by its name, or every layer with `*` |
 | `open_in_cad_viewer` | optional `path` | Opens a `.dxf` or `.dwg` file, by default the last one exported, read-only in Open CAD Studio or the program chosen in Settings, else in the system program; returns `path`, `viewer` and `read_only` |

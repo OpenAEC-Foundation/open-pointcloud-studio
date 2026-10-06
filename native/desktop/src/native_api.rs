@@ -317,6 +317,28 @@ pub enum ApiCommand {
         group: String,
         open: bool,
     },
+    /// Set the crop region of a drawing of Create 2D, which is made again.
+    SetSheetCrop {
+        #[serde(flatten)]
+        options: crate::drawing_crop::SheetCropOptions,
+    },
+    /// Drag a handle of the crop region of the drawing shown, as the
+    /// pointer does.
+    DragCropHandle {
+        handle: String,
+        to: [f64; 2],
+        #[serde(default = "applied")]
+        release: bool,
+    },
+    /// Turn what RO turns: the crop region of a plan, or the section box.
+    RotateCrop {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        degrees: Option<f64>,
+        #[serde(default = "applied")]
+        apply: bool,
+    },
     OpenInCadViewer {
         /// Absolute `.dxf` or `.dwg` file; without it the last one a drawing,
         /// faces or mesh export wrote.
@@ -395,6 +417,11 @@ pub enum ApiCommand {
         #[serde(default)]
         window: bool,
     },
+}
+
+/// A turn of `rotate_crop` is applied unless asked otherwise.
+fn applied() -> bool {
+    true
 }
 
 /// The choices of `create_drawing`, those of the Create 2D dialog. Each one

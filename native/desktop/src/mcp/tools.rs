@@ -484,6 +484,26 @@ fn table() -> Vec<Tool> {
             required("group", text("The group", 1, 4096)),
             required("open", boolean("true to open the group, false to collapse it")),
         ]),
+        tool("set_sheet_crop", Command, "Sets the crop region of a drawing of create_drawing, as dragging its handles in the Drawing view or the Crop region section of Properties does, and makes the drawing again under the same name; only the faces of its box in the plane of the drawing move. Give rect alone, or any of the figures. Answers with accepted, a job_id and the new crop, or with changed: false.", vec![
+            optional("name", text("Name of the drawing as list_drawings gives it; without it the drawing shown in the Drawing view", 1, 96)),
+            optional("rect", list("The crop region as [[left, bottom], [right, top]] in the units and coordinates of the drawing, as list_drawings gives it under crop.rect", numbers("A corner [u, v]", 2), 2, 2)),
+            optional("width", positive("Width of the crop region in metres, at least 0.10, about its centre")),
+            optional("height", positive("Height of the crop region in metres, at least 0.10, about its centre")),
+            optional("center", numbers("The centre: the model X and Y for a plan; for an elevation or a section its place along the box and its height", 2)),
+            optional("rotation", number("The turn of the box of a plan in degrees, counter-clockwise seen from above")),
+            optional("cut", number("A plan: the height of the cut. An elevation or a section: where the cut lies along the direction it looks, measured along the box")),
+            optional("depth", positive("The view depth behind the cut in metres: the slab of a plan or a section (0.005 to 5), the depth of the box of an elevation")),
+        ]),
+        tool("drag_crop_handle", Command, "Drags a handle of the crop region of the drawing the Drawing view shows to a point of the drawing, as the pointer does: the side or the two sides it moves go there, with the size in whole centimetres and at least 0.10 m. With release false the handle is held and the region is drawn as during a drag, with its size; let go (the default), the drawing is made again in place, with a job_id.", vec![
+            required("handle", choice("The handle", &["left", "right", "bottom", "top", "bottom_left", "bottom_right", "top_left", "top_right"])),
+            required("to", numbers("The point [u, v] of the drawing, in its units and coordinates, as list_drawings gives crop.rect", 2)),
+            optional("release", boolean("false to hold the handle there without letting go; true by default")),
+        ]),
+        tool("rotate_crop", Command, "Turns what the keys R and then O turn: the crop region of a plan of create_drawing, counter-clockwise on the sheet (its box turns as far about the vertical through the centre of the region and the plan is made again upright in it, with a job_id), or in the 3D view the section box about its centre. With apply false the turn starts as RO starts it, shown at the angle given, and waits for Enter, a click, Escape or this command with apply true and no degrees. status.result.turning reports a turn under way.", vec![
+            optional("name", text("Name of a plan as list_drawings gives it; without it the plan shown in the Drawing view, or the section box in the 3D view", 1, 96)),
+            optional("degrees", number_in("The turn in degrees, counter-clockwise", -3600.0, 3600.0)),
+            optional("apply", boolean("false to start the turn and show it without applying it; true by default")),
+        ]),
         tool("open_in_cad_viewer", Command, "Opens a DXF or DWG file in the CAD viewer: the program chosen in Settings, else an installed Open CAD Studio, started read-only and without waiting for it; without either the file goes to the program the system has for it. Without a path it opens the last file that a drawing, faces or mesh export wrote. Answers with the path, the viewer program (null for the system program) and read_only. status.result.cad_viewer tells which viewer was found.", vec![
             optional("path", path("Absolute path of an existing .dxf or .dwg file; without it the last exported one")),
         ]),

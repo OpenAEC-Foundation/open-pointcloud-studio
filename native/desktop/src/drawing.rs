@@ -1011,6 +1011,15 @@ impl DrawingTool {
         self.job.is_some() || self.dialog_pending
     }
 
+    /// The identifier of the drawing of the Project Browser the running job
+    /// makes.
+    pub(crate) fn running_sheet(&self) -> Option<&str> {
+        match &self.job.as_ref()?.input.target {
+            Target::Sheet(definition) => Some(&definition.guid),
+            _ => None,
+        }
+    }
+
     /// The filled cut to lay over the points, when there is one.
     pub(crate) fn overlay(&self) -> Option<&CutPreview> {
         self.preview.as_ref().map(|shown| &*shown.cut)
@@ -1673,18 +1682,33 @@ impl Studio {
             Target::Sheet(definition) => Some(definition.as_ref().clone()),
             _ => None,
         };
+        // A drawing made again in place after its crop region changed.
+        let remade = sheet.as_ref().and_then(|definition| {
+            self.drawing_view
+                .remake
+                .take_if(|remake| remake.guid == definition.guid)
+        });
         let mut value = last.value();
         self.status = last.status();
         if let Some(definition) = &sheet {
             // A drawing of the Project Browser reports as one.
-            value["operation"] = "create_drawing".into();
+            value["operation"] = remade
+                .as_ref()
+                .map_or("create_drawing", |remake| remake.operation)
+                .into();
             value["name"] = definition.name.clone().into();
             value["guid"] = definition.guid.clone().into();
             value["kind"] = definition.kind.key().into();
+            if remade.is_some() {
+                value["crop"] = crate::drawing_crop::crop_value(definition);
+            }
             self.status = match &last {
-                Last::Previewed { .. } => {
-                    format!("Drawing {} made; it is listed under VIEWS", definition.name)
-                }
+                Last::Previewed { .. } => match &remade {
+                    Some(remake) => Self::remade_status(definition, remake.operation),
+                    None => {
+                        format!("Drawing {} made; it is listed under VIEWS", definition.name)
+                    }
+                },
                 Last::Cancelled { .. } => format!("Drawing {} cancelled", definition.name),
                 Last::Failed { error, .. } => {
                     format!("The drawing {} could not be made: {error}", definition.name)
@@ -1712,6 +1736,10 @@ impl Studio {
             if matches!(job.input.target, Target::Sheet(_)) {
                 self.drawing_view.shown = true;
                 self.file_open = false;
+            }
+            // In place: the view keeps where it looked and its layers.
+            if let Some(remake) = remade {
+                self.drawing_view.keep_view(remake.camera, &remake.layers);
             }
         }
         if let Some(path) = written {
@@ -4345,6 +4373,496 @@ mod tests {
             "{error}"
         );
         assert!(!directory.path().join("empty.dxf").exists());
+    }
+
+    /// Make a plan of the model with Create 2D at a height, as the local
+    /// API does, and answer its identifier.
+    fn make_plan(studio: &mut Studio, height: f64) -> String {
+        let answer = send(
+            studio,
+            serde_json::from_str(&format!(
+                r#"{{"command":"create_drawing","kind":"plan","height":{height}}}"#
+            ))
+            .unwrap(),
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        finish(studio);
+        let made = job(studio, answer["job_id"].as_str().unwrap());
+        assert_eq!(made["state"], "complete", "{made}");
+        made["guid"].as_str().unwrap().to_owned()
+    }
+
+    fn definition(studio: &Studio, guid: &str) -> SavedDrawing {
+        studio
+            .drawing_view
+            .saved
+            .iter()
+            .find(|drawing| drawing.guid == guid)
+            .unwrap()
+            .clone()
+    }
+
+    /// How far the long lines of the outline of the filled cut of the
+    /// drawing shown are off the axes of the sheet, in degrees, at most.
+    fn outline_off_axis(studio: &Studio, longer_than: f64) -> f64 {
+        let scene = studio.drawing_view.scene().unwrap();
+        let layer = scene
+            .layers
+            .iter()
+            .find(|layer| layer.name == pointcloud_core::LAYER_CUT_OUTLINE)
+            .expect("an outline");
+        let mut worst: f64 = 0.0;
+        let mut long = 0;
+        for line in &layer.lines {
+            let mut points = line.points.clone();
+            if line.closed {
+                points.push(points[0]);
+            }
+            for pair in points.windows(2) {
+                let (dx, dy) = (pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]);
+                if dx.hypot(dy) < longer_than {
+                    continue;
+                }
+                long += 1;
+                let angle = dy.atan2(dx).to_degrees().rem_euclid(90.0);
+                worst = worst.max(angle.min(90.0 - angle));
+            }
+        }
+        assert!(long >= 4, "{long} long lines");
+        worst
+    }
+
+    #[test]
+    fn the_crop_region_of_a_plan_is_dragged_and_set_and_made_again_in_place() {
+        use crate::drawing_crop::{CropAction, Field};
+
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        let plan = make_plan(&mut studio, 1.05);
+        let before = definition(&studio, &plan);
+        let unit = before.request().unwrap().units.factor();
+
+        // The crop region is the box as the plan shows it, with handles.
+        let crop = studio.crop_overlay().expect("a crop region");
+        assert!(crop.editable && crop.turn.is_none());
+        let model = crate::combined_bounds(&studio.clouds).unwrap();
+        assert_eq!(crop.rect[0], [model.min[0] * unit, model.min[1] * unit]);
+        assert_eq!(crop.rect[1], [model.max[0] * unit, model.max[1] * unit]);
+        assert!(studio.drawing_view_properties().is_some());
+        // The switch hides it and shows it again.
+        let _ = studio.update(Message::Crop(CropAction::Show(false)));
+        assert!(studio.crop_overlay().is_none());
+        let _ = studio.update(Message::Crop(CropAction::Show(true)));
+        assert!(studio.crop_overlay().is_some());
+
+        // A view of its own: panned and zoomed.
+        let size = Size::new(800.0, 600.0);
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::Zoom(
+            2.0,
+            [300.0, 200.0],
+            size,
+        )));
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::Pan([40.0, -25.0])));
+        let camera = studio.drawing_view.camera();
+
+        // Handles let go around the room: the box follows in its own plane,
+        // the cut and the floor stay, and the plan is made again in place.
+        let room = [[-0.5 * unit, -0.5 * unit], [4.5 * unit, 3.5 * unit]];
+        let _ = studio.update(Message::Crop(CropAction::Set(plan.clone(), room)));
+        assert!(studio.drawing.job.is_some(), "{}", studio.status);
+        let pending = studio.crop_overlay().unwrap();
+        assert!(!pending.editable, "no handles while it is made again");
+        assert_eq!(pending.corners[0], room[0]);
+        assert_eq!(pending.corners[2], room[1]);
+        // A second change waits for the first.
+        let _ = studio.update(Message::Crop(CropAction::Set(plan.clone(), crop.rect)));
+        assert!(
+            studio.status.contains("being made again"),
+            "{}",
+            studio.status
+        );
+        finish(&mut studio);
+        let after = definition(&studio, &plan);
+        assert_eq!(after.name, before.name);
+        assert!(
+            (after.section.min[0] + 0.5).abs() < 1e-9 && (after.section.max[0] - 4.5).abs() < 1e-9
+        );
+        assert!(
+            (after.section.min[1] + 0.5).abs() < 1e-9 && (after.section.max[1] - 3.5).abs() < 1e-9
+        );
+        assert_eq!(after.section.min[2], before.section.min[2]);
+        assert_eq!(after.section.max[2], before.section.max[2]);
+        assert_eq!(studio.drawing_view.shown_guid(), Some(plan.as_str()));
+        assert_eq!(
+            studio.drawing_view.camera(),
+            camera,
+            "no jump to the extents"
+        );
+        assert!(
+            studio
+                .status
+                .starts_with("Crop region of Plan +1.05 set to 5.00 × 4.00 m"),
+            "{}",
+            studio.status
+        );
+        assert_eq!(crate::saved_drawings::load()[0], after, "kept on disk");
+        // The frame of the drawing made again is the crop region.
+        let frame = studio
+            .drawing_view
+            .scene()
+            .unwrap()
+            .layers
+            .iter()
+            .find(|layer| layer.name == pointcloud_core::LAYER_FRAME)
+            .unwrap()
+            .lines[0]
+            .points
+            .clone();
+        assert!(
+            frame.contains(&room[0]) && frame.contains(&room[1]),
+            "{frame:?}"
+        );
+
+        // Properties: a width typed and Enter, about the centre.
+        let _ = studio.update(Message::Crop(CropAction::Field(Field::Width, "4,2".into())));
+        let _ = studio.update(Message::Crop(CropAction::Apply(Field::Width)));
+        finish(&mut studio);
+        let narrower = definition(&studio, &plan);
+        assert!((narrower.section.max[0] - narrower.section.min[0] - 4.2).abs() < 1e-9);
+        assert!(((narrower.section.min[0] + narrower.section.max[0]) / 2.0 - 2.0).abs() < 1e-9);
+        assert!(studio.drawing_view.crop_edits.1.is_empty());
+        // Too small is refused and changes nothing.
+        let _ = studio.update(Message::Crop(CropAction::Field(
+            Field::Height,
+            "0.05".into(),
+        )));
+        let _ = studio.update(Message::Crop(CropAction::Apply(Field::Height)));
+        assert!(studio.drawing.job.is_none());
+        assert_eq!(definition(&studio, &plan), narrower);
+
+        // The local API sets figures and the rectangle, as a job.
+        let answer = send(
+            &mut studio,
+            serde_json::from_str(
+                r#"{"command":"set_sheet_crop","name":"plan +1.05","center":[2.0,1.5],"height":3.4,"depth":0.2}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert!((answer["crop"]["height"].as_f64().unwrap() - 3.4).abs() < 1e-9);
+        finish(&mut studio);
+        let done = job(&mut studio, answer["job_id"].as_str().unwrap());
+        assert_eq!(done["state"], "complete", "{done}");
+        assert_eq!(done["operation"], "set_sheet_crop");
+        assert_eq!(definition(&studio, &plan).thickness, Some(0.2));
+        let listed = send(&mut studio, ApiCommand::ListDrawings);
+        let listed_crop = &listed["drawings"][0]["crop"];
+        assert!(
+            (listed_crop["width"].as_f64().unwrap() - 4.2).abs() < 1e-9,
+            "{listed}"
+        );
+        assert_eq!(listed_crop["center"][1], 1.5);
+        let refused = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"set_sheet_crop","width":0.01}"#).unwrap(),
+        );
+        assert_eq!(refused["ok"], false);
+        let nothing = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"set_sheet_crop"}"#).unwrap(),
+        );
+        assert_eq!(nothing["ok"], false);
+
+        // The local API drags a handle as the pointer does: held first, with
+        // the size in whole centimetres, then let go.
+        let drag = |release: bool| {
+            serde_json::from_str::<ApiCommand>(&format!(
+                r#"{{"command":"drag_crop_handle","handle":"top","to":[0,{}],"release":{release}}}"#,
+                3.004 * unit
+            ))
+            .unwrap()
+        };
+        let held = send(&mut studio, drag(false));
+        assert_eq!(held["held"], true, "{held}");
+        assert!(
+            (held["height"].as_f64().unwrap() - 3.2).abs() < 1e-9,
+            "{held}"
+        );
+        assert!(studio.drawing_view.held.is_some() && studio.drawing.job.is_none());
+        let _ = studio.view();
+        let released = send(&mut studio, drag(true));
+        assert_eq!(released["accepted"], true, "{released}");
+        assert!(studio.drawing_view.held.is_none());
+        finish(&mut studio);
+        assert!((definition(&studio, &plan).section.max[1] - 3.0).abs() < 1e-9);
+        let wrong = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"drag_crop_handle","handle":"middle","to":[0,0]}"#)
+                .unwrap(),
+        );
+        assert_eq!(wrong["ok"], false);
+        let _ = studio.view();
+    }
+
+    #[test]
+    fn ro_turns_the_crop_region_of_a_plan_and_the_walls_come_along_the_sheet() {
+        use crate::drawing_crop::{CropAction, TurnTarget};
+
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let mut studio = studio_with_turned_room(directory.path(), 30.0);
+        let plan = make_plan(&mut studio, 1.05);
+        let before = definition(&studio, &plan);
+        let unit = before.request().unwrap().units.factor();
+        // The walls of the room stand 30 degrees off the sheet.
+        let off = outline_off_axis(&studio, 1.0 * unit);
+        assert!((off - 30.0).abs() < 1.0, "{off}");
+        let size = Size::new(800.0, 600.0);
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::Zoom(
+            1.5,
+            [500.0, 260.0],
+            size,
+        )));
+        let camera = studio.drawing_view.camera();
+        let centre = crate::drawing_crop::middle(studio.crop_overlay().unwrap().rect);
+        let seen = camera.to_screen(centre, size);
+
+        // R and then O start the turn; the pointer turns the region, and a
+        // typed angle wins.
+        let typed = |studio: &mut Studio, key: &str| {
+            let _ = studio.update(Message::KeyTyped(key.into(), false));
+        };
+        typed(&mut studio, "r");
+        typed(&mut studio, "o");
+        let Some(TurnTarget::Plan { guid, .. }) = studio.turn.as_ref().map(|turn| &turn.target)
+        else {
+            panic!("no turn: {}", studio.status);
+        };
+        assert_eq!(*guid, plan);
+        assert!(
+            studio.status.starts_with("Turning the crop region: 0°"),
+            "{}",
+            studio.status
+        );
+        let reach = 2.0 * unit;
+        let _ = studio.update(Message::Crop(CropAction::TurnPointer([
+            centre[0] + reach,
+            centre[1],
+        ])));
+        let pointed = [
+            centre[0] + reach * 40.2f64.to_radians().cos(),
+            centre[1] + reach * 40.2f64.to_radians().sin(),
+        ];
+        let _ = studio.update(Message::Crop(CropAction::TurnPointer(pointed)));
+        assert_eq!(studio.crop_overlay().unwrap().turn.as_deref(), Some("40°"));
+        let _ = studio.update(Message::Modifiers(iced::keyboard::Modifiers::SHIFT));
+        assert_eq!(studio.crop_overlay().unwrap().turn.as_deref(), Some("45°"));
+        let _ = studio.update(Message::Modifiers(iced::keyboard::Modifiers::default()));
+        // F neither fits nor ends the turn; digits type the angle.
+        typed(&mut studio, "f");
+        typed(&mut studio, "3");
+        typed(&mut studio, "1");
+        let _ = studio.update(Message::Measure(measure::MeasureAction::RemoveLast));
+        typed(&mut studio, "0");
+        let shown = studio.crop_overlay().unwrap();
+        assert_eq!(shown.turn.as_deref(), Some("30°"));
+        assert!(!shown.editable);
+        assert_eq!(studio.drawing_view.camera(), camera);
+        // Enter applies: the box turns 30 degrees counter-clockwise about
+        // the centre of the region and the plan is made again upright.
+        let _ = studio.update(Message::Measure(measure::MeasureAction::Finish));
+        assert!(studio.turn.is_none());
+        assert!(studio.drawing.job.is_some(), "{}", studio.status);
+        finish(&mut studio);
+        let after = definition(&studio, &plan);
+        assert_eq!(after.section.rotation, 30.0);
+        let [was, now] = [&before, &after].map(|drawing| drawing.oriented().center());
+        assert!((0..3).all(|axis| (was[axis] - now[axis]).abs() < 1e-9));
+        let off = outline_off_axis(&studio, 1.0 * unit);
+        assert!(off < 0.5, "the walls run along the sheet: {off}");
+        // The centre of the region stays where it was on the screen, at the
+        // same zoom.
+        let after_crop = studio.crop_overlay().unwrap();
+        let camera_after = studio.drawing_view.camera();
+        assert_eq!(camera_after.scale, camera.scale);
+        let seen_after = camera_after.to_screen(crate::drawing_crop::middle(after_crop.rect), size);
+        assert!((seen_after[0] - seen[0]).abs() < 1e-6 && (seen_after[1] - seen[1]).abs() < 1e-6);
+        assert!(studio.status.contains("stands at 30°"), "{}", studio.status);
+
+        // A right click, or Escape, cancels.
+        typed(&mut studio, "r");
+        typed(&mut studio, "o");
+        typed(&mut studio, "9");
+        let _ = studio.update(Message::Escape);
+        assert!(studio.turn.is_none());
+        assert_eq!(studio.status, "Turn cancelled");
+        typed(&mut studio, "R");
+        typed(&mut studio, "O");
+        let _ = studio.update(Message::Crop(CropAction::TurnCancel));
+        assert!(studio.turn.is_none() && studio.drawing.job.is_none());
+        // Showing something else ends a turn.
+        typed(&mut studio, "r");
+        typed(&mut studio, "o");
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::Show(false)));
+        assert!(studio.turn.is_none());
+
+        // The local API: a turn shown at an angle, then applied, back.
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::Show(true)));
+        let pending = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"rotate_crop","degrees":-30,"apply":false}"#)
+                .unwrap(),
+        );
+        assert_eq!(pending["turning"]["degrees"], -30.0, "{pending}");
+        assert_eq!(studio.crop_overlay().unwrap().turn.as_deref(), Some("-30°"));
+        let applied = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"rotate_crop"}"#).unwrap(),
+        );
+        assert_eq!(applied["accepted"], true, "{applied}");
+        assert!(studio.turn.is_none());
+        finish(&mut studio);
+        let done = job(&mut studio, applied["job_id"].as_str().unwrap());
+        assert_eq!(done["operation"], "rotate_crop", "{done}");
+        assert_eq!(definition(&studio, &plan).section.rotation, 0.0);
+        let by_name = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"rotate_crop","name":"PLAN +1.05","degrees":30}"#)
+                .unwrap(),
+        );
+        assert_eq!(by_name["accepted"], true, "{by_name}");
+        finish(&mut studio);
+        let done = job(&mut studio, by_name["job_id"].as_str().unwrap());
+        assert_eq!(done["operation"], "rotate_crop", "{done}");
+        assert_eq!(definition(&studio, &plan).section.rotation, 30.0);
+        let _ = studio.view();
+    }
+
+    #[test]
+    fn ro_turns_the_section_box_in_3d_and_only_a_plan_in_the_drawing_view() {
+        use crate::drawing_crop::{CropAction, TurnTarget};
+
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        let typed = |studio: &mut Studio, key: &str, captured: bool| {
+            let _ = studio.update(Message::KeyTyped(key.into(), captured));
+        };
+
+        // Without a section box there is nothing to turn in 3D.
+        typed(&mut studio, "r", false);
+        typed(&mut studio, "o", false);
+        assert!(studio.turn.is_none());
+        assert!(
+            studio.status.contains("switch the section box on"),
+            "{}",
+            studio.status
+        );
+
+        set_plan_box(&mut studio);
+        let original = studio.section_box().unwrap();
+        // Another key between R and O, or a key a text field takes, starts
+        // over.
+        for (first, second) in [(false, true), (true, false)] {
+            typed(&mut studio, "r", first);
+            typed(&mut studio, "o", second);
+            assert!(studio.turn.is_none());
+        }
+        typed(&mut studio, "r", false);
+        typed(&mut studio, "w", false);
+        typed(&mut studio, "o", false);
+        assert!(studio.turn.is_none());
+
+        // R and then O turn the section box with the pointer, live.
+        typed(&mut studio, "r", false);
+        typed(&mut studio, "o", false);
+        assert!(matches!(
+            studio.turn.as_ref().map(|turn| &turn.target),
+            Some(TurnTarget::SectionBox(_))
+        ));
+        assert!(
+            studio.status.starts_with("Turning the section box"),
+            "{}",
+            studio.status
+        );
+        let size = Size::new(800.0, 600.0);
+        let _ = studio.update(Message::Crop(CropAction::TurnPointer3d(
+            [600.0, 300.0],
+            size,
+        )));
+        let _ = studio.update(Message::Crop(CropAction::TurnPointer3d(
+            [400.0, 100.0],
+            size,
+        )));
+        let turned = studio.section_box().unwrap();
+        assert_ne!(turned.rotation_degrees, 0.0, "{}", studio.status);
+        assert_eq!(turned.rotation_degrees, turned.rotation_degrees.round());
+        // Escape puts it back.
+        let _ = studio.update(Message::Escape);
+        assert!(studio.turn.is_none());
+        assert_eq!(studio.section_box(), Some(original));
+        // A typed angle, applied with Enter.
+        typed(&mut studio, "r", false);
+        typed(&mut studio, "o", false);
+        typed(&mut studio, "1", false);
+        typed(&mut studio, "5", false);
+        assert_eq!(studio.section_box().unwrap().rotation_degrees, 15.0);
+        let _ = studio.update(Message::Measure(measure::MeasureAction::Finish));
+        assert!(studio.turn.is_none());
+        let section = studio.section_box().unwrap();
+        assert_eq!(section.rotation_degrees, 15.0);
+        assert!((0..3).all(|axis| (section.center()[axis] - original.center()[axis]).abs() < 1e-9));
+        assert_eq!(studio.status, "Section box turned to 15° about its centre");
+        // The local API turns it by an angle too.
+        let answer = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"rotate_crop","degrees":-20}"#).unwrap(),
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["section"]["rotation"], -5.0);
+
+        // In the Drawing view only the crop region of a plan turns.
+        let _ = studio.update(Message::SetSectionEnabled(false));
+        let answer = send(
+            &mut studio,
+            serde_json::from_str(
+                r#"{"command":"create_drawing","kind":"elevation","side":"front"}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        finish(&mut studio);
+        assert!(studio.drawing_view.shown);
+        typed(&mut studio, "r", false);
+        typed(&mut studio, "o", false);
+        assert!(studio.turn.is_none());
+        assert!(
+            studio
+                .status
+                .contains("an elevation or a section keeps its direction"),
+            "{}",
+            studio.status
+        );
+        let refused = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"rotate_crop","degrees":10}"#).unwrap(),
+        );
+        assert_eq!(refused["ok"], false);
+        // A plan turns.
+        let plan = make_plan(&mut studio, 1.05);
+        typed(&mut studio, "r", false);
+        typed(&mut studio, "o", false);
+        assert!(matches!(
+            studio.turn.as_ref().map(|turn| &turn.target),
+            Some(TurnTarget::Plan { guid, .. }) if *guid == plan
+        ));
+        let status = send(&mut studio, ApiCommand::Status);
+        assert_eq!(status["result"]["turning"]["target"], "crop_region");
+        let _ = studio.view();
     }
 
     #[test]

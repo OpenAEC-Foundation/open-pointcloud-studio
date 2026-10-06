@@ -18,6 +18,7 @@ mod closed_mesh;
 mod cloud_centroid;
 mod cloud_transform;
 mod drawing;
+mod drawing_crop;
 mod drawing_view;
 mod extensions;
 mod faces;
@@ -1103,18 +1104,6 @@ fn main() -> iced::Result {
                 }) if status == iced::event::Status::Ignored => {
                     Some(Message::Measure(measure::MeasureAction::Finish))
                 }
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Character(value),
-                    modifiers,
-                    ..
-                }) if status == iced::event::Status::Ignored
-                    && !modifiers.control()
-                    && !modifiers.alt()
-                    && !modifiers.logo()
-                    && value.eq_ignore_ascii_case("f") =>
-                {
-                    Some(Message::ModelKey(ModelKey::Fit))
-                }
                 // With the command key of the system: Control, and Command on
                 // macOS.
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
@@ -1136,18 +1125,16 @@ fn main() -> iced::Result {
                         None
                     }
                 }
-                // W A S D walk, Q and E move down and up.
+                // F fits the view, W A S D walk, Q and E move down and up,
+                // R and then O turn, and while turning digits type the
+                // angle. A key a text field takes only ends RO.
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Character(value),
                     modifiers,
                     ..
-                }) if status == iced::event::Status::Ignored
-                    && !modifiers.control()
-                    && !modifiers.alt()
-                    && !modifiers.logo() =>
-                {
-                    WalkKey::from_character(value.as_str()).map(|key| Message::WalkKey(key, true))
-                }
+                }) if !modifiers.control() && !modifiers.alt() && !modifiers.logo() => Some(
+                    Message::KeyTyped(value.to_string(), status == iced::event::Status::Captured),
+                ),
                 iced::Event::Keyboard(iced::keyboard::Event::KeyReleased {
                     key: iced::keyboard::Key::Character(value),
                     ..
@@ -1573,6 +1560,44 @@ impl ModelKey {
     }
 }
 
+impl Studio {
+    /// A key with a character was typed. A key a text field took only ends
+    /// RO. While a turn is under way, digits, a sign and a decimal point or
+    /// comma type its angle and other keys do nothing; otherwise R and then
+    /// O start a turn, F fits the view and the walk keys walk.
+    fn key_typed(&mut self, value: &str, captured: bool) -> Task<Message> {
+        let now = Instant::now();
+        if captured {
+            self.key_sequence.typed(value, now, true);
+            return Task::none();
+        }
+        // While the File view, Settings or the card of Mesh to Plans covers
+        // the model, RO starts nothing; F and the walk keys say so themselves.
+        if self.model_covered() {
+            self.key_sequence.typed(value, now, true);
+        }
+        if let Some(turn) = &mut self.turn {
+            let mut characters = value.chars();
+            if let (Some(character), None) = (characters.next(), characters.next()) {
+                if turn.type_char(character) {
+                    return self.turn_changed();
+                }
+            }
+            return Task::none();
+        }
+        if !self.model_covered() && self.key_sequence.typed(value, now, false) {
+            return self.start_turn();
+        }
+        if value.eq_ignore_ascii_case("f") {
+            return self.handle(Message::ModelKey(ModelKey::Fit));
+        }
+        match WalkKey::from_character(value) {
+            Some(key) => self.handle(Message::WalkKey(key, true)),
+            None => Task::none(),
+        }
+    }
+}
+
 /// Keys that move the walking camera.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WalkKey {
@@ -1786,6 +1811,12 @@ enum Message {
     WalkZoom(f32),
     WalkKey(WalkKey, bool),
     ModelKey(ModelKey),
+    /// A key with a character, without Control, Alt or the system key: F,
+    /// the keys that walk, RO and the angle of a turn. Taken by a text field
+    /// when the second is true.
+    KeyTyped(String, bool),
+    /// The crop region of a drawing and the turn RO starts.
+    Crop(drawing_crop::CropAction),
     Modifiers(iced::keyboard::Modifiers),
     WalkTick(Instant),
     WalkStop,
@@ -2013,6 +2044,13 @@ struct Studio {
     /// The Drawing view: the 2D drawing the main area shows in place of the
     /// 3D scene when it is switched on.
     drawing_view: drawing_view::DrawingViewTool,
+    /// The two-letter command RO as it is typed.
+    key_sequence: drawing_crop::KeySequence,
+    /// A turn started with RO: of the crop region of a plan in the Drawing
+    /// view, or of the section box in the 3D view.
+    turn: Option<drawing_crop::Turning>,
+    /// The pixel of the 3D view under the pointer, as it was last drawn.
+    viewport_pointer: std::cell::Cell<Option<[f32; 2]>>,
     /// The Closed mesh tool: its settings, its job and its last result.
     closed_mesh: closed_mesh::ClosedMeshTool,
     /// The Detect faces tool: its settings and its job. The faces it finds
@@ -2464,6 +2502,9 @@ impl Default for Studio {
                 selection::set_orthographic(settings.orthographic);
                 drawing_view::DrawingViewTool::new(settings.show_drawing_after_export)
             },
+            key_sequence: drawing_crop::KeySequence::default(),
+            turn: None,
+            viewport_pointer: std::cell::Cell::new(None),
             closed_mesh: closed_mesh::ClosedMeshTool::default(),
             faces: faces::FaceTool::default(),
             mesh_to_plans: mesh_to_plans::Wizard::with_recent(
@@ -3341,6 +3382,7 @@ impl Studio {
                 answer.0["result"]["drawing"] = self.drawing.value();
                 answer.0["result"]["drawing_view"] = self.drawing_view.value();
                 answer.0["result"]["project_browser"] = self.browser_value();
+                answer.0["result"]["turning"] = self.turn_value();
                 answer.0["result"]["section_align_pending"] =
                     Value::Bool(self.section_align_pending);
                 answer.0["result"]["closed_mesh"] = self.closed_mesh.value();
@@ -4278,6 +4320,17 @@ impl Studio {
             ApiCommand::ShowDrawing { name } => self.api_show_drawing(&name),
             ApiCommand::DeleteDrawing { name } => (self.api_delete_drawing(&name), Task::none()),
             ApiCommand::SetBrowserGroup { group, open } => self.api_set_browser_group(&group, open),
+            ApiCommand::SetSheetCrop { options } => self.api_set_sheet_crop(&options),
+            ApiCommand::DragCropHandle {
+                handle,
+                to,
+                release,
+            } => self.api_drag_crop_handle(&handle, to, release),
+            ApiCommand::RotateCrop {
+                name,
+                degrees,
+                apply,
+            } => self.api_rotate_crop(name.as_deref(), degrees, apply),
             ApiCommand::OpenInCadViewer { path } => (
                 self.open_in_cad_viewer(path)
                     .unwrap_or_else(|error| json!({"ok": false, "error": error})),
@@ -5260,6 +5313,7 @@ impl Studio {
         self.settle_drawing();
         self.settle_faces();
         self.settle_mesh_to_plans();
+        self.settle_turn();
         task
     }
 
@@ -7531,6 +7585,9 @@ impl Studio {
             Message::Modifiers(modifiers) => {
                 self.walk_fast = modifiers.shift();
                 self.modifiers = modifiers;
+                if self.turn.is_some() {
+                    return self.turn_changed();
+                }
             }
             Message::WalkStop => {
                 self.walk_keys = [false; 6];
@@ -8138,6 +8195,7 @@ impl Studio {
                     ContextAction::ClearSelection => return self.update(Message::ClearSelection),
                 }
             }
+            Message::Escape if self.turn.is_some() => return self.cancel_turn(),
             Message::Escape => {
                 if self.settings.is_some() {
                     self.settings_action(settings_dialog::SettingsAction::Cancel);
@@ -8211,9 +8269,22 @@ impl Studio {
                 self.views.leave_tool();
                 self.drag_rectangle = None;
             }
+            // While RO turns, Enter applies the turn and Backspace takes
+            // back a typed digit.
+            Message::Measure(measure::MeasureAction::Finish) if self.turn.is_some() => {
+                return self.apply_turn()
+            }
+            Message::Measure(measure::MeasureAction::RemoveLast) if self.turn.is_some() => {
+                if let Some(turn) = &mut self.turn {
+                    turn.backspace();
+                }
+                return self.turn_changed();
+            }
             Message::Measure(action) => return self.update_measure(action),
             Message::Drawing(action) => return self.update_drawing(action),
             Message::DrawingView(action) => return self.update_drawing_view(action),
+            Message::Crop(action) => return self.update_crop(action),
+            Message::KeyTyped(value, captured) => return self.key_typed(&value, captured),
             Message::ClosedMesh(action) => return self.update_closed_mesh(action),
             Message::Faces(action) => return self.update_faces(action),
             Message::MeshToPlans(action) => return self.update_mesh_to_plans(action),
@@ -9252,6 +9323,12 @@ impl Studio {
                         .is_some_and(|entry| *station < entry.cloud.scan_poses.len())
             }),
             panorama_photos: self.panorama_photos.as_ref(),
+            turning: self
+                .turn
+                .as_ref()
+                .filter(|turn| matches!(turn.target, drawing_crop::TurnTarget::SectionBox(_))),
+            shift: self.modifiers.shift(),
+            pointer: &self.viewport_pointer,
         }
     }
 
@@ -11061,6 +11138,13 @@ struct PointViewport<'a> {
     walk: Option<WalkView>,
     walk_station: Option<(usize, usize)>,
     panorama_photos: Option<&'a Arc<PhotoSet>>,
+    /// A turn of the section box started with RO: the pointer turns it, a
+    /// left click applies and a right click cancels. Its angle is shown
+    /// beside the box, in steps of 15 degrees with `shift`.
+    turning: Option<&'a drawing_crop::Turning>,
+    shift: bool,
+    /// Where the pointer is over the view, as it was last drawn.
+    pointer: &'a std::cell::Cell<Option<[f32; 2]>>,
 }
 
 struct ScanMarker {
@@ -11564,6 +11648,41 @@ impl canvas::Program<Message> for PointViewport<'_> {
         let modifiers = state.modifiers;
         let last_click = &mut state.last_click;
         let state = &mut state.drag;
+        // While RO turns the section box the pointer turns it; a left click
+        // applies the turn and a right click cancels it.
+        if self.turning.is_some() && state.is_none() {
+            let crop = |action| Some(Message::Crop(action));
+            match event {
+                canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                    if cursor.is_over(bounds) =>
+                {
+                    return (
+                        event::Status::Captured,
+                        crop(drawing_crop::CropAction::TurnApply),
+                    );
+                }
+                canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+                    if cursor.is_over(bounds) =>
+                {
+                    return (
+                        event::Status::Captured,
+                        crop(drawing_crop::CropAction::TurnCancel),
+                    );
+                }
+                canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                    if let Some(at) = cursor.position_in(bounds) {
+                        return (
+                            event::Status::Ignored,
+                            crop(drawing_crop::CropAction::TurnPointer3d(
+                                [at.x, at.y],
+                                bounds.size(),
+                            )),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
         if let Some(view) = self.walk {
             return self.update_walk(view, state, event, bounds, cursor);
         }
@@ -11866,6 +11985,8 @@ impl canvas::Program<Message> for PointViewport<'_> {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         self.annotate.drawn_at(bounds);
+        self.pointer
+            .set(_cursor.position_in(bounds).map(|at| [at.x, at.y]));
         if let Some(view) = self.walk {
             self.draw_walk_overlay(&mut frame, view, bounds.size());
             return vec![frame.into_geometry()];
@@ -12019,6 +12140,29 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             ..canvas::Text::default()
                         });
                     }
+                }
+            }
+            // While RO turns the box, its angle beside the middle of its top.
+            if let Some(label) = self.turning.map(|turn| turn.label(self.shift)) {
+                let mut top = section.center();
+                top[2] = section.bounds.max[2];
+                if let Some((x, y, _)) = projection.project_unclipped(section.to_scene(top)) {
+                    let centre = UiPoint::new(x, y);
+                    if let Some(at) = _cursor.position_in(bounds) {
+                        frame.stroke(
+                            &canvas::Path::line(centre, at),
+                            canvas::Stroke::default()
+                                .with_color(Color::from_rgba8(245, 158, 11, 0.6))
+                                .with_width(1.0),
+                        );
+                    }
+                    frame.fill_text(canvas::Text {
+                        content: label,
+                        position: UiPoint::new(x + 12.0, y - 12.0),
+                        size: iced::Pixels(16.0),
+                        color: self.scene.scene_label,
+                        ..canvas::Text::default()
+                    });
                 }
             }
             // A curved arrow on the top edge of each side face turns the box.
