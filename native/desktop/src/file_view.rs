@@ -226,6 +226,9 @@ impl Studio {
         if open && self.mesh_to_plans.covers_model() {
             return refuse("the Mesh to Plans wizard is open; minimize it first".into());
         }
+        if open && self.mesh_wizard.is_open() {
+            return refuse("the Mesh Pointcloud card is open; close it first".into());
+        }
         if open != self.file_open {
             self.file_open = open;
             self.file_page = FilePage::default();

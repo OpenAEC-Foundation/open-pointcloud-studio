@@ -427,6 +427,7 @@ mod tests {
         ("index_jobs.rs", include_str!("index_jobs.rs")),
         ("measure.rs", include_str!("measure.rs")),
         ("mesh_export.rs", include_str!("mesh_export.rs")),
+        ("mesh_wizard.rs", include_str!("mesh_wizard.rs")),
         ("mesh_to_plans/mod.rs", include_str!("mesh_to_plans/mod.rs")),
         (
             "mesh_to_plans/pipeline.rs",
@@ -487,6 +488,9 @@ mod tests {
         ("property_input", 0),
         ("property_control", 0),
         ("section_header", 0),
+        // mesh_wizard.rs
+        ("option_input", 0),
+        ("option_control", 0),
         // file_view.rs
         ("item", 0),
         ("entry", 0),

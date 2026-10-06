@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Terrain mesh" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M2 15V20H22V12" stroke="#A1A1AA" stroke-width="1.5"/>
+  <path d="M7 10V20M12 13V20M17 9V20" stroke="#A1A1AA" stroke-width="1.1"/>
+  <path d="M2 15L7 10L12 13L17 9L22 12M7 10L12 20M12 13L17 20" stroke="#D97706" stroke-width="1.5"/>
+</svg>

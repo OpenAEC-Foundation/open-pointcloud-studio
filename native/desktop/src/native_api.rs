@@ -432,6 +432,19 @@ pub enum ApiCommand {
         #[serde(default)]
         page: Option<String>,
     },
+    /// Show the card of Mesh Pointcloud, with a method and on a step, or
+    /// take it away.
+    MeshWizard {
+        open: bool,
+        /// `method`, `options` or `run`, with `open: true`; without it the
+        /// card shows the step it showed last, or the Run step of a job
+        /// that runs.
+        #[serde(default)]
+        step: Option<String>,
+        /// `closed`, `terrain`, `surface` or `faces`, with `open: true`.
+        #[serde(default)]
+        method: Option<String>,
+    },
     MeshToPlansView {
         open: bool,
         /// The step to show, with `open: true`; without it the wizard keeps

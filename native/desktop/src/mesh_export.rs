@@ -474,6 +474,10 @@ impl Studio {
                     format_count(topology.components),
                 ));
         }
+        // A closed mesh adds how far the points lie from it.
+        for row in self.closed_mesh_figures(mesh) {
+            rows = rows.push(row);
+        }
         // All meshes share the buffers of the graphics device. One that no
         // longer fits beside the others is held and can be saved, but is not
         // drawn.

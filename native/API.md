@@ -73,8 +73,8 @@ stops the task and leaves an existing destination unchanged.
 
 ## Closed mesh
 
-`mesh` with `mode: "closed"` makes a closed mesh, as the Closed mesh block of
-Properties does: a surface without overlapping faces from the points inside
+`mesh` with `mode: "closed"` makes a closed mesh, as the method Closed mesh
+of [Mesh Pointcloud](#mesh-pointcloud) does: a surface without overlapping faces from the points inside
 the section box, or from the whole layers when the box is off, closed
 wherever the scan has points or a gap up to `max_hole` wide. Deleted points
 and hidden classes are left out. The mesh goes to the active layer, where it
@@ -85,20 +85,20 @@ a folder that exists the mesh is also written there, as the scene shows it
 and in the format described under Mesh export; without it the mesh is shown
 only, and `export_mesh` saves it later.
 
-The other fields are the settings of the block. A field that is left out
-keeps what the block has, and a field that is given is put in the block as
-well. `set_closed_mesh_settings` takes the same fields without starting a job
+The other fields are the settings of a closed mesh, its options in Mesh
+Pointcloud. A field that is left out keeps what the options have, and a
+field that is given is put in the options as well. `set_closed_mesh_settings` takes the same fields without starting a job
 and answers with `settings`. Both check the fields together: when one is
 refused, none is taken.
 
 - `voxel`: edge of a voxel in metres, 0.005 to 0.5, or `null` for automatic,
-  as the block starts: 0.02 for a region up to 20 m long, 0.03 up to 60 m and
+  as the options start: 0.02 for a region up to 20 m long, 0.03 up to 60 m and
   0.05 beyond. Detail under about two voxels is lost.
 - `max_hole`: gaps in the points up to this wide are closed, in metres, 0 to
   3.2 and never more than 32 voxels; 0.25 at the start. Wider openings stay
   open.
 - `simplify_mm`: how far simplification may move the surface, in millimetres,
-  0 (none) to 1000, or `null` for automatic, as the block starts: 0.15 voxel.
+  0 (none) to 1000, or `null` for automatic, as the options start: 0.15 voxel.
 - `sample_percent`: the share of the source points the surface is fitted
   to, in percent, 0.01 to 100; 100 at the start uses every point. A smaller
   share takes the same points on every run, spread over the region. A job
@@ -175,7 +175,7 @@ outside the limits above, for a `path` that is not absolute, has another
 extension, lies in a folder that does not exist or is the source file of an
 open layer, and while another mesh job of any mode is open or running. The
 settings are refused with `mode` `terrain` or `surface`. A refused command
-changes nothing in the block.
+changes nothing in the options.
 
 ## Mesh export
 
@@ -223,20 +223,21 @@ is true while the file is written.
 
 `detect_faces` finds the flat faces (floors, ceilings, walls and sloped
 planes) and the round columns and pipes in the points inside the section box,
-or in the whole layers when the box is off, as the Detect faces block of
-Properties does. Deleted points and hidden classes are left out. The faces
+or in the whole layers when the box is off, as the method Flat faces of Mesh
+Pointcloud does. Deleted points and hidden classes are left out. The faces
 are kept with the active layer as a layer of their own beside its mesh, in
 the frame of that layer, so a later `translate` or `scale` takes them along;
 faces the layer had are replaced. The command answers with a `job_id`.
 
-Its fields are the settings of the block. A field that is left out keeps what
-the block has, and a field that is given is put in the block as well.
+Its fields are the settings of a detection, its options in Mesh Pointcloud.
+A field that is left out keeps what the options have, and a field that is
+given is put in the options as well.
 `set_face_settings` takes the same fields without starting a job and answers
 with `settings`. Both check the fields together: when one is refused, none is
 taken.
 
 - `distance_tolerance`: how far a point may lie from the plane of its face,
-  in metres, 0.001 to 0.5; 0.02 at the start. The block shows it in
+  in metres, 0.001 to 0.5; 0.02 at the start. The options show it in
   millimetres. About three times the noise of the scan or more.
 - `angle_tolerance`: how far the surface at a point may be turned from its
   face, in degrees, 1 to 45; 10 at the start.
@@ -318,8 +319,9 @@ come without their `boundary` and the answer without `edges`. A layer that is
 scaled unequally along its axes lists no cylinders.
 
 `select_face` highlights the face with the number `id` in the viewport and in
-the list of the block, and answers with `selected` and that `face`, outline
-included; without `id`, or with `null`, it takes the highlight off.
+the list of Detected faces in Properties, and answers with `selected` and that
+`face`, outline included; without `id`, or with `null`, it takes the highlight
+off.
 
 `export_faces` saves the faces of the active layer; `path` is an absolute
 destination in a folder that exists, and its extension chooses the format:
@@ -439,7 +441,7 @@ outside the limits above and while another detection runs. With
 `layers: "visible"` it is also refused without a visible layer of scan
 points, for an active layer of 3D BAG buildings, and for an active layer
 that is hidden or lies outside the section box. A refused command changes
-nothing in the block. One detection runs at a time; it can run beside a mesh
+nothing in the options. One detection runs at a time; it can run beside a mesh
 job or a section drawing. A job that finds no face is `complete` with
 `count` 0 and `kept` false.
 
@@ -830,10 +832,10 @@ and with `shown` or `closed`, the name of the tab.
 ## CAD viewer
 
 `open_in_cad_viewer` opens a DXF or DWG file in the CAD viewer, as the button
-Open in CAD viewer of the Section drawing, Detect faces, Closed mesh and
-Surface mesh blocks does. Without `path` it opens the last file that a section
-drawing, faces export, closed mesh or mesh export wrote, through the window or
-through this API; `path` is an absolute `.dxf` or `.dwg` file that exists.
+Open in CAD viewer of the Section drawing block and of the Surface mesh and
+Detected faces sections of Properties does. Without `path` it opens the last
+file that a section drawing, faces export, closed mesh or mesh export wrote,
+through the window or through this API; `path` is an absolute `.dxf` or `.dwg` file that exists.
 The viewer is the Open CAD Studio that comes with the application:
 `OpenCADStudio` (`OpenCADStudio.exe` on Windows) beside the executable of the
 application, as the Windows installer, the archives and the macOS bundle put
@@ -918,11 +920,57 @@ shows. The answer holds `file_view` with `open` and `page`, as
 `status.result.file_view` does; `page` is `null` while the view is closed. The
 3D BAG panel is not part of the File view and is not opened by this command.
 A `page` with `open: false`, an unknown page, and opening while the Settings
-dialog or the card of the Mesh to Plans wizard is open are refused. The Settings dialog is not opened or closed
+dialog, the card of the Mesh to Plans wizard or the card of Mesh Pointcloud is
+open are refused. The Settings dialog is not opened or closed
 through this API.
 `status.result.mesh_export_pending` is true from the moment the window asks
 where to save a mesh from the File view or Properties, or from the moment
 `export_mesh` is accepted, until that file has been written.
+
+## Mesh Pointcloud
+
+The one button of the SURFACE group, **Mesh Pointcloud**, opens a card over
+the window in three steps: **Method**, with the four ways to mesh as cards
+(Closed mesh, Terrain mesh, 3D surface and Flat faces) and what they work on;
+**Options**, the settings of that method with their defaults, explanations
+and a **Use recommended** preset; and **Run**, the progress of its job with
+**Cancel**, or its result in figures with **Show in model**, **Export…** and
+**Back to options**. The settings stay where the commands above put them:
+`set_closed_mesh_settings`, `set_surface_settings` and `set_face_settings`
+set the options of the card, and `mesh` and `detect_faces` start the same
+jobs as its Run button.
+
+`mesh_wizard` shows the card or takes it away, as the button, **Close**, the
+cross and Escape do. With `open: true` the card is shown on the step `step`
+names (`method`, `options` or `run`) with the method `method` names
+(`closed`, `terrain`, `surface` or `faces`); without them it shows the Run
+step of a job of one of the methods that runs, else the step and the method
+it showed last. Opening closes the File view and turns the card of Mesh to
+Plans into its strip. `open: false` takes the card away; a job goes on, and
+the button in the ribbon shows that it runs. A `step` or `method` with
+`open: false`, an unknown step or method, and opening while the Settings
+dialog is open are refused.
+
+The card covers the model like the File view does: while it is shown the
+keys of the model do nothing, `screenshot` of the scene is refused, a view
+snapshot waits and `file_view` does not open; `screenshot` with
+`window: true` captures the card. Escape closes Settings first, then the
+card.
+
+The answer holds `mesh_wizard` as `status.result.mesh_wizard` does: `open`,
+`step`, `method`, `running` (the method whose job runs, or `null`; a terrain
+mesh or 3D surface also while its save dialog is open), `run_ready` (whether
+the method shown can start now), `run_reason` (why not, in the language in
+use, or `null`), `recommended` (whether its options are the recommended
+ones), `run_state` of the method shown (`idle`, `choosing` while the save
+dialog of its OBJ file is open, `running`, `done`, `cancelled` or `failed`)
+and `scope`, what the methods work on while the card is shown, else `null`:
+`active` (`name` and `points` of the active layer, or `null`),
+`visible_scans` and `visible_points` (the shown layers without 3D BAG
+buildings), `section` (`null` while the box is off, else its `size` in
+metres and about how many points of the active layer and of the visible
+layers lie inside it, `active_points` and `visible_points`, from the
+overview sample of each layer) and `selected` (the selected points).
 
 ## Mesh to Plans
 
@@ -1212,15 +1260,17 @@ caps were still being made), the `path` it was written to or
 is true. Without a `path` the image is returned as base64; with a `path` only
 when `base64` is true as well. An image whose longer edge exceeds `max_edge`
 (16–8192, default 1920 pixels) is scaled down. A file that exists at `path`
-is replaced. The command fails while the File view, Settings or the card of
-the Mesh to Plans wizard covers the viewport (`file_view` with `open: false`
-returns to the model, `mesh_to_plans_view` with `minimized: true` leaves the
-wizard as a strip that is not captured), and while the
+is replaced. The command fails while the File view, Settings, the card of
+the Mesh to Plans wizard or the card of Mesh Pointcloud covers the viewport
+(`file_view` with `open: false` returns to the model, `mesh_to_plans_view`
+with `minimized: true` leaves the wizard as a strip that is not captured, and
+`mesh_wizard` with `open: false` takes the card away), and while the
 window is minimised (`"the window is minimised;
 restore it to take a screenshot"`); a view snapshot due meanwhile is taken
 when the view is restored. With `window: true` the image is the whole window
 as the application draws it, with ribbon, panels and status bar, also while
-the File view, Settings or the Mesh to Plans wizard covers the model; `view` is then `window` and
+the File view, Settings, the Mesh to Plans wizard or the card of Mesh
+Pointcloud covers the model; `view` is then `window` and
 `viewport_size` the size of the window in logical pixels. It is drawn by the
 application itself, so it does not depend on the window being visible on a
 screen.
@@ -1324,7 +1374,7 @@ layer with photo colours.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), the tabs above the main area (`view_tabs`, as `list_tabs` gives them), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), the tabs above the main area (`view_tabs`, as `list_tabs` gives them), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (`mesh_wizard`: whether it is shown, its step and method, the method whose job runs and what the methods work on; see [Mesh Pointcloud](#mesh-pointcloud)), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, colouring from photos, merge, 3D BAG download or Mesh to Plans task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -1390,17 +1440,17 @@ layer with photo colours.
 | `build_index` | — | Starts an octree build for the active unindexed cloud, or queues it ahead of the automatic builds while as many builds run as the computer takes at once |
 | `cancel_index` | — | Cancels every running octree build without publishing a partial index, and empties the queue |
 | `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
-| `set_surface_settings` | optional `max_vertices`, `neighbors`, `edge_factor`, `mesh_size` | Sets the settings of the 3D surface in Properties atomically: 3–1,000,000 vertices, 3–32 neighbors, a finite positive edge factor and a mesh size of 0 or more in the units of the scan, the width of a voxel in which one point is kept before the vertices are thinned (`0`, the start, leaves the spacing to the vertices). A field that is left out keeps its value; the fields are checked together with the others and none is taken when one is refused. Returns the `surface_settings` |
+| `set_surface_settings` | optional `max_vertices`, `neighbors`, `edge_factor`, `mesh_size` | Sets the settings of the 3D surface, its options in Mesh Pointcloud, atomically: 3–1,000,000 vertices, 3–32 neighbors, a finite positive edge factor and a mesh size of 0 or more in the units of the scan, the width of a voxel in which one point is kept before the vertices are thinned (`0`, the start, leaves the spacing to the vertices). A field that is left out keeps its value; the fields are checked together with the others and none is taken when one is refused. Returns the `surface_settings` |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
-| `mesh` | `mode`, `path` (optional for `closed`), and for `closed` optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path, or a `closed` mesh that is shown and, with a `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path, also written, using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings, closed mode the Closed mesh settings with the fields given. A layer that is still loading is refused (`a point cloud is still loading:` and its file name). Returns a job ID. The complete job reports the open edges and the connected parts of the mesh, and for `closed` the distance between points and mesh |
-| `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Sets the settings of the Closed mesh block atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, a share of 0.01–100 percent of the source points, sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
+| `mesh` | `mode`, `path` (optional for `closed`), and for `closed` optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path, or a `closed` mesh that is shown and, with a `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path, also written, using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings, closed mode the settings of a closed mesh with the fields given; both are the options of those methods in Mesh Pointcloud. A layer that is still loading is refused (`a point cloud is still loading:` and its file name). Returns a job ID. The complete job reports the open edges and the connected parts of the mesh, and for `closed` the distance between points and mesh |
+| `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Sets the settings of a closed mesh, its options in Mesh Pointcloud, atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, a share of 0.01–100 percent of the source points, sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task, of whatever mode |
 | `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
-| `set_face_settings` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Sets the settings of the Detect faces block atomically: a distance tolerance of 0.001–0.5 m, an angle tolerance of 1–45 degrees, a smallest face of 0.01–10000 m², cylinders on or off, layers `active` or `visible`, and the colouring `face` or `deviation` of the faces that are shown. Returns the `settings` |
-| `detect_faces` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Finds the flat faces and the cylinders in the undeleted points inside the active section box and visible classification filters, with the Detect faces settings and the fields given, and keeps them with the active layer beside its mesh. Returns a job ID; the complete job reports the faces per type, the edges, the voxel used and the points on a face |
+| `set_face_settings` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Sets the settings of a face detection, the options of Flat faces in Mesh Pointcloud, atomically: a distance tolerance of 0.001–0.5 m, an angle tolerance of 1–45 degrees, a smallest face of 0.01–10000 m², cylinders on or off, layers `active` or `visible`, and the colouring `face` or `deviation` of the faces that are shown. Returns the `settings` |
+| `detect_faces` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Finds the flat faces and the cylinders in the undeleted points inside the active section box and visible classification filters, with the settings of a face detection and the fields given, and keeps them with the active layer beside its mesh. Returns a job ID; the complete job reports the faces per type, the edges, the voxel used and the points on a face |
 | `cancel_detect_faces` | — | Requests cancellation of the running face detection |
 | `list_faces` | optional `boundaries` | Lists the faces of the active layer in scene coordinates with their class, plane or axis, area and residuals; with `boundaries: true` also their outlines and the edges between them |
-| `select_face` | optional `id` | Highlights the face with that number in the viewport and the block and returns it; without `id` or with `null` takes the highlight off |
+| `select_face` | optional `id` | Highlights the face with that number in the viewport and in the list of Properties and returns it; without `id` or with `null` takes the highlight off |
 | `export_faces` | `path` | Saves the faces of the active layer in scene coordinates to an absolute `.json`, `.obj`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
 | `clear_faces` | — | Removes the faces of the active layer; `cleared` is false when it had none |
 | `merge_visible` | `path` | Merges the visible LAS/LAZ layers to an absolute `.las` or `.laz` path; returns a job ID |
@@ -1410,6 +1460,7 @@ layer with photo colours.
 | `list_extensions` | — | Lists the built-in optional features and whether each is enabled |
 | `set_extension_enabled` | `id`, `enabled` | Switches a built-in optional feature (`bag3d`) on or off and persists that; `saved` in the answer is false, with `save_error`, when it could not be persisted |
 | `file_view` | `open`, optional `page` | Opens the File view, on the page `new`, `open`, `import`, `export`, `workspace`, `extensions` or `about` when one is named, or closes it and returns to the model |
+| `mesh_wizard` | `open`, optional `step`, `method` | Shows the card of Mesh Pointcloud on a step (`method`, `options` or `run`) with a method (`closed`, `terrain`, `surface` or `faces`), or takes it away; a job goes on. With `open: true` and no `step` the card shows the Run step of a job that runs. Answers with `mesh_wizard` |
 | `mesh_to_plans_view` | `open`, optional `step`, `minimized` | Shows the Mesh to Plans wizard as its card, on a step when one is named, or with `minimized: true` as a strip above the scene, or takes it away; answers with `mesh_to_plans` |
 | `mesh_to_plans_action` | `action`, optional `folder` | Does what a button of the Mesh to Plans wizard does on the step it shows: `run`, `run_all`, `confirm`, `skip`, `cancel`, `back` or `next`; `folder` is the absolute folder of a new project. `resume` opens the project in the absolute `folder` instead. `run` and `run_all` return a job ID; answers with `mesh_to_plans` |
 | `mesh_to_plans_level` | optional `level`, `action`, `name`, `cut_height`, `floor_above_p` | Does what the page of step 0 of the Mesh to Plans wizard does with the level whose id is `level`: selects it, gives it `name`, `cut_height` (0.3 to 3 m above its floor) and `floor_above_p`, then does `action`: `select` (the default), `show`, `set_peil`, `add`, `merge` or `remove`; answers with `mesh_to_plans` |

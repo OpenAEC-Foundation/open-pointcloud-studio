@@ -201,6 +201,19 @@ fn one_deleted(total: u64, ordinal: u64) -> Arc<DeletionMask> {
 /// Build the window in Dutch and in English. The language is one setting of
 /// the whole process: the test that calls this holds it, in English, and
 /// gets it back in English.
+/// Show the Options step of Mesh Pointcloud with the faces: where the
+/// settings of the tool are shown.
+fn open_options(studio: &mut Studio) {
+    use crate::mesh_wizard::{MeshMethod, MeshWizardAction, WizardStep};
+    for action in [
+        MeshWizardAction::Open,
+        MeshWizardAction::Method(MeshMethod::Faces),
+        MeshWizardAction::Step(WizardStep::Options),
+    ] {
+        let _ = studio.update(Message::MeshWizard(action));
+    }
+}
+
 fn view_in_both_languages(studio: &Studio) {
     for language in [Language::Table(0), Language::English] {
         crate::i18n::set(language);
@@ -630,7 +643,7 @@ fn colouring_is_one_colour_per_face_or_the_deviation_of_the_points() {
     let _language = TestLanguage::hold(Language::English);
     let directory = tempfile::tempdir().unwrap();
     let mut studio = studio_with_room(directory.path());
-    let _ = studio.update(Message::Faces(FaceAction::Toggle));
+    open_options(&mut studio);
     detect(&mut studio, json!({}));
     let layer = studio.clouds[0].faces.as_ref().unwrap();
     let (flat, deviation) = (Arc::clone(&layer.flat), Arc::clone(&layer.deviation));
@@ -832,7 +845,7 @@ fn faces_are_out_of_date_when_their_points_are_no_longer_those_of_the_scene() {
         (&listing["count"], &listing["stale"]),
         (&json!(7), &json!("points"))
     );
-    let _ = studio.update(Message::Faces(FaceAction::Toggle));
+    open_options(&mut studio);
     view_in_both_languages(&studio);
     // Restoring the points does not bring the faces up to date: the scan
     // they were made from is not known to be the same.
@@ -1119,7 +1132,7 @@ fn a_move_of_one_of_several_scans_makes_their_faces_out_of_date() {
         "moved"
     );
     assert!(studio.faces_export_request().unwrap().stale);
-    let _ = studio.update(Message::Faces(FaceAction::Toggle));
+    open_options(&mut studio);
     view_in_both_languages(&studio);
     // Moving it back does not bring the faces up to date.
     studio.clouds[right].transform = CloudTransform::default();
@@ -1197,7 +1210,7 @@ fn the_list_keeps_the_cylinders_when_there_are_many_flat_faces() {
     let layer = studio.clouds[0].faces.as_mut().unwrap();
     layer.detected = Arc::new(many.clone());
     layer.placed = Arc::new(many);
-    let _ = studio.update(Message::Faces(FaceAction::Toggle));
+    open_options(&mut studio);
     let _ = studio.update(Message::Faces(FaceAction::Select(Some(column))));
     assert_eq!(
         studio.clouds[0].faces.as_ref().unwrap().selected,
@@ -1340,7 +1353,7 @@ fn a_cancelled_or_failed_job_leaves_the_faces_as_they_were() {
     assert!(studio.status.starts_with("Face detection failed: "));
     let layer = studio.clouds[0].faces.as_ref().unwrap();
     assert!(Arc::ptr_eq(&layer.detected, &kept));
-    let _ = studio.update(Message::Faces(FaceAction::Toggle));
+    open_options(&mut studio);
     let _ = studio.view();
 
     // The answer of a job that was replaced is not taken for the new one.
@@ -1369,7 +1382,7 @@ fn a_detection_without_faces_leaves_the_scan_what_it_had() {
     );
     let layer = studio.clouds[0].faces.as_ref().unwrap();
     assert!(Arc::ptr_eq(&layer.detected, &kept));
-    let _ = studio.update(Message::Faces(FaceAction::Toggle));
+    open_options(&mut studio);
     let _ = studio.view();
 
     // A scan that was closed while its job ran gets nothing.
@@ -1637,13 +1650,16 @@ fn block_says_what_a_job_would_search_and_what_voxel_the_budget_gives() {
     let _language = TestLanguage::hold(Language::English);
     let directory = tempfile::tempdir().unwrap();
     let mut studio = studio_with_room(directory.path());
-    // The button opens the block, and closes it.
+    // The settings are on the card; Properties shows faces once there are.
     assert!(studio.faces_properties().is_none());
-    let _ = studio.update(Message::Faces(FaceAction::Toggle));
-    assert!(studio.faces.open && studio.faces_properties().is_some());
-    assert!(studio
-        .status
-        .starts_with("Detect faces: put the section box"));
+    open_options(&mut studio);
+    assert!(studio.faces_properties().is_none());
+    let notes = studio.faces_notes();
+    assert_eq!(notes.refusal, None);
+    assert_eq!(
+        notes.lines[0],
+        region_note(&studio.faces_region().unwrap(), Layers::Active)
+    );
     let region = studio.faces_region().unwrap();
     assert!(!region.boxed && !region.coarse);
     assert_eq!(
@@ -1740,7 +1756,7 @@ fn block_says_what_a_job_would_search_and_what_voxel_the_budget_gives() {
             "cylinders": false, "layers": "visible", "color": "face",
         })
     );
-    // Start from the block runs a job without a job of the local API.
+    // Start from the card runs a job without a job of the local API.
     let _ = studio.update(Message::Faces(FaceAction::Start));
     assert!(studio.faces.is_running());
     assert!(studio.faces.job.as_ref().unwrap().api_job_id.is_none());
@@ -1756,8 +1772,7 @@ fn block_says_what_a_job_would_search_and_what_voxel_the_budget_gives() {
     assert_eq!(studio.status, "Faces of room.xyz cleared");
     let _ = studio.update(Message::Faces(FaceAction::Clear));
     assert_eq!(studio.status, "The active scan has no faces to clear");
-    let _ = studio.update(Message::Faces(FaceAction::Toggle));
-    assert!(!studio.faces.open);
+    assert!(studio.faces_properties().is_none());
 }
 
 #[test]

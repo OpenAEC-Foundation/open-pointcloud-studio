@@ -36,6 +36,7 @@ mod mcp;
 mod measure;
 mod mesh_export;
 mod mesh_to_plans;
+mod mesh_wizard;
 mod native_api;
 mod native_chrome;
 mod open_progress;
@@ -1349,7 +1350,7 @@ fn ribbon_scroll_id() -> scrollable::Id {
     scrollable::Id::new("ops-ribbon")
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MeshMode {
     Terrain,
     Surface,
@@ -2029,6 +2030,8 @@ enum Message {
     PhotoColours(photo_colours::PhotoColourAction),
     /// The Mesh to Plans wizard.
     MeshToPlans(mesh_to_plans::WizardAction),
+    /// The Mesh Pointcloud wizard.
+    MeshWizard(mesh_wizard::MeshWizardAction),
     ClearSelection,
     SelectionDrag([f32; 2], [f32; 2]),
     BoxSelect {
@@ -2209,6 +2212,8 @@ struct Studio {
     photo_colours: photo_colours::PhotoColourTool,
     /// The Mesh to Plans wizard: its card and where its steps stand.
     mesh_to_plans: mesh_to_plans::Wizard,
+    /// The Mesh Pointcloud wizard: its card, its step and its method.
+    mesh_wizard: mesh_wizard::MeshWizard,
     drag_rectangle: Option<([f32; 2], [f32; 2])>,
     context_menu: Option<[f32; 2]>,
     selection_pending: bool,
@@ -2820,6 +2825,7 @@ impl Default for Studio {
             mesh_to_plans: mesh_to_plans::Wizard::with_recent(
                 settings.recent_mesh_to_plans.clone(),
             ),
+            mesh_wizard: mesh_wizard::MeshWizard::default(),
             drag_rectangle: None,
             context_menu: None,
             selection_pending: false,
@@ -2900,12 +2906,16 @@ impl Studio {
     }
 
     /// Whether the model is out of sight behind the File view, the Settings
-    /// dialog or the card of the Mesh to Plans wizard. Keys then leave the
-    /// model alone, and a screenshot or a view snapshot is not taken, as it
-    /// would show what covers the model. The strip of the wizard lies
-    /// beside the scene and covers nothing.
+    /// dialog, the card of the Mesh to Plans wizard or that of Mesh
+    /// Pointcloud. Keys then leave the model alone, and a screenshot or a
+    /// view snapshot is not taken, as it would show what covers the model.
+    /// The strip of the Mesh to Plans wizard lies beside the scene and
+    /// covers nothing.
     fn model_covered(&self) -> bool {
-        self.file_open || self.settings.is_some() || self.mesh_to_plans.covers_model()
+        self.file_open
+            || self.settings.is_some()
+            || self.mesh_to_plans.covers_model()
+            || self.mesh_wizard.is_open()
     }
 
     /// Whether reading the points of the viewport reports in the status
@@ -3818,6 +3828,7 @@ impl Studio {
                 answer.0["result"]["section_fill"] = self.section_fill.value();
                 answer.0["result"]["faces"] = self.faces_value();
                 answer.0["result"]["mesh_to_plans"] = self.mesh_to_plans.value();
+                answer.0["result"]["mesh_wizard"] = self.mesh_wizard_value();
                 answer.0["result"]["photos"] = self.photos_value();
                 answer.0["result"]["colour_from_photos"] = self.photo_colours_value();
                 answer
@@ -4869,6 +4880,9 @@ impl Studio {
                 step,
                 minimized,
             } => self.api_mesh_to_plans_view(open, step.as_deref(), minimized),
+            ApiCommand::MeshWizard { open, step, method } => {
+                self.api_mesh_wizard(open, step.as_deref(), method.as_deref())
+            }
             ApiCommand::MeshToPlansAction { action, folder } => {
                 self.api_mesh_to_plans_action(&action, folder)
             }
@@ -5779,6 +5793,7 @@ impl Studio {
         self.settle_drawing();
         self.settle_faces();
         self.settle_mesh_to_plans();
+        self.settle_mesh_wizard();
         self.settle_turn();
         self.settle_focus();
         let task = match self.ask_box_sample() {
@@ -6692,6 +6707,7 @@ impl Studio {
             }
             Message::MeshPathChosen(mode, config, cloud, deleted, Some(path)) => {
                 self.mesh_dialog_pending = false;
+                self.mesh_wizard.save_chosen();
                 if self.mesh_job.is_some() || self.closed_mesh.is_running() {
                     self.status = "A mesh task is already running".into();
                     return Task::none();
@@ -6718,6 +6734,7 @@ impl Studio {
             }
             Message::MeshPathChosen(_, _, _, _, None) => {
                 self.mesh_dialog_pending = false;
+                self.mesh_wizard.save_cancelled();
                 self.status = "Mesh save cancelled".into();
             }
             Message::MeshPoll => {
@@ -6737,6 +6754,12 @@ impl Studio {
                 }
             }
             Message::MeshReady(mode, result) => {
+                // The Run step of Mesh Pointcloud shows how the job ended.
+                let seconds = self
+                    .mesh_job
+                    .as_ref()
+                    .map_or(0.0, |job| job.started.elapsed().as_secs_f64());
+                self.keep_file_mesh_end(mode, seconds, &result);
                 if let Some(job) = self.mesh_job.take() {
                     if let Some(id) = job.api_job_id {
                         let state = match &result {
@@ -8609,6 +8632,11 @@ impl Studio {
                 if self.sheet_dialog.take().is_some() {
                     return Task::none();
                 }
+                // The card of Mesh Pointcloud closes; a job it started goes
+                // on.
+                if self.mesh_wizard.close() {
+                    return Task::none();
+                }
                 // The card of the wizard comes next: it becomes the strip
                 // above the scene, and a job it runs goes on.
                 if self.mesh_to_plans.minimize() {
@@ -8699,6 +8727,7 @@ impl Studio {
             Message::Faces(action) => return self.update_faces(action),
             Message::PhotoColours(action) => return self.update_photo_colours(action),
             Message::MeshToPlans(action) => return self.update_mesh_to_plans(action),
+            Message::MeshWizard(action) => return self.update_mesh_wizard(action),
             Message::ClearSelection => {
                 self.pending_delete = false;
                 if self.selection_pending {
@@ -9872,33 +9901,8 @@ impl Studio {
                 RibbonItem::Small(zoom_selection),
             ],
         );
-        let mesh_idle = has_active
-            && self.mesh_job.is_none()
-            && !self.mesh_dialog_pending
-            && !self.closed_mesh.is_running();
-        let mut surface_tools = vec![
-            self.closed_mesh_ribbon_item(),
-            RibbonItem::Small(small_tool_button_when(
-                "Terrain mesh",
-                Message::MeshRequest(MeshMode::Terrain),
-                false,
-                mesh_idle,
-            )),
-            RibbonItem::Small(small_tool_button_when(
-                "3D surface",
-                Message::MeshRequest(MeshMode::Surface),
-                false,
-                mesh_idle,
-            )),
-            self.faces_ribbon_item(),
-        ];
-        if self.mesh_job.is_some() {
-            surface_tools.push(RibbonItem::Small(small_tool_button(
-                "Cancel mesh",
-                Message::CancelMesh,
-                false,
-            )));
-        }
+        // The four ways to mesh are one wizard.
+        let surface_tools = vec![self.mesh_wizard_ribbon_item()];
         // While the active layer cannot get an octree of its own, running or
         // waiting builds offer their cancel action instead of the start.
         let can_build = self
@@ -10312,14 +10316,6 @@ impl Studio {
         if let Some(drawing) = self.drawing_properties() {
             properties = properties.push(drawing);
         }
-        // So does the block of the Closed mesh tool.
-        if let Some(closed_mesh) = self.closed_mesh_properties() {
-            properties = properties.push(closed_mesh);
-        }
-        // And the block of the Detect faces tool, with the faces it found.
-        if let Some(faces) = self.faces_properties() {
-            properties = properties.push(faces);
-        }
         for row in [
             opencad_properties::section_header("General"),
             opencad_properties::property_row("Source points", format_count(source_points)),
@@ -10344,34 +10340,6 @@ impl Studio {
             opencad_properties::property_row("Selected", format_count(selected_points)),
         ] {
             properties = properties.push(row);
-        }
-        if active_cloud.is_some() {
-            properties = properties
-                .push(opencad_properties::section_header("3D surface settings"))
-                .push(opencad_properties::property_input(
-                    "Max vertices",
-                    "50000",
-                    &self.surface_settings[0],
-                    |value| Message::SurfaceSetting(0, value),
-                ))
-                .push(opencad_properties::property_input(
-                    "Neighbors",
-                    "12",
-                    &self.surface_settings[1],
-                    |value| Message::SurfaceSetting(1, value),
-                ))
-                .push(opencad_properties::property_input(
-                    "Edge factor",
-                    "4",
-                    &self.surface_settings[2],
-                    |value| Message::SurfaceSetting(2, value),
-                ))
-                .push(opencad_properties::property_input(
-                    "Mesh size",
-                    "0 = auto",
-                    &self.surface_settings[3],
-                    |value| Message::SurfaceSetting(3, value),
-                ));
         }
         if self.active.is_some() {
             properties = properties.push(self.transform_properties());
@@ -10775,8 +10743,13 @@ impl Studio {
             );
             properties = properties.push(self.section_fill.properties());
         }
+        // The results of Mesh Pointcloud the active scan keeps: its mesh,
+        // and the faces found in it.
         if let Some(mesh) = self.mesh_properties() {
             properties = properties.push(mesh);
+        }
+        if let Some(faces) = self.faces_properties() {
+            properties = properties.push(faces);
         }
         // The ribbon switches eye-dome lighting; its strength is set here.
         if self.eye_dome {
@@ -10858,12 +10831,15 @@ impl Studio {
         self.with_dialogs(window.into())
     }
 
-    /// The window with the card of the Mesh to Plans wizard over it, and the
-    /// dialog of a 2D drawing or the Settings dialog over both, while they
-    /// are shown.
+    /// The window with the card of the Mesh to Plans wizard or of Mesh
+    /// Pointcloud over it, and the dialog of a 2D drawing or the Settings
+    /// dialog over both, while they are shown.
     fn with_dialogs<'a>(&'a self, window: Element<'a, Message>) -> Element<'a, Message> {
         let mut layers = stack![window].width(Fill).height(Fill);
         if let Some(wizard) = self.mesh_to_plans_view() {
+            layers = layers.push(wizard);
+        }
+        if let Some(wizard) = self.mesh_wizard_view() {
             layers = layers.push(wizard);
         }
         if let Some(dialog) = self.settings_view().or_else(|| self.sheet_dialog_view()) {
@@ -11054,6 +11030,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::ClosedMesh(_) => ToolIcon::ClosedMesh,
         Message::Faces(_) => ToolIcon::Faces,
         Message::MeshToPlans(_) => ToolIcon::MeshToPlans,
+        Message::MeshWizard(_) => ToolIcon::MeshPointcloud,
         Message::ClearSelection => ToolIcon::Clear,
         Message::SetEyeDome(_) => ToolIcon::Shading,
         Message::ShowScanPoses(_) => ToolIcon::Pick,
@@ -11377,6 +11354,10 @@ enum ToolIcon {
     ClosedMesh,
     Faces,
     MeshToPlans,
+    /// Mesh Pointcloud, and two of its methods.
+    MeshPointcloud,
+    MeshTerrain,
+    MeshSurface,
     /// The kinds of the Project Browser: a scan, the classes, the views
     /// and the 3D model, a saved view, a plan, an elevation, a section, a
     /// drawing file and BCF.
@@ -11451,6 +11432,13 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Faces => include_bytes!("../../assets/opencad-icons/detect_faces.svg"),
         // And so is the icon of the Mesh to Plans wizard.
         ToolIcon::MeshToPlans => include_bytes!("../../assets/opencad-icons/mesh_to_plans.svg"),
+        // And so are the icons of Mesh Pointcloud and of its terrain mesh
+        // and 3D surface.
+        ToolIcon::MeshPointcloud => {
+            include_bytes!("../../assets/opencad-icons/mesh_pointcloud.svg")
+        }
+        ToolIcon::MeshTerrain => include_bytes!("../../assets/opencad-icons/mesh_terrain.svg"),
+        ToolIcon::MeshSurface => include_bytes!("../../assets/opencad-icons/mesh_surface.svg"),
         // The icons of the Project Browser are drawn for this app in the
         // same style: grey with amber for scans and with blue for views.
         ToolIcon::Scan => include_bytes!("../../assets/opencad-icons/browser_scan.svg"),

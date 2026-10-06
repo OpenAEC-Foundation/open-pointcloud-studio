@@ -5,9 +5,9 @@
 //! This module holds the settings of the tool, what it says about the region
 //! before a job starts, the job that reads the layers with its stages and its
 //! cancel, the mapping of the result to the frame of the scan that keeps it,
-//! the Properties block, the commands of the local API and the
-//! `--closed-mesh` mode of the command line. The mesh itself is made by the
-//! core.
+//! what the Options and Run steps of Mesh Pointcloud and Properties show of
+//! it, the commands of the local API and the `--closed-mesh` mode of the
+//! command line. The mesh itself is made by the core.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-use iced::widget::{button, column, container, pick_list, row, text};
+use iced::widget::{column, container, pick_list, row, text};
 use iced::{Element, Fill, Task};
 use pointcloud_core::region_source::{resident_points, RegionSource};
 use pointcloud_core::surfels::{SurfelSource, MAX_VOXEL, MIN_VOXEL};
@@ -37,8 +37,8 @@ use crate::mesh_export::{topology_text, MeasuredMesh};
 use crate::open_progress::{Line, Phase};
 use crate::selection::{ClassFilter, ClassVisibility};
 use crate::{
-    camera_views, compact_count, display_name, flat_tool_style, format_count, opencad_properties,
-    opencad_ribbon, themed_pick_list_style, CloudEntry, Message, Studio,
+    camera_views, compact_count, display_name, format_count, mesh_wizard, opencad_properties,
+    themed_pick_list_style, CloudEntry, Message, Studio,
 };
 
 /// A layer without an index is read into memory for the job. Above this many
@@ -982,7 +982,27 @@ struct Written {
     origin: Option<[f64; 3]>,
 }
 
-/// How the last job ended, for the Properties block and the local API.
+/// The mesh a job made, without keeping it: Properties shows the figures of
+/// the job under the mesh of a scan for as long as the scan holds this mesh.
+/// The allocation stays while it is looked at, so its address is never that
+/// of another mesh.
+#[derive(Debug, Clone)]
+struct MeshOf(Weak<MeshGeometry>);
+
+impl MeshOf {
+    fn is(&self, mesh: &Arc<MeshGeometry>) -> bool {
+        std::ptr::eq(self.0.as_ptr(), Arc::as_ptr(mesh))
+    }
+}
+
+impl PartialEq for MeshOf {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// How the last job ended, for the Run step of Mesh Pointcloud, Properties
+/// and the local API.
 #[derive(Debug, Clone, PartialEq)]
 enum Last {
     Done {
@@ -994,6 +1014,7 @@ enum Last {
         /// The file name of the scan that got the mesh, or nothing when
         /// that scan was closed while the job ran.
         shown_on: Option<String>,
+        mesh: MeshOf,
     },
     Cancelled,
     Failed(String),
@@ -1008,6 +1029,7 @@ impl Last {
                 sides,
                 written,
                 shown_on,
+                ..
             } => {
                 let mut value = report_value(report, *sides);
                 value["state"] = "complete".into();
@@ -1041,6 +1063,7 @@ impl Last {
                 sides,
                 written,
                 shown_on,
+                ..
             } => {
                 let mut line = match shown_on {
                     Some(name) => format!("Closed mesh shown as the mesh of {name}: "),
@@ -1067,11 +1090,10 @@ impl Last {
     }
 }
 
-/// What the Closed mesh tool holds: whether its block is open, its settings,
-/// a job under way and how the last job ended.
+/// What the Closed mesh tool holds: its settings, which the Options step of
+/// Mesh Pointcloud shows, a job under way and how the last job ended.
 #[derive(Default)]
 pub(crate) struct ClosedMeshTool {
-    open: bool,
     settings: ClosedMeshSettings,
     job: Option<ClosedMeshJob>,
     next_serial: u64,
@@ -1085,6 +1107,11 @@ pub(crate) struct ClosedMeshTool {
 impl ClosedMeshTool {
     pub(crate) fn is_running(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// Which scans a job reads.
+    pub(crate) fn layers(&self) -> Layers {
+        self.settings.layers
     }
 
     /// Ask the worker of a running job to stop.
@@ -1153,8 +1180,6 @@ impl ClosedMeshTool {
 /// Everything the Closed mesh tool reacts to.
 #[derive(Debug, Clone)]
 pub enum ClosedMeshAction {
-    /// Open the block of the tool in Properties, or close it.
-    Toggle,
     Voxel(String),
     MaxHole(String),
     Simplify(String),
@@ -1584,7 +1609,6 @@ impl Studio {
         self.closed_mesh.job = Some(job);
         // The result of an earlier job would read as the result of this one.
         self.closed_mesh.last = None;
-        self.closed_mesh.open = true;
         let worker = Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || ClosedMeshEnd::of(run(&input, &control)))
@@ -1598,19 +1622,6 @@ impl Studio {
 
     pub(crate) fn update_closed_mesh(&mut self, action: ClosedMeshAction) -> Task<Message> {
         match action {
-            ClosedMeshAction::Toggle => {
-                // The 3D BAG panel takes the place of Properties. With that
-                // panel open the block is out of sight, and the button
-                // brings it back instead of closing it.
-                let hidden = self.closed_mesh.open && self.bag_panel;
-                self.closed_mesh.open = hidden || !self.closed_mesh.open;
-                if self.closed_mesh.open {
-                    let _ = self.set_bag_panel(false);
-                    self.status = "Closed mesh: put the section box around the part to mesh, \
-                                   check the settings in Properties and choose Start"
-                        .into();
-                }
-            }
             ClosedMeshAction::Voxel(value) => self.closed_mesh.settings.voxel = value,
             ClosedMeshAction::MaxHole(value) => self.closed_mesh.settings.max_hole = value,
             ClosedMeshAction::Simplify(value) => self.closed_mesh.settings.simplify = value,
@@ -1699,6 +1710,7 @@ impl Studio {
                             origin: finished.origin,
                         }),
                     shown_on,
+                    mesh: MeshOf(Arc::downgrade(&finished.mesh.mesh)),
                 }
             }
             ClosedMeshEnd::Cancelled => Last::Cancelled,
@@ -1812,212 +1824,283 @@ impl Studio {
         Some(json!({"ok": true, "cancel_requested": true}))
     }
 
-    /// The button of the tool in the SURFACE group of the ribbon. It needs a
-    /// scan to be active, and an open block can always be closed with it.
-    pub(crate) fn closed_mesh_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
-        opencad_ribbon::RibbonItem::Large(crate::large_tool_button_when(
-            "Closed mesh",
-            Message::ClosedMesh(ClosedMeshAction::Toggle),
-            self.closed_mesh.open,
-            self.active.is_some() || self.closed_mesh.open,
-        ))
-    }
-
-    /// The block of the tool in Properties: its settings, what a job would
-    /// mesh, the button that starts one, a job under way and what the last
-    /// job reported.
-    pub(crate) fn closed_mesh_properties(&self) -> Option<Element<'_, Message>> {
-        let tool = &self.closed_mesh;
-        if !tool.open {
-            return None;
-        }
-        let settings = &tool.settings;
-        let colors = self.ui_theme.colors();
-        let note =
-            |content: String| container(text(content).size(10).color(colors.muted)).padding([4, 8]);
-        let warning = |content: String| {
-            container(text(content).size(10).color(colors.accent)).padding([4, 8])
-        };
-        let mut explanation: Vec<String> = Vec::new();
-        let mut warnings: Vec<String> = Vec::new();
-        let mut block = column![
-            opencad_properties::section_header("Closed mesh"),
-            opencad_properties::property_input(
+    /// The settings of a closed mesh as the Options step of Mesh Pointcloud
+    /// shows them, each with its default and its explanation.
+    pub(crate) fn closed_mesh_options(&self) -> Element<'_, Message> {
+        let settings = &self.closed_mesh.settings;
+        let defaults = ClosedMeshSettings::default();
+        let send = Message::ClosedMesh;
+        column![
+            mesh_wizard::option_input(
                 "Voxel size (m)",
-                "auto",
                 &settings.voxel,
-                |value| { Message::ClosedMesh(ClosedMeshAction::Voxel(value)) }
-            ),
-            opencad_properties::property_input(
-                "Close holes up to (m)",
-                "0.25",
-                &settings.max_hole,
-                |value| Message::ClosedMesh(ClosedMeshAction::MaxHole(value)),
-            ),
-            opencad_properties::property_input(
-                "Simplify within (mm)",
                 "auto",
+                tr("automatic").to_owned(),
+                move |value| send(ClosedMeshAction::Voxel(value)),
+                key("The edge of a voxel, from 0.005 to 0.5 m. Smaller voxels follow more detail and cost more time and triangles. Empty, or auto, lets the job choose: 0.02 m for a region up to 20 m long, 0.03 m up to 60 m and 0.05 m beyond."),
+            ),
+            mesh_wizard::option_input(
+                "Close holes up to (m)",
+                &settings.max_hole,
+                "0.25",
+                defaults.max_hole.clone(),
+                move |value| send(ClosedMeshAction::MaxHole(value)),
+                key("Gaps in the points up to this wide are closed, from 0 (none) to 3.2 m and never more than 32 voxels. Wider openings, such as doors and windows, stay open."),
+            ),
+            mesh_wizard::option_input(
+                "Simplify within (mm)",
                 &settings.simplify,
-                |value| Message::ClosedMesh(ClosedMeshAction::Simplify(value)),
+                "auto",
+                tr("automatic").to_owned(),
+                move |value| send(ClosedMeshAction::Simplify(value)),
+                key("How far simplification may move the surface, from 0 (no simplification) to 1000 mm. Empty, or auto, is 0.15 voxel: 3 mm at voxels of 0.02 m."),
             ),
-            opencad_properties::property_input(
+            mesh_wizard::option_input(
                 "Source points (%)",
-                "100",
                 &settings.sample_percent,
-                |value| Message::ClosedMesh(ClosedMeshAction::SamplePercent(value)),
+                "100",
+                defaults.sample_percent.clone(),
+                move |value| send(ClosedMeshAction::SamplePercent(value)),
+                key("The share of the source points the surface is fitted to, from 0.01 to 100: the same points on every run, spread over the region. Less is faster, but sparse detail may be lost."),
             ),
-            opencad_properties::property_control(
+            mesh_wizard::option_control(
                 "Sides",
                 choice_list(Sides::ALL, settings.sides, Sides::text, |sides| {
                     Message::ClosedMesh(ClosedMeshAction::Sides(sides))
                 }),
+                tr(defaults.sides.text()).to_owned(),
+                key("Which side of a surface is its front. Automatic: the side of the station that measured it, where the scan knows its stations, and the centre of the region elsewhere. Towards the centre: every face looks at the centre of the region. Upward: every face looks up, for data measured from above."),
             ),
-            opencad_properties::property_control(
+            mesh_wizard::option_control(
                 "Scans",
                 choice_list(Layers::ALL, settings.layers, Layers::text, |layers| {
                     Message::ClosedMesh(ClosedMeshAction::Layers(layers))
                 }),
+                tr(defaults.layers.text()).to_owned(),
+                key("The active scan, or every visible scan that reaches the section box, without layers of 3D BAG buildings. The mesh becomes the mesh of the active scan either way."),
             ),
         ]
-        .spacing(0)
-        .width(Fill);
+        .spacing(4)
+        .into()
+    }
 
-        if let Some(job) = &tool.job {
-            let cancelling = job.cancelling();
-            let state = if cancelling {
-                tr("Cancelling…").to_owned()
-            } else {
-                stage_line(job.control.snapshot())
-            };
-            block = block
-                .push(container(text(state).size(11)).padding([6, 8]))
-                .push(
-                    container(
-                        button(tr("Cancel"))
-                            .on_press_maybe(
-                                (!cancelling)
-                                    .then_some(Message::ClosedMesh(ClosedMeshAction::Cancel)),
-                            )
-                            .style(flat_tool_style),
-                    )
-                    .padding([3, 8]),
-                );
-        } else {
-            let mut ready = self.mesh_job.is_none() && !self.mesh_dialog_pending;
-            match self.closed_mesh_region() {
-                Ok(region) => {
-                    explanation.push(region_note(&region, settings.layers));
-                    let voxel = format!("{:.0}", region.voxel * 1000.0);
-                    let triangles = format_count(region.triangles);
-                    explanation.push(tr_args(
-                        "Voxels of {voxel} mm: about {triangles} triangles before simplification for the faces of this box alone. Furniture and inner walls add to that.",
-                        &[("voxel", &voxel), ("triangles", &triangles)],
-                    ));
-                    if let Some(line) = fit_warning(region.fit) {
-                        warnings.push(line);
-                    }
-                }
-                Err(problem) => {
-                    ready = false;
-                    warnings.push(match problem {
-                        Problem::Setting(sentence) => sentence.translated(),
-                        Problem::Refused(refusal) => refusal.sentence().translated(),
-                    });
-                }
-            }
-            explanation.push(
-                tr("The result becomes the mesh of the active scan and takes the place of a mesh it has.")
-                    .to_owned(),
-            );
-            // The explanation is in the tooltip of Start, warnings behind the
-            // mark beside it; the panel keeps the settings and the results.
-            let mut start = row![opencad_properties::explained(
-                button(tr("Start"))
-                    .on_press_maybe(ready.then_some(Message::ClosedMesh(ClosedMeshAction::Start)))
-                    .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status)),
-                std::mem::take(&mut explanation),
-            )]
-            .spacing(6)
-            .align_y(iced::Alignment::Center);
-            if let Some(mark) = opencad_properties::warning_mark(std::mem::take(&mut warnings)) {
-                start = start.push(mark);
-            }
-            block = block.push(container(start).padding([3, 8]));
+    /// What the Options step says of a closed mesh before it runs: what it
+    /// would mesh and how large that is, warnings, and why it cannot start.
+    pub(crate) fn closed_mesh_notes(&self) -> mesh_wizard::Notes {
+        let mut notes = mesh_wizard::Notes::default();
+        if self.closed_mesh.is_running() {
+            notes.refusal = Some(tr("A closed mesh is already being made").to_owned());
+        } else if self.mesh_job.is_some() || self.mesh_dialog_pending {
+            notes.refusal = Some(tr("A mesh task is already open or running").to_owned());
         }
-
-        match &tool.last {
-            Some(Last::Done { report, sides, .. }) => {
-                for row in result_rows(report, *sides) {
-                    block = block.push(row);
+        match self.closed_mesh_region() {
+            Ok(region) => {
+                let settings = &self.closed_mesh.settings;
+                notes.lines.push(region_note(&region, settings.layers));
+                let voxel = format!("{:.0}", region.voxel * 1000.0);
+                let triangles = format_count(region.triangles);
+                notes.lines.push(tr_args(
+                    "Voxels of {voxel} mm: about {triangles} triangles before simplification for the faces of this box alone. Furniture and inner walls add to that.",
+                    &[("voxel", &voxel), ("triangles", &triangles)],
+                ));
+                if let Some(line) = fit_warning(region.fit) {
+                    notes.warnings.push(line);
                 }
-                let advice: Vec<String> =
-                    advice_sentences(report, *sides, &|count| format_count(count))
+            }
+            Err(problem) => {
+                let sentence = match problem {
+                    Problem::Setting(sentence) => sentence.translated(),
+                    Problem::Refused(refusal) => refusal.sentence().translated(),
+                };
+                notes.refusal.get_or_insert(sentence);
+            }
+        }
+        notes.lines.push(
+            tr("The result becomes the mesh of the active scan and takes the place of a mesh it has.")
+                .to_owned(),
+        );
+        notes
+    }
+
+    /// Put the recommended settings in the options: those a job starts
+    /// with. Which scans take part stays as it was chosen.
+    pub(crate) fn recommend_closed_mesh(&mut self) {
+        let layers = self.closed_mesh.settings.layers;
+        self.closed_mesh.settings = ClosedMeshSettings {
+            layers,
+            ..ClosedMeshSettings::default()
+        };
+    }
+
+    /// Whether the options hold the recommended settings.
+    pub(crate) fn closed_mesh_recommended(&self) -> bool {
+        let settings = &self.closed_mesh.settings;
+        *settings
+            == ClosedMeshSettings {
+                layers: settings.layers,
+                ..ClosedMeshSettings::default()
+            }
+    }
+
+    /// A job under way, or how the last one ended, as the Run step of Mesh
+    /// Pointcloud shows it.
+    pub(crate) fn closed_mesh_run(&self) -> mesh_wizard::RunState {
+        let tool = &self.closed_mesh;
+        if let Some(job) = &tool.job {
+            let step = job.control.snapshot();
+            let stages = job.stages();
+            let place = stages
+                .iter()
+                .position(|stage| *stage == step.stage)
+                .map_or(1, |place| place + 1);
+            let cancelling = job.cancelling();
+            return mesh_wizard::RunState::Running(mesh_wizard::Progress {
+                stage: if cancelling {
+                    tr("Cancelling…").to_owned()
+                } else {
+                    stage_line(step)
+                },
+                steps: Some((place, stages.len())),
+                fraction: step.fraction(),
+                seconds: job.started.elapsed().as_secs(),
+                cancelling,
+            });
+        }
+        match &tool.last {
+            None => mesh_wizard::RunState::Idle,
+            Some(Last::Done {
+                report,
+                sides,
+                written,
+                shown_on,
+                ..
+            }) => {
+                let mut lines = vec![match shown_on {
+                    Some(name) => tr_args(
+                        "Shown as the mesh of {name}; it takes the place of the mesh that scan had.",
+                        &[("name", name)],
+                    ),
+                    None => tr("Its scan was closed while the job ran, so nothing is shown.")
+                        .to_owned(),
+                }];
+                if let Some(written) = written {
+                    lines.push(tr_args(
+                        "Also written to {path}.",
+                        &[("path", &written.path.display())],
+                    ));
+                }
+                mesh_wizard::RunState::Done {
+                    rows: result_rows(report, *sides, true),
+                    lines,
+                    warnings: advice_sentences(report, *sides, &|count| format_count(count))
                         .into_iter()
                         .map(|sentence| sentence.translated())
-                        .collect();
-                if let Some(mark) = opencad_properties::warning_mark(advice) {
-                    block = block.push(
-                        container(
-                            row![text(tr("Advice")).size(11).color(colors.accent), mark]
-                                .spacing(6)
-                                .align_y(iced::Alignment::Center),
-                        )
-                        .padding([4, 8]),
-                    );
+                        .collect(),
                 }
             }
-            Some(Last::Failed(error)) => {
-                block = block
-                    .push(note(tr("The last closed mesh failed:").to_owned()))
-                    .push(warning(error.clone()));
-            }
-            Some(Last::Cancelled) => {
-                block = block.push(note(tr("The last closed mesh was cancelled.").to_owned()));
-            }
-            None => {}
+            Some(Last::Cancelled) => mesh_wizard::RunState::Cancelled(
+                tr("The last closed mesh was cancelled.").to_owned(),
+            ),
+            Some(Last::Failed(error)) => mesh_wizard::RunState::Failed(error.clone()),
         }
-        block = block.push(self.cad_viewer_controls());
-        Some(block.into())
+    }
+
+    /// The figures of the closed mesh a scan holds, under its Surface mesh
+    /// in Properties: how far the points lie from it, where its sides came
+    /// from and the advice; nothing when the scan holds another mesh.
+    pub(crate) fn closed_mesh_figures(
+        &self,
+        mesh: &Arc<MeshGeometry>,
+    ) -> Vec<Element<'static, Message>> {
+        let Some(Last::Done {
+            report,
+            sides,
+            mesh: made,
+            ..
+        }) = &self.closed_mesh.last
+        else {
+            return Vec::new();
+        };
+        if !made.is(mesh) {
+            return Vec::new();
+        }
+        let mut rows = result_rows(report, *sides, false);
+        let advice: Vec<String> = advice_sentences(report, *sides, &|count| format_count(count))
+            .into_iter()
+            .map(|sentence| sentence.translated())
+            .collect();
+        if let Some(mark) = opencad_properties::warning_mark(advice) {
+            let accent = self.ui_theme.colors().accent;
+            rows.push(
+                container(
+                    row![text(tr("Advice")).size(11).color(accent), mark]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center),
+                )
+                .padding([4, 8])
+                .into(),
+            );
+        }
+        rows
     }
 }
 
-/// What the core reported of the last job, as rows of the Properties block.
-fn result_rows(report: &ClosedMeshReport, sides: Sides) -> Vec<Element<'static, Message>> {
-    let mut rows = vec![
-        opencad_properties::property_row(
-            "Last mesh",
-            tr_args(
-                "{seconds} s, voxel {voxel} mm",
-                &[
-                    (
-                        "seconds",
-                        &format!("{:.1}", report.timings.total.as_secs_f64()),
-                    ),
-                    ("voxel", &format!("{:.0}", report.voxel * 1000.0)),
-                ],
-            ),
+/// What the core reported of the last job, as rows of figures. `size` adds
+/// the size of the mesh and how its triangles hang together, which the
+/// Surface mesh section of Properties shows of every mesh already.
+fn result_rows(
+    report: &ClosedMeshReport,
+    sides: Sides,
+    size: bool,
+) -> Vec<Element<'static, Message>> {
+    let mut rows = vec![opencad_properties::property_row(
+        "Last mesh",
+        tr_args(
+            "{seconds} s, voxel {voxel} mm",
+            &[
+                (
+                    "seconds",
+                    &format!("{:.1}", report.timings.total.as_secs_f64()),
+                ),
+                ("voxel", &format!("{:.0}", report.voxel * 1000.0)),
+            ],
         ),
-        opencad_properties::property_row("Vertices", format_count(report.vertices)),
-        opencad_properties::property_row("Triangles", format_count(report.triangles)),
+    )];
+    if size {
+        rows.push(opencad_properties::property_row(
+            "Vertices",
+            format_count(report.vertices),
+        ));
+        rows.push(opencad_properties::property_row(
+            "Triangles",
+            format_count(report.triangles),
+        ));
+    }
+    rows.extend([
         opencad_properties::property_row("Mean deviation", millimetres(report.deviation.mean)),
         opencad_properties::property_row("95% deviation", millimetres(report.deviation.p95)),
         opencad_properties::property_row("Largest deviation", millimetres(report.deviation.max)),
-        opencad_properties::property_row("Open edges", format_count(report.topology.open_edges)),
-        opencad_properties::property_row(
+    ]);
+    if size {
+        rows.push(opencad_properties::property_row(
+            "Open edges",
+            format_count(report.topology.open_edges),
+        ));
+        rows.push(opencad_properties::property_row(
             "Connected parts",
             format_count(report.topology.components),
-        ),
-        opencad_properties::property_row(
-            "Sides",
-            tr(match (report.orientation, sides) {
-                (OrientationUsed::Stations, _) => key("From stations"),
-                (OrientationUsed::Mixed, _) => key("Stations and centre"),
-                (OrientationUsed::Fallback, Sides::Upward) => key("Upward"),
-                (OrientationUsed::Fallback, _) => key("Towards the centre"),
-            })
-            .to_owned(),
-        ),
-    ];
+        ));
+    }
+    rows.push(opencad_properties::property_row(
+        "Sides",
+        tr(match (report.orientation, sides) {
+            (OrientationUsed::Stations, _) => key("From stations"),
+            (OrientationUsed::Mixed, _) => key("Stations and centre"),
+            (OrientationUsed::Fallback, Sides::Upward) => key("Upward"),
+            (OrientationUsed::Fallback, _) => key("Towards the centre"),
+        })
+        .to_owned(),
+    ));
     // Asked for the centre or upward, every element is without a station,
     // whatever the scan knows.
     let without = without_station(report);
@@ -2228,6 +2311,21 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
         ));
     }
     Ok(lines)
+}
+
+#[cfg(test)]
+impl Studio {
+    /// Do the work of the running job here, as its worker thread would, and
+    /// hand its end to the window: for the tests of other modules.
+    pub(crate) fn finish_closed_mesh_here(&mut self) {
+        let Some(job) = &self.closed_mesh.job else {
+            return;
+        };
+        let (serial, input, control) =
+            (job.serial, Arc::clone(&job.input), Arc::clone(&job.control));
+        let end = ClosedMeshEnd::of(run(&input, &control));
+        let _ = self.update(Message::ClosedMesh(ClosedMeshAction::Finished(serial, end)));
+    }
 }
 
 #[cfg(test)]

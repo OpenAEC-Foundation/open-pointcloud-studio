@@ -103,6 +103,20 @@ fn job(studio: &mut Studio, id: &str) -> Value {
     send(studio, ApiCommand::Job { id: id.to_owned() })["job"].clone()
 }
 
+/// The Options step of Mesh Pointcloud with the closed mesh, built: where
+/// the settings of the tool are shown.
+fn view_options(studio: &mut Studio) {
+    use crate::mesh_wizard::{MeshMethod, MeshWizardAction, WizardStep};
+    for action in [
+        MeshWizardAction::Open,
+        MeshWizardAction::Method(MeshMethod::Closed),
+        MeshWizardAction::Step(WizardStep::Options),
+    ] {
+        let _ = studio.update(Message::MeshWizard(action));
+    }
+    let _ = studio.view();
+}
+
 /// What the worker thread of the running job does, and its message to the
 /// window.
 fn finish(studio: &mut Studio) {
@@ -667,14 +681,14 @@ fn block_warns_in_the_language_in_use_when_a_region_may_not_fit() {
     let cloud = Arc::new(pointcloud_core::open(&source, 10).unwrap());
     let mut studio = Studio::default();
     let _ = studio.update(Message::Loaded(Ok(cloud)));
-    let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::Toggle));
     let region = studio.closed_mesh_region().unwrap();
     assert_eq!(region.voxel, 0.05);
     assert_eq!(region.fit, Fit::Doubtful, "{region:?}");
-    assert!(studio.closed_mesh_properties().is_some());
+    view_options(&mut studio);
+    assert_eq!(studio.closed_mesh_notes().warnings.len(), 1);
     let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::Simplify("0".into())));
     assert_eq!(studio.closed_mesh_region().unwrap().fit, Fit::TooLarge);
-    assert!(studio.closed_mesh_properties().is_some());
+    view_options(&mut studio);
     // 60 by 60 by 1 m at voxels of 5 cm is 6.0 million triangles for the
     // box: under the limit, and close to it without simplification.
     let source = directory.path().join("hall.xyz");
@@ -682,7 +696,6 @@ fn block_warns_in_the_language_in_use_when_a_region_may_not_fit() {
     let cloud = Arc::new(pointcloud_core::open(&source, 10).unwrap());
     let mut studio = Studio::default();
     let _ = studio.update(Message::Loaded(Ok(cloud)));
-    let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::Toggle));
     let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::Voxel("0.05".into())));
     assert_eq!(studio.closed_mesh_region().unwrap().fit, Fit::Fits);
     let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::Simplify("0".into())));
@@ -692,7 +705,7 @@ fn block_warns_in_the_language_in_use_when_a_region_may_not_fit() {
         "{region:?}"
     );
     assert_eq!(region.fit, Fit::Close);
-    assert!(studio.closed_mesh_properties().is_some());
+    view_options(&mut studio);
 }
 
 #[test]
@@ -703,10 +716,9 @@ fn api_makes_a_closed_mesh_of_a_room_and_reports_how_good_it_is() {
     assert_eq!(status(&mut studio)["closed_mesh"]["last"], Value::Null);
 
     let id = start(&mut studio, json!({"sides": "centre"}));
-    // The block takes the fields of the command and opens.
+    // The options take the fields of the command.
     assert_eq!(studio.closed_mesh.settings.voxel, "0.04");
     assert_eq!(studio.closed_mesh.settings.sides, Sides::Centre);
-    assert!(studio.closed_mesh.open);
     let running = job(&mut studio, &id);
     assert_eq!(running["state"], "running");
     assert_eq!(running["operation"], "mesh");
@@ -1196,7 +1208,6 @@ fn a_job_is_refused_before_it_starts_when_it_cannot_run() {
         send(&mut empty, closed(json!({})))["error"],
         "no active cloud"
     );
-    let _ = empty.update(Message::ClosedMesh(ClosedMeshAction::Toggle));
     let _ = empty.update(Message::ClosedMesh(ClosedMeshAction::Start));
     assert_eq!(
         empty.status,
@@ -1658,9 +1669,15 @@ fn advice_is_worded_for_the_count_and_for_the_sides_that_were_asked() {
         "{automatic}"
     );
     // The row that counts the elements without a station is for Automatic.
-    let rows = |sides| result_rows(&undecided, sides).len();
+    let rows = |sides| result_rows(&undecided, sides, true).len();
     assert_eq!(rows(Sides::Automatic), rows(Sides::Centre) + 1);
     assert_eq!(rows(Sides::Centre), rows(Sides::Upward));
+    // Under the mesh of the scan in Properties the size of the mesh is left
+    // out: that section gives it already.
+    assert_eq!(
+        result_rows(&undecided, Sides::Automatic, false).len() + 4,
+        rows(Sides::Automatic)
+    );
     // Every sentence has its entry in the table.
     for sides in Sides::ALL {
         for sentence in advice_sentences(&torn, sides, &grouped)
@@ -1749,21 +1766,16 @@ fn stages_are_those_a_job_goes_through() {
 }
 
 #[test]
-fn block_shows_the_region_the_job_and_the_result_in_the_language_in_use() {
+fn options_show_the_region_the_job_and_the_result_in_the_language_in_use() {
     let _language = TestLanguage::hold(Language::Table(0));
     let directory = tempfile::tempdir().unwrap();
     let mut studio = studio_with_room(directory.path());
-    assert!(
-        studio.closed_mesh_properties().is_none(),
-        "the block is closed"
-    );
-    let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::Toggle));
-    assert!(studio.closed_mesh_properties().is_some());
-    assert!(studio
-        .status
-        .starts_with("Closed mesh: put the section box"));
-    let _ = studio.view();
-    // What the block says of the region, and of a job under way.
+    view_options(&mut studio);
+    let notes = studio.closed_mesh_notes();
+    assert_eq!(notes.refusal, None);
+    assert!(notes.warnings.is_empty(), "{notes:?}");
+    assert_eq!(notes.lines.len(), 3, "{notes:?}");
+    // What the options say of the region, and of a job under way.
     let region = studio.closed_mesh_region().unwrap();
     assert_eq!(
         region_note(&region, Layers::Active),
@@ -1797,9 +1809,14 @@ fn block_shows_the_region_the_job_and_the_result_in_the_language_in_use() {
     assert_eq!(stage(Stage::Simplifying, 1, 4), "Vereenvoudigen…");
     assert_eq!(stage(Stage::Measuring, 0, 0), "Resultaat meten…");
     assert_eq!(stage(Stage::Writing, 0, 0), "Bestand schrijven…");
-    // A setting that cannot be read is said in the block, in its language.
+    // A setting that cannot be read is said on the card, in its language,
+    // and holds the job back.
     let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::MaxHole("9".into())));
-    assert!(studio.closed_mesh_properties().is_some());
+    view_options(&mut studio);
+    assert_eq!(
+        studio.closed_mesh_notes().refusal.as_deref(),
+        Some("De gatgrens moet tussen 0 en 3.2 m liggen")
+    );
     let Err(Problem::Setting(problem)) = studio.closed_mesh_region() else {
         panic!("the hole limit is out of range");
     };
@@ -1821,19 +1838,25 @@ fn block_shows_the_region_the_job_and_the_result_in_the_language_in_use() {
             "sides": "upward", "layers": "visible",
         })
     );
-    // The Start button starts a job, whose stage the block shows.
+    // Start runs a job, whose stage the Run step shows.
     let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::Start));
     assert!(studio.closed_mesh.is_running());
-    assert!(studio.closed_mesh_properties().is_some());
+    let crate::mesh_wizard::RunState::Running(progress) = studio.closed_mesh_run() else {
+        panic!("a job runs");
+    };
+    assert_eq!(progress.stage, "Scan zonder index lezen…");
     let _ = studio.view();
     finish(&mut studio);
     assert!(matches!(studio.closed_mesh.last, Some(Last::Done { .. })));
-    assert!(studio.closed_mesh_properties().is_some());
+    assert!(matches!(
+        studio.closed_mesh_run(),
+        crate::mesh_wizard::RunState::Done { .. }
+    ));
+    // Properties gives the figures under the mesh of the scan.
     assert!(studio.mesh_properties().is_some());
+    let mesh = Arc::clone(studio.clouds[0].mesh.as_ref().unwrap());
+    assert!(studio.closed_mesh_figures(&mesh).len() >= 5);
     let _ = studio.view();
-    // The button closes the block again; the result stays for the next time.
-    let _ = studio.update(Message::ClosedMesh(ClosedMeshAction::Toggle));
-    assert!(studio.closed_mesh_properties().is_none());
 
     assert_eq!(tr("Closed mesh"), "Gesloten mesh");
     assert_eq!(tr("Voxel size (m)"), "Voxelgrootte (m)");

@@ -5,9 +5,10 @@
 //! This module holds the settings of the tool, what it says about the region
 //! before a job starts, the job that reads the layers with its stages and its
 //! cancel, the layer of faces a scan keeps beside its mesh, what makes that
-//! layer out of date, the Properties block with the list of faces, the
-//! exports, the commands of the local API and the `--faces` mode of the
-//! command line. The faces themselves are found by the core.
+//! layer out of date, what the Options and Run steps of Mesh Pointcloud show
+//! of it, the Properties section with the list of faces, the exports, the
+//! commands of the local API and the `--faces` mode of the command line. The
+//! faces themselves are found by the core.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -48,8 +49,8 @@ use crate::open_progress::{Line, Phase};
 use crate::selection::{ClassFilter, ClassVisibility, DeletionMask};
 use crate::{
     camera_views, compact_count, display_name, drawing, flat_tool_style, format_count, measure,
-    muted_checkbox_style, opencad_properties, opencad_ribbon, same_deletion_mask, CloudEntry,
-    Message, PointViewport, Studio,
+    mesh_wizard, muted_checkbox_style, opencad_properties, opencad_ribbon, same_deletion_mask,
+    CloudEntry, Message, PointViewport, Studio,
 };
 
 /// The limits of the settings. The core asks for a tolerance and an area
@@ -1262,12 +1263,12 @@ impl Last {
     }
 }
 
-/// What the Detect faces tool holds: whether its block is open, its
-/// settings, a job under way, how the last job ended and whether a faces
-/// file is being saved. The faces themselves are kept with their scan.
+/// What the Detect faces tool holds: its settings, which the Options step of
+/// Mesh Pointcloud shows, a job under way, how the last job ended and
+/// whether a faces file is being saved. The faces themselves are kept with
+/// their scan.
 #[derive(Default)]
 pub(crate) struct FaceTool {
-    open: bool,
     settings: FaceSettings,
     job: Option<FaceJob>,
     next_serial: u64,
@@ -1279,6 +1280,11 @@ pub(crate) struct FaceTool {
 impl FaceTool {
     pub(crate) fn is_running(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// Which scans a job reads.
+    pub(crate) fn layers(&self) -> Layers {
+        self.settings.layers
     }
 
     /// Ask the worker of a running job to stop.
@@ -1320,8 +1326,6 @@ impl FaceTool {
 /// Everything the Detect faces tool reacts to.
 #[derive(Debug, Clone)]
 pub enum FaceAction {
-    /// Open the block of the tool in Properties, or close it.
-    Toggle,
     Distance(String),
     Angle(String),
     MinArea(String),
@@ -1574,6 +1578,42 @@ fn swatch(color: [u8; 3]) -> Element<'static, Message> {
         .into()
 }
 
+/// What a detection found, in figures: the time, the voxel, the faces per
+/// type and the points on a face.
+fn summary_rows(summary: &Summary) -> Vec<Element<'static, Message>> {
+    vec![
+        opencad_properties::property_row(
+            "Last detection",
+            tr_args(
+                "{seconds} s, voxel {voxel} mm",
+                &[
+                    ("seconds", &format!("{:.1}", summary.seconds)),
+                    ("voxel", &format!("{:.0}", summary.voxel * 1000.0)),
+                ],
+            ),
+        ),
+        opencad_properties::property_row(
+            "Floors and ceilings",
+            format!("{} + {}", summary.floors, summary.ceilings),
+        ),
+        opencad_properties::property_row(
+            "Walls and sloped planes",
+            format!("{} + {}", summary.walls, summary.sloped),
+        ),
+        opencad_properties::property_row("Columns and pipes", summary.cylinders.to_string()),
+        opencad_properties::property_row(
+            "Points on a face",
+            tr_args(
+                "{count} of {all}",
+                &[
+                    ("count", &compact_count(summary.assigned_points)),
+                    ("all", &compact_count(summary.source_points)),
+                ],
+            ),
+        ),
+    ]
+}
+
 /// The rows the details of a face have in common: how many points it has
 /// and how far they lie from it.
 fn residual_rows(residuals: &Residuals) -> Vec<Element<'static, Message>> {
@@ -1816,7 +1856,6 @@ impl Studio {
         self.faces.job = Some(job);
         // The result of an earlier job would read as the result of this one.
         self.faces.last = None;
-        self.faces.open = true;
         let worker = Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || FaceEnd::of(run(&input, &control)))
@@ -1841,19 +1880,6 @@ impl Studio {
 
     pub(crate) fn update_faces(&mut self, action: FaceAction) -> Task<Message> {
         match action {
-            FaceAction::Toggle => {
-                // The 3D BAG panel takes the place of Properties. With that
-                // panel open the block is out of sight, and the button
-                // brings it back instead of closing it.
-                let hidden = self.faces.open && self.bag_panel;
-                self.faces.open = hidden || !self.faces.open;
-                if self.faces.open {
-                    let _ = self.set_bag_panel(false);
-                    self.status = "Detect faces: put the section box around the part to search, \
-                                   check the settings in Properties and choose Start"
-                        .into();
-                }
-            }
             FaceAction::Distance(value) => self.faces.settings.distance = value,
             FaceAction::Angle(value) => self.faces.settings.angle = value,
             FaceAction::MinArea(value) => self.faces.settings.min_area = value,
@@ -2360,53 +2386,38 @@ impl Studio {
         json!({"ok": true, "cleared": cleared})
     }
 
-    /// The button of the tool in the SURFACE group of the ribbon. It needs a
-    /// scan to be active, and an open block can always be closed with it.
-    pub(crate) fn faces_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
-        opencad_ribbon::RibbonItem::Small(crate::small_tool_button_when(
-            "Detect faces",
-            Message::Faces(FaceAction::Toggle),
-            self.faces.open,
-            self.active.is_some() || self.faces.open,
-        ))
-    }
-
-    /// The block of the tool in Properties: its settings, what a job would
-    /// search, the button that starts one, a job under way, and the faces of
-    /// the active scan with their colouring, their list and their exports.
-    pub(crate) fn faces_properties(&self) -> Option<Element<'_, Message>> {
-        let tool = &self.faces;
-        if !tool.open {
-            return None;
-        }
-        let settings = &tool.settings;
-        let colors = self.ui_theme.colors();
-        let note =
-            |content: String| container(text(content).size(10).color(colors.muted)).padding([4, 8]);
-        let warning = |content: String| {
-            container(text(content).size(10).color(colors.accent)).padding([4, 8])
-        };
-        let mut block = column![
-            opencad_properties::section_header("Detect faces"),
-            opencad_properties::property_input(
+    /// The settings of a detection as the Options step of Mesh Pointcloud
+    /// shows them, each with its default and its explanation.
+    pub(crate) fn faces_options(&self) -> Element<'_, Message> {
+        let settings = &self.faces.settings;
+        let defaults = FaceSettings::default();
+        let send = Message::Faces;
+        column![
+            mesh_wizard::option_input(
                 "Distance tolerance (mm)",
-                "20",
                 &settings.distance,
-                |value| Message::Faces(FaceAction::Distance(value)),
+                "20",
+                defaults.distance.clone(),
+                move |value| send(FaceAction::Distance(value)),
+                key("How far a point may lie from the plane of its face, from 1 to 500 mm. Take about three times the noise of the scan or more: with less a wall falls apart into pieces, with more a step in a wall is taken into the same face."),
             ),
-            opencad_properties::property_input(
+            mesh_wizard::option_input(
                 "Angle tolerance (°)",
-                "10",
                 &settings.angle,
-                |value| Message::Faces(FaceAction::Angle(value)),
+                "10",
+                defaults.angle.clone(),
+                move |value| send(FaceAction::Angle(value)),
+                key("How far the surface at a point may be turned from the plane of its face, from 1 to 45 degrees."),
             ),
-            opencad_properties::property_input(
+            mesh_wizard::option_input(
                 "Smallest face (m²)",
-                "0.25",
                 &settings.min_area,
-                |value| Message::Faces(FaceAction::MinArea(value)),
+                "0.25",
+                defaults.min_area.clone(),
+                move |value| send(FaceAction::MinArea(value)),
+                key("Smaller faces are not reported, from 0.01 to 10000 m². A value above the faces that are there finds nothing and makes the job slow."),
             ),
-            opencad_properties::property_control(
+            mesh_wizard::option_control(
                 "Cylinders",
                 checkbox(tr("Columns and pipes"), settings.cylinders)
                     .on_toggle(|value| Message::Faces(FaceAction::Cylinders(value)))
@@ -2414,117 +2425,176 @@ impl Studio {
                     .text_size(11)
                     .size(12)
                     .into(),
+                tr(if defaults.cylinders { key("On") } else { key("Off") }).to_owned(),
+                key("Whether round columns and pipes are looked for among the points that no flat face took."),
             ),
-            opencad_properties::property_control(
+            mesh_wizard::option_control(
                 "Scans",
                 choice_list(Layers::ALL, settings.layers, Layers::text, |layers| {
                     Message::Faces(FaceAction::Layers(layers))
                 }),
+                tr(defaults.layers.text()).to_owned(),
+                key("The active scan, or every visible scan that reaches the section box, without layers of 3D BAG buildings. The faces are kept with the active scan, which has to be one of them."),
             ),
         ]
-        .spacing(0)
-        .width(Fill);
+        .spacing(4)
+        .into()
+    }
 
-        if let Some(job) = &tool.job {
-            let cancelling = job.cancelling();
-            let state = if cancelling {
-                tr("Cancelling…").to_owned()
-            } else {
-                stage_line(job.control.snapshot())
-            };
-            block = block
-                .push(container(text(state).size(11)).padding([6, 8]))
-                .push(
-                    container(
-                        button(tr("Cancel"))
-                            .on_press_maybe(
-                                (!cancelling).then_some(Message::Faces(FaceAction::Cancel)),
-                            )
-                            .style(flat_tool_style),
-                    )
-                    .padding([3, 8]),
-                );
-        } else {
-            let mut ready = true;
-            let mut explanation: Vec<String> = Vec::new();
-            let mut warnings: Vec<String> = Vec::new();
-            match self.faces_region() {
-                Ok(region) => {
-                    explanation.push(region_note(&region, settings.layers));
-                    let voxel = format!("{:.0}", region.voxel * 1000.0);
-                    let budget = format_count(region.budget);
-                    let values: [(&str, &dyn fmt::Display); 2] =
-                        [("voxel", &voxel), ("budget", &budget)];
-                    if region.coarse {
-                        warnings.push(tr_args(
-                            "This region needs voxels of {voxel} mm or more to stay within {budget} working points: narrow faces and faces close together are lost. A smaller section box brings them back.",
-                            &values,
-                        ));
-                    } else {
-                        explanation.push(tr_args(
-                            "Voxels of {voxel} mm: the budget of {budget} working points holds the faces of this box. Walls and objects inside it take more and can make the voxels larger.",
-                            &values,
-                        ));
-                    }
-                    for name in &region.streamed {
-                        warnings.push(tr_args(
-                            "{name} has no index: its file is read twice. Build the index first (INDEX > Build index) for a faster job.",
-                            &[("name", name)],
-                        ));
-                    }
+    /// What the Options step says of a detection before it runs: what it
+    /// would search, the voxel the budget gives, warnings, and why it cannot
+    /// start.
+    pub(crate) fn faces_notes(&self) -> mesh_wizard::Notes {
+        let mut notes = mesh_wizard::Notes::default();
+        if self.faces.is_running() {
+            notes.refusal = Some(tr("Faces are already being detected").to_owned());
+        }
+        match self.faces_region() {
+            Ok(region) => {
+                notes
+                    .lines
+                    .push(region_note(&region, self.faces.settings.layers));
+                let voxel = format!("{:.0}", region.voxel * 1000.0);
+                let budget = format_count(region.budget);
+                let values: [(&str, &dyn fmt::Display); 2] =
+                    [("voxel", &voxel), ("budget", &budget)];
+                if region.coarse {
+                    notes.warnings.push(tr_args(
+                        "This region needs voxels of {voxel} mm or more to stay within {budget} working points: narrow faces and faces close together are lost. A smaller section box brings them back.",
+                        &values,
+                    ));
+                } else {
+                    notes.lines.push(tr_args(
+                        "Voxels of {voxel} mm: the budget of {budget} working points holds the faces of this box. Walls and objects inside it take more and can make the voxels larger.",
+                        &values,
+                    ));
                 }
-                Err(problem) => {
-                    ready = false;
-                    warnings.push(match problem {
-                        Problem::Setting(sentence) => sentence.translated(),
-                        Problem::Refused(refusal) => refusal.sentence().translated(),
+                for name in &region.streamed {
+                    notes.warnings.push(tr_args(
+                        "{name} has no index: its file is read twice. Build the index first (INDEX > Build index) for a faster job.",
+                        &[("name", name)],
+                    ));
+                }
+            }
+            Err(problem) => {
+                let sentence = match problem {
+                    Problem::Setting(sentence) => sentence.translated(),
+                    Problem::Refused(refusal) => refusal.sentence().translated(),
+                };
+                notes.refusal.get_or_insert(sentence);
+            }
+        }
+        notes.lines.push(
+            tr("The faces are kept with the active scan, as a layer beside its points and its mesh; faces it had are replaced.")
+                .to_owned(),
+        );
+        notes
+    }
+
+    /// Put the recommended settings in the options: those a detection starts
+    /// with. Which scans take part, and the colouring of the faces shown,
+    /// stay as they were chosen.
+    pub(crate) fn recommend_faces(&mut self) {
+        let settings = &self.faces.settings;
+        self.faces.settings = FaceSettings {
+            layers: settings.layers,
+            colouring: settings.colouring,
+            ..FaceSettings::default()
+        };
+    }
+
+    /// Whether the options hold the recommended settings.
+    pub(crate) fn faces_recommended(&self) -> bool {
+        let settings = &self.faces.settings;
+        *settings
+            == FaceSettings {
+                layers: settings.layers,
+                colouring: settings.colouring,
+                ..FaceSettings::default()
+            }
+    }
+
+    /// A job under way, or how the last one ended, as the Run step of Mesh
+    /// Pointcloud shows it.
+    pub(crate) fn faces_run(&self) -> mesh_wizard::RunState {
+        let tool = &self.faces;
+        if let Some(job) = &tool.job {
+            let step = job.control.snapshot();
+            let stages = job.stages();
+            let place = stages
+                .iter()
+                .position(|stage| *stage == step.stage)
+                .map_or(1, |place| place + 1);
+            let cancelling = job.cancelling();
+            return mesh_wizard::RunState::Running(mesh_wizard::Progress {
+                stage: if cancelling {
+                    tr("Cancelling…").to_owned()
+                } else {
+                    stage_line(step)
+                },
+                steps: Some((place, stages.len())),
+                fraction: step.fraction(),
+                seconds: job.started.elapsed().as_secs(),
+                cancelling,
+            });
+        }
+        match &tool.last {
+            None => mesh_wizard::RunState::Idle,
+            Some(Last::Done { summary, kept_with }) => {
+                let mut lines = Vec::new();
+                let mut warnings = Vec::new();
+                if summary.count() == 0 {
+                    warnings.push(
+                        tr("The last face detection found no faces. Check the section box and the tolerances.")
+                            .to_owned(),
+                    );
+                } else {
+                    lines.push(match kept_with {
+                        Some(name) => tr_args(
+                            "Kept with {name}, as a layer beside its points and its mesh; faces it had are replaced.",
+                            &[("name", name)],
+                        ),
+                        None => tr("Its scan was closed while the job ran, so nothing is kept.")
+                            .to_owned(),
                     });
                 }
+                if summary.density_doublings > 0 {
+                    warnings.push(
+                        tr("The points lie far apart, so larger voxels were used: narrow faces are lost.")
+                            .to_owned(),
+                    );
+                } else if summary.coarse {
+                    warnings.push(
+                        tr("The region was large, so larger voxels were used: narrow faces and faces close together are lost. A smaller section box brings them back.")
+                            .to_owned(),
+                    );
+                }
+                mesh_wizard::RunState::Done {
+                    rows: summary_rows(summary),
+                    lines,
+                    warnings,
+                }
             }
-            explanation.push(
-                tr("The faces are kept with the active scan, as a layer beside its points and its mesh; faces it had are replaced.")
-                    .to_owned(),
-            );
-            let mut start = row![opencad_properties::explained(
-                button(tr("Start"))
-                    .on_press_maybe(ready.then_some(Message::Faces(FaceAction::Start)))
-                    .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status)),
-                explanation,
-            )]
-            .spacing(6)
-            .align_y(iced::Alignment::Center);
-            if let Some(mark) = opencad_properties::warning_mark(warnings) {
-                start = start.push(mark);
-            }
-            block = block.push(container(start).padding([3, 8]));
+            Some(Last::Cancelled) => mesh_wizard::RunState::Cancelled(
+                tr("The last face detection was cancelled.").to_owned(),
+            ),
+            Some(Last::Failed(error)) => mesh_wizard::RunState::Failed(error.clone()),
         }
+    }
 
-        match &tool.last {
-            Some(Last::Failed(error)) => {
-                block = block
-                    .push(note(tr("The last face detection failed:").to_owned()))
-                    .push(warning(error.clone()));
-            }
-            Some(Last::Cancelled) => {
-                block = block.push(note(
-                    tr("The last face detection was cancelled.").to_owned(),
-                ));
-            }
-            Some(Last::Done { summary, .. }) if summary.count() == 0 => {
-                block = block.push(warning(
-                    tr("The last face detection found no faces. Check the section box and the tolerances.")
-                        .to_owned(),
-                ));
-            }
-            _ => {}
-        }
-
-        if let Some((index, _, layer)) = self.active_faces() {
-            for part in self.faces_result(index, layer) {
-                block = block.push(part);
-            }
-        }
-        Some(block.into())
+    /// The faces the active scan keeps, in Properties: their figures, the
+    /// colouring with its legend, the list, the details of the face that is
+    /// highlighted and the buttons that save and clear them. Nothing for a
+    /// scan without faces; the settings of a detection are in Mesh
+    /// Pointcloud.
+    pub(crate) fn faces_properties(&self) -> Option<Element<'_, Message>> {
+        let (index, _, layer) = self.active_faces()?;
+        Some(
+            column(self.faces_result(index, layer))
+                .spacing(0)
+                .width(Fill)
+                .into(),
+        )
     }
 
     /// The faces of the active scan as the block shows them: the figures,
@@ -2539,38 +2609,9 @@ impl Studio {
         };
         let summary = layer.summary();
         let surfaces = &layer.placed;
-        let mut parts: Vec<Element<'a, Message>> = vec![
-            opencad_properties::section_header("Detected faces"),
-            opencad_properties::property_row(
-                "Last detection",
-                tr_args(
-                    "{seconds} s, voxel {voxel} mm",
-                    &[
-                        ("seconds", &format!("{:.1}", summary.seconds)),
-                        ("voxel", &format!("{:.0}", summary.voxel * 1000.0)),
-                    ],
-                ),
-            ),
-            opencad_properties::property_row(
-                "Floors and ceilings",
-                format!("{} + {}", summary.floors, summary.ceilings),
-            ),
-            opencad_properties::property_row(
-                "Walls and sloped planes",
-                format!("{} + {}", summary.walls, summary.sloped),
-            ),
-            opencad_properties::property_row("Columns and pipes", summary.cylinders.to_string()),
-            opencad_properties::property_row(
-                "Points on a face",
-                tr_args(
-                    "{count} of {all}",
-                    &[
-                        ("count", &compact_count(summary.assigned_points)),
-                        ("all", &compact_count(summary.source_points)),
-                    ],
-                ),
-            ),
-        ];
+        let mut parts: Vec<Element<'a, Message>> =
+            vec![opencad_properties::section_header("Detected faces")];
+        parts.extend(summary_rows(&summary));
         if let Some(stale) = &layer.stale {
             parts.push(warning(stale.sentence().translated()).into());
         }
@@ -3006,6 +3047,21 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
     )];
     lines.extend(face_lines(surfaces));
     Ok(lines.join("\n"))
+}
+
+#[cfg(test)]
+impl Studio {
+    /// Do the work of the running job here, as its worker thread would, and
+    /// hand its end to the window: for the tests of other modules.
+    pub(crate) fn finish_faces_here(&mut self) {
+        let Some(job) = &self.faces.job else {
+            return;
+        };
+        let (serial, input, control) =
+            (job.serial, Arc::clone(&job.input), Arc::clone(&job.control));
+        let end = FaceEnd::of(run(&input, &control));
+        let _ = self.update(Message::Faces(FaceAction::Finished(serial, end)));
+    }
 }
 
 #[cfg(test)]
