@@ -9474,23 +9474,18 @@ impl Studio {
     /// group of the ribbon, now with the scan in Properties.
     fn transform_properties(&self) -> Element<'_, Message> {
         let has_active = self.active.is_some();
-        let edit_action = |tool: Element<'static, Message>| container(tool).width(66);
+        // The panel is narrow: the actions are icons, named in their tooltip.
         let scale_action = if self.scale_job.is_some() {
-            small_tool_button("Cancel", Message::CancelScale, false)
+            icon_tool_button_when("Cancel", Message::CancelScale, false, true)
         } else {
-            small_tool_button_when("Scale", Message::ApplyScale, false, has_active)
+            icon_tool_button_when("Scale", Message::ApplyScale, false, has_active)
         };
         let rows = column![
             row![
                 axis_input("X", "0", &self.translate_x, Message::TranslateX),
                 axis_input("Y", "0", &self.translate_y, Message::TranslateY),
                 axis_input("Z", "0", &self.translate_z, Message::TranslateZ),
-                edit_action(small_tool_button_when(
-                    "Move",
-                    Message::ApplyTranslation,
-                    false,
-                    has_active,
-                )),
+                icon_tool_button_when("Move", Message::ApplyTranslation, false, has_active,),
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
@@ -9505,7 +9500,7 @@ impl Studio {
                 axis_input("Z", "1", &self.scale_inputs[2], |value| {
                     Message::ScaleAxis(2, value)
                 }),
-                edit_action(scale_action),
+                scale_action,
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
@@ -9514,12 +9509,12 @@ impl Studio {
                 text(i18n::tr("Keep")).size(12).width(44),
                 slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
                 text(format!("{}%", self.thin_percent)).size(11).width(30),
-                edit_action(small_tool_button_when(
+                icon_tool_button_when(
                     "Thin",
                     Message::Thin,
                     false,
                     has_active && !self.thin_pending,
-                )),
+                ),
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
@@ -10339,7 +10334,9 @@ fn large_tool_button(
 }
 
 /// The main tool of a ribbon group: a large icon above its name, over the
-/// full height of the group.
+/// full height of the group. The button is as wide as its name on one line,
+/// so that a long word is never broken, and never narrower than
+/// `LARGE_TOOL_MIN_WIDTH`.
 fn large_tool_button_when(
     label: &'static str,
     message: Message,
@@ -10350,19 +10347,40 @@ fn large_tool_button_when(
     button(
         column![
             icon_svg(icon, 32.0),
+            iced::widget::Space::with_height(4),
             text(i18n::tr(label))
                 .size(11)
-                .align_x(iced::alignment::Horizontal::Center),
+                .wrapping(iced::widget::text::Wrapping::None),
+            iced::widget::Space::with_width(LARGE_TOOL_MIN_WIDTH),
         ]
-        .spacing(4)
         .align_x(iced::Alignment::Center),
     )
     .on_press_maybe(enabled.then_some(message))
     .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
-    .width(iced::Length::Fixed(74.0))
     .height(Fill)
-    .padding([8, 4])
+    .padding([8, 6])
     .into()
+}
+
+/// The narrowest a large ribbon button gets, for a short name.
+const LARGE_TOOL_MIN_WIDTH: f32 = 56.0;
+
+/// A tool as its icon alone, named in its tooltip: for a narrow panel.
+fn icon_tool_button_when(
+    label: &'static str,
+    message: Message,
+    active: bool,
+    enabled: bool,
+) -> Element<'static, Message> {
+    let icon = tool_icon(&message);
+    opencad_properties::explained(
+        button(icon_svg(icon, 18.0))
+            .on_press_maybe(enabled.then_some(message))
+            .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
+            .height(opencad_ribbon::ROW_H)
+            .padding([2, 6]),
+        vec![i18n::tr(label).to_owned()],
+    )
 }
 
 fn small_tool_button_when(
