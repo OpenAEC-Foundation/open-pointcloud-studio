@@ -1238,6 +1238,9 @@ impl Studio {
         operation: &str,
         reused: bool,
     ) -> String {
+        if crate::layouts::made_for_sheet(operation) {
+            return format!("Drawing {} made for the sheet", definition.name);
+        }
         let Some(request) = definition.request() else {
             return format!("Drawing {} made again", definition.name);
         };

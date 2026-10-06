@@ -59,6 +59,7 @@ impl Tool {
                 | "job"
                 | "list_camera_views"
                 | "list_drawings"
+                | "list_sheets"
                 | "list_faces"
                 | "list_photos"
                 | "list_extensions"
@@ -121,6 +122,59 @@ fn tool(
 fn at_least_one(mut tool: Tool) -> Tool {
     tool.schema["minProperties"] = json!(1);
     tool
+}
+
+fn sheet_name() -> Value {
+    text("The sheet by its guid, number or name, any case, as list_sheets gives them; without it the sheet shown", 1, 128)
+}
+
+fn viewport_name() -> Value {
+    json!({"type": ["integer", "string"], "description": "The viewport by its zero-based index on the sheet or its id, as list_sheets gives them"})
+}
+
+fn sheet_scale() -> Value {
+    json!({"type": ["number", "string"], "description": "The scale of a drawing: the number after 1:, from 1 to 100000, or a text such as 1:50"})
+}
+
+/// The fields of a sheet that create_sheet and update_sheet set.
+fn sheet_fields(named: bool) -> Vec<Argument> {
+    let mut fields = Vec::new();
+    if named {
+        fields.push(optional("sheet", sheet_name()));
+    }
+    fields.extend([
+        optional(
+            "number",
+            text("The number of the sheet, such as A-101", 0, 48),
+        ),
+        optional("name", text("The name of the sheet", 1, 96)),
+        optional(
+            "paper",
+            choice("The paper", &["a4", "a3", "a2", "a1", "a0"]),
+        ),
+        optional(
+            "orientation",
+            choice("How the paper lies", &["landscape", "portrait"]),
+        ),
+        optional("project", text("The project in the title block", 0, 96)),
+        optional(
+            "date",
+            text(
+                "The date in the title block; a new sheet has the day it was made",
+                0,
+                48,
+            ),
+        ),
+        optional(
+            "drawn_by",
+            text(
+                "Who drew it, in the title block; a new sheet has the name of the user",
+                0,
+                96,
+            ),
+        ),
+    ]);
+    fields
 }
 
 fn yaw() -> Value {
@@ -544,6 +598,41 @@ fn table() -> Vec<Tool> {
             optional("name", text("Name of a plan as list_drawings gives it; without it the plan shown in the Drawing view, or the section box in the 3D view", 1, 96)),
             optional("degrees", number_in("The turn in degrees, counter-clockwise", -3600.0, 3600.0)),
             optional("apply", boolean("false to start the turn and show it without applying it; true by default")),
+        ]),
+        tool("list_sheets", Command, "Lists the sheets of SHEETS in the Project Browser: paper of the A series with a border and a title block, on which saved 3D views and drawings of create_drawing are placed. Each has guid, number, name, paper (a4 to a0), orientation, size_mm, the title block (project, date, drawn_by, scale: the scale of its drawings when they share one, else as indicated) and shown, and its viewports with index, id, kind (view or drawing), guid and name of what they show, title, centre and size in millimetres on the paper from its lower left corner, the scale of a drawing, and shows: drawing, image (with pixels and dpi), waiting (with why, such as a drawing still being made) or missing when the view or drawing was deleted.", vec![]),
+        tool("create_sheet", Command, "Makes a new sheet, as New sheet… under SHEETS does, keeps it beside the saved views and shows it in a tab. Without choices it is the next number and Sheet N on A3 lying. Answers with the sheet as list_sheets gives it.", sheet_fields(false)),
+        at_least_one(tool("update_sheet", Command, "Changes the number, name, paper, orientation or a field of the title block of a sheet, as Properties does while the sheet is shown and nothing on it is selected; what is left out stays. A drawing keeps its scale and a 3D view its size on other paper. Answers with the sheet.", sheet_fields(true))),
+        tool("duplicate_sheet", Command, "Duplicates a sheet with the views placed on it, named with \" (2)\" or the next free number, right below it, and shows the copy. Answers with the copy.", vec![
+            optional("sheet", sheet_name()),
+        ]),
+        tool("delete_sheet", Command, "Deletes a sheet; the views and drawings on it stay. Its tab closes.", vec![
+            optional("sheet", sheet_name()),
+        ]),
+        tool("show_sheet", Command, "Shows a sheet in its tab, as a click on its row does: the paper on grey, looked at as it was left. A drawing placed on it that is not made in this session is made in the background, one after another; list_sheets tells when every viewport shows its drawing. Refused while Settings is open. Answers with the sheet.", vec![
+            optional("sheet", sheet_name()),
+        ]),
+        tool("place_view", Command, "Places a saved 3D view of the active scan or a drawing of create_drawing on a sheet, as dragging its row of VIEWS onto the paper or Place view in Properties does. A drawing shows its crop region with every layer at its scale (1:100 unless given); a 3D view shows its snapshot, the picture the viewport took when it last showed the view, at about 200 dpi made smaller to fit. Without at it goes to the first free place inside the border, clear of the title block and the other views. The viewport follows its view: a drawing made again, a crop region changed, a view renamed or updated show on the sheet. Answers with the sheet and viewport, the id of the new viewport.", vec![
+            optional("sheet", sheet_name()),
+            required("name", text("Name of the saved view or the drawing, any case", 1, 96)),
+            optional("kind", choice("What the name is; without it a saved view of that name, else a drawing", &["view", "drawing"])),
+            optional("at", numbers("The middle of the viewport [x, y] in millimetres from the lower left corner of the paper", 2)),
+            optional("scale", sheet_scale()),
+        ]),
+        at_least_one(tool("update_viewport", Command, "Changes a viewport on a sheet, as dragging it on the paper and its section of Properties do: its place, the scale of a drawing (its size follows its crop region), the size of the image of a 3D view (give a width or a height with the other null to keep its proportions) and its title. Answers with the sheet.", vec![
+            optional("sheet", sheet_name()),
+            required("viewport", viewport_name()),
+            optional("at", numbers("The middle of the viewport [x, y] in millimetres from the lower left corner of the paper", 2)),
+            optional("size", list("Width and height of the image of a 3D view in millimetres, 5 to 2000; one may be null", json!({"type": ["number", "null"]}), 2, 2)),
+            optional("scale", sheet_scale()),
+            optional("title", text("The title under the viewport; empty for the name of its view", 0, 96)),
+        ])),
+        tool("remove_viewport", Command, "Takes a viewport off a sheet, as Delete does while it is selected; its view or drawing stays. Answers with the sheet and removed, the title it had.", vec![
+            optional("sheet", sheet_name()),
+            required("viewport", viewport_name()),
+        ]),
+        tool("export_sheet_pdf", Job, "Writes a sheet as a PDF of one page the size of its paper: the drawings and the title block as vectors, the 3D views as images, the texts in Helvetica. The drawings on it must be made in this session: show_sheet makes them. Answers with a job_id; the complete job reports the path and the bytes written.", vec![
+            optional("sheet", sheet_name()),
+            required("path", path("Absolute destination ending in .pdf")),
         ]),
         tool("open_in_cad_viewer", Command, "Opens a DXF or DWG file in the CAD viewer: the Open CAD Studio that comes with the application, else the program chosen in Settings, else an installed Open CAD Studio, started read-only and without waiting for it; without any of them the file goes to the program the system has for it. Without a path it opens the last file that a drawing, faces or mesh export wrote. Answers with the path, the viewer program (null for the system program) and read_only. status.result.cad_viewer tells which viewer was found.", vec![
             optional("path", path("Absolute path of an existing .dxf or .dwg file; without it the last exported one")),

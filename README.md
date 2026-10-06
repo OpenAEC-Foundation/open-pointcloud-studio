@@ -225,6 +225,12 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - The **Drawing view** shows the drawing in the application itself in place of the 3D scene as soon as it is exported, or after a preview, and whenever it is chosen under VIEWS in the Project Browser: points, filled cut, outlines, frame and text on a light sheet, with a switch per layer, pan and zoom, a scale bar and the coordinates under the pointer. Any DXF or DWG file opens there too, from **Open** in the File view.
 - The filled cut is traced from the points and has limits: a wall scanned from one side is drawn as a thin strip, gaps under about half a metre are closed, and furniture in the slab is drawn unless its points are deleted first. The [user guide](docs/guide.md#the-filled-cut-and-its-limits) lists them.
 
+### Sheets
+
+- **SHEETS** in the Project Browser holds sheets: paper from A4 to A0, lying or standing, with a border and a title block with the project, the name, the number, the scale, the date and who drew it. A sheet opens in a tab of its own.
+- Drag a saved 3D view, a plan, an elevation or a section from VIEWS onto the paper, or use **Place view** in Properties. A drawing is placed as vectors at 1:100 or another scale, a 3D view as the picture of the view at about 200 dpi; each has its title under it, can be moved, scaled or resized, and follows its view.
+- **Export PDF…** writes the sheet as a PDF the size of its paper.
+
 ### Mesh
 
 **Mesh Pointcloud**, the one button of the SURFACE group, opens a card in three steps: the **method**, four cards that say what each makes and when to use it, with what it works on (the active scan, the section box and the selection, with about how many points); its **options**, each with its default and an explanation under the pointer, and **Use recommended**; and **Run**, with the progress, **Cancel**, and at the end the figures with **Show in model**, **Export…** and **Back to options**. A job goes on when the card is closed: the button then says which step runs and how far that step is, and opens the card on its Run step. Three of the methods turn the points of a scan, or the part of them inside the section box, into a mesh of triangles:

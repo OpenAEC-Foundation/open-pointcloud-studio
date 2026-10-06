@@ -20,6 +20,7 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 - [Saved views, annotations and BCF](#saved-views-annotations-and-bcf)
 - [Exporting and merging](#exporting-and-merging)
 - [Section drawings](#section-drawings)
+- [Sheets](#sheets)
 - [Mesh Pointcloud](#mesh-pointcloud)
 - [Meshing](#meshing)
 - [Closed mesh](#closed-mesh)
@@ -507,6 +508,30 @@ open-pointcloud-studio --drawing scan.laz 0,6,-1,20,15,8 along-wall.dxf --view f
 ```
 
 The six numbers are the section box: X, Y and Z min, then X, Y and Z max. `--rotation` turns it that many degrees counter-clockwise about the vertical through its centre. `--view` is `plan`, `front`, `back`, `left` or `right`, `--thickness` the slab in metres, `--units` `mm` or `m`, and `--fill` `on` or `off`; without them the drawing is a plan with a slab of 0.10 m in millimetres, filled for a plan and not for a vertical section. Limits that do not run from the minimum to the maximum and an output folder that does not exist are refused before the scan is read. The file is read through its index when `--index` or the window built one, and from start to end otherwise.
+
+## Sheets
+
+A sheet is paper on which saved 3D views, plans, elevations and sections are laid out to be printed: paper of the A series with a border 10 mm inside its edge and a title block in the lower right corner. The sheets are listed under **SHEETS** in the Project Browser, between VIEWS and BCF, and kept in `sheets.json` beside the saved views, so they are there again after a restart.
+
+- **New sheet…** at the bottom of SHEETS, or the sheet button on its band, asks for the number, the name, the paper (A4 to A0) and whether it lies or stands; a new sheet is the next number on A3 lying. **Create** makes it and shows it.
+- Every row has **Rename**, **Duplicate** (the copy keeps the views on it and gets the next free number after its name) and **×**, which deletes the sheet but not the views and drawings on it.
+- A click on a row opens the sheet in a tab of its own above the main area: the paper on grey in its true proportions, with its border and title block. Drag to pan and turn the wheel to zoom about the pointer; **Fit sheet** in Properties shows the whole paper again.
+
+### Placing views
+
+Drag a row of VIEWS onto the paper: the view is placed where you let go. **Place view** in Properties does the same with a view chosen from a list, at the first free place inside the border, clear of the title block and the views already there.
+
+- A plan, an elevation or a section is placed at 1:100 and shows its crop region with every layer of the drawing, as vectors: a metre of the model is 10 mm on the paper at 1:100. **Drawing scale** in Properties chooses 1:20, 1:50, 1:100, 1:200 or 1:500, and **Other scale** takes any scale; the viewport takes the size of the crop region at that scale.
+- A saved 3D view shows its snapshot, the picture the viewport took when it last showed the view, at about 200 dpi, made smaller to fit the paper. It is a picture of the scene as it was on screen, so a view that was never shown since it was saved says so until it is shown once. **Width (mm)** and **Height (mm)** set its size with its proportions kept, and **Resolution** says how many dots per inch the picture has at that size.
+- Under every view stands its title on a line, with the scale of a drawing under it. **Title** in Properties replaces the name of the view.
+
+A click on a view selects it: it is outlined in the accent colour, and Properties shows **Viewport** with what it shows, its place (**X (mm)** and **Y (mm)**, from the lower left corner of the paper) and its size or scale. Drag it to move it. **Delete**, or **Remove from sheet**, takes it off the sheet; its view stays under VIEWS. Escape or a click beside it lets go of it. With nothing selected, Properties shows the sheet: its number, name, paper and orientation, and the **Title block** with the project, the date and who drew it; the scale in the title block is that of the drawings on the sheet when they share one, else "as indicated".
+
+A view on a sheet follows its view: a drawing made again or with another crop region, and a view renamed or updated, show on the sheet as they are now. A view or drawing that is deleted leaves its frame on the sheet with **view missing**. A drawing placed on a sheet is made in the background, one after another, when the sheet is shown and the drawing is not made in this session yet; until then its frame says it is being made, or which scans to open.
+
+### Printing a sheet
+
+**Export PDF…** in Properties writes the sheet as a PDF of one page of the size of its paper: the drawings, the border and the title block as vectors, the 3D views as images, and the texts in Helvetica, a font every PDF reader has. A drawing on the sheet that is not made yet is refused until it is.
 
 ## Mesh Pointcloud
 

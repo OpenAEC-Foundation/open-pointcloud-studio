@@ -318,7 +318,7 @@ pub fn group_named(name: &str) -> Option<String> {
         return (!folder.is_empty()).then(|| folder_key(Path::new(folder)));
     }
     let name = name.to_ascii_lowercase();
-    [SCANS, CLASSES, VIEWS, BCF]
+    [SCANS, CLASSES, VIEWS, crate::layouts::SHEETS, BCF]
         .into_iter()
         .chain(ViewKind::ALL.map(ViewKind::key))
         .find(|known| *known == name || known.strip_prefix("views.") == Some(name.as_str()))
@@ -342,7 +342,7 @@ pub enum BrowserAction {
 
 /// What each group's band marks it with: the colour of its strip.
 #[derive(Debug, Clone, Copy)]
-enum Mark {
+pub(crate) enum Mark {
     Scans,
     Classes,
     Views,
@@ -364,7 +364,7 @@ impl Mark {
 /// holds, its caption and a count, which open or collapse it on a click,
 /// and controls of its own beside them.
 #[allow(clippy::too_many_arguments)]
-fn band<'a>(
+pub(crate) fn band<'a>(
     group: String,
     open: bool,
     icon: ToolIcon,
@@ -736,10 +736,12 @@ impl Studio {
                 SCANS: self.browser.is_open(SCANS),
                 CLASSES: self.browser.is_open(CLASSES),
                 VIEWS: self.browser.is_open(VIEWS),
+                crate::layouts::SHEETS: self.browser.is_open(crate::layouts::SHEETS),
                 BCF: self.browser.is_open(BCF),
             },
             "collapsed": self.browser.collapsed(),
             "views": groups,
+            "sheets": self.layouts.list.iter().map(crate::layouts::Layout::caption).collect::<Vec<_>>(),
             "shown": self.shown_row().map(|row| name_of(&row)),
         })
     }
@@ -752,7 +754,7 @@ impl Studio {
     ) -> (Value, Task<Message>) {
         let Some(key) = group_named(group) else {
             return (
-                json!({"ok": false, "error": "group must be scans, classes, views, bcf, 3d, plans, elevations, sections, files or folder: and the path of a folder of scans"}),
+                json!({"ok": false, "error": "group must be scans, classes, views, sheets, bcf, 3d, plans, elevations, sections, files or folder: and the path of a folder of scans"}),
                 Task::none(),
             );
         };
@@ -777,7 +779,10 @@ impl Studio {
         if let Some(classes) = self.classes_group() {
             panel = panel.push(classes);
         }
-        panel = panel.push(self.views_group()).push(self.bcf_group());
+        panel = panel
+            .push(self.views_group())
+            .push(self.sheets_group())
+            .push(self.bcf_group());
         // Pointcloud to Drawing projects of the open scans can be taken up again.
         if let Some(resume) = self.mesh_to_plans_browser() {
             panel = panel.push(resume);
@@ -1196,7 +1201,7 @@ impl Studio {
             if sub_open {
                 let mut list = column![].spacing(2);
                 for listed in rows {
-                    list = list.push(self.view_group_row(&listed));
+                    list = list.push(self.draggable_row(&listed, self.view_group_row(&listed)));
                 }
                 sub = sub.push(indented(list, SUB_ROW_INDENT));
             }
@@ -1214,6 +1219,10 @@ impl Studio {
     pub(crate) fn shown_row(&self) -> Option<ViewRow> {
         let view = &self.drawing_view;
         if view.shown {
+            // A sheet in front is no row of VIEWS.
+            if view.layout.is_some() {
+                return None;
+            }
             if let Some(guid) = view.shown_guid() {
                 return Some(ViewRow::Drawing(guid.to_owned()));
             }

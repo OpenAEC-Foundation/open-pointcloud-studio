@@ -787,7 +787,7 @@ fn length_text(metres: f64) -> String {
     format!("{:.0} mm", metres * 1000.0)
 }
 
-fn size_text(bytes: u64) -> String {
+pub(crate) fn size_text(bytes: u64) -> String {
     if bytes >= 1_000_000 {
         format!("{:.1} MB", bytes as f64 / 1_000_000.0)
     } else {

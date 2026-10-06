@@ -29,6 +29,7 @@ mod i18n;
 mod index_jobs;
 mod job_scene;
 mod kept_slabs;
+mod layouts;
 mod lod_pace;
 #[cfg(target_os = "macos")]
 mod macos_open;
@@ -1714,6 +1715,10 @@ impl Studio {
         self.key_sequence.interrupt();
         let message = match named {
             Named::Escape => Message::Escape,
+            // On a sheet Delete takes the selected view off it.
+            Named::Delete if ignored && self.drawing_view.shown_layout().is_some() => {
+                Message::Layouts(layouts::LayoutAction::DeleteSelected)
+            }
             Named::Delete if ignored => Message::ModelKey(ModelKey::Delete),
             Named::Backspace if ignored => Message::Measure(measure::MeasureAction::RemoveLast),
             Named::Enter if ignored => Message::Measure(measure::MeasureAction::Finish),
@@ -2042,6 +2047,8 @@ enum Message {
     Measure(measure::MeasureAction),
     Drawing(drawing::DrawingAction),
     DrawingView(drawing_view::DrawingViewAction),
+    /// The sheets that views and drawings are placed on.
+    Layouts(layouts::LayoutAction),
     ClosedMesh(closed_mesh::ClosedMeshAction),
     Faces(faces::FaceAction),
     PhotoColours(photo_colours::PhotoColourAction),
@@ -2215,6 +2222,9 @@ struct Studio {
     /// The Drawing view: the 2D drawing the main area shows in place of the
     /// 3D scene when it is switched on.
     drawing_view: drawing_view::DrawingViewTool,
+    /// The sheets that views and drawings are placed on, and the one
+    /// shown.
+    layouts: layouts::LayoutTool,
     /// The two-letter command RO as it is typed.
     key_sequence: drawing_crop::KeySequence,
     /// A turn started with RO: of the crop region of a plan in the Drawing
@@ -2837,6 +2847,7 @@ impl Default for Studio {
                 selection::set_orthographic(settings.orthographic);
                 drawing_view::DrawingViewTool::new(settings.show_drawing_after_export)
             },
+            layouts: layouts::LayoutTool::load(),
             key_sequence: drawing_crop::KeySequence::default(),
             turn: None,
             viewport_pointer: std::cell::Cell::new(None),
@@ -3842,6 +3853,7 @@ impl Studio {
                 answer.0["result"]["drawing_view"] = self.drawing_view.value();
                 answer.0["result"]["project_browser"] = self.browser_value();
                 answer.0["result"]["view_tabs"] = self.tabs_value();
+                answer.0["result"]["sheets"] = self.layouts_value();
                 answer.0["result"]["turning"] = self.turn_value();
                 answer.0["result"]["section_align_pending"] =
                     Value::Bool(self.section_align_pending);
@@ -4822,6 +4834,20 @@ impl Studio {
             ApiCommand::ShowTab { name, index } => self.api_show_tab(name.as_deref(), index),
             ApiCommand::CloseTab { name, index } => self.api_close_tab(name.as_deref(), index),
             ApiCommand::SetSheetCrop { options } => self.api_set_sheet_crop(&options),
+            ApiCommand::ListSheets => self.api_list_sheets(),
+            ApiCommand::CreateSheet { options } => self.api_create_sheet(&options),
+            ApiCommand::UpdateSheet { options } => self.api_update_sheet(&options),
+            ApiCommand::DuplicateSheet { sheet } => self.api_duplicate_sheet(sheet.as_deref()),
+            ApiCommand::DeleteSheet { sheet } => self.api_delete_sheet(sheet.as_deref()),
+            ApiCommand::ShowSheet { sheet } => self.api_show_sheet(sheet.as_deref()),
+            ApiCommand::PlaceView { options } => self.api_place_view(&options),
+            ApiCommand::UpdateViewport { options } => self.api_update_viewport(&options),
+            ApiCommand::RemoveViewport { sheet, viewport } => {
+                self.api_remove_viewport(sheet.as_deref(), &viewport)
+            }
+            ApiCommand::ExportSheetPdf { sheet, path } => {
+                self.api_export_sheet_pdf(sheet.as_deref(), path)
+            }
             ApiCommand::DuplicateView { name, kind } => {
                 self.api_duplicate_view(&name, kind.as_deref())
             }
@@ -5830,6 +5856,11 @@ impl Studio {
         self.settle_focus();
         let task = match self.ask_box_sample() {
             Some(count) => Task::batch([task, count]),
+            None => task,
+        };
+        // A sheet shown makes the drawings placed on it that are not made.
+        let task = match self.settle_layouts() {
+            Some(made) => Task::batch([task, made]),
             None => task,
         };
         // A message handled within another leaves the window halfway: the
@@ -8687,6 +8718,10 @@ impl Studio {
                 if self.drawing_view.shown && self.select_crop(false) {
                     return Task::none();
                 }
+                // So does a view dragged onto a sheet or selected on it.
+                if self.layout_escape() {
+                    return Task::none();
+                }
                 // A rename or a half-placed annotation ends before anything else.
                 if let Some(status) = self.views.cancel_input() {
                     self.status = status.into();
@@ -8757,6 +8792,7 @@ impl Studio {
             Message::Measure(action) => return self.update_measure(action),
             Message::Drawing(action) => return self.update_drawing(action),
             Message::DrawingView(action) => return self.update_drawing_view(action),
+            Message::Layouts(action) => return self.update_layouts(action),
             Message::Crop(action) => return self.update_crop(action),
             Message::KeyTyped(value, captured) => return self.key_typed(&value, captured),
             Message::NamedKey(named, ignored) => return self.named_key(named, ignored),
@@ -10263,7 +10299,9 @@ impl Studio {
                 .into(),
             );
         }
-        let canvas = if self.drawing_view.shown {
+        let canvas = if let Some(sheet) = self.layout_canvas() {
+            stack![sheet].width(Fill).height(Fill)
+        } else if self.drawing_view.shown {
             stack![self.drawing_sheet()].width(Fill).height(Fill)
         } else {
             let point_view = self.point_viewport();
@@ -10346,8 +10384,12 @@ impl Studio {
         ]
         .spacing(0)
         .width(270);
-        // The block of the Drawing view comes first while the view is shown.
-        if let Some(view) = self.drawing_view_properties() {
+        // The block of the sheet or of the Drawing view comes first while
+        // it is shown.
+        if let Some(view) = self
+            .layout_properties()
+            .or_else(|| self.drawing_view_properties())
+        {
             properties = properties.push(view);
         }
         // The block of the Section drawing tool comes next: it is opened
@@ -11422,6 +11464,8 @@ enum ToolIcon {
     /// Rename a saved view, and overwrite it with what the scene shows.
     Rename,
     Update,
+    /// A sheet of SHEETS.
+    Sheet,
 }
 
 // SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
@@ -11501,6 +11545,7 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Duplicate => include_bytes!("../../assets/opencad-icons/browser_duplicate.svg"),
         ToolIcon::Rename => include_bytes!("../../assets/opencad-icons/browser_rename.svg"),
         ToolIcon::Update => include_bytes!("../../assets/opencad-icons/browser_update.svg"),
+        ToolIcon::Sheet => include_bytes!("../../assets/opencad-icons/browser_sheet.svg"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)

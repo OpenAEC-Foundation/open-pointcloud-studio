@@ -472,6 +472,10 @@ mod tests {
         ("project_browser.rs", include_str!("project_browser.rs")),
         ("sheet_dialog.rs", include_str!("sheet_dialog.rs")),
         ("views.rs", include_str!("views.rs")),
+        ("layouts/mod.rs", include_str!("layouts/mod.rs")),
+        ("layouts/model.rs", include_str!("layouts/model.rs")),
+        ("layouts/panels.rs", include_str!("layouts/panels.rs")),
+        ("layouts/plot.rs", include_str!("layouts/plot.rs")),
     ];
 
     /// The functions and local helpers that translate a text they are given,

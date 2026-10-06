@@ -790,6 +790,65 @@ kind VIEWS lists with its `group`, whether it is `open` and the names in its
 highlighted: the drawing the Drawing view shows, else the active view, else
 `3D model`.
 
+## Sheets
+
+Sheets are listed under SHEETS in the Project Browser and kept in
+`sheets.json` beside the saved views. A sheet is paper of the A series, A4 to
+A0, lying (`landscape`) or standing (`portrait`), with a border 10 mm inside
+its edge and a title block of 180 by 32 mm in the lower right corner that
+holds the project, the name, the number, the scale, the date and who drew
+it. Every length on a sheet is in millimetres on the paper, from its lower
+left corner, X to the right and Y up. (A "sheet" in `set_sheet_crop` is a
+drawing of `create_drawing`; the commands below are about the paper.)
+
+`sheet` names a sheet by its `guid`, its `number` or its `name` in any case;
+without it a command acts on the sheet shown. `viewport` names a view placed
+on a sheet by its zero-based place or its `id`.
+
+`create_sheet` makes a sheet, by default numbered with the next free `01`,
+`02`, … and named `Sheet N` on A3 lying, and shows it in a tab;
+`update_sheet` changes any of `number`, `name`, `paper`, `orientation`,
+`project`, `date` and `drawn_by`. A new sheet has the day it was made as its
+date and the name of the user as `drawn_by`. `duplicate_sheet` copies a sheet
+with its viewports and shows the copy; `delete_sheet` deletes it and closes
+its tab; its views and drawings stay. `show_sheet` shows it, as a click on
+its row or its tab does.
+
+`place_view` places the saved 3D view of the active scan or the drawing of
+`create_drawing` named `name` (a saved view of that name first, unless
+`kind` is `view` or `drawing`). A drawing shows its crop region with every
+layer at `scale` (a number such as `100`, or `"1:100"`; 1:100 by default),
+so that a metre of the model is 10 mm on the paper at 1:100. A 3D view shows
+its snapshot, the picture the viewport took when it last showed the view, at
+about 200 dpi, made smaller to fit the paper; the picture is a screenshot of
+the viewport, not a render of its own. Without `at` the viewport goes to the
+first free place inside the border, clear of the title block and the other
+viewports. `update_viewport` moves it to `at`, sets the `scale` of a drawing
+(its size follows), the `size` of the image of a 3D view (`[width, null]`
+keeps its proportions) and its `title`; `remove_viewport` takes it off.
+
+A viewport follows its view: a drawing made again or with another crop
+region, a view renamed or updated show on the sheet as they are now. A
+deleted view or drawing leaves its frame with "view missing". A drawing that
+is not made in this session is made in the background while its sheet is
+shown, one after another; until then its viewport says so.
+
+`list_sheets` answers with `sheets`, each with `guid`, `number`, `name`,
+`paper`, `orientation`, `size_mm`, `project`, `date`, `drawn_by`, `scale`
+(the scale of its drawings when they share one, else "as indicated"), `shown`
+and `viewports`, each with `index`, `id`, `kind`, the `guid` and `name` of
+its view, `title`, `centre`, `size`, a drawing's `scale` and `scale_label`,
+and `shows`: `drawing`, `image` (with `pixels` and `dpi`), `waiting` (with
+`waiting`, why) or `missing`. `status.result.sheets` has the `count`, the
+sheet `shown`, the `selected` viewport, the drawing it is `making` and
+`export_pending`. A tab of a sheet has the kind `sheet` in `list_tabs`.
+
+`export_sheet_pdf` writes the sheet to the absolute `.pdf` `path` as a job:
+one page of the size of the paper, the drawings, the border and the title
+block as vectors, the 3D views as images and the texts in Helvetica. It is
+refused while a drawing on the sheet is not made; `show_sheet` makes it. The
+complete job has `path` and `bytes`.
+
 ## View tabs
 
 The tabs above the main area show the 3D model and the views and drawings
@@ -1575,6 +1634,16 @@ layer with photo colours.
 | `select_crop_region` | `selected` | Selects (`true`) or deselects (`false`) the crop region of the drawing shown, as a click on its outline or Escape does; Properties shows its figures while it is selected |
 | `drag_crop_handle` | `handle`, `to`, optional `release` | Drags a handle of the crop region of the drawing shown to a point of the drawing, as the pointer does; held with `release: false`, else the drawing is made again (job ID) |
 | `duplicate_view` | `name`, optional `kind` | Duplicates the 3D model, a saved view or a drawing under VIEWS, right below it, and shows the copy |
+| `list_sheets` | — | The sheets of SHEETS with their paper, title block and viewports; see [Sheets](#sheets) |
+| `create_sheet` | optional `number`, `name`, `paper`, `orientation`, `project`, `date`, `drawn_by` | Makes a sheet, by default the next number on A3 lying, and shows it |
+| `update_sheet` | optional `sheet`, `number`, `name`, `paper`, `orientation`, `project`, `date`, `drawn_by` | Changes a sheet and the fields of its title block |
+| `duplicate_sheet` | optional `sheet` | Duplicates a sheet with the views on it and shows the copy |
+| `delete_sheet` | optional `sheet` | Deletes a sheet; the views and drawings on it stay |
+| `show_sheet` | optional `sheet` | Shows a sheet in its tab; drawings on it that are not made are made in the background |
+| `place_view` | optional `sheet`, `name`, optional `kind`, `at`, `scale` | Places a saved 3D view or a drawing on a sheet |
+| `update_viewport` | optional `sheet`, `viewport`, optional `at`, `size`, `scale`, `title` | Moves a viewport, or sets the scale of a drawing, the size of a 3D view or the title |
+| `remove_viewport` | optional `sheet`, `viewport` | Takes a viewport off a sheet |
+| `export_sheet_pdf` | optional `sheet`, `path` | Writes a sheet as a PDF; returns a job ID |
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as the keys R and then O do |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view; answers with the `camera` |
 | `set_drawing_layer` | `layer`, `visible` | Shows or hides a layer of the drawing in the Drawing view by its name, or every layer with `*` |

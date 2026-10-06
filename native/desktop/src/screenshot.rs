@@ -130,7 +130,9 @@ impl Studio {
     /// Where the part of the window that a screenshot captures lies: the
     /// sheet of the Drawing view while it is shown, else the 3D scene.
     pub(crate) fn shown_canvas_bounds(&self) -> Option<Rectangle> {
-        if self.drawing_view.shown {
+        if self.drawing_view.shown_layout().is_some() {
+            self.layouts.bounds.get()
+        } else if self.drawing_view.shown {
             self.drawing_view.canvas_bounds()
         } else {
             self.views.canvas_bounds()
@@ -215,6 +217,8 @@ impl Studio {
                 };
                 let view = if request.window {
                     "window"
+                } else if self.drawing_view.shown_layout().is_some() {
+                    "sheet"
                 } else if self.drawing_view.shown {
                     "drawing"
                 } else {

@@ -486,6 +486,9 @@ pub(crate) struct DrawingViewTool {
     pointer: Cell<Option<[f64; 2]>>,
     /// A handle of the crop region the local API holds dragged.
     pub(crate) held: Option<CropDrag>,
+    /// The sheet the main area shows in place of the drawing while the
+    /// view is shown; see `layouts`.
+    pub(crate) layout: Option<String>,
     /// Where the view looked at each drawing it showed before and which
     /// layers were on, by `look_key`: shown again from its tab or its row,
     /// a drawing comes back as it was left.
@@ -552,6 +555,7 @@ impl DrawingViewTool {
             crop_edits: (None, Vec::new()),
             pointer: Cell::new(None),
             held: None,
+            layout: None,
             looks: HashMap::new(),
         }
     }
@@ -688,7 +692,25 @@ impl DrawingViewTool {
     /// The identifier of the drawing of Create 2D the view shows, while it
     /// is shown.
     pub(crate) fn shown_guid(&self) -> Option<&str> {
-        self.current_guid().filter(|_| self.shown)
+        self.current_guid().filter(|_| self.drawing_shown())
+    }
+
+    /// Whether the main area shows the drawing: the view is shown and no
+    /// sheet lies in front of it.
+    pub(crate) fn drawing_shown(&self) -> bool {
+        self.shown && self.layout.is_none()
+    }
+
+    /// The sheet the main area shows, while one is shown.
+    pub(crate) fn shown_layout(&self) -> Option<&str> {
+        self.layout.as_deref().filter(|_| self.shown)
+    }
+
+    /// Show the drawing the view holds in the main area, in place of a
+    /// sheet.
+    pub(crate) fn front_drawing(&mut self) {
+        self.shown = true;
+        self.layout = None;
     }
 
     /// The identifier of the drawing of Create 2D the view holds, also
@@ -1718,6 +1740,7 @@ impl Studio {
             DrawingViewAction::Show(on) => {
                 view.shown = on;
                 if on {
+                    view.front_drawing();
                     self.file_open = false;
                 }
             }
@@ -1773,7 +1796,7 @@ impl Studio {
                     if !view.is_current(&sheet) {
                         view.show_again(sheet);
                     }
-                    view.shown = true;
+                    view.front_drawing();
                     self.file_open = false;
                 }
             }
@@ -1816,7 +1839,7 @@ impl Studio {
             if !self.drawing_view.is_current(&scene) {
                 self.drawing_view.show_again(scene);
             }
-            self.drawing_view.shown = true;
+            self.drawing_view.front_drawing();
             self.file_open = false;
             self.tabs.add(tab);
             self.status = format!("Drawing {}", definition.name);
@@ -1922,7 +1945,7 @@ impl Studio {
         if let Some((camera, layers)) = kept {
             view.keep_view(Some(camera), &layers);
         }
-        view.shown = true;
+        view.front_drawing();
         self.file_open = false;
         self.status = format!("Drawing {} duplicated as {}", original.name, copy.name);
         Ok((copy, None))
@@ -1966,7 +1989,7 @@ impl Studio {
             path: path.clone(),
             api_job_id,
         });
-        self.drawing_view.shown = true;
+        self.drawing_view.front_drawing();
         self.file_open = false;
         self.status = format!("Reading the drawing {}…", path.display());
         Task::perform(
@@ -2033,7 +2056,7 @@ impl Studio {
                 });
                 self.drawing_view.last_error = None;
                 self.drawing_view.set_scene(scene);
-                self.drawing_view.shown = true;
+                self.drawing_view.front_drawing();
                 value
             }
             Err(error) => {
@@ -2061,7 +2084,7 @@ impl Studio {
     pub(crate) fn section_drawing_built(&mut self, scene: Arc<DrawScene>, exported: bool) {
         self.drawing_view.set_scene(scene);
         if exported && self.drawing_view.show_after_export {
-            self.drawing_view.shown = true;
+            self.drawing_view.front_drawing();
         }
     }
 
@@ -2074,7 +2097,7 @@ impl Studio {
     pub(crate) fn sheet_drawing_built(&mut self, scene: Arc<DrawScene>, remade: Option<Remake>) {
         let Some(remake) = remade else {
             self.drawing_view.set_scene(scene);
-            self.drawing_view.shown = true;
+            self.drawing_view.front_drawing();
             self.file_open = false;
             return;
         };
@@ -2187,7 +2210,7 @@ impl Studio {
                     "name": sheet.source.caption(),
                     "source": sheet.source.kind(),
                     "path": sheet.source.path(),
-                    "shown": self.drawing_view.shown && self.drawing_view.is_current(sheet),
+                    "shown": self.drawing_view.drawing_shown() && self.drawing_view.is_current(sheet),
                 })
             })
             .collect();
@@ -2290,7 +2313,7 @@ impl Studio {
     /// zoom extents.
     pub(crate) fn drawing_view_properties(&self) -> Option<Element<'_, Message>> {
         let tool = &self.drawing_view;
-        if !tool.shown {
+        if !tool.drawing_shown() {
             return None;
         }
         let colors = self.ui_theme.colors();

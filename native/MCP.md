@@ -228,6 +228,16 @@ follows when that view is restored.
 | `drag_crop_handle` | `handle` (`left`, `right`, `bottom`, `top`, `bottom_left`, `bottom_right`, `top_left` or `top_right`), `to` (`[u, v]` in drawing units), optional `release` | Drags a handle of the crop region of the drawing shown, as the pointer does |
 | `duplicate_view` | `name`, optional `kind` (`model`, `view` or `drawing`) | Duplicates the 3D model, a saved view or a drawing under VIEWS, right below it, and shows the copy |
 | `rotate_crop` | optional `name`, `degrees`, `apply` | Turns the crop region of a plan, or the section box in the 3D view, as R and then O do |
+| `list_sheets` | — | Lists the sheets of SHEETS with their paper, title block and the views placed on them, each with what it shows |
+| `create_sheet` | optional `number`, `name`, `paper` (`a4` to `a0`), `orientation`, `project`, `date`, `drawn_by` | Makes a sheet, by default A3 lying, and shows it |
+| `update_sheet` | optional `sheet`, `number`, `name`, `paper`, `orientation`, `project`, `date`, `drawn_by` | Changes a sheet and its title block |
+| `duplicate_sheet` | optional `sheet` | Duplicates a sheet with its views and shows the copy |
+| `delete_sheet` | optional `sheet` | Deletes a sheet; its views and drawings stay |
+| `show_sheet` | optional `sheet` | Shows a sheet in its tab and makes the drawings on it that are not made yet |
+| `place_view` | optional `sheet`, `name`, optional `kind`, `at`, `scale` | Places a saved 3D view or a drawing on a sheet; a drawing at 1:100 unless given |
+| `update_viewport` | optional `sheet`, `viewport`, optional `at`, `size`, `scale`, `title` | Moves a viewport, sets the scale of a drawing, the size of a 3D view or the title |
+| `remove_viewport` | optional `sheet`, `viewport` | Takes a viewport off a sheet |
+| `export_sheet_pdf` | optional `sheet`, `path` (`.pdf`) | Writes a sheet as a PDF of the size of its paper; a job |
 | `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, read-only in the Open CAD Studio that comes with the application, else in the program chosen in Settings or an installed Open CAD Studio; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |

@@ -374,6 +374,48 @@ pub enum ApiCommand {
         #[serde(flatten)]
         options: crate::drawing_crop::SheetCropOptions,
     },
+    /// The sheets of SHEETS with the views placed on them.
+    ListSheets,
+    CreateSheet {
+        #[serde(flatten)]
+        options: crate::layouts::SheetOptions,
+    },
+    UpdateSheet {
+        #[serde(flatten)]
+        options: crate::layouts::SheetOptions,
+    },
+    DuplicateSheet {
+        #[serde(default)]
+        sheet: Option<String>,
+    },
+    DeleteSheet {
+        #[serde(default)]
+        sheet: Option<String>,
+    },
+    ShowSheet {
+        #[serde(default)]
+        sheet: Option<String>,
+    },
+    /// Place a saved view or a drawing on a sheet.
+    PlaceView {
+        #[serde(flatten)]
+        options: crate::layouts::PlaceOptions,
+    },
+    UpdateViewport {
+        #[serde(flatten)]
+        options: crate::layouts::ViewportOptions,
+    },
+    RemoveViewport {
+        #[serde(default)]
+        sheet: Option<String>,
+        viewport: crate::layouts::ViewportRef,
+    },
+    /// Write a sheet as a PDF.
+    ExportSheetPdf {
+        #[serde(default)]
+        sheet: Option<String>,
+        path: PathBuf,
+    },
     /// Duplicate a row of VIEWS: the 3D model, a saved view or a drawing.
     DuplicateView {
         name: String,

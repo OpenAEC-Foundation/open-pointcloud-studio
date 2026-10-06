@@ -40,6 +40,8 @@ pub enum TabId {
     /// A preview, an export or an opened DXF or DWG file of this session, by
     /// its path; the preview has none.
     File(Option<PathBuf>),
+    /// A sheet of SHEETS, by its identifier.
+    Layout(String),
 }
 
 /// How the preferences name the 3D model, and how they start the name of a
@@ -50,6 +52,7 @@ const MODEL_KEY: &str = "model";
 const MODEL_NAME: &str = "3D model";
 const VIEW_KEY: &str = "view:";
 const DRAWING_KEY: &str = "drawing:";
+const LAYOUT_KEY: &str = "layout:";
 
 impl TabId {
     /// The name the preferences keep the tab by; none for a preview, an
@@ -59,6 +62,7 @@ impl TabId {
             Self::Model => Some(MODEL_KEY.to_owned()),
             Self::View(guid) => Some(format!("{VIEW_KEY}{guid}")),
             Self::Drawing(guid) => Some(format!("{DRAWING_KEY}{guid}")),
+            Self::Layout(guid) => Some(format!("{LAYOUT_KEY}{guid}")),
             Self::File(_) => None,
         }
     }
@@ -76,6 +80,7 @@ impl TabId {
         guid(VIEW_KEY)
             .map(Self::View)
             .or_else(|| guid(DRAWING_KEY).map(Self::Drawing))
+            .or_else(|| guid(LAYOUT_KEY).map(Self::Layout))
     }
 
     /// What the local API calls the kind of the tab.
@@ -85,6 +90,7 @@ impl TabId {
             Self::View(_) => "view",
             Self::Drawing(_) => "drawing",
             Self::File(_) => "file",
+            Self::Layout(_) => "sheet",
         }
     }
 
@@ -102,7 +108,7 @@ impl TabId {
     /// the drawing of this tab.
     fn look_key(&self) -> Option<String> {
         match self {
-            Self::Model | Self::View(_) => None,
+            Self::Model | Self::View(_) | Self::Layout(_) => None,
             Self::Drawing(guid) => Some(crate::drawing_view::sheet_look_key(guid)),
             Self::File(path) => Some(crate::drawing_view::file_look_key(path.as_deref())),
         }
@@ -443,6 +449,9 @@ impl Studio {
     /// else the active view, else the 3D model; none while the Drawing view
     /// holds no drawing.
     pub(crate) fn shown_tab(&self) -> Option<TabId> {
+        if let Some(guid) = self.drawing_view.shown_layout() {
+            return Some(TabId::Layout(guid.to_owned()));
+        }
         Some(match self.shown_row()? {
             ViewRow::Model => TabId::Model,
             ViewRow::Saved(guid) => TabId::View(guid),
@@ -479,6 +488,7 @@ impl Studio {
                 .iter()
                 .any(|drawing| drawing.guid == *guid),
             TabId::File(path) => self.sheet_place(path.as_deref()).is_some(),
+            TabId::Layout(guid) => self.layouts.layout(guid).is_some(),
         }
     }
 
@@ -493,6 +503,7 @@ impl Studio {
             TabId::View(guid) => views.iter().any(|view| view.guid == *guid),
             TabId::Drawing(guid) => drawings.iter().any(|drawing| drawing.guid == *guid),
             TabId::File(path) => self.sheet_place(path.as_deref()).is_some(),
+            TabId::Layout(guid) => self.layouts.layout(guid).is_some(),
         };
         std::iter::once(TabId::Model)
             .chain(self.tabs.open().iter().filter(listed).cloned())
@@ -520,6 +531,10 @@ impl Studio {
                 .map_or_else(String::new, |place| {
                     self.drawing_view.sheets()[place].source.caption()
                 }),
+            TabId::Layout(guid) => self
+                .layouts
+                .layout(guid)
+                .map_or_else(String::new, crate::layouts::Layout::caption),
         }
     }
 
@@ -542,7 +557,7 @@ impl Studio {
                 .iter()
                 .find(|drawing| drawing.guid == *guid)
                 .map_or(ViewKind::Plans, |drawing| ViewKind::of(drawing.kind)),
-            TabId::File(_) => ViewKind::Files,
+            TabId::File(_) | TabId::Layout(_) => ViewKind::Files,
         }
     }
 
@@ -550,6 +565,7 @@ impl Studio {
         match tab {
             TabId::Model => ToolIcon::Model,
             TabId::View(_) => ToolIcon::SavedView,
+            TabId::Layout(_) => ToolIcon::Sheet,
             _ => self.tab_kind(tab).icon(),
         }
     }
@@ -595,6 +611,7 @@ impl Studio {
                 Ok(self
                     .update_drawing_view(crate::drawing_view::DrawingViewAction::ShowSheet(place)))
             }
+            TabId::Layout(guid) => self.show_layout(guid),
         }
     }
 
@@ -816,6 +833,9 @@ impl Studio {
     /// The title and the caption at the right of the strip: the model space
     /// and how the camera looks, or the drawing and what it is.
     fn strip_caption(&self) -> (&'static str, String) {
+        if let Some(caption) = self.layout_caption() {
+            return (tr("SHEET"), shortened(&caption, CAPTION_CHARS));
+        }
         if self.drawing_view.shown {
             (
                 tr("DRAWING"),
@@ -989,7 +1009,11 @@ impl Studio {
                         ..Border::default()
                     })
             });
-        let tip = format!("{full}\n{}", tr(self.tab_kind(&tab).label()));
+        let kind = match &tab {
+            TabId::Layout(_) => tr("Sheets"),
+            _ => tr(self.tab_kind(&tab).label()),
+        };
+        let tip = format!("{full}\n{kind}");
         let element: Element<'_, Message> = if closable {
             mouse_area(framed)
                 .on_middle_press(Message::Tabs(TabAction::Close(tab)))
@@ -1023,7 +1047,9 @@ impl Studio {
                     "closable": tab.closable(),
                 });
                 match tab {
-                    TabId::View(guid) | TabId::Drawing(guid) => entry["guid"] = json!(guid),
+                    TabId::View(guid) | TabId::Drawing(guid) | TabId::Layout(guid) => {
+                        entry["guid"] = json!(guid)
+                    }
                     TabId::File(path) => entry["path"] = json!(path),
                     TabId::Model => {}
                 }

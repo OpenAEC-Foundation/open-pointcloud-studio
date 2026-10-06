@@ -280,7 +280,7 @@ fn shortened(text: &str, max_chars: usize) -> String {
 }
 
 /// Who exports: the name of the user on this computer.
-fn author() -> String {
+pub(crate) fn author() -> String {
     ["USERNAME", "USER"]
         .into_iter()
         .find_map(|name| std::env::var(name).ok())
