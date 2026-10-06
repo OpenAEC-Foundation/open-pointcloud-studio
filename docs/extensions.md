@@ -156,7 +156,8 @@ application cannot check them, see [Security](#security).
 ### contributes
 
 `ribbon` holds up to 8 buttons. They appear in the **EXTENSIONS** group of
-the ribbon, which the ribbon shows while an enabled extension has a button.
+the ribbon, after SELECTION, which the ribbon shows while an enabled
+extension has a button.
 
 | Field | What it is |
 | --- | --- |

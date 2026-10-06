@@ -9991,19 +9991,17 @@ impl Studio {
                 .into(),
             )],
         );
-        let groups = row![
-            view,
-            display,
-            section,
-            selection,
-            self.measure.ribbon(),
-            self.views_ribbon(),
-            opencad_ribbon::render_group_items("SURFACE", surface_tools),
-            mesh_to_plans,
-            index,
-        ]
-        .push_maybe(self.extensions_ribbon())
-        .spacing(2);
+        // The buttons of extensions come after the groups that look at the
+        // cloud, where the default window of 1440 pixels still shows them;
+        // the ribbon is wider than that.
+        let groups = row![view, display, section, selection]
+            .push_maybe(self.extensions_ribbon())
+            .push(self.measure.ribbon())
+            .push(self.views_ribbon())
+            .push(opencad_ribbon::render_group_items("SURFACE", surface_tools))
+            .push(mesh_to_plans)
+            .push(index)
+            .spacing(2);
         let group_strip = scrollable(
             container(groups)
                 .padding([0, 4])
