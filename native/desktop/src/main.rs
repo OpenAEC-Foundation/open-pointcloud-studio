@@ -4941,6 +4941,7 @@ impl Studio {
         self.cancel_closed_mesh();
         self.cancel_faces();
         self.cancel_mesh_to_plans();
+        self.cancel_photo_colours();
         if let Some(job) = &self.merge_job {
             job.control.cancelled.store(true, Ordering::Relaxed);
         }

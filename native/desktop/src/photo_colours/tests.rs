@@ -530,6 +530,22 @@ fn a_colouring_is_refused_with_a_reason_and_can_be_cancelled() {
 }
 
 #[test]
+fn closing_the_window_stops_a_colouring() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut studio, _) = studio_with_photo(directory.path());
+    let accepted = send(&mut studio, json!({"command": "colour_from_photos"}));
+    assert_eq!(accepted["ok"], true, "{accepted}");
+    let control = Arc::clone(&studio.photo_colours.job.as_ref().unwrap().control);
+    assert!(!control.cancelled.load(Ordering::Relaxed));
+    // Exit in the File view and closing the window both arrive as this.
+    let _ = studio.update(Message::Exit);
+    assert!(
+        control.cancelled.load(Ordering::Relaxed),
+        "the job stops at its next batch instead of keeping the process alive"
+    );
+}
+
+#[test]
 fn the_block_speaks_the_language_of_the_window() {
     let _language = TestLanguage::hold(Language::Table(0));
     let refusal = Refusal::NoPhotos("room.xyz".into());
