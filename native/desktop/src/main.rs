@@ -4362,7 +4362,8 @@ impl Studio {
                 path,
                 base64,
                 max_edge,
-            } => return self.api_screenshot(request.reply, path, base64, max_edge),
+                window,
+            } => return self.api_screenshot(request.reply, path, base64, max_edge, window),
         };
         let _ = request.reply.send(response);
         task

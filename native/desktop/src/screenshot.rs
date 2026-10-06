@@ -1,6 +1,7 @@
 //! The `screenshot` command of the command API: a PNG image of the scene
 //! part of the window, cut from a window screenshot as view snapshots are.
-//! While the Drawing view is shown it is the drawing that is captured.
+//! While the Drawing view is shown it is the drawing that is captured. On
+//! request it is the whole window, as the application draws it.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -8,7 +9,7 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use iced::window::Screenshot;
-use iced::{Rectangle, Task};
+use iced::{Point, Rectangle, Size, Task};
 use serde_json::{json, Value};
 
 use crate::{views, Message, Studio};
@@ -37,6 +38,8 @@ pub struct Request {
     path: Option<PathBuf>,
     base64: bool,
     max_edge: u32,
+    /// The whole window instead of the scene.
+    window: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +95,18 @@ pub fn capture_window() -> Task<Result<Screenshot, Uncaptured>> {
     })
 }
 
+/// The whole window of a screenshot, in logical pixels.
+fn window_area(screenshot: &Screenshot) -> Rectangle {
+    let scale = screenshot.scale_factor.max(f64::MIN_POSITIVE);
+    Rectangle::new(
+        Point::ORIGIN,
+        Size::new(
+            (f64::from(screenshot.size.width) / scale) as f32,
+            (f64::from(screenshot.size.height) / scale) as f32,
+        ),
+    )
+}
+
 fn settle_timer(request: Request, remaining: u8, quiet: u8) -> Task<Message> {
     Task::perform(async { tokio::time::sleep(SETTLE_STEP).await }, move |()| {
         Message::ApiScreenshot(Step::Settle {
@@ -120,14 +135,16 @@ impl Studio {
         }
     }
 
-    /// Start a screenshot for the command API; the answer is sent once the
-    /// image has been taken and encoded.
+    /// Start a screenshot for the command API, of the scene or with
+    /// `window` of the whole window; the answer is sent once the image has
+    /// been taken and encoded.
     pub fn api_screenshot(
         &mut self,
         reply: Sender<Value>,
         path: Option<PathBuf>,
         base64: Option<bool>,
         max_edge: Option<u32>,
+        window: bool,
     ) -> Task<Message> {
         let failed = |error: &str| {
             let _ = reply.send(json!({"ok": false, "error": error}));
@@ -140,7 +157,7 @@ impl Studio {
         if !(MIN_MAX_EDGE..=MAX_MAX_EDGE).contains(&max_edge) {
             return failed("max_edge must be from 16 to 8192 pixels");
         }
-        if self.model_covered() {
+        if !window && self.model_covered() {
             return failed(COVERED);
         }
         if self.shown_canvas_bounds().is_none() && !self.drawing_view.shown {
@@ -151,6 +168,7 @@ impl Studio {
             reply,
             path,
             max_edge,
+            window,
         };
         settle_timer(request, SETTLE_STEPS, 0)
     }
@@ -187,13 +205,20 @@ impl Studio {
                         return Task::none();
                     }
                 };
-                let canvas = self.shown_canvas_bounds();
-                let view = if self.drawing_view.shown {
+                let covered = self.model_covered();
+                let (canvas, covered) = if request.window {
+                    (Some(window_area(&screenshot)), false)
+                } else {
+                    (self.shown_canvas_bounds(), covered)
+                };
+                let view = if request.window {
+                    "window"
+                } else if self.drawing_view.shown {
                     "drawing"
                 } else {
                     "model"
                 };
-                let (Some(canvas), false) = (canvas, self.model_covered()) else {
+                let (Some(canvas), false) = (canvas, covered) else {
                     let _ = request
                         .reply
                         .send(json!({"ok": false, "error": Uncaptured::NoWindow.message()}));
@@ -331,9 +356,23 @@ mod tests {
                 path,
                 base64,
                 max_edge: DEFAULT_MAX_EDGE,
+                window: false,
             },
             receive,
         )
+    }
+
+    #[test]
+    fn the_whole_window_is_the_screenshot_in_logical_pixels() {
+        let screenshot = Screenshot::new(vec![200u8; 300 * 150 * 4], Size::new(300, 150), 1.5);
+        let area = window_area(&screenshot);
+        assert_eq!(area, Rectangle::new(Point::ORIGIN, Size::new(200.0, 100.0)));
+        let (whole, _) = request(None, true);
+        let value = answer(&whole, &screenshot, area, Pending::default());
+        assert_eq!(
+            (value["width"].as_u64(), value["height"].as_u64()),
+            (Some(300), Some(150))
+        );
     }
 
     #[test]
@@ -410,12 +449,12 @@ mod tests {
             (None, Some(10_000)),
         ] {
             let (reply, receive) = std::sync::mpsc::channel();
-            let _ = studio.api_screenshot(reply, path, None, max_edge);
+            let _ = studio.api_screenshot(reply, path, None, max_edge, false);
             assert_eq!(receive.try_recv().unwrap()["ok"], false);
         }
         // Nothing has been drawn in a studio without a window.
         let (reply, receive) = std::sync::mpsc::channel();
-        let _ = studio.api_screenshot(reply, None, None, None);
+        let _ = studio.api_screenshot(reply, None, None, None, false);
         let value = receive.try_recv().unwrap();
         assert_eq!(value["error"], "the viewport has not been drawn yet");
     }

@@ -126,7 +126,7 @@ follows when that view is restored.
 | `job` | `id` | Reads a background job once |
 | `wait_for_job` | `id`, optional `timeout_seconds` (default 60) | Waits until the job no longer runs |
 | `wait_until_idle` | optional `timeout_seconds` (default 60) | Waits until no work is under way; reports what is still busy |
-| `screenshot` | optional `path` (`.png`), `max_edge` (16–8192, default 1920) | Image of the 3D viewport, or of the drawing while the Drawing view is shown |
+| `screenshot` | optional `path` (`.png`), `max_edge` (16–8192, default 1920), `window` | Image of the 3D viewport, or of the drawing while the Drawing view is shown, or with `window` of the whole window |
 | `open` | `path` | Opens a file, every supported file in a folder, or a scan project file |
 | `cancel_import` | `id` | Cancels a full-stream import |
 | `remove` | `index` | Removes a layer |

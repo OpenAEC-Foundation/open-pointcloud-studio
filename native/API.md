@@ -1014,7 +1014,12 @@ returns to the model, `mesh_to_plans_view` with `minimized: true` leaves the
 wizard as a strip that is not captured), and while the
 window is minimised (`"the window is minimised;
 restore it to take a screenshot"`); a view snapshot due meanwhile is taken
-when the view is restored.
+when the view is restored. With `window: true` the image is the whole window
+as the application draws it, with ribbon, panels and status bar, also while
+the File view, Settings or the Mesh to Plans wizard covers the model; `view` is then `window` and
+`viewport_size` the size of the window in logical pixels. It is drawn by the
+application itself, so it does not depend on the window being visible on a
+screen.
 
 ## Commands
 
@@ -1119,7 +1124,7 @@ when the view is restored.
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view; answers with the `camera` |
 | `set_drawing_layer` | `layer`, `visible` | Shows or hides a layer of the drawing in the Drawing view by its name, or every layer with `*` |
 | `open_in_cad_viewer` | optional `path` | Opens a `.dxf` or `.dwg` file, by default the last one exported, read-only in Open CAD Studio or the program chosen in Settings, else in the system program; returns `path`, `viewer` and `read_only` |
-| `screenshot` | optional `path`, `base64`, `max_edge` | Captures the 3D viewport, or the drawing while the Drawing view is shown, as a PNG image: written atomically to an absolute `.png` path, replacing a file there, and/or returned as base64 in `png_base64` |
+| `screenshot` | optional `path`, `base64`, `max_edge`, `window` | Captures the 3D viewport, or the drawing while the Drawing view is shown, or with `window: true` the whole window, as a PNG image: written atomically to an absolute `.png` path, replacing a file there, and/or returned as base64 in `png_base64` |
 
 ## Exports, stored settings and the server
 

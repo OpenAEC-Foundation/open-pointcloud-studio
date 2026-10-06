@@ -390,6 +390,10 @@ pub enum ApiCommand {
         base64: Option<bool>,
         /// Longest edge of the image in pixels.
         max_edge: Option<u32>,
+        /// The whole window, with ribbon, panels and status bar, instead of
+        /// the scene.
+        #[serde(default)]
+        window: bool,
     },
 }
 

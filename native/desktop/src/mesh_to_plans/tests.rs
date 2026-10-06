@@ -227,7 +227,7 @@ fn api_shows_the_wizard_as_card_or_strip_on_a_step_and_takes_it_away() {
         "the Mesh to Plans wizard is open; minimize it first"
     );
     let (reply, receive) = std::sync::mpsc::channel();
-    let _ = studio.api_screenshot(reply, None, None, None);
+    let _ = studio.api_screenshot(reply, None, None, None, false);
     assert_eq!(
         receive.try_recv().unwrap()["error"],
         crate::screenshot::COVERED
@@ -346,7 +346,7 @@ fn the_strip_lies_above_the_scene_and_out_of_a_screenshot() {
     assert!((beside.y + beside.height - alone.y - alone.height).abs() < 0.5);
     // With the strip shown, the screenshot command goes ahead.
     let (reply, receive) = std::sync::mpsc::channel();
-    let _ = studio.api_screenshot(reply, None, None, None);
+    let _ = studio.api_screenshot(reply, None, None, None, false);
     assert!(receive.try_recv().is_err(), "not refused");
 
     // The card lies over the window: the scene keeps its place beneath it.
