@@ -157,8 +157,11 @@ pub fn render_group_items<'a>(
                     container::Style::default()
                         .background(ui_theme::colors(theme).ribbon_group_separator)
                 }),
+                // On one line, so that a long title widens its group
+                // instead of being cut off.
                 text(crate::i18n::tr(title))
                     .size(10)
+                    .wrapping(iced::widget::text::Wrapping::None)
                     .style(|theme| text::Style {
                         color: Some(ui_theme::colors(theme).ribbon_group_label),
                     }),
