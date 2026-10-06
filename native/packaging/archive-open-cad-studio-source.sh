@@ -116,13 +116,16 @@ done <<< "$git_sources"
 # Every crate with its licence, as Cargo resolves the workspace for every
 # system and feature: KIND NAME VERSION LICENCE, separated by tabs, where KIND
 # is git, registry or path (a crate of Open CAD Studio itself).
-if ! (cd "$cad_source_dir" && cargo tree --locked --config "$cad_vendor_dir/config.toml" \
+# A build machine may ask Cargo for colours (CARGO_TERM_COLOR); they would
+# end up in the names and licences, so they are turned off and taken out.
+if ! (cd "$cad_source_dir" && cargo tree --locked --color never \
+    --config "$cad_vendor_dir/config.toml" \
     --workspace --all-features --target all --edges normal,build,dev \
     --prefix none --format '{p}|{l}') > "$work/tree.txt" 2> "$work/tree.log"; then
     tail -n 20 "$work/tree.log" >&2
     fail "cargo tree failed on commit $cad_commit"
 fi
-crates=$(tr -d '\r' < "$work/tree.txt" | sed 's/ (\*)$//' | LC_ALL=C sort -u | awk -F'|' '
+crates=$(tr -d '\r' < "$work/tree.txt" | sed $'s/\x1b\\[[0-9;]*m//g; s/ (\\*)$//' | LC_ALL=C sort -u | awk -F'|' '
     # The blank line between the trees of the crates of the workspace.
     NF < 2 { next }
     {

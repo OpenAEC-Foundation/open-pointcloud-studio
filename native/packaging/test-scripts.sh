@@ -321,6 +321,13 @@ tree)
             registry+*) echo "$name v$version|$(licence "$name")" ;;
         esac
     done
+    # Cargo marks a crate it printed before with (*), in colour on a build
+    # machine that asks for colours.
+    packages | awk '$3 ~ /^git\+/ { print; exit }' | while read -r name version source; do
+        source=${source#git+}
+        printf '%s v%s (%s#%s)|%s \033[33m\033[2m(*)\033[39m\033[22m\n' "$name" "$version" \
+            "${source%%#*}" "$(cut -c1-8 <<< "${source##*#}")" "$(licence "$name")"
+    done
     ;;
 metadata)
     # Resolves only when the folder that --config names holds every package
