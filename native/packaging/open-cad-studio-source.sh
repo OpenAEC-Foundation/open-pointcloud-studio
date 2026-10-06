@@ -50,14 +50,19 @@ read_cad_pin() {
 # and fails unless it holds exactly the pinned tree. read_cad_pin first.
 #
 # The commit is fetched alone (git fetch --depth 1 URL COMMIT) from the pinned
-# URL, or from OCS_FETCH_FROM, a local clone or a mirror, when that is set;
-# a checkout that is already at the commit is used without fetching. Files
+# URL, or from OCS_FETCH_FROM, a local clone or a mirror, when that is set,
+# such as the folder that build-open-cad-studio.sh --export writes; a
+# checkout that is already at the commit is used without fetching. Files
 # that differ from the commit are restored and files it does not have are
 # removed, so a build never takes a change made by hand. A checkout that has
 # the commit is not checked out again: the build script of the program
 # watches .git/HEAD, and Cargo would compile its largest crate again.
 fetch_cad_source() {
     local dir=$cad_source_dir from=${OCS_FETCH_FROM:-$cad_url} head tree date changed
+    # git runs in the checkout, so a local folder is named by its full path.
+    if [[ -d "$from" ]]; then
+        from=$(cd "$from" && pwd)
+    fi
     if [[ ! -e "$dir/.git" ]]; then
         if [[ -d "$dir" && -n "$(ls -A "$dir")" ]]; then
             fail "$dir is not empty and no git repository; remove it, and the source is fetched again"

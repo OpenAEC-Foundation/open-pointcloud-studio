@@ -4,8 +4,10 @@
 # open-cad-studio.pin names.
 #
 #   build-open-cad-studio.sh [CARGO_OPTIONS...]
-#   build-open-cad-studio.sh --fetch    only fetch and check the source
-#   build-open-cad-studio.sh --pin      only read the pin file and print it
+#   build-open-cad-studio.sh --fetch            only fetch and check the source
+#   build-open-cad-studio.sh --pin              only read the pin file and print it
+#   build-open-cad-studio.sh --export FOLDER    write a bare repository with
+#                                               only the pinned commit
 #
 # The source is not part of this repository. The pinned commit is fetched
 # into native/target/open-cad-studio/source, a git repository of its own, and
@@ -15,7 +17,12 @@
 # for every git dependency, which check_cad_source checks, and
 # `cargo build --locked` builds those commits and nothing newer.
 # OCS_FETCH_FROM fetches from another place than the pinned URL, such as a
-# local clone; the tree is checked all the same.
+# local clone or the folder that --export wrote; the tree is checked all the
+# same. OCS_VENDOR_DIR names a folder of crates that
+# archive-open-cad-studio-source.sh vendored for the pinned commit, such as
+# the vendor/ of its release file: Cargo then builds those in place of their
+# git repositories, which it does not fetch from. A folder vendored for
+# another commit is refused.
 #
 # The options go to `cargo build`, for example `-j 4` or
 # `--target aarch64-apple-darwin`. Open CAD Studio is a Cargo workspace of its
@@ -30,7 +37,9 @@
 #
 # --pin prints url=, commit=, tree=, date=, archive= and vendor= lines (the
 # names of the release files with the source and with the crates from git
-# repositories), as the Packages workflow reads them.
+# repositories), as the Packages workflow reads them. With --export, the
+# job of the workflow that checked the commit hands it to the jobs that
+# build it, so that they fetch nothing from its repository.
 #
 # Built with the GNU toolchain for Windows, the program links the C++ runtime
 # of MinGW, libstdc++-6.dll, for a mesh library written in C++. That library
@@ -58,7 +67,27 @@ case "${1:-}" in
         echo "$cad_source_dir"
         exit 0
         ;;
+    --export)
+        [[ $# -eq 2 ]] || fail "usage: build-open-cad-studio.sh --export FOLDER"
+        fetch_cad_source
+        rm -rf "$2"
+        git init -q --bare "$2"
+        git -C "$2" fetch -q --depth 1 "$(cd "$cad_source_dir" && pwd)" "$cad_commit:refs/heads/pinned" \
+            || fail "commit $cad_commit could not be put into $2"
+        echo "$2"
+        exit 0
+        ;;
 esac
+
+# The crates from git repositories that archive-open-cad-studio-source.sh
+# vendored for this commit, in place of those repositories.
+vendor_config=()
+if [[ -n "${OCS_VENDOR_DIR:-}" ]]; then
+    [[ -d "$OCS_VENDOR_DIR" ]] || fail "OCS_VENDOR_DIR $OCS_VENDOR_DIR is no folder"
+    vendor_dir=$(cd "$OCS_VENDOR_DIR" && pwd)
+    check_cad_vendor "$vendor_dir"
+    vendor_config=(--config "$vendor_dir/config.toml")
+fi
 
 target=
 previous=
@@ -114,7 +143,8 @@ check_cad_source
 export RUST_MIN_STACK=${RUST_MIN_STACK:-67108864}
 
 cd "$cad_source_dir"
-cargo build --release --locked --bin "$CAD_BINARY_NAME" --target-dir "$target_dir" "$@" >&2
+cargo build --release --locked --bin "$CAD_BINARY_NAME" --target-dir "$target_dir" \
+    ${vendor_config[@]+"${vendor_config[@]}"} "$@" >&2
 
 [[ -f "$binary" ]] || fail "cargo finished, but $binary does not exist"
 copy_mingw_runtime "$binary"

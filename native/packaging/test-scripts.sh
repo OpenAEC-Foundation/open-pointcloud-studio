@@ -388,6 +388,38 @@ else
     sed 's/^/        /' "$work/build.log"
 fi
 
+# --export writes the pinned commit alone into a bare repository, as the job
+# that checks the pin hands it to the jobs that build; a checkout elsewhere
+# fetches it from there, also by a relative path.
+if build_cad --export "$work/exported.git" > /dev/null 2> "$work/build.log" \
+    && [[ "$(git -C "$work/exported.git" rev-parse refs/heads/pinned)" == "$good" ]] \
+    && (cd "$work" && PATH="$work/bin:$PATH" OCS_PIN_FILE="$work/ocs.pin" OCS_FETCH_FROM=exported.git \
+        OCS_TARGET_DIR="$work/elsewhere" bash "$packaging_dir/build-open-cad-studio.sh" --fetch) \
+        > /dev/null 2> "$work/build.log" \
+    && [[ "$(git -C "$work/elsewhere/source" rev-parse HEAD)" == "$good" ]]; then
+    passed "a checkout fetches the pinned commit from the repository that --export wrote"
+else
+    wrong "the pinned commit cannot be fetched from the repository that --export wrote:"
+    sed 's/^/        /' "$work/build.log"
+fi
+
+# OCS_VENDOR_DIR puts crates vendored for the commit in place of their git
+# repositories; a folder vendored for another commit is refused before Cargo
+# runs.
+mkdir -p "$work/vendored"
+printf '# Git dependencies of Open CAD Studio commit %s\n' "$good" > "$work/vendored/config.toml"
+export OCS_VENDOR_DIR=$work/vendored
+if build_cad -j 1 > /dev/null 2> "$work/build.log" \
+    && [[ "$(cat "$work/cargo.log")" == *"--config "*/vendored/config.toml" -j 1" ]]; then
+    passed "build-open-cad-studio.sh builds with the crates vendored for the commit"
+else
+    wrong "build-open-cad-studio.sh does not build with the crates vendored for the commit: $(cat "$work/cargo.log")"
+    sed 's/^/        /' "$work/build.log"
+fi
+printf '# Git dependencies of Open CAD Studio commit %s\n' "$good_hash" > "$work/vendored/config.toml"
+refused_build "crates vendored for another commit" "no crates vendored for commit $good"
+unset OCS_VENDOR_DIR
+
 # ---- Open CAD Studio in the packages --------------------------------------
 
 # Stand-ins for the two programs: the application, and an Open CAD Studio

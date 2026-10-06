@@ -99,6 +99,14 @@ jobs:
   # same checkout gives the two source archives of the release: the commit,
   # and the crates it takes from git repositories, which Cargo vendors; the
   # notices have to name those crates and the ones under a copyleft licence.
+  #
+  # The checkout and the vendored crates are kept in the cache under the
+  # pinned commit, so that a later run fetches nothing from those
+  # repositories; only crates.io is asked for the other crates. The builds
+  # below take the commit and the crates from this job, never from the
+  # repositories. A cache that is not used for seven days is removed, so a
+  # run after a quiet week, or after a new pin, still needs the repositories
+  # to be there.
   open-cad-studio-pin:
     runs-on: ubuntu-latest
     outputs:
@@ -109,10 +117,22 @@ jobs:
       - name: Read the pin file
         id: pin
         run: bash native/packaging/build-open-cad-studio.sh --pin | tee -a "$GITHUB_OUTPUT"
+      - name: Look for the pinned commit in the cache
+        uses: actions/cache@v4
+        with:
+          path: native/target/open-cad-studio/source
+          key: open-cad-studio-source-${{ steps.pin.outputs.commit }}
+      - name: Look for its vendored crates in the cache
+        uses: actions/cache@v4
+        with:
+          path: native/target/open-cad-studio/vendor
+          key: open-cad-studio-vendor-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/packaging/archive-open-cad-studio-source.sh', 'native/packaging/open-cad-studio-source.sh') }}
       - name: Fetch and check the pinned commit
         run: bash native/packaging/build-open-cad-studio.sh --fetch
       - name: Write the source archives
         run: bash native/packaging/archive-open-cad-studio-source.sh native/target/packages
+      - name: Keep the pinned commit for the builds
+        run: bash native/packaging/build-open-cad-studio.sh --export native/target/open-cad-studio/commit.git
       - uses: actions/upload-artifact@v4
         with:
           name: package-open-cad-studio-source
@@ -121,6 +141,12 @@ jobs:
             native/target/packages/open-cad-studio-source_*.tar.gz.sha256
             native/target/packages/open-cad-studio-vendor_*.tar.gz
             native/target/packages/open-cad-studio-vendor_*.tar.gz.sha256
+          if-no-files-found: error
+      # Not package-*: the release does not publish it.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-cad-studio-commit
+          path: native/target/open-cad-studio/commit.git
           if-no-files-found: error
 
   # Open CAD Studio for each system and processor, from the pinned commit.
@@ -195,8 +221,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev \
             libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev libfontconfig1-dev libfreetype6-dev
+      # The commit and the vendored crates that open-cad-studio-pin checked
+      # and published: the build fetches nothing from their repositories.
+      - name: Take the pinned commit from the job that checked it
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: open-cad-studio-commit
+          path: native/target/open-cad-studio/commit.git
+      - name: Take the source archives from the same job
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: package-open-cad-studio-source
+          path: native/target/open-cad-studio/published
+      - name: Unpack the vendored crates
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          tar --strip-components 1 -C native/target/open-cad-studio \
+            -xzf native/target/open-cad-studio/published/open-cad-studio-vendor_*.tar.gz
       - name: Build Open CAD Studio
         if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          OCS_FETCH_FROM: native/target/open-cad-studio/commit.git
+          OCS_VENDOR_DIR: native/target/open-cad-studio/vendor
         run: bash native/packaging/build-open-cad-studio.sh --target ${{ matrix.target }}
       - name: Check what the binary needs from the system
         if: runner.os == 'Linux'

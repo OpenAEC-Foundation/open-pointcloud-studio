@@ -93,18 +93,26 @@ tested on build machines with software rendering only.
   own test data: a grid of 1000 points.
 - In the Packages workflow, the job `open-cad-studio-pin` reads the pin file
   with `build-open-cad-studio.sh --pin`, fetches and checks the pinned commit
-  with `--fetch` and writes the source archive, which the release takes as
-  the artifact `package-open-cad-studio-source`. The job `open-cad-studio`
-  builds the program for each system and processor and keeps it in the cache
-  under all that decides it: the target, the pinned commit, the Rust
+  with `--fetch` and writes the two source archives, which the release takes
+  as the artifact `package-open-cad-studio-source`. It keeps the checkout and
+  the vendored crates in the cache under the pinned commit, so that a later
+  run fetches nothing from the repository of Open CAD Studio or those of its
+  git dependencies, and hands the commit on with `--export` as the artifact
+  `open-cad-studio-commit`. The job `open-cad-studio` builds the program for
+  each system and processor from that artifact (`OCS_FETCH_FROM`) and from
+  the crates of the vendor archive (`OCS_VENDOR_DIR`), so the programs are
+  built from exactly what the release page carries, and keeps each in the
+  cache under all that decides it: the target, the pinned commit, the Rust
   toolchain, the system image with its C and C++ compiler (and SDK on macOS),
   the oldest macOS it is built for, and the hash of
   `open-cad-studio-source.sh` and `build-open-cad-studio.sh`. It is built
   again only when one of them changes; a build with an empty cache takes the
-  longest part of a run. The
-  macOS job joins the two halves with `lipo`, as it does for the
-  application, and every package is checked with `check-open-cad-studio.sh`
-  after it is installed or unpacked.
+  longest part of a run. GitHub removes a cache that has not been used for
+  seven days, so a run after a quiet week or after a new pin needs those
+  repositories again; `OCS_FETCH_FROM` can then name a mirror. The macOS job
+  joins the two halves with `lipo`, as it does for the application, and
+  every package is checked with `check-open-cad-studio.sh` after it is
+  installed or unpacked.
 - `release-notes.sh` cuts the section of a version out of
   [`../../CHANGELOG.md`](../../CHANGELOG.md) and appends
   `release-notes-footer.md`; `draft-release.sh` creates the draft release
