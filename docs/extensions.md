@@ -191,7 +191,11 @@ The program gets these variables:
 
 `PYTHONUNBUFFERED` and `PYTHONIOENCODING` are set as well, so that the
 output of Python comes in order and in UTF-8. The context file holds what
-`context` reports, with the extension and the button or tile:
+`context` reports, with the extension and the button or tile.
+`application.language` is the language of the window, `en` or `nl`: word
+what the extension shows in it, as the example does, and group the digits
+of a count with a point, `1.234.567`, as the window does in every language,
+so that its numbers read the same as those beside them.
 
 ```json
 {
@@ -222,23 +226,36 @@ the first 4 MiB. The logs of the newest 20 runs are kept.
 
 The status bar shows that the extension runs, with its progress and a
 **Stop** button. When the run ends it says so: `<name> finished`, or
-`<name> failed with exit code <n>` with the last lines of standard error, or
-`<name> stopped`. A message the run showed with `show_message` stays when it
-ends well. A run is stopped with its button, with **Stop** in the status bar
-or on the Extensions page, with `stop_extension`, by switching the extension
-off, and before it is updated or uninstalled. On Windows the program and
-everything it started end at once; on macOS and Linux its process group gets
-`SIGTERM` and, 1.5 seconds later, `SIGKILL`. When the window closes, every
-run is ended.
+`<name> failed with exit code <n>` with the last three lines of standard
+error, or `<name> stopped`. A message the run showed with `show_message`
+stays when it ends well. So that a failure reads well there, end with only
+the reason on standard error and write where it happened to standard
+output, which the log keeps; the helpers below do that.
+
+A run is stopped with its button, with **Stop** in the status bar or on the
+Extensions page, with `stop_extension`, by switching the extension off, and
+before it is updated or uninstalled. Stopping ends the program and
+everything it started: on Windows at once; on macOS and Linux its process
+group gets `SIGTERM` and, 1.5 seconds later, `SIGKILL`, also what is left of
+the group after the program itself ended. When the window closes, every run
+under way is ended the same way. A run that ends by itself leaves what it
+started running, on every system: a report it opened in its program, or a
+web page in the browser, stays open after the run.
 
 ## Using the local API
 
 Each command is one `POST` of a JSON object to
 `http://127.0.0.1:<OPS_API_PORT>/exec` with the token in the header
-`X-OPS-Token`. The answer is a JSON object with `ok: true`, or `ok: false`
-and an `error`. The server answers on this computer only: let the HTTP
-client of the language leave out the proxy of the system. Send the body as
-UTF-8.
+`X-OPS-Token`. A command the window carries out answers with HTTP 200 and a
+JSON object with `ok: true`, or `ok: false` and an `error`. A request the
+server refuses itself answers with another status and a JSON object with
+only an `error`: 403 for a command the extension did not declare (the error
+names it) or a token that stopped working, 400 for a body that is no
+command, 413 for a body that is too large and 503 or 504 when the window
+does not answer. The HTTP clients of Python and PowerShell raise an error on
+those before the answer is read, so the helpers below read the `error` out
+of the body. The server answers on this computer only: let the HTTP client
+of the language leave out the proxy of the system. Send the body as UTF-8.
 
 These commands are made for extensions; [API.md](../native/API.md) describes
 them and every other command:
@@ -255,7 +272,7 @@ them and every other command:
 ### Python
 
 ```python
-import json, os, urllib.request
+import json, os, sys, traceback, urllib.error, urllib.request
 
 URL = "http://127.0.0.1:{}/exec".format(os.environ["OPS_API_PORT"])
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -266,28 +283,55 @@ def ops(command, **arguments):
         data=json.dumps(dict(arguments, command=command)).encode("utf-8"),
         headers={"X-OPS-Token": os.environ["OPS_API_TOKEN"], "Content-Type": "application/json"},
     )
-    with OPENER.open(request, timeout=30) as response:
-        answer = json.loads(response.read().decode("utf-8"))
+    try:
+        with OPENER.open(request, timeout=30) as response:
+            answer = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        # A command the server refuses: HTTP 400, 403 or 504 with only an error.
+        answer = json.loads(error.read().decode("utf-8"))
     if not answer.get("ok"):
-        raise RuntimeError(answer.get("error"))
+        raise RuntimeError("{}: {}".format(command, answer.get("error")))
     return answer
 
-scans = ops("status")["result"]["clouds"]
-ops("show_message", text="{} scans open".format(len(scans)))
+def main():
+    scans = ops("status")["result"]["clouds"]
+    ops("show_message", text="{} scans open".format(len(scans)))
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        traceback.print_exc(file=sys.stdout)  # where it happened, for the log
+        sys.stdout.flush()
+        print(error, file=sys.stderr)  # the reason, for the status bar
+        sys.exit(1)
 ```
 
 ### PowerShell
 
 ```powershell
 $ErrorActionPreference = 'Stop'
+trap {
+    Write-Output $_.InvocationInfo.PositionMessage  # where it happened, for the log
+    [Console]::Error.WriteLine($_.Exception.Message)  # the reason, for the status bar
+    exit 1
+}
 $url = "http://127.0.0.1:$($env:OPS_API_PORT)/exec"
 $headers = @{ 'X-OPS-Token' = $env:OPS_API_TOKEN }
 
 function Invoke-Ops([hashtable]$command) {
     $body = [System.Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $command -Compress -Depth 8))
-    $answer = Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
-        -Body $body -ContentType 'application/json; charset=utf-8'
-    if (-not $answer.ok) { throw $answer.error }
+    try {
+        $answer = Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
+            -Body $body -ContentType 'application/json; charset=utf-8'
+    } catch {
+        # A command the server refuses: HTTP 400, 403 or 504 with only an error.
+        $failure = $_
+        $answer = $null
+        try { $answer = ConvertFrom-Json $failure.ErrorDetails.Message } catch { }
+        if (-not $answer.error) { throw $failure }
+    }
+    if (-not $answer.ok) { throw "$($command.command): $($answer.error)" }
     return $answer
 }
 
@@ -295,8 +339,12 @@ $scans = @((Invoke-Ops @{ command = 'status' }).result.clouds)
 Invoke-Ops @{ command = 'show_message'; text = "$($scans.Count) scans open" } | Out-Null
 ```
 
-A refused command throws in both: the script ends with an error, and the
-status bar shows the exit code and the last lines of the error.
+A refused command ends the script in both with exit code 1 and only the
+reason on standard error, so the status bar shows, for example,
+`<name> failed with exit code 1: status: extension org.example.room-report
+does not declare the command status in uses.commands of its extension.json`.
+Without the `trap` of PowerShell, or the `except` of Python, the last lines
+of standard error are where the error happened, not why.
 
 ## Installing, updating and removing
 
@@ -324,10 +372,14 @@ number of scans and points and the selection in the status bar; its tile on
 the Export page, **Point count report…**, asks where to save a CSV file with
 a line per scan and writes it. On Windows it runs `report.ps1` with Windows
 PowerShell, elsewhere `report.py` with Python; both do the same. It reads
-the context file, sends `status`, `report_progress`, `show_message`,
-`choose_path` and `job`, and writes to its log. The tests of the application
-install it in a temporary settings folder, run it against a window and check
-its message, with PowerShell and with Python where they are installed.
+the context file, speaks the language of the window (English or Dutch) and
+groups digits with a point as the window does, sends `status`,
+`report_progress`, `show_message`, `choose_path` and `job`, writes to its
+log, and ends a failure with only its reason on standard error. The tests of
+the application install it in a temporary settings folder, run it against a
+window in English and in Dutch and check its message, and check the message
+of a command it did not declare, with PowerShell and with Python where they
+are installed.
 
 ## Security
 

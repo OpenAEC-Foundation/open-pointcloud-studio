@@ -465,17 +465,30 @@ fn interpreter_works(interpreter: manifest::Interpreter) -> bool {
         })
 }
 
+/// The command that runs the example with an interpreter, where that is not
+/// the one it uses on this system.
+fn example_command(interpreter: manifest::Interpreter) -> Option<Value> {
+    match interpreter {
+        manifest::Interpreter::PowerShell => {
+            (!cfg!(windows)).then(|| json!({"interpreter": "powershell", "program": "report.ps1"}))
+        }
+        _ => cfg!(windows).then(|| json!({"interpreter": "python", "program": "report.py"})),
+    }
+}
+
 /// Install the example, with another command when given, open a scan of
-/// four points and press its button: it reads the status and shows the
-/// points in the status bar.
-fn the_example_counts_the_points(command: Option<Value>) {
+/// 1234 points and press its button, in an English and in a Dutch window:
+/// it reads the status and shows the points in the status bar, in the
+/// language of the window and with the digits grouped as the window groups
+/// them.
+fn the_example_counts_the_points(interpreter: manifest::Interpreter) {
     let _language = TestLanguage::hold(Language::English);
     // The window and its server end before another test starts one.
     let _server = crate::native_api::one_server_at_a_time();
     let bench = Bench::new();
     let mut studio = bench.studio();
     let mut receiver = with_api(&mut studio);
-    let source = match command {
+    let source = match example_command(interpreter) {
         Some(command) => example_copy(bench.directory.path(), "1.0.0", Some(command)),
         None => example_folder(),
     };
@@ -483,31 +496,43 @@ fn the_example_counts_the_points(command: Option<Value>) {
     assert_eq!(studio.status, "Installed Point count report 1.0.0");
 
     let scan = bench.directory.path().join("hall.xyz");
-    fs::write(&scan, "0 0 0\n4 0 0\n4 3 0\n0 3 2\n").unwrap();
+    let points: String = (0..1234).map(|index| format!("{index} 0 0\n")).collect();
+    fs::write(&scan, points).unwrap();
     let cloud = Arc::new(pointcloud_core::open(&scan, 10).unwrap());
     let _ = studio.update(Message::Loaded(Ok(cloud)));
 
-    let _ = studio.update(Message::Extension(ExtensionAction::Press(
-        EXAMPLE.into(),
-        Some("count".into()),
-    )));
-    let driven = drive(&mut studio, &mut receiver, EXAMPLE);
-    assert!(driven.end.succeeded(), "{:?}\n{}", driven.end, driven.log);
-    assert_eq!(
-        studio.status,
-        "Point count report: 1 scan, 4 points, 0 selected"
-    );
-    assert_eq!(driven.progress, Some((60.0, "Counting points".to_owned())));
-    assert!(
-        driven.log.contains("Started from: count; active scan: "),
-        "{}",
-        driven.log
-    );
-    assert!(
-        driven.log.contains("1 scan, 4 points, 0 selected"),
-        "{}",
-        driven.log
-    );
+    for (language, message, counting) in [
+        (
+            Language::English,
+            "Point count report: 1 scan, 1.234 points, 0 selected",
+            "Counting points",
+        ),
+        (
+            Language::Table(0),
+            "Puntentelling: 1 scan, 1.234 punten, 0 geselecteerd",
+            "Punten tellen",
+        ),
+    ] {
+        crate::i18n::set(language);
+        let _ = studio.update(Message::Extension(ExtensionAction::Press(
+            EXAMPLE.into(),
+            Some("count".into()),
+        )));
+        let driven = drive(&mut studio, &mut receiver, EXAMPLE);
+        assert!(driven.end.succeeded(), "{:?}\n{}", driven.end, driven.log);
+        assert_eq!(studio.status, message);
+        assert_eq!(driven.progress, Some((60.0, counting.to_owned())));
+        assert!(
+            driven.log.contains("Started from: count; active scan: "),
+            "{}",
+            driven.log
+        );
+        assert!(
+            driven.log.contains(message.split_once(": ").unwrap().1),
+            "{}",
+            driven.log
+        );
+    }
 }
 
 #[test]
@@ -516,9 +541,7 @@ fn the_example_counts_the_points_with_powershell() {
         eprintln!("skipped: PowerShell is not installed here");
         return;
     }
-    the_example_counts_the_points(
-        (!cfg!(windows)).then(|| json!({"interpreter": "powershell", "program": "report.ps1"})),
-    );
+    the_example_counts_the_points(manifest::Interpreter::PowerShell);
 }
 
 #[test]
@@ -527,9 +550,63 @@ fn the_example_counts_the_points_with_python() {
         eprintln!("skipped: Python is not installed here");
         return;
     }
-    the_example_counts_the_points(
-        cfg!(windows).then(|| json!({"interpreter": "python", "program": "report.py"})),
+    the_example_counts_the_points(manifest::Interpreter::Python);
+}
+
+/// Install a copy of the example that does not declare `status`, which it
+/// sends, and press its button: the server refuses the command, and the
+/// status bar shows why, as the example ends with only the reason on its
+/// error output.
+fn a_refused_command_shows_its_reason(interpreter: manifest::Interpreter) {
+    let _language = TestLanguage::hold(Language::English);
+    // The window and its server end before another test starts one.
+    let _server = crate::native_api::one_server_at_a_time();
+    let bench = Bench::new();
+    let mut studio = bench.studio();
+    let mut receiver = with_api(&mut studio);
+    let source = example_copy(
+        bench.directory.path(),
+        "1.0.0",
+        example_command(interpreter),
     );
+    let path = source.join(manifest::MANIFEST);
+    let mut declared: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    declared["uses"]["commands"] = json!(["show_message"]);
+    fs::write(&path, serde_json::to_vec_pretty(&declared).unwrap()).unwrap();
+    install_confirmed(&mut studio, &source);
+
+    let _ = studio.update(Message::Extension(ExtensionAction::Press(
+        EXAMPLE.into(),
+        Some("count".into()),
+    )));
+    let driven = drive(&mut studio, &mut receiver, EXAMPLE);
+    assert_eq!(driven.end.code, Some(1), "{}", driven.log);
+    assert_eq!(
+        studio.status,
+        format!(
+            "Point count report failed with exit code 1: status: extension {EXAMPLE} does not declare the command status in uses.commands of its extension.json"
+        ),
+        "{}",
+        driven.log
+    );
+}
+
+#[test]
+fn a_refused_command_shows_its_reason_with_powershell() {
+    if !interpreter_works(manifest::Interpreter::PowerShell) {
+        eprintln!("skipped: PowerShell is not installed here");
+        return;
+    }
+    a_refused_command_shows_its_reason(manifest::Interpreter::PowerShell);
+}
+
+#[test]
+fn a_refused_command_shows_its_reason_with_python() {
+    if !interpreter_works(manifest::Interpreter::Python) {
+        eprintln!("skipped: Python is not installed here");
+        return;
+    }
+    a_refused_command_shows_its_reason(manifest::Interpreter::Python);
 }
 
 #[test]

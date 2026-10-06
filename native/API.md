@@ -964,8 +964,9 @@ The token in `OPS_API_TOKEN` belongs to that run alone and stops working
 when it ends. With it the server accepts the commands the extension
 declared in `uses.commands` of its `extension.json`, or every command when it
 declared `all`, and always `show_message`, `report_progress`, `context`,
-`choose_path` and `job`; another command gets HTTP 403. The token of the
-discovery file accepts every command, as before.
+`choose_path` and `job`; another command gets HTTP 403 with only an `error`
+that names the command. The token of the discovery file accepts every
+command, as before.
 
 `show_message` shows `text` (1–300 characters, on one line) in the status
 bar; a message from a run starts with the name of its extension and stays
