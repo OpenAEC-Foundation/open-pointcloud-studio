@@ -123,8 +123,13 @@ pub(crate) fn save(preferences: &Preferences) -> io::Result<()> {
 
 /// Directory for the settings of this application: `XDG_CONFIG_HOME` when
 /// set, otherwise the roaming application data folder on Windows and
-/// `~/.config` elsewhere.
+/// `~/.config` elsewhere. Tests have none: they run beside an installed
+/// application and must neither read nor change its settings, theme, views
+/// or running windows.
 pub(crate) fn config_directory() -> Option<PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
     let set = |name: &str| {
         std::env::var_os(name)
             .filter(|value| !value.is_empty())
