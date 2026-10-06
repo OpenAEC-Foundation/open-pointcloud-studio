@@ -47,6 +47,7 @@ drops those that begin with the name of an operating system or with
 - The progress strip above the scene is readable in the light theme: its text was white on the white scene.
 - The local API and the MCP server report the running and waiting index builds in `status.result.index`; `build_index` answers `queued: true` when the scan waits for a place, and `cancel_index` says how many builds it stopped and how many scans it took out of the queue.
 - A LAS or LAZ file whose points cannot be read, such as a cut-off LAZ file, is closed again with the reason in the status bar, instead of staying as a layer without points that waited for its index for ever; one with an index kept from before stays open from that index, without the points shown while it was read.
+- A LAZ file whose compressed chunks vary in size is read in full for its first picture, with its points shown at every tenth on the way, instead of being sampled at places in it that cannot be found from the number of a point.
 - **Save view** and **Save section** under VIEWS AND SECTIONS in the Project Browser are one button, **Save**, beside the name field. It saves the view with the section box as it is; a view saved with the box on is marked *section* in the list and is offered by **Create 2D plan / elevation / section…** to make a drawing from. Section boxes saved with the old button stay in the list and in that dialog. `save_camera_view` in the local API and the MCP server answers with `section`, true when the view was saved with the box on.
 
 ## 0.9.1 - 2026-10-05

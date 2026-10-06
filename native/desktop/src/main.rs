@@ -5086,18 +5086,13 @@ impl Studio {
                                 // compressed chunks vary in size cannot, so
                                 // those are sampled from a full pass instead,
                                 // which shows its points on the way.
-                                pointcloud_core::open_las_preview(&path, LOAD_SAMPLE_LIMIT).or_else(
-                                    |_| {
-                                        pointcloud_core::open_with_steps(
-                                            &path,
-                                            LOAD_SAMPLE_LIMIT,
-                                            |_| Ok(()),
-                                            |cloud| {
-                                                snapshot_tx.send(Arc::new(cloud.clone())).map_err(
-                                                    |_| pointcloud_core::LoadError::Cancelled,
-                                                )
-                                            },
-                                        )
+                                pointcloud_core::open_las_sample(
+                                    &path,
+                                    LOAD_SAMPLE_LIMIT,
+                                    |cloud| {
+                                        snapshot_tx
+                                            .send(Arc::new(cloud.clone()))
+                                            .map_err(|_| pointcloud_core::LoadError::Cancelled)
                                     },
                                 )
                             })

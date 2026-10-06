@@ -3258,6 +3258,7 @@ dependencies = [
  "e57",
  "earcutr",
  "las",
+ "laz",
  "memmap2",
  "rayon",
  "reqwest",

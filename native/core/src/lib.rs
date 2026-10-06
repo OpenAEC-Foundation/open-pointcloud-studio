@@ -479,6 +479,12 @@ pub fn open_with_snapshots(
     )
 }
 
+/// Showing a source in steps only, never densely.
+const STEPS_ONLY: snapshots::Showing = snapshots::Showing {
+    dense_from: u64::MAX,
+    ..snapshots::Showing::DEFAULT
+};
+
 /// Open a point cloud like `open_with_snapshots`, and show it in steps only,
 /// never densely: the returned cloud is always the one `open_with_progress`
 /// returns, whatever the size of the source.
@@ -488,16 +494,41 @@ pub fn open_with_steps(
     progress: impl FnMut(u64) -> Result<(), LoadError>,
     mut snapshot: impl FnMut(&PointCloud) -> Result<(), LoadError>,
 ) -> Result<PointCloud, LoadError> {
-    let showing = snapshots::Showing {
-        dense_from: u64::MAX,
-        ..snapshots::Showing::DEFAULT
-    };
     open_showing(
         path.as_ref(),
         sample_limit,
         progress,
-        Some((&mut snapshot, showing)),
+        Some((&mut snapshot, STEPS_ONLY)),
     )
+}
+
+/// The first picture of a LAS or LAZ file opened from its header: points
+/// from places spread through the file, as `open_las_preview` takes them.
+/// A file that cannot be sampled in place, such as a LAZ file whose
+/// compressed chunks vary in size, is read in full instead and shown in
+/// steps on the way, as `open_with_steps` shows a source.
+pub fn open_las_sample(
+    path: impl AsRef<Path>,
+    sample_limit: usize,
+    snapshot: impl FnMut(&PointCloud) -> Result<(), LoadError>,
+) -> Result<PointCloud, LoadError> {
+    las_sample(path.as_ref(), sample_limit, snapshot, STEPS_ONLY)
+}
+
+fn las_sample(
+    path: &Path,
+    sample_limit: usize,
+    mut snapshot: impl FnMut(&PointCloud) -> Result<(), LoadError>,
+    showing: snapshots::Showing,
+) -> Result<PointCloud, LoadError> {
+    open_las_preview(path, sample_limit).or_else(|_| {
+        open_showing(
+            path,
+            sample_limit,
+            |_| Ok(()),
+            Some((&mut snapshot, showing)),
+        )
+    })
 }
 
 fn open_showing(
@@ -776,6 +807,18 @@ pub fn open_las_preview(
     let block_len = target.div_ceil(blocks);
     cloud.points.reserve(target as usize);
     let mut reader = las::Reader::from_path(path)?;
+    // The chunk of a point cannot be found from its number when the chunks
+    // vary in size; such a file is read in full instead.
+    if compressed
+        && reader
+            .header()
+            .laz_vlr()
+            .is_ok_and(|vlr| vlr.uses_variable_size_chunks())
+    {
+        return Err(LoadError::InvalidData(
+            "LAZ chunks of varying size cannot be sampled in place".into(),
+        ));
+    }
     for block in 0..blocks {
         let start = if blocks == 1 {
             0
@@ -1172,6 +1215,179 @@ mod tests {
         assert_same_cloud(&public, &plain);
         let steps = open_with_steps(&source, 500, |_| Ok(()), |_| Ok(())).unwrap();
         assert_same_cloud(&steps, &plain);
+    }
+
+    /// A LAS file, a LAZ file in chunks of the same size and one in chunks
+    /// of varying size, each of the same 20,000 points.
+    fn las_files(directory: &Path) -> [PathBuf; 3] {
+        let points = las_points();
+        let files = [
+            directory.join("plain.las"),
+            directory.join("fixed.laz"),
+            directory.join("varying.laz"),
+        ];
+        write_las(&files[0], &points);
+        write_las(&files[1], &points);
+        write_laz_of_varying_chunks(&files[2], &points);
+        files
+    }
+
+    /// 20,000 points of a LAS file with intensity and a class.
+    fn las_points() -> Vec<las::Point> {
+        (0..20_000u32)
+            .map(|index| las::Point {
+                x: f64::from(index) * 0.01,
+                y: f64::from(index % 97),
+                z: f64::from(index / 97) * 0.5,
+                intensity: (index % 4_000) as u16,
+                classification: las::point::Classification::Ground,
+                ..las::Point::default()
+            })
+            .collect()
+    }
+
+    /// Write `points` as a LAS file, or a LAZ file in chunks of the same
+    /// size, as the writer of las makes them.
+    fn write_las(path: &Path, points: &[las::Point]) {
+        let header = las::Builder::from((1, 2)).into_header().unwrap();
+        let mut writer = las::Writer::from_path(path, header).unwrap();
+        for point in points {
+            writer.write_point(point.clone()).unwrap();
+        }
+        writer.close().unwrap();
+    }
+
+    /// Write `points` as a LAZ file whose chunks hold 3,000, 1,000, 5,000,
+    /// 6,500 and 4,500 points, as some writers make them.
+    fn write_laz_of_varying_chunks(path: &Path, points: &[las::Point]) {
+        let mut builder = las::Builder::from((1, 2));
+        builder.point_format.is_compressed = true;
+        let items = laz::LazItemRecordBuilder::default_for_point_format_id(
+            builder.point_format.to_u8().unwrap(),
+            0,
+        )
+        .unwrap();
+        let vlr = laz::LazVlrBuilder::new(items)
+            .with_variable_chunk_size()
+            .build();
+        let mut data = Vec::new();
+        vlr.write_to(&mut data).unwrap();
+        builder.vlrs.push(las::Vlr {
+            user_id: laz::LazVlr::USER_ID.to_owned(),
+            record_id: laz::LazVlr::RECORD_ID,
+            description: laz::LazVlr::DESCRIPTION.to_owned(),
+            data,
+        });
+        let mut header = builder.into_header().unwrap();
+        for point in points {
+            header.add_point(point);
+        }
+        let mut file = std::io::BufWriter::new(File::create(path).unwrap());
+        header.write_to(&mut file).unwrap();
+        let mut compressor = laz::LasZipCompressor::new(file, vlr).unwrap();
+        let mut record = Vec::new();
+        for (index, point) in points.iter().enumerate() {
+            record.clear();
+            point
+                .clone()
+                .into_raw(header.transforms())
+                .unwrap()
+                .write_to(&mut record, header.point_format())
+                .unwrap();
+            compressor.compress_one(&record).unwrap();
+            if [3_000, 4_000, 9_000, 15_500].contains(&(index + 1)) {
+                compressor.finish_current_chunk().unwrap();
+            }
+        }
+        compressor.done().unwrap();
+    }
+
+    #[test]
+    fn las_and_laz_files_read_in_full_are_shown_in_steps() {
+        let directory = tempfile::tempdir().unwrap();
+        for path in &las_files(directory.path()) {
+            let name = path.display();
+            // The header states the count the steps are a tenth of.
+            assert_eq!(snapshots::stated_points(path), Some(20_000), "{name}");
+            let whole = open(path, 500).unwrap();
+            assert_eq!(whole.total_points, 20_000, "{name}");
+            let (stepped, shown) = open_in_steps(path, 500, 1);
+            assert_same_cloud(&stepped, &whole);
+            assert_eq!(shown.len(), 9, "{name}");
+            for (step, cloud) in shown.iter().enumerate() {
+                let read = 2_000 * (step as u64 + 1);
+                assert!(cloud.provisional);
+                assert_eq!(cloud.total_points, 20_000);
+                assert_eq!(cloud.points.len(), 500);
+                assert!(cloud.point_ordinals.iter().all(|ordinal| *ordinal < read));
+                assert!(cloud
+                    .point_ordinals
+                    .iter()
+                    .any(|ordinal| *ordinal >= read * 9 / 10));
+                assert!(cloud.has_intensity && cloud.has_classification);
+            }
+            // As the window reads such a file: no steps below a million
+            // stated points, and the same cloud.
+            let mut called = false;
+            let read = open_with_steps(
+                path,
+                500,
+                |_| Ok(()),
+                |_| {
+                    called = true;
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(!called);
+            assert_same_cloud(&read, &whole);
+        }
+    }
+
+    #[test]
+    fn a_laz_file_that_cannot_be_sampled_in_place_is_read_in_steps() {
+        let directory = tempfile::tempdir().unwrap();
+        let [plain, fixed, varying] = las_files(directory.path());
+        let showing = snapshots::Showing {
+            dense_from: u64::MAX,
+            steps_from: 1,
+        };
+        // Sampled in place: points spread through the file, at once.
+        for path in [&plain, &fixed] {
+            let unshown = |_: &PointCloud| -> Result<(), LoadError> { panic!("no steps") };
+            let sampled = las_sample(path, 500, unshown, showing).unwrap();
+            let preview = open_las_preview(path, 500).unwrap();
+            assert_eq!(sampled.points.len(), 500);
+            assert_eq!(sampled.total_points, 20_000);
+            assert_eq!(sampled.bounds, preview.bounds);
+            assert!(sampled
+                .points
+                .iter()
+                .zip(&preview.points)
+                .all(|(a, b)| a.xyz == b.xyz));
+        }
+        // The chunk of a point cannot be found in chunks of varying size:
+        // the whole file is read, and shown in steps on the way.
+        assert!(open_las_preview(&varying, 500).is_err());
+        let mut shown = Vec::new();
+        let read = las_sample(
+            &varying,
+            500,
+            |cloud| {
+                shown.push(cloud.clone());
+                Ok(())
+            },
+            showing,
+        )
+        .unwrap();
+        let whole = open(&varying, 500).unwrap();
+        assert_same_cloud(&read, &whole);
+        assert_eq!(shown.len(), 9);
+        assert!(shown.iter().all(|cloud| cloud.provisional));
+        // What the window calls: the same cloud, and no steps below a
+        // million stated points.
+        let public = open_las_sample(&varying, 500, |_| Ok(())).unwrap();
+        assert_same_cloud(&public, &whole);
     }
 
     #[test]
