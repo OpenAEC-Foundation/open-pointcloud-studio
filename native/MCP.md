@@ -219,8 +219,8 @@ follows when that view is restored.
 | `list_drawings` | — | The drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`; one not made in this session yet is made again from its scans, with a job to wait for. `3D model` shows the 3D model |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
-| `set_browser_group` | `group` (`scans`, `classes`, `views`, `bcf`, `3d`, `plans`, `elevations`, `sections`, `files` or `folder:` and a path), `open` | Opens or collapses a group of the Project Browser |
-| `list_tabs` | — | The tabs above the main area in their order, the 3D model first, with the active one |
+| `set_browser_group` | `group` (`scans`, `classes`, `views`, `sheets`, `bcf`, `3d`, `plans`, `elevations`, `sections`, `files` or `folder:` and a path), `open` | Opens or collapses a group of the Project Browser |
+| `list_tabs` | — | The tabs above the main area in their order, the 3D model first, with the active one; a tab of a sheet has the kind `sheet`, and each tab says whether it is `locked` |
 | `show_tab` | `name` or `index` as `list_tabs` gives them | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job to wait for. Refused while Settings, the dialog of Create 2D or the card of the Pointcloud to Drawing wizard is open |
 | `close_tab` | `name` or `index` as `list_tabs` gives them | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |
 | `set_sheet_crop` | optional `name`, `rect` (`[[left, bottom], [right, top]]` in drawing units), `width`, `height`, `center`, `rotation`, `cut`, `depth`, `sample_percent` (0.1–100) | Sets the crop region of a drawing of `create_drawing` and makes it again in place, from the points it read before when its cut, depth and points used stay |
