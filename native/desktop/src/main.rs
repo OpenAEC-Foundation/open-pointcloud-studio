@@ -2738,8 +2738,12 @@ impl Studio {
     }
 
     /// Read the faces of a source that can hold a mesh, for the layer that
-    /// shows `cloud`.
+    /// shows `cloud`. A provisional cloud of points read so far gets none:
+    /// the faces are read once the checked cloud has taken its place.
     fn mesh_task(cloud: &Arc<PointCloud>) -> Option<Task<Message>> {
+        if cloud.provisional {
+            return None;
+        }
         let format = cloud
             .path
             .extension()
@@ -5770,10 +5774,11 @@ impl Studio {
                         .iter_mut()
                         .find(|entry| entry.index_import_id == Some(id) && entry.cloud.provisional)
                     {
-                        entry.replace_cloud(cloud);
+                        entry.replace_cloud(Arc::clone(&cloud));
                         self.revision += 1;
                         self.reframe_after_replacement(scene);
-                        return self.schedule_detail();
+                        let mesh = Self::mesh_task(&cloud).unwrap_or_else(Task::none);
+                        return Task::batch([self.schedule_detail(), mesh]);
                     }
                     return Task::none();
                 }
@@ -5795,6 +5800,8 @@ impl Studio {
                 let import = self.imports.remove(&id);
                 let header = self.import_headers.remove(&id);
                 let mut loaded = Task::none();
+                // The faces of a mesh are read for the checked cloud.
+                let mut mesh = Task::none();
                 let mut ready = false;
                 if let (Some(header), true) = (&header, cancelled || result.is_err()) {
                     // No points will follow the metadata that was shown.
@@ -5830,6 +5837,7 @@ impl Studio {
                             // loose bounds: the checked cloud takes its place.
                             if entry.cloud.provisional {
                                 entry.replace_cloud(Arc::clone(&cloud));
+                                mesh = Self::mesh_task(&cloud).unwrap_or_else(Task::none);
                                 replaced = true;
                             }
                             self.revision += 1;
@@ -5896,6 +5904,7 @@ impl Studio {
                             if entry.cloud.provisional {
                                 // The full pass did finish: its checked cloud
                                 // takes the place of the sampled preview.
+                                mesh = Self::mesh_task(&cloud).unwrap_or_else(Task::none);
                                 entry.replace_cloud(cloud);
                                 replaced = true;
                             }
@@ -5925,7 +5934,13 @@ impl Studio {
                 } else {
                     Task::none()
                 };
-                return Task::batch([loaded, detail, pending_delete, self.start_queued_indexes()]);
+                return Task::batch([
+                    loaded,
+                    mesh,
+                    detail,
+                    pending_delete,
+                    self.start_queued_indexes(),
+                ]);
             }
             Message::Loaded(result) => match result {
                 Ok(cloud) => {
@@ -5979,10 +5994,11 @@ impl Studio {
                 Err(error) => self.status = error,
             },
             Message::MeshLoaded(source, result) => {
+                // The layer may show a later cloud of the same source by now.
                 if let Some(entry) = self
                     .clouds
                     .iter_mut()
-                    .find(|entry| Arc::ptr_eq(&entry.cloud, &source))
+                    .find(|entry| entry.matches_source(&source))
                 {
                     match result {
                         Ok(Some(measured)) => {
@@ -14608,6 +14624,41 @@ mod import_api_tests {
         receive.recv().unwrap()
     }
 
+    /// Run the work of a task as the window would, until it ends or for at
+    /// most ten seconds, and keep the messages it gives that `keep` picks.
+    fn task_messages(task: Task<Message>, keep: impl Fn(&Message) -> bool) -> Vec<Message> {
+        use iced::futures::StreamExt;
+        let Some(mut stream) = iced_runtime::task::into_stream(task) else {
+            return Vec::new();
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            let mut kept = Vec::new();
+            while let Ok(Some(action)) = tokio::time::timeout_at(deadline, stream.next()).await {
+                if let iced_runtime::Action::Output(message) = action {
+                    if keep(&message) {
+                        kept.push(message);
+                    }
+                }
+            }
+            kept
+        })
+    }
+
+    /// A provisional look at `cloud` with its first `points` points, as a
+    /// step of a reading pass gives it.
+    fn step_of(cloud: &PointCloud, points: usize) -> Arc<PointCloud> {
+        let mut step = cloud.clone();
+        step.points.truncate(points);
+        step.point_ordinals.truncate(points);
+        step.provisional = true;
+        Arc::new(step)
+    }
+
     /// An import of `path` that reads it and builds its octree in one pass,
     /// as `load_indexed` starts it. Returns what cancels it.
     fn indexed_import(studio: &mut Studio, id: u64, path: &Path) -> Arc<AtomicBool> {
@@ -14862,6 +14913,91 @@ mod import_api_tests {
             },
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_mesh_opened_in_one_pass_with_steps_keeps_its_faces() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("room.ply");
+        std::fs::write(
+            &path,
+            "ply
+format ascii 1.0
+element vertex 4
+property float x
+property float y
+             property float z
+element face 2
+property list uchar int vertex_indices
+             end_header
+0 0 0
+4 0 0
+4 3 0
+0 3 0
+3 0 1 2
+3 0 2 3
+",
+        )
+        .unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+        let index = Arc::new(
+            OctreeIndex::build_cached(
+                &cloud,
+                IndexConfig {
+                    scratch_dir: Some(dir.path().join("cache")),
+                    ..IndexConfig::default()
+                },
+            )
+            .unwrap(),
+        );
+        let mut studio = Studio::default();
+        indexed_import(&mut studio, 41, &path);
+        // Two steps of the points read so far, each shown at a flush, then
+        // the checked cloud and the octree.
+        let mut tasks = Vec::new();
+        for points in [2, 3] {
+            tasks.push(studio.update(Message::IndexedImportPreview(41, step_of(&cloud, points))));
+            tasks.push(studio.update(Message::FlushSnapshots));
+            assert!(studio.clouds[0].cloud.provisional);
+        }
+        tasks.push(studio.update(Message::IndexedImportPreview(41, Arc::clone(&cloud))));
+        tasks.push(studio.update(Message::IndexedImportReady(
+            41,
+            Ok((Arc::clone(&cloud), Some(index))),
+        )));
+        let meshes: Vec<Message> = tasks
+            .into_iter()
+            .flat_map(|task| {
+                task_messages(task, |message| matches!(message, Message::MeshLoaded(..)))
+            })
+            .collect();
+        assert_eq!(
+            meshes.len(),
+            1,
+            "the faces are read once, for the checked cloud"
+        );
+        for message in meshes {
+            let _ = studio.update(message);
+        }
+        assert_eq!(studio.clouds.len(), 1);
+        assert!(studio.clouds[0].index.is_some());
+        let mesh = studio.clouds[0]
+            .mesh
+            .as_ref()
+            .expect("the faces of the mesh");
+        assert_eq!(mesh.triangles.len(), 2);
+        assert!(
+            studio.status.starts_with("Mesh displayed"),
+            "{}",
+            studio.status
+        );
+
+        // Faces read for a cloud the layer has replaced since still find it.
+        let shown = Arc::clone(&studio.clouds[0].load_identity);
+        studio.clouds[0].mesh = None;
+        let measured = mesh_export::read_measured(&path).unwrap();
+        let _ = studio.update(Message::MeshLoaded(shown, Ok(measured)));
+        assert!(studio.clouds[0].mesh.is_some());
     }
 
     #[test]
