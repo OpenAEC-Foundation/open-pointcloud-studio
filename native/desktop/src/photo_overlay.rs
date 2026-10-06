@@ -495,11 +495,11 @@ mod tests {
     #[test]
     fn the_shader_places_every_kind_of_photo_as_the_photo_does() {
         let pinhole = photo(
-            1500,
-            2000,
+            1200,
+            900,
             PhotoProjection::Pinhole {
-                focal: [1100.0, 1100.0],
-                principal: [750.0, 1000.0],
+                focal: [1000.0, 1000.0],
+                principal: [600.0, 450.0],
             },
         );
         shader_follows_the_photo(&pinhole);
@@ -539,11 +539,11 @@ mod tests {
     #[test]
     fn the_level_of_detail_follows_the_texels_per_radian() {
         let pinhole = photo(
-            1500,
-            2000,
+            1200,
+            900,
             PhotoProjection::Pinhole {
                 focal: [1000.0, 1000.0],
-                principal: [749.5, 999.5],
+                principal: [599.5, 449.5],
             },
         );
         let shown = |photo| ShownPhoto {
@@ -558,7 +558,7 @@ mod tests {
             zoom: 1.0,
         };
         // A texture of half the width has half the texels per radian.
-        assert_eq!(uniform(&shown(&pinhole), 750, 11).axis_z[3], 500.0);
+        assert_eq!(uniform(&shown(&pinhole), 600, 11).axis_z[3], 500.0);
         let panorama = photo(
             4000,
             2000,
