@@ -259,6 +259,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 ### Other
 
 - **3D BAG buildings…** in the File view downloads building models of the Netherlands for an area in RD New coordinates and shows them with a scan. It is a built-in extension that can be switched off on the Extensions page.
+- **Extensions** from other authors add tasks: a folder or `.zip` with an `extension.json` and a program in any language, such as a PowerShell or Python script, that drives the window through the command API in a process of its own. **Install extension…** on the Extensions page checks it and shows what it declares before it is installed; its buttons appear in the EXTENSIONS group of the ribbon and its tiles on the New and Export pages. [Writing an extension](docs/extensions.md) describes the format, with an [example](native/extensions/examples/point-count-report).
 - **Settings** has the language (the language of the system, English or Dutch) and five colour themes.
 - Display settings are kept between sessions. Settings and indexes are stored in the folders that the [user guide](docs/guide.md#where-settings-and-indexes-are-stored) names.
 
@@ -376,7 +377,7 @@ curl -H 'Content-Type: application/json' -H 'X-OPS-Token: TOKEN' \
   -d '{"command":"status"}' http://127.0.0.1:PORT/exec
 ```
 
-The commands open and close scans, set the camera, the section box and the display, select, delete, measure, save views, export, draw sections, mesh, detect faces, download 3D BAG buildings and take pictures of the 3D view. The server listens on the loopback address only and refuses a command without the token. [native/API.md](native/API.md) lists every command.
+The commands open and close scans, set the camera, the section box and the display, select, delete, measure, save views, export, draw sections, mesh, detect faces, download 3D BAG buildings, run extensions and take pictures of the 3D view. The server listens on the loopback address only and refuses a command without the token. [native/API.md](native/API.md) lists every command, and [Writing an extension](docs/extensions.md) shows how a program of its own adds a task to the window through it.
 
 ### MCP server
 
@@ -431,8 +432,9 @@ It writes `native/target/open-cad-studio/release/OpenCADStudio`, where a develop
 | `native/core` | The point-cloud library: readers and writers, the index on disk and the reads from it, export, meshing, 2D drawings, face detection and the 3D BAG client |
 | `native/desktop` | The desktop application: window, 3D view, selection and the other tools, command API and MCP server |
 | `native/assets` | Fonts, icons and the Dutch interface texts |
+| `native/extensions/examples` | An example extension, in PowerShell and Python |
 | `native/installer`, `native/packaging` | The Windows installer script and the packaging of all systems |
-| `docs` | The user guide and its images |
+| `docs` | The user guide and its images, and the guide for authors of extensions |
 | `screenshots` | Pictures taken while developing, most of them of earlier versions of the interface |
 | `classic` | An earlier application, kept for reference and no longer developed |
 

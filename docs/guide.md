@@ -985,7 +985,14 @@ A choice shows at once. **Save** keeps it, **Cancel** or Escape puts back what w
 
 A text without a Dutch translation stays English. That holds for the messages in the status bar and for most texts with a count in them.
 
-The **Extensions** page of the File view has a card for every built-in optional feature with its name, the version of the application, a description, its author, its category, whether it uses the internet and an **Enabled** switch. The only one is 3D BAG. Switching it off disables the **3D BAG buildings…** entry, closes the panel and stops a running download; `--bag3d` on the command line keeps working. Every extension is part of the application: no code from another source is loaded, and extensions from other sources cannot be installed.
+The **Extensions** page of the File view lists the extensions under **BUILT IN** and **INSTALLED**, each on a card with its name, version, author, description and an **Enabled** switch.
+
+- **Built in** are the optional features of the application. The only one is 3D BAG. Switching it off disables the **3D BAG buildings…** entry, closes the panel and stops a running download; `--bag3d` on the command line keeps working.
+- **Installed** extensions are programs from other authors that add a task: a button in the **EXTENSIONS** group of the ribbon, a tile on the **New** or **Export** page of the File view, or both. They work through the local command API of the window, in a process of their own, so an extension that fails never takes the window down. Their card also says what they start, whether they use the internet or files outside their folder and which commands of the API they send, and has **Run** (or **Stop** while it runs), **Show folder**, **Homepage ↗** and **Uninstall…**.
+
+**Install extension…** asks for a `.zip` archive of an extension or the `extension.json` in its folder. The files are checked first: their size and number, their names, no links and nothing that would land outside the folder. A dialog then shows what the extension declares and asks to confirm, because an extension is a program that runs with your rights when you start it; install only extensions whose author you trust. A newer version is installed the same way over the one installed, which keeps its logs and its switch; an older version is refused. **Uninstall…** removes it with its folder after a confirmation.
+
+An installed extension runs only when you start it: with its button or tile, or **Run** on its card. Its button is highlighted while it runs and the status bar shows its name, its progress and **Stop**; a click on its button stops it as well. When it ends, the status bar shows its message, or that it finished, or that it failed with its exit code and the last lines of its error output. Every run writes a log in the `logs` folder of the extension, which **Show folder** opens. Closing the window ends the extensions that run. [Writing an extension](extensions.md) describes the folder, its `extension.json` and the API for authors, with an example.
 
 ## Where settings and indexes are stored
 
@@ -1002,7 +1009,8 @@ When the environment variable `XDG_CONFIG_HOME` is set, on any system, the folde
 | --- | --- |
 | `settings.json` | Colour mode, point size, eye-dome lighting and its strength, station markers, point budget, Auto-index |
 | `theme`, `language` | The theme and the language |
-| `extensions.json` | The extensions that are switched off |
+| `extensions.json` | The extensions that are switched off and the installed extensions with their versions |
+| `extensions/` | The installed extensions, a folder each, with the logs of their runs |
 | `camera-views.json`, `view-snapshots/` | The saved views of every scan and their snapshots |
 | `instances/` | The discovery file of each running window, for the [command API](../native/API.md) |
 
