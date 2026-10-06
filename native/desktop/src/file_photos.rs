@@ -1148,8 +1148,16 @@ impl Studio {
         let source = entry.cloud.path.clone();
         let expanded = self.photos.expanded.contains(&source);
         let header = tr_args("{count} photos", &[("count", &photos.photos.len())]);
+        // The chevron of the groups of the Project Browser.
+        let chevron = if expanded {
+            crate::ToolIcon::ChevronOpen
+        } else {
+            crate::ToolIcon::ChevronClosed
+        };
         let mut rows = column![button(
-            text(format!("{} {header}", if expanded { "▾" } else { "▸" })).size(11)
+            row![crate::icon_svg(chevron, 10.0), text(header).size(11)]
+                .spacing(4)
+                .align_y(iced::Alignment::Center)
         )
         .on_press(Message::Photos(PhotoAction::ToggleList(source.clone())))
         .style(crate::flat_tool_style)
