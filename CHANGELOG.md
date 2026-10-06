@@ -14,6 +14,9 @@ drops those that begin with the name of an operating system or with
 
 ## Unreleased
 
+- The **Select** button left the ribbon: without a tool the mouse selects, and Escape returns to it.
+- A click on the mark of a photo enters it; a double click is no longer needed. Inside a photo, or while walking, the nearest photos ahead show as rings, and a click on a ring steps into that photo.
+- **Distance** and **Area** measure inside a photo and while walking: a click without a drag picks the point under the pointer.
 - A plan made from the whole 3D model in **Create 2D plan / elevation / section…** is cut 1.20 m above the floor that the points show, also when the scan lies far above or below zero, as a surveyed scan does; before, the dialog proposed 1.20 m above zero and refused it for such a scan. The dialog says at which height it found the floor.
 - A large button of the ribbon is as wide as its name, so that a long name such as **Snedetekening** is no longer broken in the middle of the word. **Move**, **Scale** and **Thin** under Transform in Properties are icons, named in their tooltip, so that the narrow panel no longer breaks their names.
 - The Linux packages on the release page carry a build attestation kept by GitHub: with the GitHub CLI, `gh attestation verify` checks that the project's release workflow attested the file and that it has not been changed since. The release notes and the README give the full command.

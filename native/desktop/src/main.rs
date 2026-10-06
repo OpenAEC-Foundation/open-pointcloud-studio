@@ -1972,9 +1972,6 @@ enum Message {
     /// A single click at a pixel of the scene with no tool on: the point
     /// there becomes the selection, as with Pick point.
     ClickSelect([f32; 2], Size),
-    /// Leave every viewport tool for the plain mouse: a click selects a
-    /// point and a drag orbits. The selection is kept.
-    SelectMode,
     Pan(f32, f32),
     FinishPan(f32, f32),
     FinishOrbit(f32, f32),
@@ -8361,14 +8358,6 @@ impl Studio {
                     }
                 };
             }
-            Message::SelectMode => {
-                self.box_select = false;
-                self.pick_mode = false;
-                self.measure.leave(false);
-                self.views.leave_tool();
-                self.drag_rectangle = None;
-                self.status = SELECT_MODE_STATUS.into();
-            }
             Message::OrbitPointPicked(point) => self.set_orbit_point(point),
             Message::Pan(dx, dy) => {
                 self.pan[0] += dx;
@@ -8766,15 +8755,6 @@ impl Studio {
             }
         }
         Task::none()
-    }
-
-    /// Whether no viewport tool is on, so that a click selects a point and
-    /// a drag orbits: the Select button of the ribbon shows it.
-    fn plain_mouse(&self) -> bool {
-        !self.box_select
-            && !self.pick_mode
-            && self.measure.mode.is_none()
-            && self.views.tool.is_none()
     }
 
     fn selected_total(&self) -> u64 {
@@ -9446,11 +9426,6 @@ impl Studio {
         let selection = opencad_ribbon::render_group_items(
             "SELECTION",
             vec![
-                RibbonItem::Large(large_tool_button(
-                    "Select",
-                    Message::SelectMode,
-                    self.plain_mouse(),
-                )),
                 RibbonItem::Small(small_tool_button(
                     "Pick point",
                     Message::TogglePickSelect,
@@ -12220,8 +12195,11 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     if button == mouse::Button::Left {
                         let click =
                             orbit_click(last_click, drag, position, Instant::now(), bounds.size());
-                        // A double click on the mark of a photo enters it.
-                        if let Some(Message::PickOrbitPoint(pointer, _)) = click {
+                        // A click on the mark of a photo enters it.
+                        if let Some(
+                            Message::ClickSelect(pointer, _) | Message::PickOrbitPoint(pointer, _),
+                        ) = click
+                        {
                             let photo = combined_bounds(self.clouds)
                                 .filter(|_| self.show_scan_poses)
                                 .and_then(|overall| {
@@ -12826,8 +12804,16 @@ impl canvas::Program<Message> for PointViewport<'_> {
     ) -> mouse::Interaction {
         if let Some(view) = self.walk {
             return match cursor.position_in(bounds) {
-                Some(point) if self.walk_station_at(view, point, bounds.size()).is_some() => {
+                Some(point)
+                    if self.walk_station_at(view, point, bounds.size()).is_some()
+                        || self
+                            .walk_photo_step_at(view, point, bounds.size())
+                            .is_some() =>
+                {
                     mouse::Interaction::Pointer
+                }
+                Some(_) if self.measure.mode.is_some() || self.annotate.tool.is_some() => {
+                    mouse::Interaction::Crosshair
                 }
                 Some(_) => mouse::Interaction::Idle,
                 None => mouse::Interaction::default(),
@@ -13006,8 +12992,26 @@ impl PointViewport<'_> {
             .map(|(station, _)| (station.cloud, station.station))
     }
 
-    /// While walking every drag looks around and a click on a station steps
-    /// into its photo.
+    /// From inside a photo or while walking: the eye the camera looks from.
+    fn walk_eye(&self, view: WalkView) -> [f64; 3] {
+        self.shown_photo().map_or(view.eye, |shown| shown.eye)
+    }
+
+    /// The photo of a file to step into under the pointer, from inside a
+    /// photo or while walking.
+    fn walk_photo_step_at(
+        &self,
+        view: WalkView,
+        pointer: UiPoint,
+        size: Size,
+    ) -> Option<(PathBuf, usize)> {
+        let scene = combined_bounds(self.clouds)?;
+        let projection = self.projection(scene, size.width, size.height);
+        self.photo_step_at(projection, self.walk_eye(view), [pointer.x, pointer.y])
+    }
+
+    /// While walking every drag looks around and a click on a station or on
+    /// the ring of a photo steps into its photo.
     fn update_walk(
         &self,
         view: WalkView,
@@ -13027,6 +13031,17 @@ impl PointViewport<'_> {
                     return (event::Status::Ignored, None);
                 };
                 if button == mouse::Button::Left {
+                    if let Some((source, index)) =
+                        self.walk_photo_step_at(view, position, bounds.size())
+                    {
+                        *drag = None;
+                        return (
+                            event::Status::Captured,
+                            Some(Message::Photos(file_photos::PhotoAction::Enter(
+                                source, index,
+                            ))),
+                        );
+                    }
                     if let Some((cloud, station)) =
                         self.walk_station_at(view, position, bounds.size())
                     {
@@ -13047,19 +13062,25 @@ impl PointViewport<'_> {
             canvas::Event::Mouse(mouse::Event::ButtonReleased(
                 button @ (mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle),
             )) => {
-                // With an annotation tool a left click without a drag picks a point.
+                // With a measuring or an annotation tool a left click without a
+                // drag picks a point, also inside a photo.
+                let measuring = self.measure.mode.is_some();
                 let click = drag
                     .take()
-                    .filter(|_| button == mouse::Button::Left && self.annotate.tool.is_some())
+                    .filter(|_| {
+                        button == mouse::Button::Left && (measuring || self.annotate.tool.is_some())
+                    })
                     .and_then(|pressed| {
                         let position = cursor.position_from(bounds.position())?;
                         let moved =
                             (position.x - pressed.start.x).hypot(position.y - pressed.start.y);
                         (moved < 5.0).then(|| {
-                            Message::Views(views::ViewAction::Click(
-                                [position.x, position.y],
-                                bounds.size(),
-                            ))
+                            let at = [position.x, position.y];
+                            if measuring {
+                                Message::Measure(measure::MeasureAction::Click(at, bounds.size()))
+                            } else {
+                                Message::Views(views::ViewAction::Click(at, bounds.size()))
+                            }
                         })
                     });
                 (event::Status::Captured, click)
@@ -13120,6 +13141,10 @@ impl PointViewport<'_> {
         self.draw_faces(frame, size);
         self.draw_measure(frame, size);
         self.draw_annotations(frame, size);
+        if let Some(scene) = combined_bounds(self.clouds) {
+            let projection = self.projection(scene, size.width, size.height);
+            self.draw_photo_steps(frame, projection, self.walk_eye(view));
+        }
         let inside = self.walk_station.is_some();
         for station in self.walk_stations(view, size) {
             if inside {

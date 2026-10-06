@@ -39,6 +39,13 @@ const MAX_PINNED_ZOOM: f32 = 8.0;
 const MARK_GROUP_RADIUS: f32 = 32.0;
 /// How near a click must be to a mark to enter its photo.
 const MARK_REACH: f32 = 9.0;
+/// From inside a photo, or while walking, the nearest photos within this
+/// many metres are marked as rings, and a click on one steps into it.
+const STEP_REACH: f64 = 40.0;
+/// How many photos are marked from inside a photo.
+const STEP_COUNT: usize = 12;
+/// A photo taken this close to the eye is the one looked through.
+const STEP_SAME: f64 = 0.05;
 /// Most labels drawn over the marks.
 const MAX_MARK_LABELS: usize = 64;
 
@@ -1388,6 +1395,15 @@ impl PointViewport<'_> {
     /// Every photo of the visible layers that is in front of the camera, in
     /// the order of its path.
     fn photo_marks(&self, projection: Projection) -> Vec<PhotoMark<'_>> {
+        self.photo_marks_where(projection, |_| true)
+    }
+
+    /// The photos in front of the camera whose position `keep` accepts.
+    fn photo_marks_where(
+        &self,
+        projection: Projection,
+        keep: impl Fn([f64; 3]) -> bool,
+    ) -> Vec<PhotoMark<'_>> {
         let mut marks = Vec::new();
         for entry in self.clouds.iter().filter(|entry| entry.visible) {
             let Some(photos) = self.photos.files.get(&entry.cloud.path) else {
@@ -1395,6 +1411,9 @@ impl PointViewport<'_> {
             };
             for (index, photo) in photos.photos.iter().enumerate() {
                 let position = entry.transform.xyz(photo.position);
+                if !keep(position) {
+                    continue;
+                }
                 let Some((x, y, depth)) = projection.project(position) else {
                     continue;
                 };
@@ -1424,6 +1443,81 @@ impl PointViewport<'_> {
             }
         }
         marks
+    }
+
+    /// The other photos that can be stepped into from `eye`, the eye of a
+    /// photo or of the walking camera: the nearest `STEP_COUNT` within
+    /// `STEP_REACH` that are in front of the camera.
+    fn photo_steps(&self, projection: Projection, eye: [f64; 3]) -> Vec<PhotoMark<'_>> {
+        let distance = |position: [f64; 3]| {
+            (0..3)
+                .map(|axis| (position[axis] - eye[axis]).powi(2))
+                .sum::<f64>()
+                .sqrt()
+        };
+        let mut near: Vec<f64> = self
+            .clouds
+            .iter()
+            .filter(|entry| entry.visible)
+            .filter_map(|entry| {
+                let photos = self.photos.files.get(&entry.cloud.path)?;
+                Some(
+                    photos
+                        .photos
+                        .iter()
+                        .map(|photo| distance(entry.transform.xyz(photo.position)))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .flatten()
+            .filter(|&away| away > STEP_SAME && away <= STEP_REACH)
+            .collect();
+        near.sort_by(f64::total_cmp);
+        let Some(&farthest) = near.get(STEP_COUNT.min(near.len()).saturating_sub(1)) else {
+            return Vec::new();
+        };
+        self.photo_marks_where(projection, |position| {
+            let away = distance(position);
+            away > STEP_SAME && away <= farthest
+        })
+    }
+
+    /// The photo to step into under the pointer, from inside a photo or
+    /// while walking.
+    pub(crate) fn photo_step_at(
+        &self,
+        projection: Projection,
+        eye: [f64; 3],
+        pointer: [f32; 2],
+    ) -> Option<(PathBuf, usize)> {
+        self.photo_steps(projection, eye)
+            .into_iter()
+            .map(|mark| {
+                let distance = (mark.x - pointer[0]).hypot(mark.y - pointer[1]);
+                (mark, distance)
+            })
+            .filter(|(_, distance)| *distance <= MARK_REACH)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(mark, _)| (mark.source.to_path_buf(), mark.index))
+    }
+
+    /// The photos that can be stepped into, as rings in the colour of the
+    /// photo marks.
+    pub(crate) fn draw_photo_steps(
+        &self,
+        frame: &mut Frame,
+        projection: Projection,
+        eye: [f64; 3],
+    ) {
+        let color = mark_color();
+        for mark in self.photo_steps(projection, eye) {
+            let ring = canvas::Path::circle(UiPoint::new(mark.x, mark.y), 7.0);
+            frame.fill(&ring, Color::from_rgba8(42, 42, 50, 0.6));
+            frame.stroke(
+                &ring,
+                canvas::Stroke::default().with_color(color).with_width(2.0),
+            );
+        }
     }
 
     /// The photo whose mark is under the pointer.
@@ -2044,6 +2138,31 @@ mod tests {
         let marks = viewport.photo_marks(projection);
         assert_eq!(marks.len(), 3);
         assert!(marks[2].toward.is_some() && marks[0].toward.is_none());
+    }
+
+    #[test]
+    fn from_inside_a_photo_the_photos_ahead_are_rings_to_step_into() {
+        let (mut studio, _directory, source) = studio_with_photos();
+        let _ = send(&mut studio, json!({"command": "enter_photo", "index": 0}));
+        // Look along the path, toward the next photos.
+        let view = crate::station_photos::WalkView::new(studio.walk.unwrap().eye, 0.0);
+        studio.walk = Some(view);
+        let viewport = studio.point_viewport();
+        let scene = crate::combined_bounds(&studio.clouds).unwrap();
+        let projection = viewport.projection(scene, 900.0, 600.0);
+        let eye = viewport.walk_eye(view);
+        let steps = viewport.photo_steps(projection, eye);
+        // The photo looked through is no ring; the ones ahead are.
+        assert!(!steps.is_empty());
+        assert!(steps.iter().all(|mark| mark.index != 0));
+        let ahead = &steps[0];
+        assert_eq!(
+            viewport.photo_step_at(projection, eye, [ahead.x + 2.0, ahead.y]),
+            Some((source, ahead.index))
+        );
+        assert!(viewport
+            .photo_step_at(projection, eye, [ahead.x + 40.0, ahead.y + 40.0])
+            .is_none());
     }
 
     #[test]

@@ -3020,6 +3020,41 @@ mod tests {
     }
 
     #[test]
+    fn a_measuring_click_while_walking_or_in_a_photo_picks_a_point() {
+        use iced::mouse::{self, Cursor};
+        use iced::widget::canvas::{Event, Program};
+
+        let (mut studio, _directory) = studio_with_scan();
+        let _ = studio.update(Message::Measure(crate::measure::MeasureAction::Toggle(
+            crate::measure::MeasureMode::Distance,
+        )));
+        let walked = send(
+            &mut studio,
+            command(r#"{"command":"walk","eye":[1.0,1.5,1.6],"yaw":0.7,"pitch":-0.2}"#),
+        );
+        assert_eq!(walked["ok"], true);
+        let bounds = Rectangle::new(UiPoint::ORIGIN, studio.viewport_size);
+        let at = |x: f32, y: f32| Cursor::Available(UiPoint::new(x, y));
+        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let release = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+        let viewport = studio.point_viewport();
+        let mut state = crate::ViewportState::default();
+        let _ = viewport.update(&mut state, press.clone(), bounds, at(300.0, 400.0));
+        let (_, message) = viewport.update(&mut state, release.clone(), bounds, at(301.0, 400.0));
+        assert!(matches!(
+            message,
+            Some(Message::Measure(crate::measure::MeasureAction::Click(
+                [301.0, 400.0],
+                _
+            )))
+        ));
+        assert_eq!(
+            viewport.mouse_interaction(&state, bounds, at(300.0, 400.0)),
+            iced::mouse::Interaction::Crosshair
+        );
+    }
+
+    #[test]
     fn views_are_renamed_updated_and_deleted_with_their_snapshot() {
         let (mut studio, _directory) = studio_with_scan();
         act(&mut studio, ViewAction::Save);

@@ -505,7 +505,6 @@
   "Planes and cylinders as JSON, OBJ, DXF, DWG or IFC": "Vlakken en cilinders als JSON, OBJ, DXF, DWG of IFC",
   "The saved views with their notes, for issue tracking": "De opgeslagen views met hun notities, voor issuebeheer",
   "One LAZ file from every visible LAS or LAZ scan": "Eén LAZ-bestand uit alle zichtbare LAS- en LAZ-scans",
-  "Select": "Selecteren",
   "CAD viewer": "CAD-viewer",
   "The program that opens exported DXF and DWG drawings. Leave it empty to use Open CAD Studio where it is installed.": "Het programma dat geëxporteerde DXF- en DWG-tekeningen opent. Laat het leeg om Open CAD Studio te gebruiken waar het is geïnstalleerd.",
   "Find Open CAD Studio": "Open CAD Studio zoeken",

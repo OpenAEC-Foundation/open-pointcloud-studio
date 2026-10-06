@@ -99,7 +99,7 @@ The percentage needs a known total: an E57 file states its record count, and an 
 
 ## Looking around
 
-- The left button selects: a click selects the point under the pointer and a drag draws a rectangle that selects the points inside it (see **Select** under Selecting).
+- The left button selects: a click selects the point under the pointer and a drag draws a rectangle that selects the points inside it (see Selecting).
 - Drag with the middle button while Shift is held to orbit, or with the left button while Alt is held.
 - Double-click a point to orbit about it: from then on the view turns about that point, which stays where it is on the screen, and a small target marks it while the view turns. Double-click where no point is drawn, or use Zoom all, to orbit about the centre of the model again. The view does not move when the point is set. While the section box is on and no point is set, the view turns about the centre of the box.
 - Drag with the middle or the right button to pan.
@@ -208,7 +208,7 @@ A turned box clips the points, the exports, the selections, the meshers and **De
 
 ### Selecting
 
-- **Select** is the plain mouse, and what Escape returns to: a click selects the nearest point of the active scan within eight pixels, as Pick point does, a drag orbits and a double-click sets the orbit point. The button is lit while no other tool is on.
+- Without a tool the mouse selects, and Escape returns to it: a click selects the nearest point of the active scan within eight pixels, as Pick point does, a drag draws a rectangle that selects, and a double-click sets the orbit point. The ribbon has no button for it.
 - **Box select**: draw a rectangle in the scene. Every source point of every visible scan inside it is selected, not only the points on screen. With an index the search visits only the parts of the index that the rectangle touches; without one it reads the whole source. While a search runs, **Cancel selection** takes the place of Zoom selection; a cancelled search leaves the previous selection as it was.
 - **Pick point**: click a point. The nearest point of the active scan within eight pixels of the pointer is selected, and Properties shows its coordinates, colour, intensity and class under **Selected point**. While Pick point is on, the point under the pointer is picked when the left button is released, also after a drag. Orbit with Shift and a middle drag, and pan with a middle or right drag.
 - **Clear** drops the selection. Escape leaves the active tool for Select and drops the selection as well.
