@@ -3,27 +3,33 @@
 # under /usr. The .deb and the AppImage are both made from this tree, so
 # their desktop entry, icons, file types and metadata cannot differ.
 #
-#   stage-tree.sh ROOT BINARY ICONS NUMBER DATE
+#   stage-tree.sh ROOT BINARY CAD_BINARY ICONS NUMBER DATE
 #
-# ROOT    folder that receives usr/...
-# ICONS   output folder of make-icons.sh
-# NUMBER  version for the AppStream metadata, DATE its day (YYYY-MM-DD)
+# ROOT        folder that receives usr/...
+# CAD_BINARY  the Open CAD Studio that build-open-cad-studio.sh built; it goes
+#             to usr/lib/open-pointcloud-studio, out of the search path, where
+#             the application looks for it
+# ICONS       output folder of make-icons.sh
+# NUMBER      version for the AppStream metadata, DATE its day (YYYY-MM-DD)
 set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 
-[[ $# -eq 5 ]] || fail "usage: stage-tree.sh ROOT BINARY ICONS NUMBER DATE"
+[[ $# -eq 6 ]] || fail "usage: stage-tree.sh ROOT BINARY CAD_BINARY ICONS NUMBER DATE"
 root=$1
 binary=$2
-icons=$3
-number=$4
-date=$5
+cad_binary=$3
+icons=$4
+number=$5
+date=$6
+[[ -f "$cad_binary" ]] || fail "$cad_binary does not exist; build it with build-open-cad-studio.sh"
 here=$packaging_dir/linux
 
 # Packages must not depend on the umask of whoever builds them.
 umask 022
 
 install -Dm755 "$binary" "$root/usr/bin/$BINARY_NAME"
+install -Dm755 "$cad_binary" "$root/usr/lib/$BINARY_NAME/$CAD_BINARY_NAME"
 install -Dm644 "$here/$APP_ID.desktop" "$root/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$here/$APP_ID.mime.xml" "$root/usr/share/mime/packages/$APP_ID.xml"
 
@@ -41,3 +47,4 @@ install -Dm644 "$icons/hicolor/scalable/apps/$APP_ID.svg" \
 docs=$root/usr/share/doc/$BINARY_NAME
 install -Dm644 "$packaging_dir/NOTICE.txt" "$docs/NOTICE.txt"
 install -m644 "$native_dir"/assets/fonts/*-OFL.txt "$docs/"
+copy_cad_notice "$docs" "$number"

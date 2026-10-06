@@ -5,7 +5,8 @@
 ;   ISCC /DAppVersion=0.8.0 /DSourceDir=..\target\packages\open-pointcloud-studio_0.8.0_windows-x64 windows.iss
 ;
 ; SourceDir is the folder that native/packaging/build-archive.sh leaves
-; behind. A pre-release such as 0.8.0-rc1 also needs /DAppNumericVersion=0.8.0,
+; behind: the application, Open CAD Studio beside it and the licence texts.
+; A pre-release such as 0.8.0-rc1 also needs /DAppNumericVersion=0.8.0,
 ; because the version details of the installer file take numbers only.
 
 #ifndef AppVersion
@@ -23,6 +24,9 @@
 
 #define AppName "Open Pointcloud Studio"
 #define AppExe "open-pointcloud-studio.exe"
+; Open CAD Studio, which shows exported drawings; the application looks for it
+; beside itself.
+#define CadExe "OpenCADStudio.exe"
 #define ProgId "OpenPointcloudStudio.Scan"
 
 [Setup]
@@ -66,7 +70,9 @@ Name: "dutch"; MessagesFile: "compiler:Languages\Dutch.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\*"; Excludes: "{#CadExe}"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Named on its own, so that an installer cannot be built without it.
+Source: "{#SourceDir}\{#CadExe}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"

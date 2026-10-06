@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
 # Builds the AppImage for the processor type of this machine.
 #
-#   build-appimage.sh BINARY ICONS NUMBER DATE OUT_DIR
+#   build-appimage.sh BINARY CAD_BINARY ICONS NUMBER DATE OUT_DIR
 #
 # Writes OUT_DIR/open-pointcloud-studio_NUMBER_ARCH.AppImage with a .sha256;
-# ARCH is amd64 or arm64, as for the .deb.
+# ARCH is amd64 or arm64, as for the .deb. CAD_BINARY is the Open CAD Studio
+# that build-open-cad-studio.sh built for this machine; stage-tree.sh says
+# where it goes.
 #
 # An AppImage is a small runtime followed by a compressed image of the
-# application folder. No libraries are bundled: the binary links only the C
-# library, and window system and graphics driver libraries have to come from
-# the system it runs on in any case.
+# application folder. No libraries are bundled: the application links only
+# the C library, Open CAD Studio also the C++ runtime of the system
+# (libstdc++), and window system and graphics driver libraries have to come
+# from the system it runs on in any case. check-binary.sh holds both binaries
+# to the versions of the C library and the C++ runtime that the oldest
+# supported systems have.
 set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 
-[[ $# -eq 5 ]] || fail "usage: build-appimage.sh BINARY ICONS NUMBER DATE OUT_DIR"
+[[ $# -eq 6 ]] || fail "usage: build-appimage.sh BINARY CAD_BINARY ICONS NUMBER DATE OUT_DIR"
 binary=$1
-icons=$2
-number=$3
-date=$4
-out_dir=$5
+cad_binary=$2
+icons=$3
+number=$4
+date=$5
+out_dir=$6
 here=$packaging_dir/linux
 
 # The runtime is fetched at build time from a release that does not change,
@@ -60,11 +66,11 @@ found=$(sha256sum "$work/runtime" | cut -d' ' -f1)
     || fail "the runtime does not carry the AppImage type 2 mark"
 
 appdir=$work/AppDir
-bash "$here/stage-tree.sh" "$appdir" "$binary" "$icons" "$number" "$date"
+bash "$here/stage-tree.sh" "$appdir" "$binary" "$cad_binary" "$icons" "$number" "$date"
 
 # Outside a Debian system there is no folder of common licence texts to
 # point at, so this package carries them.
-copy_licences "$appdir/usr/share/doc/$BINARY_NAME"
+copy_licences "$appdir/usr/share/doc/$BINARY_NAME" "$number"
 install -m644 "$here/AppImage-runtime-LICENSE.txt" "$appdir/usr/share/doc/$BINARY_NAME/"
 
 # What the runtime and the desktop integration tools look for at the top.

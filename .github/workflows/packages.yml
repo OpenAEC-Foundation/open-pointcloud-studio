@@ -4,6 +4,11 @@ name: Packages
 # machine and starts it there. Nothing is published: the packages are kept as
 # artifacts of the run. The release workflow calls this workflow and publishes
 # what it built; started by hand it tries the packaging before any tag exists.
+#
+# Every package carries Open CAD Studio beside the application, built by the
+# job open-cad-studio from the commit that native/packaging/open-cad-studio.pin
+# names. The job open-cad-studio-pin checks that pin and writes the source of
+# that commit, which the release carries as package-open-cad-studio-source.
 
 on:
   workflow_dispatch:
@@ -86,8 +91,104 @@ jobs:
           path: icons
           if-no-files-found: error
 
+  # The pin file is read as the build script reads it, which refuses a pin
+  # that is not a URL, two full hashes and a date; the pinned commit is
+  # fetched and checked as before a build: its tree, date, Cargo.lock and
+  # licence. A pin that does not fit fails here, before the long builds. The
+  # same checkout gives the source archive of the release.
+  open-cad-studio-pin:
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.pin.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the pin file
+        id: pin
+        run: bash native/packaging/build-open-cad-studio.sh --pin | tee -a "$GITHUB_OUTPUT"
+      - name: Fetch and check the pinned commit
+        run: bash native/packaging/build-open-cad-studio.sh --fetch
+      - name: Write the source archive
+        run: bash native/packaging/archive-open-cad-studio-source.sh native/target/packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-open-cad-studio-source
+          path: |
+            native/target/packages/open-cad-studio-source_*.tar.gz
+            native/target/packages/open-cad-studio-source_*.tar.gz.sha256
+          if-no-files-found: error
+
+  # Open CAD Studio for each system and processor, from the pinned commit.
+  # Its build takes long and the pin changes seldom, so the binary is kept in
+  # the cache under the pinned commit, the Rust toolchain and the build
+  # script, and is built only when one of them changed. The macOS halves are
+  # joined in the macos job, as the application's are.
+  open-cad-studio:
+    needs: open-cad-studio-pin
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            file: OpenCADStudio.exe
+          # The same systems as the application's builds, for the same
+          # oldest C library.
+          - name: linux-amd64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            file: OpenCADStudio
+          - name: linux-arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            file: OpenCADStudio
+          - name: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            file: OpenCADStudio
+          - name: macos-x86_64
+            runner: macos-15
+            target: x86_64-apple-darwin
+            file: OpenCADStudio
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      # The oldest macOS the application starts on.
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        id: toolchain
+        with:
+          targets: ${{ matrix.target }}
+      - name: Look for this build in the cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: native/target/open-cad-studio/${{ matrix.target }}/release/${{ matrix.file }}
+          key: open-cad-studio-${{ matrix.target }}-${{ needs.open-cad-studio-pin.outputs.commit }}-rust-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('native/packaging/build-open-cad-studio.sh') }}
+      - name: Install the libraries of the build
+        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev \
+            libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev libfontconfig1-dev libfreetype6-dev
+      - name: Build Open CAD Studio
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash native/packaging/build-open-cad-studio.sh --target ${{ matrix.target }}
+      - name: Check what the binary needs from the system
+        if: runner.os == 'Linux'
+        run: |
+          bash native/packaging/linux/check-binary.sh \
+            native/target/open-cad-studio/${{ matrix.target }}/release/OpenCADStudio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-cad-studio-${{ matrix.name }}
+          path: native/target/open-cad-studio/${{ matrix.target }}/release/${{ matrix.file }}
+          if-no-files-found: error
+
   windows:
-    needs: prepare
+    needs: [prepare, open-cad-studio]
     runs-on: windows-latest
     # A step that hangs must not hold a machine for hours.
     timeout-minutes: 60
@@ -104,6 +205,10 @@ jobs:
         run: cargo build --release --locked -p open-pointcloud-studio-native
       - name: Smoke-test the built application
         run: bash native/packaging/smoke-test.sh native/target/release/open-pointcloud-studio.exe "$NUMBER"
+      - uses: actions/download-artifact@v4
+        with:
+          name: open-cad-studio-windows-x64
+          path: native/target/open-cad-studio/package
       # An unsigned binary still works; signing only spares users a warning.
       - name: Sign the application
         continue-on-error: true
@@ -121,10 +226,29 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+      - name: Sign Open CAD Studio
+        continue-on-error: true
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}/native/target/open-cad-studio/package
+          files-folder-filter: exe
+          files-folder-depth: 1
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
       - name: Pack the archive
         run: |
           bash native/packaging/build-archive.sh native/target/release/open-pointcloud-studio.exe \
+            native/target/open-cad-studio/package/OpenCADStudio.exe \
             "$NUMBER" windows-x64 native/target/packages
+          bash native/packaging/check-open-cad-studio.sh \
+            "native/target/packages/open-pointcloud-studio_${NUMBER}_windows-x64/open-pointcloud-studio.exe"
       # The installer packs the same folder as the archive: the signed
       # application with its licence texts.
       - name: Build the installer
@@ -163,6 +287,7 @@ jobs:
         run: |
           $files = @(
             "native\target\release\open-pointcloud-studio.exe",
+            "native\target\open-cad-studio\package\OpenCADStudio.exe",
             "native\target\installer\open-pointcloud-studio_$($env:NUMBER)_x64-setup.exe"
           )
           $signed = $true
@@ -192,6 +317,9 @@ jobs:
           }
           if (-not (Test-Path "$target\open-pointcloud-studio.exe")) { throw "the application was not installed" }
           if (-not (Test-Path "$target\LICENSE-GPL-3.0.txt")) { throw "the licence text was not installed" }
+          foreach ($file in 'OpenCADStudio.exe', 'OpenCADStudio-LICENSE.txt', 'OpenCADStudio-NOTICE.txt') {
+            if (-not (Test-Path "$target\$file")) { throw "$file was not installed" }
+          }
           foreach ($extension in 'e57', 'las', 'laz', 'ply', 'pcd', 'ptx', 'pts', 'xyz', 'rcp') {
             $key = "HKCU:\Software\Classes\.$extension\OpenWithProgids"
             if ($null -eq (Get-ItemProperty -Path $key -Name 'OpenPointcloudStudio.Scan' -ErrorAction SilentlyContinue)) {
@@ -202,6 +330,8 @@ jobs:
         run: |
           bash native/packaging/smoke-test.sh \
             "$(cygpath -u "$RUNNER_TEMP")/ops-install/open-pointcloud-studio.exe" "$NUMBER"
+          bash native/packaging/check-open-cad-studio.sh \
+            "$(cygpath -u "$RUNNER_TEMP")/ops-install/open-pointcloud-studio.exe"
       - name: Uninstall silently
         shell: pwsh
         run: |
@@ -226,7 +356,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: [prepare, icons]
+    needs: [prepare, icons, open-cad-studio]
     strategy:
       fail-fast: false
       matrix:
@@ -255,6 +385,10 @@ jobs:
         with:
           name: build-icons
           path: native/target/icons
+      - uses: actions/download-artifact@v4
+        with:
+          name: open-cad-studio-linux-${{ matrix.arch }}
+          path: native/target/open-cad-studio/package
       - name: Build the application
         working-directory: native
         run: cargo build --release --locked -p open-pointcloud-studio-native
@@ -265,14 +399,17 @@ jobs:
       - name: Pack the archive
         run: |
           bash native/packaging/build-archive.sh native/target/release/open-pointcloud-studio \
+            native/target/open-cad-studio/package/OpenCADStudio \
             "$NUMBER" "linux-${{ matrix.arch }}" native/target/packages
       - name: Build the .deb
         run: |
           bash native/packaging/linux/build-deb.sh native/target/release/open-pointcloud-studio \
+            native/target/open-cad-studio/package/OpenCADStudio \
             native/target/icons "$NUMBER" "$DEB_VERSION" "$DATE" native/target/packages
       - name: Build the AppImage
         run: |
           bash native/packaging/linux/build-appimage.sh native/target/release/open-pointcloud-studio \
+            native/target/open-cad-studio/package/OpenCADStudio \
             native/target/icons "$NUMBER" "$DATE" native/target/packages
       - uses: actions/upload-artifact@v4
         with:
@@ -285,7 +422,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    needs: [prepare, icons]
+    needs: [prepare, icons, open-cad-studio]
     runs-on: macos-15
     timeout-minutes: 90
     env:
@@ -320,6 +457,23 @@ jobs:
           # whole once more so the archive holds a binary signed as one file.
           codesign --force --sign - --timestamp=none target/universal/open-pointcloud-studio
           codesign --verify --strict target/universal/open-pointcloud-studio
+      - uses: actions/download-artifact@v4
+        with:
+          name: open-cad-studio-macos-arm64
+          path: native/target/open-cad-studio/arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: open-cad-studio-macos-x86_64
+          path: native/target/open-cad-studio/x86_64
+      - name: Join the halves of Open CAD Studio
+        working-directory: native
+        run: |
+          lipo -create -output target/universal/OpenCADStudio \
+            target/open-cad-studio/arm64/OpenCADStudio target/open-cad-studio/x86_64/OpenCADStudio
+          lipo -archs target/universal/OpenCADStudio
+          chmod 755 target/universal/OpenCADStudio
+          codesign --force --sign - --timestamp=none target/universal/OpenCADStudio
+          codesign --verify --strict target/universal/OpenCADStudio
       - name: Smoke-test the built application
         run: bash native/packaging/smoke-test.sh native/target/universal/open-pointcloud-studio "$NUMBER"
       - name: Smoke-test the x86-64 half through translation
@@ -333,10 +487,12 @@ jobs:
       - name: Pack the archive
         run: |
           bash native/packaging/build-archive.sh native/target/universal/open-pointcloud-studio \
+            native/target/universal/OpenCADStudio \
             "$NUMBER" macos-universal native/target/packages
       - name: Build the application bundle and the disk image
         run: |
           bash native/packaging/macos/build-app.sh native/target/universal/open-pointcloud-studio \
+            native/target/universal/OpenCADStudio \
             native/target/icons/AppIcon.iconset "$NUMBER" "$NUMERIC" native/target/packages
       - uses: actions/upload-artifact@v4
         with:
@@ -385,6 +541,10 @@ jobs:
         run: |
           SMOKE_KEEP_DIR="$RUNNER_TEMP/smoke" \
             bash native/packaging/smoke-test.sh /usr/bin/open-pointcloud-studio "$NUMBER"
+      - name: Check the installed Open CAD Studio
+        run: |
+          bash native/packaging/check-open-cad-studio.sh /usr/bin/open-pointcloud-studio
+          test -f /usr/share/doc/open-pointcloud-studio/OpenCADStudio-NOTICE.txt
       - name: Check that the system knows the file types
         run: bash native/packaging/linux/check-file-types.sh "$RUNNER_TEMP/smoke"
       - name: Check the installed desktop entry
@@ -405,6 +565,7 @@ jobs:
         run: |
           sudo apt-get remove -y open-pointcloud-studio
           test ! -e /usr/bin/open-pointcloud-studio
+          test ! -e /usr/lib/open-pointcloud-studio/OpenCADStudio
           test ! -e /usr/share/applications/org.openaec.OpenPointcloudStudio.desktop
           test ! -e /usr/share/mime/packages/org.openaec.OpenPointcloudStudio.xml
       - name: Start the AppImage without mounting it
@@ -415,6 +576,13 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --list-scans "$RUNNER_TEMP/smoke/scans" | grep 'grid\.ply'
       - name: Smoke-test the mounted AppImage
         run: bash native/packaging/smoke-test.sh "packages/open-pointcloud-studio_${NUMBER}_${ARCH}.AppImage" "$NUMBER"
+      - name: Check the Open CAD Studio of the AppImage
+        run: |
+          mkdir -p "$RUNNER_TEMP/appimage"
+          cd "$RUNNER_TEMP/appimage"
+          "$GITHUB_WORKSPACE/packages/open-pointcloud-studio_${NUMBER}_${ARCH}.AppImage" --appimage-extract >/dev/null
+          bash "$GITHUB_WORKSPACE/native/packaging/check-open-cad-studio.sh" squashfs-root/usr/bin/open-pointcloud-studio
+          test -f squashfs-root/usr/share/doc/open-pointcloud-studio/OpenCADStudio-LICENSE.txt
       - name: Window test of the AppImage
         run: |
           xvfb-run -a -s '-screen 0 1440x900x24' python3 native/packaging/gui-smoke.py \
@@ -425,7 +593,9 @@ jobs:
           tar -xzf "packages/open-pointcloud-studio_${NUMBER}_linux-${ARCH}.tar.gz"
           folder="open-pointcloud-studio_${NUMBER}_linux-${ARCH}"
           test -f "$folder/LICENSE-GPL-3.0.txt"
+          test -f "$folder/OpenCADStudio-LICENSE.txt"
           bash native/packaging/smoke-test.sh "$folder/open-pointcloud-studio" "$NUMBER"
+          bash native/packaging/check-open-cad-studio.sh "$folder/open-pointcloud-studio"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -473,6 +643,8 @@ jobs:
         run: |
           bash native/packaging/smoke-test.sh \
             "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app/Contents/MacOS/open-pointcloud-studio" "$NUMBER"
+          bash native/packaging/check-open-cad-studio.sh \
+            "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app/Contents/MacOS/open-pointcloud-studio"
       - name: Install by copying, as a user would
         run: |
           mkdir -p "$RUNNER_TEMP/Applications"
@@ -484,15 +656,21 @@ jobs:
           plutil -lint "$app/Contents/Info.plist"
           test -f "$app/Contents/Resources/AppIcon.icns"
           test -f "$app/Contents/Resources/LICENSE-GPL-3.0.txt"
-          archs=$(lipo -archs "$app/Contents/MacOS/open-pointcloud-studio")
-          [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
+          test -f "$app/Contents/Resources/OpenCADStudio-LICENSE.txt"
+          for program in open-pointcloud-studio OpenCADStudio; do
+            archs=$(lipo -archs "$app/Contents/MacOS/$program")
+            [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
+          done
           bash native/packaging/smoke-test.sh "$app/Contents/MacOS/open-pointcloud-studio" "$NUMBER"
+          bash native/packaging/check-open-cad-studio.sh "$app/Contents/MacOS/open-pointcloud-studio"
       - name: Start the archive binary
         run: |
           tar -xzf "packages/open-pointcloud-studio_${NUMBER}_macos-universal.tar.gz"
           folder="open-pointcloud-studio_${NUMBER}_macos-universal"
           test -f "$folder/LICENSE-GPL-3.0.txt"
+          test -f "$folder/OpenCADStudio-LICENSE.txt"
           bash native/packaging/smoke-test.sh "$folder/open-pointcloud-studio" "$NUMBER"
+          bash native/packaging/check-open-cad-studio.sh "$folder/open-pointcloud-studio"
       # Whether a hosted machine offers the graphics interface the window
       # needs is not promised, so these two may fail without failing the run
       # until they have been seen to work.

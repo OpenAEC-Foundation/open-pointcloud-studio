@@ -21,3 +21,12 @@ https://mozilla.org/MPL/2.0/.
 
 The source code and the licence text of every other crate listed are
 available from crates.io under the crate name and version.
+
+The packages of Open Pointcloud Studio also carry Open CAD Studio,
+https://github.com/HakanSeven12/OpenCADStudio, by Hakan Seven and the
+contributors of Open CAD Studio, licensed under the GNU General Public
+License, version 3. Its source is not part of this repository:
+packaging/open-cad-studio.pin names the commit that the packages are built
+from, without changes, and every release carries the source of that commit
+as open-cad-studio-source_SHORT.tar.gz. The crates that program links are
+recorded in the Cargo.lock of that commit, each under its own licence.

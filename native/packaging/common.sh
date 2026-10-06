@@ -14,12 +14,12 @@ APP_ID=org.openaec.OpenPointcloudStudio
 APP_NAME="Open Pointcloud Studio"
 BINARY_NAME=open-pointcloud-studio
 
-# Open CAD Studio, the CAD program that shows exported drawings. It keeps
-# the name of its upstream binary, which the application looks for. Its
-# source is not part of this repository: open-cad-studio.pin names the one
-# commit of its repository that is built, and fetch_cad_source fetches it
-# into a folder of the target folder. The OCS_ variables move these places
-# for the tests of the scripts.
+# Open CAD Studio, the CAD program every package carries beside the
+# application. It keeps the name of its upstream binary, which the
+# application looks for. Its source is not part of this repository:
+# open-cad-studio.pin names the one commit of its repository that is built,
+# and fetch_cad_source fetches it into a folder of the target folder. The
+# OCS_ variables move these places for the tests of the scripts.
 CAD_BINARY_NAME=OpenCADStudio
 cad_pin_file=${OCS_PIN_FILE:-$packaging_dir/open-cad-studio.pin}
 cad_target_dir=${OCS_TARGET_DIR:-$native_dir/target/open-cad-studio}
@@ -114,7 +114,7 @@ fetch_cad_source() {
 # check_cad_source checks the fetched source before it is built: that every
 # git dependency in its Cargo.lock names the full hash of one commit, which
 # `cargo build --locked` then builds, and that its licence text is the
-# GPL-3.0 text of native/desktop/LICENSE-GPL-3.0.
+# GPL-3.0 text that copy_cad_licence puts in the packages for it.
 check_cad_source() {
     local dir=$cad_source_dir sources source hash rev
     [[ -f "$dir/Cargo.lock" ]] || fail "$dir has no Cargo.lock"
@@ -135,18 +135,49 @@ check_cad_source() {
         fi
     done <<< "$sources"
     if ! cmp -s <(git -C "$dir" show "HEAD:LICENSE" | tr -d '\r') <(tr -d '\r' < "$native_dir/desktop/LICENSE-GPL-3.0"); then
-        fail "the LICENSE of commit $cad_commit is not the GPL-3.0 text of native/desktop/LICENSE-GPL-3.0; look at its licence before it is built"
+        fail "the LICENSE of commit $cad_commit is not the GPL-3.0 text of native/desktop/LICENSE-GPL-3.0, which the packages carry for Open CAD Studio; look at its licence before it is built"
     fi
 }
 
-# The licences travel with every copy of the binary.
+# The name of the release file that holds the source of the pinned commit.
+cad_source_archive_name() {
+    read_cad_pin
+    echo "open-cad-studio-source_${cad_commit:0:8}.tar.gz"
+}
+
+# The licences travel with every copy of the binary, and those of Open CAD
+# Studio with it: copy_licences DESTINATION NUMBER, where NUMBER is the
+# version of the package.
 copy_licences() {
-    local destination=$1
+    local destination=$1 number=$2
     mkdir -p "$destination"
     cp "$repo_dir/LICENSE.md" "$destination/LICENSE-LGPL-3.0.md"
     cp "$native_dir/desktop/LICENSE-GPL-3.0" "$destination/LICENSE-GPL-3.0.txt"
     cp "$native_dir"/assets/fonts/*-OFL.txt "$destination/"
     cp "$packaging_dir/NOTICE.txt" "$destination/NOTICE.txt"
+    copy_cad_licence "$destination"
+    copy_cad_notice "$destination" "$number"
+}
+
+# The licence text of Open CAD Studio. It is the GPL-3.0 text, the same as
+# the LICENSE of the pinned commit: check_cad_source refuses to build a
+# commit whose LICENSE says otherwise.
+copy_cad_licence() {
+    local destination=$1
+    mkdir -p "$destination"
+    cp "$native_dir/desktop/LICENSE-GPL-3.0" "$destination/$CAD_BINARY_NAME-LICENSE.txt"
+}
+
+# The notice of Open CAD Studio, which names the pinned commit and the release
+# file with its source: copy_cad_notice DESTINATION NUMBER.
+copy_cad_notice() {
+    local destination=$1 number=$2
+    [[ -n "$number" ]] || fail "copy_cad_notice needs the version of the package"
+    read_cad_pin
+    mkdir -p "$destination"
+    fill_template "$packaging_dir/$CAD_BINARY_NAME-NOTICE.txt.in" "$destination/$CAD_BINARY_NAME-NOTICE.txt" \
+        "URL=${cad_url%.git}" "COMMIT=$cad_commit" "DATE=$cad_date" "VERSION=$number" \
+        "ARCHIVE=$(cad_source_archive_name)"
 }
 
 # Write FILE.sha256 beside FILE, naming the file without its folder so that

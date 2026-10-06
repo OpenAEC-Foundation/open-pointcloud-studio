@@ -36,13 +36,15 @@ The files are on the [releases page](https://github.com/OpenAEC-Foundation/open-
 | System | File | What it is |
 | --- | --- | --- |
 | Windows 10 and 11, x64 | `open-pointcloud-studio_VERSION_x64-setup.exe` | Installer |
-| | `open-pointcloud-studio_VERSION_windows-x64.zip` | The application and the licence texts, without an installer |
+| | `open-pointcloud-studio_VERSION_windows-x64.zip` | The application with Open CAD Studio and the licence texts, without an installer |
 | macOS 11 and later, Apple and Intel processors | `open-pointcloud-studio_VERSION_macos-universal.dmg` | Disk image with the application |
-| | `open-pointcloud-studio_VERSION_macos-universal.tar.gz` | The bare binary and the licence texts |
+| | `open-pointcloud-studio_VERSION_macos-universal.tar.gz` | The bare binaries and the licence texts |
 | Linux x86-64 | `open-pointcloud-studio_VERSION_amd64.deb` | Package for Debian, Ubuntu and their relatives |
 | | `open-pointcloud-studio_VERSION_amd64.AppImage` | One file that runs on any distribution |
-| | `open-pointcloud-studio_VERSION_linux-amd64.tar.gz` | The bare binary and the licence texts |
+| | `open-pointcloud-studio_VERSION_linux-amd64.tar.gz` | The bare binaries and the licence texts |
 | Linux 64-bit ARM (experimental) | `open-pointcloud-studio_VERSION_arm64.deb`, `_arm64.AppImage`, `_linux-arm64.tar.gz` | The same three kinds of file as for x86-64. Experimental: built and tested only on build machines with software rendering, not yet on real ARM boards or laptops |
+
+Every package also carries [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio), the open-source CAD application, which shows exported DXF and DWG drawings; it does not have to be installed separately. The release page also holds `open-cad-studio-source_SHORT.tar.gz`, the source it was built from.
 
 Every file has a `.sha256` file beside it; see [Checking a download](#checking-a-download).
 
@@ -64,13 +66,13 @@ It is not signed with a paid developer certificate and not notarised, so macOS r
 - macOS 11 to 14: Control-click the application, choose **Open** and confirm.
 - Either version, from Terminal: `xattr -dr com.apple.quarantine "/Applications/Open Pointcloud Studio.app"`
 
-The disk image carries the same note as `First start.txt`. The `.tar.gz` holds the binary without the application bundle, and the licence texts, for use from a terminal.
+The disk image carries the same note as `First start.txt`. The `.tar.gz` holds the binary and Open CAD Studio without the application bundle, and the licence texts, for use from a terminal.
 
 ### Linux
 
-Linux needs a C library of version 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later), X11 or Wayland, and a Vulkan driver or OpenGL ES 3 through EGL. File dialogs use the desktop portal, or `zenity` where there is none.
+Linux needs a C library of version 2.35 or newer and the C++ runtime of GCC 12 or newer (`libstdc++.so.6` with `GLIBCXX_3.4.30`, which Open CAD Studio uses): Ubuntu 22.04, Debian 12, Fedora 36 or later have both. It also needs X11 or Wayland, and a Vulkan driver or OpenGL ES 3 through EGL. File dialogs use the desktop portal, or `zenity` where there is none.
 
-The `.deb` installs the application as `/usr/bin/open-pointcloud-studio` with a menu entry, its icon and the libraries it needs, and offers it for E57, LAS, LAZ, PLY, PCD, PTX and PTS files and scan project files:
+The `.deb` installs the application as `/usr/bin/open-pointcloud-studio` with a menu entry, its icon and the libraries it needs, puts Open CAD Studio in `/usr/lib/open-pointcloud-studio`, and offers the application for E57, LAS, LAZ, PLY, PCD, PTX and PTS files and scan project files:
 
 ```bash
 sudo apt install ./open-pointcloud-studio_0.9.1_amd64.deb
@@ -85,7 +87,7 @@ chmod +x open-pointcloud-studio_0.9.1_amd64.AppImage
 
 It mounts itself through FUSE (`fusermount3` or `fusermount`). Without FUSE, start it with `--appimage-extract-and-run` after the file name.
 
-The `.tar.gz` holds the binary and the licence texts. It unpacks into a folder of its own name; run `./open-pointcloud-studio` in that folder.
+The `.tar.gz` holds the binary, Open CAD Studio beside it and the licence texts. It unpacks into a folder of its own name; run `./open-pointcloud-studio` in that folder.
 
 ### Checking a download
 
@@ -411,7 +413,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 The executable is `native/target/release/open-pointcloud-studio`, with `.exe` on Windows. `cargo run -p open-pointcloud-studio-native -- scan.laz` builds and starts a development build with a file.
 
-Open CAD Studio, the CAD program that shows exported drawings, is not part of this repository. This script fetches the commit of its repository that `native/packaging/open-cad-studio.pin` names, checks that it is that commit, and builds it in a Cargo workspace of its own. It needs git and a C++ compiler besides Rust, and on Debian and Ubuntu also `libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev libfontconfig1-dev libfreetype6-dev`:
+Open CAD Studio, which the packages carry, is not part of this repository. This script fetches the commit of its repository that `native/packaging/open-cad-studio.pin` names, checks that it is that commit, and builds it in a Cargo workspace of its own. It needs git and a C++ compiler besides Rust, and on Debian and Ubuntu also `libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev libfontconfig1-dev libfreetype6-dev`:
 
 ```bash
 bash native/packaging/build-open-cad-studio.sh -j 4
@@ -437,6 +439,7 @@ It writes `native/target/open-cad-studio/release/OpenCADStudio`. [native/README.
 
 - The point-cloud library `native/core` is licensed under LGPL-3.0-or-later; see [LICENSE.md](LICENSE.md).
 - The desktop application `native/desktop` is licensed under GPL-3.0-only; see [native/desktop/LICENSE-GPL-3.0](native/desktop/LICENSE-GPL-3.0). Its ribbon and properties rows are adapted from [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio), which is GPL-3.0, and it uses that project's SVG icons.
+- Open CAD Studio, which every package carries, is licensed under GPL-3.0 by its authors. Its source is not part of this repository: [native/packaging/open-cad-studio.pin](native/packaging/open-cad-studio.pin) names the commit of its repository that the packages are built from, and every release carries the source of that commit as `open-cad-studio-source_SHORT.tar.gz`. The packages carry its licence text as `OpenCADStudio-LICENSE.txt` and a notice with the commit as `OpenCADStudio-NOTICE.txt`.
 - The fonts Inter and Space Grotesk are bundled under the SIL Open Font License 1.1; see [native/assets/fonts](native/assets/fonts/README.md).
 - The Rust libraries the application links are recorded in `native/Cargo.lock`, each under its own licence; [native/NOTICE](native/NOTICE) has the third-party notices.
 - Building models come from [3DBAG](https://docs.3dbag.nl/nl/copyright/) (CC BY 4.0), and the map in the 3D BAG panel from [Kadaster through PDOK](https://www.pdok.nl/copyright/) (CC BY 4.0). The application shows both credits, and files it saves from 3DBAG carry the credit.

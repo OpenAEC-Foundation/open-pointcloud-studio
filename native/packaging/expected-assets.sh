@@ -11,6 +11,11 @@
 # what the download buttons of the foundation's website look for, and that
 # script takes the first match in name order, so the x86-64 AppImage has to
 # sort before the ARM one: amd64 and arm64 do, x86_64 and aarch64 would not.
+#
+# The last file is the source of the Open CAD Studio that every package
+# carries, open-cad-studio-source_SHORT.tar.gz for the commit that
+# open-cad-studio.pin names (archive-open-cad-studio-source.sh). Its name
+# ends in none of the endings of the download buttons, so they never offer it.
 set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -29,4 +34,5 @@ ${base}_amd64.deb
 ${base}_arm64.deb
 ${base}_linux-amd64.tar.gz
 ${base}_linux-arm64.tar.gz
+$(cad_source_archive_name)
 EOF

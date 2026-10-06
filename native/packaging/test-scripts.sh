@@ -325,6 +325,144 @@ else
     sed 's/^/        /' "$work/build.log"
 fi
 
+# ---- Open CAD Studio in the packages --------------------------------------
+
+# Stand-ins for the two programs: the application, and an Open CAD Studio
+# that reports a version and converts a drawing by copying it.
+mkdir -p "$work/built"
+printf '#!/usr/bin/env bash\necho application\n' > "$work/built/$BINARY_NAME"
+cat > "$work/built/$CAD_BINARY_NAME" <<EOF
+#!/usr/bin/env bash
+case \$1 in
+--version) echo "$CAD_BINARY_NAME 2026.40" ;;
+--export) cp "\$2" "\$3" ;;
+*) exit 1 ;;
+esac
+EOF
+chmod +x "$work/built/$BINARY_NAME" "$work/built/$CAD_BINARY_NAME"
+pinned=$(bash "$packaging_dir/build-open-cad-studio.sh" --pin)
+pinned_commit=$(sed -n 's/^commit=//p' <<< "$pinned")
+pinned_archive=$(sed -n 's/^archive=//p' <<< "$pinned")
+
+# The archive of Linux and macOS is packed with tar, which every system has.
+if bash "$packaging_dir/build-archive.sh" "$work/built/$BINARY_NAME" "$work/built/$CAD_BINARY_NAME" \
+    9.9.9 linux-amd64 "$work/packages" > "$work/archive.log" 2>&1; then
+    package=$work/packages/${BINARY_NAME}_9.9.9_linux-amd64
+    listing=$(tar -tvzf "$package.tar.gz")
+    if grep -qE "^-rwxr-xr-x .* ${BINARY_NAME}_9.9.9_linux-amd64/$CAD_BINARY_NAME\$" <<< "$listing" \
+        && grep -qF "/$CAD_BINARY_NAME-LICENSE.txt" <<< "$listing" \
+        && grep -qF "/$CAD_BINARY_NAME-NOTICE.txt" <<< "$listing"; then
+        passed "the archive carries Open CAD Studio, executable, with its licence and notice"
+    else
+        wrong "the archive lacks Open CAD Studio, its executable bit, its licence or its notice:"
+        sed 's/^/        /' <<< "$listing"
+    fi
+    notice=$package/$CAD_BINARY_NAME-NOTICE.txt
+    if grep -qF "$pinned_commit" "$notice" && grep -qF "$pinned_archive" "$notice" \
+        && grep -qF "releases/tag/v9.9.9" "$notice"; then
+        passed "the notice of Open CAD Studio names the pinned commit and where its source is"
+    else
+        wrong "the notice of Open CAD Studio does not name $pinned_commit, $pinned_archive and the release page:"
+        sed 's/^/        /' "$notice"
+    fi
+    if cmp -s "$package/$CAD_BINARY_NAME-LICENSE.txt" "$native_dir/desktop/LICENSE-GPL-3.0"; then
+        passed "the licence of Open CAD Studio is the GPL-3.0 text"
+    else
+        wrong "the licence of Open CAD Studio in the archive is not the GPL-3.0 text"
+    fi
+    if output=$(bash "$packaging_dir/check-open-cad-studio.sh" "$package/$BINARY_NAME" 2>&1); then
+        passed "check-open-cad-studio.sh accepts Open CAD Studio beside the application"
+    else
+        wrong "check-open-cad-studio.sh refuses Open CAD Studio beside the application:"
+        sed 's/^/        /' <<< "$output"
+    fi
+else
+    wrong "build-archive.sh failed:"
+    sed 's/^/        /' "$work/archive.log"
+fi
+
+if bash "$packaging_dir/build-archive.sh" "$work/built/$BINARY_NAME" "$work/built/missing" \
+    9.9.9 linux-amd64 "$work/packages" > /dev/null 2>&1; then
+    wrong "build-archive.sh packs an archive without Open CAD Studio"
+else
+    passed "build-archive.sh refuses to pack an archive without Open CAD Studio"
+fi
+
+# The .deb and the AppImage keep it out of the search path, where the
+# application looks for it too.
+mkdir -p "$work/icons/hicolor/scalable/apps"
+for size in 32 48 64 128 256 512; do
+    mkdir -p "$work/icons/hicolor/${size}x${size}/apps"
+    : > "$work/icons/hicolor/${size}x${size}/apps/$APP_ID.png"
+done
+: > "$work/icons/hicolor/scalable/apps/$APP_ID.svg"
+if bash "$packaging_dir/linux/stage-tree.sh" "$work/root" "$work/built/$BINARY_NAME" \
+    "$work/built/$CAD_BINARY_NAME" "$work/icons" 9.9.9 2026-10-05 > "$work/stage.log" 2>&1 \
+    && [[ -x "$work/root/usr/lib/$BINARY_NAME/$CAD_BINARY_NAME" ]] \
+    && grep -qF "$pinned_commit" "$work/root/usr/share/doc/$BINARY_NAME/$CAD_BINARY_NAME-NOTICE.txt"; then
+    passed "stage-tree.sh puts Open CAD Studio in usr/lib/$BINARY_NAME with its notice"
+    if output=$(bash "$packaging_dir/check-open-cad-studio.sh" "$work/root/usr/bin/$BINARY_NAME" 2>&1); then
+        passed "check-open-cad-studio.sh accepts Open CAD Studio in ../lib/$BINARY_NAME"
+    else
+        wrong "check-open-cad-studio.sh refuses Open CAD Studio in ../lib/$BINARY_NAME:"
+        sed 's/^/        /' <<< "$output"
+    fi
+else
+    wrong "stage-tree.sh does not put Open CAD Studio in usr/lib/$BINARY_NAME with its notice:"
+    sed 's/^/        /' "$work/stage.log"
+fi
+
+# A program that does not answer as Open CAD Studio does is refused.
+mkdir -p "$work/other"
+cp "$work/built/$BINARY_NAME" "$work/other/"
+printf '#!/usr/bin/env bash\necho something else\n' > "$work/other/$CAD_BINARY_NAME"
+chmod +x "$work/other/$CAD_BINARY_NAME"
+if bash "$packaging_dir/check-open-cad-studio.sh" "$work/other/$BINARY_NAME" > /dev/null 2>&1; then
+    wrong "check-open-cad-studio.sh accepts a program that is not Open CAD Studio"
+else
+    passed "check-open-cad-studio.sh refuses a program that is not Open CAD Studio"
+fi
+
+# ---- archive-open-cad-studio-source.sh -----------------------------------
+
+# The source goes on the release page whole, also what the .gitattributes of
+# the commit would leave out of an archive.
+printf 'src/main.rs export-ignore\n' > "$upstream/.gitattributes"
+kept=$(commit_upstream "a file that git archive would leave out")
+short=${kept:0:8}
+pin_upstream "$kept"
+if output=$(PATH="$work/bin:$PATH" OCS_PIN_FILE="$work/ocs.pin" OCS_FETCH_FROM="$upstream" \
+    OCS_TARGET_DIR="$work/ocs-target" \
+    bash "$packaging_dir/archive-open-cad-studio-source.sh" "$work/source" 2> "$work/source.log"); then
+    expected=$(git -C "$upstream" ls-tree -r --name-only "$kept" | sed "s|^|open-cad-studio-$short/|" | sort)
+    archived=$(tar -tzf "$output" | grep -v '/$' | sort)
+    if [[ "$output" == "$work/source/open-cad-studio-source_$short.tar.gz" && "$archived" == "$expected" ]]; then
+        passed "the source archive holds every file of the pinned commit"
+    else
+        wrong "the source archive $output does not hold the files of the pinned commit:"
+        diff <(echo "$expected") <(echo "$archived") | sed 's/^/        /'
+    fi
+    if (cd "$work/source" && if command -v sha256sum >/dev/null 2>&1; then sha256sum -c --quiet ./*.sha256; else shasum -a 256 -c --quiet ./*.sha256; fi) > /dev/null 2>&1; then
+        passed "the source archive has a .sha256 beside it"
+    else
+        wrong "the source archive has no fitting .sha256 beside it"
+    fi
+else
+    wrong "archive-open-cad-studio-source.sh failed:"
+    sed 's/^/        /' "$work/source.log"
+fi
+
+# The release has it as its last file, under a name that the download
+# buttons of the website, which look for the endings of the packages, never
+# offer.
+source_name=$(bash "$packaging_dir/expected-assets.sh" 9.9.9 | tail -n 1)
+if [[ "$source_name" == "$pinned_archive" && "$source_name" == open-cad-studio-source_*.tar.gz \
+    && "$source_name" != *linux* && "$source_name" != *macos* && "$source_name" != *windows* ]]; then
+    passed "the release carries the source of Open CAD Studio as $source_name"
+else
+    wrong "the release does not carry the source of Open CAD Studio as $pinned_archive, but '$source_name'"
+fi
+
 if [[ "$failures" -ne 0 ]]; then
     fail "$failures of the tests failed"
 fi

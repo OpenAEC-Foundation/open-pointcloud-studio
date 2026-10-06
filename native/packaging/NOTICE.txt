@@ -16,8 +16,15 @@ licence. Writing a drawing as DXF or DWG uses the crate acadrust, version
 under that name and version. native/NOTICE in the source repository lists
 it with the crates it brings along.
 
+Every package also carries Open CAD Studio, the open-source CAD
+application, as the program that shows exported drawings: OpenCADStudio
+(OpenCADStudio.exe on Windows) beside the application, or in
+/usr/lib/open-pointcloud-studio in the .deb and the AppImage. It is
+licensed GPL-3.0 (OpenCADStudio-LICENSE.txt); OpenCADStudio-NOTICE.txt
+names its source and the commit it was built from.
+
 A package for a Debian-based system refers to the licence texts that the
-system keeps in /usr/share/common-licenses instead of carrying the two
+system keeps in /usr/share/common-licenses instead of carrying the
 LICENSE files.
 
 The AppImage package starts with the AppImage type 2 runtime, release

@@ -1,0 +1,31 @@
+Open CAD Studio
+
+OpenCADStudio (OpenCADStudio.exe on Windows) is Open CAD Studio, the
+open-source CAD application by Hakan Seven and the contributors of Open
+CAD Studio: @URL@
+
+It is licensed under the GNU General Public License, version 3; the text
+is in OpenCADStudio-LICENSE.txt. Open Pointcloud Studio carries it to show
+exported drawings read-only.
+
+It was built without changes from this commit of that repository:
+
+    @COMMIT@ (@DATE@)
+
+with the versions of the Rust crates that the Cargo.lock of that commit
+lists, each under its own licence, by native/packaging/build-open-cad-studio.sh
+of the source repository of Open Pointcloud Studio.
+
+The source of that commit is published on the release page of this
+version of Open Pointcloud Studio,
+
+    https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v@VERSION@
+
+as the file
+
+    @ARCHIVE@
+
+It can also be fetched from the repository above by its commit hash.
+
+Source code of Open Pointcloud Studio:
+https://github.com/OpenAEC-Foundation/open-pointcloud-studio

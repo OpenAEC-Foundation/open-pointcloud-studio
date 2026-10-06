@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Builds Open CAD Studio, the CAD program that shows exported drawings, from
-# the one commit of its repository that open-cad-studio.pin names.
+# Builds Open CAD Studio, the CAD program every package carries beside the
+# application, from the one commit of its repository that
+# open-cad-studio.pin names.
 #
 #   build-open-cad-studio.sh [CARGO_OPTIONS...]
 #   build-open-cad-studio.sh --fetch    only fetch and check the source
@@ -27,14 +28,15 @@
 # stack size on Windows. Run again with nothing changed, Cargo has nothing to
 # do; only another commit in the pin file is fetched and built again.
 #
-# --pin prints url=, commit=, tree= and date= lines.
+# --pin prints url=, commit=, tree=, date= and archive= lines (the name of
+# the release file with the source), as the Packages workflow reads them.
 #
 # Built with the GNU toolchain for Windows, the program links the C++ runtime
 # of MinGW, libstdc++-6.dll, for a mesh library written in C++. That library
 # and the ones it needs in turn are copied from the folder of g++ to beside
 # the program, so that it also starts where MinGW is not on the search path,
-# as from a development build of the application. Built with the MSVC
-# toolchain, it needs none of this.
+# as from a development build of the application. The packages build it with
+# the MSVC toolchain, which needs none of this.
 #
 # Runs with bash 3.2 (macOS) and with the bash of Git for Windows.
 set -euo pipefail
@@ -44,7 +46,8 @@ set -euo pipefail
 read_cad_pin
 case "${1:-}" in
     --pin)
-        printf 'url=%s\ncommit=%s\ntree=%s\ndate=%s\n' "$cad_url" "$cad_commit" "$cad_tree" "$cad_date"
+        printf 'url=%s\ncommit=%s\ntree=%s\ndate=%s\narchive=%s\n' \
+            "$cad_url" "$cad_commit" "$cad_tree" "$cad_date" "$(cad_source_archive_name)"
         exit 0
         ;;
     --fetch)

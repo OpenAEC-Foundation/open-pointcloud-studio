@@ -86,6 +86,9 @@ jobs:
       NUMBER: ${{ needs.prepare.outputs.number }}
     steps:
       - uses: actions/checkout@v4
+      # The packages of every system, and package-open-cad-studio-source: the
+      # source of the Open CAD Studio they carry, which is GPL-3.0 and goes on
+      # the release page with them (expected-assets.sh lists it last).
       - uses: actions/download-artifact@v4
         with:
           pattern: package-*

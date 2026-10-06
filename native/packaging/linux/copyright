@@ -8,6 +8,13 @@ Comment:
  properties-panel code and icons adapted from a GPL-3.0 project that is
  credited in the source headers and in native/README.md; the notes of the
  release archives are in NOTICE.txt beside this file.
+ .
+ The binary /usr/lib/open-pointcloud-studio/OpenCADStudio is Open CAD Studio,
+ https://github.com/HakanSeven12/OpenCADStudio, copyright Hakan Seven and the
+ contributors of Open CAD Studio, licensed GPL-3. It is built without changes
+ from one commit of that repository and is not part of the source repository
+ of Open Pointcloud Studio; OpenCADStudio-NOTICE.txt beside this file names
+ the commit and the file of the release page that holds its source.
 
 Files: *
 Copyright: OpenAEC Foundation and the contributors of Open Pointcloud Studio

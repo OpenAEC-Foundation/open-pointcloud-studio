@@ -60,8 +60,11 @@ fi
 
 footer=$(mktemp)
 trap 'rm -f "$footer"' EXIT
+read_cad_pin
 fill_template "$packaging_dir/release-notes-footer.md" "$footer" \
-    "VERSION=$number" "WINDOWS_SIGNING=$signing"
+    "VERSION=$number" "WINDOWS_SIGNING=$signing" \
+    "CAD_COMMIT=$cad_commit" "CAD_DATE=$cad_date" "CAD_URL=${cad_url%.git}" \
+    "CAD_SOURCE=$(cad_source_archive_name)"
 
 echo "$section"
 echo
