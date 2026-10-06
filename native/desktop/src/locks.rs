@@ -498,6 +498,9 @@ mod tests {
 
     #[test]
     fn a_locked_view_keeps_its_camera_and_box_for_the_mouse_the_keys_and_the_api() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
         let (mut studio, _directory) = studio_with_scan();
         let _ = studio.update(Message::SetSectionEnabled(true));
         let _ = studio.update(Message::Views(ViewAction::Save));
@@ -591,6 +594,9 @@ mod tests {
 
     #[test]
     fn a_locked_drawing_keeps_its_crop_region_and_a_locked_viewport_its_place() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
         use crate::layouts::{Paper, PlacedKind};
         use pointcloud_core::{Bounds, DrawingRequest, DrawingView, OrientedBox};
 

@@ -2406,6 +2406,9 @@ mod tests {
 
     #[test]
     fn a_dimension_snaps_to_the_corners_and_shows_the_distance_in_millimetres() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
         let (mut studio, _directory) = studio_with_scan();
         let guid = shown_plan(&mut studio);
         let act = |studio: &mut Studio, action: NoteAction| {
@@ -2487,6 +2490,9 @@ mod tests {
 
     #[test]
     fn annotations_stay_at_their_model_points_when_the_drawing_is_made_again() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
         let (mut studio, _directory) = studio_with_scan();
         let guid = shown_plan(&mut studio);
         let added = send(
@@ -2548,6 +2554,9 @@ mod tests {
 
     #[test]
     fn a_drawing_with_its_annotations_is_written_with_real_dimensions() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
         use cadcodec_check::dimensions_in;
 
         let (mut studio, directory) = studio_with_scan();
@@ -2606,6 +2615,9 @@ mod tests {
 
     #[test]
     fn a_sheet_shows_the_annotations_of_a_drawing_at_scale_and_its_own_notes() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
         use crate::layouts::{Paper, PlacedKind};
 
         let (mut studio, _directory) = studio_with_scan();
@@ -2680,6 +2692,9 @@ mod tests {
 
     #[test]
     fn the_layer_of_the_drawing_view_snaps_clicks_selects_and_drags_annotations() {
+        // What it reads is in the language of the window; a test in Dutch
+        // may run at the same time.
+        let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
         use iced::widget::canvas::Program;
         use iced::{mouse, Point as UiPoint, Rectangle, Size};
 

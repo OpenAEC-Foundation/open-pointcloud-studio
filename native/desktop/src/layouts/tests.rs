@@ -157,6 +157,9 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 #[test]
 fn papers_of_the_a_series_lie_and_stand() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     assert_eq!(Paper::A4.size(false), [210.0, 297.0]);
     assert_eq!(Paper::A3.size(true), [420.0, 297.0]);
     assert_eq!(Paper::A2.size(true), [594.0, 420.0]);
@@ -181,6 +184,9 @@ fn papers_of_the_a_series_lie_and_stand() {
 
 #[test]
 fn a_metre_is_ten_millimetres_at_one_to_a_hundred() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     assert_eq!(model::paper_mm(1.0, 100.0), 10.0);
     assert_eq!(model::paper_mm(1.0, 50.0), 20.0);
     assert_eq!(model::paper_mm(2.5, 200.0), 12.5);
@@ -209,6 +215,9 @@ fn a_metre_is_ten_millimetres_at_one_to_a_hundred() {
 
 #[test]
 fn views_are_placed_where_the_paper_is_free() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let mut sheet = Layout::new("01", "Plans", Paper::A3, true);
     let first = sheet.free_place([120.0, 80.0], None);
     let place = |at: [f64; 2], size: [f64; 2]| model::rect_around(at, size);
@@ -233,6 +242,9 @@ fn views_are_placed_where_the_paper_is_free() {
 
 #[test]
 fn sheets_are_kept_and_what_cannot_be_read_is_left_out() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config/sheets.json");
     let mut sheet = Layout::new("A-101", "Ground floor", Paper::A2, false);
@@ -266,6 +278,9 @@ fn sheets_are_kept_and_what_cannot_be_read_is_left_out() {
 
 #[test]
 fn a_sheet_with_a_plan_and_a_view_comes_back_after_a_restart() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, directory) = studio_with_scan();
     let plan = made_plan(&mut studio, "Plan +1.20");
     let _ = studio.update(Message::Views(crate::views::ViewAction::Save));
@@ -341,6 +356,9 @@ fn a_sheet_with_a_plan_and_a_view_comes_back_after_a_restart() {
 
 #[test]
 fn a_deleted_view_leaves_view_missing_and_a_viewport_follows_its_view() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let english = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     let plan = made_plan(&mut studio, "Plan +1.20");
     let _ = studio.update(Message::Views(crate::views::ViewAction::Save));
@@ -398,6 +416,7 @@ fn a_deleted_view_leaves_view_missing_and_a_viewport_follows_its_view() {
     assert_eq!(viewports[0]["shows"], "missing");
     assert_eq!(viewports[1]["shows"], "missing");
     {
+        drop(english);
         let _dutch = crate::i18n::TestLanguage::hold(crate::i18n::Language::Table(0));
         let _ = studio.update(Message::Layouts(LayoutAction::Fit));
         assert!(texts(&studio).iter().any(|text| text == "view ontbreekt"));
@@ -407,6 +426,9 @@ fn a_deleted_view_leaves_view_missing_and_a_viewport_follows_its_view() {
 
 #[test]
 fn the_pdf_holds_the_paper_the_drawing_the_picture_and_the_texts() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     let plan = made_plan(&mut studio, "Plan +1.20");
     let _ = studio.update(Message::Views(crate::views::ViewAction::Save));
@@ -512,6 +534,9 @@ fn texts_are_written_in_the_encoding_of_the_standard_fonts() {
 
 #[test]
 fn the_api_makes_shows_places_changes_and_deletes_sheets() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     let plan = made_plan(&mut studio, "Plan +1.20");
     let _ = studio.update(Message::Views(crate::views::ViewAction::Save));
@@ -610,6 +635,9 @@ fn the_api_makes_shows_places_changes_and_deletes_sheets() {
 
 #[test]
 fn a_row_of_views_let_go_over_the_paper_is_placed_there() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (mut studio, _directory) = studio_with_scan();
     let plan = made_plan(&mut studio, "Plan +1.20");
     let sheet = studio
@@ -656,6 +684,9 @@ fn a_row_of_views_let_go_over_the_paper_is_placed_there() {
 
 #[test]
 fn a_viewport_that_waits_says_why() {
+    // What it reads is in the language of the window; a test in Dutch
+    // may run at the same time.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     let (studio, _directory) = studio_with_scan();
     let mut sheet = Layout::new("01", "Sheet 1", Paper::A4, false);
     sheet.viewports.push(model::Viewport::new(
