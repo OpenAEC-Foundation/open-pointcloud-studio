@@ -414,6 +414,11 @@ impl MeasureTool {
             return Err(format!("A measurement holds at most {MAX_POINTS} points"));
         }
         measurement.points.push(xyz);
+        // A distance is between two points: it is done with the second, and
+        // the next click starts a new one instead of going on from it.
+        if mode == MeasureMode::Distance && measurement.points.len() == 2 {
+            measurement.finished = true;
+        }
         Ok(&*measurement)
     }
 
@@ -610,7 +615,13 @@ impl Studio {
                     // The pick search answers in scene coordinates: the
                     // layer's live transform is already applied.
                     Ok(Some(record)) => match self.measure.push(record.point.xyz) {
-                        Ok(measurement) => self.status = measurement.progress(),
+                        Ok(measurement) => {
+                            self.status = if measurement.finished {
+                                format!("Measured {}", measurement.summary())
+                            } else {
+                                measurement.progress()
+                            }
+                        }
                         Err(error) => self.status = error,
                     },
                     Ok(None) => self.status = format!("No point within {PICK_RADIUS} pixels"),
@@ -1130,11 +1141,9 @@ mod tests {
             tool.finish().unwrap_err(),
             "Distance needs at least 2 points"
         );
-        tool.push([1.0, 0.0, 0.0]).unwrap();
-        tool.push([1.0, 1.0, 0.0]).unwrap();
-        assert!(tool.remove_last());
+        // The second point ends the distance.
+        assert!(tool.push([1.0, 0.0, 0.0]).unwrap().finished);
         assert_eq!(tool.current.as_ref().unwrap().points.len(), 2);
-        assert!(tool.finish().unwrap().unwrap().finished);
         // Nothing is left to finish or to shorten.
         assert!(tool.finish().unwrap().is_none());
         assert!(!tool.remove_last());
@@ -1148,7 +1157,6 @@ mod tests {
         // Cancelling drops unfinished points; switching tools keeps a
         // measurement that is complete and drops one that is not.
         tool.push([0.0; 3]).unwrap();
-        tool.push([1.0, 0.0, 0.0]).unwrap();
         assert!(tool.leave(false));
         assert!(tool.current.is_none() && tool.mode.is_none());
         assert!(!tool.leave(false));
@@ -1170,9 +1178,11 @@ mod tests {
         assert!(tool.leave(false));
         assert!(tool.current.is_some());
 
-        tool.mode = Some(MeasureMode::Distance);
+        // An area holds a limited number of corners.
+        tool.mode = Some(MeasureMode::Area);
+        tool.current = None;
         for index in 0..MAX_POINTS {
-            tool.push([index as f64, 0.0, 0.0]).unwrap();
+            tool.push([index as f64, (index % 2) as f64, 0.0]).unwrap();
         }
         assert!(tool.push([0.0; 3]).is_err());
         assert_eq!(tool.current.unwrap().points.len(), MAX_POINTS);
@@ -1303,21 +1313,36 @@ mod tests {
     }
 
     #[test]
-    fn picked_points_build_a_polyline_that_backspace_shortens_and_enter_finishes() {
+    fn two_picked_points_measure_a_distance_and_the_next_click_starts_anew() {
         let mut studio = Studio::default();
         apply(&mut studio, MeasureAction::Toggle(MeasureMode::Distance));
         let revision = studio.revision;
-        for xyz in [[0.0, 0.0, 0.0], [3.0, 4.0, 0.0], [9.0, 9.0, 9.0]] {
-            studio.selection_pending = true;
-            apply(&mut studio, MeasureAction::Picked(revision, picked(xyz)));
-            assert!(!studio.selection_pending);
-        }
-        assert_eq!(studio.measure.current.as_ref().unwrap().points.len(), 3);
-
+        studio.selection_pending = true;
+        apply(
+            &mut studio,
+            MeasureAction::Picked(revision, picked([9.0; 3])),
+        );
+        assert!(!studio.selection_pending);
+        // Backspace takes back the first point of an unfinished distance.
         apply(&mut studio, MeasureAction::RemoveLast);
+        assert!(studio.measure.current.is_none());
+
+        apply(
+            &mut studio,
+            MeasureAction::Picked(revision, picked([0.0, 0.0, 0.0])),
+        );
+        assert!(!studio.measure.current.as_ref().unwrap().finished);
         apply(
             &mut studio,
             MeasureAction::Picked(revision, picked([3.0, 4.0, 12.0])),
+        );
+        // The second point ends it, without Enter.
+        let done = studio.measure.current.as_ref().unwrap();
+        assert!(done.finished);
+        assert_eq!(done.points, vec![[0.0, 0.0, 0.0], [3.0, 4.0, 12.0]]);
+        assert_eq!(
+            studio.status,
+            "Measured length 13.000 m · horizontal 5.000 m · height +12.000 m"
         );
         // A miss, a failed search and a stale answer add nothing.
         apply(&mut studio, MeasureAction::Picked(revision, Ok(None)));
@@ -1330,23 +1355,14 @@ mod tests {
             &mut studio,
             MeasureAction::Picked(revision + 1, picked([7.0; 3])),
         );
-        let open = studio.measure.current.as_ref().unwrap();
-        assert!(!open.finished);
-        assert_eq!(
-            open.points,
-            vec![[0.0, 0.0, 0.0], [3.0, 4.0, 0.0], [3.0, 4.0, 12.0]]
-        );
-
+        assert_eq!(studio.measure.current.as_ref().unwrap().points.len(), 2);
+        // Enter and Backspace leave the finished distance alone.
         apply(&mut studio, MeasureAction::Finish);
-        assert!(studio.measure.current.as_ref().unwrap().finished);
-        assert_eq!(
-            studio.status,
-            "Measured length 17.000 m · horizontal 5.000 m · height +12.000 m"
-        );
-        assert_eq!(studio.measure.mode, Some(MeasureMode::Distance));
-        // Backspace leaves a finished measurement alone; a click starts anew.
         apply(&mut studio, MeasureAction::RemoveLast);
-        assert_eq!(studio.measure.current.as_ref().unwrap().points.len(), 3);
+        assert_eq!(studio.measure.current.as_ref().unwrap().points.len(), 2);
+        assert_eq!(studio.measure.mode, Some(MeasureMode::Distance));
+
+        // The next click starts a new distance instead of going on.
         apply(
             &mut studio,
             MeasureAction::Picked(revision, picked([1.0; 3])),
@@ -1370,10 +1386,6 @@ mod tests {
         apply(
             &mut studio,
             MeasureAction::Picked(revision, picked([0.0; 3])),
-        );
-        apply(
-            &mut studio,
-            MeasureAction::Picked(revision, picked([4.0, 0.0, 0.0])),
         );
 
         let _ = studio.update(Message::Escape);
