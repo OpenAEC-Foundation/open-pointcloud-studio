@@ -32,7 +32,9 @@ package carries its licence text (`OpenCADStudio-LICENSE.txt`, the GPL-3.0
 text) and a notice (`OpenCADStudio-NOTICE.txt`) that names the commit and
 says that its source is on the release page of that version, as
 `open-cad-studio-source_SHORT.tar.gz`; the GPL asks that whoever gets the
-program can get its source from the same place.
+program can get its source from the same place. The `.deb` is the exception
+for the licence text, as for those of the application: its notice points at
+`/usr/share/common-licenses/GPL-3`, which every Debian-based system has.
 
 The endings `_x64-setup.exe`, `.dmg`, `.AppImage` and `_amd64.deb` are what
 the download buttons of the foundation's website look for. That script takes

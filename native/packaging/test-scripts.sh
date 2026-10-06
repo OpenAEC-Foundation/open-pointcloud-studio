@@ -365,6 +365,11 @@ if bash "$packaging_dir/build-archive.sh" "$work/built/$BINARY_NAME" "$work/buil
         wrong "the notice of Open CAD Studio does not name $pinned_commit, $pinned_archive and the release page:"
         sed 's/^/        /' "$notice"
     fi
+    if grep -qF "is in $CAD_BINARY_NAME-LICENSE.txt." "$notice"; then
+        passed "the notice of Open CAD Studio in an archive points at the licence text beside it"
+    else
+        wrong "the notice of Open CAD Studio in an archive does not point at $CAD_BINARY_NAME-LICENSE.txt"
+    fi
     if cmp -s "$package/$CAD_BINARY_NAME-LICENSE.txt" "$native_dir/desktop/LICENSE-GPL-3.0"; then
         passed "the licence of Open CAD Studio is the GPL-3.0 text"
     else
@@ -401,6 +406,16 @@ if bash "$packaging_dir/linux/stage-tree.sh" "$work/root" "$work/built/$BINARY_N
     && [[ -x "$work/root/usr/lib/$BINARY_NAME/$CAD_BINARY_NAME" ]] \
     && grep -qF "$pinned_commit" "$work/root/usr/share/doc/$BINARY_NAME/$CAD_BINARY_NAME-NOTICE.txt"; then
     passed "stage-tree.sh puts Open CAD Studio in usr/lib/$BINARY_NAME with its notice"
+    # The .deb carries no OpenCADStudio-LICENSE.txt, so its notice must not
+    # point there.
+    notice=$work/root/usr/share/doc/$BINARY_NAME/$CAD_BINARY_NAME-NOTICE.txt
+    if grep -qF "is in /usr/share/common-licenses/GPL-3." "$notice" \
+        && ! grep -qF "$CAD_BINARY_NAME-LICENSE.txt" "$notice"; then
+        passed "the notice of Open CAD Studio in the .deb points at the GPL text of the system"
+    else
+        wrong "the notice of Open CAD Studio in the .deb points at a licence text the package does not carry:"
+        sed 's/^/        /' "$notice"
+    fi
     if output=$(bash "$packaging_dir/check-open-cad-studio.sh" "$work/root/usr/bin/$BINARY_NAME" 2>&1); then
         passed "check-open-cad-studio.sh accepts Open CAD Studio in ../lib/$BINARY_NAME"
     else

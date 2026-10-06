@@ -5,8 +5,8 @@ open-source CAD application by Hakan Seven and the contributors of Open
 CAD Studio: @URL@
 
 It is licensed under the GNU General Public License, version 3; the text
-is in OpenCADStudio-LICENSE.txt. Open Pointcloud Studio carries it to show
-exported drawings read-only.
+is in @LICENCE_TEXT@. Open Pointcloud Studio carries it to
+show exported drawings read-only.
 
 It was built without changes from this commit of that repository:
 

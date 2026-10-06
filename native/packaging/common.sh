@@ -169,15 +169,17 @@ copy_cad_licence() {
 }
 
 # The notice of Open CAD Studio, which names the pinned commit and the release
-# file with its source: copy_cad_notice DESTINATION NUMBER.
+# file with its source: copy_cad_notice DESTINATION NUMBER [LICENCE_TEXT].
+# LICENCE_TEXT is where the notice says the licence text is, by default
+# OpenCADStudio-LICENSE.txt beside it, which copy_cad_licence writes.
 copy_cad_notice() {
-    local destination=$1 number=$2
+    local destination=$1 number=$2 licence_text=${3:-$CAD_BINARY_NAME-LICENSE.txt}
     [[ -n "$number" ]] || fail "copy_cad_notice needs the version of the package"
     read_cad_pin
     mkdir -p "$destination"
     fill_template "$packaging_dir/$CAD_BINARY_NAME-NOTICE.txt.in" "$destination/$CAD_BINARY_NAME-NOTICE.txt" \
         "URL=${cad_url%.git}" "COMMIT=$cad_commit" "DATE=$cad_date" "VERSION=$number" \
-        "ARCHIVE=$(cad_source_archive_name)"
+        "ARCHIVE=$(cad_source_archive_name)" "LICENCE_TEXT=$licence_text"
 }
 
 # Write FILE.sha256 beside FILE, naming the file without its folder so that

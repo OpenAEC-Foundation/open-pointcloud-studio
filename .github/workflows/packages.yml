@@ -544,7 +544,11 @@ jobs:
       - name: Check the installed Open CAD Studio
         run: |
           bash native/packaging/check-open-cad-studio.sh /usr/bin/open-pointcloud-studio
-          test -f /usr/share/doc/open-pointcloud-studio/OpenCADStudio-NOTICE.txt
+          # The .deb carries no licence texts; its notice names the one the
+          # system keeps.
+          notice=/usr/share/doc/open-pointcloud-studio/OpenCADStudio-NOTICE.txt
+          grep -F 'is in /usr/share/common-licenses/GPL-3.' "$notice"
+          test -f /usr/share/common-licenses/GPL-3
       - name: Check that the system knows the file types
         run: bash native/packaging/linux/check-file-types.sh "$RUNNER_TEMP/smoke"
       - name: Check the installed desktop entry
@@ -583,6 +587,8 @@ jobs:
           "$GITHUB_WORKSPACE/packages/open-pointcloud-studio_${NUMBER}_${ARCH}.AppImage" --appimage-extract >/dev/null
           bash "$GITHUB_WORKSPACE/native/packaging/check-open-cad-studio.sh" squashfs-root/usr/bin/open-pointcloud-studio
           test -f squashfs-root/usr/share/doc/open-pointcloud-studio/OpenCADStudio-LICENSE.txt
+          grep -F 'is in OpenCADStudio-LICENSE.txt.' \
+            squashfs-root/usr/share/doc/open-pointcloud-studio/OpenCADStudio-NOTICE.txt
       - name: Window test of the AppImage
         run: |
           xvfb-run -a -s '-screen 0 1440x900x24' python3 native/packaging/gui-smoke.py \
