@@ -3125,6 +3125,21 @@ impl Studio {
         ))
     }
 
+    /// What tells each open scan from the others, for as long as it is open.
+    pub(crate) fn open_layer_identities(&self) -> Vec<Arc<PointCloud>> {
+        self.clouds
+            .iter()
+            .map(|entry| Arc::clone(&entry.load_identity))
+            .collect()
+    }
+
+    /// The drawings let go of the points they kept from scans that were
+    /// closed.
+    fn drop_kept_of_closed_scans(&mut self) {
+        let open = self.open_layer_identities();
+        self.drawing_view.kept.drop_closed(&open);
+    }
+
     fn remove_header_layer(&mut self, header: &Arc<PointCloud>) {
         if let Some(index) = self
             .clouds
@@ -3132,6 +3147,7 @@ impl Studio {
             .position(|entry| entry.matches_source(header))
         {
             self.clouds.remove(index);
+            self.drop_kept_of_closed_scans();
             self.leave_walk();
             self.rebuild_photo_atlas();
             self.revision += 1;
@@ -3616,6 +3632,7 @@ impl Studio {
             }
             self.clouds.remove(index);
         }
+        self.drop_kept_of_closed_scans();
         self.leave_walk();
         self.rebuild_photo_atlas();
         self.undo_deletions.clear();

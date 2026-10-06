@@ -13,10 +13,13 @@
 //! drawn, not when they are kept, so that a deletion or another class shown
 //! needs no read either.
 //!
-//! A kept point takes 24 bytes: its place as an offset in single precision
-//! from the middle of its leaf, which stays within a micrometre for a leaf
-//! of tens of metres, its colour, its class and its ordinal. Its intensity
-//! is not kept; a drawing has no use for it.
+//! A kept point takes 32 bytes: its place in the scene exactly as a read
+//! gives it, so that every point falls in the cell of the grid and of the
+//! thinning that a read puts it in, also on the edge of a cell; its colour,
+//! its class and its ordinal, which is kept from the lowest ordinal of its
+//! leaf. Its intensity is not kept; a drawing has no use for it. The points
+//! of a leaf whose ordinals lie 2^30 (over a thousand million) or more apart
+//! are not kept: the slab is then read as without kept points.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -57,71 +60,131 @@ const PARALLEL_FROM: usize = 400_000;
 /// kept points fill take at most this much memory together.
 const MAX_GRID_COPIES: usize = 256 << 20;
 
-/// The largest ordinal a kept point holds.
-const MAX_ORDINAL: u64 = (1 << 48) - 1;
+/// The bits of an ordinal a kept point holds: the ordinals of the points
+/// of a unit lie less than 2 to this power apart.
+const ORDINAL_BITS: u32 = 30;
+const ORDINAL_MASK: u32 = (1 << ORDINAL_BITS) - 1;
+/// Which of the colour and the class a kept point has, above its ordinal.
+const HAS_RGB: u32 = 1 << ORDINAL_BITS;
+const HAS_CLASSIFICATION: u32 = 1 << (ORDINAL_BITS + 1);
 
-/// A point as it is kept: where it stands in the scene, from the anchor of
-/// its leaf, what it carries and its ordinal in its source file.
+/// A point as it is kept: where it stands in the scene, what it carries and
+/// its ordinal in its source file.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct KeptPoint {
-    offset: [f32; 3],
-    ordinal_low: u32,
-    ordinal_high: u16,
+    /// Exactly as a read of the layer puts it in the scene.
+    xyz: [f64; 3],
+    /// The low `ORDINAL_BITS` of the ordinal, see `KeptUnit::ordinal`, and
+    /// the flags `HAS_RGB` and `HAS_CLASSIFICATION`.
+    word: u32,
     rgb: [u8; 3],
     classification: u8,
-    /// Which of the colour and the class the point has.
-    has: u8,
 }
-
-const HAS_RGB: u8 = 1;
-const HAS_CLASSIFICATION: u8 = 2;
 
 /// Bytes of memory a kept point takes.
 pub const KEPT_POINT_BYTES: usize = std::mem::size_of::<KeptPoint>();
 
 impl KeptPoint {
-    fn of(point: &Point, ordinal: u64, anchor: [f64; 3]) -> Self {
-        let mut has = 0;
+    fn of(point: &Point, ordinal: u64) -> Self {
+        let mut word = (ordinal & u64::from(ORDINAL_MASK)) as u32;
         if point.rgb.is_some() {
-            has |= HAS_RGB;
+            word |= HAS_RGB;
         }
         if point.classification.is_some() {
-            has |= HAS_CLASSIFICATION;
+            word |= HAS_CLASSIFICATION;
         }
         Self {
-            offset: std::array::from_fn(|axis| (point.xyz[axis] - anchor[axis]) as f32),
-            ordinal_low: ordinal as u32,
-            ordinal_high: (ordinal >> 32) as u16,
+            xyz: point.xyz,
+            word,
             rgb: point.rgb.unwrap_or_default(),
             classification: point.classification.unwrap_or_default(),
-            has,
-        }
-    }
-
-    fn xyz(&self, anchor: [f64; 3]) -> [f64; 3] {
-        std::array::from_fn(|axis| anchor[axis] + f64::from(self.offset[axis]))
-    }
-
-    fn record(&self, anchor: [f64; 3]) -> IndexedPoint {
-        let with = |flag: u8| self.has & flag != 0;
-        IndexedPoint {
-            point: Point {
-                xyz: self.xyz(anchor),
-                rgb: with(HAS_RGB).then_some(self.rgb),
-                intensity: None,
-                classification: with(HAS_CLASSIFICATION).then_some(self.classification),
-            },
-            ordinal: (u64::from(self.ordinal_high) << 32) | u64::from(self.ordinal_low),
         }
     }
 }
 
-/// The kept points of a leaf, or of a layer without an index, with the
-/// place they are kept from.
+/// The kept points of a leaf, or of a layer without an index.
 #[derive(Debug, Clone, PartialEq)]
 struct KeptUnit {
-    anchor: [f64; 3],
+    /// The lowest ordinal of its points.
+    first: u64,
     points: Vec<KeptPoint>,
+}
+
+impl KeptUnit {
+    /// The ordinal of a point: the one from `first` up whose low bits it
+    /// holds.
+    fn ordinal(&self, point: &KeptPoint) -> u64 {
+        let low = u64::from(point.word & ORDINAL_MASK);
+        let first_low = self.first & u64::from(ORDINAL_MASK);
+        self.first + (low.wrapping_sub(first_low) & u64::from(ORDINAL_MASK))
+    }
+
+    fn record(&self, point: &KeptPoint) -> IndexedPoint {
+        let with = |flag: u32| point.word & flag != 0;
+        IndexedPoint {
+            point: Point {
+                xyz: point.xyz,
+                rgb: with(HAS_RGB).then_some(point.rgb),
+                intensity: None,
+                classification: with(HAS_CLASSIFICATION).then_some(point.classification),
+            },
+            ordinal: self.ordinal(point),
+        }
+    }
+
+    /// Memory its points take.
+    fn bytes(&self) -> usize {
+        self.points.capacity() * KEPT_POINT_BYTES
+    }
+}
+
+/// The points of a unit as they are kept, one after the other.
+struct Keeping {
+    points: Vec<KeptPoint>,
+    /// The lowest and the highest ordinal so far.
+    ordinals: [u64; 2],
+}
+
+impl Keeping {
+    fn new() -> Self {
+        Self {
+            points: Vec::new(),
+            ordinals: [u64::MAX, 0],
+        }
+    }
+
+    fn push(&mut self, point: &Point, ordinal: u64) {
+        self.ordinals[0] = self.ordinals[0].min(ordinal);
+        self.ordinals[1] = self.ordinals[1].max(ordinal);
+        self.points.push(KeptPoint::of(point, ordinal));
+    }
+
+    fn len(&self) -> usize {
+        self.points.len()
+    }
+
+    /// Whether the ordinals lie close enough together to keep.
+    fn fits(&self) -> bool {
+        self.points.is_empty() || self.ordinals[1] - self.ordinals[0] <= u64::from(ORDINAL_MASK)
+    }
+
+    /// The kept unit, in no more memory than its points take; none when
+    /// its ordinals lie too far apart.
+    fn finish(self) -> Option<KeptUnit> {
+        if !self.fits() {
+            return None;
+        }
+        let mut points = self.points;
+        points.shrink_to_fit();
+        Some(KeptUnit {
+            first: if points.is_empty() {
+                0
+            } else {
+                self.ordinals[0]
+            },
+            points,
+        })
+    }
 }
 
 /// What a layer is, as far as the kept points go: what its points are read
@@ -259,6 +322,8 @@ pub struct KeptSlab {
     key: Option<KeptKey>,
     units: HashMap<UnitKey, KeptUnit>,
     points: usize,
+    /// The memory the points of `units` take.
+    bytes: usize,
     limit: usize,
     /// From this many points on, the kept points are drawn on several
     /// threads.
@@ -272,14 +337,16 @@ impl KeptSlab {
             key: None,
             units: HashMap::new(),
             points: 0,
+            bytes: 0,
             limit,
             parallel_from: PARALLEL_FROM,
         }
     }
 
-    /// The memory the kept points take, in bytes.
+    /// The memory the kept points take, in bytes: what is set aside for
+    /// them, which is what they need.
     pub fn bytes(&self) -> usize {
-        self.points * KEPT_POINT_BYTES
+        self.bytes
     }
 
     /// How many points are kept.
@@ -296,6 +363,7 @@ impl KeptSlab {
         self.key = None;
         self.units.clear();
         self.points = 0;
+        self.bytes = 0;
     }
 
     fn start_over(&mut self, key: KeptKey) {
@@ -308,12 +376,15 @@ impl KeptSlab {
         let wanted: Vec<UnitKey> = needed.iter().filter_map(Unit::key).collect();
         self.units.retain(|key, _| wanted.contains(key));
         self.points = self.units.values().map(|unit| unit.points.len()).sum();
+        self.bytes = self.units.values().map(KeptUnit::bytes).sum();
     }
 
     fn insert(&mut self, key: UnitKey, unit: KeptUnit) {
         self.points += unit.points.len();
+        self.bytes += unit.bytes();
         if let Some(earlier) = self.units.insert(key, unit) {
             self.points -= earlier.points.len();
+            self.bytes -= earlier.bytes();
         }
     }
 }
@@ -386,20 +457,6 @@ impl Unit<'_> {
         }
     }
 
-    /// The place its points are kept from: the middle of where they lie.
-    fn anchor(&self) -> [f64; 3] {
-        self.bounds().map_or([0.0; 3], |bounds| {
-            std::array::from_fn(|axis| {
-                let middle = (bounds.min[axis] + bounds.max[axis]) / 2.0;
-                if middle.is_finite() {
-                    middle
-                } else {
-                    0.0
-                }
-            })
-        })
-    }
-
     /// About how many of its points a read keeps: those in the band, as if
     /// its points were spread evenly over its box.
     fn estimate(&self, band: &Band, percent: f64) -> f64 {
@@ -450,8 +507,8 @@ fn units_of<'a>(sources: &[RegionSource<'a>], slab: &Slab) -> Vec<Unit<'a>> {
 }
 
 /// The points of one leaf in the band and the share, and how many were
-/// read; nothing when an ordinal is too large to keep. Stops at the next
-/// few thousand points once `stop` is set.
+/// read; nothing when their ordinals lie too far apart to keep. Stops at
+/// the next few thousand points once `stop` is set.
 fn read_leaf(
     unit: &Unit<'_>,
     band: Band,
@@ -467,10 +524,8 @@ fn read_leaf(
     else {
         return Ok(None);
     };
-    let anchor = unit.anchor();
-    let mut points = Vec::new();
+    let mut keeping = Keeping::new();
     let mut read = 0u64;
-    let mut fits = true;
     index.visit_leaf(leaf, |record| {
         read += 1;
         if read.is_multiple_of(CHUNK_POINTS as u64) && stop.load(Ordering::Relaxed) {
@@ -482,12 +537,11 @@ fn read_leaf(
         let mut point = record.point;
         point.xyz = transform.xyz(point.xyz);
         if band.holds(point.xyz) {
-            fits &= record.ordinal <= MAX_ORDINAL;
-            points.push(KeptPoint::of(&point, record.ordinal, anchor));
+            keeping.push(&point, record.ordinal);
         }
         Ok(())
     })?;
-    Ok(fits.then_some((KeptUnit { anchor, points }, read)))
+    Ok(keeping.finish().map(|unit| (unit, read)))
 }
 
 /// What reading the missing units gave: the points of each by its place in
@@ -584,12 +638,11 @@ fn read_missing(
         else {
             continue;
         };
-        let anchor = unit.anchor();
         let layer = RegionSource {
             reader: RegionReader::Stream(cloud),
             transform,
         };
-        let mut points = Vec::new();
+        let mut keeping = Keeping::new();
         let before = read;
         let mut over = false;
         let stats = visit_region(
@@ -598,13 +651,10 @@ fn read_missing(
             &|_, ordinal, point| sampled_ordinal(ordinal, percent) && band.holds(point.xyz),
             &mut |step| progress(before + step.read),
             &mut |_, batch| {
-                points.extend(
-                    batch
-                        .iter()
-                        .map(|record| KeptPoint::of(&record.point, record.ordinal, anchor)),
-                );
-                let too_late = batch.iter().any(|record| record.ordinal > MAX_ORDINAL);
-                if too_late || held + points.len() > room {
+                for record in batch {
+                    keeping.push(&record.point, record.ordinal);
+                }
+                if !keeping.fits() || held + keeping.len() > room {
                     over = true;
                     return Err(LoadError::Cancelled);
                 }
@@ -616,8 +666,11 @@ fn read_missing(
             Err(LoadError::Cancelled) if over => return Ok(None),
             Err(error) => return Err(error),
         }
-        held += points.len();
-        fresh.push((place, KeptUnit { anchor, points }));
+        let Some(kept) = keeping.finish() else {
+            return Ok(None);
+        };
+        held += kept.points.len();
+        fresh.push((place, kept));
     }
     Ok(Some((fresh, read)))
 }
@@ -674,13 +727,12 @@ impl Drawing<'_, '_> {
             Drawn::Kept(source, kept) => {
                 for chunk in kept.points.chunks(CHUNK_POINTS) {
                     for point in chunk {
-                        let xyz = point.xyz(kept.anchor);
-                        if !self.in_slab(xyz) {
+                        if !self.in_slab(point.xyz) {
                             continue;
                         }
-                        let record = point.record(kept.anchor);
+                        let record = kept.record(point);
                         if (self.accept)(source, record.ordinal, &record.point) {
-                            take(self.slab.frame.to_uv(xyz), source as u32, &record);
+                            take(self.slab.frame.to_uv(point.xyz), source as u32, &record);
                             accepted += 1;
                         }
                     }
@@ -829,9 +881,10 @@ fn draw_in_parts(
 /// band and share are taken from memory; only the leaves that the slab
 /// touches and that are not kept yet are read, on several threads. A large
 /// number of kept points is drawn on several threads as well. The result is
-/// the one `collect_slab` gives, to the rounding of the kept positions, with
-/// `read_points` the points read now and `reused_points` the points taken
-/// from memory.
+/// the one `collect_slab` gives, but for the order in which the sums of the
+/// cells of the filled cut are added when the points are drawn on several
+/// threads, with `read_points` the points read now and `reused_points` the
+/// points taken from memory.
 ///
 /// When the band holds more points than the limit of `kept`, the slab is
 /// read as `collect_slab` reads it and `kept` is emptied. `progress` hears
@@ -882,7 +935,7 @@ pub fn collect_slab_kept(
         kept.clear();
         return collect_slab(sources, slab, options, accept, &mut reading);
     }
-    if kept.points + expected > room {
+    if kept.bytes / KEPT_POINT_BYTES + expected > room {
         kept.keep_only(&units);
     }
     let to_read: u64 = missing.iter().map(|place| units[*place].stored()).sum();
@@ -896,7 +949,7 @@ pub fn collect_slab_kept(
         &missing,
         band,
         percent,
-        room.saturating_sub(kept.points),
+        room.saturating_sub(kept.bytes / KEPT_POINT_BYTES),
         &mut |read| {
             reading(RegionProgress {
                 read,
@@ -1088,33 +1141,130 @@ mod tests {
         }
     }
 
-    /// The drawing a read without kept points gives, to the rounding of the
-    /// kept positions to a fraction of a micrometre: the same points of the
-    /// slab, and the same number drawn but for the few that the rounding
-    /// moves over the edge of a cell where the points lie on a lattice.
-    fn like_streamed(kept: &SlabCut, read: &SlabCut) {
-        assert_eq!(kept.slab_points, read.slab_points);
-        assert_eq!(kept.spacing, read.spacing);
-        let (a, b) = (kept.points.len(), read.points.len());
-        assert!(a.abs_diff(b) <= 2 + b / 50, "{a} and {b} points");
-        let total = |cut: &SlabCut| {
-            cut.grid.as_ref().map(|grid| {
-                grid.counts()
-                    .counts()
-                    .iter()
-                    .map(|count| u64::from(*count))
-                    .sum::<u64>()
-            })
-        };
-        assert_eq!(total(kept), total(read));
-    }
-
     fn indexed(cloud: &crate::test_shapes::IndexedCloud) -> [RegionSource<'_>; 1] {
         [RegionSource::new(
             &cloud.cloud,
             Some(&cloud.index),
             SourceTransform::default(),
         )]
+    }
+
+    /// Points on a millimetre lattice away from the origin, as a scan file
+    /// with a scale of 0.001 and its lowest corner as offset gives them: so
+    /// many lie exactly on an edge of a cell of the grid or of the thinning,
+    /// whose corners lie on the lattice too, that a position off by the
+    /// least amount moves some of them to the next cell.
+    fn lattice_points() -> Vec<Point> {
+        let offset = [-33.325_226, -29.508_170, 1.234_567];
+        let steps = [3_000u64, 2_500, 1_200];
+        let at = |axis: usize, step: u64| step as f64 * 0.001 + offset[axis];
+        let mut rng = crate::test_shapes::Rng::new(11);
+        let mut points: Vec<Point> = (0..60_000)
+            .map(|_| Point {
+                xyz: std::array::from_fn(|axis| at(axis, rng.next_u64() % (steps[axis] + 1))),
+                rgb: None,
+                intensity: None,
+                classification: None,
+            })
+            .collect();
+        points[0].xyz = std::array::from_fn(|axis| at(axis, 0));
+        points[1].xyz = std::array::from_fn(|axis| at(axis, steps[axis]));
+        points
+    }
+
+    #[test]
+    fn a_kept_point_gives_back_its_place_and_its_ordinal_exactly() {
+        let point = |x: f64, rgb: Option<[u8; 3]>, classification: Option<u8>| Point {
+            xyz: [x, -33.325_226_000_000_1, 1.0e7 + 0.001],
+            rgb,
+            intensity: Some(9),
+            classification,
+        };
+        let base = 1u64 << 40;
+        // Across a boundary of the low bits, and not in order.
+        let given = [
+            (point(0.1, Some([1, 2, 3]), Some(6)), base + (1 << 30) - 2),
+            (point(-1e-9, None, Some(0)), base + (1 << 30) + 3),
+            (
+                point(f64::from(f32::MAX) * 4.0, Some([0; 3]), None),
+                base + 5,
+            ),
+            (point(1.0 / 3.0, None, None), base + (1 << 29)),
+        ];
+        let mut keeping = Keeping::new();
+        for (point, ordinal) in &given {
+            keeping.push(point, *ordinal);
+        }
+        let unit = keeping.finish().unwrap();
+        assert_eq!(unit.first, base + 5);
+        assert_eq!(unit.points.capacity(), unit.points.len());
+        assert_eq!(unit.bytes(), given.len() * KEPT_POINT_BYTES);
+        for ((point, ordinal), kept) in given.iter().zip(&unit.points) {
+            let record = unit.record(kept);
+            assert_eq!(record.ordinal, *ordinal);
+            assert_eq!(
+                record.point.xyz.map(f64::to_bits),
+                point.xyz.map(f64::to_bits)
+            );
+            assert_eq!(
+                (record.point.rgb, record.point.classification),
+                (point.rgb, point.classification)
+            );
+            assert_eq!(record.point.intensity, None);
+        }
+        // The ordinals of a unit lie fewer than 2^30 apart, else it is not
+        // kept.
+        let one = point(0.0, None, None);
+        let mut edge = Keeping::new();
+        edge.push(&one, 7 + u64::from(ORDINAL_MASK));
+        edge.push(&one, 7);
+        let unit = edge.finish().unwrap();
+        let ordinals: Vec<u64> = unit.points.iter().map(|kept| unit.ordinal(kept)).collect();
+        assert_eq!(ordinals, [7 + u64::from(ORDINAL_MASK), 7]);
+        let mut wide = Keeping::new();
+        wide.push(&one, 7);
+        wide.push(&one, 8 + u64::from(ORDINAL_MASK));
+        assert!(!wide.fits());
+        assert!(wide.finish().is_none());
+        assert_eq!(Keeping::new().finish().unwrap().points.len(), 0);
+    }
+
+    #[test]
+    fn points_on_a_millimetre_lattice_fall_in_the_cells_a_read_puts_them_in() {
+        let points = lattice_points();
+        let cloud = indexed_cloud(&points, 4_096);
+        let sources = indexed(&cloud);
+        let (low, high) = (cloud.cloud.bounds.min, cloud.cloud.bounds.max);
+        let at = |axis: usize, centimetres: f64| low[axis] + centimetres * 0.01;
+        let mixed = SlabOptions {
+            grid_percent: 100.0,
+            ..options(10.0)
+        };
+        for slab in [
+            // The crop region a drawing starts with: the bounds of the scan.
+            plan(low, high, 0.0),
+            // One set in whole centimetres.
+            plan(
+                [at(0, 25.0), at(1, 40.0), low[2]],
+                [at(0, 260.0), at(1, 210.0), high[2]],
+                0.0,
+            ),
+        ] {
+            for options in [options(100.0), mixed] {
+                let read = streamed(&sources, &slab, &options, &every);
+                assert!(read.slab_points > 1_000, "{}", read.slab_points);
+                for parallel_from in [PARALLEL_FROM, 1] {
+                    let mut kept = KeptSlab::new(64 << 20);
+                    kept.parallel_from = parallel_from;
+                    let cut = from_kept(&sources, &slab, &options, &every, &mut kept);
+                    // Every cell holds the points it holds after a read.
+                    same_cut(&cut, &read);
+                    let again = from_kept(&sources, &slab, &options, &every, &mut kept);
+                    assert_eq!(again.read_points, 0);
+                    same_cut(&again, &read);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1125,12 +1275,12 @@ mod tests {
         let mut kept = KeptSlab::new(64 << 20);
         let whole = plan([-1.0, -1.0, 0.0], [5.0, 4.0, 1.1], 0.0);
         let first = from_kept(&sources, &whole, &options(100.0), &every, &mut kept);
-        like_streamed(&first, &streamed(&sources, &whole, &options(100.0), &every));
+        same_cut(&first, &streamed(&sources, &whole, &options(100.0), &every));
         assert!(first.read_points > 0 && first.reused_points == 0);
         // What is kept is the band of the leaves read: the slab and more.
         assert!(kept.points() as u64 >= first.slab_points);
         assert_eq!(kept.bytes(), kept.points() * KEPT_POINT_BYTES);
-        assert_eq!(KEPT_POINT_BYTES, 24);
+        assert_eq!(KEPT_POINT_BYTES, 32);
 
         // Smaller, moved, and turned within the leaves read: nothing is read,
         // and the drawing is the one a read gives.
@@ -1224,7 +1374,7 @@ mod tests {
         assert!((0.07..0.13).contains(&share), "{share}");
         let mut kept = KeptSlab::new(64 << 20);
         let from_memory = from_kept(&sources, &whole, &options(10.0), &every, &mut kept);
-        like_streamed(&from_memory, &tenth);
+        same_cut(&from_memory, &tenth);
         let small = from_kept(&sources, &part, &options(10.0), &record, &mut kept);
         assert_eq!(small.read_points, 0);
         same_cut(&small, &fresh(&sources, &part, &options(10.0), &every));
@@ -1257,7 +1407,7 @@ mod tests {
             fresh(&sources, &whole, &options(10.0), &every).points
         );
         assert_eq!(cut.slab_points, all.slab_points);
-        like_streamed(&cut, &streamed(&sources, &whole, &mixed, &every));
+        same_cut(&cut, &streamed(&sources, &whole, &mixed, &every));
         let more = SlabOptions {
             sample_percent: 50.0,
             ..mixed
@@ -1308,7 +1458,7 @@ mod tests {
             // With room, a layer without an index is kept as a whole.
             let mut room = KeptSlab::new(64 << 20);
             let first = from_kept(&sources, &whole, &options(100.0), &every, &mut room);
-            like_streamed(&first, &truth);
+            same_cut(&first, &truth);
             let again = from_kept(&sources, &part, &options(100.0), &every, &mut room);
             assert_eq!(again.read_points, 0);
             same_cut(&again, &fresh(&sources, &part, &options(100.0), &every));
@@ -1348,7 +1498,7 @@ mod tests {
             let alone = from_kept(&sources, &slab, &options, &filter, &mut one);
             let split = from_kept(&sources, &slab, &options, &filter, &mut several);
             same_cut(&split, &alone);
-            like_streamed(&split, &streamed(&sources, &slab, &options, &filter));
+            same_cut(&split, &streamed(&sources, &slab, &options, &filter));
         }
         // A cancel stops the threads.
         let slab = plan([-1.0, -1.0, 0.0], [5.0, 4.0, 1.1], 0.0);
@@ -1386,7 +1536,7 @@ mod tests {
         let mut kept = KeptSlab::new(64 << 20);
         let whole = front([-0.5, -0.045, -0.5], [4.5, 3.5, 3.0]);
         let first = from_kept(&sources, &whole, &options(100.0), &every, &mut kept);
-        like_streamed(&first, &streamed(&sources, &whole, &options(100.0), &every));
+        same_cut(&first, &streamed(&sources, &whole, &options(100.0), &every));
         let part = front([1.0, -0.045, 0.5], [3.0, 3.5, 2.0]);
         let cut = from_kept(&sources, &part, &options(100.0), &every, &mut kept);
         assert_eq!(cut.read_points, 0);

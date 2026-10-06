@@ -1809,7 +1809,8 @@ impl Studio {
         }
         // The drawings used longest ago let go of the points they keep when
         // all of them take too much memory.
-        self.drawing_view.kept.settle();
+        let open = self.open_layer_identities();
+        self.drawing_view.kept.settle(&open);
     }
 
     /// Start a job for a command of the local API: put the fields it names
@@ -5680,6 +5681,26 @@ mod tests {
         // A drawing that is deleted lets go of its points.
         assert_eq!(studio.api_delete_drawing(&name)["ok"], true);
         assert_eq!(kept(&mut studio)["drawings"], 0);
+    }
+
+    #[test]
+    fn the_points_a_drawing_kept_go_with_the_scans_it_was_made_from() {
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        let kept = |studio: &mut Studio| {
+            send(studio, ApiCommand::Status)["result"]["drawing_view"]["kept"].clone()
+        };
+        let made = make_plan_of(&mut studio, 100.0);
+        assert_eq!(made["state"], "complete", "{made}");
+        assert_eq!(kept(&mut studio)["drawings"], 1);
+        // New in the File view closes every scan: the points kept from
+        // them could never be drawn again, so they go at once.
+        let _ = studio.file_action(crate::file_view::FileAction::NewWorkspace);
+        assert!(studio.clouds.is_empty());
+        let held = kept(&mut studio);
+        assert_eq!((&held["drawings"], &held["bytes"]), (&json!(0), &json!(0)));
     }
 
     #[test]

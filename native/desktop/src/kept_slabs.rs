@@ -2,7 +2,9 @@
 //! drawing so that a change of its crop region makes it again without
 //! reading the scans: see `KeptSlab` of the core. Each drawing keeps at most
 //! `DRAWING_LIMIT` bytes, and all drawings together `TOTAL_LIMIT`; past that
-//! the drawing used longest ago lets go of its points first.
+//! the drawing used longest ago lets go of its points first. Points kept
+//! from a scan that was closed go with it: a scan opened again is another
+//! layer, which the core never takes them for.
 
 use std::sync::{Arc, Mutex, Weak};
 
@@ -20,14 +22,31 @@ pub(crate) const TOTAL_LIMIT: usize = 1 << 30;
 /// closed goes, while no other layer can take its place in memory and pass
 /// for it.
 struct Pin {
-    _cloud: Weak<PointCloud>,
-    _index: Option<Weak<OctreeIndex>>,
+    /// What tells the layer from the others for as long as it is open.
+    identity: Weak<PointCloud>,
+    cloud: Weak<PointCloud>,
+    index: Option<Weak<OctreeIndex>>,
+}
+
+impl Pin {
+    /// Whether the points kept from the layer can still be drawn: it is
+    /// open, and what they were read from is still there.
+    fn usable(&self, open: &[Arc<PointCloud>]) -> bool {
+        self.cloud.strong_count() > 0
+            && self
+                .index
+                .as_ref()
+                .is_none_or(|index| index.strong_count() > 0)
+            && open
+                .iter()
+                .any(|layer| std::ptr::eq(Arc::as_ptr(layer), self.identity.as_ptr()))
+    }
 }
 
 struct Entry {
     guid: String,
     kept: Arc<Mutex<KeptSlab>>,
-    _pins: Vec<Pin>,
+    pins: Vec<Pin>,
     /// When it was used last, by the count of `KeptSlabs::clock`.
     used: u64,
 }
@@ -49,14 +68,15 @@ impl KeptSlabs {
         let pins = layers
             .iter()
             .map(|layer| Pin {
-                _cloud: Arc::downgrade(&layer.cloud),
-                _index: layer.index.as_ref().map(Arc::downgrade),
+                identity: Arc::downgrade(&layer.identity),
+                cloud: Arc::downgrade(&layer.cloud),
+                index: layer.index.as_ref().map(Arc::downgrade),
             })
             .collect();
         let used = self.clock;
         match self.entries.iter_mut().find(|entry| entry.guid == guid) {
             Some(entry) => {
-                entry._pins = pins;
+                entry.pins = pins;
                 entry.used = used;
                 Arc::clone(&entry.kept)
             }
@@ -65,7 +85,7 @@ impl KeptSlabs {
                 self.entries.push(Entry {
                     guid: guid.to_owned(),
                     kept: Arc::clone(&kept),
-                    _pins: pins,
+                    pins,
                     used,
                 });
                 kept
@@ -73,10 +93,12 @@ impl KeptSlabs {
         }
     }
 
-    /// After a job: the drawings used longest ago let go of their points
-    /// until all fit in `TOTAL_LIMIT`. A drawing whose job still runs keeps
-    /// them.
-    pub(crate) fn settle(&mut self) {
+    /// After a job: the points kept from scans that are no longer among
+    /// the `open` layers go, by `load_identity`, and the drawings used
+    /// longest ago let go of their points until all fit in `TOTAL_LIMIT`. A
+    /// drawing whose job still runs keeps them.
+    pub(crate) fn settle(&mut self, open: &[Arc<PointCloud>]) {
+        self.drop_closed(open);
         self.entries
             .sort_by_key(|entry| std::cmp::Reverse(entry.used));
         let mut total = 0usize;
@@ -98,6 +120,14 @@ impl KeptSlabs {
         self.entries.retain(|entry| entry.guid != guid);
     }
 
+    /// Let go of the points kept from a scan that is no longer among the
+    /// `open` layers: they can never be drawn again. A job that still runs
+    /// with them lets go of them when it ends.
+    pub(crate) fn drop_closed(&mut self, open: &[Arc<PointCloud>]) {
+        self.entries
+            .retain(|entry| entry.pins.iter().all(|pin| pin.usable(open)));
+    }
+
     /// What is kept, as `status` of the local API reports it.
     pub(crate) fn value(&self) -> Value {
         let (mut points, mut bytes, mut drawings) = (0usize, 0usize, 0usize);
@@ -111,5 +141,59 @@ impl KeptSlabs {
             }
         }
         json!({"drawings": drawings, "points": points, "bytes": bytes})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cloud_transform::CloudTransform;
+
+    fn guids(kept: &KeptSlabs) -> Vec<&str> {
+        kept.entries
+            .iter()
+            .map(|entry| entry.guid.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn the_points_kept_from_a_scan_go_when_it_is_closed() {
+        let directory = tempfile::tempdir().unwrap();
+        let cloud = |name: &str| {
+            let path = directory.path().join(name);
+            std::fs::write(&path, "0 0 0\n1 1 1\n").unwrap();
+            pointcloud_core::open(&path, 10).unwrap()
+        };
+        let first = JobLayer::of_file(cloud("a.xyz"), None);
+        let second = JobLayer::of_file(cloud("b.xyz"), None);
+        let open = [Arc::clone(&first.identity), Arc::clone(&second.identity)];
+        let mut kept = KeptSlabs::default();
+        kept.for_job("one", std::slice::from_ref(&first));
+        kept.for_job("two", &[first, second]);
+        kept.drop_closed(&open);
+        assert_eq!(guids(&kept), ["one", "two"]);
+        // The second scan closes: the drawing made with it lets go.
+        kept.drop_closed(&open[..1]);
+        assert_eq!(guids(&kept), ["one"]);
+
+        // A layer that is open still, but whose points were read from a
+        // cloud that is gone: they cannot be drawn again either.
+        let reread = JobLayer {
+            cloud: Arc::new(cloud("a.xyz")),
+            identity: Arc::clone(&open[0]),
+            name: "a".into(),
+            index: None,
+            transform: CloudTransform::default(),
+            deleted: None,
+        };
+        kept.for_job("three", std::slice::from_ref(&reread));
+        kept.drop_closed(&open[..1]);
+        assert_eq!(guids(&kept), ["one", "three"]);
+        drop(reread);
+        kept.drop_closed(&open[..1]);
+        assert_eq!(guids(&kept), ["one"]);
+        // After a job the same happens: no scan is open any more.
+        kept.settle(&[]);
+        assert!(guids(&kept).is_empty());
     }
 }

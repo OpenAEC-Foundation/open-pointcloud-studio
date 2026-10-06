@@ -670,11 +670,14 @@ Made again after its crop region shrank, moved or turned over those leaves,
 it is drawn from them without reading the scans (`read_points` 0), and a crop
 region that grows reads only the leaves it touches for the first time.
 Another cut or view depth, another share of an elevation or a section,
-another layer or a layer that moved reads the slab again. A drawing keeps at most 384 MB of points, 24 bytes each
-(about 16 million), and all drawings together 1 GB; the drawing used longest
-ago lets go of its points first, and a slab that holds more than that is read
-each time, as before. A kept point has no intensity; a drawing does not use
-it. Deleted points and hidden classes are left out each time the drawing
+another layer or a layer that moved reads the slab again. A drawing keeps at
+most 384 MB of points, 32 bytes each (about 12 million), and all drawings
+together 1 GB; the drawing used longest ago lets go of its points first, and a
+slab that holds more than that is read each time, as before. The points kept
+from a scan go when it is closed. A kept point holds its place exactly as it
+was read, so the drawing is the one a read makes; it has no intensity, which a
+drawing does not use. The points of a leaf whose ordinals lie 2^30 or more
+apart are not kept, and its slab is read each time. Deleted points and hidden classes are left out each time the drawing
 is made, so they need no read either. `list_drawings` lists the drawings made from an open scan, each
 with those, with its `crop` region and with `made` (true once it is made in
 this session) and `shown`, and the `files` of this session: the last preview, the exports and
