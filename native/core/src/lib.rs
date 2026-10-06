@@ -14,6 +14,7 @@ pub mod cad3d;
 mod closed_mesh;
 mod drawing;
 mod dxf;
+mod e57_parallel;
 mod e57_points;
 mod e57_quick;
 mod export;

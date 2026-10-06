@@ -8,6 +8,7 @@ use e57::{
     Projection, RecordName,
 };
 
+use super::e57_parallel;
 use super::window_reader::WindowReader;
 use super::{
     quaternion_axes, Bounds, FilePhoto, FilePhotos, LoadError, PhotoProjection, Point, ScanImage,
@@ -455,11 +456,12 @@ pub fn read(
 ) -> Result<(), LoadError> {
     let mut file = open_reader(path)?;
     let scans = file.pointclouds();
+    let parallel = e57_parallel::Parallel::machine();
     for (scan, pose) in scans.iter().zip(stations(&scans)) {
         // A scan without a station is reported too: its points must not be
         // taken for those of the scan before it.
         scan_begin(pose);
-        read_scan(&mut file, scan, push)?;
+        e57_parallel::read_scan(path, &mut file, scan, parallel, push)?;
     }
     Ok(())
 }

@@ -45,25 +45,34 @@ const SAMPLING_TIME: Duration = Duration::from_secs(6);
 
 /// A source file read by logical offset, which skips the checksum that ends
 /// every page and verifies it on the way.
-struct Source {
+pub(crate) struct Source {
     file: File,
-    page: u64,
-    length: u64,
-    raw: Vec<u8>,
+    pub(crate) page: u64,
+    pub(crate) length: u64,
+    /// The whole pages of the last read, checksums included, as they lie in
+    /// the file from `raw_start` on.
+    pub(crate) raw: Vec<u8>,
+    pub(crate) raw_start: u64,
 }
 
 impl Source {
-    fn open(path: &Path, page: u64) -> Result<Self, LoadError> {
+    pub(crate) fn open(path: &Path, page: u64) -> Result<Self, LoadError> {
         let file = File::open(path)?;
         Ok(Self {
             length: file.metadata()?.len(),
             file,
             page,
             raw: Vec::new(),
+            raw_start: 0,
         })
     }
 
-    fn read(&mut self, at: u64, length: usize, out: &mut Vec<u8>) -> Result<(), LoadError> {
+    pub(crate) fn read(
+        &mut self,
+        at: u64,
+        length: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<(), LoadError> {
         out.clear();
         if length == 0 {
             return Ok(());
@@ -73,7 +82,8 @@ impl Source {
         let last = (at + length as u64 - 1) / data;
         self.raw
             .resize(((last - first + 1) * self.page) as usize, 0);
-        self.file.seek(SeekFrom::Start(first * self.page))?;
+        self.raw_start = first * self.page;
+        self.file.seek(SeekFrom::Start(self.raw_start))?;
         self.file.read_exact(&mut self.raw)?;
         for (number, page) in (first..).zip(self.raw.chunks_exact(self.page as usize)) {
             let (content, checksum) = page.split_at(data as usize);
@@ -98,8 +108,24 @@ impl Source {
     }
 }
 
-fn logical_offset(physical: u64, page: u64) -> u64 {
+pub(crate) fn logical_offset(physical: u64, page: u64) -> u64 {
     physical - physical / page * CHECKSUM_BYTES
+}
+
+pub(crate) fn physical_offset(logical: u64, page: u64) -> u64 {
+    let data = page - CHECKSUM_BYTES;
+    logical / data * page + logical % data
+}
+
+/// The page size an E57 file states in its header, when it is one this
+/// module can read.
+pub(crate) fn page_size(path: &Path) -> Result<Option<u64>, LoadError> {
+    let mut header = [0u8; FILE_HEADER_BYTES];
+    File::open(path)?.read_exact(&mut header)?;
+    let page = u64::from_le_bytes(header[40..48].try_into().unwrap());
+    Ok((CHECKSUM_BYTES + 1..=MAX_PAGE_BYTES)
+        .contains(&page)
+        .then_some(page))
 }
 
 /// Bytes per value of every record field, when all of them fill whole bytes.
@@ -132,7 +158,7 @@ fn packet_length(bytes: &[u8]) -> usize {
 
 /// Length and record count of the data packet that starts `bytes`, when
 /// every field stream in it holds the same number of whole records.
-fn data_packet(bytes: &[u8], widths: &[usize]) -> Option<(usize, usize)> {
+pub(crate) fn data_packet(bytes: &[u8], widths: &[usize]) -> Option<(usize, usize)> {
     let streams = PACKET_HEADER_BYTES + 2 * widths.len();
     if bytes.len() < streams || bytes[0] != DATA_PACKET {
         return None;
@@ -192,29 +218,28 @@ fn thinned_packet(bytes: &[u8], widths: &[usize], records: usize, take: usize) -
     packet
 }
 
-/// Where the packets of one scan lie and how the preview samples them.
-/// Every packet but the last has the length and record count of the first,
-/// and together they hold the stated number of records: field streams that
-/// run in step like that can be decoded from any packet on.
-struct ScanPlan {
-    widths: Vec<usize>,
+/// Where the packets of one scan lie. Every packet but the last has the
+/// length and record count of the first, and together they hold the stated
+/// number of records: field streams that run in step like that can be
+/// decoded from any packet on. Only the first and the last packet are
+/// checked here; a reader checks every other packet it reads.
+pub(crate) struct Layout {
+    pub(crate) widths: Vec<usize>,
     /// Logical offsets of the first packet and of the end of the section.
-    start: u64,
-    end: u64,
+    pub(crate) start: u64,
+    pub(crate) end: u64,
     /// Length and record count of every packet but the last.
-    stride: u64,
-    records: usize,
-    packets: u64,
-    picks: u64,
-    take: usize,
+    pub(crate) stride: u64,
+    pub(crate) records: usize,
+    pub(crate) packets: u64,
 }
 
-impl ScanPlan {
-    fn new(
+impl Layout {
+    /// The layout of a scan, or `None` when its packets are not laid out
+    /// this way.
+    pub(crate) fn find(
         source: &mut Source,
         scan: &e57::PointCloud,
-        share: f64,
-        limit: usize,
     ) -> Result<Option<Self>, LoadError> {
         let Some(widths) = field_widths(&scan.prototype) else {
             return Ok(None);
@@ -254,11 +279,6 @@ impl ScanPlan {
         if stated != Some(scan.records) {
             return Ok(None);
         }
-        let quota = ((limit as f64 * share).ceil() as u64).max(1);
-        let affordable = ((MAX_READ_BYTES as f64 * share) as u64 / stride).max(1);
-        let picks = quota
-            .div_ceil(RECORDS_PER_PACKET)
-            .clamp(1, packets.min(affordable));
         Ok(Some(Self {
             widths,
             start,
@@ -266,8 +286,54 @@ impl ScanPlan {
             stride,
             records,
             packets,
+        }))
+    }
+
+    /// Logical offset of a packet.
+    pub(crate) fn packet_start(&self, index: u64) -> u64 {
+        self.start + index * self.stride
+    }
+
+    /// Length and record count of the packet `index` at the start of
+    /// `bytes`, or `None` when it is not laid out like the first.
+    pub(crate) fn packet(&self, index: u64, bytes: &[u8]) -> Option<(usize, usize)> {
+        let (length, records) = data_packet(bytes, &self.widths)?;
+        let expected = if index + 1 < self.packets {
+            length as u64 == self.stride && records == self.records
+        } else {
+            self.packet_start(index) + length as u64 == self.end
+        };
+        (expected && bytes.len() >= length).then_some((length, records))
+    }
+}
+
+/// How the preview samples a scan of a known layout.
+struct ScanPlan {
+    layout: Layout,
+    picks: u64,
+    take: usize,
+}
+
+impl ScanPlan {
+    fn new(
+        source: &mut Source,
+        scan: &e57::PointCloud,
+        share: f64,
+        limit: usize,
+    ) -> Result<Option<Self>, LoadError> {
+        let Some(layout) = Layout::find(source, scan)? else {
+            return Ok(None);
+        };
+        let quota = ((limit as f64 * share).ceil() as u64).max(1);
+        let affordable = ((MAX_READ_BYTES as f64 * share) as u64 / layout.stride).max(1);
+        let picks = quota
+            .div_ceil(RECORDS_PER_PACKET)
+            .clamp(1, layout.packets.min(affordable));
+        let take = (quota.div_ceil(picks) as usize).min(layout.records);
+        Ok(Some(Self {
+            layout,
             picks,
-            take: (quota.div_ceil(picks) as usize).min(records),
+            take,
         }))
     }
 
@@ -279,23 +345,16 @@ impl ScanPlan {
         pick: u64,
         bytes: &mut Vec<u8>,
     ) -> Result<Option<Thinned>, LoadError> {
-        let index = (u128::from(pick) * u128::from(self.packets) / u128::from(self.picks)) as u64;
-        let at = self.start + index * self.stride;
-        source.read(at, (self.end - at).min(self.stride) as usize, bytes)?;
-        let Some((length, records)) = data_packet(bytes, &self.widths) else {
+        let layout = &self.layout;
+        let index = (u128::from(pick) * u128::from(layout.packets) / u128::from(self.picks)) as u64;
+        let at = layout.packet_start(index);
+        source.read(at, (layout.end - at).min(layout.stride) as usize, bytes)?;
+        let Some((_, records)) = layout.packet(index, bytes) else {
             return Ok(None);
         };
-        let expected = if index + 1 < self.packets {
-            length as u64 == self.stride && records == self.records
-        } else {
-            at + length as u64 == self.end
-        };
-        if !expected || bytes.len() < length {
-            return Ok(None);
-        }
         let take = self.take.min(records);
         Ok(Some((
-            thinned_packet(bytes, &self.widths, records, take),
+            thinned_packet(bytes, &layout.widths, records, take),
             take,
         )))
     }
@@ -487,7 +546,7 @@ fn preview_within(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
     use std::fs;
 
@@ -498,7 +557,7 @@ mod tests {
 
     /// A registered scan whose fields all fill whole bytes, unless a row
     /// index of ten bits is added.
-    fn write_scan(path: &Path, count: usize, row_index: bool) {
+    pub(crate) fn write_scan(path: &Path, count: usize, row_index: bool) {
         let mut writer =
             E57Writer::from_file(path, "{00000000-0000-4000-8000-000000000021}").unwrap();
         let mut prototype = vec![
@@ -662,7 +721,7 @@ mod tests {
         // longer continue the records of the first three.
         let skipped = directory.path().join("skipped.e57");
         write_scan(&skipped, 100_000, false);
-        let layout = plan(&skipped, 1_000);
+        let layout = plan(&skipped, 1_000).layout;
         assert!(layout.packets > 10);
         patch(&skipped, layout.start + 3 * layout.stride, &[2]);
         assert!(preview(&skipped, 10_000_000).unwrap().is_none());
@@ -705,7 +764,8 @@ mod tests {
         // A page with the section header fails its checksum.
         let damaged = directory.path().join("damaged.e57");
         write_scan(&damaged, 200_000, false);
-        let layout = plan(&damaged, 2_000);
+        let plan = plan(&damaged, 2_000);
+        let layout = &plan.layout;
         let mut bytes = fs::read(&damaged).unwrap();
         bytes[600] ^= 0x40;
         fs::write(&damaged, &bytes).unwrap();
@@ -713,7 +773,7 @@ mod tests {
 
         // So does a page of a packet that only a later pick reads.
         bytes[600] ^= 0x40;
-        assert_eq!(layout.picks, 8);
+        assert_eq!(plan.picks, 8);
         let inside = layout.start + layout.packets / 8 * layout.stride + 100;
         bytes[(inside / 1020 * 1024 + inside % 1020) as usize] ^= 0x40;
         fs::write(&damaged, &bytes).unwrap();
@@ -821,6 +881,7 @@ mod tests {
                 dense_from: 0,
                 ..crate::snapshots::Showing::DEFAULT
             }),
+            None,
             |preview| {
                 previews.push(preview.clone());
                 Ok(())
