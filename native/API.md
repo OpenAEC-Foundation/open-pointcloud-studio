@@ -899,16 +899,87 @@ off the command answers `extension bag3d is disabled`.
 
 ## Extensions
 
-`list_extensions` lists the optional features built into the application in
-`extensions`: for each its `id`, `name`, `version` (the version of the
-application), `description`, `author`, `category`, `builtin` (always true: no
-code from another source is loaded), `uses_network` and `enabled`.
-`set_extension_enabled` switches one on or off and keeps that in
-`extensions.json` in the configuration directory; an unknown `id` is refused.
-The answer holds `id`, `enabled` and `saved`. When `saved` is false the file
-could not be written: the switch holds for this session only and `save_error`
-says why. Switching `bag3d` off closes its panel, stops a running download
-and disables its entry in the File view.
+There are two kinds of extension: the optional features built into the
+application, such as `bag3d`, and installed extensions. An installed
+extension is a separate program in a folder of the configuration directory,
+`extensions/<id>/`, that drives the window through this API; it can add
+buttons to the EXTENSIONS group of the ribbon and tiles to the New and Export
+pages of the File view. [docs/extensions.md](../docs/extensions.md) describes
+the folder, its `extension.json` and how to write one.
+
+`list_extensions` lists both in `extensions`: for each its `id`, `name`,
+`version`, `description`, `author`, `category`, `builtin`, `uses_network` and
+`enabled`. A built-in feature has the version of the application and
+`builtin: true`. An installed extension has `builtin: false`, `category`
+`Installed`, its `folder`, `homepage`, `min_app_version`, the `command` it
+starts on this system, what it declares it `uses` (`network`,
+`files_outside_folder` and `commands`, a list or `all`), its `ribbon` buttons
+and `file_view` tiles, and `run`: the run under way or `null`. `problems`
+lists installed extensions that could not be read, with `id`, `folder` and
+`error`. `set_extension_enabled` switches either kind on or off and keeps
+that in `extensions.json` in the configuration directory; an unknown `id` is
+refused. The answer holds `id`, `enabled` and `saved`. When `saved` is false
+the file could not be written: the switch holds for this session only and
+`save_error` says why. Switching `bag3d` off closes its panel, stops a
+running download and disables its entry in the File view; switching an
+installed extension off takes its buttons and tiles away and stops its run.
+`extensions.json` holds `disabled`, the ids that are switched off, and
+`installed`, the installed extensions with their versions; a file written
+by an earlier version, a list of the ids that are switched off, is read as
+well, also with a byte-order mark.
+
+`install_extension` takes the absolute path of an extension folder, the
+`extension.json` in it, or a `.zip` archive of one. It copies the files to a
+staging folder beside the installed extensions and checks them there: the
+manifest, at most 1000 files and 64 MiB, no links, names that every system
+keeps, paths inside the folder, icons of at most 64 KiB that refer to
+nothing outside themselves, and for an archive no entry outside the folder
+and no more unpacked than allowed. A source that does not fit is refused with
+the reason. Otherwise the window shows what the extension declares and asks
+the user to confirm, since it installs a program; the answer comes once that
+dialog shows, with `confirmation: "shown"`, `extension` (what it declares)
+and `replaces` (the version it replaces, or `null`). Only the user can
+confirm. `status.result.extensions.dialog` reports the open dialog. An older
+version than the one installed is refused; the same or a newer one replaces
+it and keeps its logs and its switch.
+
+`run_extension` starts an installed extension as a click on its button does,
+with the arguments of the button or tile `entry` when one is named. Its
+program runs in its folder with `OPS_API_PORT`, `OPS_API_TOKEN`,
+`OPS_API_URL`, `OPS_EXTENSION_ID` and `OPS_CONTEXT`, the path of a JSON file
+with what `context` reports. Its output goes to `logs/run-<time>.log` in its
+folder; the newest 20 runs keep their logs. The answer holds `run`, `log`
+and `context`. `status.result.extensions.running` lists the runs under way
+with their `entry`, `seconds`, `percent`, `text`, `stopping`, `log` and
+`pid`. An extension runs once at a time. `stop_extension` stops a run and
+what it started: at once on Windows, otherwise after 1.5 seconds at the
+latest. When the window closes, every run is ended.
+
+The token in `OPS_API_TOKEN` belongs to that run alone and stops working
+when it ends. With it the server accepts the commands the extension
+declared in `uses.commands` of its `extension.json`, or every command when it
+declared `all`, and always `show_message`, `report_progress`, `context`,
+`choose_path` and `job`; another command gets HTTP 403. The token of the
+discovery file accepts every command, as before.
+
+`show_message` shows `text` (1–300 characters, on one line) in the status
+bar; a message from a run starts with the name of its extension and stays
+when the run ends well. `report_progress` takes `percent` (0–100) and an
+optional `text` (at most 120 characters): for a run it shows beside the name
+of the extension in the status bar, with a bar; otherwise in the status line
+and in `status.result.extensions.progress`, until 100 is reported.
+`choose_path` asks the user for a path with a dialog of the window: `mode`
+`open` (an existing file), `save` (a file to write) or `folder`, with an
+optional `title`, `filters` (up to 8 of `{"name", "extensions"}`, the
+extensions without the dot), `file_name` and `directory`. It answers with a
+`job_id`; the job is `complete` with the `path`, or `cancelled`. One such
+dialog is open at a time. `context` reports what the window shows: the
+`application` version and language, the `active_scan` (`index`, `path`,
+`points`, `remaining`, `selected`, `bounds`) or `null`, the number of
+`scans`, the `selected_points`, the `section_box` (`min`, `max`,
+`rotation`) or `null`, the tab `shown` (as `list_tabs` gives it), and whether
+the `drawing_view` and the `file_view` are shown; for a run also its
+`extension`. A layer from a file an extension wrote is added with `open`.
 
 ## File view
 
@@ -1379,8 +1450,8 @@ layer with photo colours.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), the tabs above the main area (`view_tabs`, as `list_tabs` gives them), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Pointcloud to Drawing wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (`mesh_wizard`: whether it is shown, its step and method, the method whose job runs and what the methods work on; see [Mesh Pointcloud](#mesh-pointcloud)), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), and current status text |
-| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, colouring from photos, merge, 3D BAG download or Pointcloud to Drawing task's state and result |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), the tabs above the main area (`view_tabs`, as `list_tabs` gives them), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Pointcloud to Drawing wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (`mesh_wizard`: whether it is shown, its step and method, the method whose job runs and what the methods work on; see [Mesh Pointcloud](#mesh-pointcloud)), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), the runs of extensions, a progress reported outside a run and the dialog about an install or an uninstall (`extensions`, see [Extensions](#extensions)), and current status text |
+| `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, colouring from photos, merge, 3D BAG download, `choose_path` dialog or Pointcloud to Drawing task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
 | `remove` | `index` | Removes a layer from the project |
@@ -1462,8 +1533,15 @@ layer with photo colours.
 | `cancel_merge` | — | Requests cancellation of the running merge task |
 | `bag3d` | `bbox`, `lod`, `path` | Downloads the 3D BAG buildings inside an RD New box `[xmin, ymin, xmax, ymax]` of at most 2 by 2 km at level of detail `1.2`, `1.3` or `2.2` to an absolute `.obj` path in an existing folder and opens them as a layer; returns a job ID |
 | `cancel_bag3d` | — | Requests cancellation of the running 3D BAG download |
-| `list_extensions` | — | Lists the built-in optional features and whether each is enabled |
-| `set_extension_enabled` | `id`, `enabled` | Switches a built-in optional feature (`bag3d`) on or off and persists that; `saved` in the answer is false, with `save_error`, when it could not be persisted |
+| `list_extensions` | — | Lists the built-in optional features and the installed extensions with what each declares, whether it is enabled and its run under way; `problems` lists installed extensions that could not be read. See [Extensions](#extensions) |
+| `set_extension_enabled` | `id`, `enabled` | Switches a built-in optional feature (`bag3d`) or an installed extension on or off and persists that; `saved` in the answer is false, with `save_error`, when it could not be persisted |
+| `install_extension` | `path` | Copies and checks the extension in an absolute folder, `extension.json` or `.zip` and asks the user in the window to confirm its install; answers when the dialog shows, with what the extension declares |
+| `run_extension` | `id`, optional `entry` | Starts an installed extension with the arguments of its button or tile `entry`; returns `run`, `log` and `context` |
+| `stop_extension` | `id` | Stops the run of an extension and what it started |
+| `show_message` | `text` | Shows a message of 1–300 characters in the status bar, after the name of the extension that sends it |
+| `report_progress` | `percent`, optional `text` | Shows how far a task is (0–100) in the status bar |
+| `choose_path` | `mode`, optional `title`, `filters`, `file_name`, `directory` | Asks the user for a file to `open`, a file to `save` or a `folder` with a dialog of the window; returns a job ID whose complete job holds the `path` |
+| `context` | — | What the window shows: the active scan, the selection, the section box and the tab shown |
 | `file_view` | `open`, optional `page` | Opens the File view, on the page `new`, `open`, `import`, `export`, `workspace`, `extensions` or `about` when one is named, or closes it and returns to the model |
 | `mesh_wizard` | `open`, optional `step`, `method` | Shows the card of Mesh Pointcloud on a step (`method`, `options` or `run`) with a method (`closed`, `terrain`, `surface` or `faces`), or takes it away; a job goes on. With `open: true` and no `step` the card shows the Run step of a job that runs. Answers with `mesh_wizard` |
 | `mesh_to_plans_view` | `open`, optional `step`, `minimized` | Shows the Pointcloud to Drawing wizard as its card, on a step when one is named, or with `minimized: true` as a strip above the scene, or takes it away; answers with `mesh_to_plans` |

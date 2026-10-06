@@ -22,6 +22,8 @@ use serde_json::{json, Value};
 // The tests of the window hold what it reports against what a wait looks at.
 #[cfg(test)]
 pub(crate) use tools::busy;
+// The commands an extension may declare it calls.
+pub(crate) use tools::command_names;
 use tools::{CallError, Link, Outcome};
 
 /// Protocol versions this server speaks, newest first.

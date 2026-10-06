@@ -62,6 +62,7 @@ impl Tool {
                 | "list_faces"
                 | "list_photos"
                 | "list_extensions"
+                | "context"
                 | "list_instances"
                 | "wait_for_job"
                 | "wait_until_idle"
@@ -226,8 +227,8 @@ const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (E
 fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
-        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), the Detect faces tool (faces: its settings, a running job, the last job, export_pending and result, the faces of the active layer in figures; clouds[].faces has those figures per layer, or null), the photos of the files and the one that is entered (photos), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view), the Pointcloud to Drawing wizard (mesh_to_plans: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (mesh_wizard: whether it is shown, its step and method, the method whose job runs and what the methods work on) and the status line.", vec![]),
-        tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, detect_faces, export_faces, colour_from_photos, merge_visible or bag3d returned, or that status.result.mesh_to_plans.job names: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
+        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), the Detect faces tool (faces: its settings, a running job, the last job, export_pending and result, the faces of the active layer in figures; clouds[].faces has those figures per layer, or null), the photos of the files and the one that is entered (photos), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view), the Pointcloud to Drawing wizard (mesh_to_plans: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (mesh_wizard: whether it is shown, its step and method, the method whose job runs and what the methods work on), the runs of extensions with their progress and the dialog about an install (extensions) and the status line.", vec![]),
+        tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, detect_faces, export_faces, colour_from_photos, merge_visible, bag3d or choose_path returned, or that status.result.mesh_to_plans.job names: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
         tool("wait_for_job", WaitForJob, "Waits until a background job is no longer running and returns it, polling it four times a second. Answers with timed_out: true and the running job when the time is up.", vec![
@@ -558,11 +559,39 @@ fn table() -> Vec<Tool> {
             required("path", path(OBJ_FILE)),
         ]),
         tool("cancel_bag3d", Command, "Cancels the running 3D BAG download; the request under way ends first, and an existing file at the destination is left as it is.", vec![]),
-        tool("list_extensions", Command, "Lists the optional features built into the application (id, name, version, description, author, category, whether it uses the internet) and whether each is enabled.", vec![]),
-        tool("set_extension_enabled", Command, "Switches a built-in optional feature on or off and keeps that for later sessions. When the answer has saved false the choice could not be written and holds for this session only; save_error says why. Switching bag3d off closes its panel, stops a running download and makes the bag3d tool fail.", vec![
-            required("id", choice("Id of the extension, as list_extensions gives it", &crate::extensions::ids())),
+        tool("list_extensions", Command, "Lists the extensions: the optional features built into the application and the installed extensions, programs that drive the window through this API. Each has id, name, version, description, author, category, builtin, uses_network and enabled; an installed one also its folder, the command it starts, what it declares it uses (network, files_outside_folder, commands), its ribbon buttons and File view tiles, and run (the run under way, or null). problems lists installed extensions that could not be read, with the reason.", vec![]),
+        tool("set_extension_enabled", Command, "Switches an extension, built in or installed, on or off and keeps that for later sessions. When the answer has saved false the choice could not be written and holds for this session only; save_error says why. Switching bag3d off closes its panel, stops a running download and makes the bag3d tool fail; switching an installed extension off takes its buttons and tiles away and stops a run of it.", vec![
+            required("id", text("Id of the extension, as list_extensions gives it, such as bag3d", 3, 64)),
             required("enabled", boolean("Whether the extension is switched on")),
         ]),
+        tool("install_extension", Command, "Copies an extension from a folder, the extension.json in a folder or a .zip archive into a staging folder, checks it (manifest, size, paths, no links, icons) and shows the user in the window what it declares, asking to confirm the install, since it runs a program. Answers once the dialog is shown, with what the extension declares and the version it replaces, or with the reason it was refused. Only the user can confirm; status.result.extensions.dialog tells whether the dialog is still open, and list_extensions lists the extension once it is installed.", vec![
+            required("path", path("Absolute path of the folder of the extension, its extension.json or a .zip archive")),
+        ]),
+        tool("run_extension", Command, "Starts an installed and enabled extension as a click on its button does: its program runs in its folder with OPS_API_PORT, OPS_API_TOKEN, OPS_EXTENSION_ID and OPS_CONTEXT, and its output goes to a log file. Answers with the number of the run and the paths of its log and context file; status.result.extensions.running lists the runs under way. Refused while it runs already.", vec![
+            required("id", text("Id of the installed extension, as list_extensions gives it", 3, 64)),
+            optional("entry", text("Id of one of its ribbon buttons or File view tiles, whose arguments are added to the command; without it none are", 1, 64)),
+        ]),
+        tool("stop_extension", Command, "Stops the run of an extension, and what it started: on Windows at once, elsewhere after 1.5 seconds at the latest. The status bar then says it stopped.", vec![
+            required("id", text("Id of the extension that runs", 3, 64)),
+        ]),
+        tool("show_message", Command, "Shows a message in the status bar of the window. A message from a run of an extension starts with the name of the extension.", vec![
+            required("text", text("The message, on one line; line breaks become spaces", 1, 300)),
+        ]),
+        tool("report_progress", Command, "Shows how far a task is: for a run of an extension beside its name in the status bar, with a bar; otherwise in the status line, until 100 is reported.", vec![
+            required("percent", number_in("How far the task is, from 0 to 100", 0.0, 100.0)),
+            optional("text", text("What the task is doing", 0, 120)),
+        ]),
+        tool("choose_path", Job, "Asks the user for a path with a dialog of the window: an existing file (open), a file to write (save) or a folder. Answers with a job_id at once; the job is complete with the path the user chose, or cancelled. The dialog of a run of an extension names the extension in its title. One dialog at a time.", vec![
+            required("mode", choice("What is asked for", &["open", "save", "folder"])),
+            optional("title", text("Title of the dialog", 1, 120)),
+            optional("filters", list("Kinds of file the dialog offers", object(vec![
+                required("name", text("Name of the kind, such as CSV table", 1, 60)),
+                required("extensions", list("Extensions without the dot, such as csv", text("Extension of letters and digits", 1, 16), 1, 16)),
+            ]), 0, 8)),
+            optional("file_name", text("File name a save dialog proposes", 1, 120)),
+            optional("directory", path("Absolute path of the folder the dialog starts in")),
+        ]),
+        tool("context", Command, "Reports what the window shows, as the context file of a run of an extension does: the version and language of the application, the active scan (index, path, points, remaining, selected, bounds), the number of scans, the selected points, the section box (min, max, rotation, or null), the tab shown (kind and name), whether the Drawing view and the File view are shown, and for a run its extension.", vec![]),
         tool("file_view", Command, "Opens the File view over the model, on a page when one is named, or closes it and returns to the model. A screenshot needs it closed. Opening is refused while the Settings dialog, the card of the Pointcloud to Drawing wizard or the card of Mesh Pointcloud is open.", vec![
             required("open", boolean("true to show the File view, false to return to the model")),
             optional("page", choice("Page to show, only with open true; without it the view opens on workspace, or keeps the page it shows", &crate::file_view::FilePage::ids())),
@@ -606,6 +635,15 @@ pub fn tools() -> &'static [Tool] {
 
 pub fn find(name: &str) -> Option<&'static Tool> {
     tools().iter().find(|tool| tool.name == name)
+}
+
+/// The commands of the local API: every one has the tool of its name.
+pub fn command_names() -> Vec<&'static str> {
+    tools()
+        .iter()
+        .filter(|tool| matches!(tool.kind, Kind::Command | Kind::Job | Kind::Screenshot))
+        .map(|tool| tool.name)
+        .collect()
 }
 
 /// What a tool call returns: its content blocks, the JSON it reports, and

@@ -179,6 +179,15 @@ pub fn choice() -> Language {
         .unwrap_or(Language::English)
 }
 
+/// The code of the language texts are shown in: `en`, or the code of the
+/// table in use.
+pub fn active_code() -> &'static str {
+    usize::from(ACTIVE.load(Ordering::Relaxed))
+        .checked_sub(1)
+        .and_then(|index| TABLES.get(index))
+        .map_or("en", |table| table.code)
+}
+
 /// A text in the language in use.
 pub fn tr(text: &str) -> &str {
     let Some(index) = usize::from(ACTIVE.load(Ordering::Relaxed)).checked_sub(1) else {
@@ -419,7 +428,8 @@ mod tests {
         ("drawing.rs", include_str!("drawing.rs")),
         ("drawing_crop.rs", include_str!("drawing_crop.rs")),
         ("drawing_view.rs", include_str!("drawing_view.rs")),
-        ("extensions.rs", include_str!("extensions.rs")),
+        ("extensions/mod.rs", include_str!("extensions/mod.rs")),
+        ("extensions/page.rs", include_str!("extensions/page.rs")),
         ("faces.rs", include_str!("faces.rs")),
         ("file_photos.rs", include_str!("file_photos.rs")),
         ("file_view.rs", include_str!("file_view.rs")),

@@ -100,8 +100,8 @@ JSON answer as text (and as `structuredContent` from protocol version
 `2025-06-18`).
 
 Exports, section drawings and their previews, selections, picks, meshes, mesh
-exports, face detections, faces exports, colourings from photos, merges and
-3D BAG downloads answer at once with a `job_id`.
+exports, face detections, faces exports, colourings from photos, merges,
+3D BAG downloads and the dialogs of `choose_path` answer at once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
@@ -234,8 +234,15 @@ follows when that view is restored.
 | `cancel_merge` | — | Cancels the merge |
 | `bag3d` | `bbox` (`[xmin, ymin, xmax, ymax]` in RD New, at most 2 by 2 km), `lod` (`1.2`, `1.3` or `2.2`), `path` (`.obj`), optional `wait_seconds` | Downloads the 3D BAG buildings of an area and opens them as a layer; job |
 | `cancel_bag3d` | — | Cancels the 3D BAG download |
-| `list_extensions` | — | Built-in optional features and whether each is enabled |
-| `set_extension_enabled` | `id` (`bag3d`), `enabled` | Switches a built-in optional feature on or off; kept for later sessions, unless the answer has `saved: false` with `save_error` |
+| `list_extensions` | — | The built-in optional features and the installed extensions, with what each declares, whether it is enabled and its run under way; `problems` lists installed extensions that could not be read |
+| `set_extension_enabled` | `id` (`bag3d` or the id of an installed extension), `enabled` | Switches an extension on or off; kept for later sessions, unless the answer has `saved: false` with `save_error`. Switching an installed one off stops its run |
+| `install_extension` | `path` (a folder, its `extension.json` or a `.zip`) | Checks an extension and shows the user what it declares in the window, asking to confirm the install; only the user can confirm |
+| `run_extension` | `id`, optional `entry` (a button or tile of it) | Starts an installed extension as its button does; answers with the run and its log |
+| `stop_extension` | `id` | Stops the run of an extension and what it started |
+| `show_message` | `text` (1–300 characters) | Shows a message in the status bar; one from a run starts with the name of the extension |
+| `report_progress` | `percent` (0–100), optional `text` | Shows how far a task is: beside the name of a run in the status bar, or in the status line |
+| `choose_path` | `mode` (`open`, `save` or `folder`), optional `title`, `filters` (`[{"name", "extensions"}]`), `file_name`, `directory`, `wait_seconds` | Asks the user for a path with a dialog of the window; job, complete with the `path` or cancelled |
+| `context` | — | What the window shows: the active scan, the selection, the section box, the tab shown |
 | `file_view` | `open`, optional `page` (`new`, `open`, `import`, `export`, `workspace`, `extensions` or `about`) | Opens the File view, on a page, or returns to the model |
 | `mesh_wizard` | `open`, optional `step` (`method`, `options` or `run`) and `method` (`closed`, `terrain`, `surface` or `faces`) | Shows the card of Mesh Pointcloud, on a step and with a method, or takes it away; a job of the card goes on, and with `open: true` the card opens on the Run step of a job that runs |
 | `mesh_to_plans_view` | `open`, optional `step` (`prepare`, `mesh`, `views`, `walls`, `openings`, `rooms`, `sheet`, `site` or `result`) and `minimized` | Shows the Pointcloud to Drawing wizard as its card or as a strip above the scene, on a step, or takes it away |

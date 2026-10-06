@@ -13,6 +13,7 @@ use iced::{Element, Fill, Font, Task};
 use pointcloud_core::ExportFormat;
 use serde_json::{json, Value};
 
+use crate::extensions::manifest::EntryPage;
 use crate::i18n::{key, tr};
 use crate::{
     display_name, extensions, format_count, opencad_ribbon, settings_dialog, sidebar_style,
@@ -407,8 +408,19 @@ impl Studio {
                 self.mesh_to_plans_tile(),
             ]),
         ]
+        .push_maybe(self.extension_group(EntryPage::New))
         .width(Fill)
         .into()
+    }
+
+    /// The tiles installed extensions add to a page, under their caption.
+    fn extension_group(&self, page: EntryPage) -> Option<Element<'_, Message>> {
+        let tiles = self.extension_tiles(page);
+        (!tiles.is_empty()).then(|| {
+            column![self.group_caption(key("EXTENSIONS")), Self::tiles(tiles)]
+                .width(Fill)
+                .into()
+        })
     }
 
     fn open_page(&self) -> Element<'_, Message> {
@@ -579,6 +591,7 @@ impl Studio {
                     && self.visible_merge_sources().is_ok(),
             )]),
         ]
+        .push_maybe(self.extension_group(EntryPage::Export))
         .width(Fill);
         if let Some(job) = &self.merge_job {
             let processed = job.control.processed.load(Ordering::Relaxed);

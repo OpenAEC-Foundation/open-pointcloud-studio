@@ -208,10 +208,19 @@ fn sample(schema: &Value) -> Value {
         "boolean" => json!(true),
         "string" => {
             let length = schema["minLength"].as_u64().unwrap_or(1).max(1) as usize;
-            json!(std::env::temp_dir()
+            let path = std::env::temp_dir()
                 .join("x".repeat(length))
                 .to_string_lossy()
-                .into_owned())
+                .into_owned();
+            // A short text, such as an extension of a file, is no path.
+            let maximum = schema["maxLength"]
+                .as_u64()
+                .map_or(usize::MAX, |most| most as usize);
+            if path.chars().count() <= maximum {
+                json!(path)
+            } else {
+                json!("x".repeat(length))
+            }
         }
         other => panic!("unexpected type {other}"),
     }
@@ -1432,14 +1441,17 @@ fn extension_and_file_view_tools_offer_what_the_window_knows() {
     let switch = tools::find("set_extension_enabled").unwrap();
     assert!(!switch.read_only());
     assert_eq!(switch.schema["required"], json!(["id", "enabled"]));
-    assert_eq!(
-        switch.schema["properties"]["id"]["enum"],
-        json!(crate::extensions::ids())
-    );
-    schema::validate_arguments(&switch.schema, &json!({"id": "bag3d", "enabled": false})).unwrap();
+    // Installed extensions are known to the window only, so any id of one
+    // is offered.
+    assert_eq!(switch.schema["properties"]["id"]["type"], "string");
+    for id in crate::extensions::ids()
+        .into_iter()
+        .chain(["org.example.point-report"])
+    {
+        schema::validate_arguments(&switch.schema, &json!({"id": id, "enabled": false})).unwrap();
+    }
     assert!(
-        schema::validate_arguments(&switch.schema, &json!({"id": "other", "enabled": false}))
-            .is_err()
+        schema::validate_arguments(&switch.schema, &json!({"id": "ab", "enabled": false})).is_err()
     );
 
     let view = tools::find("file_view").unwrap();
@@ -1483,6 +1495,106 @@ fn extension_and_file_view_tools_offer_what_the_window_knows() {
             json!({"command": "set_extension_enabled", "id": "bag3d", "enabled": false}),
             json!({"command": "list_extensions"}),
             json!({"command": "file_view", "open": false}),
+        ]
+    );
+}
+
+#[test]
+fn extension_tools_install_run_and_serve_a_run() {
+    for (name, kind, read_only) in [
+        ("install_extension", Kind::Command, false),
+        ("run_extension", Kind::Command, false),
+        ("stop_extension", Kind::Command, false),
+        ("show_message", Kind::Command, false),
+        ("report_progress", Kind::Command, false),
+        ("choose_path", Kind::Job, false),
+        ("context", Kind::Command, true),
+    ] {
+        let tool = tools::find(name).unwrap();
+        assert_eq!(tool.kind, kind, "{name}");
+        assert_eq!(tool.read_only(), read_only, "{name}");
+    }
+    // Every command an extension may always send is a command of the API.
+    let commands = tools::command_names();
+    for always in crate::native_api::EXTENSION_COMMANDS {
+        assert!(commands.contains(&always), "{always}");
+    }
+    assert!(!commands.contains(&"wait_for_job"));
+    assert!(!commands.contains(&"list_instances"));
+
+    let progress = tools::find("report_progress").unwrap();
+    assert!(schema::validate_arguments(&progress.schema, &json!({"percent": 101})).is_err());
+    let choose = tools::find("choose_path").unwrap();
+    schema::validate_arguments(
+        &choose.schema,
+        &json!({"mode": "save", "filters": [{"name": "CSV table", "extensions": ["csv"]}]}),
+    )
+    .unwrap();
+    assert!(schema::validate_arguments(
+        &choose.schema,
+        &json!({"mode": "save", "filters": [{"name": "CSV", "extensions": []}]})
+    )
+    .is_err());
+    assert!(schema::validate_arguments(&choose.schema, &json!({"mode": "delete"})).is_err());
+
+    let link = FakeLink::new(|command| {
+        Ok(match command["command"].as_str().unwrap() {
+            "choose_path" => json!({"ok": true, "accepted": true, "job_id": "p-1"}),
+            "job" => {
+                json!({"ok": true, "job": {"state": "complete", "path": "/data/report.csv"}})
+            }
+            _ => json!({"ok": true}),
+        })
+    });
+    let sent = Arc::clone(&link.commands);
+    let folder = std::env::temp_dir().join("point-report.zip");
+    let answers = session(
+        &[
+            initialize(1, "2025-06-18"),
+            call(2, "install_extension", json!({"path": folder})),
+            call(
+                3,
+                "run_extension",
+                json!({"id": "org.example.point-report", "entry": "count"}),
+            ),
+            call(4, "show_message", json!({"text": "12 points"})),
+            call(
+                5,
+                "report_progress",
+                json!({"percent": 40, "text": "Counting"}),
+            ),
+            call(
+                6,
+                "choose_path",
+                json!({"mode": "save", "file_name": "report.csv", "wait_seconds": 5}),
+            ),
+            call(7, "context", json!({})),
+            call(
+                8,
+                "stop_extension",
+                json!({"id": "org.example.point-report"}),
+            ),
+        ],
+        link,
+    );
+    for id in 2..=8 {
+        assert_eq!(by_id(&answers, id)["result"]["isError"], false, "{id}");
+    }
+    assert_eq!(
+        by_id(&answers, 6)["result"]["structuredContent"]["job"]["path"],
+        "/data/report.csv"
+    );
+    assert_eq!(
+        *sent.lock().unwrap(),
+        [
+            json!({"command": "install_extension", "path": folder}),
+            json!({"command": "run_extension", "id": "org.example.point-report", "entry": "count"}),
+            json!({"command": "show_message", "text": "12 points"}),
+            json!({"command": "report_progress", "percent": 40, "text": "Counting"}),
+            json!({"command": "choose_path", "mode": "save", "file_name": "report.csv"}),
+            json!({"command": "job", "id": "p-1"}),
+            json!({"command": "context"}),
+            json!({"command": "stop_extension", "id": "org.example.point-report"}),
         ]
     );
 }

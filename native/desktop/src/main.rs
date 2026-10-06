@@ -1250,9 +1250,18 @@ fn main() -> iced::Result {
                 let receiver = Arc::clone(receiver);
                 let stream = iced::stream::channel(32, move |mut output| async move {
                     loop {
-                        let request = receiver.lock().await.recv().await;
-                        let Some(request) = request else { break };
-                        if output.send(Message::ApiRequest(request)).await.is_err() {
+                        let delivery = receiver.lock().await.recv().await;
+                        let Some(delivery) = delivery else { break };
+                        // A request with the token of a run of an extension
+                        // is handled on behalf of that extension.
+                        let message = match delivery.caller {
+                            None => Message::ApiRequest(delivery.request),
+                            Some(caller) => Message::Extension(extensions::ExtensionAction::Api(
+                                caller,
+                                Box::new(delivery.request),
+                            )),
+                        };
+                        if output.send(message).await.is_err() {
                             break;
                         }
                     }
@@ -1886,6 +1895,8 @@ enum Message {
     OpenBagLicense,
     /// Switch a built-in extension, named by its id, on or off.
     ExtensionEnabled(&'static str, bool),
+    /// The Extensions page, the installed extensions and their runs.
+    Extension(extensions::ExtensionAction),
     TranslateX(String),
     TranslateY(String),
     TranslateZ(String),
@@ -2044,9 +2055,8 @@ enum Message {
 }
 
 struct Studio {
-    api_receiver: Option<
-        Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<native_api::ApiRequest>>>,
-    >,
+    api_receiver:
+        Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<native_api::Delivery>>>>,
     api_handle: Option<native_api::ApiHandle>,
     /// Files the system hands to the application after it started; only
     /// macOS delivers files this way.
@@ -2183,8 +2193,10 @@ struct Studio {
     file_open: bool,
     /// The page the File view shows.
     file_page: FilePage,
-    /// Which built-in optional features are switched on.
+    /// Which extensions are switched off, and which are installed.
     extensions: extensions::Extensions,
+    /// The installed extensions, their runs and the dialogs about them.
+    extension_host: extensions::Host,
     ui_theme: UiTheme,
     /// The program that opens exported DXF and DWG files.
     cad_viewer: cad_viewer::CadViewer,
@@ -2679,6 +2691,8 @@ impl Default for Studio {
     fn default() -> Self {
         let surface = SurfaceMeshConfig::default();
         let settings = preferences::load();
+        let extensions = extensions::Extensions::load();
+        let extension_host = extensions::Host::load(&extensions);
         Self {
             api_receiver: None,
             api_handle: None,
@@ -2801,7 +2815,8 @@ impl Default for Studio {
             ribbon_viewport: None,
             file_open: false,
             file_page: FilePage::default(),
-            extensions: extensions::Extensions::load(),
+            extensions,
+            extension_host,
             ui_theme: UiTheme::load(),
             cad_viewer: cad_viewer::CadViewer::new(
                 settings.cad_viewer.as_deref(),
@@ -3831,6 +3846,7 @@ impl Studio {
                 answer.0["result"]["mesh_wizard"] = self.mesh_wizard_value();
                 answer.0["result"]["photos"] = self.photos_value();
                 answer.0["result"]["colour_from_photos"] = self.photo_colours_value();
+                answer.0["result"]["extensions"] = self.extensions_status();
                 answer
             }
             ApiCommand::Job { id } => {
@@ -4865,13 +4881,22 @@ impl Studio {
             }
             ApiCommand::Bag3d { bbox, lod, path } => self.api_bag3d(bbox, &lod, path),
             ApiCommand::CancelBag3d => (self.api_cancel_bag3d(), Task::none()),
-            ApiCommand::ListExtensions => (
-                json!({"ok": true, "extensions": self.extensions.list()}),
-                Task::none(),
-            ),
+            ApiCommand::ListExtensions => (self.extensions_value(), Task::none()),
             ApiCommand::SetExtensionEnabled { id, enabled } => {
                 (self.api_set_extension_enabled(&id, enabled), Task::none())
             }
+            ApiCommand::InstallExtension { path } => {
+                return self.api_install_extension(path, request.reply)
+            }
+            ApiCommand::RunExtension { id, entry } => self.api_run_extension(&id, entry.as_deref()),
+            ApiCommand::StopExtension { id } => (self.api_stop_extension(&id), Task::none()),
+            ApiCommand::ShowMessage { text } => (self.api_show_message(&text), Task::none()),
+            ApiCommand::ReportProgress { percent, text } => (
+                self.api_report_progress(percent, text.as_deref()),
+                Task::none(),
+            ),
+            ApiCommand::ChoosePath { options } => self.api_choose_path(options),
+            ApiCommand::Context => (self.api_context(), Task::none()),
             ApiCommand::FileView { open, page } => {
                 (self.api_file_view(open, page.as_deref()), Task::none())
             }
@@ -5135,6 +5160,7 @@ impl Studio {
     /// its window until a download, a merge, a mesh or an import has ended.
     /// Each of them leaves an existing destination as it was.
     fn stop_background_work(&mut self) {
+        self.end_extension_runs();
         self.cancel_bag();
         self.cancel_drawing();
         self.cancel_closed_mesh();
@@ -6954,6 +6980,7 @@ impl Studio {
                     self.status = error;
                 }
             }
+            Message::Extension(action) => return self.extension_action(action),
             Message::OpenBagLicense => {
                 if let Err(error) = open::that("https://docs.3dbag.nl/nl/copyright/") {
                     self.status = format!("Could not open 3DBAG license: {error}");
@@ -8629,6 +8656,10 @@ impl Studio {
                     self.settings_action(settings_dialog::SettingsAction::Cancel);
                     return Task::none();
                 }
+                if self.extension_host.dialog.is_some() {
+                    return self
+                        .update(Message::Extension(extensions::ExtensionAction::CloseDialog));
+                }
                 if self.sheet_dialog.take().is_some() {
                     return Task::none();
                 }
@@ -9965,6 +9996,7 @@ impl Studio {
             mesh_to_plans,
             index,
         ]
+        .push_maybe(self.extensions_ribbon())
         .spacing(2);
         let group_strip = scrollable(
             container(groups)
@@ -10186,6 +10218,9 @@ impl Studio {
                     )
                     .style(flat_tool_style),
             );
+        }
+        if let Some(runs) = self.extension_runs_status() {
+            details = details.push(runs);
         }
         // The version is measured first and the rest fills what is left, so
         // a long message cannot push the version out of the window.
@@ -10843,6 +10878,10 @@ impl Studio {
             layers = layers.push(wizard);
         }
         if let Some(dialog) = self.settings_view().or_else(|| self.sheet_dialog_view()) {
+            layers = layers.push(dialog);
+        }
+        // An install or uninstall waits for the user above everything.
+        if let Some(dialog) = self.extension_dialog_view() {
             layers = layers.push(dialog);
         }
         layers.into()

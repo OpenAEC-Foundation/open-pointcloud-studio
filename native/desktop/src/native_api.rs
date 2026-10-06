@@ -1,10 +1,12 @@
 //! Local JSON command bridge for the native GUI. No script evaluation or webview.
 
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -425,6 +427,40 @@ pub enum ApiCommand {
         id: String,
         enabled: bool,
     },
+    /// Copy and check an extension from a folder or a `.zip` archive and
+    /// ask the user in the window to confirm its install.
+    InstallExtension {
+        path: PathBuf,
+    },
+    /// Start an installed extension, as a click on its button does.
+    RunExtension {
+        id: String,
+        /// The id of a ribbon button or a File view tile of the extension,
+        /// whose arguments are added; without it none are.
+        #[serde(default)]
+        entry: Option<String>,
+    },
+    StopExtension {
+        id: String,
+    },
+    /// Show a message in the status bar.
+    ShowMessage {
+        text: String,
+    },
+    /// Show how far a task is in the status bar.
+    ReportProgress {
+        percent: f64,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// Ask the user for a path with a dialog of the window.
+    ChoosePath {
+        #[serde(flatten)]
+        options: PathRequest,
+    },
+    /// What the window shows: the active scan, the selection, the section
+    /// box and the view or drawing shown.
+    Context,
     FileView {
         open: bool,
         /// The page to show, with `open: true`; without it the File view
@@ -495,6 +531,33 @@ pub enum ApiCommand {
     },
 }
 
+/// The dialog `choose_path` shows.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PathRequest {
+    /// `open` for an existing file, `save` for a file to write, or
+    /// `folder`.
+    pub mode: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub filters: Vec<PathFilter>,
+    /// The name a save dialog proposes.
+    #[serde(default)]
+    pub file_name: Option<String>,
+    /// The folder the dialog starts in.
+    #[serde(default)]
+    pub directory: Option<PathBuf>,
+}
+
+/// A kind of file a dialog of `choose_path` offers.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathFilter {
+    pub name: String,
+    /// Extensions without the dot, such as `csv`.
+    pub extensions: Vec<String>,
+}
+
 /// A turn of `rotate_crop` is applied unless asked otherwise.
 fn applied() -> bool {
     true
@@ -536,8 +599,74 @@ pub struct ApiRequest {
     pub reply: Sender<Value>,
 }
 
+/// A request as the server hands it to the window, with the extension whose
+/// token sent it; `None` for the token of the discovery file.
+pub struct Delivery {
+    pub request: ApiRequest,
+    pub caller: Option<String>,
+}
+
+/// The commands an extension may always send with the token of its run:
+/// they act on that run, or on nothing but the status bar and a dialog.
+pub const EXTENSION_COMMANDS: [&str; 5] = [
+    "show_message",
+    "report_progress",
+    "context",
+    "choose_path",
+    "job",
+];
+
+/// What the token of a run of an extension may do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Grant {
+    pub extension: String,
+    /// The commands it declared; `None` when it declared every command.
+    pub commands: Option<BTreeSet<String>>,
+}
+
+impl Grant {
+    pub fn allows(&self, command: &str) -> bool {
+        EXTENSION_COMMANDS.contains(&command)
+            || self
+                .commands
+                .as_ref()
+                .is_none_or(|commands| commands.contains(command))
+    }
+}
+
+/// The tokens of the runs of extensions, besides the token of the
+/// discovery file: the window adds one when a run starts and takes it away
+/// when the run ends.
+#[derive(Clone, Debug, Default)]
+pub struct Grants(Arc<Mutex<HashMap<String, Grant>>>);
+
+impl Grants {
+    pub fn insert(&self, token: String, grant: Grant) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(token, grant);
+    }
+
+    pub fn remove(&self, token: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(token);
+    }
+
+    fn get(&self, token: &str) -> Option<Grant> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(token)
+            .cloned()
+    }
+}
+
 pub struct ApiHandle {
     pub port: u16,
+    pub grants: Grants,
     discovery_path: PathBuf,
 }
 
@@ -636,8 +765,10 @@ fn write_discovery(port: u16, token: &str, started: u64) -> Result<PathBuf, Stri
 }
 
 fn respond(request: Request, status: u16, body: Value) {
-    let content_type =
-        Header::from_bytes(b"Content-Type", b"application/json").expect("valid JSON content type");
+    // The charset is named, so that every client reads paths and texts
+    // outside ASCII as they are.
+    let content_type = Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8")
+        .expect("valid JSON content type");
     let response = Response::from_string(body.to_string())
         .with_status_code(status)
         .with_header(content_type);
@@ -649,7 +780,8 @@ fn handle_request(
     port: u16,
     started: u64,
     token: &str,
-    sender: &UnboundedSender<ApiRequest>,
+    grants: &Grants,
+    sender: &UnboundedSender<Delivery>,
 ) {
     match (request.method(), request.url()) {
         (&Method::Get, "/health") => respond(request, 200, json!({"status": "ok"})),
@@ -670,14 +802,22 @@ fn handle_request(
             json!({"error": "JavaScript evaluation is unavailable; use typed /exec commands"}),
         ),
         (&Method::Post, "/exec") => {
-            let authorized = request.headers().iter().any(|header| {
-                header.field.to_string().eq_ignore_ascii_case("X-OPS-Token")
-                    && header.value.as_str() == token
-            });
-            if !authorized {
+            let given = request
+                .headers()
+                .iter()
+                .find(|header| header.field.to_string().eq_ignore_ascii_case("X-OPS-Token"))
+                .map(|header| header.value.as_str().to_owned());
+            // The token of the discovery file may send every command; that
+            // of a run of an extension the commands the extension declared.
+            let grant = match given {
+                Some(given) if given == token => Some(None),
+                Some(given) => grants.get(&given).map(Some),
+                None => None,
+            };
+            let Some(grant) = grant else {
                 respond(request, 403, json!({"error": "invalid API token"}));
                 return;
-            }
+            };
             let mut body = Vec::new();
             let read = request
                 .as_reader()
@@ -691,6 +831,20 @@ fn handle_request(
                 respond(request, 413, json!({"error": "request body is too large"}));
                 return;
             }
+            if let Some(grant) = &grant {
+                let name = serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .and_then(|value| value["command"].as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                if !grant.allows(&name) {
+                    let error = format!(
+                        "extension {} does not declare the command {name} in uses.commands of its extension.json",
+                        grant.extension
+                    );
+                    respond(request, 403, json!({ "error": error }));
+                    return;
+                }
+            }
             let command = match serde_json::from_slice::<ApiCommand>(&body) {
                 Ok(command) => command,
                 Err(error) => {
@@ -699,7 +853,11 @@ fn handle_request(
                 }
             };
             let (reply, receiver) = mpsc::channel();
-            if sender.send(ApiRequest { command, reply }).is_err() {
+            let delivery = Delivery {
+                request: ApiRequest { command, reply },
+                caller: grant.map(|grant| grant.extension),
+            };
+            if sender.send(delivery).is_err() {
                 respond(request, 503, json!({"error": "native GUI is unavailable"}));
                 return;
             }
@@ -712,9 +870,17 @@ fn handle_request(
     }
 }
 
+/// Tests that start a server hold this while it runs: a process has one
+/// server, and its discovery file is named after the process.
+#[cfg(test)]
+pub(crate) fn one_server_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    static TURN: Mutex<()> = Mutex::new(());
+    TURN.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 pub fn start(
     requested_port: Option<u16>,
-) -> Result<(UnboundedReceiver<ApiRequest>, ApiHandle), String> {
+) -> Result<(UnboundedReceiver<Delivery>, ApiHandle), String> {
     let listener = TcpListener::bind(("127.0.0.1", requested_port.unwrap_or(0)))
         .map_err(|error| error.to_string())?;
     let port = listener
@@ -726,15 +892,18 @@ pub fn start(
     let started = unix_millis();
     let discovery_path = write_discovery(port, &token, started)?;
     let (sender, receiver) = unbounded_channel();
+    let grants = Grants::default();
+    let served = grants.clone();
     thread::spawn(move || {
         for request in server.incoming_requests() {
-            handle_request(request, port, started, &token, &sender);
+            handle_request(request, port, started, &token, &served, &sender);
         }
     });
     Ok((
         receiver,
         ApiHandle {
             port,
+            grants,
             discovery_path,
         },
     ))
@@ -746,6 +915,7 @@ mod tests {
 
     #[test]
     fn server_authenticates_and_delivers_a_typed_command() {
+        let _turn = one_server_at_a_time();
         let (mut receiver, handle) = start(Some(0)).unwrap();
         let url = format!("http://127.0.0.1:{}", handle.port);
         let client = reqwest::blocking::Client::new();
@@ -807,10 +977,14 @@ mod tests {
                 .map(|body| serde_json::from_str::<Value>(&body).unwrap())
                 .unwrap()
         });
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        // A machine busy with other tests may take a while to connect.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         let request = loop {
             match receiver.try_recv() {
-                Ok(request) => break request,
+                Ok(delivery) => {
+                    assert_eq!(delivery.caller, None);
+                    break delivery.request;
+                }
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty)
                     if std::time::Instant::now() < deadline =>
                 {
@@ -828,5 +1002,96 @@ mod tests {
         let discovery_path = handle.discovery_path.clone();
         drop(handle);
         assert!(!discovery_path.exists());
+    }
+
+    /// The next request the server hands to the window.
+    fn delivered(receiver: &mut UnboundedReceiver<Delivery>) -> Delivery {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            match receiver.try_recv() {
+                Ok(delivery) => return delivery,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                    if std::time::Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("no API request arrived: {error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_token_of_a_run_sends_what_its_extension_declares() {
+        let _turn = one_server_at_a_time();
+        let (mut receiver, handle) = start(Some(0)).unwrap();
+        let url = format!("http://127.0.0.1:{}/exec", handle.port);
+        handle.grants.insert(
+            "run-token".into(),
+            Grant {
+                extension: "org.example.tool".into(),
+                commands: Some(BTreeSet::from(["status".to_owned()])),
+            },
+        );
+        let post = move |token: &str, body: Value| {
+            reqwest::blocking::Client::new()
+                .post(&url)
+                .header("X-OPS-Token", token)
+                .body(body.to_string())
+                .send()
+                .unwrap()
+        };
+
+        // A command the extension did not declare is refused before the
+        // window sees it, and so is a token the server does not know.
+        let refused = post("run-token", json!({"command": "export", "path": "/x.las"}));
+        assert_eq!(refused.status(), 403);
+        assert_eq!(
+            refused.headers()["content-type"],
+            "application/json; charset=utf-8"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&refused.text().unwrap()).unwrap()["error"],
+            "extension org.example.tool does not declare the command export in uses.commands of its extension.json"
+        );
+        assert_eq!(post("guess", json!({"command": "status"})).status(), 403);
+        assert!(receiver.try_recv().is_err());
+
+        // A declared command, and one every run may send, reach the window
+        // on behalf of the extension.
+        let post = std::sync::Arc::new(post);
+        for body in [
+            json!({"command": "status"}),
+            json!({"command": "show_message", "text": "hi"}),
+        ] {
+            let sender = {
+                let post = std::sync::Arc::clone(&post);
+                thread::spawn(move || post("run-token", body).status())
+            };
+            let delivery = delivered(&mut receiver);
+            assert_eq!(delivery.caller.as_deref(), Some("org.example.tool"));
+            assert!(matches!(
+                delivery.request.command,
+                ApiCommand::Status | ApiCommand::ShowMessage { .. }
+            ));
+            delivery.request.reply.send(json!({"ok": true})).unwrap();
+            assert_eq!(sender.join().unwrap(), 200);
+        }
+
+        // The token stops working when the run ends.
+        handle.grants.remove("run-token");
+        assert_eq!(
+            post("run-token", json!({"command": "status"})).status(),
+            403
+        );
+        let every = Grant {
+            extension: "org.example.all".into(),
+            commands: None,
+        };
+        assert!(every.allows("export"));
+        assert!(Grant {
+            commands: Some(BTreeSet::new()),
+            ..every.clone()
+        }
+        .allows("job"));
     }
 }
