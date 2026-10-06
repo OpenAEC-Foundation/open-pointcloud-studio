@@ -483,6 +483,9 @@ pub enum ExtensionAction {
     Stop(String),
     /// A run ended: the extension, the number of the run and how.
     Ended(String, u64, RunEnd),
+    /// A second passed while the Extensions page shows a run, whose time
+    /// then counts up.
+    Tick,
     /// The path a dialog of `choose_path` gave for a job, or none.
     PathChosen(String, Option<PathBuf>),
     /// A request of the local API sent with the token of a run of an
@@ -791,6 +794,8 @@ impl Studio {
                 self.stop_extension(&id);
             }
             ExtensionAction::Ended(id, number, end) => self.extension_ended(&id, number, &end),
+            // The page is drawn again after every message.
+            ExtensionAction::Tick => {}
             ExtensionAction::PathChosen(job, path) => {
                 self.extension_host.path_dialog = false;
                 let state = match path {
@@ -1096,6 +1101,14 @@ impl Studio {
         if let Some(api) = &self.api_handle {
             api.grants.remove(&run.token);
         }
+    }
+
+    /// Whether the window ticks every second: while the Extensions page
+    /// shows how long a run runs.
+    pub(crate) fn extension_clock(&self) -> bool {
+        self.file_open
+            && self.file_page == crate::file_view::FilePage::Extensions
+            && !self.extension_host.runs.is_empty()
     }
 
     /// End every run, as the window closes.

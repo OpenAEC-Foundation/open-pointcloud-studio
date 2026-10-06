@@ -7,6 +7,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::tests::{example_copy, example_folder, install_confirmed, send, Bench, EXAMPLE};
 use super::*;
+use crate::file_view::FilePage;
 use crate::i18n::{Language, TestLanguage};
 use crate::native_api::{ApiCommand, Delivery};
 
@@ -157,6 +158,14 @@ fn a_run_gets_the_api_its_context_its_arguments_and_a_log() {
     // The window draws the run in the ribbon, the page and the status bar.
     assert!(studio.extension_runs_status().is_some());
     let _ = studio.view();
+    // While the Extensions page shows the run, the window ticks every
+    // second, so that the time it runs counts up.
+    assert!(!studio.extension_clock());
+    let _ = studio.update(Message::ToggleFile);
+    let _ = studio.update(Message::FilePage(FilePage::Extensions));
+    assert!(studio.extension_clock());
+    let _ = studio.update(Message::Extension(ExtensionAction::Tick));
+    let _ = studio.view();
     // A second start of the same extension is refused while it runs.
     assert_eq!(
         studio.start_extension(id, None).err().unwrap(),
@@ -168,6 +177,7 @@ fn a_run_gets_the_api_its_context_its_arguments_and_a_log() {
     assert_eq!(studio.status, "Script finished");
     assert!(studio.extension_host.runs.is_empty());
     assert!(studio.extension_runs_status().is_none());
+    assert!(!studio.extension_clock(), "nothing runs");
 
     let folder = bench.root.join(id);
     let written = fs::read_to_string(folder.join("env.txt")).unwrap();

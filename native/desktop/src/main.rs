@@ -1287,7 +1287,13 @@ fn main() -> iced::Result {
             } else {
                 iced::Subscription::none()
             };
-            iced::Subscription::batch([keyboard, api, opened, walking])
+            let clock = if studio.extension_clock() {
+                iced::time::every(Duration::from_secs(1))
+                    .map(|_| Message::Extension(extensions::ExtensionAction::Tick))
+            } else {
+                iced::Subscription::none()
+            };
+            iced::Subscription::batch([keyboard, api, opened, walking, clock])
         })
         .font(include_bytes!("../../assets/fonts/Inter.ttf").as_slice())
         .font(include_bytes!("../../assets/fonts/SpaceGrotesk.ttf").as_slice())
