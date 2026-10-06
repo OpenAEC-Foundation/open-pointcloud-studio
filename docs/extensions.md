@@ -8,8 +8,8 @@ file, opens what it wrote as a layer, and whatever else the API offers. It
 runs as a process of its own, so an extension that fails or crashes ends its
 own run and never the window.
 
-An extension can add buttons to the **EXTENSIONS** group of the ribbon and a
-tile to the **New** or the **Export** page of the File view. The user starts
+An extension can add buttons to the **EXTENSIONS** group of the ribbon and
+tiles to the **New** and the **Export** page of the File view. The user starts
 it with one of those, or with **Run** on the **Extensions** page of the File
 view; a script or an MCP client can start it with `run_extension`.
 

@@ -101,7 +101,7 @@ fn uses_lines(manifest: &Manifest) -> Vec<String> {
 }
 
 /// What an extension adds to the window, in one line.
-fn adds_line(manifest: &Manifest) -> Option<String> {
+pub(super) fn adds_line(manifest: &Manifest) -> Option<String> {
     let mut parts = Vec::new();
     match manifest.ribbon.len() {
         0 => {}
@@ -112,12 +112,22 @@ fn adds_line(manifest: &Manifest) -> Option<String> {
         )),
     }
     for page in [EntryPage::New, EntryPage::Export] {
-        if manifest.file_view.iter().any(|tile| tile.page == page) {
-            parts.push(match page {
-                EntryPage::New => tr("a tile on the New page").to_owned(),
-                EntryPage::Export => tr("a tile on the Export page").to_owned(),
-            });
-        }
+        let count = manifest
+            .file_view
+            .iter()
+            .filter(|tile| tile.page == page)
+            .count();
+        parts.push(match (page, count) {
+            (_, 0) => continue,
+            (EntryPage::New, 1) => tr("a tile on the New page").to_owned(),
+            (EntryPage::Export, 1) => tr("a tile on the Export page").to_owned(),
+            (EntryPage::New, count) => {
+                tr_args("{count} tiles on the New page", &[("count", &count)])
+            }
+            (EntryPage::Export, count) => {
+                tr_args("{count} tiles on the Export page", &[("count", &count)])
+            }
+        });
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }

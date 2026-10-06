@@ -583,6 +583,46 @@ fn a_later_version_before_its_release_replaces_an_earlier_one() {
 }
 
 #[test]
+fn the_confirmation_counts_the_buttons_and_tiles_an_extension_adds() {
+    let _language = TestLanguage::hold(Language::English);
+    let directory = tempfile::tempdir().unwrap();
+    let source = example_copy(directory.path(), "1.0.0", None);
+    let path = source.join(manifest::MANIFEST);
+    let mut declared: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let tile = |id: &str, page: &str| json!({"id": id, "page": page, "title": "Report…"});
+    declared["contributes"]["file_view"] = json!([
+        tile("one", "export"),
+        tile("two", "export"),
+        tile("three", "export"),
+        tile("four", "new"),
+    ]);
+    fs::write(&path, serde_json::to_vec_pretty(&declared).unwrap()).unwrap();
+    let read = |path: &Path| manifest::read(path.parent().unwrap(), &known()).unwrap();
+    assert_eq!(
+        page::adds_line(&read(&path)).unwrap(),
+        "1 button in the ribbon · a tile on the New page · 3 tiles on the Export page"
+    );
+
+    declared["contributes"]["file_view"] = json!([tile("one", "new"), tile("two", "new")]);
+    let mut again = declared["contributes"]["ribbon"][0].clone();
+    again["id"] = json!("again");
+    declared["contributes"]["ribbon"]
+        .as_array_mut()
+        .unwrap()
+        .push(again);
+    fs::write(&path, serde_json::to_vec_pretty(&declared).unwrap()).unwrap();
+    assert_eq!(
+        page::adds_line(&read(&path)).unwrap(),
+        "2 buttons in the ribbon · 2 tiles on the New page"
+    );
+    crate::i18n::set(Language::Table(0));
+    assert_eq!(
+        page::adds_line(&read(&path)).unwrap(),
+        "2 knoppen in het lint · 2 tegels op de pagina Nieuw"
+    );
+}
+
+#[test]
 fn an_extension_that_cannot_be_read_is_listed_with_the_reason() {
     let _language = TestLanguage::hold(Language::English);
     let bench = Bench::new();

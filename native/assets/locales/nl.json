@@ -135,6 +135,8 @@
   "{count} buttons in the ribbon": "{count} knoppen in het lint",
   "a tile on the New page": "een tegel op de pagina Nieuw",
   "a tile on the Export page": "een tegel op de pagina Exporteren",
+  "{count} tiles on the New page": "{count} tegels op de pagina Nieuw",
+  "{count} tiles on the Export page": "{count} tegels op de pagina Exporteren",
   "Checking the extension…": "Extensie wordt gecontroleerd…",
   "Install extension…": "Extensie installeren…",
   "There is no settings folder to install extensions in.": "Er is geen instellingenmap om extensies in te installeren.",
