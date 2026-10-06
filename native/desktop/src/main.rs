@@ -15984,6 +15984,34 @@ mod import_api_tests {
     }
 
     #[test]
+    fn a_one_pass_import_shown_while_it_reads_counts_as_one_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scan.xyz");
+        std::fs::write(
+            &path,
+            "1 2 3
+2 3 4
+3 4 5
+",
+        )
+        .unwrap();
+        let cloud = pointcloud_core::open(&path, 10).unwrap();
+        let mut studio = Studio::default();
+        indexed_import(&mut studio, 17, &path);
+        // Before a first look the import waits for its row.
+        assert_eq!(studio.scans_summary().unwrap().total, 1);
+
+        let _ = studio.update(Message::IndexedImportPreview(17, step_of(&cloud, 2)));
+        let _ = studio.update(Message::FlushSnapshots);
+        // The look keeps the import, which may still be cancelled, but it
+        // is listed once, by its row.
+        assert!(studio.imports.contains_key(&17));
+        assert_eq!(studio.clouds.len(), 1);
+        let summary = studio.scans_summary().unwrap();
+        assert_eq!((summary.done, summary.total), (0, 1));
+    }
+
+    #[test]
     fn spread_preview_stands_in_for_the_metadata_until_the_import_finishes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("scan.xyz");

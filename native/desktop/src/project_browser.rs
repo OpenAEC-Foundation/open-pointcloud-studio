@@ -942,7 +942,7 @@ impl Studio {
     }
 
     /// How far the scans are that are being opened or indexed.
-    fn scans_summary(&self) -> Option<Summary> {
+    pub(crate) fn scans_summary(&self) -> Option<Summary> {
         let rows: Vec<Option<Option<f32>>> = self
             .clouds
             .iter()
@@ -952,13 +952,21 @@ impl Studio {
                     .map(|(_, fraction)| fraction)
             })
             .collect();
+        // An import waits for a row until its metadata or a first look at
+        // its points is listed; a one-pass import that shows its points
+        // while it still reads has its row already.
         let waiting = self
             .imports
             .keys()
             .filter(|id| {
-                !self.import_headers.get(id).is_some_and(|header| {
-                    self.clouds.iter().any(|entry| entry.matches_source(header))
-                })
+                let listed = self.clouds.iter().any(|entry| {
+                    entry.index_import_id == Some(**id)
+                        || self
+                            .import_headers
+                            .get(id)
+                            .is_some_and(|header| entry.matches_source(header))
+                });
+                !listed
             })
             .count();
         summary(&rows, waiting)
