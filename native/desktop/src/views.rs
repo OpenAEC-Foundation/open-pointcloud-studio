@@ -1877,26 +1877,39 @@ impl Studio {
         )
     }
 
-    /// Under the rows of VIEWS: the name field with Save view, which keeps
-    /// the camera and the section box while it is on, and the actions that
-    /// make or open a drawing.
+    /// At the top of VIEWS: the name field with Save view, which keeps the
+    /// camera and the section box while it is on.
+    pub fn save_view_row(&self) -> Element<'_, Message> {
+        let has_scan = self.active.is_some();
+        let mut save = column![row![
+            text_input(i18n::tr("Name"), &self.views.name)
+                .on_input(|name| Message::Views(ViewAction::Name(name)))
+                .on_submit(Message::Views(ViewAction::Save))
+                .size(11)
+                .padding([3, 5])
+                .width(Fill),
+            button(text(i18n::tr("Save view")).size(11))
+                .on_press_maybe(has_scan.then_some(Message::Views(ViewAction::Save)))
+                .style(crate::flat_tool_style),
+        ]
+        .spacing(4)
+        .align_y(iced::Alignment::Center)]
+        .spacing(2);
+        if !has_scan {
+            save = save.push(
+                text(i18n::tr("Open a scan to save views of it"))
+                    .size(10)
+                    .color(self.ui_theme.colors().muted),
+            );
+        }
+        save.into()
+    }
+
+    /// Under the rows of VIEWS: the actions that make or open a drawing.
     pub fn view_actions(&self) -> Element<'_, Message> {
         let flat = crate::flat_tool_style;
         let has_scan = self.active.is_some();
-        let mut actions = column![
-            row![
-                text_input(i18n::tr("Name"), &self.views.name)
-                    .on_input(|name| Message::Views(ViewAction::Name(name)))
-                    .on_submit(Message::Views(ViewAction::Save))
-                    .size(11)
-                    .padding([3, 5])
-                    .width(Fill),
-                button(text(i18n::tr("Save view")).size(11))
-                    .on_press_maybe(has_scan.then_some(Message::Views(ViewAction::Save)))
-                    .style(flat),
-            ]
-            .spacing(4)
-            .align_y(iced::Alignment::Center),
+        column![
             button(text(i18n::tr("Create 2D plan / elevation / section…")).size(11))
                 .on_press_maybe(
                     has_scan.then_some(Message::Sheet(crate::sheet_dialog::SheetAction::Open)),
@@ -1914,15 +1927,8 @@ impl Studio {
         .padding(iced::Padding {
             top: 4.0,
             ..iced::Padding::ZERO
-        });
-        if !has_scan {
-            actions = actions.push(
-                text(i18n::tr("Open a scan to save views of it"))
-                    .size(10)
-                    .color(self.ui_theme.colors().muted),
-            );
-        }
-        actions.into()
+        })
+        .into()
     }
 
     /// The annotations of the active view, each with × to delete it, while

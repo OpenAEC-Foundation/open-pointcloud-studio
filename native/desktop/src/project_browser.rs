@@ -1123,7 +1123,7 @@ impl Studio {
         if !open {
             return group.into();
         }
-        let mut body: Column<'_, Message> = column![].spacing(3);
+        let mut body: Column<'_, Message> = column![self.save_view_row()].spacing(3);
         for (kind, rows) in groups {
             let sub_open = self.browser.is_open(kind.key());
             let mut sub = column![band(
