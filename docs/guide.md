@@ -214,6 +214,8 @@ A view holds everything needed to come back to it: the camera (the orbit camera,
 
 **Save view** beside the name field under **VIEWS** in the Project Browser saves what the scene shows; it is the one button for views and section boxes alike. Without a name the view becomes "View 1", "View 2", and so on. The Project Browser lists the views of the active scan under 3D views, after the 3D model; a view with a section box has a small box after its name. A click on a name restores the view, × deletes it, and under the name of the active view **Rename** changes its name and **Update** overwrites it with the current view. A scan has at most 64 views, with names of at most 64 characters that are unique within it.
 
+The small **Duplicate** button beside × on a row of VIEWS (every row but the files) makes a copy named after the original with " (2)", or the next free number, listed right below it and shown. The copy changes on its own: its camera, its section box and its crop region are its own. A copy of a drawing comes with the drawing as it is, without making it again. Duplicate on **3D model** saves the current 3D view, with the section box while it is on, as the view "3D model (2)".
+
 Restoring puts the camera, the section box and the colour mode back, in the 3D scene also when a drawing was shown. A view with a section box switches the box on with its limits and its turn; a view without one switches the box off.
 
 Section boxes that an earlier version saved under a name with **Save section** become views the first time this version starts: one view per box, named as the box and framing it, with the box switched on. Nothing of them is lost, and the file they were kept in, `section-boxes.json`, is left as it is. The orbit camera is relative to the bounds of the scene and to the size of the 3D view, so a view also keeps those: in a 3D view of another size the pan scales with the picture, and when other scans have been opened or closed since, the camera is moved to show what it showed.
@@ -397,6 +399,22 @@ A drawing can be looked at in the application itself, without a drawing program.
 The drawing shows the points as dots, in their own colour or in that of their layer, the filled cut as filled regions with their holes, the outlines, the frame and the line of text. White and black are drawn black on the sheet, and colours too light to read on it a little darker. Drag with any mouse button to pan and turn the wheel to zoom about the pointer. The scale bar at the lower left gives a round length in the units of the drawing, and the lower right the coordinates under the pointer, in millimetres or metres as the drawing has them.
 
 While the Drawing view is shown, the **Drawing view** block at the top of Properties says where the drawing came from, its units, and how many points, polylines, fills and texts it holds. **Zoom extents** fits the whole drawing on the sheet. Under **Layers** every layer has its colour, its number of entities and a switch; **Show all** and **Hide all** switch them together.
+
+#### Crop region
+
+A plan, an elevation or a section made with **Create 2D plan / elevation / section…** shows its **crop region** on the sheet: a thin blue rectangle with a small square handle in the middle of each side and at each corner. It is the face of the box the drawing was cut from, as the drawing shows it: for a plan the box along its own two horizontal axes, for an elevation or a section its width along the view and its height.
+
+- **Drag a handle** to move that side, or the two sides at a corner. Over a handle the pointer shows arrows the way it moves; while dragging, the size is shown over the rectangle in metres, and the size goes in whole centimetres, never below 0.10 m. When you let go, the box of the drawing changes in the plane of the drawing only, and the drawing is made again under the same name, in place: the view keeps its zoom and position and the layers you switched off stay off. The section box of the 3D view and the saved views are not changed.
+- The **Crop region** switch below the layers hides the rectangle or shows it again. The crop region is never written into a DXF or DWG file.
+- The **Crop region** section of Properties gives its figures: **Width (m)** and **Height (m)**, the centre (**Centre X** and **Centre Y** in model coordinates for a plan; **Centre along** and **Centre height** for an elevation or a section, the first measured along the box from the model origin), **Rotation (°)** for a plan, **Cut height** of a plan or **Cut position** of an elevation or a section, and **View depth (m)**: how deep the drawing sees behind the cut. Type a value and press Enter; the drawing is made again. Width and height change about the centre; a view depth deeper than the box makes the box deeper.
+
+#### Turning the crop region with RO
+
+Type **R** and then **O** (within a second and a half, while no text field has the focus) to turn the crop region of the plan in the Drawing view. The rectangle turns about its centre with the pointer, in whole degrees, and in steps of 15° while Shift is held; the angle is shown beside the centre. Type a number (with a minus sign and a point or comma when needed) to set the angle exactly; Backspace takes back a digit. **Enter** or a left click applies the turn, **Escape** or a right click cancels it, and the status bar says what to do.
+
+Applying turns the box of the plan about the vertical through the centre of the crop region, counter-clockwise seen from above when the rectangle was turned counter-clockwise on the sheet, and makes the plan again: the crop region stands upright again and the model is drawn turned the other way. Turn the rectangle along the walls of a building that stands at an angle, and the plan comes out with the walls along the sheet. Only the crop region of a plan turns; for an elevation or a section, RO says so in the status bar.
+
+In the 3D view, RO turns the section box in the same way about its centre: the box follows the pointer, a typed number sets the angle, Enter or a click keeps it and Escape puts it back. Without a section box the status bar says to switch it on.
 
 What a file is read with:
 
@@ -940,9 +958,10 @@ Nothing is written beside the scans, and the scans themselves are never changed.
 | Shift + middle drag | Orbit |
 | Double click | Orbit about the point under the pointer; where no point is, about the centre of the model |
 | Wheel | Zoom at the pointer |
-| Drag, in the Drawing view | Pan the drawing; the wheel zooms about the pointer |
+| Drag, in the Drawing view | Pan the drawing; the wheel zooms about the pointer; on a handle of the crop region, move that side |
 | Right click | Menu of the scene |
 | `F` | Isometric overview of the whole model (Zoom all) |
+| `R` then `O` | Turn the crop region of the plan in the Drawing view, or the section box in the 3D view; then type an angle, Enter applies, Escape cancels |
 | Delete | Hide the selected points |
 | Ctrl+Z | Undo the last deletion |
 | Ctrl+Y, Ctrl+Shift+Z | Redo |
