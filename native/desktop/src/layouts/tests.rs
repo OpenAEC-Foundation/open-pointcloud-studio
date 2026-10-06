@@ -932,3 +932,37 @@ fn a_viewport_taken_off_the_sheet_while_it_is_dragged_is_let_go() {
         "{message:?}"
     );
 }
+
+#[test]
+fn a_new_sheet_is_named_in_the_language_of_the_window_and_the_api_answers_in_one() {
+    let _dutch = crate::i18n::TestLanguage::hold(crate::i18n::Language::Table(0));
+    let (mut studio, _directory) = studio_with_scan();
+    made_plan(&mut studio, "Plan +1.20");
+    let _ = studio.update(Message::Layouts(LayoutAction::NewSheet));
+    let form = studio.layouts.form.clone().expect("the form opened");
+    assert_eq!(form.name, "Blad 1");
+    // The local API names it as documented, in every language.
+    let made = send(&mut studio, json!({"command": "create_sheet"}));
+    assert_eq!(made["sheet"]["name"], "Sheet 1", "{made}");
+    // Drawings at two scales: the title block says so in Dutch, the API
+    // in English.
+    for scale in ["1:50", "1:100"] {
+        let placed = send(
+            &mut studio,
+            json!({"command": "place_view", "name": "Plan +1.20", "scale": scale}),
+        );
+        assert_eq!(placed["ok"], true, "{placed}");
+    }
+    let listed = send(&mut studio, json!({"command": "list_sheets"}));
+    assert_eq!(listed["sheets"][0]["scale"], "as indicated");
+    assert_eq!(
+        studio.layouts.list[0].scale_text().as_deref(),
+        Some("zoals aangegeven")
+    );
+    let _ = send(
+        &mut studio,
+        json!({"command": "remove_viewport", "viewport": 0}),
+    );
+    let listed = send(&mut studio, json!({"command": "list_sheets"}));
+    assert_eq!(listed["sheets"][0]["scale"], "1:100");
+}

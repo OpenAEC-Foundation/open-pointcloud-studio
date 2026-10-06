@@ -186,7 +186,7 @@ impl Studio {
             "project": layout.project,
             "date": layout.date,
             "drawn_by": layout.drawn_by,
-            "scale": layout.scale_text(),
+            "scale": layout.scale_value(),
             "shown": self.drawing_view.shown_layout() == Some(layout.guid.as_str()),
             "viewports": layout
                 .viewports
@@ -242,7 +242,10 @@ impl Studio {
             None => form.orientation,
         };
         let number = options.number.clone().unwrap_or(form.number);
-        let name = options.name.clone().unwrap_or(form.name);
+        let name = options
+            .name
+            .clone()
+            .unwrap_or_else(|| self.layouts.api_name());
         let guid = match self.create_layout(&number, &name, paper, orientation.landscape()) {
             Ok(guid) => guid,
             Err(error) => return refused(error),

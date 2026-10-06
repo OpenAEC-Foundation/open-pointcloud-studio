@@ -265,8 +265,8 @@ impl LayoutTool {
         model::save(&self.list).map_err(|error| format!("The sheets could not be stored: {error}"))
     }
 
-    /// What "New sheet…" starts with: the next number and name, and A3
-    /// landscape.
+    /// What "New sheet…" starts with: the next number, the next name in
+    /// the language of the window, and A3 landscape.
     fn new_form(&self) -> NewSheet {
         let taken = |number: &str| {
             self.list
@@ -277,21 +277,36 @@ impl LayoutTool {
             .map(|place| format!("{place:02}"))
             .find(|number| !taken(number))
             .unwrap_or_default();
-        let name = (1..=MAX_SHEETS + 1)
-            .map(|place| format!("Sheet {place}"))
-            .find(|name| {
-                !self
-                    .list
-                    .iter()
-                    .any(|layout| layout.name.eq_ignore_ascii_case(name))
-            })
-            .unwrap_or_else(|| "Sheet".into());
+        let name = self.free_name(
+            |place| tr_args("Sheet {number}", &[("number", &place)]),
+            tr("Sheet"),
+        );
         NewSheet {
             number,
             name,
             paper: Paper::A3,
             orientation: Orientation::Landscape,
         }
+    }
+
+    /// The first name `named` gives a place that no sheet has, else
+    /// `fallback`.
+    fn free_name(&self, named: impl Fn(usize) -> String, fallback: &str) -> String {
+        (1..=MAX_SHEETS + 1)
+            .map(named)
+            .find(|name| {
+                !self
+                    .list
+                    .iter()
+                    .any(|layout| layout.name.eq_ignore_ascii_case(name))
+            })
+            .unwrap_or_else(|| fallback.to_owned())
+    }
+
+    /// The name `create_sheet` of the local API gives a sheet without one:
+    /// "Sheet N" in every language, as documented.
+    fn api_name(&self) -> String {
+        self.free_name(|place| format!("Sheet {place}"), "Sheet")
     }
 
     /// A sheet by its identifier, its number or its name, in any case.

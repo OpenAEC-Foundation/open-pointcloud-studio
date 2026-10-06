@@ -513,7 +513,7 @@ The six numbers are the section box: X, Y and Z min, then X, Y and Z max. `--rot
 
 A sheet is paper on which saved 3D views, plans, elevations and sections are laid out to be printed: paper of the A series with a border 10 mm inside its edge and a title block in the lower right corner. The sheets are listed under **SHEETS** in the Project Browser, between VIEWS and BCF, and kept in `sheets.json` beside the saved views, so they are there again after a restart.
 
-- **New sheet…** at the bottom of SHEETS, or the sheet button on its band, asks for the number, the name, the paper (A4 to A0) and whether it lies or stands; a new sheet is the next number on A3 lying. **Create** makes it and shows it.
+- **New sheet…** at the bottom of SHEETS, or the sheet button on its band, asks for the number, the name, the paper (A4 to A0) and whether it lies or stands; a new sheet is the next number and name (Sheet 1, in the language of the window) on A3 lying. **Create** makes it and shows it.
 - Every row has **Rename**, **Duplicate** (the copy keeps the views on it and gets the next free number after its name) and **×**, which deletes the sheet but not the views and drawings on it.
 - A click on a row opens the sheet in a tab of its own above the main area: the paper on grey in its true proportions, with its border and title block. Drag to pan and turn the wheel to zoom about the pointer; **Fit sheet** in Properties shows the whole paper again.
 

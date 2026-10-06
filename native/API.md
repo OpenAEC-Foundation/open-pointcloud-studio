@@ -806,7 +806,8 @@ without it a command acts on the sheet shown. `viewport` names a view placed
 on a sheet by its zero-based place or its `id`.
 
 `create_sheet` makes a sheet, by default numbered with the next free `01`,
-`02`, … and named `Sheet N` on A3 lying, and shows it in a tab;
+`02`, … and named `Sheet N` (in every language; New sheet… of the window
+offers the name in its own) on A3 lying, and shows it in a tab;
 `update_sheet` changes any of `number`, `name`, `paper`, `orientation`,
 `project`, `date` and `drawn_by`. A new sheet has the day it was made as its
 date and the name of the user as `drawn_by`. `duplicate_sheet` copies a sheet
@@ -840,7 +841,8 @@ shown, one after another; until then its viewport says so.
 
 `list_sheets` answers with `sheets`, each with `guid`, `number`, `name`,
 `paper`, `orientation`, `size_mm`, `project`, `date`, `drawn_by`, `scale`
-(the scale of its drawings when they share one, else "as indicated"), `shown`
+(the scale of its drawings when they share one, such as `1:100`, else
+`as indicated`, in every language; `null` without a drawing), `shown`
 and `viewports`, each with `index`, `id`, `kind`, the `guid` and `name` of
 its view, `title`, `centre`, `size`, a drawing's `scale` and `scale_label`,
 and `shows`: `drawing`, `image` (with `pixels` and `dpi`), `waiting` (with

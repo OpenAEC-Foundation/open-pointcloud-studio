@@ -318,10 +318,9 @@ impl Layout {
         ]
     }
 
-    /// What the title block says the scale is: the scale of the drawings
-    /// on it when they share one, else "as indicated"; nothing without a
-    /// drawing.
-    pub fn scale_text(&self) -> Option<String> {
+    /// The scale of the drawings on it: `Some(Some(scale))` when they share
+    /// one, `Some(None)` when they differ, nothing without a drawing.
+    fn shared_scale(&self) -> Option<Option<f64>> {
         let mut scales: Vec<f64> = self
             .viewports
             .iter()
@@ -332,9 +331,28 @@ impl Layout {
         scales.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
         match scales.as_slice() {
             [] => None,
-            [only] => Some(scale_label(*only)),
-            _ => Some(crate::i18n::tr("as indicated").to_owned()),
+            [only] => Some(Some(*only)),
+            _ => Some(None),
         }
+    }
+
+    /// What the title block says the scale is, in the language of the
+    /// window: the scale of the drawings on it when they share one, else
+    /// "as indicated"; nothing without a drawing.
+    pub fn scale_text(&self) -> Option<String> {
+        self.shared_scale().map(|scale| match scale {
+            Some(scale) => scale_label(scale),
+            None => crate::i18n::tr("as indicated").to_owned(),
+        })
+    }
+
+    /// The scale as the local API gives it, the same in every language:
+    /// "1:100" when the drawings share it, else "as indicated".
+    pub fn scale_value(&self) -> Option<String> {
+        self.shared_scale().map(|scale| match scale {
+            Some(scale) => scale_label(scale),
+            None => "as indicated".to_owned(),
+        })
     }
 
     pub fn viewport(&self, id: &str) -> Option<&Viewport> {
