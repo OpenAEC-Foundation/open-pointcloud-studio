@@ -281,25 +281,23 @@ impl Studio {
         // Builds that wait for their turn are told with the queue.
         let turns = jobs.iter().filter(|job| job.waits_for_turn()).count();
         let waiting = queued + turns;
-        let detail = if waiting > 0 {
-            i18n::tr_args(
+        let values: [(&str, &dyn std::fmt::Display); 4] = [
+            ("ready", &ready),
+            ("count", &count),
+            ("running", &(jobs.len() - turns)),
+            ("waiting", &waiting),
+        ];
+        let detail = match (jobs.len() - turns, waiting) {
+            (_, 0) => i18n::tr_args("{ready} of {count} ready  ·  {running} at once", &values),
+            (0, _) => i18n::tr_args("{ready} of {count} ready  ·  {waiting} waiting", &values),
+            (1, _) => i18n::tr_args(
+                "{ready} of {count} ready  ·  1 building  ·  {waiting} waiting",
+                &values,
+            ),
+            _ => i18n::tr_args(
                 "{ready} of {count} ready  ·  {running} at once  ·  {waiting} waiting",
-                &[
-                    ("ready", &ready),
-                    ("count", &count),
-                    ("running", &(jobs.len() - turns)),
-                    ("waiting", &waiting),
-                ],
-            )
-        } else {
-            i18n::tr_args(
-                "{ready} of {count} ready  ·  {running} at once",
-                &[
-                    ("ready", &ready),
-                    ("count", &count),
-                    ("running", &(jobs.len() - turns)),
-                ],
-            )
+                &values,
+            ),
         };
         Line {
             phase: Phase::Indexing,
@@ -823,10 +821,20 @@ mod tests {
         let lines = studio.progress_lines();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].title, "Indexing 2 scans");
-        assert_eq!(lines[0].detail, "0 of 2 ready  ·  1 at once  ·  1 waiting");
+        assert_eq!(lines[0].detail, "0 of 2 ready  ·  1 building  ·  1 waiting");
         assert_eq!(lines[0].fraction, Some(0.125 / 2.0));
         let _ = studio.update(Message::IndexPoll);
-        assert_eq!(studio.status, "Building 1 octrees at once; 1 waiting");
+        assert_eq!(studio.status, "Building 1 octree; 1 waiting");
+        // Both wait, the first for a scan opened before it that is read
+        // without an octree.
+        first.lock().unwrap().stage = IndexStage::WaitingToRead;
+        assert_eq!(
+            studio.progress_lines()[0].detail,
+            "0 of 2 ready  ·  2 waiting"
+        );
+        let _ = studio.update(Message::IndexPoll);
+        assert_eq!(studio.status, "2 octrees waiting for their turn");
+        first.lock().unwrap().stage = IndexStage::ReadingSource;
 
         // Alone, the waiting scan has a line of its own that says so.
         let alone = studio.index_jobs.remove(1);
@@ -863,6 +871,36 @@ mod tests {
         assert_eq!(
             Studio::index_progress_text(*second.lock().unwrap()),
             "Read; its octree is built once the octree before it is ready"
+        );
+    }
+
+    #[test]
+    fn the_status_bar_counts_builds_in_the_singular_and_the_plural() {
+        let _language = TestLanguage::hold(Language::English);
+        let texts = || {
+            [(3, 0), (2, 1), (1, 1), (1, 2), (0, 2)]
+                .map(|(running, waiting)| crate::index_jobs::builds_status(running, waiting))
+        };
+        assert_eq!(
+            texts(),
+            [
+                "Building 3 octrees at once",
+                "Building 2 octrees at once; 1 waiting",
+                "Building 1 octree; 1 waiting",
+                "Building 1 octree; 2 waiting",
+                "2 octrees waiting for their turn",
+            ]
+        );
+        crate::i18n::set(Language::from_key("nl").unwrap());
+        assert_eq!(
+            texts(),
+            [
+                "3 indexen tegelijk in opbouw",
+                "2 indexen tegelijk in opbouw; 1 wacht",
+                "1 index in opbouw; 1 wacht",
+                "1 index in opbouw; 2 wachten",
+                "2 indexen wachten op hun beurt",
+            ]
         );
     }
 

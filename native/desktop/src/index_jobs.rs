@@ -116,6 +116,33 @@ impl IndexJob {
     }
 }
 
+/// What the status bar says while several builds run or wait: how many are
+/// built at once and how many wait, one of each in the singular.
+pub(crate) fn builds_status(running: usize, waiting: usize) -> String {
+    let waits = match waiting {
+        1 => i18n::tr("1 waiting").to_owned(),
+        _ => i18n::tr_args("{waiting} waiting", &[("waiting", &waiting)]),
+    };
+    let building = match running {
+        0 => {
+            return i18n::tr_args(
+                "{waiting} octrees waiting for their turn",
+                &[("waiting", &waiting)],
+            )
+        }
+        1 => i18n::tr("Building 1 octree").to_owned(),
+        _ => i18n::tr_args(
+            "Building {running} octrees at once",
+            &[("running", &running)],
+        ),
+    };
+    if waiting == 0 {
+        building
+    } else {
+        format!("{building}; {waits}")
+    }
+}
+
 pub(crate) fn stage_key(stage: IndexStage) -> &'static str {
     match stage {
         IndexStage::WaitingToRead => "waiting_to_read",
@@ -378,13 +405,7 @@ impl Studio {
             jobs => {
                 // Builds that wait for their turn wait like the queue.
                 let turns = jobs.iter().filter(|job| job.waits_for_turn()).count();
-                self.status = i18n::tr_args(
-                    "Building {running} octrees at once; {waiting} waiting",
-                    &[
-                        ("running", &(jobs.len() - turns)),
-                        ("waiting", &(self.index_waiting() + turns)),
-                    ],
-                );
+                self.status = builds_status(jobs.len() - turns, self.index_waiting() + turns);
             }
         }
         self.poll_index_jobs()
