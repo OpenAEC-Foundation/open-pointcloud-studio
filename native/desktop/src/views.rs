@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame};
 use iced::widget::{button, column, container, row, text, text_input, tooltip};
@@ -35,6 +35,11 @@ const SNAPSHOT_DELAY: Duration = Duration::from_millis(450);
 const SNAPSHOT_TRIES: u8 = 20;
 /// Longest edge of a stored snapshot in pixels.
 const SNAPSHOT_MAX_EDGE: u32 = 1920;
+/// A snapshot leaves the controls of the viewport out of the picture: they
+/// are hidden this long before the screenshot, so that a frame without them
+/// is drawn, and come back at the latest after `CLEAN_LIMIT`.
+const CLEAN_FRAME: Duration = Duration::from_millis(120);
+const CLEAN_LIMIT: Duration = Duration::from_secs(2);
 /// Characters of a note shown in its label before it is cut.
 const LABEL_CHARS: usize = 48;
 const LABEL_HEIGHT: f32 = 18.0;
@@ -114,9 +119,31 @@ pub struct ViewTool {
     canvas: Cell<Option<Rectangle>>,
     /// The scan path last asked for, with its name in the list of views.
     source: RefCell<Option<(PathBuf, PathBuf)>>,
+    /// The snapshot being taken, by its serial, and since when: meanwhile
+    /// the viewport leaves its controls out.
+    capturing: Option<(u64, Instant)>,
 }
 
 impl ViewTool {
+    /// Whether the viewport leaves its controls out, while a snapshot is
+    /// taken; never for longer than `CLEAN_LIMIT`.
+    pub fn capturing(&self) -> bool {
+        self.capturing
+            .is_some_and(|(_, since)| since.elapsed() < CLEAN_LIMIT)
+    }
+
+    /// The snapshot request `serial` stops leaving the controls out.
+    /// Reports whether it was the one that did.
+    fn stop_capturing(&mut self, serial: u64) -> bool {
+        match self.capturing {
+            Some((capturing, _)) if capturing == serial => {
+                self.capturing = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn load() -> Self {
         Self {
             list: camera_views::load(),
@@ -1337,6 +1364,9 @@ impl Studio {
                 serial,
                 tries,
             } => {
+                // The controls of the viewport come back unless this request
+                // takes its screenshot now.
+                let clean = self.views.stop_capturing(serial);
                 if self.views.snapshots.get(&guid) != Some(&serial) {
                     // A newer request for this view is on its way.
                     return Task::none();
@@ -1370,12 +1400,29 @@ impl Studio {
                     // the caps of the cut made.
                     return self.snapshot_timer(guid, serial, tries - 1);
                 }
+                // The picture is of the scene without the controls of the
+                // viewport: they are left out of the next frame, and the
+                // screenshot is taken of that frame.
+                self.views.capturing = Some((serial, Instant::now()));
+                if !clean {
+                    return Task::perform(
+                        async { tokio::time::sleep(CLEAN_FRAME).await },
+                        move |()| {
+                            Message::Views(ViewAction::Capture {
+                                guid: guid.clone(),
+                                serial,
+                                tries,
+                            })
+                        },
+                    );
+                }
                 // A minimised window gives no screenshot; the view stays due.
                 return crate::screenshot::capture_window().map(move |captured| {
                     Message::Views(ViewAction::Captured(guid.clone(), serial, captured.ok()))
                 });
             }
             ViewAction::Captured(guid, serial, screenshot) => {
+                self.views.stop_capturing(serial);
                 if self.views.snapshots.get(&guid) != Some(&serial) {
                     return Task::none();
                 }
@@ -3139,6 +3186,59 @@ mod tests {
             studio,
             ViewAction::SnapshotSaved(guid.to_owned(), serial, Ok(())),
         );
+    }
+
+    #[test]
+    fn a_snapshot_leaves_the_controls_of_the_viewport_out_of_its_picture() {
+        let (mut studio, _directory) = studio_with_scan();
+        draw(&studio, Size::new(900.0, 700.0));
+        act(&mut studio, ViewAction::Save);
+        let guid = studio.views.list[0].guid.clone();
+        let serial = studio.views.snapshots[&guid];
+        assert!(!studio.point_viewport().clean);
+        // The request first draws a frame without the view cube, the
+        // section box handles and the tools, then takes the screenshot of
+        // it; with the screenshot the controls come back.
+        capture(&mut studio, &guid);
+        assert!(studio.point_viewport().clean);
+        capture(&mut studio, &guid);
+        assert!(studio.point_viewport().clean);
+        act(
+            &mut studio,
+            ViewAction::Captured(guid.clone(), serial, Some(screenshot())),
+        );
+        assert!(!studio.point_viewport().clean);
+        // A request that cannot take its picture gives them back at once.
+        act(&mut studio, ViewAction::Update(guid.clone()));
+        capture(&mut studio, &guid);
+        assert!(studio.point_viewport().clean);
+        let _ = studio.update(Message::ToggleFile);
+        capture(&mut studio, &guid);
+        assert!(!studio.views.capturing());
+        let _ = studio.update(Message::ToggleFile);
+        // The viewport draws with them and without them.
+        use iced::widget::canvas::Program;
+        let renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            iced::Font::DEFAULT,
+            iced::Pixels(12.0),
+        ));
+        let bounds = Rectangle::new(UiPoint::ORIGIN, Size::new(900.0, 700.0));
+        for clean in [false, true] {
+            studio.views.capturing = clean.then(|| (serial, std::time::Instant::now()));
+            let viewport = studio.point_viewport();
+            assert_eq!(viewport.clean, clean);
+            let geometry = viewport.draw(
+                &crate::ViewportState::default(),
+                &renderer,
+                &studio.ui_theme.iced(),
+                bounds,
+                iced::mouse::Cursor::Unavailable,
+            );
+            assert_eq!(geometry.len(), 1);
+        }
+        // Never for long: the controls come back by themselves.
+        studio.views.capturing = Some((serial, std::time::Instant::now() - CLEAN_LIMIT));
+        assert!(!studio.point_viewport().clean);
     }
 
     #[test]

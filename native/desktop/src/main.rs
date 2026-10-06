@@ -10211,6 +10211,7 @@ impl Studio {
             shift: self.modifiers.shift(),
             pointer: &self.viewport_pointer,
             photos: &self.photos,
+            clean: self.views.capturing(),
         }
     }
 
@@ -10372,7 +10373,7 @@ impl Studio {
             .width(Fill)
             .height(Fill)
         };
-        let canvas = if self.walk.is_some() && !self.drawing_view.shown {
+        let canvas = if self.walk.is_some() && !self.drawing_view.shown && !self.views.capturing() {
             canvas.push(
                 container(
                     button(text(i18n::tr("Back to 3D view (Esc)")).size(12))
@@ -12084,6 +12085,9 @@ struct PointViewport<'a> {
     pointer: &'a std::cell::Cell<Option<[f32; 2]>>,
     /// The photos of the files that are not those of their stations.
     photos: &'a file_photos::PhotoTool,
+    /// A snapshot of the view is being taken: only the scene is drawn,
+    /// without the controls of the viewport.
+    clean: bool,
 }
 
 struct ScanMarker {
@@ -12960,7 +12964,13 @@ impl canvas::Program<Message> for PointViewport<'_> {
             return vec![frame.into_geometry()];
         }
         if let Some(view) = self.walk {
-            self.draw_walk_overlay(&mut frame, view, bounds.size());
+            if self.clean {
+                // A snapshot leaves out the stations and the steps to walk.
+                self.draw_faces(&mut frame, bounds.size());
+                self.draw_annotations(&mut frame, bounds.size());
+            } else {
+                self.draw_walk_overlay(&mut frame, view, bounds.size());
+            }
             return vec![frame.into_geometry()];
         }
         let Some(overall_bounds) = combined_bounds(self.clouds) else {
@@ -13012,7 +13022,14 @@ impl canvas::Program<Message> for PointViewport<'_> {
             bounds.width,
             bounds.height,
         );
-        for entry in self.clouds.iter().filter(|entry| entry.visible) {
+        // A snapshot of a view is of the scene alone: the selection, the
+        // handles of the section box, the tools and the view cube stay out
+        // of it; the frame of the box stays.
+        for entry in self
+            .clouds
+            .iter()
+            .filter(|entry| entry.visible && !self.clean)
+        {
             if let Some(selection) = &entry.selection {
                 for source_point in &selection.highlights {
                     let point = if selection.highlights_source {
@@ -13075,7 +13092,11 @@ impl canvas::Program<Message> for PointViewport<'_> {
             let hovered_handle = _cursor
                 .position_in(bounds)
                 .and_then(|point| section_handle_at(point, section, projection));
-            for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+            for (axis, name) in ["X", "Y", "Z"]
+                .into_iter()
+                .enumerate()
+                .filter(|_| !self.clean)
+            {
                 for is_min in [true, false] {
                     if let Some((x, y, _)) =
                         projection.project_unclipped(section_handle_world(section, axis, is_min))
@@ -13115,7 +13136,11 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 }
             }
             // While RO turns the box, its angle beside the middle of its top.
-            if let Some(label) = self.turning.map(|turn| turn.label(self.shift)) {
+            if let Some(label) = self
+                .turning
+                .filter(|_| !self.clean)
+                .map(|turn| turn.label(self.shift))
+            {
                 let mut top = section.center();
                 top[2] = section.bounds.max[2];
                 if let Some((x, y, _)) = projection.project_unclipped(section.to_scene(top)) {
@@ -13142,7 +13167,10 @@ impl canvas::Program<Message> for PointViewport<'_> {
             let turning = _state
                 .drag
                 .is_some_and(|drag| matches!(drag.mode, DragMode::SectionTurn));
-            for world in section_turn_handles(section) {
+            for world in section_turn_handles(section)
+                .into_iter()
+                .filter(|_| !self.clean)
+            {
                 let Some((x, y, _)) = projection.project_unclipped(world) else {
                     continue;
                 };
@@ -13327,10 +13355,17 @@ impl canvas::Program<Message> for PointViewport<'_> {
         if self.show_scan_poses {
             self.draw_photo_marks(&mut frame, projection, bounds.size());
         }
-        self.draw_drawing(&mut frame, bounds.size());
+        if !self.clean {
+            self.draw_drawing(&mut frame, bounds.size());
+        }
         self.draw_faces(&mut frame, bounds.size());
-        self.draw_measure(&mut frame, bounds.size());
+        if !self.clean {
+            self.draw_measure(&mut frame, bounds.size());
+        }
         self.draw_annotations(&mut frame, bounds.size());
+        if self.clean {
+            return vec![frame.into_geometry()];
+        }
         // While the camera turns about the orbit point, the point is marked.
         let turning = _state.drag.is_some_and(|drag| {
             matches!(drag.mode, DragMode::Orbit) && drag.position != drag.start
