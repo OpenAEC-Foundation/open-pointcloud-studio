@@ -161,12 +161,12 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - Point clouds in LAS, LAZ, E57, PLY, PCD, PTX, PTS and text formats, meshes in OBJ, PLY, OFF and STL, and the points and faces of an ASCII DXF; see [File formats](#file-formats).
 - A whole scan project at once: every supported file in a folder, or the scans that a scan project file (`.rcp`) lists and that lie beside it.
 - Several files together, each as a layer that can be hidden, shown or closed; mark several layers with Shift-click and Ctrl-click to hide, show or close them together.
-- Large files stay usable while they open: LAS and LAZ open from their header, an E57 file of 512 MiB or more first shows a sample spread through the file when its layout allows that, and any other file of that size shows the points read so far every few seconds.
+- Large files stay usable while they open: LAS and LAZ open from their header, an E57 file of 512 MiB or more first shows a sample spread through the file when its layout allows that, and a scan that is read in full shows its points while it is read, at every tenth of them, also when many scans are opened together.
 - A strip above the scene shows the progress and the time left of each import and each index build, and the stages of a section drawing, a closed mesh and a face detection, with a button to cancel.
 
 ### View
 
-- An index on disk (an octree) supplies the detail for the current camera, up to the point budget. It is built automatically for clouds of one million points or more and reused the next time the file is opened.
+- An index on disk (an octree) supplies the detail for the current camera, up to the point budget. It is built automatically for clouds of one million points or more, several at a time, and reused the next time the file is opened.
 - The points on screen stay while the camera moves; the detail of the new view takes their place once it has been read.
 - Four colour modes (stored colour, elevation, intensity, classification), eye-dome lighting, and a point size from 0.1 to 20.
 - The classes that occur in the open clouds are listed in the project panel and can be shown or hidden one by one.

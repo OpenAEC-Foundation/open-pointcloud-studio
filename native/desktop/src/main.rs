@@ -25,6 +25,7 @@ mod faces;
 mod file_view;
 mod gpu_viewport;
 mod i18n;
+mod index_jobs;
 mod job_scene;
 mod lod_pace;
 #[cfg(target_os = "macos")]
@@ -41,6 +42,7 @@ mod opencad_ribbon;
 mod orbit_point;
 mod preferences;
 mod project_browser;
+mod progressive;
 mod project_open;
 mod saved_drawings;
 mod screenshot;
@@ -1671,10 +1673,20 @@ enum Message {
     ImportLoaded(u64, Result<Arc<PointCloud>, String>),
     HeaderLoaded(u64, Result<Arc<PointCloud>, String>),
     IndexedImportPreview(u64, Arc<PointCloud>),
-    /// The points of a large source known so far, while its import is still
+    /// The points of a source known so far, while its import is still
     /// reading it.
     ImportSnapshot(u64, Arc<PointCloud>),
-    IndexedImportReady(u64, Result<(Arc<PointCloud>, Arc<OctreeIndex>), String>),
+    /// The points known so far of a LAS or LAZ file that is read in full,
+    /// for the layer of its header (the first cloud).
+    LayerSnapshot(Arc<PointCloud>, Arc<PointCloud>),
+    /// Show the snapshots that arrived since the last time, together.
+    FlushSnapshots,
+    /// The checked cloud of a one-pass import with its octree, or without
+    /// it when Cancel index stopped the octree after the pass.
+    IndexedImportReady(
+        u64,
+        Result<(Arc<PointCloud>, Option<Arc<OctreeIndex>>), String>,
+    ),
     CancelImport(u64),
     Settings(settings_dialog::SettingsAction),
     /// The CAD viewer that opens exported DXF and DWG files.
@@ -2070,9 +2082,29 @@ struct Studio {
     selection_pending: bool,
     selection_cancel: Arc<AtomicBool>,
     pending_delete: bool,
-    index_pending: bool,
-    index_progress: Option<Arc<Mutex<IndexProgress>>>,
-    index_cancel: Arc<AtomicBool>,
+    /// The octree builds that are running, in the order they started.
+    index_jobs: Vec<index_jobs::IndexJob>,
+    /// How many octree builds run at once on this machine.
+    index_limit: usize,
+    /// Layers the user asked an octree for while every place was taken, by
+    /// their load identity, in the order they get one.
+    index_requests: Vec<Arc<PointCloud>>,
+    /// Builds that ended since none was running or waiting.
+    index_finished: usize,
+    /// Scans whose builds were cancelled: they are not indexed automatically
+    /// again until automatic indexing is switched on anew.
+    index_declined: HashSet<PathBuf>,
+    /// Whether a look at the running builds is under way.
+    index_polling: bool,
+    /// The latest snapshot of each import that is still reading, by import,
+    /// with whether that import builds an octree in the same pass: they are
+    /// shown together at the next flush.
+    pending_snapshots: HashMap<u64, (bool, Arc<PointCloud>)>,
+    /// The same for layers read without an import, by the cloud they were
+    /// opened with.
+    pending_layer_snapshots: Vec<(Arc<PointCloud>, Arc<PointCloud>)>,
+    snapshot_flush_scheduled: bool,
+    last_snapshot_flush: Option<Instant>,
     detail_pending: bool,
     detail_cancel: Arc<AtomicBool>,
     detail_loaded_revision: Option<u64>,
@@ -2522,9 +2554,16 @@ impl Default for Studio {
             selection_pending: false,
             selection_cancel: Arc::new(AtomicBool::new(false)),
             pending_delete: false,
-            index_pending: false,
-            index_progress: None,
-            index_cancel: Arc::new(AtomicBool::new(false)),
+            index_jobs: Vec::new(),
+            index_limit: index_jobs::machine_build_limit(),
+            index_requests: Vec::new(),
+            index_finished: 0,
+            index_declined: HashSet::new(),
+            index_polling: false,
+            pending_snapshots: HashMap::new(),
+            pending_layer_snapshots: Vec::new(),
+            snapshot_flush_scheduled: false,
+            last_snapshot_flush: None,
             detail_pending: false,
             detail_cancel: Arc::new(AtomicBool::new(false)),
             detail_loaded_revision: None,
@@ -2624,6 +2663,14 @@ impl Studio {
     /// Add the layer of an import that is still reading its source, showing
     /// what is known of it: its metadata, or the points read so far.
     fn show_import_layer(&mut self, id: u64, header: Arc<PointCloud>) -> Task<Message> {
+        let photos = self.add_import_layer(id, header);
+        self.frame_new_scene();
+        photos
+    }
+
+    /// Add the layer of an import that is still reading its source, and
+    /// leave the camera as it is.
+    fn add_import_layer(&mut self, id: u64, header: Arc<PointCloud>) -> Task<Message> {
         self.cancel_selection_for_scene_change();
         self.clouds.push(CloudEntry {
             cloud: Arc::clone(&header),
@@ -2652,7 +2699,6 @@ impl Studio {
             self.reset_section_reference();
             self.sync_section_coordinate_inputs();
         }
-        self.frame_new_scene();
         self.station_photos_task(&header)
     }
 
@@ -3194,8 +3240,11 @@ impl Studio {
         };
         self.cancel_selection_for_scene_change();
         for &index in indices.iter().rev() {
-            if self.clouds[index].index_import_id.is_some() {
-                self.index_cancel.store(true, Ordering::Relaxed);
+            if let Some(id) = self.clouds[index].index_import_id {
+                // Its octree is built in the pass that reads it: stop both.
+                if let Some(job) = self.index_jobs.iter().find(|job| job.import_id == Some(id)) {
+                    job.cancel.store(true, Ordering::Relaxed);
+                }
             }
             let importing = self
                 .import_headers
@@ -3361,20 +3410,7 @@ impl Studio {
                         },
                         "mesh": self.mesh_job.as_ref().map(MeshJob::progress_value),
                         "merge": self.merge_job.as_ref().map(MergeJob::progress_value),
-                        "index_progress": self.index_progress.as_ref().and_then(|value| value.lock().ok().map(|progress| json!({
-                            "stage": match progress.stage {
-                                IndexStage::ReadingSource => "reading_source",
-                                IndexStage::BuildingTree => "building_tree",
-                                IndexStage::Ready => "ready",
-                            },
-                            "completed": progress.completed,
-                            "total": progress.total,
-                            "depth": progress.depth,
-                            "leaves": progress.leaves,
-                            "settled": progress.settled,
-                            "fraction": progress.fraction(),
-                            "cancelling": self.index_cancel.load(Ordering::Relaxed),
-                        }))),
+                        "index_progress": self.first_index_progress_value(),
                         "scale": self.scale_job.as_ref().map(|job| json!({
                             "source_index": job.cloud_index,
                             "completed": job.progress.load(Ordering::Relaxed),
@@ -3387,6 +3423,7 @@ impl Studio {
                 // The literal above is as large as its macro can expand; further
                 // fields are added to the answer here.
                 answer.0["result"]["detail_pending"] = Value::Bool(self.detail_pending);
+                answer.0["result"]["index"] = self.index_value();
                 answer.0["result"]["language"] = Value::from(i18n::choice().key());
                 answer.0["result"]["bag3d"] =
                     json!(self.bag_job.as_ref().map(bag_panel::BagJob::progress_value));
@@ -4117,37 +4154,53 @@ impl Studio {
                 }
             }
             ApiCommand::BuildIndex => {
-                if self.index_pending {
-                    (
-                        json!({"ok": false, "error": "an octree build is already running"}),
-                        Task::none(),
-                    )
-                } else if self
-                    .active
-                    .and_then(|index| self.clouds.get(index))
-                    .is_none_or(|entry| entry.index.is_some())
-                {
+                let active = self.active.and_then(|index| self.clouds.get(index));
+                if active.is_none_or(|entry| entry.index.is_some()) {
                     (
                         json!({"ok": false, "error": "choose an unindexed active cloud"}),
                         Task::none(),
                     )
+                } else if active
+                    .is_some_and(|entry| entry.index_building || self.index_job_of(entry).is_some())
+                {
+                    (
+                        json!({"ok": false, "error": "the octree of the active cloud is already being built"}),
+                        Task::none(),
+                    )
                 } else {
                     let task = self.update(Message::BuildIndex);
+                    let active = self.active.and_then(|index| self.clouds.get(index));
+                    let building = active.is_some_and(|entry| entry.index_building);
+                    let queued = active.is_some_and(|entry| self.index_queued(entry));
                     (
-                        json!({"ok": self.index_pending, "accepted": self.index_pending, "status": self.status}),
+                        json!({
+                            "ok": building || queued,
+                            "accepted": building || queued,
+                            "queued": queued,
+                            "status": self.status,
+                        }),
                         task,
                     )
                 }
             }
             ApiCommand::CancelIndex => {
-                if !self.index_pending {
+                if !self.index_pending() && self.index_waiting() == 0 {
                     (
-                        json!({"ok": false, "error": "no octree build is running"}),
+                        json!({"ok": false, "error": "no octree build is running or waiting"}),
                         Task::none(),
                     )
                 } else {
+                    let (running, waiting) = (self.index_jobs.len(), self.index_waiting());
                     let task = self.update(Message::CancelIndex);
-                    (json!({"ok": true, "status": self.status}), task)
+                    (
+                        json!({
+                            "ok": true,
+                            "cancelled": running,
+                            "dequeued": waiting,
+                            "status": self.status,
+                        }),
+                        task,
+                    )
                 }
             }
             ApiCommand::SetAutoIndex { enabled } => {
@@ -4745,13 +4798,6 @@ impl Studio {
         )
     }
 
-    fn index_poll_task() -> Task<Message> {
-        Task::perform(
-            async { tokio::time::sleep(Duration::from_millis(250)).await },
-            |()| Message::IndexPoll,
-        )
-    }
-
     fn index_progress_text(progress: IndexProgress) -> String {
         match progress.stage {
             IndexStage::ReadingSource if progress.total == 0 => format!(
@@ -4779,57 +4825,12 @@ impl Studio {
         }
     }
 
+    /// Whether an import that is still reading builds an octree too.
+    #[cfg(test)]
     fn indexing_during_import(&self) -> bool {
         self.imports
             .values()
-            .any(|job| Arc::ptr_eq(&job.cancel, &self.index_cancel))
-    }
-
-    fn start_index_job(&mut self, source: Arc<PointCloud>, automatic: bool) -> Task<Message> {
-        let progress = Arc::new(Mutex::new(IndexProgress {
-            stage: IndexStage::ReadingSource,
-            completed: 0,
-            total: source.total_points,
-            depth: 0,
-            leaves: 0,
-            settled: 0,
-        }));
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.index_pending = true;
-        self.index_progress = Some(Arc::clone(&progress));
-        self.index_cancel = Arc::clone(&cancel);
-        let message_source = Arc::clone(&source);
-        let worker = Task::perform(
-            async move {
-                tokio::task::spawn_blocking(move || {
-                    OctreeIndex::build_cached_with_progress(
-                        &source,
-                        IndexConfig::default(),
-                        |update| {
-                            if cancel.load(Ordering::Relaxed) {
-                                return Err(pointcloud_core::LoadError::Cancelled);
-                            }
-                            if let Ok(mut current) = progress.lock() {
-                                *current = update;
-                            }
-                            Ok(())
-                        },
-                    )
-                    .map(Arc::new)
-                    .map_err(|error| error.to_string())
-                })
-                .await
-                .map_err(|error| error.to_string())?
-            },
-            move |result| {
-                if automatic {
-                    Message::AutoIndexReady(Arc::clone(&message_source), result)
-                } else {
-                    Message::IndexReady(Arc::clone(&message_source), result)
-                }
-            },
-        );
-        Task::batch([worker, Self::index_poll_task()])
+            .any(|job| self.import_builds_index(&job.cancel))
     }
 
     fn apply_scale_from_source_centroid(
@@ -5028,14 +5029,28 @@ impl Studio {
                         self.sync_section_coordinate_inputs();
                     }
                     let identity = Arc::clone(&header_cloud);
+                    let (snapshot_tx, snapshot_rx) = tokio::sync::mpsc::unbounded_channel();
                     let preview_task = Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
                                 // Spaced sampling needs to seek; files whose
                                 // compressed chunks vary in size cannot, so
-                                // those are sampled from a full pass instead.
-                                pointcloud_core::open_las_preview(&path, LOAD_SAMPLE_LIMIT)
-                                    .or_else(|_| pointcloud_core::open(&path, LOAD_SAMPLE_LIMIT))
+                                // those are sampled from a full pass instead,
+                                // which shows its points on the way.
+                                pointcloud_core::open_las_preview(&path, LOAD_SAMPLE_LIMIT).or_else(
+                                    |_| {
+                                        pointcloud_core::open_with_steps(
+                                            &path,
+                                            LOAD_SAMPLE_LIMIT,
+                                            |_| Ok(()),
+                                            |cloud| {
+                                                snapshot_tx.send(Arc::new(cloud.clone())).map_err(
+                                                    |_| pointcloud_core::LoadError::Cancelled,
+                                                )
+                                            },
+                                        )
+                                    },
+                                )
                             })
                             .await
                             .map_err(|error| error.to_string())?
@@ -5044,7 +5059,18 @@ impl Studio {
                         },
                         move |result| Message::Refined(Arc::clone(&identity), result),
                     );
-                    return Task::batch([cached_index_task(header_cloud), preview_task]);
+                    let identity = Arc::clone(&header_cloud);
+                    let snapshots =
+                        iced::futures::stream::unfold(snapshot_rx, |mut receiver| async move {
+                            receiver.recv().await.map(|cloud| (cloud, receiver))
+                        });
+                    return Task::batch([
+                        cached_index_task(header_cloud),
+                        preview_task,
+                        Task::run(snapshots, move |cloud| {
+                            Message::LayerSnapshot(Arc::clone(&identity), cloud)
+                        }),
+                    ]);
                 }
                 Err(error) => {
                     self.status = format!("Open failed: {error}");
@@ -5061,9 +5087,8 @@ impl Studio {
                     "ply" | "e57" | "pcd" | "ptx" | "xyz" | "asc" | "txt" | "csv" | "pts"
                 )
             });
-        if self.auto_index
-            && !self.index_pending
-            && indexable
+        if indexable
+            && self.index_import_allowed(&path)
             && std::fs::metadata(&path)
                 .is_ok_and(|metadata| metadata.len() >= ONE_PASS_IMPORT_MIN_BYTES)
         {
@@ -5157,14 +5182,23 @@ impl Studio {
                 cancel: Arc::clone(&cancel),
             },
         );
-        self.index_pending = true;
-        self.index_cancel = Arc::clone(&cancel);
-        self.index_progress = Some(Arc::clone(&progress));
+        let stop_tree = Arc::new(AtomicBool::new(false));
+        self.index_jobs.push(index_jobs::IndexJob {
+            source: None,
+            import_id: Some(id),
+            path: path.clone(),
+            progress: Arc::clone(&progress),
+            cancel: Arc::clone(&cancel),
+            stop_tree: Arc::clone(&stop_tree),
+        });
         let (preview_tx, preview_rx) = tokio::sync::mpsc::unbounded_channel();
         let worker = Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || {
-                    OctreeIndex::open_and_build_cached_with_preview(
+                    // The checked cloud is kept for when the octree is
+                    // stopped after the pass.
+                    let mut checked = None;
+                    let built = OctreeIndex::open_and_build_cached_with_preview(
                         &path,
                         LOAD_SAMPLE_LIMIT,
                         IndexConfig::default(),
@@ -5172,15 +5206,24 @@ impl Studio {
                             if cancel.load(Ordering::Relaxed) {
                                 return Err(pointcloud_core::LoadError::Cancelled);
                             }
+                            let cloud = Arc::new(cloud.clone());
+                            if !cloud.provisional {
+                                checked = Some(Arc::clone(&cloud));
+                            }
                             preview_tx
-                                .send(Arc::new(cloud.clone()))
+                                .send(cloud)
                                 .map_err(|_| pointcloud_core::LoadError::Cancelled)
                         },
                         |update| {
-                            if cancel.load(Ordering::Relaxed) {
+                            // Cancel index stops the octree, not the reading:
+                            // the checked cloud comes before the tree.
+                            let tree = update.stage != IndexStage::ReadingSource;
+                            if cancel.load(Ordering::Relaxed)
+                                || (tree && stop_tree.load(Ordering::Relaxed))
+                            {
                                 return Err(pointcloud_core::LoadError::Cancelled);
                             }
-                            if update.stage == IndexStage::ReadingSource {
+                            if !tree {
                                 decoded.store(update.completed, Ordering::Relaxed);
                             }
                             if let Ok(mut current) = progress.lock() {
@@ -5188,9 +5231,16 @@ impl Studio {
                             }
                             Ok(())
                         },
-                    )
-                    .map(|(cloud, index)| (Arc::new(cloud), Arc::new(index)))
-                    .map_err(|error| error.to_string())
+                    );
+                    match (built, checked) {
+                        (Ok((cloud, index)), _) => Ok((Arc::new(cloud), Some(Arc::new(index)))),
+                        (Err(pointcloud_core::LoadError::Cancelled), Some(cloud))
+                            if !cancel.load(Ordering::Relaxed) =>
+                        {
+                            Ok((cloud, None))
+                        }
+                        (Err(error), _) => Err(error.to_string()),
+                    }
                 })
                 .await
                 .map_err(|error| error.to_string())?
@@ -5205,7 +5255,7 @@ impl Studio {
             Task::run(previews, move |cloud| {
                 Message::IndexedImportPreview(id, cloud)
             }),
-            Self::index_poll_task(),
+            self.poll_index_jobs(),
             header,
         ])
     }
@@ -5659,12 +5709,8 @@ impl Studio {
                 }
             }
             Message::CancelOpening => {
-                let indexing = self.index_pending.then(|| Arc::clone(&self.index_cancel));
                 for job in self.imports.values() {
-                    if !indexing
-                        .as_ref()
-                        .is_some_and(|cancel| Arc::ptr_eq(cancel, &job.cancel))
-                    {
+                    if !self.import_builds_index(&job.cancel) {
                         job.cancel.store(true, Ordering::Relaxed);
                     }
                 }
@@ -5679,6 +5725,7 @@ impl Studio {
                 }
             }
             Message::ImportLoaded(id, result) => {
+                self.pending_snapshots.remove(&id);
                 let Some(job) = self.imports.remove(&id) else {
                     return Task::none();
                 };
@@ -5703,43 +5750,20 @@ impl Studio {
                 }
                 return self.show_import_layer(id, header);
             }
-            Message::ImportSnapshot(id, cloud) => {
-                // Only while the import is still reading; the checked cloud
-                // replaces whatever its layer shows.
-                let Some(job) = self.imports.get(&id) else {
-                    return Task::none();
-                };
-                if job.cancel.load(Ordering::Relaxed) {
-                    return Task::none();
-                }
-                if self.selection_pending {
-                    // A snapshot changes the scene, which would discard the
-                    // selection being computed; the next one is shown.
-                    return Task::none();
-                }
-                let Some(header) = self.import_headers.get(&id).map(Arc::clone) else {
-                    return self.show_import_layer(id, cloud);
-                };
-                let scene = combined_bounds(&self.clouds);
-                if let Some(entry) = self
-                    .clouds
-                    .iter_mut()
-                    .find(|entry| entry.matches_source(&header))
-                {
-                    entry.replace_cloud(cloud);
-                    self.revision += 1;
-                    self.reframe_after_replacement(scene);
-                    return self.schedule_detail();
-                }
+            Message::ImportSnapshot(id, cloud) => return self.queue_snapshot(id, false, cloud),
+            Message::LayerSnapshot(identity, cloud) => {
+                return self.queue_layer_snapshot(identity, cloud)
             }
+            Message::FlushSnapshots => return self.flush_snapshots(),
             Message::IndexedImportPreview(id, cloud) => {
+                // The points read so far are shown with those of the other
+                // scans; the checked cloud at once.
+                if cloud.provisional {
+                    return self.queue_snapshot(id, true, cloud);
+                }
+                self.pending_snapshots.remove(&id);
                 if !self.imports.contains_key(&id) {
-                    // A later look at a scan whose layer is already shown. A
-                    // provisional one waits for a selection being computed;
-                    // the checked cloud does not.
-                    if self.selection_pending && cloud.provisional {
-                        return Task::none();
-                    }
+                    // The checked cloud of a scan whose layer is already shown.
                     let scene = combined_bounds(&self.clouds);
                     if let Some(entry) = self
                         .clouds
@@ -5753,36 +5777,21 @@ impl Studio {
                     }
                     return Task::none();
                 }
-                let Some(job) = self.imports.get(&id) else {
-                    return Task::none();
-                };
-                if job.cancel.load(Ordering::Relaxed) {
-                    return Task::none();
-                }
-                self.imports.remove(&id);
-                let header = self.import_headers.remove(&id);
-                let task = self.finish_import(header.clone(), Ok(Arc::clone(&cloud)));
-                let index = header
-                    .and_then(|header| {
-                        self.clouds
-                            .iter()
-                            .position(|entry| entry.matches_source(&header))
-                    })
-                    .or_else(|| self.clouds.len().checked_sub(1));
-                if let Some(entry) = index.and_then(|index| self.clouds.get_mut(index)) {
-                    entry.index_import_id = Some(id);
-                    entry.index_building = true;
-                }
-                self.status = format!(
-                    "Preview ready: {} points; building disk octree…",
-                    format_count(cloud.total_points)
-                );
-                return task;
+                return self
+                    .show_indexed_preview(id, cloud)
+                    .unwrap_or_else(Task::none);
             }
             Message::IndexedImportReady(id, result) => {
-                self.index_pending = false;
-                self.index_progress = None;
-                let cancelled = self.index_cancel.load(Ordering::Relaxed);
+                self.pending_snapshots.remove(&id);
+                let job = self.finish_index_import(id);
+                // Cancel index stops the octree alone; cancelling the import
+                // stops its reading too.
+                let cancelled = job
+                    .as_ref()
+                    .is_some_and(|job| job.cancel.load(Ordering::Relaxed));
+                let stopped = job
+                    .as_ref()
+                    .is_some_and(|job| job.stop_tree.load(Ordering::Relaxed));
                 let import = self.imports.remove(&id);
                 let header = self.import_headers.remove(&id);
                 let mut loaded = Task::none();
@@ -5823,14 +5832,18 @@ impl Studio {
                                 entry.replace_cloud(Arc::clone(&cloud));
                                 replaced = true;
                             }
-                            entry.index = Some(index);
                             self.revision += 1;
-                            self.status = format!(
-                                "Octree ready: {} points from {}",
-                                format_count(cloud.total_points),
-                                display_name(&cloud.path)
-                            );
-                            ready = true;
+                            if let Some(index) = index {
+                                entry.index = Some(index);
+                                self.status = format!(
+                                    "Octree ready: {} points from {}",
+                                    format_count(cloud.total_points),
+                                    display_name(&cloud.path)
+                                );
+                                ready = true;
+                            } else {
+                                self.status = "Octree build cancelled; preview remains open".into();
+                            }
                         }
                         if replaced {
                             self.reframe_after_replacement(scene);
@@ -5857,7 +5870,7 @@ impl Studio {
                             // source, so the layer cannot stay.
                             self.remove_header_layer(&preview);
                         }
-                        self.status = if cancelled {
+                        self.status = if cancelled || stopped {
                             if import.is_some() {
                                 "Import cancelled".into()
                             } else if preview_remains {
@@ -5912,7 +5925,7 @@ impl Studio {
                 } else {
                     Task::none()
                 };
-                return Task::batch([loaded, detail, pending_delete, self.start_next_auto_index()]);
+                return Task::batch([loaded, detail, pending_delete, self.start_queued_indexes()]);
             }
             Message::Loaded(result) => match result {
                 Ok(cloud) => {
@@ -5987,6 +6000,8 @@ impl Studio {
                 }
             }
             Message::Refined(source, result) => {
+                self.pending_layer_snapshots
+                    .retain(|(identity, _)| !Arc::ptr_eq(identity, &source));
                 if let Some(entry) = self
                     .clouds
                     .iter_mut()
@@ -6525,7 +6540,8 @@ impl Studio {
                 }) {
                     self.pending_delete = true;
                     self.active = Some(index);
-                    if self.index_pending {
+                    let entry = &self.clouds[index];
+                    if entry.index_building || self.index_queued(entry) {
                         self.status = "Waiting for the octree before deleting LAZ points…".into();
                         return Task::none();
                     }
@@ -7013,48 +7029,25 @@ impl Studio {
                 }
             }
             Message::BuildIndex => {
-                if self.index_pending {
-                    self.status = "An octree build is already running".into();
-                    return Task::none();
-                }
-                let Some(entry) = self.active.and_then(|index| self.clouds.get_mut(index)) else {
+                let Some(index) = self.active.filter(|index| *index < self.clouds.len()) else {
                     self.status = "Open a point cloud first".into();
                     return Task::none();
                 };
-                if entry.index.is_some() {
-                    self.status = "An octree is already ready for this cloud".into();
-                    return Task::none();
-                }
-                entry.auto_index_queued = false;
-                entry.index_building = true;
-                let source = Arc::clone(&entry.cloud);
-                self.status = format!("Building disk octree for {} points…", source.total_points);
-                return self.start_index_job(source, false);
+                return self.request_index(index);
             }
-            Message::IndexPoll => {
-                if self.index_pending {
-                    if !self.index_cancel.load(Ordering::Relaxed) {
-                        if let Some(snapshot) = self
-                            .index_progress
-                            .as_ref()
-                            .and_then(|value| value.lock().ok().map(|value| *value))
-                        {
-                            self.status = Self::index_progress_text(snapshot);
-                        }
-                    }
-                    return Self::index_poll_task();
-                }
-            }
+            Message::IndexPoll => return self.index_poll(),
             Message::CancelIndex => {
-                if self.index_pending {
-                    self.index_cancel.store(true, Ordering::Relaxed);
+                let (running, waiting) = self.cancel_all_indexes();
+                if running > 0 {
                     self.status = "Cancelling octree build…".into();
+                } else if waiting > 0 {
+                    self.status = "Octree build cancelled".into();
                 }
             }
             Message::IndexReady(source, result) | Message::AutoIndexReady(source, result) => {
-                self.index_pending = false;
-                self.index_progress = None;
-                let was_cancelled = self.index_cancel.load(Ordering::Relaxed);
+                let was_cancelled = self
+                    .finish_index_job(&source)
+                    .is_some_and(|job| job.cancelling());
                 let mut ready = false;
                 if let Some(entry) = self
                     .clouds
@@ -7089,7 +7082,7 @@ impl Studio {
                 } else {
                     Task::none()
                 };
-                return Task::batch([detail, pending_delete, self.start_next_auto_index()]);
+                return Task::batch([detail, pending_delete, self.start_queued_indexes()]);
             }
             Message::CachedIndexReady(source, result) => {
                 if let Some(entry) = self
@@ -7121,10 +7114,13 @@ impl Studio {
                                 && !entry.cloud.points.is_empty()
                                 && entry.index.is_none()
                                 && !entry.index_building
+                                && !self.index_declined.contains(&entry.cloud.path)
                             {
                                 entry.auto_index_queued = true;
-                                return self.start_next_auto_index();
                             }
+                            // A layer the user asked an octree for gets it
+                            // now that it has been checked.
+                            return self.start_queued_indexes();
                         }
                         Err(error) => {
                             self.status = format!("Octree cache unavailable: {error}");
@@ -7136,6 +7132,8 @@ impl Studio {
                 self.auto_index = enabled;
                 let save = self.queue_preferences_save();
                 if enabled {
+                    // Scans whose builds were cancelled are indexed again.
+                    self.index_declined.clear();
                     let tasks = self
                         .clouds
                         .iter()
@@ -8710,33 +8708,6 @@ impl Studio {
         self.bag_map_raster = bag_map::compose_raster(self.bag_map_view(), &self.bag_map_tiles);
     }
 
-    fn start_next_auto_index(&mut self) -> Task<Message> {
-        if self.index_pending || !self.auto_index {
-            return Task::none();
-        }
-        let next = self
-            .active
-            .filter(|index| {
-                self.clouds
-                    .get(*index)
-                    .is_some_and(|entry| entry.auto_index_queued)
-            })
-            .or_else(|| self.clouds.iter().position(|entry| entry.auto_index_queued));
-        let Some(index) = next else {
-            return Task::none();
-        };
-        let entry = &mut self.clouds[index];
-        entry.auto_index_queued = false;
-        entry.index_building = true;
-        let source = Arc::clone(&entry.cloud);
-        self.status = format!(
-            "Indexing {} points for viewport detail: {}",
-            source.total_points,
-            display_name(&source.path)
-        );
-        self.start_index_job(source, true)
-    }
-
     /// What the sets now drawn for the clouds of a refinement put in the
     /// viewport of its camera, thinned the way the renderer thins them.
     fn shown_fill(
@@ -9173,16 +9144,21 @@ impl Studio {
                 false,
             )));
         }
-        // A running manual build offers its cancel action instead of the start.
-        let build_index = if self.index_pending && !self.indexing_during_import() {
+        // While the active layer cannot get an octree of its own, running or
+        // waiting builds offer their cancel action instead of the start.
+        let can_build = self
+            .active
+            .and_then(|index| self.clouds.get(index))
+            .is_some_and(|entry| {
+                entry.index.is_none()
+                    && !entry.index_building
+                    && self.index_job_of(entry).is_none()
+                    && !self.index_queued(entry)
+            });
+        let build_index = if !can_build && (self.index_pending() || self.index_waiting() > 0) {
             large_tool_button("Cancel index", Message::CancelIndex, false)
         } else {
-            large_tool_button_when(
-                "Build index",
-                Message::BuildIndex,
-                false,
-                has_active && !self.index_pending,
-            )
+            large_tool_button_when("Build index", Message::BuildIndex, false, has_active)
         };
         let index = opencad_ribbon::render_group_items(
             "INDEX",
@@ -14632,6 +14608,36 @@ mod import_api_tests {
         receive.recv().unwrap()
     }
 
+    /// An import of `path` that reads it and builds its octree in one pass,
+    /// as `load_indexed` starts it. Returns what cancels it.
+    fn indexed_import(studio: &mut Studio, id: u64, path: &Path) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        studio.imports.insert(
+            id,
+            ImportJob {
+                path: path.to_path_buf(),
+                decoded: Arc::new(AtomicU64::new(0)),
+                cancel: Arc::clone(&cancel),
+            },
+        );
+        studio.index_jobs.push(index_jobs::IndexJob {
+            source: None,
+            import_id: Some(id),
+            path: path.to_path_buf(),
+            progress: Arc::new(Mutex::new(IndexProgress {
+                stage: IndexStage::ReadingSource,
+                completed: 0,
+                total: 0,
+                depth: 0,
+                leaves: 0,
+                settled: 0,
+            })),
+            cancel: Arc::clone(&cancel),
+            stop_tree: Arc::new(AtomicBool::new(false)),
+        });
+        cancel
+    }
+
     #[test]
     fn cancelling_import_discards_a_late_successful_result() {
         let dir = tempfile::tempdir().unwrap();
@@ -14676,18 +14682,8 @@ mod import_api_tests {
             )
             .unwrap(),
         );
-        let mut studio = Studio {
-            index_pending: true,
-            ..Studio::default()
-        };
-        studio.imports.insert(
-            17,
-            ImportJob {
-                path,
-                decoded: Arc::new(AtomicU64::new(3)),
-                cancel: Arc::clone(&studio.index_cancel),
-            },
-        );
+        let mut studio = Studio::default();
+        indexed_import(&mut studio, 17, &path);
         assert!(studio.indexing_during_import());
 
         let _ = studio.update(Message::IndexedImportPreview(17, Arc::clone(&cloud)));
@@ -14699,8 +14695,8 @@ mod import_api_tests {
         assert_eq!(studio.clouds[0].index_import_id, Some(17));
 
         let preview = Arc::clone(&studio.clouds[0].cloud);
-        let _ = studio.update(Message::IndexedImportReady(17, Ok((cloud, index))));
-        assert!(!studio.index_pending);
+        let _ = studio.update(Message::IndexedImportReady(17, Ok((cloud, Some(index)))));
+        assert!(!studio.index_pending());
         assert!(studio.clouds[0].index.is_some());
         assert!(!studio.clouds[0].index_building);
         assert_eq!(studio.clouds[0].index_import_id, None);
@@ -14737,6 +14733,7 @@ mod import_api_tests {
         let _ = studio.update(Message::HeaderLoaded(31, Ok(Arc::clone(&header))));
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &header));
         let _ = studio.update(Message::ImportSnapshot(31, Arc::clone(&spread)));
+        let _ = studio.update(Message::FlushSnapshots);
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &spread));
         assert_eq!(studio.clouds.len(), 1);
 
@@ -14745,6 +14742,7 @@ mod import_api_tests {
         assert_eq!(studio.clouds.len(), 1);
         // A snapshot that arrives after the checked cloud is dropped.
         let _ = studio.update(Message::ImportSnapshot(31, Arc::clone(&spread)));
+        let _ = studio.update(Message::FlushSnapshots);
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
 
         // A source without metadata gets its layer from the first snapshot,
@@ -14752,9 +14750,11 @@ mod import_api_tests {
         let mut studio = Studio::default();
         studio.imports.insert(32, job());
         let _ = studio.update(Message::ImportSnapshot(32, Arc::clone(&spread)));
+        let _ = studio.update(Message::FlushSnapshots);
         assert_eq!(studio.clouds.len(), 1);
         let later = Arc::new((*spread).clone());
         let _ = studio.update(Message::ImportSnapshot(32, Arc::clone(&later)));
+        let _ = studio.update(Message::FlushSnapshots);
         assert_eq!(studio.clouds.len(), 1);
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &later));
         let _ = studio.update(Message::ImportLoaded(32, Ok(Arc::clone(&cloud))));
@@ -14766,6 +14766,7 @@ mod import_api_tests {
         studio.imports.insert(33, job());
         let _ = studio.update(Message::HeaderLoaded(33, Ok(header)));
         let _ = studio.update(Message::ImportSnapshot(33, spread));
+        let _ = studio.update(Message::FlushSnapshots);
         let _ = studio.update(Message::ImportLoaded(33, Err("damaged".into())));
         assert!(studio.clouds.is_empty());
     }
@@ -14792,17 +14793,9 @@ mod import_api_tests {
         loose.provisional = true;
         let loose = Arc::new(loose);
         let preview = |studio: &mut Studio, id: u64| {
-            studio.index_pending = true;
-            studio.index_cancel = Arc::new(AtomicBool::new(false));
-            studio.imports.insert(
-                id,
-                ImportJob {
-                    path: path.clone(),
-                    decoded: Arc::new(AtomicU64::new(0)),
-                    cancel: Arc::clone(&studio.index_cancel),
-                },
-            );
+            indexed_import(studio, id, &path);
             let _ = studio.update(Message::IndexedImportPreview(id, Arc::clone(&loose)));
+            let _ = studio.update(Message::FlushSnapshots);
             assert!(studio.clouds[0].cloud.provisional);
         };
 
@@ -14813,7 +14806,7 @@ mod import_api_tests {
         studio.zoom = 0.4;
         let _ = studio.update(Message::IndexedImportReady(
             23,
-            Ok((Arc::clone(&cloud), Arc::clone(&index))),
+            Ok((Arc::clone(&cloud), Some(Arc::clone(&index)))),
         ));
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
         assert!(studio.clouds[0].index.is_some());
@@ -14825,6 +14818,7 @@ mod import_api_tests {
         preview(&mut studio, 27);
         let later = Arc::new((*loose).clone());
         let _ = studio.update(Message::IndexedImportPreview(27, Arc::clone(&later)));
+        let _ = studio.update(Message::FlushSnapshots);
         assert_eq!(studio.clouds.len(), 1);
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &later));
         assert!(studio.clouds[0].index_building);
@@ -14843,16 +14837,21 @@ mod import_api_tests {
         let _ = studio.update(Message::IndexedImportReady(25, Err("cancelled".into())));
         assert!(studio.clouds.is_empty());
 
-        // Cancelled as the pass finished: its checked cloud stays, unindexed.
+        // Cancel index stops the octree once the pass has finished: the
+        // checked cloud stays, unindexed.
         let mut studio = Studio::default();
         preview(&mut studio, 26);
         let _ = studio.update(Message::CancelIndex);
         let _ = studio.update(Message::IndexedImportReady(
             26,
-            Ok((Arc::clone(&cloud), index)),
+            Ok((Arc::clone(&cloud), None)),
         ));
         assert!(Arc::ptr_eq(&studio.clouds[0].cloud, &cloud));
         assert!(studio.clouds[0].index.is_none());
+        assert_eq!(
+            studio.status,
+            "Octree build cancelled; preview remains open"
+        );
 
         // The core refuses to index a cloud that was not checked.
         assert!(OctreeIndex::build_cached(
@@ -14881,28 +14880,18 @@ mod import_api_tests {
             )
             .unwrap(),
         );
-        let mut studio = Studio {
-            index_pending: true,
-            ..Studio::default()
-        };
-        studio.imports.insert(
-            20,
-            ImportJob {
-                path,
-                decoded: Arc::new(AtomicU64::new(2)),
-                cancel: Arc::clone(&studio.index_cancel),
-            },
-        );
+        let mut studio = Studio::default();
+        indexed_import(&mut studio, 20, &path);
 
         let _ = studio.update(Message::IndexedImportReady(
             20,
-            Ok((Arc::clone(&cloud), index)),
+            Ok((Arc::clone(&cloud), Some(index))),
         ));
         let _ = studio.update(Message::IndexedImportPreview(20, cloud));
         assert!(studio.imports.is_empty());
         assert_eq!(studio.clouds.len(), 1);
         assert!(studio.clouds[0].index.is_some());
-        assert!(!studio.index_pending);
+        assert!(!studio.index_pending());
     }
 
     #[test]
@@ -14911,56 +14900,29 @@ mod import_api_tests {
         let path = dir.path().join("scan.xyz");
         std::fs::write(&path, "1 2 3\n").unwrap();
         let cloud = Arc::new(pointcloud_core::open(&path, 1).unwrap());
-        let mut studio = Studio {
-            index_pending: true,
-            ..Studio::default()
-        };
-        studio.imports.insert(
-            18,
-            ImportJob {
-                path: path.clone(),
-                decoded: Arc::new(AtomicU64::new(1)),
-                cancel: Arc::clone(&studio.index_cancel),
-            },
-        );
+        let mut studio = Studio::default();
+        indexed_import(&mut studio, 18, &path);
         let _ = studio.update(Message::CancelImport(18));
         let _ = studio.update(Message::IndexedImportPreview(18, Arc::clone(&cloud)));
         let _ = studio.update(Message::IndexedImportReady(18, Err("cancelled".into())));
         assert!(studio.clouds.is_empty());
-        assert!(!studio.index_pending);
+        assert!(!studio.index_pending());
 
-        studio.index_pending = true;
-        studio.index_cancel = Arc::new(AtomicBool::new(false));
-        studio.imports.insert(
-            19,
-            ImportJob {
-                path,
-                decoded: Arc::new(AtomicU64::new(1)),
-                cancel: Arc::clone(&studio.index_cancel),
-            },
-        );
+        indexed_import(&mut studio, 19, &path);
         let _ = studio.update(Message::IndexedImportPreview(19, cloud));
         let _ = studio.update(Message::CancelIndex);
         let _ = studio.update(Message::IndexedImportReady(19, Err("cancelled".into())));
         assert_eq!(studio.clouds.len(), 1);
         assert!(studio.clouds[0].index.is_none());
         assert!(!studio.clouds[0].index_building);
-        assert!(!studio.index_pending);
+        assert!(!studio.index_pending());
 
-        studio.index_pending = true;
-        studio.index_cancel = Arc::new(AtomicBool::new(false));
-        studio.imports.insert(
-            21,
-            ImportJob {
-                path: studio.clouds[0].cloud.path.clone(),
-                decoded: Arc::new(AtomicU64::new(1)),
-                cancel: Arc::clone(&studio.index_cancel),
-            },
-        );
+        let other = studio.clouds[0].cloud.path.clone();
+        let cancel = indexed_import(&mut studio, 21, &other);
         let cloud = Arc::clone(&studio.clouds[0].cloud);
         let _ = studio.update(Message::IndexedImportPreview(21, cloud));
         let _ = studio.update(Message::Remove(1));
-        assert!(studio.index_cancel.load(Ordering::Relaxed));
+        assert!(cancel.load(Ordering::Relaxed));
         let _ = studio.update(Message::IndexedImportReady(21, Err("cancelled".into())));
         assert_eq!(studio.clouds.len(), 1);
         assert_eq!(studio.status, "Octree build cancelled");

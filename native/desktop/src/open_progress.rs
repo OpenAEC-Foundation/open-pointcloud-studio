@@ -4,14 +4,16 @@
 //! how long it will still take.
 
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::widget::{button, column, container, progress_bar, row, text};
 use iced::{Color, Element, Fill};
 use pointcloud_core::IndexStage;
 
-use crate::{compact_count, display_name, flat_tool_style, ui_theme, CloudEntry, Message, Studio};
+use crate::index_jobs::IndexJob;
+use crate::{
+    compact_count, display_name, flat_tool_style, i18n, ui_theme, CloudEntry, Message, Studio,
+};
 
 /// A task is timed from when it was first seen; a shorter time or a smaller
 /// advance than these says nothing yet about how long the rest will take.
@@ -35,6 +37,8 @@ pub enum Phase {
     Faces,
     /// The steps of a Mesh to Plans job; the bar starts again with each step.
     MeshToPlans,
+    /// Several octree builds, side by side or waiting for a place.
+    Indexing,
 }
 
 /// When a task was first seen, and how far it was then.
@@ -79,6 +83,20 @@ fn time_text(left: Duration) -> String {
     }
 }
 
+/// How far a build is as a whole: reading its source is the first half,
+/// building the tree the second.
+fn build_fraction(job: &IndexJob) -> f32 {
+    let Some(progress) = job.progress() else {
+        return 0.0;
+    };
+    let stage = progress.fraction().unwrap_or(0.0);
+    match progress.stage {
+        IndexStage::ReadingSource => stage * 0.5,
+        IndexStage::BuildingTree => 0.5 + stage * 0.5,
+        IndexStage::Ready => 1.0,
+    }
+}
+
 fn points_text(done: u64, total: Option<u64>) -> String {
     match total {
         Some(total) => format!(
@@ -91,22 +109,15 @@ fn points_text(done: u64, total: Option<u64>) -> String {
 }
 
 impl Studio {
-    /// The import that also builds the octree of its scan, if one is reading.
-    fn indexed_import(&self) -> Option<u64> {
-        self.imports
-            .iter()
-            .find(|(_, job)| self.index_pending && Arc::ptr_eq(&job.cancel, &self.index_cancel))
-            .map(|(id, _)| *id)
-    }
-
     /// The tasks that are opening or indexing scans right now.
     pub(crate) fn progress_lines(&self) -> Vec<Line> {
         let mut lines = Vec::new();
-        let indexed = self.indexed_import();
+        // Imports that build an octree in the same pass are told with the
+        // builds.
         let plain: Vec<_> = self
             .imports
             .iter()
-            .filter(|(id, _)| Some(**id) != indexed)
+            .filter(|(_, job)| !self.import_builds_index(&job.cancel))
             .collect();
         if !plain.is_empty() {
             let files = self.opening_total.max(plain.len());
@@ -154,75 +165,11 @@ impl Studio {
             });
         }
 
-        let progress = self
-            .index_progress
-            .as_ref()
-            .filter(|_| self.index_pending)
-            .and_then(|progress| progress.lock().ok().map(|progress| *progress));
-        if let Some(progress) = progress {
-            let building = self
-                .clouds
-                .iter()
-                .find(|entry| entry.index_building || entry.index_import_id.is_some());
-            let name = building
-                .map(|entry| display_name(&entry.cloud.path))
-                .or_else(|| indexed.map(|id| display_name(&self.imports[&id].path)));
-            // An import reads and indexes in one go; an open scan only gets
-            // its octree.
-            let importing =
-                indexed.is_some() || building.is_some_and(|entry| entry.index_import_id.is_some());
-            let verb = if importing { "Opening" } else { "Indexing" };
-            let cancelling = self.index_cancel.load(Ordering::Relaxed);
-            let waiting = self
-                .clouds
-                .iter()
-                .filter(|entry| entry.auto_index_queued)
-                .count();
-            let (phase, mut detail, fraction) = match progress.stage {
-                // Nothing read yet: the source is being opened, or an octree
-                // kept from an earlier session is being attached.
-                IndexStage::ReadingSource if progress.completed == 0 => {
-                    (Phase::Reading, "Preparing…".to_owned(), None)
-                }
-                IndexStage::ReadingSource => (
-                    Phase::Reading,
-                    format!(
-                        "Step 1 of 2  ·  reading  ·  {}",
-                        points_text(
-                            progress.completed,
-                            (progress.total > 0).then_some(progress.total)
-                        )
-                    ),
-                    progress.fraction(),
-                ),
-                IndexStage::BuildingTree | IndexStage::Ready => (
-                    Phase::Building,
-                    format!(
-                        "Step 2 of 2  ·  building the octree  ·  {} of {} points placed",
-                        compact_count(progress.settled.min(progress.total)),
-                        compact_count(progress.total)
-                    ),
-                    progress.fraction(),
-                ),
-            };
-            if waiting > 0 {
-                detail.push_str(&format!("  ·  {waiting} more waiting"));
-            }
-            lines.push(Line {
-                phase,
-                title: match (cancelling, name) {
-                    (true, _) => "Cancelling…".to_owned(),
-                    (false, Some(name)) => format!("{verb} {name}"),
-                    (false, None) => format!("{verb} a scan"),
-                },
-                detail,
-                fraction,
-                timed: true,
-                cancel: (!cancelling).then(|| match indexed {
-                    Some(id) => Message::CancelImport(id),
-                    None => Message::CancelIndex,
-                }),
-            });
+        let waiting = self.index_waiting();
+        match self.index_jobs.as_slice() {
+            [] => {}
+            [job] if waiting == 0 => lines.extend(self.index_line(job)),
+            jobs => lines.push(self.index_batch_line(jobs, waiting)),
         }
         lines.extend(self.drawing.progress_line());
         lines.extend(self.closed_mesh.progress_line());
@@ -231,13 +178,119 @@ impl Studio {
         lines
     }
 
+    /// The line of the one octree build that runs: its two steps.
+    fn index_line(&self, job: &IndexJob) -> Option<Line> {
+        let progress = job.progress()?;
+        // An import reads and indexes in one go; an open scan only gets its
+        // octree.
+        let import = job.import_id.filter(|id| self.imports.contains_key(id));
+        let name = match import.and_then(|id| self.imports.get(&id)) {
+            Some(import) => display_name(&import.path),
+            None => display_name(&job.path),
+        };
+        let verb = if job.import_id.is_some() {
+            "Opening"
+        } else {
+            "Indexing"
+        };
+        let cancelling = job.cancelling();
+        let (phase, detail, fraction) = match progress.stage {
+            // Nothing read yet: the source is being opened, or an octree
+            // kept from an earlier session is being attached.
+            IndexStage::ReadingSource if progress.completed == 0 => {
+                (Phase::Reading, "Preparing…".to_owned(), None)
+            }
+            IndexStage::ReadingSource => (
+                Phase::Reading,
+                format!(
+                    "Step 1 of 2  ·  reading  ·  {}",
+                    points_text(
+                        progress.completed,
+                        (progress.total > 0).then_some(progress.total)
+                    )
+                ),
+                progress.fraction(),
+            ),
+            IndexStage::BuildingTree | IndexStage::Ready => (
+                Phase::Building,
+                format!(
+                    "Step 2 of 2  ·  building the octree  ·  {} of {} points placed",
+                    compact_count(progress.settled.min(progress.total)),
+                    compact_count(progress.total)
+                ),
+                progress.fraction(),
+            ),
+        };
+        Some(Line {
+            phase,
+            title: if cancelling {
+                "Cancelling…".to_owned()
+            } else {
+                format!("{verb} {name}")
+            },
+            detail,
+            fraction,
+            timed: true,
+            cancel: (!cancelling).then(|| match import {
+                Some(id) => Message::CancelImport(id),
+                None => Message::CancelIndex,
+            }),
+        })
+    }
+
+    /// The line of builds that run side by side or wait for a place: how
+    /// many there are, how many are ready and how far the rest are.
+    fn index_batch_line(&self, jobs: &[IndexJob], waiting: usize) -> Line {
+        let count = self.index_finished + jobs.len() + waiting;
+        let ready = self.index_finished;
+        let running: f32 = jobs.iter().map(build_fraction).sum();
+        let cancelling = jobs.iter().all(IndexJob::cancelling);
+        let detail = if waiting > 0 {
+            i18n::tr_args(
+                "{ready} of {count} ready  ·  {running} at once  ·  {waiting} waiting",
+                &[
+                    ("ready", &ready),
+                    ("count", &count),
+                    ("running", &jobs.len()),
+                    ("waiting", &waiting),
+                ],
+            )
+        } else {
+            i18n::tr_args(
+                "{ready} of {count} ready  ·  {running} at once",
+                &[
+                    ("ready", &ready),
+                    ("count", &count),
+                    ("running", &jobs.len()),
+                ],
+            )
+        };
+        Line {
+            phase: Phase::Indexing,
+            title: if cancelling {
+                "Cancelling…".to_owned()
+            } else {
+                i18n::tr_args("Indexing {count} scans", &[("count", &count)])
+            },
+            detail,
+            fraction: Some(((ready as f32 + running) / count.max(1) as f32).min(1.0)),
+            // Builds of different sizes side by side say little about the
+            // time the rest takes.
+            timed: false,
+            cancel: (!cancelling).then_some(Message::CancelIndex),
+        }
+    }
+
     /// Remember when each task started, for the time it still takes, and
     /// forget what belonged to tasks that ended.
     pub(crate) fn track_progress(&mut self) {
+        if self.index_jobs.is_empty() && self.index_waiting() == 0 {
+            self.index_finished = 0;
+        }
         if self.imports.is_empty() {
             self.opening_total = 0;
             self.import_expected.clear();
-            if !self.index_pending
+            if !self.index_pending()
                 && !self.drawing.is_running()
                 && !self.closed_mesh.is_running()
                 && !self.faces.is_running()
@@ -279,20 +332,8 @@ impl Studio {
             };
             Some((text, fraction))
         };
-        let import = self
-            .import_headers
-            .iter()
-            .find(|(_, header)| entry.matches_source(header))
-            .map(|(id, _)| *id);
-        if entry.index_building
-            || entry.index_import_id.is_some()
-            || (import.is_some() && import == self.indexed_import())
-        {
-            let progress = self
-                .index_progress
-                .as_ref()
-                .and_then(|progress| progress.lock().ok().map(|progress| *progress));
-            return match progress {
+        if let Some(job) = self.index_job_of(entry) {
+            return match job.progress() {
                 Some(progress) if progress.stage == IndexStage::ReadingSource => {
                     percent("reading", progress.fraction())
                 }
@@ -300,6 +341,14 @@ impl Studio {
                 None => percent("indexing", None),
             };
         }
+        if entry.index_building || entry.index_import_id.is_some() {
+            return percent("indexing", None);
+        }
+        let import = self
+            .import_headers
+            .iter()
+            .find(|(_, header)| entry.matches_source(header))
+            .map(|(id, _)| *id);
         if let Some(job) = import.and_then(|id| self.imports.get(&id)) {
             let expected = import.and_then(|id| self.import_expected.get(&id));
             return percent(
@@ -311,8 +360,7 @@ impl Studio {
         if entry.cloud.points.is_empty() && entry.cloud.total_points > 0 && entry.mesh.is_none() {
             return percent("loading points", None);
         }
-        entry
-            .auto_index_queued
+        self.index_queued(entry)
             .then(|| ("index queued".to_owned(), None))
     }
 
@@ -402,12 +450,41 @@ impl Studio {
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU64};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
-    use pointcloud_core::IndexProgress;
+    use pointcloud_core::{IndexProgress, PointCloud};
 
     use super::*;
+    use crate::i18n::{Language, TestLanguage};
     use crate::ImportJob;
+
+    fn index_job(
+        source: Option<Arc<PointCloud>>,
+        import_id: Option<u64>,
+        path: &str,
+        progress: &Arc<Mutex<IndexProgress>>,
+        cancel: &Arc<AtomicBool>,
+    ) -> IndexJob {
+        IndexJob {
+            source,
+            import_id,
+            path: PathBuf::from(path),
+            progress: Arc::clone(progress),
+            cancel: Arc::clone(cancel),
+            stop_tree: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn reading(completed: u64, total: u64) -> IndexProgress {
+        IndexProgress {
+            stage: IndexStage::ReadingSource,
+            completed,
+            total,
+            depth: 0,
+            leaves: 0,
+            settled: 0,
+        }
+    }
 
     fn job(name: &str, decoded: u64) -> ImportJob {
         ImportJob {
@@ -505,19 +582,16 @@ mod tests {
     #[test]
     fn an_indexed_import_reports_its_two_steps() {
         let mut studio = Studio::default();
-        let mut import = job("merged.e57", 0);
-        import.cancel = Arc::clone(&studio.index_cancel);
+        let import = job("merged.e57", 0);
+        let progress = Arc::new(Mutex::new(reading(100_000_000, 400_000_000)));
+        studio.index_jobs.push(index_job(
+            None,
+            Some(7),
+            "merged.e57",
+            &progress,
+            &import.cancel,
+        ));
         studio.imports.insert(7, import);
-        studio.index_pending = true;
-        let progress = Arc::new(Mutex::new(IndexProgress {
-            stage: IndexStage::ReadingSource,
-            completed: 100_000_000,
-            total: 400_000_000,
-            depth: 0,
-            leaves: 0,
-            settled: 0,
-        }));
-        studio.index_progress = Some(Arc::clone(&progress));
 
         // The import that builds the octree has its own line, not the one of
         // plain imports.
@@ -552,7 +626,7 @@ mod tests {
         assert_eq!(lines[0].fraction, Some(0.8));
         assert!(matches!(lines[0].cancel, Some(Message::CancelIndex)));
 
-        // The next octree in the queue starts its own clock.
+        // The next octree starts its own clock.
         studio.track_progress();
         let first = studio.progress_marks[&Phase::Building];
         *progress.lock().unwrap() = IndexProgress {
@@ -566,9 +640,91 @@ mod tests {
         studio.track_progress();
         assert!(studio.progress_marks[&Phase::Building] != first);
 
-        studio.index_cancel.store(true, Ordering::Relaxed);
+        // Cancel index stops the octree of the import.
+        let _ = studio.update(Message::CancelIndex);
+        assert!(studio.index_jobs[0].stop_tree.load(Ordering::Relaxed));
         let lines = studio.progress_lines();
         assert_eq!(lines[0].title, "Cancelling…");
         assert!(lines[0].cancel.is_none());
+    }
+
+    #[test]
+    fn builds_side_by_side_report_how_many_run_and_wait() {
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = Studio {
+            auto_index: true,
+            ..Studio::default()
+        };
+        for name in ["a.xyz", "b.xyz", "c.xyz"] {
+            let path = directory.path().join(name);
+            std::fs::write(&path, "0 0 1\n1 0 1\n").unwrap();
+            let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+            let _ = studio.update(Message::Loaded(Ok(cloud)));
+        }
+        let first = Arc::new(Mutex::new(reading(250, 1_000)));
+        let second = Arc::new(Mutex::new(IndexProgress {
+            stage: IndexStage::BuildingTree,
+            completed: 1_000,
+            total: 1_000,
+            depth: 2,
+            leaves: 9,
+            settled: 500,
+        }));
+        for (index, progress) in [(0, &first), (1, &second)] {
+            let source = Arc::clone(&studio.clouds[index].cloud);
+            studio.clouds[index].index_building = true;
+            studio.index_jobs.push(index_job(
+                Some(source),
+                None,
+                &format!("{index}.xyz"),
+                progress,
+                &Arc::new(AtomicBool::new(false)),
+            ));
+        }
+        studio.clouds[2].auto_index_queued = true;
+        // One build ended before.
+        studio.index_finished = 1;
+
+        let lines = studio.progress_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].phase, Phase::Indexing);
+        assert_eq!(lines[0].title, "Indexing 4 scans");
+        assert_eq!(lines[0].detail, "1 of 4 ready  ·  2 at once  ·  1 waiting");
+        // One done, a quarter of the reading of one and the tree of the
+        // other at 60%.
+        let fraction = lines[0].fraction.unwrap();
+        assert!(
+            (fraction - (1.0 + 0.125 + 0.8) / 4.0).abs() < 1e-6,
+            "{fraction}"
+        );
+        assert!(!lines[0].timed);
+        assert!(matches!(lines[0].cancel, Some(Message::CancelIndex)));
+
+        // Every row tells its own build.
+        assert_eq!(
+            studio.layer_progress(&studio.clouds[0]),
+            Some(("reading 25%".to_owned(), Some(0.25)))
+        );
+        assert_eq!(
+            studio.layer_progress(&studio.clouds[1]),
+            Some(("indexing 60%".to_owned(), Some(0.6)))
+        );
+        assert_eq!(
+            studio.layer_progress(&studio.clouds[2]),
+            Some(("index queued".to_owned(), None))
+        );
+
+        // Nothing waiting: the count leaves the waiting out.
+        studio.clouds[2].auto_index_queued = false;
+        assert_eq!(
+            studio.progress_lines()[0].detail,
+            "1 of 3 ready  ·  2 at once"
+        );
+        // A single build without a queue has the line of its two steps.
+        studio.index_jobs.remove(1);
+        assert_eq!(studio.progress_lines()[0].title, "Indexing 0.xyz");
+        studio.index_jobs[0].cancel.store(true, Ordering::Relaxed);
+        assert_eq!(studio.progress_lines()[0].title, "Cancelling…");
     }
 }

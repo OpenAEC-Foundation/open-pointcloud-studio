@@ -965,15 +965,35 @@ the removed points without changing the source file.
 
 ## Index
 
-While an uncached octree is built, `status.result.index_progress` reports the
+Several octree builds run at the same time. `status.result.index` has
+`at_once`, how many this computer runs at once (chosen from its cores and the
+memory available when the window started), `builds`, the running builds in
+the order they started, and `waiting`, the layers in the queue. Each build
+has `path`, `import_id` (the import that reads its source and builds the
+octree in the same pass, or `null`), `stage` (`reading_source`,
+`building_tree` or `ready`), `completed`, `total`, `fraction` (how far the
+current stage is, from 0 to 1, or `null` while the size of the source is
+unknown) and `cancelling`. A build that ends gives its place to the next
+layer in the queue: those asked for with `build_index` first, then the active
+layer, then the others in the order of the list. One file is never built
+twice at once.
+
+`status.result.index_progress` reports the first running build: the
 source-read count and known total, then tree records handled, depth and leaf
 count, with `settled` for the points that have reached their leaf of the
-`total` points in the cloud. `fraction` is how far the current stage is, from
-0 to 1, or `null` while the size of the source is unknown. Its `stage` is
-`reading_source`, `building_tree` or `ready`, and
-`cancelling` shows whether cancellation has been requested. The field becomes
-`null` after the build finishes. `cancel_index` stops the build and discards
-its temporary files without publishing a partial cache.
+`total` points in the cloud, `fraction`, `stage` and `cancelling` as above.
+The field is `null` while no build runs.
+
+`build_index` starts the build of the active layer when a place is free and
+otherwise puts the layer in the queue, ahead of the layers that wait to be
+indexed automatically; the answer says `queued: true` then. It is refused for a layer whose octree is ready or being built.
+`cancel_index` stops every running build and empties the queue, and answers
+how many builds it `cancelled` and how many waiting layers it `dequeued`. A
+build that reads its source for an import keeps reading and keeps the
+checked cloud, without an octree. The layers open at that moment are not
+indexed automatically again until `set_auto_index` switches automatic
+indexing on anew; `build_index` still builds one of them. A cancelled build
+discards its temporary files without publishing a partial cache.
 
 ## Selection and picking
 
@@ -1107,7 +1127,7 @@ screen.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera, the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the groups of the Project Browser and what VIEWS lists (`project_browser`), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Mesh to Plans wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, merge, 3D BAG download or Mesh to Plans task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
@@ -1162,8 +1182,8 @@ screen.
 | `translate` | `offset` | Applies three finite XYZ offsets to the active cloud view |
 | `scale` | `factors` | Scales the active view around the exact centroid of remaining points; large sources stream from the disk octree in the background |
 | `cancel_scale` | — | Cancels a running centroid calculation without changing the source |
-| `build_index` | — | Starts an octree build for the active unindexed cloud |
-| `cancel_index` | — | Cancels a running octree build without publishing a partial index |
+| `build_index` | — | Starts an octree build for the active unindexed cloud, or queues it ahead of the automatic builds while as many builds run as the computer takes at once |
+| `cancel_index` | — | Cancels every running octree build without publishing a partial index, and empties the queue |
 | `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
 | `set_surface_settings` | optional `max_vertices`, `neighbors`, `edge_factor`, `mesh_size` | Sets the settings of the 3D surface in Properties atomically: 3–1,000,000 vertices, 3–32 neighbors, a finite positive edge factor and a mesh size of 0 or more in the units of the scan, the width of a voxel in which one point is kept before the vertices are thinned (`0`, the start, leaves the spacing to the vertices). A field that is left out keeps its value; the fields are checked together with the others and none is taken when one is refused. Returns the `surface_settings` |
 | `reset_transform` | — | Restores the active cloud's source coordinates |

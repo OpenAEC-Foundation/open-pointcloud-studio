@@ -708,5 +708,12 @@
   "View depth (m)": "Zichtdiepte (m)",
   "Enter applies a value and makes the drawing again. Drag a handle of the crop region on the sheet; RO turns the crop region of a plan.": "Enter past een waarde toe en maakt de tekening opnieuw. Sleep een greep van het bijsnijgebied op het blad; RO draait het bijsnijgebied van een plattegrond.",
   "Duplicate": "Dupliceren",
-  "Update to the current 3D view": "Bijwerken naar de huidige 3D-view"
+  "Update to the current 3D view": "Bijwerken naar de huidige 3D-view",
+  "Building {running} octrees at once; {waiting} waiting": "{running} indexen tegelijk in opbouw; {waiting} wachten",
+  "The octree of this scan is already being built": "De index van deze scan wordt al gebouwd",
+  "{name} waits for its octree: it starts when one of the {running} running builds ends": "{name} wacht op zijn index: die begint zodra een van de {running} lopende opbouwen klaar is",
+  "{ready} of {count} ready  ·  {running} at once  ·  {waiting} waiting": "{ready} van {count} klaar  ·  {running} tegelijk  ·  {waiting} wachtend",
+  "{ready} of {count} ready  ·  {running} at once": "{ready} van {count} klaar  ·  {running} tegelijk",
+  "Indexing {count} scans": "{count} scans indexeren",
+  "{name} gets its octree once it has been read": "{name} krijgt zijn index zodra de scan is gelezen"
 }

@@ -377,7 +377,7 @@ impl Studio {
             Some("a face detection")
         } else if self.merge_job.is_some() {
             Some("a merge")
-        } else if self.index_pending {
+        } else if self.index_pending() {
             Some("an octree")
         } else {
             None

@@ -397,8 +397,8 @@ fn table() -> Vec<Tool> {
         ]),
         tool("cancel_scale", Command, "Cancels a running scale.", vec![]),
         tool("reset_transform", Command, "Puts the active layer back at its source coordinates.", vec![]),
-        tool("build_index", Command, "Starts building the disk octree of the active unindexed layer; status.result.index_progress reports the progress.", vec![]),
-        tool("cancel_index", Command, "Cancels a running octree build.", vec![]),
+        tool("build_index", Command, "Starts building the disk octree of the active unindexed layer, or queues it ahead of the automatic builds while as many builds run as the computer takes at once; status.result.index lists the running and waiting builds.", vec![]),
+        tool("cancel_index", Command, "Cancels every running octree build and empties the queue.", vec![]),
         tool("set_auto_index", Command, "Switches the automatic indexing of large clouds on or off.", vec![
             required("enabled", boolean("Whether large clouds are indexed automatically")),
         ]),

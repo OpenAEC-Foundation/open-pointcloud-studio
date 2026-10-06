@@ -1295,7 +1295,7 @@ impl Studio {
                         "index",
                         &if indexed {
                             tr("indexed")
-                        } else if self.index_pending {
+                        } else if entry.index_building || self.index_job_of(entry).is_some() {
                             tr("index being built")
                         } else {
                             tr("no index")
@@ -1304,7 +1304,7 @@ impl Studio {
                 ],
             )));
         }
-        if needs_index && !self.index_pending {
+        if needs_index && !self.index_pending() {
             page = page.push(plain(key("Build index"), Some(Message::BuildIndex)));
         }
         let stations: usize = shown.iter().map(|entry| entry.cloud.scan_poses.len()).sum();

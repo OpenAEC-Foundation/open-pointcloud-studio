@@ -717,10 +717,10 @@ fn a_failed_step_says_why_and_exit_cancels_a_job() {
 #[test]
 fn a_job_waits_for_other_heavy_work() {
     // An octree being built.
-    let mut studio = Studio {
-        index_pending: true,
-        ..Studio::default()
-    };
+    let mut studio = Studio::default();
+    studio
+        .index_jobs
+        .push(crate::index_jobs::IndexJob::for_test("scan.xyz"));
     let _ = studio.update(wizard(WizardAction::Run));
     assert!(!studio.mesh_to_plans.is_running());
     assert_eq!(
@@ -738,7 +738,7 @@ fn studio_with_building(directory: &std::path::Path) -> (Studio, std::path::Path
     let mut studio = Studio::default();
     let _ = studio.update(Message::Loaded(Ok(cloud)));
     // An index built on its own would make the wizard wait.
-    studio.index_pending = false;
+    studio.index_jobs.clear();
     (studio, path)
 }
 
@@ -880,7 +880,7 @@ fn a_new_project_never_takes_the_folder_of_another() {
     let cloud = std::sync::Arc::new(pointcloud_core::open(&scan, 1_000_000).unwrap());
     let mut second = Studio::default();
     let _ = second.update(Message::Loaded(Ok(cloud)));
-    second.index_pending = false;
+    second.index_jobs.clear();
     let _ = second.update(wizard(WizardAction::Open));
     assert_eq!(
         second.mesh_to_plans.project_folder,

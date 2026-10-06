@@ -181,8 +181,8 @@ follows when that view is restored.
 | `scale` | `factors` | Scales the active layer around its centroid |
 | `cancel_scale` | — | Cancels a running scale |
 | `reset_transform` | — | Undoes move and scale of the active layer |
-| `build_index` | — | Builds the octree of the active layer |
-| `cancel_index` | — | Cancels the octree build |
+| `build_index` | — | Builds the octree of the active layer, or queues it while every place is taken |
+| `cancel_index` | — | Cancels the octree builds and empties the queue |
 | `set_auto_index` | `enabled` | Automatic indexing of large clouds |
 | `set_surface_settings` | optional `max_vertices` (3–1,000,000), `neighbors` (3–32), `edge_factor` (above 0), `mesh_size` (0 or more, in the units of the scan) | Sets the settings of the 3D surface; a field left out keeps its value, and when one is refused none changes |
 | `mesh` | `mode` (`terrain`, `surface` or `closed`), `path` (`.obj`; for `closed` optional, and `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc`), for `closed` optional `voxel` (0.005–0.5 m or null for automatic), `max_hole` (0–3.2 m), `simplify_mm` (0–1000 or null for automatic), `sample_percent` (0.01–100), `sides` (`automatic`, `centre` or `upward`), `layers` (`active` or `visible`), optional `wait_seconds` | Meshes the active layer, or for `closed` the active layer or every visible layer that reaches the section box (layers of 3D BAG buildings stay out), inside the section box; the job reports vertices, triangles, open edges and connected parts, and for `closed` the distance between points and mesh, where the sides came from and advice. Settings left out keep what the Closed mesh block has |

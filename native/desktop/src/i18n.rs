@@ -423,6 +423,7 @@ mod tests {
         ("faces.rs", include_str!("faces.rs")),
         ("file_view.rs", include_str!("file_view.rs")),
         ("i18n.rs", include_str!("i18n.rs")),
+        ("index_jobs.rs", include_str!("index_jobs.rs")),
         ("measure.rs", include_str!("measure.rs")),
         ("mesh_export.rs", include_str!("mesh_export.rs")),
         ("mesh_to_plans/mod.rs", include_str!("mesh_to_plans/mod.rs")),
