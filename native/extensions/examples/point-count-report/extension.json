@@ -1,0 +1,61 @@
+{
+  "id": "org.openaec.point-count-report",
+  "name": {
+    "en": "Point count report",
+    "nl": "Puntentelling"
+  },
+  "version": "1.0.0",
+  "author": "OpenAEC Foundation",
+  "description": {
+    "en": "Counts the points of the open scans and shows the total in the status bar, or writes a CSV report with a line per scan.",
+    "nl": "Telt de punten van de geopende scans en toont het totaal in de statusbalk, of schrijft een CSV-rapport met een regel per scan."
+  },
+  "homepage": "https://github.com/OpenAEC-Foundation/open-pointcloud-studio/blob/main/docs/extensions.md",
+  "min_app_version": "0.9.1",
+  "command": {
+    "windows": {
+      "interpreter": "powershell",
+      "program": "report.ps1"
+    },
+    "any": {
+      "interpreter": "python",
+      "program": "report.py"
+    }
+  },
+  "uses": {
+    "network": false,
+    "files_outside_folder": true,
+    "commands": ["status", "show_message", "report_progress", "choose_path", "job"]
+  },
+  "contributes": {
+    "ribbon": [
+      {
+        "id": "count",
+        "label": {
+          "en": "Point count",
+          "nl": "Punten tellen"
+        },
+        "icon": "icon.svg",
+        "tooltip": {
+          "en": "Show the number of points of the open scans in the status bar",
+          "nl": "Toon het aantal punten van de geopende scans in de statusbalk"
+        }
+      }
+    ],
+    "file_view": [
+      {
+        "id": "report",
+        "page": "export",
+        "title": {
+          "en": "Point count report…",
+          "nl": "Puntentellingrapport…"
+        },
+        "detail": {
+          "en": "A CSV file with the points of every open scan",
+          "nl": "Een CSV-bestand met de punten van elke geopende scan"
+        },
+        "args": ["--save"]
+      }
+    ]
+  }
+}
