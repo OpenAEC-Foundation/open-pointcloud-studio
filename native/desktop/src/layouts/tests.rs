@@ -833,3 +833,102 @@ fn the_hint_on_an_empty_sheet_reads_on_the_desk_of_every_theme() {
         assert!(contrast >= 4.5, "{theme:?}: {contrast}");
     }
 }
+
+#[test]
+fn a_viewport_taken_off_the_sheet_while_it_is_dragged_is_let_go() {
+    use iced::widget::canvas::{event, Event, Program};
+    let (mut studio, _directory) = studio_with_scan();
+    let plan = made_plan(&mut studio, "Plan +1.20");
+    let sheet = studio
+        .create_layout("01", "Plans", Paper::A3, true)
+        .unwrap();
+    let _ = studio.show_layout(&sheet);
+    let first = studio
+        .place_on_layout(
+            &sheet,
+            PlacedKind::Drawing,
+            &plan,
+            Some([100.0, 100.0]),
+            None,
+        )
+        .unwrap();
+    let second = studio
+        .place_on_layout(
+            &sheet,
+            PlacedKind::Drawing,
+            &plan,
+            Some([300.0, 200.0]),
+            None,
+        )
+        .unwrap();
+    // Two pixels a millimetre, the paper in the middle.
+    let bounds = Rectangle::new(iced::Point::ORIGIN, Size::new(840.0, 594.0));
+    studio.layouts.camera.set(ViewCamera {
+        center: [210.0, 148.5],
+        scale: 2.0,
+    });
+    fn overlay(studio: &Studio) -> canvas::Overlay<'_> {
+        canvas::Overlay {
+            tool: &studio.layouts,
+            plot: studio.shown_plot().unwrap(),
+            selected: None,
+            dropping: None,
+            accent: Color::BLACK,
+            hint: None,
+            hint_ink: Color::BLACK,
+            tool_kind: None,
+            picked: Vec::new(),
+            typing: false,
+            selected_note: None,
+        }
+    }
+    let camera = studio.layouts.camera.get();
+    let at = |paper: [f64; 2]| {
+        let [x, y] = camera.to_screen(paper, bounds.size());
+        iced::Point::new(x as f32, y as f32)
+    };
+    let (from, to) = (at([300.0, 200.0]), at([320.0, 200.0]));
+    let mut state = canvas::OverlayState::default();
+    let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    let release = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    let (status, _) = overlay(&studio).update(
+        &mut state,
+        press.clone(),
+        bounds,
+        mouse::Cursor::Available(from),
+    );
+    assert_eq!(status, event::Status::Captured);
+    let _ = overlay(&studio).update(
+        &mut state,
+        Event::Mouse(mouse::Event::CursorMoved { position: to }),
+        bounds,
+        mouse::Cursor::Available(to),
+    );
+    // Meanwhile the viewport dragged is taken off the sheet: it is let go,
+    // and the other one stays where it is.
+    studio.remove_viewport(&sheet, &second).unwrap();
+    let (status, message) = overlay(&studio).update(
+        &mut state,
+        release.clone(),
+        bounds,
+        mouse::Cursor::Available(to),
+    );
+    assert_eq!(status, event::Status::Captured);
+    assert!(message.is_none(), "{message:?}");
+    // A drag of the one left moves it.
+    let (from, to) = (at([100.0, 100.0]), at([110.0, 100.0]));
+    let _ = overlay(&studio).update(&mut state, press, bounds, mouse::Cursor::Available(from));
+    let _ = overlay(&studio).update(
+        &mut state,
+        Event::Mouse(mouse::Event::CursorMoved { position: to }),
+        bounds,
+        mouse::Cursor::Available(to),
+    );
+    let (_, message) =
+        overlay(&studio).update(&mut state, release, bounds, mouse::Cursor::Available(to));
+    assert!(
+        matches!(&message, Some(Message::Layouts(LayoutAction::Move(id, centre)))
+            if *id == first && (centre[0] - 110.0).abs() < 1e-6 && (centre[1] - 100.0).abs() < 1e-6),
+        "{message:?}"
+    );
+}

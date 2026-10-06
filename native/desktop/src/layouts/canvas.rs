@@ -290,10 +290,11 @@ impl<'a> From<Paper<'a>> for Element<'a, Message> {
 }
 
 /// A viewport being dragged to another place.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Moving {
-    /// The viewport, by its place in the plot.
-    place: usize,
+    /// The viewport, by its identifier: the viewports of the sheet may
+    /// change while it is dragged.
+    id: String,
     /// Where the pointer took hold of it and where it is now, on the paper.
     from: [f64; 2],
     to: [f64; 2],
@@ -444,7 +445,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                     if let Some(place) = hit {
                         state.pan = None;
                         state.moving = Some(Moving {
-                            place,
+                            id: self.plot.viewports[place].id.clone(),
                             from: at,
                             to: at,
                         });
@@ -482,14 +483,23 @@ impl canvas::Program<Message> for Overlay<'_> {
                 }
                 let click = state.click.take().filter(|_| button == mouse::Button::Left);
                 if let Some(moving) = state.moving.take() {
-                    let id = self.plot.viewports[moving.place].id.clone();
+                    // A viewport taken off the sheet meanwhile is let go.
+                    let Some(placed) = self
+                        .plot
+                        .viewports
+                        .iter()
+                        .find(|placed| placed.id == moving.id)
+                    else {
+                        return (event::Status::Captured, None);
+                    };
+                    let id = placed.id.clone();
                     if click.is_some() {
                         return (
                             event::Status::Captured,
                             action(LayoutAction::Select(Some(id))),
                         );
                     }
-                    let rect = self.plot.viewports[moving.place].rect;
+                    let rect = placed.rect;
                     let centre = [
                         (rect[0][0] + rect[1][0]) / 2.0 + moving.to[0] - moving.from[0],
                         (rect[0][1] + rect[1][1]) / 2.0 + moving.to[1] - moving.from[1],
@@ -618,10 +628,14 @@ impl canvas::Program<Message> for Overlay<'_> {
         // The outlines of the viewports: quiet, and the selected one in the
         // accent with its corners.
         let quiet = Color::from_rgba8(59, 130, 246, 0.35);
-        for (place, placed) in self.plot.viewports.iter().enumerate() {
+        for placed in &self.plot.viewports {
             let selected = self.selected.as_deref() == Some(placed.id.as_str());
             let mut rect = placed.rect;
-            if let Some(moving) = state.moving.filter(|moving| moving.place == place) {
+            if let Some(moving) = state
+                .moving
+                .as_ref()
+                .filter(|moving| moving.id == placed.id)
+            {
                 let shift = [moving.to[0] - moving.from[0], moving.to[1] - moving.from[1]];
                 rect = [
                     [rect[0][0] + shift[0], rect[0][1] + shift[1]],
@@ -740,7 +754,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if state.moving.is_some_and(|_| state.click.is_none()) || state.note.is_some() {
+        if (state.moving.is_some() && state.click.is_none()) || state.note.is_some() {
             return mouse::Interaction::Grabbing;
         }
         if self.tool_kind.is_some() && cursor.is_over(bounds) {
