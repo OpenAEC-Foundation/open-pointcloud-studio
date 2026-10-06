@@ -5796,7 +5796,24 @@ mod tests {
         // Made again, it stays selected.
         assert_eq!(selected(&mut studio), true);
 
-        // Escape deselects it; so does a click elsewhere, and hiding it.
+        // Escape closes the File view over it first, then deselects it; so
+        // does a click elsewhere, and hiding it.
+        let _ = studio.update(Message::ToggleFile);
+        assert!(studio.file_open);
+        let _ = studio.update(Message::Escape);
+        assert!(!studio.file_open);
+        assert_eq!(selected(&mut studio), true, "hidden, it stays selected");
+        // So does the card of the Mesh to Plans wizard.
+        let _ = studio.update(Message::MeshToPlans(
+            crate::mesh_to_plans::WizardAction::Open,
+        ));
+        assert!(studio.mesh_to_plans.covers_model());
+        let _ = studio.update(Message::Escape);
+        assert!(!studio.mesh_to_plans.covers_model());
+        assert_eq!(selected(&mut studio), true);
+        let _ = studio.update(Message::MeshToPlans(
+            crate::mesh_to_plans::WizardAction::Close,
+        ));
         let _ = studio.update(Message::Escape);
         assert_eq!(selected(&mut studio), false);
         assert!(studio.crop_properties().is_none());

@@ -1019,7 +1019,7 @@ Nothing is written beside the scans, and the scans themselves are never changed.
 | Ctrl+Y, Ctrl+Shift+Z | Redo |
 | Enter | Finish a measurement; place a note |
 | Backspace | Remove the last point of a measurement |
-| Escape | Close Settings or the File view; deselect the crop region in the Drawing view; cancel a half-placed annotation; leave walking; otherwise leave the active tool for Select, stop a running selection and drop the selection |
+| Escape | Close Settings, the dialog of Create 2D, the card of the Mesh to Plans wizard (it becomes the strip) or the File view; then deselect the crop region in the Drawing view; cancel a half-placed annotation; leave walking; otherwise leave the active tool for Select, stop a running selection and drop the selection |
 | `W` `A` `S` `D` | Walk forward, left, back and right |
 | `Q` `E` | Move down and up |
 | Shift, while walking | Walk faster |

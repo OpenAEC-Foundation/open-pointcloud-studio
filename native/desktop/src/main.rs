@@ -8609,10 +8609,6 @@ impl Studio {
                 if self.sheet_dialog.take().is_some() {
                     return Task::none();
                 }
-                // A selected crop region lets go before the rest.
-                if self.drawing_view.shown && self.select_crop(false) {
-                    return Task::none();
-                }
                 // The card of the wizard comes next: it becomes the strip
                 // above the scene, and a job it runs goes on.
                 if self.mesh_to_plans.minimize() {
@@ -8620,6 +8616,10 @@ impl Studio {
                 }
                 if self.file_open {
                     self.file_open = false;
+                    return Task::none();
+                }
+                // A selected crop region lets go once nothing covers it.
+                if self.drawing_view.shown && self.select_crop(false) {
                     return Task::none();
                 }
                 // A rename or a half-placed annotation ends before anything else.
