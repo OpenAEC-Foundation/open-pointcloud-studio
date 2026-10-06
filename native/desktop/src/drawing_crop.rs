@@ -583,15 +583,24 @@ pub struct Turning {
     pointer: f64,
     /// A number of degrees typed.
     typed: String,
+    /// The section box as the turn last left it, also while it is off: a
+    /// box set from elsewhere meanwhile, by a view restored or limits
+    /// typed, ends the turn and stays.
+    pub placed: Option<OrientedBox>,
 }
 
 impl Turning {
     pub fn new(target: TurnTarget, pointer: Option<[f64; 2]>) -> Self {
+        let placed = match target {
+            TurnTarget::SectionBox(original) => Some(original),
+            TurnTarget::Plan { .. } => None,
+        };
         Self {
             target,
             start: pointer,
             pointer: 0.0,
             typed: String::new(),
+            placed,
         }
     }
 
@@ -1273,6 +1282,10 @@ impl Studio {
         if !self.place_section(OrientedBox::new(original.bounds, rotation)) {
             return Task::none();
         }
+        let placed = self.section_shape();
+        if let Some(turn) = &mut self.turn {
+            turn.placed = placed;
+        }
         self.sync_section_coordinate_inputs();
         self.revision += 1;
         self.schedule_detail()
@@ -1338,11 +1351,22 @@ impl Studio {
 
     /// After every message: a turn of a crop region ends when its drawing is
     /// no longer shown, and a turn of the section box when the 3D view is no
-    /// longer shown or the box is off.
+    /// longer shown or the box is off. A section box set from elsewhere
+    /// while it turns, by a view restored, Reset box or limits typed, ends
+    /// the turn and stays as it was set.
     pub(crate) fn settle_turn(&mut self) {
         let Some(turn) = &self.turn else {
             return;
         };
+        if matches!(turn.target, TurnTarget::SectionBox(_)) && self.section_shape() != turn.placed {
+            self.turn = None;
+            self.status = if self.status.starts_with("Turning the section box") {
+                "The turn ended: the section box was set anew".into()
+            } else {
+                format!("{}; the turn of the section box ended", self.status)
+            };
+            return;
+        }
         let lost = match &turn.target {
             TurnTarget::Plan { guid, .. } => {
                 self.drawing_view.shown_guid() != Some(guid.as_str()) || self.model_covered()

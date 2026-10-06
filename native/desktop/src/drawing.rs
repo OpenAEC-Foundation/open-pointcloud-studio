@@ -5046,6 +5046,85 @@ mod tests {
         assert!(frame_of(&studio, &plan).contains(&room[0]));
         let _ = studio.view();
     }
+
+    #[test]
+    fn a_section_box_set_from_elsewhere_while_ro_turns_it_stays_as_set() {
+        use crate::drawing_crop::CropAction;
+
+        let _language = TestLanguage::hold(Language::English);
+        let directory = tempfile::tempdir().unwrap();
+        camera_views::use_test_directory(&directory.path().join("config"));
+        let (mut studio, _) = studio_with_room(directory.path());
+        set_plan_box(&mut studio);
+        // A view with the box turned 25 degrees, then the box upright again.
+        let turned = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"rotate_crop","degrees":25}"#).unwrap(),
+        );
+        assert_eq!(turned["ok"], true, "{turned}");
+        let saved = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"save_camera_view","name":"Turned"}"#).unwrap(),
+        );
+        assert_eq!(saved["ok"], true, "{saved}");
+        let kept = studio.section_box().unwrap();
+        set_plan_box(&mut studio);
+        let typed = |studio: &mut Studio, key: &str| {
+            let _ = studio.update(Message::KeyTyped(key.into(), false));
+        };
+        let size = Size::new(800.0, 600.0);
+        let turn = |studio: &mut Studio| {
+            for pixel in [[600.0, 300.0], [400.0, 100.0]] {
+                let _ = studio.update(Message::Crop(CropAction::TurnPointer3d(pixel, size)));
+            }
+        };
+
+        // The view restored while RO turns the box: its box stays, and the
+        // pointer and Escape no longer change it.
+        typed(&mut studio, "r");
+        typed(&mut studio, "o");
+        assert!(studio.turn.is_some(), "{}", studio.status);
+        turn(&mut studio);
+        assert_ne!(studio.section_box().unwrap().rotation_degrees, 0.0);
+        let restored = send(
+            &mut studio,
+            serde_json::from_str(r#"{"command":"restore_camera_view","name":"Turned"}"#).unwrap(),
+        );
+        assert_eq!(restored["ok"], true, "{restored}");
+        assert!(studio.turn.is_none());
+        assert!(
+            studio.status.ends_with("the turn of the section box ended"),
+            "{}",
+            studio.status
+        );
+        let shown = studio.section_box().unwrap();
+        assert!((shown.rotation_degrees - kept.rotation_degrees).abs() < 1e-9);
+        let [was, now] = [kept, shown].map(|section| section.center());
+        assert!((0..3).all(|axis| (was[axis] - now[axis]).abs() < 1e-6));
+        turn(&mut studio);
+        let _ = studio.update(Message::Escape);
+        let _ = studio.update(Message::Crop(CropAction::TurnApply));
+        assert_eq!(studio.section_box(), Some(shown));
+
+        // Limits typed elsewhere end a turn as well.
+        typed(&mut studio, "r");
+        typed(&mut studio, "o");
+        turn(&mut studio);
+        set_plan_box(&mut studio);
+        assert!(studio.turn.is_none());
+        let upright = studio.section_box().unwrap();
+        assert_eq!(upright.rotation_degrees, 0.0);
+        let _ = studio.update(Message::Escape);
+        assert_eq!(studio.section_box(), Some(upright));
+        // The box switched off still puts it back as it was.
+        typed(&mut studio, "r");
+        typed(&mut studio, "o");
+        turn(&mut studio);
+        let _ = studio.update(Message::SetSectionEnabled(false));
+        assert!(studio.turn.is_none());
+        let _ = studio.update(Message::SetSectionEnabled(true));
+        assert_eq!(studio.section_box(), Some(upright));
+    }
     #[test]
     fn the_open_block_shows_its_slab_and_the_file_view_opens_the_block_first() {
         let directory = tempfile::tempdir().unwrap();
