@@ -38,6 +38,8 @@ pub struct StoredRequest {
     pub max_wall_thickness: f64,
     pub min_wall_thickness: f64,
     pub square: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub straight_lines: Option<pointcloud_core::StraightLineOptions>,
     pub units: String,
     pub origin: String,
     pub point_spacing: f64,
@@ -113,6 +115,7 @@ impl SavedDrawing {
                 max_wall_thickness: request.max_wall_thickness,
                 min_wall_thickness: request.min_wall_thickness,
                 square: request.square,
+                straight_lines: request.straight_lines,
                 units: request.units.key().to_owned(),
                 origin: request.origin.key().to_owned(),
                 point_spacing: request.point_spacing,
@@ -155,6 +158,7 @@ impl SavedDrawing {
             max_wall_thickness: stored.max_wall_thickness,
             min_wall_thickness: stored.min_wall_thickness,
             square: stored.square,
+            straight_lines: stored.straight_lines,
             units: DrawingUnits::from_key(&stored.units)?,
             origin: DrawingOrigin::from_key(&stored.origin)?,
             point_spacing: stored.point_spacing,
@@ -280,6 +284,10 @@ mod tests {
         section.kind = SheetKind::Section;
         section.view = "front".into();
         section.request.fill = false;
+        section.request.straight_lines = Some(pointcloud_core::StraightLineOptions {
+            tolerance: 0.025,
+            min_length: 0.15,
+        });
         section.sources.push(PathBuf::from("C:/scans/annex.e57"));
         camera_views::write_json(&path, &vec![first.clone(), section.clone()]).unwrap();
         let loaded = load_from(&path);
@@ -296,6 +304,11 @@ mod tests {
         assert_eq!(turned.rotation_degrees, 22.5);
         assert_eq!(turned.bounds.max, [9.0, 7.5, 1.2]);
         assert_eq!(loaded[1].request().unwrap().view, DrawingView::Front);
+        assert_eq!(loaded[0].request().unwrap().straight_lines, None);
+        assert_eq!(
+            loaded[1].request().unwrap().straight_lines,
+            section.request.straight_lines
+        );
         assert!(loaded[1].uses(Path::new("C:/scans/annex.e57")));
         assert!(!loaded[0].uses(Path::new("C:/scans/annex.e57")));
 

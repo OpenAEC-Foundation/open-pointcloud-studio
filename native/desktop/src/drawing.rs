@@ -206,6 +206,9 @@ pub(crate) struct DrawingSettings {
     origin: DrawingOrigin,
     fill: bool,
     square: bool,
+    straight_lines: bool,
+    line_tolerance: String,
+    line_min_length: String,
     grid: String,
     max_wall: String,
     color: PointColor,
@@ -224,6 +227,9 @@ impl Default for DrawingSettings {
             origin: request.origin,
             fill: request.fill,
             square: request.square,
+            straight_lines: false,
+            line_tolerance: "0.01".into(),
+            line_min_length: "0.10".into(),
             grid: format!("{:.2}", request.grid),
             max_wall: format!("{:.2}", request.max_wall_thickness),
             color: request.color,
@@ -281,6 +287,14 @@ impl DrawingSettings {
             max_wall_thickness,
             min_wall_thickness: min_wall_for(max_wall_thickness),
             square: self.square,
+            straight_lines: if self.straight_lines {
+                Some(pointcloud_core::StraightLineOptions {
+                    tolerance: length(&self.line_tolerance, "Line tolerance")?,
+                    min_length: length(&self.line_min_length, "Minimum line length")?,
+                })
+            } else {
+                None
+            },
             units: self.units,
             origin: self.origin,
             max_points: self
@@ -359,6 +373,15 @@ impl DrawingSettings {
         if let Some(square) = options.square {
             next.square = square;
         }
+        if let Some(enabled) = options.straight_lines {
+            next.straight_lines = enabled;
+        }
+        if let Some(value) = options.line_tolerance {
+            next.line_tolerance = value.to_string();
+        }
+        if let Some(value) = options.line_min_length {
+            next.line_min_length = value.to_string();
+        }
         if let Some(thickness) = options.thickness {
             next.thickness = thickness.to_string();
         }
@@ -384,6 +407,9 @@ impl DrawingSettings {
             "origin": self.origin.key(),
             "fill": self.fill,
             "square": self.square,
+            "straight_lines": self.straight_lines,
+            "line_tolerance": metres(&self.line_tolerance),
+            "line_min_length": metres(&self.line_min_length),
             "grid": metres(&self.grid),
             "max_wall_thickness": metres(&self.max_wall),
             "color": self.color.key(),
@@ -408,6 +434,9 @@ pub struct DrawingOptions {
     pub origin: Option<String>,
     pub fill: Option<bool>,
     pub square: Option<bool>,
+    pub straight_lines: Option<bool>,
+    pub line_tolerance: Option<f64>,
+    pub line_min_length: Option<f64>,
     /// Cell of the grid the filled cut is traced from, in metres.
     pub grid: Option<f64>,
     /// Two faces at most this far apart are one wall, in metres.
@@ -882,6 +911,15 @@ fn summary(
             line.push_str(&format!(", main direction {}", direction_text(degrees)));
         }
     }
+    if let Some(lines) = stats.straight_lines {
+        line.push_str(&format!(
+            "; {} CAD segments, max deviation {:.2} mm, RMS {:.2} mm; {} short edges kept",
+            lines.segments,
+            lines.max_deviation * 1000.0,
+            lines.rms_deviation * 1000.0,
+            lines.short_segments
+        ));
+    }
     line
 }
 
@@ -904,6 +942,7 @@ fn stats_value(stats: &DrawingStats, request: &DrawingRequest, slab: f64) -> Val
         "grid_cell": stats.grid_cell,
         "grid_cell_raised": grid_raised(stats, request),
         "direction_degrees": stats.direction_degrees,
+        "straight_lines": stats.straight_lines,
     })
 }
 
@@ -1119,6 +1158,9 @@ pub enum DrawingAction {
     Origin(DrawingOrigin),
     Fill(bool),
     Square(bool),
+    StraightLines(bool),
+    LineTolerance(String),
+    LineMinLength(String),
     Grid(String),
     MaxWall(String),
     Color(PointColor),
@@ -1418,6 +1460,8 @@ impl Studio {
         request.thickness = job.thickness;
         request.fill = DrawingRequest::for_view(job.view).fill;
         request.sample_percent = job.sample_percent;
+        request.straight_lines = job.straight_lines;
+        request.square = job.square;
         let mut sources: Vec<PathBuf> = Vec::new();
         for entry in self.clouds.iter().filter(|entry| drawn(entry)) {
             let source = self.views.source_of(&entry.cloud.path);
@@ -1545,6 +1589,9 @@ impl Studio {
             DrawingAction::Origin(origin) => self.drawing.settings.origin = origin,
             DrawingAction::Fill(fill) => self.drawing.settings.fill = fill,
             DrawingAction::Square(square) => self.drawing.settings.square = square,
+            DrawingAction::StraightLines(on) => self.drawing.settings.straight_lines = on,
+            DrawingAction::LineTolerance(value) => self.drawing.settings.line_tolerance = value,
+            DrawingAction::LineMinLength(value) => self.drawing.settings.line_min_length = value,
             DrawingAction::Grid(value) => self.drawing.settings.grid = value,
             DrawingAction::MaxWall(value) => self.drawing.settings.max_wall = value,
             DrawingAction::Color(color) => self.drawing.settings.color = color,
@@ -2004,6 +2051,23 @@ impl Studio {
             ),
             check(tr("Filled cut"), settings.fill, DrawingAction::Fill),
             check(
+                tr("Straight CAD lines"),
+                settings.straight_lines,
+                DrawingAction::StraightLines
+            ),
+            opencad_properties::property_input(
+                "Line tolerance (m)",
+                "0.01",
+                &settings.line_tolerance,
+                |value| Message::Drawing(DrawingAction::LineTolerance(value))
+            ),
+            opencad_properties::property_input(
+                "Minimum line (m)",
+                "0.10",
+                &settings.line_min_length,
+                |value| Message::Drawing(DrawingAction::LineMinLength(value))
+            ),
+            check(
                 tr("Square to main directions"),
                 settings.square,
                 DrawingAction::Square
@@ -2269,6 +2333,24 @@ fn result_rows(
                 direction_text(degrees),
             ));
         }
+    }
+    if let Some(lines) = stats.straight_lines {
+        rows.push(opencad_properties::property_row(
+            "CAD segments",
+            format!("{} → {}", lines.input_segments, lines.segments),
+        ));
+        rows.push(opencad_properties::property_row(
+            "Contour deviation",
+            format!(
+                "max {:.2} mm · RMS {:.2} mm",
+                lines.max_deviation * 1000.0,
+                lines.rms_deviation * 1000.0
+            ),
+        ));
+        rows.push(opencad_properties::property_row(
+            "Short edges kept",
+            lines.short_segments.to_string(),
+        ));
     }
     rows
 }
@@ -3092,6 +3174,9 @@ mod tests {
                 max_points: Some(20_000),
                 version: Some("r2018".into()),
                 fill: None,
+                straight_lines: Some(true),
+                line_tolerance: Some(0.02),
+                line_min_length: Some(0.15),
             })
             .unwrap();
         let request = next.request().unwrap();
@@ -3113,6 +3198,7 @@ mod tests {
                 "fill": false, "square": false, "grid": 0.04, "max_wall_thickness": 0.8,
                 "color": "rgb", "point_layers": "class", "max_points": 20_000,
                 "version": "r2018",
+                "straight_lines": true, "line_tolerance": 0.02, "line_min_length": 0.15,
             })
         );
         // A fill that is named wins over the default of the view.
@@ -3205,6 +3291,7 @@ mod tests {
             grid_cell: Some(0.04),
             direction_degrees: Some(-17.304),
             bytes: 5_700_000,
+            straight_lines: None,
         };
         let plain = |count: u64| count.to_string();
         assert_eq!(
@@ -4521,6 +4608,20 @@ mod tests {
         let plan = make_plan(&mut studio, 1.05);
         let before = definition(&studio, &plan);
         let unit = before.request().unwrap().units.factor();
+
+        // Reject mixed coordinates before starting a remake. Previously
+        // this changed the crop but dropped its task, leaving it busy forever.
+        let invalid = send(
+            &mut studio,
+            serde_json::from_value(json!({
+                "command": "set_sheet_crop", "rect": [[0, 0], [2000, 2000]], "cut": 1.2
+            }))
+            .unwrap(),
+        );
+        assert_eq!(invalid["ok"], false);
+        assert!(studio.drawing.job.is_none());
+        assert!(studio.drawing_view.remake.is_none());
+        assert_eq!(definition(&studio, &plan), before);
 
         // The crop region is the box as the plan shows it, with handles.
         let crop = studio.crop_overlay().expect("a crop region");

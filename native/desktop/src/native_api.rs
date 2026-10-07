@@ -645,6 +645,10 @@ fn applied() -> bool {
 pub struct CreateDrawingOptions {
     /// `plan`, `elevation` or `section`.
     pub kind: String,
+    pub straight_lines: Option<bool>,
+    pub line_tolerance: Option<f64>,
+    pub line_min_length: Option<f64>,
+    pub square: Option<bool>,
     /// `model`, `section_box` or the name of a saved view of the active scan
     /// with a section box.
     #[serde(default)]

@@ -487,6 +487,13 @@ is put in the block as well, so the window shows what was drawn:
 - `square`: whether an edge of the filled cut is turned onto the main
   direction of the building when that moves neither of its ends more than
   30 mm; true at the start.
+- `straight_lines`: add closed editable polylines on `OPS-STRAIGHT-LINES`,
+  with the original contours retained and fills unchanged; false at the start.
+- `line_tolerance`: maximum deviation from the traced contour, in metres,
+  0 to 1; 0.01 at the start. This is additional to the grid and tracing error.
+- `line_min_length`: preferred minimum segment length, in metres, 0 to 10;
+  0.10 at the start. Short edges remain where merging them would change an
+  opening or exceed the tolerance.
 - `grid`: cell of the grid the filled cut is traced from, in metres, at least
   0.005; 0.02 at the start.
 - `max_wall_thickness`: two scanned faces at most this far apart are filled
@@ -633,7 +640,20 @@ its crop region changed, or `null`) and `kept`: the `drawings` that keep the
 points they read in memory, with the `points` and the `bytes` they take
 together.
 
+The optional `straight_lines` object in a completed drawing's statistics
+reports `input_segments`, `segments`, `short_segments`, `max_deviation` and
+`rms_deviation`. Distances are metres; RMS is sampled at the original contour
+vertices, compared with their replacement segments. A null value means the
+extra line layer was not requested. The simplification uses all contours as
+obstacles and can be cancelled during tracing. It does not reread the scan.
+
 ## Drawings of the Project Browser
+
+`create_drawing` also accepts `straight_lines` (default false),
+`line_tolerance` (default 0.01 m), `line_min_length` (default 0.10 m) and
+`square` (default true), with the same meaning and limits as above. These
+choices are kept with the drawing and used when its crop changes or it is
+opened again. The settings are also offered in the Create 2D dialog.
 
 `create_drawing` makes a plan, an elevation or a section as **Create 2D plan /
 elevation / section…** under VIEWS in the Project Browser does. `kind` is
@@ -1707,13 +1727,13 @@ layer with photo colours.
 | `export_section` | `path` | Exports only the current section of the active source, honoring deleted points |
 | `export_selection` | `path` | Exports exact selected points from the active source, including points outside the preview |
 | `export_minus_selection` | `path` | Exports the active source without selected or deleted points |
-| `export_drawing` | `path`, optional `view`, `thickness`, `units`, `origin`, `fill`, `square`, `grid`, `max_wall_thickness`, `color`, `point_layers`, `max_points`, `version` | Draws the slab behind one face of the section box, from every visible layer, as a 2D drawing and writes it to an absolute `.dxf` or `.dwg` path; the extension chooses the format. Returns a job ID; the complete job reports the points, the point spacing, the regions of the filled cut and the file size |
-| `preview_drawing` | optional `view`, `thickness`, `units`, `origin`, `fill`, `square`, `grid`, `max_wall_thickness`, `color`, `point_layers`, `max_points`, `version` | Traces the filled cut of that slab and lays it over the points in the viewport without writing a file; returns a job ID |
+| `export_drawing` | `path`, optional `view`, `thickness`, `units`, `origin`, `fill`, `square`, `straight_lines`, `line_tolerance`, `line_min_length`, `grid`, `max_wall_thickness`, `color`, `point_layers`, `max_points`, `version` | Draws the slab behind one face of the section box, from every visible layer, as a 2D drawing and writes it to an absolute `.dxf` or `.dwg` path; the extension chooses the format. Returns a job ID; the complete job reports the points, the point spacing, the regions of the filled cut and the file size |
+| `preview_drawing` | optional `view`, `thickness`, `units`, `origin`, `fill`, `square`, `straight_lines`, `line_tolerance`, `line_min_length`, `grid`, `max_wall_thickness`, `color`, `point_layers`, `max_points`, `version` | Traces the filled cut of that slab and lays it over the points in the viewport without writing a file; returns a job ID |
 | `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
 | `cancel_drawing` | — | Requests cancellation of the running section drawing or preview |
 | `drawing_view` | `show` | Shows the Drawing view in the main area in place of the 3D scene (`true`) or the 3D scene again (`false`); answers with `drawing_view` |
 | `open_drawing` | `path` | Reads an absolute `.dxf` or `.dwg` file into the Drawing view and shows it; returns a job ID whose complete job reports units, layers, entities drawn and skipped |
-| `create_drawing` | `kind`, optional `basis`, `side`, `height`, `position`, `thickness`, `sample_percent`, `name` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; returns a job ID. See [Drawings of the Project Browser](#drawings-of-the-project-browser) |
+| `create_drawing` | `kind`, optional `basis`, `side`, `height`, `position`, `thickness`, `sample_percent`, `name`, `straight_lines`, `line_tolerance`, `line_min_length`, `square` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; returns a job ID. See [Drawings of the Project Browser](#drawings-of-the-project-browser) |
 | `list_drawings` | — | Lists the drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`, made again from how it was made when it is not made in this session yet (then with a job ID); `3D model` shows the 3D model as a click on its row does, letting go of the active view |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
