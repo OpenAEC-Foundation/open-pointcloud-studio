@@ -27,12 +27,12 @@ Files: native/core/*
 Copyright: OpenAEC Foundation and the contributors of Open Pointcloud Studio
 License: LGPL-3+
 
-Files: native/assets/fonts/Inter.ttf
-Copyright: 2020 The Inter Project Authors
+Files: native/assets/fonts/Inter-*.ttf
+Copyright: 2016 The Inter Project Authors
 License: OFL-1.1
-Comment: The full licence text is in Inter-OFL.txt beside this file.
+Comment: The full licence text is in Inter-OFL.txt beside these files.
 
-Files: native/assets/fonts/SpaceGrotesk.ttf
+Files: native/assets/fonts/SpaceGrotesk-Medium.ttf
 Copyright: 2020 The Space Grotesk Project Authors
 License: OFL-1.1
 Comment: The full licence text is in SpaceGrotesk-OFL.txt beside this file.

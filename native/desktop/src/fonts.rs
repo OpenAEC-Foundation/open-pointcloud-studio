@@ -146,6 +146,72 @@ mod tests {
         assert!(found.is_empty(), "{found:#?}");
     }
 
+    #[test]
+    fn the_debian_copyright_names_the_fonts_that_ship_with_their_licence() {
+        let native = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let copyright = std::fs::read_to_string(native.join("packaging/linux/copyright")).unwrap();
+        let folder = native.join("assets/fonts");
+        let fonts: Vec<String> = std::fs::read_dir(&folder)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".ttf"))
+            .collect();
+        assert_eq!(fonts.len(), FILES.len(), "{fonts:?}");
+        let mut covered = Vec::new();
+        for stanza in copyright.split(
+            "
+
+",
+        ) {
+            let field = |name: &str| {
+                stanza
+                    .lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .map(str::trim)
+            };
+            let Some(pattern) =
+                field("Files:").and_then(|files| files.strip_prefix("native/assets/fonts/"))
+            else {
+                continue;
+            };
+            let (start, end) = pattern.split_once('*').unwrap_or((pattern, ""));
+            let named: Vec<&String> = fonts
+                .iter()
+                .filter(|font| {
+                    if pattern.contains('*') {
+                        font.starts_with(start) && font.ends_with(end)
+                    } else {
+                        *font == pattern
+                    }
+                })
+                .collect();
+            assert!(!named.is_empty(), "{pattern} names no font that ships");
+            covered.extend(named);
+            // The holder and the year are those of the licence beside them.
+            let licence = field("Comment:")
+                .and_then(|comment| {
+                    comment
+                        .split_whitespace()
+                        .find(|word| word.ends_with("-OFL.txt"))
+                })
+                .expect("the licence file");
+            let licence = std::fs::read_to_string(folder.join(licence)).unwrap();
+            let holder = field("Copyright:").unwrap();
+            assert!(
+                licence
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .starts_with(&format!("Copyright {holder}")),
+                "{holder}"
+            );
+        }
+        covered.sort();
+        covered.dedup();
+        assert_eq!(covered.len(), fonts.len(), "{covered:?} of {fonts:?}");
+    }
+
     /// Whether the table directory of a TrueType file lists `tag`.
     fn has_table(file: &[u8], tag: &[u8; 4]) -> bool {
         let tables = usize::from(u16::from_be_bytes([file[4], file[5]]));
