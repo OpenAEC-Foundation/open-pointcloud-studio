@@ -122,7 +122,7 @@ follows when that view is restored.
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `status` | — | State of the window: layers (each with its mesh, its detected faces and its points with photo colours), imports and tasks, camera, viewport size, the frame of the window and whether it is maximised, section box, the Section drawing, Closed mesh, Detect faces and Colour from photos tools, the Pointcloud to Drawing wizard, the card of Mesh Pointcloud, selection, measurement, views, photos, settings |
+| `status` | — | State of the window: layers (each with its mesh, its detected faces and its points with photo colours), imports and tasks, camera, viewport size, the frame of the window (`window`: `frame` `own`, `macos` or `system`, and `maximized` in every frame), section box, the Section drawing, Closed mesh, Detect faces and Colour from photos tools, the Pointcloud to Drawing wizard, the card of Mesh Pointcloud, selection, measurement, views, photos, settings |
 | `job` | `id` | Reads a background job once |
 | `wait_for_job` | `id`, optional `timeout_seconds` (default 60) | Waits until the job no longer runs |
 | `wait_until_idle` | optional `timeout_seconds` (default 60) | Waits until no work is under way; reports what is still busy |

@@ -6275,11 +6275,9 @@ impl Studio {
             Message::WindowResized(size) => {
                 self.window_size = Some(size);
                 self.ribbon_viewport = None;
-                // The glyph of the maximise button and the edges follow
-                // whether the window is maximised.
-                if self.title_bar.frame == title_bar::Frame::Own {
-                    return title_bar::ask_maximized();
-                }
+                // The glyph of the maximise button, the edges and `status`
+                // follow whether the window is maximised, in every frame.
+                return title_bar::ask_maximized();
             }
             Message::Window(action) => return self.window_action(action),
             Message::Theme(theme) => {

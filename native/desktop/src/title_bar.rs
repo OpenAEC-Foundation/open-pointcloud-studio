@@ -590,6 +590,29 @@ mod tests {
         assert!(!studio.title_bar.resizes());
     }
 
+    #[test]
+    fn a_resize_asks_whether_the_window_is_maximised_in_every_frame() {
+        for frame in [Frame::Own, Frame::MacOs, Frame::System] {
+            let mut studio = Studio {
+                title_bar: TitleBar::new(frame),
+                ..Studio::default()
+            };
+            let task = studio.update(Message::WindowResized(Size::new(1200.0, 800.0)));
+            assert!(iced_runtime::task::into_stream(task).is_some(), "{frame:?}");
+            let _ = studio.update(Message::Window(WindowAction::Maximized(true)));
+            assert!(studio.title_bar.maximized, "{frame:?}");
+            // `status` reports it.
+            let command = serde_json::from_value(serde_json::json!({"command": "status"})).unwrap();
+            let (reply, receive) = std::sync::mpsc::channel();
+            let _ = studio.handle_api(crate::native_api::ApiRequest { command, reply });
+            let status = receive.recv().unwrap();
+            assert_eq!(
+                status["result"]["window"],
+                serde_json::json!({"frame": frame.key(), "maximized": true})
+            );
+        }
+    }
+
     /// `studio`'s window drawn in a window of 1440 by 900, in Light.
     fn picture(studio: &Studio) -> crate::test_render::Picture {
         crate::test_render::render_window(studio, Size::new(1440.0, 900.0))
