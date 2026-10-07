@@ -1165,8 +1165,8 @@ impl Studio {
         let active = open || busy.is_some();
         let enabled = self.active.is_some() || active;
         let mut label = column![
-            icon_svg(ToolIcon::MeshPointcloud, 32.0),
-            Space::with_height(4),
+            icon_svg(ToolIcon::MeshPointcloud, 24.0),
+            Space::with_height(2),
             text(tr("Mesh Pointcloud"))
                 .size(11)
                 .wrapping(iced::widget::text::Wrapping::None),
@@ -1188,7 +1188,7 @@ impl Studio {
                 .on_press_maybe(enabled.then_some(Message::MeshWizard(MeshWizardAction::Open)))
                 .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
                 .height(Fill)
-                .padding([8, 6])
+                .padding([2, 4])
                 .into(),
         )
     }

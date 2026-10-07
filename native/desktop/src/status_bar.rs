@@ -1,8 +1,8 @@
 //! The status bar of the style book along the bottom of the window: 22
 //! pixels on the dark status colour, with what is going on and the totals
 //! at the left, the name and the version of the application in the middle
-//! and what the main area shows at the right. Every item is tinted under the
-//! pointer; the items that do something are buttons.
+//! and what the main area shows and the application's resident RAM at the
+//! right. Every item is tinted under the pointer; items that act are buttons.
 
 use std::sync::atomic::Ordering;
 
@@ -322,6 +322,9 @@ impl Studio {
                 format_zoom_level(self.zoom),
             ));
         }
+        right = right
+            .push(separator())
+            .push(item(&colors, tr("RAM:"), self.memory_usage.label()));
 
         let bar = row![
             container(left).width(Fill).clip(true),

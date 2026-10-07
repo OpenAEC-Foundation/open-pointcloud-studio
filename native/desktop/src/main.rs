@@ -38,6 +38,7 @@ mod lod_pace;
 mod macos_open;
 mod mcp;
 mod measure;
+mod memory_usage;
 mod mesh_export;
 mod mesh_to_plans;
 mod mesh_wizard;
@@ -1303,7 +1304,8 @@ fn main() -> iced::Result {
             } else {
                 iced::Subscription::none()
             };
-            iced::Subscription::batch([keyboard, api, opened, walking, clock])
+            let memory = iced::time::every(Duration::from_secs(2)).map(|_| Message::MemoryTick);
+            iced::Subscription::batch([keyboard, api, opened, walking, clock, memory])
         })
         .default_font(fonts::REGULAR)
         .theme(|studio: &Studio| studio.ui_theme.iced())
@@ -1326,6 +1328,7 @@ fn main() -> iced::Result {
         })
         .run_with(move || {
             let mut studio = Studio::default();
+            studio.memory_usage.refresh();
             if let Some((receiver, handle)) = api {
                 studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
                 studio.api_handle = Some(handle);
@@ -1992,6 +1995,7 @@ enum Message {
     Crop(drawing_crop::CropAction),
     Modifiers(iced::keyboard::Modifiers),
     WalkTick(Instant),
+    MemoryTick,
     WalkStop,
     PanoramaReady(PathBuf, usize, Result<Arc<PhotoSet>, String>),
     /// The photos of a file that are not those of its stations.
@@ -2166,6 +2170,7 @@ struct Studio {
     walk_keys: [bool; 6],
     walk_fast: bool,
     walk_tick: Option<Instant>,
+    memory_usage: memory_usage::MemoryUsage,
     /// Modifier keys held down, for range and toggle clicks in the project list.
     modifiers: iced::keyboard::Modifiers,
     budget: u32,
@@ -2815,6 +2820,7 @@ impl Default for Studio {
             walk_keys: [false; 6],
             walk_fast: false,
             walk_tick: None,
+            memory_usage: memory_usage::MemoryUsage::default(),
             modifiers: iced::keyboard::Modifiers::default(),
             budget: settings.budget,
             // The four class groups no longer have switches; classes are
@@ -5964,6 +5970,12 @@ impl Studio {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // The RAM label needs a fresh sample, not the model and drawing
+        // settlement work that follows every normal UI action.
+        if matches!(&message, Message::MemoryTick) {
+            self.memory_usage.refresh();
+            return Task::none();
+        }
         self.update_depth += 1;
         let task = self.handle(message);
         self.update_depth -= 1;
@@ -8269,6 +8281,7 @@ impl Studio {
                 self.revision += 1;
                 return Task::batch([self.sync_walk_station(), self.schedule_detail()]);
             }
+            Message::MemoryTick => self.memory_usage.refresh(),
             Message::Budget(budget) => {
                 self.budget = budget;
                 self.revision += 1;
@@ -9915,51 +9928,51 @@ impl Studio {
                 .style(|theme, status| {
                     opencad_ribbon::file_tab_style(theme, self.file_open, status)
                 })
-                .padding([5, 13]),
+                .padding([4, 11]),
         )
-        .padding([1, 8]);
+        .padding([0, 6]);
         // The one tab of the ribbon; it also leads back from the File view.
         let home_tab = button(text(i18n::tr("Home")).size(12).font(fonts::MEDIUM))
             .on_press_maybe(self.file_open.then_some(Message::ToggleFile))
             .style(|theme, status| opencad_ribbon::tab_style(theme, !self.file_open, status))
-            .padding([5, 13]);
+            .padding([4, 11]);
         let quick_access = row![
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Open, 20.0),
+                icon_svg(ToolIcon::Open, 17.0),
                 "Import point cloud",
                 Some(Message::Open),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::OpenFolder, 20.0),
+                icon_svg(ToolIcon::OpenFolder, 17.0),
                 "Open scan folder",
                 Some(Message::OpenFolder),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Export, 20.0),
+                icon_svg(ToolIcon::Export, 17.0),
                 "Export active point cloud",
                 self.active.map(|_| Message::Export),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Undo, 20.0),
+                icon_svg(ToolIcon::Undo, 17.0),
                 "Undo",
                 (!self.undo_deletions.is_empty()).then_some(Message::UndoDelete),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Redo, 20.0),
+                icon_svg(ToolIcon::Redo, 17.0),
                 "Redo",
                 (!self.redo_deletions.is_empty()).then_some(Message::RedoDelete),
             ),
         ]
-        .spacing(4);
+        .spacing(2);
         let settings_button = button(text(i18n::tr("Settings")).size(12).font(fonts::MEDIUM))
             .on_press(Message::Settings(settings_dialog::SettingsAction::Open))
             .style(|theme, status| opencad_ribbon::tab_style(theme, false, status))
-            .padding([5, 13]);
+            .padding([4, 11]);
         let logo = svg(svg::Handle::from_memory(
             include_bytes!("../../assets/icons/logo.svg").as_slice(),
         ))
-        .width(20)
-        .height(20);
+        .width(18)
+        .height(18);
         let top_strip = container(
             row![
                 logo,
@@ -9974,7 +9987,7 @@ impl Studio {
             .padding([0, 8]),
         )
         .width(Fill)
-        .height(29)
+        .height(26)
         .style(|theme| container::Style::default().background(ui_theme::colors(theme).bg_lighter));
         if self.file_open {
             return container(top_strip).width(Fill).style(ribbon_style).into();
@@ -10018,7 +10031,7 @@ impl Studio {
                         self.color_mode
                     ),
                 ]
-                .spacing(2),
+                .spacing(1),
                 row![
                     small_tool_button(
                         "Eye-dome",
@@ -10030,21 +10043,21 @@ impl Studio {
                         Message::ShowScanPoses(!self.show_scan_poses),
                         self.show_scan_poses,
                     ),
-                    iced::widget::Space::with_width(4),
+                    iced::widget::Space::with_width(2),
                     text(i18n::tr("Size")).size(12),
                     ui_style::slider(0.1..=20.0, self.point_size, Message::PointSize)
                         .step(0.1_f32)
-                        .width(88),
+                        .width(72),
                     text(format!("{:.1}", self.point_size)).size(11).width(26),
                 ]
-                .spacing(4)
+                .spacing(2)
                 .align_y(iced::Alignment::Center)
                 .height(opencad_ribbon::ROW_H),
                 row![
                     text(i18n::tr("Budget")).size(12),
                     ui_style::slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
                         .step(100_000_u32)
-                        .width(230),
+                        .width(170),
                     text(if self.budget >= 1_000_000 {
                         format!("{:.1}M", self.budget as f64 / 1_000_000.0)
                     } else {
@@ -10053,11 +10066,11 @@ impl Studio {
                     .size(11)
                     .width(34),
                 ]
-                .spacing(5)
+                .spacing(2)
                 .align_y(iced::Alignment::Center)
                 .height(opencad_ribbon::ROW_H),
             ]
-            .spacing(1)
+            .spacing(0)
             .into(),
         );
         let section = opencad_ribbon::render_group_items(
@@ -10174,7 +10187,7 @@ impl Studio {
             .push(opencad_ribbon::render_group_items("SURFACE", surface_tools))
             .push(mesh_to_plans)
             .push(index)
-            .spacing(2);
+            .spacing(1);
         let group_strip = ui_style::scrollable(
             container(groups)
                 .padding([0, 4])
@@ -10198,7 +10211,7 @@ impl Studio {
                     .on_press_maybe(enabled.then_some(Message::RibbonScroll(direction)))
                     .style(|theme, status| ui_style::ribbon_button(theme, false, status))
                     .width(26)
-                    .height(38)
+                    .height(32)
                     .padding(0),
             )
             .width(30)
@@ -10321,7 +10334,7 @@ impl Studio {
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
-            .height(opencad_ribbon::ROW_H),
+            .height(32),
             row![
                 axis_input("X", "1", &self.scale_inputs[0], |value| {
                     Message::ScaleAxis(0, value)
@@ -10336,7 +10349,7 @@ impl Studio {
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
-            .height(opencad_ribbon::ROW_H),
+            .height(32),
             row![
                 text(i18n::tr("Keep")).size(12).width(44),
                 ui_style::slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
@@ -10350,7 +10363,7 @@ impl Studio {
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
-            .height(opencad_ribbon::ROW_H),
+            .height(32),
         ]
         .spacing(1)
         .padding([4, 8]);
@@ -11102,8 +11115,8 @@ fn large_tool_button_when(
     let icon = tool_icon(&message);
     button(
         column![
-            icon_svg(icon, 32.0),
-            iced::widget::Space::with_height(4),
+            icon_svg(icon, 26.0),
+            iced::widget::Space::with_height(2),
             text(i18n::tr(label))
                 .size(11)
                 .font(label_font(active))
@@ -11115,12 +11128,12 @@ fn large_tool_button_when(
     .on_press_maybe(enabled.then_some(message))
     .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
     .height(Fill)
-    .padding([6, 3])
+    .padding([3, 2])
     .into()
 }
 
 /// The narrowest a large ribbon button gets, for a short name.
-const LARGE_TOOL_MIN_WIDTH: f32 = 46.0;
+const LARGE_TOOL_MIN_WIDTH: f32 = 42.0;
 
 /// The font of the name of a ribbon button: medium while it is on.
 fn label_font(active: bool) -> iced::Font {
@@ -11143,7 +11156,7 @@ fn icon_tool_button_when(
         button(icon_svg(icon, 18.0))
             .on_press_maybe(enabled.then_some(message))
             .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-            .height(opencad_ribbon::ROW_H)
+            .height(32)
             .padding([2, 6]),
         vec![i18n::tr(label).to_owned()],
     )
@@ -11158,16 +11171,16 @@ fn small_tool_button_when(
     let icon = tool_icon(&message);
     button(
         row![
-            icon_svg(icon, 18.0),
-            text(i18n::tr(label)).size(12).font(label_font(active)),
+            icon_svg(icon, 16.0),
+            text(i18n::tr(label)).size(11).font(label_font(active)),
         ]
-        .spacing(4)
+        .spacing(2)
         .align_y(iced::Alignment::Center),
     )
     .on_press_maybe(enabled.then_some(message))
     .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
     .height(opencad_ribbon::ROW_H)
-    .padding([2, 3])
+    .padding([1, 2])
     .into()
 }
 
@@ -11229,19 +11242,19 @@ fn small_color_button(
     button(
         row![
             Canvas::new(ColorModeGlyph(mode, mode == current))
-                .width(24)
-                .height(24),
+                .width(18)
+                .height(18),
             text(i18n::tr(label))
-                .size(12)
+                .size(11)
                 .font(label_font(mode == current)),
         ]
-        .spacing(6)
+        .spacing(2)
         .align_y(iced::Alignment::Center),
     )
     .on_press(Message::ColorMode(mode))
     .style(move |theme, status| ui_style::ribbon_button(theme, mode == current, status))
     .height(opencad_ribbon::ROW_H)
-    .padding([2, 6])
+    .padding([1, 3])
     .into()
 }
 

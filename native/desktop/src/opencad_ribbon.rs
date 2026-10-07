@@ -8,9 +8,9 @@ use iced::{Background, Border, Element, Fill, Length, Theme};
 
 use crate::{ui_style, ui_theme, Message};
 
-pub const ROW_H: f32 = 32.0;
+pub const ROW_H: f32 = 22.0;
 pub const TOOL_BAR_H: f32 = 3.0 * ROW_H + 20.0;
-pub const QUICK_ACCESS_W: f32 = 30.0;
+pub const QUICK_ACCESS_W: f32 = 26.0;
 
 /// OpenCADStudio's compact top-strip action, adapted to native point-cloud
 /// commands and OpenAEC colors. Unavailable actions remain visible and muted.
@@ -23,11 +23,11 @@ pub fn quick_access_btn<'a>(
         .on_press_maybe(message)
         .style(ui_style::tool)
         .width(Length::Fixed(QUICK_ACCESS_W))
-        .height(26)
-        .padding([2, 0]);
+        .height(23)
+        .padding([1, 0]);
     // Below the tools of the ribbon, which it would cover.
     ui_style::ribbon_tooltip(control, crate::i18n::tr(label))
-        .gap(98)
+        .gap(90)
         .into()
 }
 
@@ -44,7 +44,7 @@ pub fn flush_small_col<'a>(
     if buf.is_empty() {
         return;
     }
-    let col = column(std::mem::take(buf)).spacing(1);
+    let col = column(std::mem::take(buf)).spacing(0);
     out.push(col.into());
 }
 
@@ -76,7 +76,7 @@ pub fn render_group_items<'a>(
         }
     }
     flush_small_col(&mut small_buf, &mut items_row);
-    let tools = row(items_row).spacing(2).height(Fill).width(Length::Shrink);
+    let tools = row(items_row).spacing(1).height(Fill).width(Length::Shrink);
     // The title counts for the width of its group, so that a long one
     // widens the group instead of being cut off; the line above it spans
     // the group.
@@ -89,7 +89,7 @@ pub fn render_group_items<'a>(
         });
     let content = column![
         container(tools)
-            .height(TOOL_BAR_H - 20.0)
+            .height(3.0 * ROW_H)
             .align_y(iced::Alignment::Start),
         container(text("")).width(Fill).height(1).style(|theme| {
             container::Style::default().background(ui_theme::colors(theme).ribbon_group_separator)
@@ -98,7 +98,7 @@ pub fn render_group_items<'a>(
     ]
     .align_x(iced::Alignment::Center)
     .spacing(0)
-    .padding([2u16, 2])
+    .padding([2u16, 1])
     .width(Length::Shrink)
     .height(TOOL_BAR_H);
 
@@ -112,7 +112,7 @@ pub fn render_group_items<'a>(
                     .background(ui_theme::colors(theme).ribbon_group_separator)
             }),
     ]
-    .spacing(2)
+    .spacing(1)
     .width(Length::Shrink)
     .into()
 }
