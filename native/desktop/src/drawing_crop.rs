@@ -1637,18 +1637,12 @@ impl Studio {
                 "give rect, width, height, center, rotation, cut, depth or sample_percent".into(),
             );
         }
+        if options.rect.is_some() && !changes.is_empty() {
+            return refuse("give rect alone, or the figures without it".to_owned());
+        }
         let id = self.record_api_job(json!({"state": "running", "operation": "set_sheet_crop"}));
         let result = match options.rect {
-            Some(rect) => {
-                // The rectangle first, then the figures on the box it gives.
-                self.set_crop_rect(&guid, rect, Some(id.clone()))
-                    .and_then(|task| {
-                        if changes.is_empty() {
-                            return Ok(task);
-                        }
-                        Err("give rect alone, or the figures without it".to_owned())
-                    })
-            }
+            Some(rect) => self.set_crop_rect(&guid, rect, Some(id.clone())),
             None => self.set_crop_figures(&guid, &changes, Some(id.clone())),
         };
         self.answer_crop_job(id, &guid, result)

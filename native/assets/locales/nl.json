@@ -1022,5 +1022,12 @@
   "indexing": "indexeren",
   "loading points": "punten laden",
   "index queued": "index in de wachtrij",
-  "{count} deleted": "{count} verwijderd"
+  "{count} deleted": "{count} verwijderd",
+  "Straight CAD lines": "Rechte CAD-lijnen",
+  "Line tolerance (m)": "Lijnafwijking (m)",
+  "Minimum line (m)": "Minimumlijn (m)",
+  "Short edges stay where needed to preserve openings and tolerance.": "Korte randen blijven behouden waar openingen en nauwkeurigheid dat vereisen.",
+  "CAD segments": "CAD-segmenten",
+  "Contour deviation": "Contourafwijking",
+  "Short edges kept": "Korte randen behouden"
 }

@@ -404,6 +404,27 @@ The format is chosen by the file name: `.dxf` or `.dwg`. The choices hold for th
 
 With national grid coordinates, a drawing in millimetres has numbers of hundreds of millions, and some drawing programs draw less precisely that far from zero. **Corner of the box** keeps the numbers small; the line of text in the drawing gives the model position of drawing zero.
 
+### Straight CAD lines
+
+Enable **Straight CAD lines** in **Create 2D plan / elevation / section** or
+in the Section drawing properties to add an editable line layer. It works
+for horizontal plans and vertical sections, including a rotated section box.
+**Line tolerance (m)** limits the additional deviation from the traced
+contour (default 0.01 m). **Minimum line (m)** is the preferred segment length
+(default 0.10 m): shorter edges remain where removing them would damage an
+opening, a hole or the requested accuracy. **Square to main directions**
+controls the existing tracing step; genuinely angled walls remain angled
+unless they lie within that step's 30 mm squaring tolerance.
+
+The blue **OPS-STRAIGHT-LINES** layer appears beside the original contour and
+fill layers. The model preview also draws these blue lines over the measured
+contour on the cut plane. Switch layers on and off to compare them in Drawing view. DXF
+and DWG exports contain closed editable polylines on that separate layer.
+The job reports segment counts and maximum/RMS deviation from the traced
+contour vertices, not from the raw scan points. Original hatches and
+contours are retained. The extra step works on the contours already in
+memory and does not read the point cloud again.
+
 ### Layers of the drawing
 
 | Layer | What is on it |

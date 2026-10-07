@@ -95,6 +95,8 @@ pub struct CutPreview {
     /// The slab the regions were traced from, with its cut plane.
     pub slab: Slab,
     pub regions: Vec<PreviewRegion>,
+    /// Editable straight-line rings in scene coordinates on the same plane.
+    pub straight_rings: Vec<Vec<[f64; 3]>>,
     /// As an export reports them; no points are drawn and nothing is written.
     pub stats: DrawingStats,
 }
@@ -104,6 +106,7 @@ struct SectionCut {
     slab: Slab,
     cut: SlabCut,
     outline: Option<CutOutline>,
+    straight: Option<super::StraightLines>,
 }
 
 impl SectionCut {
@@ -122,6 +125,7 @@ impl SectionCut {
             grid_cell: self.outline.as_ref().map(|cut| cut.cell),
             direction_degrees: self.outline.as_ref().map(|cut| cut.direction_degrees),
             bytes: 0,
+            straight_lines: self.straight.as_ref().map(|lines| lines.stats),
         }
     }
 }
@@ -146,7 +150,7 @@ fn cut_section(
         sample_percent: request.sample_percent,
         // A filled cut is traced from every point: on a sparse scan a tenth
         // of them leaves the walls without their fill.
-        grid_percent: if request.fill {
+        grid_percent: if request.fill || request.straight_lines.is_some() {
             100.0
         } else {
             request.sample_percent
@@ -192,7 +196,26 @@ fn cut_section(
         }
         None => None,
     };
-    Ok(SectionCut { slab, cut, outline })
+    let straight = match (&outline, request.straight_lines) {
+        (Some(outline), Some(options)) => Some(super::straighten_cut_regions(
+            &outline.regions,
+            options,
+            &mut || {
+                progress(DrawingProgress {
+                    stage: DrawingStage::Tracing,
+                    done: 0,
+                    total: 0,
+                })
+            },
+        )?),
+        _ => None,
+    };
+    Ok(SectionCut {
+        slab,
+        cut,
+        outline,
+        straight,
+    })
 }
 
 /// The point layer of every source and class, made when its first point is
@@ -270,15 +293,30 @@ pub fn section_drawing(
         sources,
         section.into(),
         request,
-        (request.points, request.fill),
+        (
+            request.points,
+            request.fill || request.straight_lines.is_some(),
+        ),
         accept,
         None,
         progress,
     )?;
     let stats = section.stats();
-    let SectionCut { slab, cut, outline } = section;
+    let SectionCut {
+        slab,
+        cut,
+        outline,
+        straight,
+    } = section;
     let regions = outline.map(|cut| cut.regions).unwrap_or_default();
-    let drawing = build_drawing(sources, &slab, &cut.points, regions, request)?;
+    let drawing = build_drawing(
+        sources,
+        &slab,
+        &cut.points,
+        regions,
+        straight.as_ref(),
+        request,
+    )?;
     Ok((drawing, stats))
 }
 
@@ -290,6 +328,7 @@ fn build_drawing(
     slab: &Slab,
     points: &[SlabPoint],
     regions: Vec<CutRegion>,
+    straight: Option<&super::StraightLines>,
     request: &DrawingRequest,
 ) -> Result<Drawing2d, LoadError> {
     let mut drawing = Drawing2d::new(request.units);
@@ -300,7 +339,21 @@ fn build_drawing(
         drawing.add_point(layer, point.uv, rgb);
     }
     for region in regions {
-        drawing.add_cut_region(region.outer, region.holes)?;
+        if request.fill {
+            drawing.add_cut_region(region.outer, region.holes)?;
+        } else {
+            let layer = drawing.layer(super::LAYER_CUT_OUTLINE, LAYER_RGB_CONTRAST)?;
+            drawing.add_polyline(layer, region.outer, true);
+            for hole in region.holes {
+                drawing.add_polyline(layer, hole, true);
+            }
+        }
+    }
+    if let Some(lines) = straight {
+        let layer = drawing.layer(super::LAYER_STRAIGHT_LINES, [40, 110, 210])?;
+        for ring in &lines.rings {
+            drawing.add_polyline(layer, ring.clone(), true);
+        }
     }
     let [min, max] = slab.extent;
     drawing.add_frame(min, max)?;
@@ -411,9 +464,14 @@ pub fn preview_cut_regions(
             holes: region.holes.into_iter().map(world).collect(),
         })
         .collect();
+    let straight_rings = section
+        .straight
+        .map(|lines| lines.rings.into_iter().map(world).collect())
+        .unwrap_or_default();
     Ok(CutPreview {
         slab,
         regions,
+        straight_rings,
         stats,
     })
 }
@@ -477,7 +535,12 @@ fn preview_section(
         progress,
     )?;
     let stats = section.stats();
-    let SectionCut { slab, cut, outline } = section;
+    let SectionCut {
+        slab,
+        cut,
+        outline,
+        straight,
+    } = section;
     let regions = outline.map(|cut| cut.regions).unwrap_or_default();
     let world = |ring: &[[f64; 2]]| -> Vec<[f64; 3]> {
         ring.iter().map(|uv| slab.frame.to_world(*uv)).collect()
@@ -489,12 +552,28 @@ fn preview_section(
             holes: region.holes.iter().map(|hole| world(hole)).collect(),
         })
         .collect();
-    let drawn = if request.fill { regions } else { Vec::new() };
-    let drawing = build_drawing(sources, &slab, &cut.points, drawn, request)?;
+    let straight_rings = straight
+        .as_ref()
+        .map(|lines| lines.rings.iter().map(|ring| world(ring)).collect())
+        .unwrap_or_default();
+    let drawn = if request.fill || request.straight_lines.is_some() {
+        regions
+    } else {
+        Vec::new()
+    };
+    let drawing = build_drawing(
+        sources,
+        &slab,
+        &cut.points,
+        drawn,
+        straight.as_ref(),
+        request,
+    )?;
     Ok((
         CutPreview {
             slab,
             regions: preview_regions,
+            straight_rings,
             stats,
         },
         drawing,
@@ -612,6 +691,97 @@ mod tests {
 
     fn everything(_: usize, _: u64, _: &Point) -> bool {
         true
+    }
+
+    #[test]
+    fn straight_lines_keep_the_reference_and_roundtrip_in_plan_and_section() {
+        for view in [DrawingView::Plan, DrawingView::Front] {
+            let mut points = room_points();
+            let bounds = if view == DrawingView::Front {
+                for point in &mut points {
+                    point.xyz.swap(1, 2);
+                }
+                Bounds {
+                    min: [-0.5, 1.0, -0.5],
+                    max: [4.5, 2.0, 3.5],
+                }
+            } else {
+                PLAN_BOX
+            };
+            let directory = tempfile::tempdir().unwrap();
+            let scan = indexed_cloud(&points, 5_000);
+            let sources = [DrawingSource {
+                source: indexed(&scan),
+                name: "room",
+            }];
+            let reference = DrawingRequest {
+                view,
+                fill: true,
+                points: false,
+                ..Default::default()
+            };
+            let (original, _) =
+                section_drawing(&sources, bounds, &reference, &everything, &mut |_| Ok(()))
+                    .unwrap();
+            let request = DrawingRequest {
+                straight_lines: Some(super::super::StraightLineOptions::default()),
+                ..reference
+            };
+            let (drawing, stats) =
+                section_drawing(&sources, bounds, &request, &everything, &mut |_| Ok(())).unwrap();
+            assert_eq!(fills(&original), fills(&drawing));
+            let report = stats.straight_lines.unwrap();
+            assert!(report.segments > 0 && report.segments <= report.input_segments);
+            assert!(report.max_deviation <= 0.010001);
+            let layer_name = super::super::LAYER_STRAIGHT_LINES;
+            let index = drawing
+                .layers
+                .iter()
+                .position(|layer| layer.name == layer_name)
+                .unwrap() as u16;
+            let lines: Vec<_> = drawing
+                .entities
+                .iter()
+                .filter(|(layer, _)| *layer == index)
+                .collect();
+            assert!(lines
+                .iter()
+                .all(|(_, entity)| matches!(entity, DrawingEntity::Polyline { closed: true, .. })));
+            let (preview, preview_drawing) =
+                preview_section_drawing(&sources, bounds, &request, &everything, &mut |_| Ok(()))
+                    .unwrap();
+            assert_eq!(preview_drawing, drawing);
+            assert_eq!(preview.straight_rings.len(), lines.len());
+            for (ring, (_, entity)) in preview.straight_rings.iter().zip(&lines) {
+                let DrawingEntity::Polyline { points, .. } = entity else {
+                    unreachable!()
+                };
+                for (world, uv) in ring.iter().zip(points) {
+                    let shown = preview.slab.frame.to_uv(*world);
+                    assert!((shown[0] - uv[0]).abs() < 1e-9);
+                    assert!((shown[1] - uv[1]).abs() < 1e-9);
+                }
+            }
+            for extension in ["dxf", "dwg"] {
+                let path = directory.path().join(format!("straight.{extension}"));
+                super::super::write_drawing(
+                    &drawing,
+                    &path,
+                    DrawingFormat::from_path(&path).unwrap(),
+                    request.version,
+                )
+                .unwrap();
+                let read = read_back(&path, request.units);
+                assert_eq!(
+                    read.polylines
+                        .iter()
+                        .filter(|(layer, _, _)| layer == layer_name)
+                        .count(),
+                    lines.len()
+                );
+                assert_eq!(read.fills.len(), fills(&original).len());
+            }
+        }
     }
 
     /// The furnished room as a scan: every point with a colour and one of two
