@@ -363,7 +363,10 @@ impl ViewTabs {
         self.open.push(tab);
         self.changed = true;
         if self.open.len() > MAX_TABS {
-            self.open.remove(0);
+            let oldest = self.open.remove(0);
+            if self.hovered.as_ref() == Some(&oldest) {
+                self.hovered = None;
+            }
         }
         true
     }
@@ -374,6 +377,11 @@ impl ViewTabs {
         self.open.retain(|open| open != tab);
         if self.pending.as_ref() == Some(tab) {
             self.drop_pending();
+        }
+        // A closed tab is under the pointer no longer: the tab that slides
+        // into its place is, which says so itself.
+        if self.hovered.as_ref() == Some(tab) {
+            self.hovered = None;
         }
         self.changed |= self.open.len() != before;
         self.open.len() != before
@@ -1028,17 +1036,21 @@ impl Studio {
         })
         .height(TAB_HEIGHT)
         .align_y(iced::Alignment::End);
-        let mut area = mouse_area(stack![body, open_bottom])
-            .on_enter(Message::Tabs(TabAction::Hover(tab.clone())))
-            .on_exit(Message::Tabs(TabAction::Leave(tab.clone())));
+        let mut area = mouse_area(stack![body, open_bottom]);
         if closable {
             area = area.on_middle_press(Message::Tabs(TabAction::Close(tab.clone())));
         }
+        let watched = Element::new(HoverWatch {
+            content: area.into(),
+            hovered,
+            enter: Message::Tabs(TabAction::Hover(tab.clone())),
+            leave: Message::Tabs(TabAction::Leave(tab.clone())),
+        });
         let kind = match &tab {
             TabId::Layout(_) => tr("Sheets"),
             _ => tr(self.tab_kind(&tab).label()),
         };
-        ui_style::tooltip(area, format!("{full}\n{kind}")).into()
+        ui_style::tooltip(watched, format!("{full}\n{kind}")).into()
     }
 
     /// What `status.result.view_tabs` reports: the tabs the strip shows, in
@@ -1179,6 +1191,143 @@ impl Studio {
         answer["ok"] = Value::Bool(true);
         answer["closed"] = Value::from(tab_name);
         (answer, Task::batch([task, settled]))
+    }
+}
+
+/// A tab that says when the pointer comes over it and when it leaves it,
+/// measured against what the window holds as the tab under the pointer,
+/// `hovered`, at every event and every frame: a tab that slides under the
+/// pointer when the one there is closed shows its × at once, and none keeps
+/// it after the pointer went, whichever tab was laid out in its place.
+struct HoverWatch<'a> {
+    content: Element<'a, Message>,
+    hovered: bool,
+    enter: Message,
+    leave: Message,
+}
+
+impl iced::advanced::Widget<Message, Theme, iced::Renderer> for HoverWatch<'_> {
+    fn size(&self) -> iced::Size<iced::Length> {
+        self.content.as_widget().size()
+    }
+
+    fn size_hint(&self) -> iced::Size<iced::Length> {
+        self.content.as_widget().size_hint()
+    }
+
+    fn children(&self) -> Vec<iced::advanced::widget::Tree> {
+        vec![iced::advanced::widget::Tree::new(&self.content)]
+    }
+
+    fn diff(&self, tree: &mut iced::advanced::widget::Tree) {
+        tree.diff_children(std::slice::from_ref(&self.content));
+    }
+
+    fn layout(
+        &self,
+        tree: &mut iced::advanced::widget::Tree,
+        renderer: &iced::Renderer,
+        limits: &iced::advanced::layout::Limits,
+    ) -> iced::advanced::layout::Node {
+        self.content
+            .as_widget()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn draw(
+        &self,
+        tree: &iced::advanced::widget::Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &iced::advanced::renderer::Style,
+        layout: iced::advanced::Layout<'_>,
+        cursor: iced::mouse::Cursor,
+        viewport: &iced::Rectangle,
+    ) {
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+
+    fn operate(
+        &self,
+        tree: &mut iced::advanced::widget::Tree,
+        layout: iced::advanced::Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn iced::advanced::widget::Operation,
+    ) {
+        self.content
+            .as_widget()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn on_event(
+        &mut self,
+        tree: &mut iced::advanced::widget::Tree,
+        event: iced::Event,
+        layout: iced::advanced::Layout<'_>,
+        cursor: iced::mouse::Cursor,
+        renderer: &iced::Renderer,
+        clipboard: &mut dyn iced::advanced::Clipboard,
+        shell: &mut iced::advanced::Shell<'_, Message>,
+        viewport: &iced::Rectangle,
+    ) -> iced::event::Status {
+        let status = self.content.as_widget_mut().on_event(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+        let over = cursor.is_over(layout.bounds());
+        if over != self.hovered {
+            shell.publish(if over {
+                self.enter.clone()
+            } else {
+                self.leave.clone()
+            });
+            // Once: the window answers with the tab under the pointer.
+            self.hovered = over;
+        }
+        status
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &iced::advanced::widget::Tree,
+        layout: iced::advanced::Layout<'_>,
+        cursor: iced::mouse::Cursor,
+        viewport: &iced::Rectangle,
+        renderer: &iced::Renderer,
+    ) -> iced::mouse::Interaction {
+        self.content.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut iced::advanced::widget::Tree,
+        layout: iced::advanced::Layout<'_>,
+        renderer: &iced::Renderer,
+        translation: iced::Vector,
+    ) -> Option<iced::advanced::overlay::Element<'b, Message, Theme, iced::Renderer>> {
+        self.content
+            .as_widget_mut()
+            .overlay(&mut tree.children[0], layout, renderer, translation)
     }
 }
 

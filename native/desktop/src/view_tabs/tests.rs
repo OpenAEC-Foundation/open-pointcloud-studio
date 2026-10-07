@@ -478,6 +478,118 @@ fn the_document_bar_draws_the_active_tab_in_the_accent_and_the_hovered_one_tinte
     assert_eq!(studio.tabs.hovered, None);
 }
 
+/// The tabs a tab of the strip says the pointer came over, from its left
+/// to its right, with the first place where each says so.
+fn tabs_under_the_pointer(studio: &Studio, size: Size) -> Vec<(TabId, f32)> {
+    let mut found: Vec<(TabId, f32)> = Vec::new();
+    for x in (0..size.width as u32).step_by(2) {
+        let at = iced::Point::new(x as f32, 15.0);
+        for message in crate::test_render::messages(studio.tab_strip(), size, at, &[]) {
+            if let Message::Tabs(TabAction::Hover(tab)) = message {
+                if found.last().map(|(last, _)| last) != Some(&tab) {
+                    found.push((tab, x as f32));
+                }
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn the_tab_that_slides_under_the_pointer_when_the_one_there_closes_shows_its_cross() {
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+    let (mut studio, _directory) = studio_with_scan();
+    let plan = made_drawing(&mut studio, "Ground floor", 4.0);
+    let roof = made_drawing(&mut studio, "Roof", 8.0);
+    for guid in [&plan, &roof] {
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+            guid.clone(),
+        )));
+    }
+    let _ = studio.update(Message::Tabs(TabAction::Show(TabId::Model)));
+    let size = Size::new(800.0, 30.0);
+    // Every tab says when the pointer comes over it, in their order.
+    let under = tabs_under_the_pointer(&studio, size);
+    let order: Vec<&TabId> = under.iter().map(|(tab, _)| tab).collect();
+    assert_eq!(order, [&TabId::Model, &drawing(&plan), &drawing(&roof)]);
+    // The pointer on the plan, near its left: it is the tab under the
+    // pointer, which keeps saying so no longer once the window knows.
+    let at = iced::Point::new(under[1].1 + 4.0, 15.0);
+    let mut window = crate::test_render::Session::default();
+    let messages = window.send(studio.tab_strip(), size, at, &[]);
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::Tabs(TabAction::Hover(tab)) if *tab == drawing(&plan))),
+        "{messages:?}"
+    );
+    for message in messages {
+        let _ = studio.update(message);
+    }
+    assert_eq!(studio.tabs.hovered, Some(drawing(&plan)));
+    let messages = window.send(studio.tab_strip(), size, at, &[]);
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, Message::Tabs(_))),
+        "{messages:?}"
+    );
+    // Its × closes it: it is under the pointer no longer, and the roof,
+    // which slides into its place under the pointer, says so at the next
+    // frame, though the pointer did not move.
+    let _ = studio.update(Message::Tabs(TabAction::Close(drawing(&plan))));
+    assert_eq!(studio.tabs.hovered, None);
+    let frame = iced::Event::Window(iced::window::Event::RedrawRequested(
+        std::time::Instant::now(),
+    ));
+    let messages = window.send(studio.tab_strip(), size, at, &[frame]);
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::Tabs(TabAction::Hover(tab)) if *tab == drawing(&roof))),
+        "{messages:?}"
+    );
+    for message in messages {
+        let _ = studio.update(message);
+    }
+    assert_eq!(studio.tabs.hovered, Some(drawing(&roof)));
+    // Opened again, the plan is not the tab under the pointer.
+    let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+        plan.clone(),
+    )));
+    let _ = studio.update(Message::Tabs(TabAction::Show(TabId::Model)));
+    assert_ne!(studio.tabs.hovered, Some(drawing(&plan)));
+    // The pointer gone from the strip, the roof says it left.
+    let away = iced::Point::new(790.0, 15.0);
+    let messages = window.send(studio.tab_strip(), size, away, &[]);
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::Tabs(TabAction::Leave(tab)) if *tab == drawing(&roof))),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn a_tab_that_closes_is_under_the_pointer_no_longer() {
+    let mut tabs = ViewTabs::default();
+    tabs.add(drawing("a"));
+    tabs.add(drawing("b"));
+    tabs.hovered = Some(drawing("a"));
+    assert!(tabs.remove(&drawing("b")));
+    assert_eq!(tabs.hovered, Some(drawing("a")));
+    assert!(tabs.remove(&drawing("a")));
+    assert_eq!(tabs.hovered, None);
+    // Nor does the oldest tab, closed when one too many opens.
+    for index in 0..MAX_TABS {
+        tabs.add(drawing(&format!("tab {index}")));
+    }
+    tabs.hovered = Some(drawing("tab 0"));
+    tabs.add(drawing("one too many"));
+    assert!(!tabs.open().contains(&drawing("tab 0")));
+    assert_eq!(tabs.hovered, None);
+}
+
 #[test]
 fn a_closed_tab_leaves_its_view_or_drawing_and_shows_its_neighbour() {
     // The tabs are named in the language of the window; a test in Dutch
