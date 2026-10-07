@@ -607,7 +607,7 @@ pub fn tooltip<'a>(
     tip_widget::Tooltip::new(content, tip(tip_text), tip_widget::Position::Top).gap(TIP_GAP)
 }
 
-/// `content` of the ribbon or the top strip with `tip_text` in a tooltip
+/// `content` of the ribbon or the title bar with `tip_text` in a tooltip
 /// below it, as the style book opens the tooltips of its ribbon and title
 /// bar.
 pub fn ribbon_tooltip<'a>(
@@ -1353,7 +1353,7 @@ mod tests {
             "{tip:?} above {target:?}"
         );
         assert!((tip.center_x() - target.center_x()).abs() < 0.5);
-        // In the ribbon and the top strip: below.
+        // In the ribbon and the title bar: below.
         let (target, tip) = tip_around(ribbon_tooltip);
         assert!(
             (tip.y - (target.y + target.height) - TIP_GAP).abs() < 0.5,
