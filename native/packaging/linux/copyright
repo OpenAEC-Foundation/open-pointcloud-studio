@@ -45,7 +45,10 @@ Files: native/assets/ui-icons/import.svg native/assets/ui-icons/export.svg
  native/assets/ui-icons/duplicate.svg native/assets/ui-icons/rename.svg
  native/assets/ui-icons/drawing_file.svg native/assets/ui-icons/sheet.svg
  native/assets/ui-icons/settings.svg
- native/assets/ui-icons/save.svg
+ native/assets/ui-icons/save.svg native/assets/ui-icons/window_minimize.svg
+ native/assets/ui-icons/window_maximize.svg
+ native/assets/ui-icons/window_restore.svg
+ native/assets/ui-icons/window_close.svg
 Copyright: 2026 OpenAEC Foundation
 License: Expat
 Comment: Taken from the OpenAEC style book. The licence text with its
