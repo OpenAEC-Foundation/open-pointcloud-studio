@@ -8,7 +8,8 @@ use iced::{Background, Border, Color, Element, Fill};
 
 use super::WizardAction;
 use crate::i18n::{key, tr};
-use crate::{opencad_ribbon, ui_theme, Message, Studio};
+use crate::ui_style;
+use crate::{ui_theme, Message, Studio};
 
 /// The colour of the text of the scene with this much of it.
 fn faded(color: Color, alpha: f32) -> Color {
@@ -84,7 +85,7 @@ impl Studio {
             ),
             button(text(tr("Back to wizard")).size(11))
                 .on_press(send(WizardAction::Restore))
-                .style(|theme, status| opencad_ribbon::file_tab_style(theme, false, status))
+                .style(ui_style::primary)
                 .padding([2, 12]),
             button(text("×").size(13))
                 .on_press(send(WizardAction::Close))

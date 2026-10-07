@@ -6,9 +6,7 @@
 
 use std::sync::atomic::Ordering;
 
-use iced::widget::{
-    button, column, container, horizontal_space, pick_list, row, scrollable, text, Column, Space,
-};
+use iced::widget::{button, column, container, horizontal_space, row, text, Column, Space};
 use iced::{Element, Fill, Task};
 use pointcloud_core::ExportFormat;
 use serde_json::{json, Value};
@@ -16,9 +14,10 @@ use serde_json::{json, Value};
 use crate::extensions::manifest::EntryPage;
 use crate::fonts;
 use crate::i18n::{key, tr};
+use crate::ui_style;
 use crate::{
-    display_name, extensions, format_count, opencad_ribbon, settings_dialog,
-    themed_pick_list_style, ui_theme, views, CloudEntry, Message, Studio,
+    display_name, extensions, format_count, settings_dialog, ui_theme, views, CloudEntry, Message,
+    Studio,
 };
 
 /// A page of the File view. A further page is a variant here, its names in
@@ -171,7 +170,7 @@ impl Studio {
     pub(crate) fn file_view(&self) -> Element<'_, Message> {
         row![
             self.file_menu(),
-            container(scrollable(self.file_page_view()).height(Fill))
+            container(ui_style::scrollable(self.file_page_view()).height(Fill))
                 .padding([30, 40])
                 .width(Fill)
                 .height(Fill)
@@ -253,7 +252,7 @@ impl Studio {
         let item = |label: &'static str, message: Message| {
             button(text(tr(label)).size(14))
                 .on_press(message)
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                .style(|theme, status| ui_style::ribbon_button(theme, false, status))
                 .width(Fill)
                 .padding([11, 18])
         };
@@ -271,7 +270,7 @@ impl Studio {
                 }),
                 button(text(tr(page.label())).size(14))
                     .on_press(Message::FilePage(page))
-                    .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, open, status))
+                    .style(move |theme, status| ui_style::ribbon_button(theme, open, status))
                     .width(Fill)
                     .height(Fill)
                     .padding([11, 15]),
@@ -303,7 +302,7 @@ impl Studio {
                     .font(fonts::SEMIBOLD),
             )
             .on_press(Message::ToggleFile)
-            .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+            .style(|theme, status| ui_style::ribbon_button(theme, false, status))
             .width(Fill)
             .padding([13, 18]),
             // Exit ends the session at once: it stands apart, below the entry
@@ -313,7 +312,7 @@ impl Studio {
         ]
         .width(Fill);
 
-        container(column![scrollable(top).height(Fill), footer].height(Fill))
+        container(column![ui_style::scrollable(top).height(Fill), footer].height(Fill))
             .width(260)
             .height(Fill)
             .style(|theme| {
@@ -374,7 +373,7 @@ impl Studio {
         )
         .on_press_maybe(available.then_some(Message::FileAction(action)))
         .style(|theme, status| {
-            let mut style = opencad_ribbon::tool_btn_style(theme, false, status);
+            let mut style = ui_style::ribbon_button(theme, false, status);
             let colors = ui_theme::colors(theme);
             style.border.color = colors.border;
             style.border.width = 1.0;
@@ -506,21 +505,19 @@ impl Studio {
             > 0;
         let format = row![
             text(tr("Format")).size(13),
-            pick_list(
+            ui_style::pick_list(
                 ExportFormat::ALL,
                 Some(self.export_format),
                 Message::ExportFormat,
             )
-            .style(themed_pick_list_style)
             .width(220),
             Space::new(18, 1),
             text(tr("Keep 1 in")).size(13),
-            pick_list(
+            ui_style::pick_list(
                 [2u64, 5, 10, 20, 50, 100],
                 Some(self.decimation_stride),
                 Message::DecimationStride
             )
-            .style(themed_pick_list_style)
             .width(90),
         ]
         .spacing(8)
@@ -615,11 +612,10 @@ impl Studio {
             page = page.push(
                 column![
                     text(job.progress_text()).size(13),
-                    iced::widget::progress_bar(
+                    ui_style::progress_bar(
                         0.0..=1.0,
                         processed as f32 / job.control.total.max(1) as f32,
-                    )
-                    .height(8),
+                    ),
                     text(format!(
                         "{} points written to {}",
                         format_count(job.control.written.load(Ordering::Relaxed)),
@@ -627,6 +623,7 @@ impl Studio {
                     ))
                     .size(11),
                     button(text(tr("Cancel merge")))
+                        .style(ui_style::secondary)
                         .on_press(Message::FileAction(FileAction::CancelMerge)),
                 ]
                 .spacing(8)
@@ -664,7 +661,7 @@ impl Studio {
                     )
                     .on_press(Message::FileAction(FileAction::Activate(index)))
                     .style(move |theme, status| {
-                        opencad_ribbon::tool_btn_style(theme, self.active == Some(index), status)
+                        ui_style::ribbon_button(theme, self.active == Some(index), status)
                     })
                     .width(Fill)
                     .padding([9, 12]),

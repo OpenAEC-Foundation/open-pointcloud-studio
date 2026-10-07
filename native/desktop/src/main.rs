@@ -66,6 +66,7 @@ mod station_photos;
 mod survey;
 #[cfg(test)]
 mod test_render;
+mod ui_style;
 mod ui_theme;
 mod view_cube;
 mod view_tabs;
@@ -77,9 +78,7 @@ use file_view::{FileAction, FilePage};
 use iced::futures::SinkExt;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
-use iced::widget::{
-    button, checkbox, column, container, row, scrollable, slider, stack, svg, text, text_input,
-};
+use iced::widget::{button, column, container, row, scrollable, stack, svg, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 use lod_pace::{
     first_pass_budget, plan_first_pass, preview_improves, preview_tier_points, LodPace, ScreenFill,
@@ -10032,7 +10031,7 @@ impl Studio {
                     ),
                     iced::widget::Space::with_width(4),
                     text(i18n::tr("Size")).size(12),
-                    slider(0.1..=20.0, self.point_size, Message::PointSize)
+                    ui_style::slider(0.1..=20.0, self.point_size, Message::PointSize)
                         .step(0.1_f32)
                         .width(88),
                     text(format!("{:.1}", self.point_size)).size(11).width(26),
@@ -10042,7 +10041,7 @@ impl Studio {
                 .height(opencad_ribbon::ROW_H),
                 row![
                     text(i18n::tr("Budget")).size(12),
-                    slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
+                    ui_style::slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
                         .step(100_000_u32)
                         .width(230),
                     text(if self.budget >= 1_000_000 {
@@ -10175,7 +10174,7 @@ impl Studio {
             .push(mesh_to_plans)
             .push(index)
             .spacing(2);
-        let group_strip = scrollable(
+        let group_strip = ui_style::scrollable(
             container(groups)
                 .padding([0, 4])
                 .width(iced::Length::Shrink)
@@ -10189,16 +10188,14 @@ impl Studio {
                 viewport.content_bounds().width,
             )
         })
-        .direction(scrollable::Direction::Horizontal(
-            scrollable::Scrollbar::new().width(5).scroller_width(5),
-        ))
+        .direction(scrollable::Direction::Horizontal(ui_style::scrollbar()))
         .width(Fill)
         .height(opencad_ribbon::TOOL_BAR_H);
         let scroll_button = |label: &'static str, direction: f32, enabled: bool| {
             container(
                 button(text(label).size(26))
                     .on_press_maybe(enabled.then_some(Message::RibbonScroll(direction)))
-                    .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                    .style(|theme, status| ui_style::ribbon_button(theme, false, status))
                     .width(26)
                     .height(38)
                     .padding(0),
@@ -10341,7 +10338,7 @@ impl Studio {
             .height(opencad_ribbon::ROW_H),
             row![
                 text(i18n::tr("Keep")).size(12).width(44),
-                slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
+                ui_style::slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
                 text(format!("{}%", self.thin_percent)).size(11).width(30),
                 icon_tool_button_when(
                     "Thin",
@@ -10394,7 +10391,7 @@ impl Studio {
                     .on_press_maybe(
                         (!job.cancel.load(Ordering::Relaxed)).then_some(Message::CancelImport(id)),
                     )
-                    .style(status_button_style),
+                    .style(ui_style::status_item),
             );
         }
         if let Some(runs) = self.extension_runs_status() {
@@ -10425,7 +10422,13 @@ impl Studio {
         })
     }
 
+    /// The window. Nothing in it shows the hand: the shell of the style
+    /// book keeps the arrow over its buttons, tabs and items.
     fn view(&self) -> Element<'_, Message> {
+        ui_style::no_hand(self.window_view())
+    }
+
+    fn window_view(&self) -> Element<'_, Message> {
         if self.file_open {
             return self.with_dialogs(
                 column![
@@ -10570,31 +10573,24 @@ impl Studio {
                 .push(opencad_properties::section_header("Mesh progress"))
                 .push(container(text(job.progress_text()).size(11)).padding([6, 8]))
                 .push(
-                    container(
-                        iced::widget::progress_bar(
-                            0.0..=1.0,
-                            if progress.total == 0 {
-                                0.0
-                            } else {
-                                progress.completed as f32 / progress.total as f32
-                            },
-                        )
-                        .height(8)
-                        .style(|theme| {
-                            let colors = ui_theme::colors(theme);
-                            iced::widget::progress_bar::Style {
-                                background: colors.border_strong.into(),
-                                bar: colors.accent.into(),
-                                border: iced::Border::default(),
-                            }
-                        }),
-                    )
+                    container(ui_style::progress_bar(
+                        0.0..=1.0,
+                        if progress.total == 0 {
+                            0.0
+                        } else {
+                            progress.completed as f32 / progress.total as f32
+                        },
+                    ))
                     .padding([2, 8])
                     .width(Fill),
                 )
                 .push(
-                    container(button(i18n::tr("Cancel mesh")).on_press(Message::CancelMesh))
-                        .padding([5, 8]),
+                    container(
+                        button(i18n::tr("Cancel mesh"))
+                            .style(ui_style::secondary)
+                            .on_press(Message::CancelMesh),
+                    )
+                    .padding([5, 8]),
                 );
         }
         if let Some(job) = &self.merge_job {
@@ -10603,19 +10599,20 @@ impl Studio {
                 .push(opencad_properties::section_header("Merge progress"))
                 .push(container(text(job.progress_text()).size(11)).padding([6, 8]))
                 .push(
-                    container(
-                        iced::widget::progress_bar(
-                            0.0..=1.0,
-                            processed as f32 / job.control.total.max(1) as f32,
-                        )
-                        .height(8),
-                    )
+                    container(ui_style::progress_bar(
+                        0.0..=1.0,
+                        processed as f32 / job.control.total.max(1) as f32,
+                    ))
                     .padding([2, 8])
                     .width(Fill),
                 )
                 .push(
-                    container(button(i18n::tr("Cancel merge")).on_press(Message::CancelMerge))
-                        .padding([5, 8]),
+                    container(
+                        button(i18n::tr("Cancel merge"))
+                            .style(ui_style::secondary)
+                            .on_press(Message::CancelMerge),
+                    )
+                    .padding([5, 8]),
                 );
         }
         if let Some(job) = &self.scale_job {
@@ -10628,31 +10625,24 @@ impl Studio {
                         .padding([6, 8]),
                 )
                 .push(
-                    container(
-                        iced::widget::progress_bar(
-                            0.0..=1.0,
-                            if total == 0 {
-                                0.0
-                            } else {
-                                completed as f32 / total as f32
-                            },
-                        )
-                        .height(8)
-                        .style(|theme| {
-                            let colors = ui_theme::colors(theme);
-                            iced::widget::progress_bar::Style {
-                                background: colors.border_strong.into(),
-                                bar: colors.accent.into(),
-                                border: iced::Border::default(),
-                            }
-                        }),
-                    )
+                    container(ui_style::progress_bar(
+                        0.0..=1.0,
+                        if total == 0 {
+                            0.0
+                        } else {
+                            completed as f32 / total as f32
+                        },
+                    ))
                     .padding([2, 8])
                     .width(Fill),
                 )
                 .push(
-                    container(button(i18n::tr("Cancel scale")).on_press(Message::CancelScale))
-                        .padding([5, 8]),
+                    container(
+                        button(i18n::tr("Cancel scale"))
+                            .style(ui_style::secondary)
+                            .on_press(Message::CancelScale),
+                    )
+                    .padding([5, 8]),
                 );
         }
         if let Some(entry) = active_cloud {
@@ -10690,7 +10680,7 @@ impl Studio {
                         container(
                             button(i18n::tr("Reset transform"))
                                 .on_press(Message::ResetTransform)
-                                .style(flat_tool_style),
+                                .style(ui_style::tool),
                         )
                         .padding([3, 8]),
                     );
@@ -10755,7 +10745,7 @@ impl Studio {
                                 i18n::tr("Show list")
                             })
                             .on_press(Message::ExpandScanPoses(!self.expand_scan_poses))
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                         )
                         .padding([4, 8]),
                     );
@@ -10783,12 +10773,12 @@ impl Studio {
                                                         )
                                                     }),
                                             )
-                                            .style(flat_tool_style),
+                                            .style(ui_style::tool),
                                         button(i18n::tr("Center"))
                                             .on_press_maybe(self.active.map(|cloud_index| {
                                                 Message::CenterScanPose(cloud_index, pose_index)
                                             }))
-                                            .style(flat_tool_style),
+                                            .style(ui_style::tool),
                                     ]
                                     .align_y(iced::Alignment::Center),
                                     text(format!(
@@ -10846,7 +10836,7 @@ impl Studio {
                                 ))
                                 .size(10)
                                 .width(78),
-                                slider(
+                                ui_style::slider(
                                     0.0..=100.0,
                                     self.section_min_percent[axis] as f32,
                                     move |value| { Message::SectionMin(axis, value) }
@@ -10867,7 +10857,7 @@ impl Studio {
                                 ))
                                 .size(10)
                                 .width(78),
-                                slider(
+                                ui_style::slider(
                                     0.0..=100.0,
                                     self.section_max_percent[axis] as f32,
                                     move |value| { Message::SectionMax(axis, value) }
@@ -10889,18 +10879,18 @@ impl Studio {
                     container(
                         row![
                             text(label).size(11).width(15),
-                            text_input(i18n::tr("Min"), &self.section_coordinate_inputs[axis][0])
-                                .on_input(move |value| Message::SectionCoordinate(
-                                    axis, true, value
-                                ))
-                                .size(11)
-                                .width(Fill),
-                            text_input(i18n::tr("Max"), &self.section_coordinate_inputs[axis][1])
-                                .on_input(move |value| Message::SectionCoordinate(
-                                    axis, false, value
-                                ))
-                                .size(11)
-                                .width(Fill),
+                            ui_style::text_input(
+                                i18n::tr("Min"),
+                                &self.section_coordinate_inputs[axis][0]
+                            )
+                            .on_input(move |value| Message::SectionCoordinate(axis, true, value))
+                            .width(Fill),
+                            ui_style::text_input(
+                                i18n::tr("Max"),
+                                &self.section_coordinate_inputs[axis][1]
+                            )
+                            .on_input(move |value| Message::SectionCoordinate(axis, false, value))
+                            .width(Fill),
                         ]
                         .spacing(4)
                         .align_y(iced::Alignment::Center),
@@ -10912,10 +10902,9 @@ impl Studio {
                 container(
                     row![
                         text(i18n::tr("Rotation (°)")).size(11).width(78),
-                        text_input("0", &self.section_rotation_input)
+                        ui_style::text_input("0", &self.section_rotation_input)
                             .on_input(Message::SectionRotationInput)
                             .on_submit(Message::ApplySectionRotation)
-                            .size(11)
                             .width(Fill),
                     ]
                     .spacing(4)
@@ -10940,10 +10929,10 @@ impl Studio {
                     row![
                         button(i18n::tr("Apply XYZ limits"))
                             .on_press(Message::ApplySectionCoordinates)
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                         button(i18n::tr("Zoom box"))
                             .on_press(Message::ZoomToSection)
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                     ]
                     .spacing(3),
                 )
@@ -10959,7 +10948,7 @@ impl Studio {
                     .on_press_maybe(
                         (!self.section_align_pending).then_some(Message::AlignSectionToWalls),
                     )
-                    .style(flat_tool_style),
+                    .style(ui_style::tool),
                 )
                 .padding([3, 8]),
             );
@@ -10981,9 +10970,13 @@ impl Studio {
                     container(
                         row![
                             text(i18n::tr("Strength")).size(11).width(52),
-                            slider(0.0..=5.0, self.eye_dome_strength, Message::EyeDomeStrength,)
-                                .step(0.1_f32)
-                                .width(155),
+                            ui_style::slider(
+                                0.0..=5.0,
+                                self.eye_dome_strength,
+                                Message::EyeDomeStrength,
+                            )
+                            .step(0.1_f32)
+                            .width(155),
                             text(format!("{:.1}", self.eye_dome_strength)).size(11),
                         ]
                         .spacing(5)
@@ -11021,7 +11014,7 @@ impl Studio {
                         text(i18n::tr("© 3DBAG by tudelft3d and 3DGI")).size(10),
                         button(i18n::tr("Source and license ↗"))
                             .on_press(Message::OpenBagLicense)
-                            .style(flat_tool_style),
+                            .style(ui_style::link),
                     ]
                     .spacing(8)
                     .align_y(iced::Alignment::Center),
@@ -11037,7 +11030,7 @@ impl Studio {
                 .width(Fill)
                 .height(Fill)
                 .style(viewport_style),
-            container(scrollable(properties).height(Fill))
+            container(ui_style::scrollable(properties).height(Fill))
                 .width(self.properties_width())
                 .height(Fill)
                 .style(sidebar_style),
@@ -11126,10 +11119,8 @@ fn axis_input<'a>(
 ) -> Element<'a, Message> {
     row![
         text(axis).size(10).width(8),
-        text_input(placeholder, value)
+        ui_style::text_input(placeholder, value)
             .on_input(on_input)
-            .size(11)
-            .padding([2, 4])
             .width(44),
     ]
     .spacing(2)
@@ -11177,7 +11168,7 @@ fn large_tool_button_when(
         .align_x(iced::Alignment::Center),
     )
     .on_press_maybe(enabled.then_some(message))
-    .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
+    .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
     .height(Fill)
     .padding([6, 3])
     .into()
@@ -11206,7 +11197,7 @@ fn icon_tool_button_when(
     opencad_properties::explained(
         button(icon_svg(icon, 18.0))
             .on_press_maybe(enabled.then_some(message))
-            .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
+            .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
             .height(opencad_ribbon::ROW_H)
             .padding([2, 6]),
         vec![i18n::tr(label).to_owned()],
@@ -11229,7 +11220,7 @@ fn small_tool_button_when(
         .align_y(iced::Alignment::Center),
     )
     .on_press_maybe(enabled.then_some(message))
-    .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
+    .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
     .height(opencad_ribbon::ROW_H)
     .padding([2, 3])
     .into()
@@ -11303,7 +11294,7 @@ fn small_color_button(
         .align_y(iced::Alignment::Center),
     )
     .on_press(Message::ColorMode(mode))
-    .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, mode == current, status))
+    .style(move |theme, status| ui_style::ribbon_button(theme, mode == current, status))
     .height(opencad_ribbon::ROW_H)
     .padding([2, 6])
     .into()
@@ -11518,80 +11509,6 @@ fn status_style(theme: &Theme) -> container::Style {
     container::Style::default()
         .background(colors.status_bg)
         .color(colors.status_text)
-}
-
-/// A button in the status bar, such as Cancel import.
-fn status_button_style(theme: &Theme, status: button::Status) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    button::Style {
-        background: hovered.then_some(iced::Background::Color(colors.status_hover)),
-        text_color: if status == button::Status::Disabled {
-            colors.status_text_label
-        } else {
-            colors.status_text
-        },
-        ..button::Style::default()
-    }
-}
-
-fn themed_pick_list_style(
-    theme: &Theme,
-    status: iced::widget::pick_list::Status,
-) -> iced::widget::pick_list::Style {
-    let colors = ui_theme::colors(theme);
-    iced::widget::pick_list::Style {
-        text_color: colors.dialog_input_text,
-        placeholder_color: colors.text_faint,
-        handle_color: colors.text_secondary,
-        background: iced::Background::Color(colors.dialog_input_bg),
-        border: iced::Border {
-            color: if matches!(status, iced::widget::pick_list::Status::Opened) {
-                colors.focus
-            } else {
-                colors.dialog_input_border
-            },
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-    }
-}
-
-fn flat_tool_style(theme: &Theme, status: button::Status) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    button::Style {
-        background: hovered.then_some(iced::Background::Color(colors.hover)),
-        text_color: colors.text,
-        ..button::Style::default()
-    }
-}
-
-fn muted_checkbox_style(theme: &Theme, status: checkbox::Status) -> checkbox::Style {
-    let colors = ui_theme::colors(theme);
-    let checked = match status {
-        checkbox::Status::Active { is_checked }
-        | checkbox::Status::Hovered { is_checked }
-        | checkbox::Status::Disabled { is_checked } => is_checked,
-    };
-    checkbox::Style {
-        background: iced::Background::Color(if checked {
-            colors.accent
-        } else {
-            colors.dialog_input_bg
-        }),
-        icon_color: colors.btn_primary_text,
-        border: iced::Border {
-            color: if checked {
-                colors.accent
-            } else {
-                colors.dialog_input_border
-            },
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        text_color: Some(colors.text),
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

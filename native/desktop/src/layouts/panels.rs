@@ -4,17 +4,13 @@
 
 use std::sync::Arc;
 
-use iced::widget::{
-    button, column, container, pick_list, row, stack, text, text_input, tooltip, Canvas,
-};
+use iced::widget::{button, column, container, row, stack, text, tooltip, Canvas};
 use iced::{Element, Fill};
 
 use crate::i18n::tr;
 use crate::project_browser::{indented, remove_button, row_button, view_row, ViewRow};
-use crate::{
-    flat_tool_style, icon_svg, opencad_properties, themed_pick_list_style, ui_theme, Message,
-    Studio, ToolIcon,
-};
+use crate::ui_style;
+use crate::{icon_svg, opencad_properties, ui_theme, Message, Studio, ToolIcon};
 
 use super::model::{
     self, drawing_size, image_size, scale_label, Layout, Paper, PlacedKind, Viewport, SCALES,
@@ -129,17 +125,16 @@ impl Studio {
     /// SHEETS in the Project Browser: a row per sheet with Rename, Duplicate
     /// and ×, and "New sheet…" with what a new sheet gets.
     pub(crate) fn sheets_group(&self) -> Element<'_, Message> {
-        use crate::project_browser::{band, hint};
+        use crate::project_browser::band;
         let open = self.browser.is_open(SHEETS);
-        let new = tooltip(
+        let new = ui_style::tooltip(
             button(icon_svg(ToolIcon::Sheet, 15.0))
                 .on_press(Message::Layouts(LayoutAction::NewSheet))
-                .style(flat_tool_style)
+                .style(ui_style::tool)
                 .padding(3),
-            hint(tr("New sheet…").to_owned()),
+            tr("New sheet…").to_owned(),
             tooltip::Position::Bottom,
-        )
-        .gap(4);
+        );
         let mut group = column![band(
             SHEETS.to_owned(),
             open,
@@ -164,7 +159,7 @@ impl Studio {
                 list = list.push(
                     button(text(tr("New sheet…")).size(11))
                         .on_press(Message::Layouts(LayoutAction::NewSheet))
-                        .style(flat_tool_style)
+                        .style(ui_style::tool)
                         .width(Fill),
                 );
             }
@@ -180,16 +175,14 @@ impl Studio {
                 let small = |label: &'static str, action: LayoutAction| {
                     button(text(tr(label)).size(10))
                         .on_press(Message::Layouts(action))
-                        .style(flat_tool_style)
+                        .style(ui_style::tool)
                         .padding([3, 4])
                 };
                 return row![
-                    text_input(tr("Sheet name"), name)
+                    ui_style::text_input(tr("Sheet name"), name)
                         .id(rename_input_id())
                         .on_input(|name| Message::Layouts(LayoutAction::RenameText(name)))
                         .on_submit(Message::Layouts(LayoutAction::FinishRename))
-                        .size(11)
-                        .padding([3, 5])
                         .width(Fill),
                     small("OK", LayoutAction::FinishRename),
                     small("Cancel", LayoutAction::CancelRename),
@@ -239,50 +232,42 @@ impl Studio {
                 text(tr("New sheet")).size(11),
                 named(
                     tr("Number"),
-                    text_input("01", &form.number)
+                    ui_style::text_input("01", &form.number)
                         .on_input(|value| Message::Layouts(LayoutAction::FormNumber(value)))
-                        .size(11)
-                        .padding([3, 5])
                         .width(Fill)
                         .into(),
                 ),
                 named(
                     tr("Name"),
-                    text_input(tr("Sheet name"), &form.name)
+                    ui_style::text_input(tr("Sheet name"), &form.name)
                         .on_input(|value| Message::Layouts(LayoutAction::FormName(value)))
                         .on_submit(Message::Layouts(LayoutAction::Create))
-                        .size(11)
-                        .padding([3, 5])
                         .width(Fill)
                         .into(),
                 ),
                 named(
                     tr("Paper"),
-                    pick_list(Paper::ALL, Some(form.paper), |paper| {
+                    ui_style::pick_list(Paper::ALL, Some(form.paper), |paper| {
                         Message::Layouts(LayoutAction::FormPaper(paper))
                     })
-                    .style(themed_pick_list_style)
-                    .text_size(11)
                     .width(Fill)
                     .into(),
                 ),
                 named(
                     tr("Orientation"),
-                    pick_list(Orientation::ALL, Some(form.orientation), |orientation| {
+                    ui_style::pick_list(Orientation::ALL, Some(form.orientation), |orientation| {
                         Message::Layouts(LayoutAction::FormOrientation(orientation))
                     })
-                    .style(themed_pick_list_style)
-                    .text_size(11)
                     .width(Fill)
                     .into(),
                 ),
                 row![
                     button(text(tr("Create")).size(11))
                         .on_press(Message::Layouts(LayoutAction::Create))
-                        .style(flat_tool_style),
+                        .style(ui_style::primary),
                     button(text(tr("Cancel")).size(11))
                         .on_press(Message::Layouts(LayoutAction::NewSheet))
-                        .style(flat_tool_style),
+                        .style(ui_style::secondary),
                 ]
                 .spacing(4),
             ]
@@ -338,23 +323,19 @@ impl Studio {
             ))
             .push(opencad_properties::property_control(
                 "Paper",
-                pick_list(Paper::ALL, Some(layout.paper), |paper| {
+                ui_style::pick_list(Paper::ALL, Some(layout.paper), |paper| {
                     Message::Layouts(LayoutAction::SetPaper(paper))
                 })
-                .style(themed_pick_list_style)
-                .text_size(11)
                 .width(Fill)
                 .into(),
             ))
             .push(opencad_properties::property_control(
                 "Orientation",
-                pick_list(
+                ui_style::pick_list(
                     Orientation::ALL,
                     Some(Orientation::of(layout.landscape)),
                     |orientation| Message::Layouts(LayoutAction::SetOrientation(orientation)),
                 )
-                .style(themed_pick_list_style)
-                .text_size(11)
                 .width(Fill)
                 .into(),
             ))
@@ -397,16 +378,14 @@ impl Studio {
             block = block.push(
                 container(
                     row![
-                        pick_list(choices, chosen, |choice| {
+                        ui_style::pick_list(choices, chosen, |choice| {
                             Message::Layouts(LayoutAction::PlaceChoice(choice))
                         })
                         .placeholder(tr("Choose a view"))
-                        .style(themed_pick_list_style)
-                        .text_size(11)
                         .width(Fill),
                         button(text(tr("Place")).size(11))
                             .on_press_maybe(ready.then_some(Message::Layouts(LayoutAction::Place)))
-                            .style(flat_tool_style),
+                            .style(ui_style::secondary),
                     ]
                     .spacing(4)
                     .align_y(iced::Alignment::Center),
@@ -430,10 +409,10 @@ impl Studio {
                                 (!self.layouts.export_pending)
                                     .then_some(Message::Layouts(LayoutAction::ExportPdf))
                             )
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                         button(text(tr("Fit sheet")).size(11))
                             .on_press(Message::Layouts(LayoutAction::Fit))
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                     ]
                     .spacing(3),
                 )
@@ -494,12 +473,10 @@ impl Studio {
             block = block
                 .push(opencad_properties::property_control(
                     "Drawing scale",
-                    pick_list(SCALES.map(ScaleChoice), chosen, |choice| {
+                    ui_style::pick_list(SCALES.map(ScaleChoice), chosen, |choice| {
                         Message::Layouts(LayoutAction::ScaleChosen(choice))
                     })
                     .placeholder(scale_label(viewport.scale))
-                    .style(themed_pick_list_style)
-                    .text_size(11)
                     .width(Fill)
                     .into(),
                 ))
@@ -570,10 +547,10 @@ impl Studio {
                     row![
                         button(text(tr("Remove from sheet")).size(11))
                             .on_press(Message::Layouts(LayoutAction::Remove(viewport.id.clone())))
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                         button(text(tr("Deselect")).size(11))
                             .on_press(Message::Layouts(LayoutAction::Select(None)))
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                     ]
                     .spacing(3),
                 )
@@ -601,16 +578,11 @@ fn typed_row<'a>(
     .height(26)
     .align_y(iced::Alignment::Center)
     .padding([0, 6]);
-    let value = container(
-        text_input(placeholder, value)
-            .on_input(on_input)
-            .size(11)
-            .padding([2, 4]),
-    )
-    .width(iced::Length::FillPortion(6))
-    .height(26)
-    .align_y(iced::Alignment::Center)
-    .padding([0, 5]);
+    let value = container(ui_style::text_input(placeholder, value).on_input(on_input))
+        .width(iced::Length::FillPortion(6))
+        .height(26)
+        .align_y(iced::Alignment::Center)
+        .padding([0, 5]);
     container(row![label, value])
         .height(26)
         .width(Fill)

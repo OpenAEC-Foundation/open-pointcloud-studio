@@ -15,10 +15,9 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use iced::widget::{
-    button, center, column, container, horizontal_space, mouse_area, opaque, progress_bar, row,
-    scrollable, text, text_input, Space,
+    button, center, column, container, horizontal_space, mouse_area, opaque, row, text, Space,
 };
-use iced::{Border, Color, Element, Fill, Length, Task, Theme};
+use iced::{Border, Element, Fill, Length, Task, Theme};
 use pointcloud_core::{IndexedPoint, MeshTopology, SurfaceMeshConfig};
 use serde_json::{json, Value};
 
@@ -26,9 +25,10 @@ use crate::closed_mesh::{ClosedMeshAction, Layers, MeshOf};
 use crate::faces::FaceAction;
 use crate::i18n::{key, tr, tr_args};
 use crate::selection::ClassFilter;
+use crate::ui_style;
 use crate::{
-    display_name, flat_tool_style, format_count, icon_svg, opencad_properties, opencad_ribbon,
-    ui_theme, CloudEntry, MeshMode, Message, Studio, ToolIcon,
+    display_name, format_count, icon_svg, opencad_properties, opencad_ribbon, ui_theme, CloudEntry,
+    MeshMode, Message, Studio, ToolIcon,
 };
 
 #[cfg(test)]
@@ -401,10 +401,8 @@ pub(crate) fn option_input<'a>(
     on_input: impl Fn(String) -> Message + 'a,
     tip: &'static str,
 ) -> Element<'a, Message> {
-    let field = text_input(placeholder, value)
+    let field = ui_style::text_input(placeholder, value)
         .on_input(on_input)
-        .size(12)
-        .padding([4, 6])
         .width(FIELD_W);
     option_row(tr(label), field.into(), default, tip)
 }
@@ -520,31 +518,16 @@ fn scope_row<'a>(
 fn plain_button<'a>(label: &str, message: Option<Message>) -> Element<'a, Message> {
     button(text(label.to_owned()).size(12))
         .on_press_maybe(message)
-        .style(plain_btn_style)
+        .style(ui_style::secondary)
         .padding([5, 12])
         .into()
-}
-
-/// The look of a plain button: outlined while it can be pressed; while it
-/// cannot, without an outline and with faint text, so that it does not look
-/// ready while it waits.
-fn plain_btn_style(theme: &Theme, status: button::Status) -> button::Style {
-    let mut style = opencad_ribbon::tool_btn_style(theme, false, status);
-    let colors = ui_theme::colors(theme);
-    if matches!(status, button::Status::Disabled) {
-        style.border.color = Color::TRANSPARENT;
-        style.text_color = colors.text.scale_alpha(0.5);
-    } else if style.border.color == Color::TRANSPARENT {
-        style.border.color = colors.border;
-    }
-    style
 }
 
 /// The button that goes on.
 fn primary_button<'a>(label: &str, message: Option<Message>) -> Element<'a, Message> {
     button(text(label.to_owned()).size(12))
         .on_press_maybe(message)
-        .style(opencad_ribbon::primary_btn_style)
+        .style(ui_style::primary)
         .padding([5, 16])
         .into()
 }
@@ -1207,7 +1190,7 @@ impl Studio {
         opencad_ribbon::RibbonItem::Large(
             button(label)
                 .on_press_maybe(enabled.then_some(Message::MeshWizard(MeshWizardAction::Open)))
-                .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, active, status))
+                .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
                 .height(Fill)
                 .padding([8, 6])
                 .into(),
@@ -1230,7 +1213,7 @@ impl Studio {
             horizontal_space(),
             button(text("×").size(14))
                 .on_press(send(MeshWizardAction::Close))
-                .style(flat_tool_style)
+                .style(ui_style::tool)
                 .padding([1, 8]),
         ]
         .spacing(10)
@@ -1245,7 +1228,7 @@ impl Studio {
                 header,
                 self.mesh_wizard_steps(),
                 rule(),
-                scrollable(container(page).padding(iced::Padding {
+                ui_style::scrollable(container(page).padding(iced::Padding {
                     right: 14.0,
                     ..iced::Padding::ZERO
                 }))
@@ -1683,16 +1666,7 @@ impl Studio {
                     .push(text(progress.stage).size(13))
                     .push(figures)
                     .push(
-                        progress_bar(0.0..=1.0, progress.fraction.unwrap_or(0.0))
-                            .height(8)
-                            .style(|theme: &Theme| {
-                                let colors = ui_theme::colors(theme);
-                                progress_bar::Style {
-                                    background: colors.border_strong.into(),
-                                    bar: colors.accent.into(),
-                                    border: Border::default(),
-                                }
-                            }),
+                        ui_style::progress_bar(0.0..=1.0, progress.fraction.unwrap_or(0.0)),
                     )
                     .push(note(
                         tr("The job goes on when the card is closed: the Mesh Pointcloud button shows that it runs, and opens the card here again.")

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame};
-use iced::widget::{button, column, container, row, slider, text, tooltip};
+use iced::widget::{button, column, container, row, text, tooltip};
 use iced::{Color, Element, Fill, Point as UiPoint, Size, Task};
 use pointcloud_core::{FilePhoto, FilePhotos, PhotoKind, PhotoProjection, ScanImageFormat};
 use serde_json::{json, Value};
@@ -21,6 +21,7 @@ use crate::i18n::{self, tr, tr_args};
 use crate::native_api::ApiCommand;
 use crate::selection::Projection;
 use crate::station_photos::{self, WalkView};
+use crate::ui_style;
 use crate::{CloudEntry, DragMode, DragState, Message, PointViewport, Studio};
 
 /// Longest edge of a photo on the graphics device. A larger photo is
@@ -1167,7 +1168,7 @@ impl Studio {
                 .align_y(iced::Alignment::Center)
         )
         .on_press(Message::Photos(PhotoAction::ToggleList(source.clone())))
-        .style(crate::flat_tool_style)
+        .style(ui_style::tool)
         .padding([1, 4])]
         .spacing(1);
         if expanded {
@@ -1188,7 +1189,7 @@ impl Studio {
                     button(text(label).size(10))
                         .on_press(Message::Photos(PhotoAction::Enter(source.clone(), index)))
                         .style(move |theme, status| {
-                            let mut style = crate::flat_tool_style(theme, status);
+                            let mut style = ui_style::tool(theme, status);
                             if current {
                                 style.text_color = crate::ui_theme::colors(theme).accent;
                             }
@@ -1241,19 +1242,12 @@ impl Studio {
     pub(crate) fn photo_controls(&self) -> Option<Element<'_, Message>> {
         let shown = self.shown_photo()?;
         let step = |label: &'static str, tip: &'static str, steps: i64, enabled: bool| {
-            tooltip(
+            ui_style::tooltip(
                 button(text(label).size(13))
                     .on_press_maybe(enabled.then_some(Message::Photos(PhotoAction::Step(steps))))
-                    .style(crate::flat_tool_style)
+                    .style(ui_style::tool)
                     .padding([1, 8]),
-                container(text(tr(tip)).size(11))
-                    .padding([3, 6])
-                    .style(|theme| {
-                        let colors = crate::ui_theme::colors(theme);
-                        container::Style::default()
-                            .background(colors.tooltip_bg)
-                            .color(colors.tooltip_text)
-                    }),
+                tr(tip),
                 tooltip::Position::Bottom,
             )
         };
@@ -1277,7 +1271,7 @@ impl Studio {
             ),
             iced::widget::Space::with_width(10),
             text(tr("Photo")).size(12),
-            slider(0.0_f32..=1.0, self.photos.blend, |blend| {
+            ui_style::slider(0.0_f32..=1.0, self.photos.blend, |blend| {
                 Message::Photos(PhotoAction::Blend(blend))
             })
             .step(0.01_f32)

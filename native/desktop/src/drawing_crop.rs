@@ -15,7 +15,7 @@
 
 use std::time::{Duration, Instant};
 
-use iced::widget::{column, container, text, text_input};
+use iced::widget::{column, container, text};
 use iced::{Element, Fill, Size, Task};
 use pointcloud_core::{
     normalized_degrees, Bounds, DrawingFrame, DrawingOrigin, DrawingView, OrientedBox,
@@ -28,6 +28,7 @@ use crate::drawing_view::ViewCamera;
 use crate::i18n::key;
 use crate::saved_drawings::SavedDrawing;
 use crate::selection::Projection;
+use crate::ui_style;
 use crate::{
     combined_bounds, format_rotation, opencad_properties, parse_rotation, section_turn_delta,
     Message, Studio,
@@ -1566,11 +1567,9 @@ impl Studio {
         for field in Field::of(request.view) {
             let field = *field;
             let value = typed(field).unwrap_or_else(|| field.text(&shown, request.sample_percent));
-            let input = text_input("", &value)
+            let input = ui_style::text_input("", &value)
                 .on_input(move |value| Message::Crop(CropAction::Field(field, value)))
-                .on_submit(Message::Crop(CropAction::Apply(field)))
-                .size(11)
-                .padding([2, 4]);
+                .on_submit(Message::Crop(CropAction::Apply(field)));
             block = block.push(opencad_properties::property_control(
                 field.label(request.view),
                 input.into(),

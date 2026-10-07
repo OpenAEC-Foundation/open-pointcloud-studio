@@ -23,7 +23,7 @@ use std::sync::{Arc, Weak};
 use iced::alignment;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame};
-use iced::widget::{button, column, container, pick_list, row, text, text_input};
+use iced::widget::{button, column, container, row, text, text_input};
 use iced::{
     Color, Element, Fill, Pixels, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme, Vector,
 };
@@ -40,7 +40,8 @@ use crate::i18n::{key, tr};
 use crate::layouts::model::PaperNote;
 use crate::layouts::plot::Align;
 use crate::saved_drawings::SavedDrawing;
-use crate::{flat_tool_style, opencad_properties, opencad_ribbon, Message, Studio};
+use crate::ui_style;
+use crate::{opencad_properties, opencad_ribbon, Message, Studio};
 
 /// The longest text of an annotation.
 pub const MAX_NOTE_CHARS: usize = 240;
@@ -1793,19 +1794,17 @@ impl Studio {
         let ready = !typing.trim().is_empty();
         let prompt = container(
             row![
-                text_input(tr("Text of the annotation"), typing)
+                ui_style::text_input(tr("Text of the annotation"), typing)
                     .id(note_input_id())
                     .on_input(|value| Message::Notes(NoteAction::Typed(value)))
                     .on_submit(Message::Notes(NoteAction::Submit))
-                    .size(12)
-                    .padding([4, 6])
                     .width(300),
                 button(text(tr("Add")).size(12))
                     .on_press_maybe(ready.then_some(Message::Notes(NoteAction::Submit)))
-                    .style(flat_tool_style),
+                    .style(ui_style::primary),
                 button(text(tr("Cancel")).size(12))
                     .on_press(Message::Notes(NoteAction::Cancel))
-                    .style(flat_tool_style),
+                    .style(ui_style::secondary),
             ]
             .spacing(6)
             .align_y(iced::Alignment::Center),
@@ -1911,14 +1910,12 @@ impl Studio {
             opencad_properties::section_header("Annotations"),
             opencad_properties::property_control(
                 "Annotation scale",
-                pick_list(
+                ui_style::pick_list(
                     crate::layouts::model::SCALES.map(crate::layouts::ScaleChoice),
                     chosen,
                     |choice| Message::Notes(NoteAction::Scale(choice)),
                 )
                 .placeholder(crate::layouts::model::scale_label(scale))
-                .style(crate::themed_pick_list_style)
-                .text_size(11)
                 .width(Fill)
                 .into(),
             ),
@@ -1947,7 +1944,7 @@ impl Studio {
                         (!self.notes.export_pending && self.drawing_view.made(guid).is_some())
                             .then_some(Message::Notes(NoteAction::Export)),
                     )
-                    .style(flat_tool_style),
+                    .style(ui_style::tool),
             )
             .padding([3, 8]),
         );
@@ -2015,7 +2012,7 @@ impl Studio {
                     button(text(label).size(11))
                         .on_press(Message::Notes(NoteAction::Select(Some(id.clone()))))
                         .style(move |theme, status| {
-                            opencad_ribbon::tool_btn_style(theme, selected, status)
+                            ui_style::ribbon_button(theme, selected, status)
                         })
                         .padding([2, 4])
                         .width(Fill),
@@ -2033,7 +2030,7 @@ impl Studio {
                 };
                 let id = id.clone();
                 list = list.push(
-                    text_input(
+                    ui_style::text_input(
                         if kind == NoteKind::Dimension {
                             tr("Value; empty for the measured one")
                         } else {
@@ -2042,9 +2039,7 @@ impl Studio {
                         &typed,
                     )
                     .on_input(move |value| Message::Notes(NoteAction::Edit(id.clone(), value)))
-                    .on_submit(Message::Notes(NoteAction::ApplyEdit))
-                    .size(11)
-                    .padding([2, 4]),
+                    .on_submit(Message::Notes(NoteAction::ApplyEdit)),
                 );
             }
         }

@@ -770,19 +770,25 @@ fn the_run_button_says_run_again_only_after_a_result() {
 }
 
 #[test]
-fn a_disabled_button_of_the_card_has_no_outline_and_faint_text() {
+fn a_button_of_the_card_that_waits_is_drawn_at_half_strength() {
     for theme in crate::ui_theme::UiTheme::ALL {
         let iced = theme.iced();
         let colors = theme.colors();
-        let ready = plain_btn_style(&iced, button::Status::Active);
-        let waiting = plain_btn_style(&iced, button::Status::Disabled);
-        assert_eq!(ready.border.color, colors.border, "{theme:?}");
-        assert_eq!(waiting.border.color, Color::TRANSPARENT, "{theme:?}");
-        assert_eq!(ready.text_color, colors.text, "{theme:?}");
-        assert!(waiting.text_color.a <= 0.5, "{theme:?}");
-        // Hovered, it is outlined as the ribbon outlines a button.
-        let hovered = plain_btn_style(&iced, button::Status::Hovered);
-        assert_ne!(hovered.border.color, Color::TRANSPARENT, "{theme:?}");
+        let ready = crate::ui_style::secondary(&iced, button::Status::Active);
+        let waiting = crate::ui_style::secondary(&iced, button::Status::Disabled);
+        assert_eq!(ready.border.color, colors.dialog_input_border, "{theme:?}");
+        assert_eq!(ready.text_color, colors.btn_secondary_text, "{theme:?}");
+        assert_eq!(
+            waiting.text_color,
+            colors.btn_secondary_text.scale_alpha(0.5),
+            "{theme:?}"
+        );
+        // Hovered, it is outlined in the accent colour.
+        let hovered = crate::ui_style::secondary(&iced, button::Status::Hovered);
+        assert_eq!(
+            hovered.border.color, colors.btn_secondary_hover_border,
+            "{theme:?}"
+        );
     }
 }
 

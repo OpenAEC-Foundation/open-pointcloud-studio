@@ -12,16 +12,15 @@ use std::path::{Path, PathBuf};
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{tree, Tree, Widget};
 use iced::advanced::{overlay, renderer, Clipboard, Shell};
-use iced::widget::{
-    button, column, container, horizontal_space, opaque, progress_bar, row, scrollable, text, Space,
-};
+use iced::widget::{button, column, container, horizontal_space, opaque, row, text, Space};
 use iced::{event, mouse, Border, Color, Element, Event, Fill, Length, Rectangle, Size, Task};
 use iced::{Theme, Vector};
 use serde_json::{json, Value};
 
 use crate::closed_mesh::Sentence;
 use crate::i18n::{key, tr, tr_args};
-use crate::{drawing_view, flat_tool_style, opencad_ribbon, ui_theme, Message, Studio};
+use crate::ui_style;
+use crate::{drawing_view, ui_theme, Message, Studio};
 
 mod pipeline;
 mod prepare;
@@ -1138,7 +1137,7 @@ impl Studio {
                 } else {
                     WizardAction::Resume(recent.file.clone())
                 }))
-                .style(flat_tool_style)
+                .style(ui_style::tool)
                 .width(Fill),
             );
         }
@@ -1325,11 +1324,11 @@ impl Studio {
             horizontal_space(),
             button(text(tr("Show in model")).size(12))
                 .on_press(send(WizardAction::Minimize))
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                .style(|theme, status| ui_style::ribbon_button(theme, false, status))
                 .padding([4, 12]),
             button(text("×").size(14))
                 .on_press(send(WizardAction::Close))
-                .style(flat_tool_style)
+                .style(ui_style::tool)
                 .padding([1, 8]),
         ]
         .spacing(14)
@@ -1338,7 +1337,7 @@ impl Studio {
         let body = row![
             self.mesh_to_plans_sidebar(),
             rule_vertical(),
-            container(scrollable(self.mesh_to_plans_settings()).height(Fill))
+            container(ui_style::scrollable(self.mesh_to_plans_settings()).height(Fill))
                 .padding([4, 16])
                 .width(SETTINGS_W)
                 .height(Fill),
@@ -1437,7 +1436,7 @@ impl Studio {
                 }),
             );
         }
-        container(scrollable(steps).height(Fill))
+        container(ui_style::scrollable(steps).height(Fill))
             .padding(iced::Padding {
                 right: 10.0,
                 ..iced::Padding::ZERO
@@ -1482,7 +1481,7 @@ impl Studio {
             page = page.push(
                 column![
                     text(line.detail).size(11).color(colors.text_muted),
-                    progress_bar(0.0..=1.0, line.fraction.unwrap_or(0.0)).height(6),
+                    ui_style::progress_bar(0.0..=1.0, line.fraction.unwrap_or(0.0)),
                 ]
                 .spacing(4),
             );
@@ -1496,7 +1495,7 @@ impl Studio {
             page = page.push(
                 button(text(tr(label)).size(12))
                     .on_press(Message::MeshToPlans(WizardAction::Confirm))
-                    .style(opencad_ribbon::primary_btn_style)
+                    .style(ui_style::primary)
                     .padding([5, 16]),
             );
         }
@@ -1514,7 +1513,7 @@ impl Studio {
             page = page.push(
                 button(text(tr("Skip this step")).size(12))
                     .on_press(Message::MeshToPlans(WizardAction::Skip))
-                    .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                    .style(|theme, status| ui_style::ribbon_button(theme, false, status))
                     .padding([5, 12]),
             );
         }
@@ -1558,7 +1557,7 @@ impl Studio {
         let plain = |label: &'static str, message: Option<Message>| {
             button(text(tr(label)).size(12))
                 .on_press_maybe(message)
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                .style(|theme, status| ui_style::ribbon_button(theme, false, status))
                 .padding([5, 12])
         };
         row![
@@ -1579,7 +1578,7 @@ impl Studio {
             },
             button(text(tr("Next")).size(12))
                 .on_press_maybe(ready.is_ok().then_some(send(WizardAction::Next)))
-                .style(opencad_ribbon::primary_btn_style)
+                .style(ui_style::primary)
                 .padding([5, 16]),
             plain(
                 key("Run all automatically"),

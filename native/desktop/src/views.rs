@@ -22,6 +22,7 @@ use crate::camera_views::{
 use crate::native_api::ApiCommand;
 use crate::selection::Projection;
 use crate::station_photos::WalkView;
+use crate::ui_style;
 use crate::{
     bcf, combined_bounds, i18n, measure, opencad_properties, opencad_ribbon, ColorMode, Message,
     PointViewport, Studio, ToolIcon,
@@ -1851,7 +1852,7 @@ impl Studio {
         let small = |label: &'static str, action: ViewAction| -> Element<'static, Message> {
             button(text(i18n::tr(label)).size(10))
                 .on_press(Message::Views(action))
-                .style(crate::flat_tool_style)
+                .style(ui_style::tool)
                 .padding([3, 4])
                 .into()
         };
@@ -1859,12 +1860,10 @@ impl Studio {
         if let Some((renamed, name)) = &self.views.renaming {
             if *renamed == view.guid {
                 return row![
-                    text_input(i18n::tr("View name"), name)
+                    ui_style::text_input(i18n::tr("View name"), name)
                         .id(rename_input_id())
                         .on_input(|name| Message::Views(ViewAction::RenameText(name)))
                         .on_submit(Message::Views(ViewAction::FinishRename))
-                        .size(11)
-                        .padding([3, 5])
                         .width(Fill),
                     small("OK", ViewAction::FinishRename),
                     small("Cancel", ViewAction::CancelRename),
@@ -1878,16 +1877,9 @@ impl Studio {
         let mut controls: Vec<Element<'_, Message>> = Vec::new();
         if view.section_box().is_some() {
             controls.push(
-                tooltip(
+                ui_style::tooltip(
                     crate::icon_svg(ToolIcon::SectionBox, 12.0),
-                    container(text(i18n::tr("Has a section box")).size(11))
-                        .padding([4, 7])
-                        .style(|theme| {
-                            let colors = crate::ui_theme::colors(theme);
-                            container::Style::default()
-                                .background(colors.tooltip_bg)
-                                .color(colors.tooltip_text)
-                        }),
+                    i18n::tr("Has a section box"),
                     tooltip::Position::Bottom,
                 )
                 .into(),
@@ -1925,15 +1917,13 @@ impl Studio {
     pub fn save_view_row(&self) -> Element<'_, Message> {
         let has_scan = self.active.is_some();
         let mut save = column![row![
-            text_input(i18n::tr("Name"), &self.views.name)
+            ui_style::text_input(i18n::tr("Name"), &self.views.name)
                 .on_input(|name| Message::Views(ViewAction::Name(name)))
                 .on_submit(Message::Views(ViewAction::Save))
-                .size(11)
-                .padding([3, 5])
                 .width(Fill),
             button(text(i18n::tr("Save view")).size(11))
                 .on_press_maybe(has_scan.then_some(Message::Views(ViewAction::Save)))
-                .style(crate::flat_tool_style),
+                .style(ui_style::tool),
         ]
         .spacing(4)
         .align_y(iced::Alignment::Center)]
@@ -1955,7 +1945,7 @@ impl Studio {
         let small = |label: &'static str, action: ViewAction| {
             button(text(i18n::tr(label)).size(10))
                 .on_press(Message::Views(action))
-                .style(crate::flat_tool_style)
+                .style(ui_style::tool)
                 .padding([3, 4])
         };
         let mut list = column![container(
@@ -2025,7 +2015,7 @@ impl Studio {
                     self.can_export_bcf()
                         .then_some(Message::Views(ViewAction::ExportBcf)),
                 )
-                .style(crate::flat_tool_style)
+                .style(ui_style::tool)
                 .width(Fill),
             vec![
                 i18n::tr_args("Saved views: {count}", &[("count", &views)]),
@@ -2043,19 +2033,17 @@ impl Studio {
         let ready = checked_note(&self.views.note_text).is_some();
         let prompt = container(
             row![
-                text_input(i18n::tr("Text of the note"), &self.views.note_text)
+                ui_style::text_input(i18n::tr("Text of the note"), &self.views.note_text)
                     .id(note_input_id())
                     .on_input(|value| Message::Views(ViewAction::NoteText(value)))
                     .on_submit(Message::Views(ViewAction::NoteSubmit))
-                    .size(12)
-                    .padding([4, 6])
                     .width(300),
                 button(text(i18n::tr("Add")).size(12))
                     .on_press_maybe(ready.then_some(Message::Views(ViewAction::NoteSubmit)))
-                    .style(crate::flat_tool_style),
+                    .style(ui_style::primary),
                 button(text(i18n::tr("Cancel")).size(12))
                     .on_press(Message::Views(ViewAction::CancelPlacing))
-                    .style(crate::flat_tool_style),
+                    .style(ui_style::secondary),
             ]
             .spacing(6)
             .align_y(iced::Alignment::Center),

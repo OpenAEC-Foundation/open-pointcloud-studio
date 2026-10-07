@@ -26,6 +26,7 @@ use crate::fonts;
 use crate::i18n::tr;
 use crate::project_browser::{ViewKind, ViewRow};
 use crate::station_photos::WalkView;
+use crate::ui_style;
 use crate::{icon_svg, ui_theme, ColorMode, Message, Studio, ToolIcon};
 
 /// A tab, by what it shows.
@@ -914,12 +915,14 @@ impl Studio {
             let active = (shown.as_ref() == Some(tab)).then_some(surface);
             tabs = tabs.push(self.tab_button(tab.clone(), full, short, active));
         }
-        let strip = scrollable::Scrollable::with_direction(
-            tabs,
-            Direction::Horizontal(Scrollbar::new().width(3).scroller_width(3).margin(0)),
-        )
-        .id(strip_id())
-        .width(Fill);
+        // The bar under the tabs stays 3 pixels, so that it does not cover
+        // them.
+        let strip = ui_style::scrollable(tabs)
+            .direction(Direction::Horizontal(
+                Scrollbar::new().width(3).scroller_width(3).margin(0),
+            ))
+            .id(strip_id())
+            .width(Fill);
         let mut line = row![strip].align_y(iced::Alignment::End);
         if let Some((title, caption)) = caption {
             line = line.push(
@@ -1022,13 +1025,7 @@ impl Studio {
         } else {
             framed.into()
         };
-        tooltip(
-            element,
-            crate::project_browser::hint(tip),
-            tooltip::Position::Bottom,
-        )
-        .gap(4)
-        .into()
+        ui_style::tooltip(element, tip, tooltip::Position::Bottom).into()
     }
 
     /// What `status.result.view_tabs` reports: the tabs the strip shows, in

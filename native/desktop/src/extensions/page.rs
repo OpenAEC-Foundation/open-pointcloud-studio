@@ -4,8 +4,8 @@
 //! extensions add to the New and Export pages.
 
 use iced::widget::{
-    button, center, checkbox, column, container, horizontal_space, mouse_area, opaque,
-    progress_bar, row, svg, text, tooltip, Column, Space,
+    button, center, column, container, horizontal_space, mouse_area, opaque, row, svg, text,
+    tooltip, Column, Space,
 };
 use iced::{Border, Element, Fill, Length};
 
@@ -14,10 +14,8 @@ use super::{Dialog, ExtensionAction, Installed, BUILT_IN};
 use crate::file_view::FilePage;
 use crate::fonts;
 use crate::i18n::{tr, tr_args};
-use crate::{
-    flat_tool_style, muted_checkbox_style, opencad_ribbon, status_button_style, ui_theme, Message,
-    Studio, VERSION_LABEL,
-};
+use crate::ui_style;
+use crate::{opencad_ribbon, ui_theme, Message, Studio, VERSION_LABEL};
 
 /// The widest the cards of the page grow.
 const CARD_W: f32 = 620.0;
@@ -67,7 +65,7 @@ fn small_button<'a>(label: &str, message: Option<Message>) -> Element<'a, Messag
     button(text(label.to_owned()).size(12))
         .on_press_maybe(message)
         .style(|theme, status| {
-            let mut style = opencad_ribbon::tool_btn_style(theme, false, status);
+            let mut style = ui_style::ribbon_button(theme, false, status);
             style.border.color = ui_theme::colors(theme).border;
             style
         })
@@ -160,7 +158,7 @@ impl Studio {
                 (host.root.is_some() && !host.preparing && host.dialog.is_none())
                     .then_some(send(ExtensionAction::Install)),
             )
-            .style(opencad_ribbon::primary_btn_style)
+            .style(ui_style::primary)
             .padding([7, 16])]
         .spacing(12)
         .align_y(iced::Alignment::Center);
@@ -216,14 +214,9 @@ impl Studio {
                                 text(tr(extension.name)).size(15).font(fonts::SEMIBOLD),
                                 chip(tr(extension.category).to_owned()),
                                 horizontal_space(),
-                                checkbox(tr("Enabled"), enabled)
-                                    .on_toggle(move |enabled| Message::ExtensionEnabled(
-                                        extension.id,
-                                        enabled
-                                    ))
-                                    .style(muted_checkbox_style)
-                                    .text_size(12)
-                                    .size(15),
+                                ui_style::checkbox(tr("Enabled"), enabled).on_toggle(
+                                    move |enabled| Message::ExtensionEnabled(extension.id, enabled)
+                                ),
                             ]
                             .spacing(10)
                             .align_y(iced::Alignment::Center),
@@ -325,14 +318,10 @@ impl Studio {
                     .font(fonts::SEMIBOLD),
                 chip(tr("Installed").to_owned()),
                 horizontal_space(),
-                checkbox(tr("Enabled"), enabled)
-                    .on_toggle({
-                        let id = id.clone();
-                        move |enabled| send(ExtensionAction::SetEnabled(id.clone(), enabled))
-                    })
-                    .style(muted_checkbox_style)
-                    .text_size(12)
-                    .size(15),
+                ui_style::checkbox(tr("Enabled"), enabled).on_toggle({
+                    let id = id.clone();
+                    move |enabled| send(ExtensionAction::SetEnabled(id.clone(), enabled))
+                }),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center),
@@ -503,7 +492,7 @@ impl Studio {
                     horizontal_space(),
                     button(text("×").size(14))
                         .on_press(send(ExtensionAction::CloseDialog))
-                        .style(flat_tool_style)
+                        .style(ui_style::tool)
                         .padding([1, 8]),
                 ]
                 .align_y(iced::Alignment::Center),
@@ -512,11 +501,11 @@ impl Studio {
                     horizontal_space(),
                     button(text(tr("Cancel")).size(12))
                         .on_press(send(ExtensionAction::CloseDialog))
-                        .style(flat_tool_style)
+                        .style(ui_style::secondary)
                         .padding([5, 12]),
                     button(text(confirm.to_owned()).size(12))
                         .on_press(send(confirm_action))
-                        .style(|theme, status| opencad_ribbon::file_tab_style(theme, false, status))
+                        .style(ui_style::primary)
                         .padding([5, 16]),
                 ]
                 .spacing(8)
@@ -576,7 +565,7 @@ impl Studio {
                     manifest.id.clone(),
                     Some(each.id.clone()),
                 )))
-                .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, running, status))
+                .style(move |theme, status| ui_style::ribbon_button(theme, running, status))
                 .height(Fill)
                 .padding([6, 3]);
                 let mut tip = each
@@ -588,19 +577,7 @@ impl Studio {
                     tip = format!("{tip}\n{}", tr("Runs; click to stop it"));
                 }
                 items.push(opencad_ribbon::RibbonItem::Large(
-                    tooltip(
-                        control,
-                        container(text(tip).size(11))
-                            .padding([4, 7])
-                            .style(|theme| {
-                                let colors = ui_theme::colors(theme);
-                                container::Style::default()
-                                    .background(colors.tooltip_bg)
-                                    .color(colors.tooltip_text)
-                            }),
-                        tooltip::Position::Bottom,
-                    )
-                    .into(),
+                    ui_style::tooltip(control, tip, tooltip::Position::Bottom).into(),
                 ));
             }
         }
@@ -631,9 +608,7 @@ impl Studio {
         .align_y(iced::Alignment::Center);
         if let Some((percent, _)) = &run.progress {
             segment = segment.push(
-                progress_bar(0.0..=100.0, *percent as f32)
-                    .width(Length::Fixed(70.0))
-                    .height(6),
+                ui_style::progress_bar(0.0..=100.0, *percent as f32).width(Length::Fixed(70.0)),
             );
             segment = segment.push(text(format!("{percent:.0}%")).size(11));
         }
@@ -642,7 +617,7 @@ impl Studio {
                 .on_press_maybe(
                     (!run.control.stopping()).then(|| send(ExtensionAction::Stop(id.clone()))),
                 )
-                .style(status_button_style)
+                .style(ui_style::status_item)
                 .padding([1, 6]),
         );
         Some(segment.into())
@@ -685,7 +660,7 @@ impl Studio {
                         ))
                     }))
                     .style(|theme, status| {
-                        let mut style = opencad_ribbon::tool_btn_style(theme, false, status);
+                        let mut style = ui_style::ribbon_button(theme, false, status);
                         let colors = ui_theme::colors(theme);
                         style.border.color = colors.border;
                         style.border.width = 1.0;

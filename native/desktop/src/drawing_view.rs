@@ -23,7 +23,7 @@ use iced::advanced::widget::{self, Widget};
 use iced::alignment;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame};
-use iced::widget::{button, checkbox, column, container, row, stack, text};
+use iced::widget::{button, column, container, row, stack, text};
 use iced::{
     Background, Color, Element, Fill, Length, Pixels, Point as UiPoint, Rectangle, Renderer, Size,
     Task, Theme, Transformation, Vector,
@@ -37,10 +37,9 @@ use crate::drawing_crop::{
 };
 use crate::i18n::{tr, tr_args};
 use crate::saved_drawings::SavedDrawing;
+use crate::ui_style;
 use crate::ui_theme::UiTheme;
-use crate::{
-    flat_tool_style, format_count, muted_checkbox_style, opencad_properties, Message, Studio,
-};
+use crate::{format_count, opencad_properties, Message, Studio};
 
 /// Wheel steps of a mouse turn the scale by this much each.
 const ZOOM_STEP: f32 = 1.25;
@@ -2436,7 +2435,7 @@ impl Studio {
         }
         let open = button(text(tr("Open drawing…")).size(11))
             .on_press(Message::DrawingView(DrawingViewAction::OpenFile))
-            .style(flat_tool_style);
+            .style(ui_style::tool);
         let Some(scene) = tool.scene() else {
             block = block.push(note(
                 tr("Preview or export a section drawing, or open a DXF or DWG file.").to_owned(),
@@ -2499,7 +2498,7 @@ impl Studio {
                 row![
                     button(text(tr("Zoom extents")).size(11))
                         .on_press(Message::DrawingView(DrawingViewAction::ZoomExtents))
-                        .style(flat_tool_style),
+                        .style(ui_style::tool),
                     open,
                 ]
                 .spacing(3),
@@ -2520,10 +2519,10 @@ impl Studio {
                     row![
                         button(text(tr("Show all")).size(11))
                             .on_press(Message::DrawingView(DrawingViewAction::AllLayers(true)))
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                         button(text(tr("Hide all")).size(11))
                             .on_press(Message::DrawingView(DrawingViewAction::AllLayers(false)))
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                     ]
                     .spacing(3),
                 )
@@ -2539,13 +2538,9 @@ impl Studio {
                             .width(10)
                             .height(10)
                             .style(move |_| container::Style::default().background(swatch)),
-                        checkbox(label, tool.layer_shown(index))
-                            .on_toggle(move |on| {
-                                Message::DrawingView(DrawingViewAction::Layer(index, on))
-                            })
-                            .style(muted_checkbox_style)
-                            .text_size(11)
-                            .size(13),
+                        ui_style::checkbox(label, tool.layer_shown(index)).on_toggle(move |on| {
+                            Message::DrawingView(DrawingViewAction::Layer(index, on))
+                        }),
                     ]
                     .spacing(6)
                     .align_y(iced::Alignment::Center),
@@ -2567,11 +2562,8 @@ impl Studio {
                                 radius: 0.0.into(),
                             })
                         }),
-                        checkbox(tr("Crop region"), tool.crop_shown)
-                            .on_toggle(|on| Message::Crop(CropAction::Show(on)))
-                            .style(muted_checkbox_style)
-                            .text_size(11)
-                            .size(13),
+                        ui_style::checkbox(tr("Crop region"), tool.crop_shown)
+                            .on_toggle(|on| Message::Crop(CropAction::Show(on))),
                     ]
                     .spacing(6)
                     .align_y(iced::Alignment::Center),

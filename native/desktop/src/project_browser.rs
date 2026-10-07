@@ -9,9 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use iced::widget::{
-    button, checkbox, column, container, mouse_area, progress_bar, row, text, tooltip, Column,
-};
+use iced::widget::{button, checkbox, column, container, mouse_area, row, text, tooltip, Column};
 use iced::{Color, Element, Fill, Task};
 use serde_json::{json, Value};
 
@@ -21,11 +19,11 @@ use crate::fonts;
 use crate::i18n::{key, tr, tr_args};
 use crate::saved_drawings::SavedDrawing;
 use crate::sheet_dialog::SheetKind;
+use crate::ui_style;
 use crate::ui_theme;
 use crate::{
-    compact_count, display_name, faces, flat_tool_style, format_count, icon_svg,
-    muted_checkbox_style, opencad_ribbon, project_open, CloudEntry, Message, Studio, ToolIcon,
-    ASPRS_CLASSIFICATIONS,
+    compact_count, display_name, faces, format_count, icon_svg, project_open, CloudEntry, Message,
+    Studio, ToolIcon, ASPRS_CLASSIFICATIONS,
 };
 
 /// The groups and sub-groups that open and collapse, by the key the
@@ -428,55 +426,37 @@ pub(crate) fn band<'a>(
 
 /// A small button with an icon and a tooltip, for the band of a group.
 fn icon_button<'a>(icon: ToolIcon, tip: &str, message: Message) -> Element<'a, Message> {
-    tooltip(
+    ui_style::tooltip(
         button(icon_svg(icon, 15.0))
             .on_press(message)
-            .style(flat_tool_style)
+            .style(ui_style::tool)
             .padding(3),
-        hint(tip.to_owned()),
+        tip.to_owned(),
         tooltip::Position::Bottom,
     )
-    .gap(4)
     .into()
 }
 
 /// An action on the band of a group: an icon with its name in a tooltip,
 /// disabled when there is no message.
 fn band_action<'a>(icon: ToolIcon, tip: &str, message: Option<Message>) -> Element<'a, Message> {
-    tooltip(
+    ui_style::tooltip(
         button(icon_svg(icon, 15.0))
             .on_press_maybe(message)
-            .style(flat_tool_style)
+            .style(ui_style::tool)
             .padding(3),
-        hint(tip.to_owned()),
+        tip.to_owned(),
         tooltip::Position::Bottom,
     )
-    .gap(4)
     .into()
-}
-
-/// The box a tooltip of the Project Browser shows its text in.
-pub(crate) fn hint<'a>(content: String) -> Element<'a, Message> {
-    container(text(content).size(11))
-        .padding([4, 7])
-        .style(|theme| {
-            let colors = ui_theme::colors(theme);
-            container::Style::default()
-                .background(colors.tooltip_bg)
-                .color(colors.tooltip_text)
-                .border(iced::Border::default().rounded(4))
-        })
-        .into()
 }
 
 /// The checkbox of a group of scans: ticked when all are shown, empty when
 /// none is and with a dash when some are. A click on a dash shows them all.
 fn shown_checkbox<'a>(state: Shown, on: impl Fn(bool) -> Message + 'a) -> Element<'a, Message> {
-    let mut boxed = checkbox("", state != Shown::None)
+    let mut boxed = ui_style::checkbox("", state != Shown::None)
         .on_toggle(move |checked| on(state == Shown::Mixed || checked))
-        .style(muted_checkbox_style)
-        .spacing(0)
-        .size(13);
+        .spacing(0);
     if state == Shown::Mixed {
         boxed = boxed.icon(checkbox::Icon {
             font: fonts::REGULAR,
@@ -520,13 +500,11 @@ pub fn view_row<'a>(
             .align_y(iced::Alignment::Center),
     )
     .on_press(message)
-    .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, shown, status))
+    .style(move |theme, status| ui_style::ribbon_button(theme, shown, status))
     .padding([3, 5])
     .width(Fill);
     let pick: Element<'a, Message> = if cut {
-        tooltip(pick, hint(name), tooltip::Position::Bottom)
-            .gap(4)
-            .into()
+        ui_style::tooltip(pick, name, tooltip::Position::Bottom).into()
     } else {
         pick.into()
     };
@@ -555,15 +533,14 @@ pub fn duplicate_button<'a>(message: Message) -> Element<'a, Message> {
 
 /// A small button with an icon on a row of VIEWS, with its tooltip.
 pub fn row_button<'a>(icon: ToolIcon, tip: &str, message: Message) -> Element<'a, Message> {
-    tooltip(
+    ui_style::tooltip(
         button(icon_svg(icon, 12.0))
             .on_press(message)
-            .style(flat_tool_style)
+            .style(ui_style::tool)
             .padding([3, 4]),
-        hint(tip.to_owned()),
+        tip.to_owned(),
         tooltip::Position::Bottom,
     )
-    .gap(4)
     .into()
 }
 
@@ -571,7 +548,7 @@ pub fn row_button<'a>(icon: ToolIcon, tip: &str, message: Message) -> Element<'a
 pub fn remove_button<'a>(message: Message) -> Element<'a, Message> {
     button(text("×").size(11))
         .on_press(message)
-        .style(flat_tool_style)
+        .style(ui_style::tool)
         .padding([3, 6])
         .into()
 }
@@ -755,7 +732,7 @@ impl Studio {
         if let Some(resume) = self.mesh_to_plans_browser() {
             panel = panel.push(resume);
         }
-        container(iced::widget::scrollable(panel.padding(14)).height(Fill))
+        container(ui_style::scrollable(panel.padding(14)).height(Fill))
             .width(WIDTH)
             .height(Fill)
             .style(crate::sidebar_style)
@@ -813,16 +790,7 @@ impl Studio {
                     ))
                     .size(10)
                     .color(colors.text_muted),
-                    progress_bar(0.0..=1.0, summary.fraction)
-                        .height(2)
-                        .style(|theme| {
-                            let colors = ui_theme::colors(theme);
-                            progress_bar::Style {
-                                background: colors.border_strong.into(),
-                                bar: colors.accent.into(),
-                                border: iced::Border::default(),
-                            }
-                        }),
+                    ui_style::progress_line(0.0..=1.0, summary.fraction),
                 ]
                 .spacing(2),
                 7.0,
@@ -836,13 +804,13 @@ impl Studio {
                 .push(
                     button(text(tr("+  Add point cloud")).size(12))
                         .on_press(Message::Open)
-                        .style(flat_tool_style)
+                        .style(ui_style::tool)
                         .width(Fill),
                 )
                 .push(
                     button(text(tr("+  Open scan folder…")).size(12))
                         .on_press(Message::OpenFolder)
-                        .style(flat_tool_style)
+                        .style(ui_style::tool)
                         .width(Fill),
                 )
                 .into();
@@ -878,7 +846,7 @@ impl Studio {
                 |name| name.to_string_lossy().into_owned(),
             );
             let target = folder.clone();
-            let header = tooltip(
+            let header = ui_style::tooltip(
                 band(
                     key,
                     folder_open,
@@ -890,10 +858,9 @@ impl Studio {
                     })],
                     true,
                 ),
-                hint(folder.display().to_string()),
+                folder.display().to_string(),
                 tooltip::Position::FollowCursor,
-            )
-            .gap(5);
+            );
             let mut sub = column![header].spacing(2);
             if folder_open {
                 let mut list = column![].spacing(2);
@@ -947,7 +914,7 @@ impl Studio {
         let name = display_name(&entry.cloud.path);
         let readable_name = name.replace('_', "_\u{200b}");
         let remaining = entry.remaining_count();
-        let file_button = tooltip(
+        let file_button = ui_style::tooltip(
             button(
                 row![
                     icon_svg(ToolIcon::Scan, 13.0),
@@ -960,29 +927,26 @@ impl Studio {
                 .align_y(iced::Alignment::Center),
             )
             .on_press(Message::LayerClick(index))
-            .style(flat_tool_style)
+            .style(ui_style::tool)
             .width(Fill)
             .padding([2, 2]),
-            hint(format!(
+            format!(
                 "{}\n{} points",
                 entry.cloud.path.display(),
                 format_count(remaining)
-            )),
+            ),
             tooltip::Position::FollowCursor,
-        )
-        .gap(5);
+        );
         let mut item = column![row![
-            checkbox("", entry.visible)
-                .on_toggle(move |value| Message::LayerVisible(index, value))
-                .style(muted_checkbox_style)
-                .size(14),
+            ui_style::checkbox("", entry.visible)
+                .on_toggle(move |value| Message::LayerVisible(index, value)),
             file_button,
             text(compact_count(remaining))
                 .size(10)
                 .color(colors.text_muted),
             button(text("×").size(12))
                 .on_press(Message::LayerRemove(index))
-                .style(flat_tool_style)
+                .style(ui_style::tool)
                 .padding([1, 5]),
         ]
         .spacing(3)
@@ -1012,15 +976,7 @@ impl Studio {
         }
         if let Some(fraction) = progress.and_then(|(_, fraction)| fraction) {
             item = item.push(
-                container(progress_bar(0.0..=1.0, fraction).height(2).style(|theme| {
-                    let colors = ui_theme::colors(theme);
-                    progress_bar::Style {
-                        background: colors.border_strong.into(),
-                        bar: colors.accent.into(),
-                        border: iced::Border::default(),
-                    }
-                }))
-                .padding(iced::Padding {
+                container(ui_style::progress_line(0.0..=1.0, fraction)).padding(iced::Padding {
                     left: 20.0,
                     right: 4.0,
                     ..iced::Padding::ZERO
@@ -1029,11 +985,8 @@ impl Studio {
         }
         if entry.mesh.is_some() {
             item = item.push(
-                checkbox(tr("Surface"), entry.mesh_visible)
-                    .on_toggle(move |value| Message::SetMeshVisible(index, value))
-                    .style(muted_checkbox_style)
-                    .text_size(11)
-                    .size(12),
+                ui_style::checkbox(tr("Surface"), entry.mesh_visible)
+                    .on_toggle(move |value| Message::SetMeshVisible(index, value)),
             );
         }
         if let Some(switch) = faces::layer_switch(index, entry) {
@@ -1105,11 +1058,9 @@ impl Studio {
                 let shown = self.class_visibility.allows(Some(code));
                 list = list.push(
                     row![
-                        checkbox("", shown)
+                        ui_style::checkbox("", shown)
                             .on_toggle(move |visible| Message::FilterClass(code, visible))
-                            .style(muted_checkbox_style)
-                            .spacing(0)
-                            .size(13),
+                            .spacing(0),
                         icon_svg(ToolIcon::Classes, 12.0),
                         mouse_area(text(label).size(11))
                             .on_press(Message::FilterClass(code, !shown)),
@@ -1131,17 +1082,14 @@ impl Studio {
         let groups = self.view_groups();
         let count: usize = groups.iter().map(|(_, rows)| rows.len()).sum();
         let model_shown = !self.drawing_view.shown;
-        let show_model = tooltip(
+        let show_model = ui_style::tooltip(
             button(icon_svg(ToolIcon::Model, 15.0))
                 .on_press(Message::Browser(BrowserAction::ShowModel))
-                .style(move |theme, status| {
-                    opencad_ribbon::tool_btn_style(theme, model_shown, status)
-                })
+                .style(move |theme, status| ui_style::ribbon_button(theme, model_shown, status))
                 .padding(3),
-            hint(tr("Show the 3D model").to_owned()),
+            tr("Show the 3D model").to_owned(),
             tooltip::Position::Bottom,
-        )
-        .gap(4);
+        );
         // Making and opening drawings are icons on the band, beside the 3D
         // model, so that the group holds only views.
         let has_scan = self.active.is_some();

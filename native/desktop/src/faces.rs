@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame};
-use iced::widget::{button, checkbox, column, container, horizontal_space, row, scrollable, text};
+use iced::widget::{button, column, container, horizontal_space, row, text};
 use iced::{Color, Element, Fill, Length, Size, Task};
 use pointcloud_core::region_source::{resident_points, RegionSource, SourceTransform, EVERYWHERE};
 use pointcloud_core::surfaces::{
@@ -39,6 +39,7 @@ use crate::closed_mesh::{
     box_limits, choice_list, lacks_scan_ranges, number, option_value, rotation_option, turned_box,
     uncapitalised, with_scan_ranges, Layers, Learned, Sentence,
 };
+use crate::ui_style;
 // The tests of how a layer is read size a scan by the limit of memory.
 #[cfg(test)]
 use crate::closed_mesh::UNINDEXED_LIMIT;
@@ -48,9 +49,8 @@ use crate::job_scene::{JobLayer, JobScene};
 use crate::open_progress::{Line, Phase};
 use crate::selection::{ClassFilter, ClassVisibility, DeletionMask};
 use crate::{
-    camera_views, compact_count, display_name, drawing, flat_tool_style, format_count, measure,
-    mesh_wizard, muted_checkbox_style, opencad_properties, opencad_ribbon, same_deletion_mask,
-    CloudEntry, Message, PointViewport, Studio,
+    camera_views, compact_count, display_name, drawing, format_count, measure, mesh_wizard,
+    opencad_properties, same_deletion_mask, CloudEntry, Message, PointViewport, Studio,
 };
 
 /// The limits of the settings. The core asks for a tolerance and an area
@@ -1090,11 +1090,8 @@ pub(crate) fn layer_switch(index: usize, entry: &CloudEntry) -> Option<Element<'
         tr("Faces")
     };
     Some(
-        checkbox(name, layer.visible)
+        ui_style::checkbox(name, layer.visible)
             .on_toggle(move |visible| Message::Faces(FaceAction::Visible(index, visible)))
-            .style(muted_checkbox_style)
-            .text_size(11)
-            .size(12)
             .into(),
     )
 }
@@ -2471,11 +2468,8 @@ impl Studio {
             ),
             mesh_wizard::option_control(
                 "Cylinders",
-                checkbox(tr("Columns and pipes"), settings.cylinders)
+                ui_style::checkbox(tr("Columns and pipes"), settings.cylinders)
                     .on_toggle(|value| Message::Faces(FaceAction::Cylinders(value)))
-                    .style(muted_checkbox_style)
-                    .text_size(11)
-                    .size(12)
                     .into(),
                 tr(if defaults.cylinders { key("On") } else { key("Off") }).to_owned(),
                 key("Whether round columns and pipes are looked for among the points that no flat face took."),
@@ -2779,7 +2773,7 @@ impl Studio {
                     .align_y(iced::Alignment::Center),
                 )
                 .on_press(Message::Faces(FaceAction::Select(Some(face.id))))
-                .style(move |theme, status| opencad_ribbon::tool_btn_style(theme, chosen, status))
+                .style(move |theme, status| ui_style::ribbon_button(theme, chosen, status))
                 .width(Fill)
                 .height(LIST_ROW_H)
                 .padding([2, 8]),
@@ -2791,7 +2785,7 @@ impl Studio {
                 .into(),
         );
         parts.push(
-            scrollable(list)
+            ui_style::scrollable(list)
                 .height(Length::Fixed((shown as f32 * LIST_ROW_H).min(LIST_MAX_H)))
                 .into(),
         );
@@ -2819,10 +2813,10 @@ impl Studio {
                             (!self.faces.export_pending)
                                 .then_some(Message::Faces(FaceAction::Export)),
                         )
-                        .style(flat_tool_style),
+                        .style(ui_style::tool),
                     button(tr("Clear faces"))
                         .on_press(Message::Faces(FaceAction::Clear))
-                        .style(flat_tool_style),
+                        .style(ui_style::tool),
                 ]
                 .spacing(8),
             )

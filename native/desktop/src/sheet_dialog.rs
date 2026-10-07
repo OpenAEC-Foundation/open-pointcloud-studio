@@ -8,18 +8,15 @@
 use std::fmt;
 
 use iced::widget::{
-    button, center, column, container, horizontal_space, mouse_area, opaque, pick_list, row, text,
-    text_input,
+    button, center, column, container, horizontal_space, mouse_area, opaque, row, text,
 };
 use iced::{Border, Element, Task};
 use pointcloud_core::{DrawingView, OrientedBox};
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::{key, tr};
-use crate::{
-    combined_bounds, flat_tool_style, opencad_ribbon, themed_pick_list_style, ui_theme, Message,
-    Studio,
-};
+use crate::ui_style;
+use crate::{combined_bounds, ui_theme, Message, Studio};
 
 /// The cut of a plan lies this far above the floor of the box it starts
 /// from.
@@ -532,9 +529,7 @@ impl Studio {
                     button(text(tr(kind.label())).size(12))
                         .on_press(send(SheetAction::Kind(kind)))
                         .padding([5, 14])
-                        .style(move |theme, status| {
-                            opencad_ribbon::tool_btn_style(theme, active, status)
-                        }),
+                        .style(move |theme, status| ui_style::ribbon_button(theme, active, status)),
                 )
             });
         let mut bases = vec![SheetBasis::Model];
@@ -543,21 +538,17 @@ impl Studio {
         }
         bases.extend(self.views_with_a_box());
         let field = |value: &str, on: fn(String) -> SheetAction| {
-            text_input("", value)
+            ui_style::text_input("", value)
                 .on_input(move |value| Message::Sheet(on(value)))
-                .size(12)
-                .padding([4, 6])
                 .width(110)
         };
         let mut form = column![
             row![label("Drawing"), kinds].align_y(iced::Alignment::Center),
             row![
                 label("Based on"),
-                pick_list(bases, Some(dialog.basis.clone()), |basis| Message::Sheet(
+                ui_style::pick_list(bases, Some(dialog.basis.clone()), |basis| Message::Sheet(
                     SheetAction::Basis(basis)
                 ))
-                .style(themed_pick_list_style)
-                .text_size(12)
                 .width(220),
             ]
             .align_y(iced::Alignment::Center),
@@ -567,11 +558,9 @@ impl Studio {
             form = form.push(
                 row![
                     label("Looking at"),
-                    pick_list(Side::ALL, Some(dialog.side), |side| Message::Sheet(
+                    ui_style::pick_list(Side::ALL, Some(dialog.side), |side| Message::Sheet(
                         SheetAction::Side(side)
                     ))
-                    .style(themed_pick_list_style)
-                    .text_size(12)
                     .width(140),
                 ]
                 .align_y(iced::Alignment::Center),
@@ -639,7 +628,7 @@ impl Studio {
                     horizontal_space(),
                     button(text("×").size(14))
                         .on_press(send(SheetAction::Close))
-                        .style(flat_tool_style)
+                        .style(ui_style::tool)
                         .padding([1, 8]),
                 ]
                 .align_y(iced::Alignment::Center),
@@ -648,13 +637,13 @@ impl Studio {
                     horizontal_space(),
                     button(text(tr("Cancel")).size(12))
                         .on_press(send(SheetAction::Close))
-                        .style(flat_tool_style),
+                        .style(ui_style::secondary),
                     button(text(tr("Create")).size(12))
                         .on_press_maybe(
                             (!self.clouds.is_empty()).then_some(send(SheetAction::Create))
                         )
                         .padding([5, 16])
-                        .style(|theme, status| opencad_ribbon::tool_btn_style(theme, true, status)),
+                        .style(ui_style::primary),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),

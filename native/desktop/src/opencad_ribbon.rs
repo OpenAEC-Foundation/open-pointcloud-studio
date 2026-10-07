@@ -4,10 +4,9 @@
 // Changes: adapted the ribbon primitives to iced 0.13 and point-cloud commands.
 
 use iced::widget::{button, column, container, row, text, tooltip};
-use iced::{Background, Border, Color, Element, Fill, Length, Theme};
+use iced::{Background, Border, Element, Fill, Length, Theme};
 
-use crate::ui_theme;
-use crate::Message;
+use crate::{ui_style, ui_theme, Message};
 
 pub const ROW_H: f32 = 32.0;
 pub const TOOL_BAR_H: f32 = 3.0 * ROW_H + 20.0;
@@ -22,24 +21,14 @@ pub fn quick_access_btn<'a>(
 ) -> Element<'a, Message> {
     let control = button(container(icon).width(Fill).height(Fill).center(Fill))
         .on_press_maybe(message)
-        .style(|theme, status| tool_btn_style(theme, false, status))
+        .style(ui_style::tool)
         .width(Length::Fixed(QUICK_ACCESS_W))
         .height(26)
         .padding([2, 0]);
-    tooltip(
-        control,
-        container(text(crate::i18n::tr(label)).size(11))
-            .padding([4, 7])
-            .style(|theme| {
-                let colors = ui_theme::colors(theme);
-                container::Style::default()
-                    .background(colors.tooltip_bg)
-                    .color(colors.tooltip_text)
-            }),
-        tooltip::Position::Bottom,
-    )
-    .gap(98)
-    .into()
+    // Below the tools of the ribbon, which it would cover.
+    ui_style::tooltip(control, crate::i18n::tr(label), tooltip::Position::Bottom)
+        .gap(98)
+        .into()
 }
 
 pub enum RibbonItem<'a> {
@@ -57,66 +46,6 @@ pub fn flush_small_col<'a>(
     }
     let col = column(std::mem::take(buf)).spacing(1);
     out.push(col.into());
-}
-
-/// OpenCADStudio button behavior with OpenAEC dark ribbon tokens.
-pub fn tool_btn_style(theme: &Theme, is_active: bool, status: button::Status) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    let (background, text_color, border) = match (is_active, status) {
-        // A button that cannot be pressed is drawn at 40 %.
-        (_, button::Status::Disabled) => (None, colors.text.scale_alpha(0.4), Color::TRANSPARENT),
-        (true, _) => (
-            Some(colors.ribbon_btn_active_bg),
-            colors.ribbon_btn_active_text,
-            colors.ribbon_btn_active_border,
-        ),
-        (_, button::Status::Hovered | button::Status::Pressed) => (
-            Some(colors.ribbon_btn_hover),
-            colors.ribbon_text_hover,
-            colors.ribbon_btn_hover_border,
-        ),
-        _ => (None, colors.text, Color::TRANSPARENT),
-    };
-    button::Style {
-        background: background.map(Background::Color),
-        text_color,
-        border: Border {
-            radius: 3.0.into(),
-            color: border,
-            width: 1.0,
-        },
-        shadow: iced::Shadow::default(),
-    }
-}
-
-/// The button that goes on, such as Next or Confirm in a wizard: filled with
-/// the accent colour, and only outlined with muted text while it cannot be
-/// pressed, so that it does not look ready while it waits.
-pub fn primary_btn_style(theme: &Theme, status: button::Status) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    let (background, text_color, border) = match status {
-        button::Status::Disabled => (None, colors.text_muted, colors.border),
-        button::Status::Hovered | button::Status::Pressed => (
-            Some(colors.btn_primary_hover_bg),
-            colors.btn_primary_hover_text,
-            Color::TRANSPARENT,
-        ),
-        button::Status::Active => (
-            Some(colors.btn_primary_bg),
-            colors.btn_primary_text,
-            Color::TRANSPARENT,
-        ),
-    };
-    button::Style {
-        background: background.map(Background::Color),
-        text_color,
-        border: Border {
-            radius: 3.0.into(),
-            color: border,
-            width: 1.0,
-        },
-        shadow: iced::Shadow::default(),
-    }
 }
 
 /// OpenCADStudio's panel structure: tools above a centered muted title.

@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use iced::alignment;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
-use iced::widget::{button, column, container, image, row, scrollable, stack, text, text_input};
+use iced::widget::{button, column, container, image, row, stack, text};
 use iced::{
     keyboard, mouse, Border, Color, Element, Fill, Point, Rectangle, Renderer, Size, Task, Theme,
 };
@@ -36,7 +36,8 @@ use super::{StepStatus, WizardAction, WizardStep};
 use crate::closed_mesh::{Sentence, UNINDEXED_LIMIT};
 use crate::i18n::{key, tr, tr_args};
 use crate::job_scene::{JobLayer, JobScene};
-use crate::{opencad_ribbon, Message, Studio};
+use crate::ui_style;
+use crate::{Message, Studio};
 
 /// What `mesh_to_plans_level` of the local API does with a level.
 pub(crate) const LEVEL_ACTIONS: [&str; 6] =
@@ -1206,16 +1207,14 @@ impl Studio {
             };
         let input =
             |placeholder: &'static str, value: &str, on_input: fn(String) -> PrepareAction| {
-                text_input(tr(placeholder), value)
+                ui_style::text_input(tr(placeholder), value)
                     .on_input(move |typed| send(on_input(typed)))
-                    .size(11)
-                    .padding([3, 5])
                     .width(Fill)
             };
         let plain = |label: &'static str, message: Option<Message>| {
             button(text(tr(label)).size(11))
                 .on_press_maybe(message)
-                .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status))
+                .style(|theme, status| ui_style::ribbon_button(theme, false, status))
                 .padding([3, 8])
         };
 
@@ -1233,12 +1232,10 @@ impl Studio {
         // The folder is fixed once the project is written, and while a job
         // writes to it.
         let folder_open = wizard.project.is_none() && !wizard.is_running();
-        let folder_input = text_input(tr("Folder"), &wizard.project_folder)
+        let folder_input = ui_style::text_input(tr("Folder"), &wizard.project_folder)
             .on_input_maybe(
                 folder_open.then_some(|typed| send(PrepareAction::ProjectFolder(typed))),
             )
-            .size(11)
-            .padding([3, 5])
             .width(Fill);
         page = page.push(field(
             key("Folder"),
@@ -1410,19 +1407,15 @@ impl Studio {
                 |message: fn(String) -> PrepareAction| move |typed: String| send(message(typed));
             page = page.push(field(
                 key("Name"),
-                text_input(tr("Name"), &prepare.name)
+                ui_style::text_input(tr("Name"), &prepare.name)
                     .on_input_maybe((!locked).then_some(editable(PrepareAction::Name)))
-                    .size(11)
-                    .padding([3, 5])
                     .width(Fill)
                     .into(),
             ));
             page = page.push(field(
                 key("Cut height (m)"),
-                text_input("1.20", &prepare.cut)
+                ui_style::text_input("1.20", &prepare.cut)
                     .on_input_maybe((!locked).then_some(editable(PrepareAction::Cut)))
-                    .size(11)
-                    .padding([3, 5])
                     .width(Fill)
                     .into(),
             ));
@@ -1585,7 +1578,7 @@ impl Studio {
                     }),
             );
         }
-        container(scrollable(table).height(iced::Length::Shrink))
+        container(ui_style::scrollable(table).height(iced::Length::Shrink))
             .max_height(200)
             .width(Fill)
             .into()

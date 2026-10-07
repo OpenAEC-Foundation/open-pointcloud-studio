@@ -3,9 +3,10 @@
 // Changes: read-only point-cloud fields, a row that holds a control and the
 // iced 0.13 palette API.
 
-use iced::widget::{container, row, text, text_input, tooltip};
+use iced::widget::{container, row, text, tooltip};
 use iced::{Background, Border, Element, Fill, Length, Theme};
 
+use crate::ui_style;
 use crate::ui_theme;
 use crate::Message;
 
@@ -100,16 +101,11 @@ pub fn property_input<'a>(
     .height(ROW_H)
     .align_y(iced::Alignment::Center)
     .padding([0, 6]);
-    let value_col = container(
-        text_input(placeholder, value)
-            .on_input(on_input)
-            .size(FONT_SZ)
-            .padding([2, 4]),
-    )
-    .width(Length::FillPortion(6))
-    .height(ROW_H)
-    .align_y(iced::Alignment::Center)
-    .padding([0, 5]);
+    let value_col = container(ui_style::text_input(placeholder, value).on_input(on_input))
+        .width(Length::FillPortion(6))
+        .height(ROW_H)
+        .align_y(iced::Alignment::Center)
+        .padding([0, 5]);
     container(row![label_col, value_col])
         .height(ROW_H)
         .width(Fill)
@@ -172,21 +168,6 @@ pub fn section_header(title: &'static str) -> Element<'static, Message> {
     .into()
 }
 
-/// The box a tooltip of the panels is shown in.
-fn tip_box<'a>(lines: &[String]) -> Element<'a, Message> {
-    container(text(lines.join("\n\n")).size(11))
-        .padding([6, 8])
-        .max_width(340)
-        .style(|theme| {
-            let colors = ui_theme::colors(theme);
-            container::Style::default()
-                .background(colors.tooltip_bg)
-                .color(colors.tooltip_text)
-                .border(Border::default().rounded(4))
-        })
-        .into()
-}
-
 /// A control whose explanation shows in a tooltip instead of as text on the
 /// panel.
 pub fn explained<'a>(
@@ -196,9 +177,7 @@ pub fn explained<'a>(
     if lines.is_empty() {
         return content.into();
     }
-    tooltip(content, tip_box(&lines), tooltip::Position::Bottom)
-        .gap(4)
-        .into()
+    ui_style::tooltip(content, lines.join("\n\n"), tooltip::Position::Bottom).into()
 }
 
 /// A small mark in the accent colour whose tooltip holds warnings or
@@ -219,9 +198,5 @@ pub fn warning_mark<'a>(lines: Vec<String>) -> Option<Element<'a, Message>> {
             radius: 9.0.into(),
         })
     });
-    Some(
-        tooltip(mark, tip_box(&lines), tooltip::Position::Bottom)
-            .gap(4)
-            .into(),
-    )
+    Some(ui_style::tooltip(mark, lines.join("\n\n"), tooltip::Position::Bottom).into())
 }

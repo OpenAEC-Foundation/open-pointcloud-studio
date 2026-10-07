@@ -17,16 +17,15 @@
 //! view keeps the room on its row for its name, and shows its lock in the
 //! icon of the row.
 
-use iced::widget::{button, checkbox, container, row, text, tooltip};
+use iced::widget::{button, container, row, text, tooltip};
 use iced::{Element, Fill, Task};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::i18n::tr;
 use crate::native_api::ApiCommand;
-use crate::{
-    flat_tool_style, icon_svg, muted_checkbox_style, opencad_properties, Message, Studio, ToolIcon,
-};
+use crate::ui_style;
+use crate::{icon_svg, opencad_properties, Message, Studio, ToolIcon};
 
 /// What a lock is set on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,15 +105,14 @@ fn padlock<'a>(locked: bool, message: Message) -> Element<'a, Message> {
     } else {
         (ToolIcon::Unlocked, tr("Lock"))
     };
-    tooltip(
+    ui_style::tooltip(
         button(icon_svg(icon, 12.0))
             .on_press(message)
-            .style(flat_tool_style)
+            .style(ui_style::tool)
             .padding([3, 4]),
-        crate::project_browser::hint(tip.to_owned()),
+        tip.to_owned(),
         tooltip::Position::Bottom,
     )
-    .gap(4)
     .into()
 }
 
@@ -317,15 +315,14 @@ impl Studio {
             _ => return None,
         };
         self.is_locked(&target).then(|| {
-            tooltip(
+            ui_style::tooltip(
                 button(icon_svg(ToolIcon::Locked, 11.0))
                     .on_press(Message::Lock(target))
-                    .style(flat_tool_style)
+                    .style(ui_style::tool)
                     .padding([0, 2]),
-                crate::project_browser::hint(tr("Locked: click to unlock").to_owned()),
+                tr("Locked: click to unlock").to_owned(),
                 tooltip::Position::Bottom,
             )
-            .gap(4)
             .into()
         })
     }
@@ -338,18 +335,17 @@ impl Studio {
         } else {
             tr("Update to the current 3D view")
         };
-        tooltip(
+        ui_style::tooltip(
             button(icon_svg(ToolIcon::Update, 12.0))
                 .on_press_maybe(
                     (!locked)
                         .then(|| Message::Views(crate::views::ViewAction::Update(guid.to_owned()))),
                 )
-                .style(flat_tool_style)
+                .style(ui_style::tool)
                 .padding([3, 4]),
-            crate::project_browser::hint(tip.to_owned()),
+            tip.to_owned(),
             tooltip::Position::Bottom,
         )
-        .gap(4)
         .into()
     }
 
@@ -365,11 +361,8 @@ impl Studio {
         };
         container(
             row![
-                checkbox(tr("Locked"), locked)
-                    .on_toggle(move |_| Message::Lock(target.clone()))
-                    .style(muted_checkbox_style)
-                    .text_size(11)
-                    .size(13),
+                ui_style::checkbox(tr("Locked"), locked)
+                    .on_toggle(move |_| Message::Lock(target.clone())),
                 text(explanation)
                     .size(10)
                     .width(Fill)

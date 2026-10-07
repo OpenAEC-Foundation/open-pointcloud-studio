@@ -8,9 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::Canvas;
-use iced::widget::{
-    button, column, container, image, pick_list, progress_bar, row, stack, text, text_input,
-};
+use iced::widget::{button, column, container, image, row, stack, text};
 use iced::{Element, Fill, Point as UiPoint, Task};
 use pointcloud_core::{BagBounds, BagLod, BagProgress, BagStats};
 use serde_json::{json, Value};
@@ -19,7 +17,8 @@ use crate::bag_map::{self, BagMap};
 use crate::extensions;
 use crate::fonts;
 use crate::i18n::{key, tr, tr_args};
-use crate::{flat_tool_style, opencad_ribbon, themed_pick_list_style, CloudEntry, Message, Studio};
+use crate::ui_style;
+use crate::{CloudEntry, Message, Studio};
 
 /// What the core answers when a download was stopped on request.
 const CANCELLED: &str = "Operation cancelled";
@@ -559,7 +558,7 @@ impl Studio {
                     .width(Fill),
                 button("×")
                     .on_press(Message::ToggleBagPanel)
-                    .style(flat_tool_style),
+                    .style(ui_style::tool),
             ]
             .align_y(iced::Alignment::Center),
             text(tr("Download buildings in RD New + NAP (EPSG:7415)."))
@@ -581,13 +580,13 @@ impl Studio {
                     tr("Draw area")
                 })
                 .on_press(Message::BagMapDraw(!self.bag_map_drawing))
-                .style(flat_tool_style),
+                .style(ui_style::tool),
                 button(tr("Fit area"))
                     .on_press(Message::BagMapFitFields)
-                    .style(flat_tool_style),
+                    .style(ui_style::tool),
                 button(tr("Amsterdam"))
                     .on_press(Message::BagMapHome)
-                    .style(flat_tool_style),
+                    .style(ui_style::tool),
             ]
             .spacing(6),
             row![
@@ -596,13 +595,13 @@ impl Studio {
                         -1.0,
                         UiPoint::new(bag_map::WIDTH * 0.5, bag_map::HEIGHT * 0.5),
                     ))
-                    .style(flat_tool_style),
+                    .style(ui_style::tool),
                 button("+")
                     .on_press(Message::BagMapZoom(
                         1.0,
                         UiPoint::new(bag_map::WIDTH * 0.5, bag_map::HEIGHT * 0.5),
                     ))
-                    .style(flat_tool_style),
+                    .style(ui_style::tool),
                 text(tr("Drag to pan · scroll to zoom")).size(10),
             ]
             .spacing(8)
@@ -611,13 +610,13 @@ impl Studio {
                 text(tr("© Kadaster (BRT) via PDOK · CC BY 4.0")).size(10),
                 button(tr("License ↗"))
                     .on_press(Message::OpenPdokLicense)
-                    .style(flat_tool_style),
+                    .style(ui_style::link),
             ]
             .spacing(5)
             .align_y(iced::Alignment::Center),
             button(tr("Use scan / section box"))
                 .on_press_maybe(scan_in_rd.then_some(Message::BagFromSection))
-                .style(flat_tool_style),
+                .style(ui_style::tool),
         ]
         .spacing(10)
         .padding(12)
@@ -639,7 +638,7 @@ impl Studio {
             panel = panel.push(
                 column![
                     text(name).size(11),
-                    text_input(name, &self.bag_fields[index])
+                    ui_style::text_input(name, &self.bag_fields[index])
                         .on_input(move |value| Message::BagField(index, value))
                         .width(Fill),
                 ]
@@ -654,28 +653,31 @@ impl Studio {
         if let Some(problem) = problem {
             panel = panel.push(text(tr(problem)).size(11).color(colors.accent));
         }
-        panel = panel.push(text(tr("Level of detail")).size(11)).push(
-            pick_list(BagLod::ALL, Some(self.bag_lod), Message::BagLod)
-                .style(themed_pick_list_style),
-        );
+        panel = panel
+            .push(text(tr("Level of detail")).size(11))
+            .push(ui_style::pick_list(
+                BagLod::ALL,
+                Some(self.bag_lod),
+                Message::BagLod,
+            ));
         if let Some(job) = &self.bag_job {
             let progress = job.control.snapshot();
             let cancelling = job.cancelling();
             panel = panel.push(text(progress_text(progress, cancelling)).size(12));
             if let Some(fraction) = progress_fraction(progress) {
-                panel = panel.push(progress_bar(0.0..=1.0, fraction).height(6));
+                panel = panel.push(ui_style::progress_bar(0.0..=1.0, fraction));
             }
             panel = panel.push(
                 button(tr("Cancel"))
                     .on_press_maybe((!cancelling).then_some(Message::CancelBag))
-                    .style(flat_tool_style),
+                    .style(ui_style::secondary),
             );
         } else {
             let ready = problem.is_none() && !self.bag_dialog_pending;
             panel = panel.push(
                 button(tr("Download OBJ"))
                     .on_press_maybe(ready.then_some(Message::BagDownload))
-                    .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status)),
+                    .style(|theme, status| ui_style::ribbon_button(theme, false, status)),
             );
         }
         if let Some(error) = &self.bag_last_error {
@@ -701,7 +703,7 @@ impl Studio {
             .push(
                 button(tr("CC BY 4.0 · source and license ↗"))
                     .on_press(Message::OpenBagLicense)
-                    .style(flat_tool_style),
+                    .style(ui_style::link),
             )
             .into()
     }

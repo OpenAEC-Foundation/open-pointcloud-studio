@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 use crate::i18n::{key, tr};
 use crate::selection::Projection;
+use crate::ui_style;
 use crate::{opencad_properties, opencad_ribbon, Message, PointViewport, Studio, ToolIcon};
 
 /// Pixel reach of a measuring click, the same as the point-pick tool.
@@ -525,7 +526,7 @@ impl MeasureTool {
                                     .is_some()
                                     .then_some(Message::Measure(MeasureAction::Clear)),
                             )
-                            .style(crate::flat_tool_style),
+                            .style(ui_style::tool),
                     )
                     .padding([3, 8]),
                 )

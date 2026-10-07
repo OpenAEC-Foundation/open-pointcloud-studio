@@ -4,6 +4,7 @@
 use super::*;
 use crate::i18n::{self, Language, TestLanguage};
 use crate::settings_dialog::SettingsAction;
+use crate::ui_style;
 
 fn wizard(action: WizardAction) -> Message {
     Message::MeshToPlans(action)
@@ -120,15 +121,19 @@ fn next_looks_ready_only_when_it_is() {
     let studio = Studio::default();
     let theme = studio.ui_theme.iced();
     let colors = studio.ui_theme.colors();
-    let ready = opencad_ribbon::primary_btn_style(&theme, button::Status::Active);
-    let waiting = opencad_ribbon::primary_btn_style(&theme, button::Status::Disabled);
+    let ready = ui_style::primary(&theme, button::Status::Active);
+    let waiting = ui_style::primary(&theme, button::Status::Disabled);
     assert_eq!(
         ready.background,
         Some(iced::Background::Color(colors.accent))
     );
-    assert_eq!(waiting.background, None);
-    assert_eq!(waiting.text_color, colors.text_muted);
-    assert_ne!(waiting.text_color, ready.text_color);
+    // While it waits it is drawn at half its strength, as the style book
+    // draws a button that cannot be pressed.
+    assert_eq!(
+        waiting.background,
+        Some(iced::Background::Color(colors.accent.scale_alpha(0.5)))
+    );
+    assert_eq!(waiting.text_color, ready.text_color.scale_alpha(0.5));
 }
 
 #[test]

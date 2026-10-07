@@ -15,9 +15,10 @@ use serde_json::{json, Value};
 
 use crate::cloud_transform::CloudTransform;
 use crate::i18n::tr;
+use crate::ui_style;
 use crate::{
-    camera_views, flat_tool_style, format_count, is_bag3d_mesh, opencad_properties, CloudEntry,
-    Message, Studio, BAG3D_MESH_COMMENTS, BAG3D_PLY_COMMENTS,
+    camera_views, format_count, is_bag3d_mesh, opencad_properties, CloudEntry, Message, Studio,
+    BAG3D_MESH_COMMENTS, BAG3D_PLY_COMMENTS,
 };
 
 /// The formats in the order the save dialog offers them, each with the name
@@ -509,7 +510,7 @@ impl Studio {
                 container(
                     button(tr("Export mesh…"))
                         .on_press_maybe((!self.mesh_export_pending).then_some(Message::ExportMesh))
-                        .style(flat_tool_style),
+                        .style(ui_style::tool),
                 )
                 .padding([4, 8]),
             )

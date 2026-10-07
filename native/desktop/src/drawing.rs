@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame};
-use iced::widget::{button, checkbox, column, container, pick_list, row, text};
+use iced::widget::{button, column, container, row, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Size, Task};
 use pointcloud_core::region_source::{RegionFilter, RegionSource};
 use pointcloud_core::{
@@ -35,14 +35,14 @@ use crate::job_scene::{JobLayer, JobScene};
 use crate::open_progress::{Line, Phase};
 use crate::saved_drawings::SavedDrawing;
 use crate::selection::{ClassFilter, ClassVisibility, Projection};
+use crate::ui_style;
 // The tests delete points of a layer.
 #[cfg(test)]
 use crate::selection::DeletionMask;
 use crate::sheet_dialog::SheetJob;
 use crate::{
-    camera_views, compact_count, flat_tool_style, format_count, measure, muted_checkbox_style,
-    opencad_properties, opencad_ribbon, same_deletion_mask, themed_pick_list_style, CloudEntry,
-    Message, PointViewport, Studio,
+    camera_views, compact_count, format_count, measure, opencad_properties, opencad_ribbon,
+    same_deletion_mask, CloudEntry, Message, PointViewport, Studio,
 };
 
 /// The formats in the order the save dialog offers them, each with the name
@@ -188,13 +188,10 @@ where
         value,
         text: name(value),
     };
-    pick_list(all.map(choice), Some(choice(current)), move |chosen| {
+    ui_style::pick_list(all.map(choice), Some(choice(current)), move |chosen| {
         Message::Drawing(action(chosen.value))
     })
-    .text_size(11)
-    .padding([2, 4])
     .width(Fill)
-    .style(themed_pick_list_style)
     .into()
 }
 
@@ -1957,11 +1954,8 @@ impl Studio {
         let settings = &tool.settings;
         let check = |label: &'static str, on: bool, action: fn(bool) -> DrawingAction| {
             container(
-                checkbox(label, on)
-                    .on_toggle(move |value| Message::Drawing(action(value)))
-                    .style(muted_checkbox_style)
-                    .text_size(11)
-                    .size(13),
+                ui_style::checkbox(label, on)
+                    .on_toggle(move |value| Message::Drawing(action(value))),
             )
             .padding([4, 8])
         };
@@ -2090,7 +2084,7 @@ impl Studio {
                             .on_press_maybe(
                                 (!cancelling).then_some(Message::Drawing(DrawingAction::Cancel)),
                             )
-                            .style(flat_tool_style),
+                            .style(ui_style::secondary),
                     )
                     .padding([3, 8]),
                 );
@@ -2104,7 +2098,7 @@ impl Studio {
                             opencad_properties::explained(
                                 button(tr("Preview"))
                                     .on_press_maybe(act(DrawingAction::Preview))
-                                    .style(flat_tool_style),
+                                    .style(ui_style::tool),
                                 explanation.clone(),
                             ),
                             button(tr("Clear preview"))
@@ -2113,7 +2107,7 @@ impl Studio {
                                         .is_some()
                                         .then_some(Message::Drawing(DrawingAction::ClearPreview),)
                                 )
-                                .style(flat_tool_style),
+                                .style(ui_style::tool),
                         ]
                         .spacing(3),
                     )
@@ -2123,9 +2117,7 @@ impl Studio {
                     container(opencad_properties::explained(
                         button(tr("Export drawing…"))
                             .on_press_maybe(act(DrawingAction::Export))
-                            .style(|theme, status| {
-                                opencad_ribbon::tool_btn_style(theme, false, status)
-                            }),
+                            .style(|theme, status| ui_style::ribbon_button(theme, false, status)),
                         {
                             let mut lines = explanation.clone();
                             lines.push(
@@ -2146,14 +2138,14 @@ impl Studio {
                                 .has_section_drawing()
                                 .then_some(Message::DrawingView(DrawingViewAction::Show(true))),
                         )
-                        .style(flat_tool_style),
-                    checkbox(tr("Show after export"), self.drawing_view.show_after_export)
-                        .on_toggle(|on| {
-                            Message::DrawingView(DrawingViewAction::ShowAfterExport(on))
-                        })
-                        .style(muted_checkbox_style)
-                        .text_size(11)
-                        .size(12),
+                        .style(ui_style::tool),
+                    ui_style::checkbox(
+                        tr("Show after export"),
+                        self.drawing_view.show_after_export
+                    )
+                    .on_toggle(|on| {
+                        Message::DrawingView(DrawingViewAction::ShowAfterExport(on))
+                    }),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),

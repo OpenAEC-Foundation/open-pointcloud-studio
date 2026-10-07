@@ -3,14 +3,14 @@
 //! in use when the dialog opened and Save keeps it for later sessions.
 
 use iced::widget::{
-    button, center, column, container, horizontal_space, mouse_area, opaque, pick_list, row, text,
-    Space,
+    button, center, column, container, horizontal_space, mouse_area, opaque, row, text, Space,
 };
 use iced::{Border, Color, Element, Fill};
 
 use crate::i18n::{self, tr, Language};
+use crate::ui_style;
 use crate::ui_theme::{self, UiColors, UiTheme};
-use crate::{flat_tool_style, opencad_ribbon, themed_pick_list_style, Message, Studio};
+use crate::{Message, Studio};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -69,7 +69,7 @@ pub(crate) fn about<'a>(colors: UiColors) -> iced::widget::Column<'a, Message> {
             .color(colors.text_secondary),
         button(text(tr("Source code ↗")).size(12))
             .on_press(Message::OpenUrl(crate::SOURCE_URL))
-            .style(flat_tool_style)
+            .style(ui_style::link)
             .padding([4, 8]),
     ]
     .spacing(10)
@@ -201,11 +201,9 @@ impl Studio {
                 heading("Application"),
                 row![
                     label("Language"),
-                    pick_list(Language::all(), Some(i18n::choice()), move |language| send(
+                    ui_style::pick_list(Language::all(), Some(i18n::choice()), move |language| send(
                         SettingsAction::Language(language)
                     ))
-                    .style(themed_pick_list_style)
-                    .text_size(12)
                     .width(190),
                 ]
                 .spacing(12)
@@ -290,16 +288,16 @@ impl Studio {
         let footer = row![
             button(text(tr("Reset to Defaults")).size(12))
                 .on_press(send(SettingsAction::Reset))
-                .style(flat_tool_style)
+                .style(ui_style::secondary)
                 .padding([5, 12]),
             horizontal_space(),
             button(text(tr("Cancel")).size(12))
                 .on_press(send(SettingsAction::Cancel))
-                .style(flat_tool_style)
+                .style(ui_style::secondary)
                 .padding([5, 12]),
             button(text(tr("Save")).size(12))
                 .on_press(send(SettingsAction::Save))
-                .style(|theme, status| opencad_ribbon::file_tab_style(theme, false, status))
+                .style(ui_style::primary)
                 .padding([5, 16]),
         ]
         .spacing(8)
@@ -312,7 +310,7 @@ impl Studio {
                     horizontal_space(),
                     button(text("×").size(14))
                         .on_press(send(SettingsAction::Cancel))
-                        .style(flat_tool_style)
+                        .style(ui_style::tool)
                         .padding([1, 8]),
                 ]
                 .align_y(iced::Alignment::Center),

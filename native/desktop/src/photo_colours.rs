@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use iced::widget::{button, checkbox, column, container, row, text};
+use iced::widget::{button, column, container, row, text};
 use iced::{Element, Fill, Task};
 use pointcloud_core::photo_colour::{
     colour_from_photos, ColourComparison, ColourProgress, ColourStage, ColourTimes,
@@ -31,9 +31,10 @@ use crate::i18n::{key, tr, tr_args};
 use crate::job_scene::JobLayer;
 use crate::open_progress::{Line, Phase};
 use crate::selection::ClassFilter;
+use crate::ui_style;
 use crate::{
-    compact_count, display_name, flat_tool_style, format_count, muted_checkbox_style,
-    opencad_properties, opencad_ribbon, CloudEntry, ColorMode, EditBatch, Message, Studio,
+    compact_count, display_name, format_count, opencad_properties, CloudEntry, ColorMode,
+    EditBatch, Message, Studio,
 };
 
 const BUSY: &str = key("Points are already being coloured from photos");
@@ -1119,11 +1120,8 @@ impl Studio {
             opencad_properties::property_control(
                 "Photos",
                 opencad_properties::explained(
-                    checkbox(tr("Blend"), settings.blend)
-                        .on_toggle(|value| Message::PhotoColours(PhotoColourAction::Blend(value)))
-                        .style(muted_checkbox_style)
-                        .text_size(11)
-                        .size(12),
+                    ui_style::checkbox(tr("Blend"), settings.blend)
+                        .on_toggle(|value| Message::PhotoColours(PhotoColourAction::Blend(value))),
                     vec![tr(
                         "Every photo that sees a point adds to its colour, weighted strongly to the nearest: this evens out the exposure of photos taken one after another. Without it the nearest photo alone gives the colour."
                     )
@@ -1150,7 +1148,7 @@ impl Studio {
                                 (!cancelling)
                                     .then_some(Message::PhotoColours(PhotoColourAction::Cancel)),
                             )
-                            .style(flat_tool_style),
+                            .style(ui_style::tool),
                     )
                     .padding([3, 8]),
                 );
@@ -1186,7 +1184,7 @@ impl Studio {
                     .on_press_maybe(
                         ready.then_some(Message::PhotoColours(PhotoColourAction::Start))
                     )
-                    .style(|theme, status| opencad_ribbon::tool_btn_style(theme, false, status)),
+                    .style(|theme, status| ui_style::ribbon_button(theme, false, status)),
                 explanation,
             )]
             .spacing(6)
@@ -1195,7 +1193,7 @@ impl Studio {
                 buttons = buttons.push(
                     button(tr("Remove photo colours"))
                         .on_press(Message::PhotoColours(PhotoColourAction::Clear))
-                        .style(flat_tool_style),
+                        .style(ui_style::tool),
                 );
             }
             if let Some(mark) = opencad_properties::warning_mark(warnings) {

@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-use iced::widget::{column, container, pick_list, row, text};
+use iced::widget::{column, container, row, text};
 use iced::{Element, Fill, Task};
 use pointcloud_core::region_source::{resident_points, RegionSource};
 use pointcloud_core::surfels::{SurfelSource, MAX_VOXEL, MIN_VOXEL};
@@ -36,9 +36,10 @@ use crate::job_scene::{JobLayer, JobScene};
 use crate::mesh_export::{topology_text, MeasuredMesh};
 use crate::open_progress::{Line, Phase};
 use crate::selection::{ClassFilter, ClassVisibility};
+use crate::ui_style;
 use crate::{
     camera_views, compact_count, display_name, format_count, mesh_wizard, opencad_properties,
-    themed_pick_list_style, CloudEntry, Message, Studio,
+    CloudEntry, Message, Studio,
 };
 
 /// A layer without an index is read into memory for the job. Above this many
@@ -1448,13 +1449,10 @@ where
         value,
         text: name(value),
     };
-    pick_list(all.map(choice), Some(choice(current)), move |chosen| {
+    ui_style::pick_list(all.map(choice), Some(choice(current)), move |chosen| {
         message(chosen.value)
     })
-    .text_size(11)
-    .padding([2, 4])
     .width(Fill)
-    .style(themed_pick_list_style)
     .into()
 }
 

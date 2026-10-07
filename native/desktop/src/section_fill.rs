@@ -5,12 +5,13 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use iced::widget::{checkbox, column, container, row, text_input};
+use iced::widget::{column, container, row};
 use iced::{Background, Border, Color, Element, Fill};
 use pointcloud_core::{DEFAULT_CAP_MAX_THICKNESS, MAX_CAP_MAX_THICKNESS, MIN_CAP_MAX_THICKNESS};
 use serde_json::{json, Value};
 
 use crate::i18n::tr;
+use crate::ui_style;
 use crate::{opencad_properties, Message};
 
 /// A dark neutral grey. It stands apart from a mesh without colours, drawn in
@@ -215,11 +216,8 @@ impl SectionFill {
     /// The rows of the Section box block in Properties.
     pub fn properties(&self) -> Element<'_, Message> {
         let mut block = column![container(
-            checkbox(tr("Fill the cut"), self.fill_cut)
-                .on_toggle(|enabled| Message::SectionFill(FillAction::Enabled(enabled)))
-                .style(crate::muted_checkbox_style)
-                .text_size(11)
-                .size(13),
+            ui_style::checkbox(tr("Fill the cut"), self.fill_cut)
+                .on_toggle(|enabled| Message::SectionFill(FillAction::Enabled(enabled))),
         )
         .padding([4, 8])]
         .spacing(0);
@@ -248,10 +246,8 @@ impl SectionFill {
                     "Cap colour",
                     row![
                         swatch,
-                        text_input("#585858", &self.color_input)
+                        ui_style::text_input("#585858", &self.color_input)
                             .on_input(|value| Message::SectionFill(FillAction::Color(value)))
-                            .size(11)
-                            .padding([2, 4])
                             .width(Fill),
                     ]
                     .spacing(5)

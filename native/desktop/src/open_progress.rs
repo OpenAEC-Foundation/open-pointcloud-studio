@@ -6,14 +6,13 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use iced::widget::{button, column, container, progress_bar, row, text};
-use iced::{Color, Element, Fill};
+use iced::widget::{button, column, container, row, text};
+use iced::{Element, Fill};
 use pointcloud_core::IndexStage;
 
 use crate::index_jobs::IndexJob;
-use crate::{
-    compact_count, display_name, flat_tool_style, i18n, ui_theme, CloudEntry, Message, Studio,
-};
+use crate::ui_style;
+use crate::{compact_count, display_name, i18n, ui_theme, CloudEntry, Message, Studio};
 
 /// A task is timed from when it was first seen; a shorter time or a smaller
 /// advance than these says nothing yet about how long the rest will take.
@@ -437,11 +436,6 @@ impl Studio {
         let now = Instant::now();
         // The strip lies on the scene, which is white in the light theme.
         let colors = self.ui_theme.colors();
-        let accent = colors.accent;
-        let track = Color {
-            a: 0.25,
-            ..colors.dom.scene_muted
-        };
         let mut strip = column![].spacing(7);
         for line in lines {
             // How far and how long still, beside the title.
@@ -472,7 +466,7 @@ impl Studio {
                 heading = heading.push(
                     button(text(crate::i18n::tr("Cancel")).size(11))
                         .on_press(cancel)
-                        .style(flat_tool_style)
+                        .style(ui_style::secondary)
                         .padding([1, 8]),
                 );
             }
@@ -487,13 +481,7 @@ impl Studio {
             ]
             .spacing(3);
             if let Some(fraction) = line.fraction {
-                task = task.push(progress_bar(0.0..=1.0, fraction).height(5).style(move |_| {
-                    progress_bar::Style {
-                        background: track.into(),
-                        bar: accent.into(),
-                        border: iced::Border::default().rounded(2.5),
-                    }
-                }));
+                task = task.push(ui_style::progress_bar(0.0..=1.0, fraction));
             }
             strip = strip.push(task);
         }

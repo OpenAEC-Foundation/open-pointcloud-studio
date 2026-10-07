@@ -8,12 +8,13 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use iced::widget::{button, checkbox, column, container, row, text};
+use iced::widget::{button, column, container, row, text};
 use iced::{Element, Fill, Task};
 use serde_json::{json, Value};
 
 use crate::i18n::{tr, tr_args};
-use crate::{flat_tool_style, muted_checkbox_style, Message, Studio};
+use crate::ui_style;
+use crate::{Message, Studio};
 
 /// The name of the CAD application in status lines and answers.
 pub(crate) const VIEWER_NAME: &str = "Open CAD Studio";
@@ -603,12 +604,9 @@ impl Studio {
                         .is_some()
                         .then_some(Message::CadViewer(CadAction::OpenLast)),
                 )
-                .style(flat_tool_style),
-            checkbox(tr("Open after export"), self.cad_viewer.open_after_export)
-                .on_toggle(|on| Message::CadViewer(CadAction::OpenAfterExport(on)))
-                .style(muted_checkbox_style)
-                .text_size(11)
-                .size(12),
+                .style(ui_style::tool),
+            ui_style::checkbox(tr("Open after export"), self.cad_viewer.open_after_export)
+                .on_toggle(|on| Message::CadViewer(CadAction::OpenAfterExport(on))),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center)]
@@ -654,14 +652,12 @@ impl Studio {
         };
         column![
             row![
-                iced::widget::text_input(tr("Find Open CAD Studio"), &self.cad_viewer.input)
+                ui_style::text_input(tr("Find Open CAD Studio"), &self.cad_viewer.input)
                     .on_input(|value| Message::CadViewer(CadAction::Path(value)))
-                    .size(12)
-                    .padding([4, 6])
                     .width(Fill),
                 button(text(tr("Browse…")).size(12))
                     .on_press(Message::CadViewer(CadAction::Browse))
-                    .style(flat_tool_style)
+                    .style(ui_style::tool)
                     .padding([4, 10]),
             ]
             .spacing(6)
