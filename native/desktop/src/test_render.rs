@@ -117,3 +117,48 @@ pub(crate) fn render_under(
 pub(crate) fn render_window(studio: &Studio, size: Size) -> Picture {
     render(studio.view(), &studio.ui_theme.iced(), size)
 }
+
+/// The messages `element`, laid out in `size`, gives for `events` with the
+/// pointer at `at`, after the pointer was moved there.
+pub(crate) fn messages(
+    mut element: Element<'_, Message>,
+    size: Size,
+    at: iced::Point,
+    events: &[iced::Event],
+) -> Vec<Message> {
+    load_fonts();
+    let renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
+        crate::fonts::REGULAR,
+        iced::Pixels(12.0),
+    ));
+    let mut tree = Tree::new(&element);
+    let node =
+        element
+            .as_widget()
+            .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    let mut messages = Vec::new();
+    let mut clipboard = iced::advanced::clipboard::Null;
+    let moved = iced::Event::Mouse(mouse::Event::CursorMoved { position: at });
+    for event in std::iter::once(moved).chain(events.iter().cloned()) {
+        let mut shell = iced::advanced::Shell::new(&mut messages);
+        let _ = element.as_widget_mut().on_event(
+            &mut tree,
+            event,
+            Layout::new(&node),
+            mouse::Cursor::Available(at),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(size),
+        );
+    }
+    messages
+}
+
+/// A press of `button` of the mouse at `at`, and its release.
+pub(crate) fn click(button: mouse::Button) -> [iced::Event; 2] {
+    [
+        iced::Event::Mouse(mouse::Event::ButtonPressed(button)),
+        iced::Event::Mouse(mouse::Event::ButtonReleased(button)),
+    ]
+}

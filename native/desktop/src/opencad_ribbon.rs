@@ -213,19 +213,23 @@ pub fn arrow_button<'a>(
 
 /// A button of the quick-access row: its icon of 16 in the accent colour,
 /// named in its tooltip, with the key that does the same. Unavailable
-/// actions stay visible and fade.
+/// actions stay visible and fade, and a press on them does nothing: it
+/// does not reach the bar under them, which would move or maximise the
+/// window.
 pub fn quick_access_btn<'a>(
     icon: impl Into<Element<'a, Message>>,
     label: &'static str,
     shortcut: Option<&str>,
     message: Option<Message>,
 ) -> Element<'a, Message> {
-    let control = button(container(icon).center(16))
-        .on_press_maybe(message)
-        .style(ui_style::quick_button)
-        .width(QUICK_W)
-        .height(QUICK_H)
-        .padding([(QUICK_H - 16.0) / 2.0, (QUICK_W - 16.0) / 2.0]);
+    let control = iced::widget::opaque(
+        button(container(icon).center(16))
+            .on_press_maybe(message)
+            .style(ui_style::quick_button)
+            .width(QUICK_W)
+            .height(QUICK_H)
+            .padding([(QUICK_H - 16.0) / 2.0, (QUICK_W - 16.0) / 2.0]),
+    );
     let name = crate::i18n::tr(label);
     let tip = match shortcut {
         Some(keys) => format!("{name} ({keys})"),

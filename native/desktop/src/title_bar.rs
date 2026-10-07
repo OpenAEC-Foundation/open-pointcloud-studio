@@ -157,6 +157,8 @@ pub enum WindowAction {
     Maximized(bool),
     /// Send Feedback.
     Feedback,
+    /// A right click on the empty part of the bar.
+    SystemMenu,
 }
 
 /// What the window is asked to do.
@@ -166,6 +168,8 @@ pub enum Request {
     ToggleMaximize,
     Minimize,
     Resize(Edge),
+    /// The menu of the window of the system, at the pointer.
+    SystemMenu,
 }
 
 /// The state of the bar: the frame, whether the window is maximised, and
@@ -229,6 +233,7 @@ fn request_task(request: Request) -> Task<Message> {
             })
             .discard()
         }),
+        Request::SystemMenu => window.and_then(iced::window::show_system_menu),
     }
 }
 
@@ -260,12 +265,21 @@ impl Studio {
                 return Task::none();
             }
             WindowAction::Feedback => return Task::done(Message::OpenUrl(ISSUES_URL)),
+            // Where the system frames the window, its frame has the menu.
+            WindowAction::SystemMenu => {
+                if self.title_bar.frame != Frame::Own {
+                    return Task::none();
+                }
+                Request::SystemMenu
+            }
         };
         request_task(request)
     }
 
-    /// The bar at the top of the window.
-    pub(crate) fn title_bar(&self) -> Element<'_, Message> {
+    /// The bar at the top of the window. While a dialog covers the window
+    /// under it, `covered`, its quick-access buttons wait, as the keys do,
+    /// and it still moves, minimises, maximises and closes the window.
+    pub(crate) fn title_bar(&self, covered: bool) -> Element<'_, Message> {
         let frame = self.title_bar.frame;
         let logo =
             container(icons::glyph(icons::logo(), 16.0).tint(|colors| colors.accent)).center(20);
@@ -275,12 +289,18 @@ impl Studio {
             opencad_ribbon::line(|colors| colors.accent)
                 .width(1)
                 .height(Fill),
-            container(self.quick_access())
+            container(self.quick_access(covered))
                 .padding([0, 4])
                 .center_y(Fill),
         ]
         .height(Fill);
-        let left = row![logo, Space::with_width(2), quick]
+        // The line 2 after the gap of 4 beside the logo, as the style book
+        // sets it.
+        let quick = container(quick).padding(iced::Padding {
+            left: 2.0,
+            ..iced::Padding::ZERO
+        });
+        let left = row![logo, quick]
             .spacing(4)
             .height(HEIGHT)
             .align_y(iced::Alignment::Center)
@@ -334,10 +354,12 @@ impl Studio {
             .width(Fill)
             .height(HEIGHT)
             .align_y(iced::Alignment::Center);
-        // The empty part of the bar moves the window; the title lets the
-        // pointer through to it.
+        // The empty part of the bar moves the window and opens the menu of
+        // the window on a right click; the title lets the pointer through
+        // to it.
         let drag = mouse_area(Space::new(Fill, HEIGHT))
-            .on_press(Message::Window(WindowAction::BarPressed));
+            .on_press(Message::Window(WindowAction::BarPressed))
+            .on_right_press(Message::Window(WindowAction::SystemMenu));
         let mut layers = stack![drag, bar].width(Fill).height(HEIGHT);
         if frame != Frame::System {
             let accent = |theme: &Theme| text::Style {
@@ -655,8 +677,14 @@ mod tests {
             // glyphs of the window buttons at the right.
             assert!(inked(&own, 660..780, colors.accent), "{}", theme.key());
             assert!(inked(&own, 1320..1440, colors.accent), "{}", theme.key());
-            // The logo and the line before the quick-access buttons.
+            // The logo, and the line before the quick-access buttons 6
+            // after it, as the style book sets them: the logo from 8 to 28,
+            // the line at 34.
             assert!(inked(&own, 8..28, colors.accent), "{}", theme.key());
+            assert!(own.is(34, 16, colors.accent), "{}", theme.key());
+            for x in [29, 33, 35, 38] {
+                assert!(own.is(x, 16, colors.bg_lighter), "{} {x}", theme.key());
+            }
             assert!(inked(&own, 1410..1430, colors.accent), "{}", theme.key());
             // A maximised window shows the glyph that restores it.
             studio.title_bar.maximized = true;
@@ -675,6 +703,124 @@ mod tests {
                 theme.key()
             );
             assert!(inked(&system, 1300..1430, colors.accent), "{}", theme.key());
+        }
+    }
+
+    /// The places of the bar a test presses on: the empty part, Import
+    /// point cloud, Export active point cloud, Undo, and the minimise and
+    /// the close buttons of a window of 1440. The quick-access buttons are
+    /// 28 wide from 39, 1 apart.
+    const EMPTY: Point = Point::new(400.0, 16.0);
+    const IMPORT: Point = Point::new(53.0, 16.0);
+    const EXPORT: Point = Point::new(111.0, 16.0);
+    const UNDO: Point = Point::new(140.0, 16.0);
+    const MINIMISE: Point = Point::new(1340.0, 16.0);
+    const CLOSE: Point = Point::new(1420.0, 16.0);
+    const WINDOW: Size = Size::new(1440.0, 900.0);
+
+    fn window_actions(messages: &[Message]) -> Vec<WindowAction> {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::Window(action) => Some(*action),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_press_on_a_quick_access_button_that_waits_does_not_move_the_window() {
+        let _language = i18n::TestLanguage::hold(i18n::Language::English);
+        let mut studio = Studio::default();
+        studio.title_bar = TitleBar::new(Frame::Own);
+        let press = [Event::Mouse(mouse::Event::ButtonPressed(
+            mouse::Button::Left,
+        ))];
+        // Without a scan or an edit, Export and Undo cannot be used: a press
+        // on them, as the third of three quick ones on Undo, neither drags
+        // nor maximises the window.
+        for at in [EXPORT, UNDO] {
+            let messages =
+                crate::test_render::messages(studio.title_bar(false), WINDOW, at, &press);
+            assert!(messages.is_empty(), "{at:?}: {messages:?}");
+        }
+        // The empty part of the bar drags the window, and Import, which can
+        // always be used, imports.
+        let messages = crate::test_render::messages(studio.title_bar(false), WINDOW, EMPTY, &press);
+        assert_eq!(window_actions(&messages), [WindowAction::BarPressed]);
+        let click = crate::test_render::click(mouse::Button::Left);
+        let messages =
+            crate::test_render::messages(studio.title_bar(false), WINDOW, IMPORT, &click);
+        assert!(
+            matches!(messages.as_slice(), [Message::Open]),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn the_bar_moves_minimises_and_closes_the_window_while_a_dialog_is_open() {
+        let _language = i18n::TestLanguage::hold(i18n::Language::English);
+        let mut studio = Studio::default();
+        studio.title_bar = TitleBar::new(Frame::Own);
+        let _ = studio.update(Message::Settings(
+            crate::settings_dialog::SettingsAction::Open,
+        ));
+        assert!(studio.settings_view().is_some());
+        let click = crate::test_render::click(mouse::Button::Left);
+        let at = |point: Point, events: &[Event]| {
+            window_actions(&crate::test_render::messages(
+                studio.view(),
+                WINDOW,
+                point,
+                events,
+            ))
+        };
+        assert_eq!(at(EMPTY, &click), [WindowAction::BarPressed]);
+        assert_eq!(
+            at(EMPTY, &crate::test_render::click(mouse::Button::Right)),
+            [WindowAction::SystemMenu]
+        );
+        assert_eq!(at(MINIMISE, &click), [WindowAction::Minimize]);
+        assert_eq!(at(CLOSE, &click), [WindowAction::Close]);
+        // The quick-access buttons wait until the dialog is closed, as the
+        // keys do.
+        let messages = crate::test_render::messages(studio.view(), WINDOW, IMPORT, &click);
+        assert!(
+            !messages
+                .iter()
+                .any(|message| matches!(message, Message::Open)),
+            "{messages:?}"
+        );
+        let _ = studio.update(Message::Settings(
+            crate::settings_dialog::SettingsAction::Cancel,
+        ));
+        assert!(studio.settings_view().is_none());
+        let messages = crate::test_render::messages(studio.view(), WINDOW, IMPORT, &click);
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::Open)),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_right_click_on_the_bar_opens_the_menu_of_the_window_where_the_application_frames_it() {
+        for (frame, opens) in [
+            (Frame::Own, true),
+            (Frame::MacOs, false),
+            (Frame::System, false),
+        ] {
+            let mut studio = Studio {
+                title_bar: TitleBar::new(frame),
+                ..Studio::default()
+            };
+            let task = studio.window_action(WindowAction::SystemMenu);
+            assert_eq!(
+                iced_runtime::task::into_stream(task).is_some(),
+                opens,
+                "{frame:?}"
+            );
         }
     }
 

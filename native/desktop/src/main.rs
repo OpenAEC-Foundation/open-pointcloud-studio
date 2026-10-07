@@ -9964,45 +9964,48 @@ impl Studio {
 
     /// The quick-access buttons of the title bar: import, open a scan
     /// folder, export, undo, redo and Settings, as icons named in their
-    /// tooltips.
-    fn quick_access(&self) -> Element<'_, Message> {
+    /// tooltips. They wait while a dialog covers the window, `covered`.
+    fn quick_access(&self, covered: bool) -> Element<'_, Message> {
         let icon = |icon: ToolIcon| icon_svg(icon, 16.0);
+        let unless_covered = |message: Option<Message>| message.filter(|_| !covered);
         row![
             opencad_ribbon::quick_access_btn(
                 icon(ToolIcon::Open),
                 "Import point cloud",
                 None,
-                Some(Message::Open),
+                unless_covered(Some(Message::Open)),
             ),
             opencad_ribbon::quick_access_btn(
                 icon(ToolIcon::OpenFolder),
                 "Open scan folder",
                 None,
-                Some(Message::OpenFolder),
+                unless_covered(Some(Message::OpenFolder)),
             ),
             opencad_ribbon::quick_access_btn(
                 icon(ToolIcon::Export),
                 "Export active point cloud",
                 None,
-                self.active.map(|_| Message::Export),
+                unless_covered(self.active.map(|_| Message::Export)),
             ),
             opencad_ribbon::quick_access_btn(
                 icon(ToolIcon::Undo),
                 "Undo",
                 Some(&command_key("Z")),
-                (!self.undo_deletions.is_empty()).then_some(Message::UndoDelete),
+                unless_covered((!self.undo_deletions.is_empty()).then_some(Message::UndoDelete)),
             ),
             opencad_ribbon::quick_access_btn(
                 icon(ToolIcon::Redo),
                 "Redo",
                 Some(&command_key("Y")),
-                (!self.redo_deletions.is_empty()).then_some(Message::RedoDelete),
+                unless_covered((!self.redo_deletions.is_empty()).then_some(Message::RedoDelete)),
             ),
             opencad_ribbon::quick_access_btn(
                 icon(ToolIcon::Settings),
                 "Settings",
                 Some(&command_key(",")),
-                Some(Message::Settings(settings_dialog::SettingsAction::Open)),
+                unless_covered(Some(Message::Settings(
+                    settings_dialog::SettingsAction::Open
+                ))),
             ),
         ]
         .spacing(1)
@@ -10439,7 +10442,6 @@ impl Studio {
         if self.file_open {
             return self.with_dialogs(
                 column![
-                    self.title_bar(),
                     self.ribbon(),
                     self.file_view(),
                     self.status_bar(self.status.clone()),
@@ -11045,7 +11047,6 @@ impl Studio {
         // opened from the Project Browser, over the width of the window
         // under the ribbon, as the document bar of the style book.
         let window = column![
-            self.title_bar(),
             self.ribbon(),
             self.tab_strip(),
             content,
@@ -11055,26 +11056,26 @@ impl Studio {
         self.with_dialogs(window.into())
     }
 
-    /// The window with the card of the Pointcloud to Drawing wizard or of Mesh
-    /// Pointcloud over it, and the dialog of a 2D drawing or the Settings
-    /// dialog over both, while they are shown.
+    /// The window under the title bar with the card of the Pointcloud to
+    /// Drawing wizard or of Mesh Pointcloud over it, and the dialog of a 2D
+    /// drawing or the Settings dialog over both, while they are shown; and
+    /// the title bar above it, which moves, minimises, maximises and closes
+    /// the window also while a dialog is open.
     fn with_dialogs<'a>(&'a self, window: Element<'a, Message>) -> Element<'a, Message> {
         let mut layers = stack![window].width(Fill).height(Fill);
-        if let Some(wizard) = self.mesh_to_plans_view() {
-            layers = layers.push(wizard);
-        }
-        if let Some(wizard) = self.mesh_wizard_view() {
-            layers = layers.push(wizard);
-        }
-        if let Some(dialog) = self.settings_view().or_else(|| self.sheet_dialog_view()) {
-            layers = layers.push(dialog);
-        }
+        let mut dialogs = Vec::new();
+        dialogs.extend(self.mesh_to_plans_view());
+        dialogs.extend(self.mesh_wizard_view());
+        dialogs.extend(self.settings_view().or_else(|| self.sheet_dialog_view()));
         // An install or uninstall waits for the user above everything.
-        if let Some(dialog) = self.extension_dialog_view() {
+        dialogs.extend(self.extension_dialog_view());
+        let covered = !dialogs.is_empty();
+        for dialog in dialogs {
             layers = layers.push(dialog);
         }
+        let framed = column![self.title_bar(covered), layers].height(Fill);
         // The edges of the window resize it above everything.
-        self.with_edges(layers.into())
+        self.with_edges(framed.into())
     }
 }
 
