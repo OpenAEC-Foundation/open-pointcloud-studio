@@ -3382,6 +3382,23 @@ impl Studio {
             .unwrap_or(self.viewport_size)
     }
 
+    /// Pan is measured in viewport pixels. Preserve its relative position
+    /// when the canvas changes size, so a fitted scan stays in view.
+    fn resize_viewport(&mut self, size: Size) {
+        let previous = self.viewport_size;
+        if previous.width <= 0.0 || previous.height <= 0.0 {
+            self.viewport_size = size;
+            return;
+        }
+        let was_automatic = self.auto_camera == Some((self.yaw, self.pitch, self.zoom, self.pan));
+        self.pan[0] *= size.width / previous.width;
+        self.pan[1] *= size.height / previous.height;
+        self.viewport_size = size;
+        if was_automatic {
+            self.auto_camera = Some((self.yaw, self.pitch, self.zoom, self.pan));
+        }
+    }
+
     fn camera_value(&self) -> Value {
         json!({
             "yaw": self.yaw,
@@ -6221,8 +6238,17 @@ impl Studio {
             }
             Message::CloseRibbonPanel => self.ribbon_panel_open = None,
             Message::WindowResized(size) => {
-                self.window_size = Some(size);
+                let previous = self.window_size.replace(size);
                 self.ribbon_panel_open = None;
+                if let Some(previous) = previous {
+                    let viewport = Size::new(
+                        (self.viewport_size.width + size.width - previous.width).max(1.0),
+                        (self.viewport_size.height + size.height - previous.height).max(1.0),
+                    );
+                    self.resize_viewport(viewport);
+                    self.revision += 1;
+                    return self.schedule_detail();
+                }
             }
             Message::Theme(theme) => {
                 self.ui_theme = theme;
@@ -8742,7 +8768,7 @@ impl Studio {
             }
             Message::ViewportSize(size) => {
                 if size.width > 0.0 && size.height > 0.0 {
-                    self.viewport_size = size;
+                    self.resize_viewport(size);
                     self.revision += 1;
                     return self.schedule_detail();
                 }
@@ -11381,6 +11407,27 @@ mod ribbon_tests {
         let _ = studio.update(Message::ToggleRibbonPanel("surface"));
         let _ = studio.update(Message::Escape);
         assert_eq!(studio.ribbon_panel_open, None);
+    }
+
+    #[test]
+    fn narrowing_window_keeps_the_camera_pan_in_the_viewport() {
+        let mut studio = Studio::default();
+        studio.window_size = Some(Size::new(1440.0, 900.0));
+        studio.viewport_size = Size::new(900.0, 700.0);
+        studio.pan = [-600.0, 120.0];
+        studio.auto_camera = Some((studio.yaw, studio.pitch, studio.zoom, studio.pan));
+
+        let _ = studio.update(Message::WindowResized(Size::new(920.0, 900.0)));
+        assert_eq!(studio.viewport_size, Size::new(380.0, 700.0));
+        assert!((studio.pan[0] + 253.333_34).abs() < 0.001);
+        assert_eq!(studio.pan[1], 120.0);
+        assert_eq!(
+            studio.auto_camera,
+            Some((studio.yaw, studio.pitch, studio.zoom, studio.pan))
+        );
+
+        let _ = studio.update(Message::ViewportSize(Size::new(378.0, 700.0)));
+        assert!((studio.pan[0] + 252.0).abs() < 0.001);
     }
 
     #[test]
