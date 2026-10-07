@@ -155,6 +155,42 @@ pub(crate) fn messages(
     messages
 }
 
+/// Whether `element`, laid out in `size`, shows something over the window,
+/// such as a tooltip, with the pointer at `at`.
+pub(crate) fn overlay_shown(
+    mut element: Element<'_, Message>,
+    size: Size,
+    at: iced::Point,
+) -> bool {
+    load_fonts();
+    let renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
+        crate::fonts::REGULAR,
+        iced::Pixels(12.0),
+    ));
+    let mut tree = Tree::new(&element);
+    let node =
+        element
+            .as_widget()
+            .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    let mut messages = Vec::new();
+    let mut shell = iced::advanced::Shell::new(&mut messages);
+    let _ = element.as_widget_mut().on_event(
+        &mut tree,
+        iced::Event::Mouse(mouse::Event::CursorMoved { position: at }),
+        Layout::new(&node),
+        mouse::Cursor::Available(at),
+        &renderer,
+        &mut iced::advanced::clipboard::Null,
+        &mut shell,
+        &Rectangle::with_size(size),
+    );
+    let shown = element
+        .as_widget_mut()
+        .overlay(&mut tree, Layout::new(&node), &renderer, iced::Vector::ZERO)
+        .is_some();
+    shown
+}
+
 /// Where the scrollable `id` of `element`, laid out in `size`, lies.
 pub(crate) fn scrollable_bounds(
     element: Element<'_, Message>,

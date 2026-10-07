@@ -1157,27 +1157,23 @@ impl Studio {
         })
     }
 
-    /// The one button of the SURFACE group. While a job of one of the
-    /// methods runs it is highlighted and says in place of its name how far
-    /// the job is, with its name in its tooltip.
+    /// The one button of the SURFACE group, with its name in its tooltip.
+    /// While a job of one of the methods runs it is highlighted and says in
+    /// place of its name how far the job is.
     pub(crate) fn mesh_wizard_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
         let busy = self.mesh_busy_label();
         let open = self.mesh_wizard.open;
         let active = open || busy.is_some();
         let enabled = self.active.is_some() || active;
         let name = tr("Mesh Pointcloud");
-        let control = opencad_ribbon::tool_button(
+        opencad_ribbon::RibbonItem::Large(opencad_ribbon::explained_tool_button(
             opencad_ribbon::ButtonSize::Large,
             crate::icons::tool_glyph(ToolIcon::MeshPointcloud, 24.0, active),
             busy.as_deref().unwrap_or(name),
             active,
             enabled.then_some(Message::MeshWizard(MeshWizardAction::Open)),
-        );
-        opencad_ribbon::RibbonItem::Large(if busy.is_some() {
-            ui_style::ribbon_tooltip(control, name).into()
-        } else {
-            control
-        })
+            name.to_owned(),
+        ))
     }
 
     /// The card over the dimmed window, while it is shown. A click beside it

@@ -180,17 +180,6 @@ pub fn explained<'a>(
     ui_style::tooltip(content, lines.join("\n\n")).into()
 }
 
-/// A tool of the ribbon whose explanation shows in a tooltip below it.
-pub fn explained_in_ribbon<'a>(
-    content: impl Into<Element<'a, Message>>,
-    lines: Vec<String>,
-) -> Element<'a, Message> {
-    if lines.is_empty() {
-        return content.into();
-    }
-    ui_style::ribbon_tooltip(content, lines.join("\n\n")).into()
-}
-
 /// A small mark in the accent colour whose tooltip holds warnings or
 /// advice; nothing when there are none.
 pub fn warning_mark<'a>(lines: Vec<String>) -> Option<Element<'a, Message>> {

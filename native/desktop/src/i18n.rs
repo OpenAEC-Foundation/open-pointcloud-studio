@@ -492,6 +492,7 @@ mod tests {
         // main.rs
         ("small_tool_button", 0),
         ("small_tool_button_when", 0),
+        ("explained_small_tool_button_when", 0),
         ("icon_tool_button_when", 0),
         ("large_tool_button", 0),
         ("large_tool_button_when", 0),

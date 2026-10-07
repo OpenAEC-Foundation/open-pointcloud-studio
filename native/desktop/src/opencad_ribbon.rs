@@ -33,7 +33,9 @@ const LARGE_MIN_W: f32 = 44.0;
 const SMALL_MIN_W: f32 = 70.0;
 /// The narrowest a group gets.
 const GROUP_MIN_W: f32 = 50.0;
-/// The line of the caption of a group and the space above and below it.
+/// The size of the caption of a group, its line and the space above and
+/// below it.
+const CAPTION_SIZE: f32 = 9.0;
 const CAPTION_LINE: f32 = 13.5;
 const CAPTION_PADDING: f32 = 2.0;
 /// The width the name of a large button wraps in, in two lines at most.
@@ -68,20 +70,16 @@ pub fn label_font(active: bool) -> iced::Font {
 /// What the font system had loaded when a width was measured.
 type FontVersion = iced::advanced::graphics::text::Version;
 
-/// How wide a name is, by its text and whether it is set in medium,
-/// measured with the fonts of a version of the font system.
-type Widths = (FontVersion, HashMap<(String, bool), f32>);
+/// How wide a text is, by the text, its size and its font, measured with
+/// the fonts of a version of the font system.
+type Widths = (FontVersion, HashMap<(String, u32, iced::Font), f32>);
 
 thread_local! {
     static WIDTHS: RefCell<Widths> = RefCell::new((FontVersion::default(), HashMap::new()));
 }
 
-/// The lines the name of a large button is set in: on one line when it fits
-/// the label width of the style book, else broken at a space into two lines,
-/// the first as full as the label width allows it. A word is never broken
-/// and nothing is cut off: where the best of the two-line breaks is wider
-/// than the label width, the label, and the button, are that wide.
-pub fn label_lines(label: &str, active: bool) -> Vec<String> {
+/// How wide `content` is on one line at `size` in `font`, measured once.
+fn measured(content: &str, size: f32, font: iced::Font) -> f32 {
     let version = iced::advanced::graphics::text::font_system()
         .read()
         .map(|fonts| fonts.version())
@@ -94,12 +92,20 @@ pub fn label_lines(label: &str, active: bool) -> Vec<String> {
             *measured_with = version;
             widths.clear();
         }
-        let mut measure = |part: &str| -> f32 {
-            *widths
-                .entry((part.to_owned(), active))
-                .or_insert_with(|| fonts::width(part, LABEL_SIZE, label_font(active)))
-        };
-        lines_within(label, &mut measure)
+        *widths
+            .entry((content.to_owned(), size.to_bits(), font))
+            .or_insert_with(|| fonts::width(content, size, font))
+    })
+}
+
+/// The lines the name of a large button is set in: on one line when it fits
+/// the label width of the style book, else broken at a space into two lines,
+/// the first as full as the label width allows it. A word is never broken
+/// and nothing is cut off: where the best of the two-line breaks is wider
+/// than the label width, the label, and the button, are that wide.
+pub fn label_lines(label: &str, active: bool) -> Vec<String> {
+    lines_within(label, &mut |part: &str| {
+        measured(part, LABEL_SIZE, label_font(active))
     })
 }
 
@@ -124,15 +130,45 @@ pub fn lines_within(label: &str, measure: &mut impl FnMut(&str) -> f32) -> Vec<S
     vec![words[..first].join(" "), words[first..].join(" ")]
 }
 
+/// The style of a ribbon button of `size`: corners of 2 for a large one, of
+/// 1 for a medium and a small one, as the style book rounds them.
+pub fn button_style(
+    size: ButtonSize,
+    theme: &Theme,
+    active: bool,
+    status: button::Status,
+) -> button::Style {
+    match size {
+        ButtonSize::Large => ui_style::ribbon_button(theme, active, status),
+        ButtonSize::Medium | ButtonSize::Small => {
+            ui_style::small_ribbon_button(theme, active, status)
+        }
+    }
+}
+
 /// A ribbon button: `icon` and the name `label`, already in the language of
 /// the window, in the size of the style book, tinted under the pointer and
-/// while it is on, at 40 % while it cannot be used (no `message`).
+/// while it is on, at 40 % while it cannot be used (no `message`). As the
+/// RibbonButton of the style book, it has its name in its tooltip.
 pub fn tool_button<'a>(
     size: ButtonSize,
     icon: impl Into<Element<'a, Message>>,
     label: &str,
     active: bool,
     message: Option<Message>,
+) -> Element<'a, Message> {
+    explained_tool_button(size, icon, label, active, message, label.to_owned())
+}
+
+/// A ribbon button as `tool_button` with `tip` in its tooltip in place of
+/// its name: what it does, where its name alone does not say it.
+pub fn explained_tool_button<'a>(
+    size: ButtonSize,
+    icon: impl Into<Element<'a, Message>>,
+    label: &str,
+    active: bool,
+    message: Option<Message>,
+    tip: String,
 ) -> Element<'a, Message> {
     let font = label_font(active);
     let (content, padding, height): (Element<'a, Message>, Padding, f32) = match size {
@@ -188,12 +224,12 @@ pub fn tool_button<'a>(
             )
         }
     };
-    button(content)
+    let control = button(content)
         .padding(padding)
         .height(height)
         .on_press_maybe(message)
-        .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-        .into()
+        .style(move |theme, status| button_style(size, theme, active, status));
+    ui_style::ribbon_tooltip(control, tip).into()
 }
 
 /// A small ribbon button without a name, as tall as a large one: the
@@ -207,7 +243,7 @@ pub fn arrow_button<'a>(
         .padding([(LARGE_H - 16.0) / 2.0, 3.0])
         .height(LARGE_H)
         .on_press_maybe(message)
-        .style(|theme, status| ui_style::ribbon_button(theme, false, status));
+        .style(|theme, status| button_style(ButtonSize::Small, theme, false, status));
     ui_style::ribbon_tooltip(control, name.to_owned()).into()
 }
 
@@ -261,9 +297,10 @@ pub fn render_group<'a>(title: &'static str, tools: Element<'a, Message>) -> Ele
     render_group_items(title, vec![RibbonItem::Large(tools)])
 }
 
-/// A group of the ribbon: large tools side by side, small tools in stacks of
-/// three, and under them its caption under a line, which sets the width of
-/// the group when it is wider than the tools.
+/// A group of the ribbon: large tools side by side from its left, small
+/// tools in stacks of three, and under them its caption, in its middle under
+/// a line over the width of the group, which the caption sets when it is
+/// wider than the tools.
 pub fn render_group_items<'a>(
     title: &'static str,
     items: Vec<RibbonItem<'a>>,
@@ -289,8 +326,13 @@ pub fn render_group_items<'a>(
         .spacing(1)
         .align_y(iced::Alignment::Start)
         .padding([1, 0]);
-    let caption = text(crate::i18n::tr(title))
-        .size(9)
+    let caption = crate::i18n::tr(title);
+    // The group is as wide as its tools or its caption, whichever is wider:
+    // the tools and a space as wide as the caption come before the line and
+    // the caption in the column, which gives those the width they set.
+    let caption_width = measured(caption, CAPTION_SIZE, fonts::MEDIUM).ceil();
+    let caption = text(caption)
+        .size(CAPTION_SIZE)
         .font(fonts::MEDIUM)
         .line_height(LineHeight::Absolute(CAPTION_LINE.into()))
         .wrapping(Wrapping::None)
@@ -298,25 +340,18 @@ pub fn render_group_items<'a>(
             color: Some(ui_theme::colors(theme).ribbon_group_label),
         });
     let body = column![
-        container(tools).height(Fill),
-        Space::with_height(1),
-        container(caption).padding([CAPTION_PADDING, 0.0]),
-        Space::with_width(GROUP_MIN_W - 16.0),
-    ]
-    .align_x(iced::Alignment::Center)
-    .width(Length::Shrink)
-    .height(Fill);
-    // The line over the caption spans the group, as wide as its tools or
-    // its caption, whichever is wider: a layer over the group, which knows
-    // its width once the group is laid out.
-    let rule = column![
-        Space::with_height(Fill),
+        container(tools).height(GROUP_H - 1.0 - CAPTION_LINE - 2.0 * CAPTION_PADDING),
+        Space::new(caption_width.max(GROUP_MIN_W - 16.0), 0),
         line(|colors| colors.border_subtle).width(Fill).height(1),
-        Space::with_height(CAPTION_LINE + 2.0 * CAPTION_PADDING),
+        container(caption)
+            .width(Fill)
+            .align_x(iced::Alignment::Center)
+            .padding([CAPTION_PADDING, 0.0]),
     ]
-    .width(Fill)
-    .height(Fill);
-    container(iced::widget::stack![body, rule])
+    .align_x(iced::Alignment::Start)
+    .width(Length::Shrink)
+    .height(GROUP_H);
+    container(body)
         .padding([0, 8])
         .width(Length::Shrink)
         .height(GROUP_H)

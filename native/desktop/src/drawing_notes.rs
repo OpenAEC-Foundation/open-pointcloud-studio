@@ -1832,11 +1832,7 @@ impl Studio {
         let on_sheet = matches!(target, Some(NoteTarget::Sheet(_)));
         let in_3d = !self.drawing_view.shown && self.active.is_some();
         let note_tool = |kind: NoteKind| self.notes.kind == Some(kind);
-        let item = |button: Element<'static, Message>, lines: Vec<String>| {
-            opencad_ribbon::RibbonItem::Small(opencad_properties::explained_in_ribbon(
-                button, lines,
-            ))
-        };
+        let item = opencad_ribbon::RibbonItem::Small;
         let line_message = if on_drawing || on_sheet {
             Message::Notes(NoteAction::Tool(NoteKind::Line))
         } else {
@@ -1848,51 +1844,41 @@ impl Studio {
             self.views.tool == Some(AnnotationKind::Line)
         };
         vec![
-            item(
-                crate::small_tool_button_when(
+            item(crate::explained_small_tool_button_when(
                     "Note",
                     Message::Views(ViewAction::Tool(AnnotationKind::Note)),
                     self.views.tool == Some(AnnotationKind::Note),
                     in_3d,
-                ),
-                vec![tr("A note at a point of the scan, kept with the saved view; in the 3D view").to_owned()],
-            ),
-            item(
-                crate::small_tool_button_when(
+                tr("A note at a point of the scan, kept with the saved view; in the 3D view").to_owned(),
+            )),
+            item(crate::explained_small_tool_button_when(
                     "Line",
                     line_message,
                     line_active,
                     in_3d || on_drawing || on_sheet,
-                ),
-                vec![tr("An arrow between two points of the scan in the 3D view; a line on a drawing, snapping to its lines, or on the paper of a sheet").to_owned()],
-            ),
-            item(
-                crate::small_tool_button_when(
+                tr("An arrow between two points of the scan in the 3D view; a line on a drawing, snapping to its lines, or on the paper of a sheet").to_owned(),
+            )),
+            item(crate::explained_small_tool_button_when(
                     "Text",
                     Message::Notes(NoteAction::Tool(NoteKind::Text)),
                     note_tool(NoteKind::Text),
                     on_drawing || on_sheet,
-                ),
-                vec![tr("A text on a plan, an elevation or a section, 2.5 mm high on the paper unless set in Properties; or on the paper of a sheet").to_owned()],
-            ),
-            item(
-                crate::small_tool_button_when(
+                tr("A text on a plan, an elevation or a section, 2.5 mm high on the paper unless set in Properties; or on the paper of a sheet").to_owned(),
+            )),
+            item(crate::explained_small_tool_button_when(
                     "Dimension",
                     Message::Notes(NoteAction::Tool(NoteKind::Dimension)),
                     note_tool(NoteKind::Dimension),
                     on_drawing,
-                ),
-                vec![tr("A dimension on a plan, an elevation or a section: two points that snap to the ends and corners of the lines, then its line; it shows the distance in millimetres").to_owned()],
-            ),
-            item(
-                crate::small_tool_button_when(
+                tr("A dimension on a plan, an elevation or a section: two points that snap to the ends and corners of the lines, then its line; it shows the distance in millimetres").to_owned(),
+            )),
+            item(crate::explained_small_tool_button_when(
                     "Leader",
                     Message::Notes(NoteAction::Tool(NoteKind::Leader)),
                     note_tool(NoteKind::Leader),
                     on_drawing,
-                ),
-                vec![tr("An arrow with a text on a plan, an elevation or a section: the point it points at, then where its text goes").to_owned()],
-            ),
+                tr("An arrow with a text on a plan, an elevation or a section: the point it points at, then where its text goes").to_owned(),
+            )),
         ]
     }
 

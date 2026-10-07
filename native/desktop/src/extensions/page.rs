@@ -544,17 +544,6 @@ impl Studio {
                     Some(handle) => svg(handle.clone()).width(24).height(24).into(),
                     None => Space::new(24, 24).into(),
                 };
-                let control = opencad_ribbon::tool_button(
-                    opencad_ribbon::ButtonSize::Large,
-                    icon,
-                    each.label.get(),
-                    running,
-                    Some(send(ExtensionAction::Press(
-                        manifest.id.clone(),
-                        Some(each.id.clone()),
-                    ))),
-                );
-
                 let mut tip = each
                     .tooltip
                     .as_ref()
@@ -564,7 +553,17 @@ impl Studio {
                     tip = format!("{tip}\n{}", tr("Runs; click to stop it"));
                 }
                 items.push(opencad_ribbon::RibbonItem::Large(
-                    ui_style::ribbon_tooltip(control, tip).into(),
+                    opencad_ribbon::explained_tool_button(
+                        opencad_ribbon::ButtonSize::Large,
+                        icon,
+                        each.label.get(),
+                        running,
+                        Some(send(ExtensionAction::Press(
+                            manifest.id.clone(),
+                            Some(each.id.clone()),
+                        ))),
+                        tip,
+                    ),
                 ));
             }
         }

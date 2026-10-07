@@ -115,8 +115,24 @@ pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
 
 /// A button of the ribbon, and a small action in a panel drawn as one:
 /// transparent with a transparent border, tinted and outlined in the accent
-/// colour under the pointer and while it is on.
+/// colour under the pointer and while it is on, with the corners of 2 of a
+/// large ribbon button.
 pub fn ribbon_button(theme: &Theme, active: bool, status: button::Status) -> button::Style {
+    ribbon_button_rounded(theme, active, status, 2.0)
+}
+
+/// A small or medium button of the ribbon, and an arrow that scrolls it:
+/// a ribbon button with the corners of 1 the style book gives those.
+pub fn small_ribbon_button(theme: &Theme, active: bool, status: button::Status) -> button::Style {
+    ribbon_button_rounded(theme, active, status, 1.0)
+}
+
+fn ribbon_button_rounded(
+    theme: &Theme,
+    active: bool,
+    status: button::Status,
+    radius: f32,
+) -> button::Style {
     let colors = colors(theme);
     let (background, text_color, border) = if active {
         (
@@ -139,7 +155,7 @@ pub fn ribbon_button(theme: &Theme, active: bool, status: button::Status) -> but
         border: Border {
             color: border,
             width: 1.0,
-            radius: 2.0.into(),
+            radius: radius.into(),
         },
         shadow: Shadow::default(),
     };
@@ -1098,6 +1114,29 @@ mod tests {
             assert_eq!(on.text_color, colors.ribbon_btn_active_text);
             let waiting = ribbon_button(&theme, false, button::Status::Disabled);
             assert_eq!(waiting.text_color, colors.text.scale_alpha(0.4));
+            // A large button has corners of 2, a small or medium one of 1,
+            // in every state, and is otherwise the same.
+            for (active, status) in [
+                (false, button::Status::Active),
+                (false, button::Status::Hovered),
+                (true, button::Status::Active),
+                (false, button::Status::Disabled),
+            ] {
+                let large = ribbon_button(&theme, active, status);
+                let small = small_ribbon_button(&theme, active, status);
+                assert_eq!(large.border.radius, 2.0.into());
+                assert_eq!(small.border.radius, 1.0.into());
+                assert_eq!(
+                    button::Style {
+                        border: Border {
+                            radius: 2.0.into(),
+                            ..small.border
+                        },
+                        ..small
+                    },
+                    large
+                );
+            }
             // A small action of a panel is a ribbon button that is not on.
             for status in [button::Status::Active, button::Status::Hovered] {
                 assert_eq!(tool(&theme, status), ribbon_button(&theme, false, status));

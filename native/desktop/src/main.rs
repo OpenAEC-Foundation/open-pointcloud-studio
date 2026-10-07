@@ -11219,20 +11219,35 @@ fn icon_tool_button_when(
     )
 }
 
-/// A small button of the ribbon: its icon of 16 before its name.
+/// A small button of the ribbon: its icon of 16 before its name, which is
+/// in its tooltip too.
 fn small_tool_button_when(
     label: &'static str,
     message: Message,
     active: bool,
     enabled: bool,
 ) -> Element<'static, Message> {
+    let tip = i18n::tr(label).to_owned();
+    explained_small_tool_button_when(label, message, active, enabled, tip)
+}
+
+/// A small button of the ribbon whose tooltip says what it does, `tip`, in
+/// the language of the window.
+fn explained_small_tool_button_when(
+    label: &'static str,
+    message: Message,
+    active: bool,
+    enabled: bool,
+    tip: String,
+) -> Element<'static, Message> {
     let icon = tool_icon(&message);
-    opencad_ribbon::tool_button(
+    opencad_ribbon::explained_tool_button(
         opencad_ribbon::ButtonSize::Small,
         icons::tool_glyph(icon, 16.0, active),
         i18n::tr(label),
         active,
         enabled.then_some(message),
+        tip,
     )
 }
 
@@ -11525,6 +11540,136 @@ mod ribbon_tests {
         ));
         assert_eq!(medium.height, opencad_ribbon::MEDIUM_H);
         assert_eq!(medium.width, 70.0);
+        // A large button has corners of 2, a small and a medium one of 1,
+        // as the style book rounds them.
+        for (size, radius) in [
+            (opencad_ribbon::ButtonSize::Large, 2.0),
+            (opencad_ribbon::ButtonSize::Medium, 1.0),
+            (opencad_ribbon::ButtonSize::Small, 1.0),
+        ] {
+            for theme in [UiTheme::Light, UiTheme::Forge] {
+                for (active, status) in [
+                    (false, iced::widget::button::Status::Hovered),
+                    (true, iced::widget::button::Status::Active),
+                ] {
+                    let style = opencad_ribbon::button_style(size, &theme.iced(), active, status);
+                    assert_eq!(style.border.radius, radius.into(), "{size:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_ribbon_button_has_its_name_or_what_it_does_in_its_tooltip() {
+        let _language = i18n::TestLanguage::hold(i18n::Language::English);
+        let size = Size::new(400.0, 100.0);
+        let over = UiPoint::new(10.0, 10.0);
+        let away = UiPoint::new(390.0, 90.0);
+        let buttons: [fn() -> Element<'static, Message>; 9] = [
+            || large_tool_button("Zoom all", Message::ResetCamera, false),
+            || large_tool_button_when("Build index", Message::BuildIndex, false, false),
+            || small_tool_button("Clear", Message::ClearSelection, true),
+            || small_tool_button_when("Delete", Message::DeleteSelection, false, false),
+            || {
+                explained_small_tool_button_when(
+                    "Text",
+                    Message::ClearSelection,
+                    false,
+                    true,
+                    "What the tool does".to_owned(),
+                )
+            },
+            || small_color_button("RGB", ColorMode::Rgb, ColorMode::Elevation),
+            || {
+                opencad_ribbon::tool_button(
+                    opencad_ribbon::ButtonSize::Large,
+                    icon_svg(ToolIcon::Fit, 24.0),
+                    "Large",
+                    false,
+                    None,
+                )
+            },
+            || {
+                opencad_ribbon::tool_button(
+                    opencad_ribbon::ButtonSize::Medium,
+                    icon_svg(ToolIcon::Fit, 20.0),
+                    "Medium",
+                    false,
+                    Some(Message::ResetCamera),
+                )
+            },
+            || {
+                opencad_ribbon::tool_button(
+                    opencad_ribbon::ButtonSize::Small,
+                    icon_svg(ToolIcon::Fit, 16.0),
+                    "Small",
+                    true,
+                    Some(Message::ResetCamera),
+                )
+            },
+        ];
+        for (place, button) in buttons.iter().enumerate() {
+            assert!(
+                test_render::overlay_shown(button(), size, over),
+                "button {place}"
+            );
+            assert!(
+                !test_render::overlay_shown(button(), size, away),
+                "button {place}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_tools_of_a_group_stand_at_its_left_under_its_caption_in_its_middle() {
+        let _language = i18n::TestLanguage::hold(i18n::Language::English);
+        let theme = UiTheme::Light;
+        let colors = theme.colors();
+        // A caption much wider than the one button of the group.
+        let group = opencad_ribbon::render_group_items(
+            "POINTCLOUD TO DRAWING",
+            vec![opencad_ribbon::RibbonItem::Large(large_tool_button(
+                "Clear",
+                Message::ResetCamera,
+                true,
+            ))],
+        );
+        let width = laid_out(opencad_ribbon::render_group_items(
+            "POINTCLOUD TO DRAWING",
+            vec![],
+        ))
+        .width;
+        let picture = test_render::render(
+            container(group)
+                .width(Fill)
+                .height(Fill)
+                .style(|theme| container::Style::default().background(ui_theme::colors(theme).bg))
+                .into(),
+            &theme.iced(),
+            Size::new(400.0, opencad_ribbon::group_height()),
+        );
+        let marked = |x: u32, y: u32| !picture.is(x, y, colors.bg);
+        // The caption sets the width of the group, with 8 at each side.
+        let right = width as u32 - 8;
+        assert!(width > 100.0, "{width}");
+        // The button, 44 wide, stands at the left of the group.
+        assert!(marked(8, 30) && marked(10, 30));
+        assert!((0..8).all(|x| !marked(x, 30)));
+        assert!((54..right).all(|x| !marked(x, 30)), "{right}");
+        // The line over the caption spans the group.
+        let rule = |x: u32| marked(x, 71) || marked(x, 72);
+        assert!(rule(8) && rule(right - 1), "{right}");
+        assert!(!rule(7) && !rule(right), "{right}");
+        // The caption stands in the middle of the group.
+        let ink: Vec<u32> = (0..width as u32)
+            .filter(|&x| (75..88).any(|y| marked(x, y)))
+            .collect();
+        let (first, last) = (ink[0], ink[ink.len() - 1]);
+        let middle = (first + last) as f32 / 2.0;
+        assert!(
+            (middle - width / 2.0).abs() <= 1.5,
+            "{first}..{last} in {width}"
+        );
     }
 }
 
