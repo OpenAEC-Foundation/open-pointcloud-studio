@@ -80,7 +80,7 @@ use file_view::{FileAction, FilePage};
 use iced::futures::SinkExt;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
-use iced::widget::{button, column, container, row, scrollable, stack, svg, text};
+use iced::widget::{button, column, container, row, stack, svg, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 use lod_pace::{
     first_pass_budget, plan_first_pass, preview_improves, preview_tier_points, LodPace, ScreenFill,
@@ -1372,10 +1372,6 @@ impl fmt::Display for ColorMode {
     }
 }
 
-fn ribbon_scroll_id() -> scrollable::Id {
-    scrollable::Id::new("ops-ribbon")
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MeshMode {
     Terrain,
@@ -1796,8 +1792,8 @@ enum Message {
     /// Open a web page of the application in the browser of the system.
     OpenUrl(&'static str),
     Exit,
-    RibbonScroll(f32),
-    RibbonViewport(f32, f32, f32),
+    ToggleRibbonPanel(&'static str),
+    CloseRibbonPanel,
     /// The window opened or got another size: the ribbon measures its
     /// overflow again.
     WindowResized(Size),
@@ -2224,7 +2220,7 @@ struct Studio {
     viewport_size: Size,
     /// The size of the window, once it opened.
     window_size: Option<Size>,
-    ribbon_viewport: Option<(f32, f32, f32)>,
+    ribbon_panel_open: Option<&'static str>,
     file_open: bool,
     /// The page the File view shows.
     file_page: FilePage,
@@ -2861,7 +2857,7 @@ impl Default for Studio {
             sheet_dialog: None,
             viewport_size: Size::new(915.0, 743.0),
             window_size: None,
-            ribbon_viewport: None,
+            ribbon_panel_open: None,
             file_open: false,
             file_page: FilePage::default(),
             extensions,
@@ -6204,7 +6200,7 @@ impl Studio {
             Message::ToggleFile => {
                 self.file_open = !self.file_open;
                 self.file_page = FilePage::default();
-                self.ribbon_viewport = None;
+                self.ribbon_panel_open = None;
             }
             Message::FileAction(action) => return self.file_action(action),
             Message::FilePage(page) => self.file_page = page,
@@ -6220,21 +6216,13 @@ impl Studio {
                 self.stop_background_work();
                 return iced::exit();
             }
-            Message::RibbonScroll(direction) => {
-                return scrollable::scroll_by(
-                    ribbon_scroll_id(),
-                    scrollable::AbsoluteOffset {
-                        x: direction * 320.0,
-                        y: 0.0,
-                    },
-                );
+            Message::ToggleRibbonPanel(id) => {
+                self.ribbon_panel_open = (self.ribbon_panel_open != Some(id)).then_some(id);
             }
-            Message::RibbonViewport(offset, width, content_width) => {
-                self.ribbon_viewport = Some((offset, width, content_width));
-            }
+            Message::CloseRibbonPanel => self.ribbon_panel_open = None,
             Message::WindowResized(size) => {
                 self.window_size = Some(size);
-                self.ribbon_viewport = None;
+                self.ribbon_panel_open = None;
             }
             Message::Theme(theme) => {
                 self.ui_theme = theme;
@@ -6298,7 +6286,7 @@ impl Studio {
                 if self.file_open {
                     self.file_open = false;
                     self.file_page = FilePage::default();
-                    self.ribbon_viewport = None;
+                    self.ribbon_panel_open = None;
                 }
                 self.mesh_to_plans.minimize();
                 return self.open_paths(paths);
@@ -8755,7 +8743,6 @@ impl Studio {
             Message::ViewportSize(size) => {
                 if size.width > 0.0 && size.height > 0.0 {
                     self.viewport_size = size;
-                    self.ribbon_viewport = None;
                     self.revision += 1;
                     return self.schedule_detail();
                 }
@@ -8835,6 +8822,9 @@ impl Studio {
             }
             Message::Escape if self.turn.is_some() => return self.cancel_turn(),
             Message::Escape => {
+                if self.ribbon_panel_open.take().is_some() {
+                    return Task::none();
+                }
                 if self.settings.is_some() {
                     self.settings_action(settings_dialog::SettingsAction::Cancel);
                     return Task::none();
@@ -10177,63 +10167,35 @@ impl Studio {
                 .into(),
             )],
         );
-        // The buttons of extensions come after the groups that look at the
-        // cloud, where the default window of 1440 pixels still shows them;
-        // the ribbon is wider than that.
-        let groups = row![view, display, section, selection]
-            .push_maybe(self.extensions_ribbon())
-            .push(self.measure.ribbon())
-            .push(self.views_ribbon())
-            .push(opencad_ribbon::render_group_items("SURFACE", surface_tools))
-            .push(mesh_to_plans)
-            .push(index)
-            .spacing(1);
-        let group_strip = ui_style::scrollable(
-            container(groups)
+        use opencad_ribbon::AdaptivePanel;
+        let open = self.ribbon_panel_open;
+        let panel = |id, short, full| AdaptivePanel::new(id, short, full, open == Some(id));
+        let mut groups = vec![
+            panel("view", "VIEW", view),
+            panel("display", "DISPLAY", display),
+            panel("section", "SECTION BOX", section),
+            panel("selection", "SELECTION", selection),
+        ];
+        if let Some(extensions) = self.extensions_ribbon() {
+            groups.push(panel("extensions", "EXTENSIONS", extensions));
+        }
+        groups.extend([
+            panel("measure", "MEASURE", self.measure.ribbon()),
+            panel("views", "VIEWS", self.views_ribbon()),
+            panel(
+                "surface",
+                "SURFACE",
+                opencad_ribbon::render_group_items("SURFACE", surface_tools),
+            ),
+            panel("plans", "2D", mesh_to_plans),
+            panel("index", "INDEX", index),
+        ]);
+        let tool_strip: Element<'_, Message> =
+            container(opencad_ribbon::AdaptiveRibbon::new(groups, open))
                 .padding([0, 4])
-                .width(iced::Length::Shrink)
-                .height(opencad_ribbon::TOOL_BAR_H),
-        )
-        .id(ribbon_scroll_id())
-        .on_scroll(|viewport| {
-            Message::RibbonViewport(
-                viewport.absolute_offset().x,
-                viewport.bounds().width,
-                viewport.content_bounds().width,
-            )
-        })
-        .direction(scrollable::Direction::Horizontal(ui_style::scrollbar()))
-        .width(Fill)
-        .height(opencad_ribbon::TOOL_BAR_H);
-        let scroll_button = |label: &'static str, direction: f32, enabled: bool| {
-            container(
-                button(text(label).size(26))
-                    .on_press_maybe(enabled.then_some(Message::RibbonScroll(direction)))
-                    .style(|theme, status| ui_style::ribbon_button(theme, false, status))
-                    .width(26)
-                    .height(32)
-                    .padding(0),
-            )
-            .width(30)
-            .height(opencad_ribbon::TOOL_BAR_H)
-            .align_y(iced::Alignment::Center)
-            .align_x(iced::Alignment::Center)
-        };
-        let tool_strip: Element<'_, Message> = if let Some((offset, width, content_width)) = self
-            .ribbon_viewport
-            .filter(|(_, width, content_width)| *content_width > *width + 1.0)
-        {
-            row![
-                scroll_button("‹", -1.0, offset > 1.0),
-                group_strip,
-                scroll_button("›", 1.0, offset + width < content_width - 1.0),
-            ]
-            .height(opencad_ribbon::TOOL_BAR_H)
-            .align_y(iced::Alignment::Center)
-            .into()
-        } else {
-            group_strip.into()
-        };
+                .width(Fill)
+                .height(opencad_ribbon::TOOL_BAR_H)
+                .into();
         container(
             column![
                 top_strip,
@@ -11409,14 +11371,16 @@ mod ribbon_tests {
     }
 
     #[test]
-    fn ribbon_overflow_is_measured_again_after_a_resize() {
+    fn collapsed_ribbon_panel_closes_on_resize_and_escape() {
         let mut studio = Studio::default();
-        let _ = studio.update(Message::RibbonViewport(0.0, 900.0, 1400.0));
-        assert_eq!(studio.ribbon_viewport, Some((0.0, 900.0, 1400.0)));
+        let _ = studio.update(Message::ToggleRibbonPanel("surface"));
+        assert_eq!(studio.ribbon_panel_open, Some("surface"));
         let _ = studio.view();
-
         let _ = studio.update(Message::WindowResized(Size::new(1200.0, 800.0)));
-        assert_eq!(studio.ribbon_viewport, None);
+        assert_eq!(studio.ribbon_panel_open, None);
+        let _ = studio.update(Message::ToggleRibbonPanel("surface"));
+        let _ = studio.update(Message::Escape);
+        assert_eq!(studio.ribbon_panel_open, None);
     }
 
     #[test]

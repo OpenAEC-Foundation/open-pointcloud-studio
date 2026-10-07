@@ -8,6 +8,9 @@ use iced::{Background, Border, Element, Fill, Length, Theme};
 
 use crate::{ui_style, ui_theme, Message};
 
+mod adaptive;
+pub use adaptive::{AdaptivePanel, AdaptiveRibbon};
+
 pub const ROW_H: f32 = 22.0;
 pub const TOOL_BAR_H: f32 = 3.0 * ROW_H + 20.0;
 pub const QUICK_ACCESS_W: f32 = 26.0;
