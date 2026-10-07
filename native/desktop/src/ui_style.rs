@@ -187,6 +187,49 @@ pub fn quick_button(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// The red of the close button of a window under the pointer, and while it
+/// is pressed, in every theme, as the template has them.
+fn close_hover() -> Color {
+    Color::from_rgb8(0xE8, 0x11, 0x23)
+}
+fn close_pressed() -> Color {
+    Color::from_rgb8(0xC5, 0x0F, 0x1F)
+}
+
+/// A button of the window in the title bar: its glyph in the accent colour,
+/// tinted and outlined under the pointer as a ribbon button; the close
+/// button turns red with a white glyph.
+pub fn window_button(theme: &Theme, close: bool, status: button::Status) -> button::Style {
+    let colors = colors(theme);
+    let (background, text_color, border) = match (status, close) {
+        (button::Status::Hovered, true) => (Some(close_hover()), Color::WHITE, close_hover()),
+        (button::Status::Pressed, true) => (Some(close_pressed()), Color::WHITE, close_pressed()),
+        (button::Status::Hovered, false) => (
+            Some(colors.ribbon_btn_hover),
+            colors.accent,
+            colors.ribbon_btn_hover_border,
+        ),
+        (button::Status::Pressed, false) => (
+            Some(colors.ribbon_btn_active_bg),
+            colors.accent,
+            colors.ribbon_btn_active_border,
+        ),
+        (button::Status::Active | button::Status::Disabled, _) => {
+            (None, colors.accent, Color::TRANSPARENT)
+        }
+    };
+    button::Style {
+        background: background.map(Background::Color),
+        text_color,
+        border: Border {
+            color: border,
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        shadow: Shadow::default(),
+    }
+}
+
 /// A small action in a panel or on a row: a ribbon button that is not on.
 pub fn tool(theme: &Theme, status: button::Status) -> button::Style {
     ribbon_button(theme, false, status)
@@ -1059,6 +1102,41 @@ mod tests {
             for status in [button::Status::Active, button::Status::Hovered] {
                 assert_eq!(tool(&theme, status), ribbon_button(&theme, false, status));
             }
+        }
+    }
+
+    #[test]
+    fn a_button_of_the_title_bar_is_the_accent_tinted_under_the_pointer() {
+        for (theme, colors) in themes() {
+            let idle = quick_button(&theme, button::Status::Active);
+            assert_eq!(background(&idle), None);
+            assert_eq!(idle.text_color, colors.accent);
+            assert_eq!(idle.border.radius, 2.0.into());
+            let over = quick_button(&theme, button::Status::Hovered);
+            assert_eq!(background(&over), Some(colors.ribbon_btn_hover));
+            assert_eq!(over.border.color, colors.ribbon_btn_hover_border);
+            assert_eq!(over.text_color, colors.ribbon_text_hover);
+            let pressed = quick_button(&theme, button::Status::Pressed);
+            assert_eq!(background(&pressed), Some(colors.ribbon_btn_active_bg));
+            assert_eq!(pressed.border.color, colors.ribbon_btn_active_border);
+            // The buttons of the window: square, the close button red under
+            // the pointer in every theme.
+            for close in [false, true] {
+                let idle = window_button(&theme, close, button::Status::Active);
+                assert_eq!(background(&idle), None);
+                assert_eq!(idle.text_color, colors.accent);
+                assert_eq!(idle.border.radius, 0.0.into());
+            }
+            let over = window_button(&theme, false, button::Status::Hovered);
+            assert_eq!(background(&over), Some(colors.ribbon_btn_hover));
+            let close = window_button(&theme, true, button::Status::Hovered);
+            assert_eq!(background(&close), Some(Color::from_rgb8(0xE8, 0x11, 0x23)));
+            assert_eq!(close.text_color, Color::WHITE);
+            let pressed = window_button(&theme, true, button::Status::Pressed);
+            assert_eq!(
+                background(&pressed),
+                Some(Color::from_rgb8(0xC5, 0x0F, 0x1F))
+            );
         }
     }
 

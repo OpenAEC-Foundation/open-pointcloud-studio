@@ -68,6 +68,7 @@ mod status_bar;
 mod survey;
 #[cfg(test)]
 mod test_render;
+mod title_bar;
 mod ui_style;
 mod ui_theme;
 mod view_cube;
@@ -1322,6 +1323,10 @@ fn main() -> iced::Result {
         .antialiasing(true)
         .window(iced::window::Settings {
             size: Size::new(1440.0, 900.0),
+            min_size: Some(title_bar::MIN_SIZE),
+            // The title bar of the style book frames the window on Windows
+            // and X11; macOS and Wayland keep the frame of the system.
+            decorations: title_bar::Frame::current().decorations(),
             icon: iced::window::icon::from_file_data(
                 include_bytes!("../../assets/icons/icon-64.png"),
                 None,
@@ -1331,6 +1336,20 @@ fn main() -> iced::Result {
             platform_specific: iced::window::settings::PlatformSpecific {
                 application_id: APPLICATION_ID.into(),
                 ..Default::default()
+            },
+            // The shadow of the system around a window without its frame.
+            #[cfg(windows)]
+            platform_specific: iced::window::settings::PlatformSpecific {
+                undecorated_shadow: true,
+                ..Default::default()
+            },
+            // The buttons of the system over the title bar, which runs
+            // under them.
+            #[cfg(target_os = "macos")]
+            platform_specific: iced::window::settings::PlatformSpecific {
+                title_hidden: true,
+                titlebar_transparent: true,
+                fullsize_content_view: true,
             },
             // Closing arrives as `Message::Exit`, like Exit in the File view.
             exit_on_close_request: false,
@@ -1816,6 +1835,8 @@ enum Message {
     FilePage(FilePage),
     /// Open a web page of the application in the browser of the system.
     OpenUrl(&'static str),
+    /// The title bar and the edges of the window.
+    Window(title_bar::WindowAction),
     Exit,
     RibbonScroll(f32),
     RibbonViewport(f32, f32, f32),
@@ -2243,6 +2264,8 @@ struct Studio {
     viewport_size: Size,
     /// The size of the window, once it opened.
     window_size: Option<Size>,
+    /// The bar at the top of the window, of the style book.
+    title_bar: title_bar::TitleBar,
     ribbon_viewport: Option<(f32, f32, f32)>,
     file_open: bool,
     /// The page the File view shows.
@@ -2879,6 +2902,7 @@ impl Default for Studio {
             sheet_dialog: None,
             viewport_size: Size::new(915.0, 743.0),
             window_size: None,
+            title_bar: title_bar::TitleBar::default(),
             ribbon_viewport: None,
             file_open: false,
             file_page: FilePage::default(),
@@ -3878,6 +3902,10 @@ impl Studio {
                         "thin_pending": self.thin_pending,
                         "color_mode": self.color_mode.to_string(),
                         "theme": self.ui_theme.key(),
+                        "window": {
+                            "frame": self.title_bar.frame.key(),
+                            "maximized": self.title_bar.maximized,
+                        },
                         "hidden_classes": (0..=u8::MAX)
                             .filter(|code| !self.class_visibility.allows(Some(*code)))
                             .collect::<Vec<_>>(),
@@ -6247,7 +6275,13 @@ impl Studio {
             Message::WindowResized(size) => {
                 self.window_size = Some(size);
                 self.ribbon_viewport = None;
+                // The glyph of the maximise button and the edges follow
+                // whether the window is maximised.
+                if self.title_bar.frame == title_bar::Frame::Own {
+                    return title_bar::ask_maximized();
+                }
             }
+            Message::Window(action) => return self.window_action(action),
             Message::Theme(theme) => {
                 self.ui_theme = theme;
                 theme.save();
@@ -9930,7 +9964,7 @@ impl Studio {
         }
     }
 
-    /// The buttons beside the tabs of the ribbon: import, open a scan
+    /// The quick-access buttons of the title bar: import, open a scan
     /// folder, export, undo, redo and Settings, as icons named in their
     /// tooltips.
     fn quick_access(&self) -> Element<'_, Message> {
@@ -9979,20 +10013,17 @@ impl Studio {
 
     /// The row of the tabs of the ribbon: File, which opens the File view,
     /// and Home, the one tab, open while the File view is not.
-    fn ribbon_tabs<'a>(&'a self, right: Element<'a, Message>) -> Element<'a, Message> {
-        opencad_ribbon::tab_row(
-            vec![
-                opencad_ribbon::file_tab(i18n::tr("File"), Message::ToggleFile),
-                // The one tab of the ribbon; it also leads back from the
-                // File view.
-                opencad_ribbon::tab(
-                    i18n::tr("Home"),
-                    !self.file_open,
-                    self.file_open.then_some(Message::ToggleFile),
-                ),
-            ],
-            right,
-        )
+    fn ribbon_tabs(&self) -> Element<'_, Message> {
+        opencad_ribbon::tab_row(vec![
+            opencad_ribbon::file_tab(i18n::tr("File"), Message::ToggleFile),
+            // The one tab of the ribbon; it also leads back from the
+            // File view.
+            opencad_ribbon::tab(
+                i18n::tr("Home"),
+                !self.file_open,
+                self.file_open.then_some(Message::ToggleFile),
+            ),
+        ])
     }
 
     /// The ribbon of the style book: the row of its tabs, and under it the
@@ -10001,7 +10032,7 @@ impl Studio {
     fn ribbon(&self) -> Element<'_, Message> {
         use opencad_ribbon::RibbonItem;
 
-        let tabs = self.ribbon_tabs(self.quick_access());
+        let tabs = self.ribbon_tabs();
         if self.file_open {
             return tabs;
         }
@@ -10410,6 +10441,7 @@ impl Studio {
         if self.file_open {
             return self.with_dialogs(
                 column![
+                    self.title_bar(),
                     self.ribbon(),
                     self.file_view(),
                     self.status_bar(self.status.clone()),
@@ -11013,6 +11045,7 @@ impl Studio {
         .height(Fill);
         let mesh_status = self.mesh_job.as_ref().map(MeshJob::progress_text);
         let window = column![
+            self.title_bar(),
             self.ribbon(),
             content,
             self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
@@ -11039,7 +11072,8 @@ impl Studio {
         if let Some(dialog) = self.extension_dialog_view() {
             layers = layers.push(dialog);
         }
-        layers.into()
+        // The edges of the window resize it above everything.
+        self.with_edges(layers.into())
     }
 }
 

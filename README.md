@@ -135,7 +135,7 @@ open-pointcloud-studio --help
 
 ## The first five minutes
 
-The window has the **ribbon** with the tools along the top, the **project panel** with the open scans at the left, the **scene** (the 3D view) in the middle and the **Properties panel** (*Eigenschappen*) at the right. The ribbon is wider than the window at its first size: the arrow buttons at both ends of the ribbon, or the wheel over it, scroll to the groups that do not fit, among them EDIT (*BEWERKEN*), SURFACE (*OPPERVLAK*) and INDEX. **File** (*Bestand*) at the top left opens the File view, with the pages New, Open, Import and Export (*Nieuw*, *Openen*, *Importeren*, *Exporteren*) and the Workspace page (*Werkruimte*).
+The window has the **title bar** of the OpenAEC style book at the top, with the quick-access buttons, Undo and Redo among them, and Settings, then the **ribbon** with the tools, the **project panel** with the open scans at the left, the **scene** (the 3D view) in the middle and the **Properties panel** (*Eigenschappen*) at the right. The ribbon is wider than the window at its first size: the arrow buttons at both ends of the ribbon, or the wheel over it, scroll to the groups that do not fit, among them EDIT (*BEWERKEN*), SURFACE (*OPPERVLAK*) and INDEX. **File** (*Bestand*), the first tab of the ribbon, opens the File view, with the pages New, Open, Import and Export (*Nieuw*, *Openen*, *Importeren*, *Exporteren*) and the Workspace page (*Werkruimte*).
 
 The interface follows the language of the system, English or Dutch; **Settings > General** (*Instellingen > Algemeen*) changes it. This page uses the English names and, in the steps below, gives the Dutch name in brackets where it differs.
 

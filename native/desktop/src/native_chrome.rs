@@ -1,6 +1,11 @@
-//! Match the system title bar to the native OpenAEC palette on X11 and
-//! Windows. The window manager keeps its normal drag, resize and control
-//! behavior.
+//! The parts of the frame of the window that the system keeps: the light
+//! or dark hint of the frame on X11 and the colours of the frame on
+//! Windows, which the shadow around a window without its frame takes, and
+//! the resize from an edge of a window that has no frame of the system.
+
+use iced::window::raw_window_handle::WindowHandle;
+
+use crate::title_bar::Edge;
 
 /// Give the title bar of the application's window the dark or light variant
 /// and, where the system allows it, the given caption and text colours.
@@ -154,3 +159,124 @@ pub fn apply(dark: bool, caption: [u8; 3], text: [u8; 3]) -> bool {
 pub fn apply(_dark: bool, _caption: [u8; 3], _text: [u8; 3]) -> bool {
     true
 }
+
+/// Let the system resize the window from `edge`, as a press on its frame
+/// would, while the button that was pressed is held: the window has no
+/// frame of the system, and iced 0.13 does not ask the system for a resize.
+/// On Windows the press is handed to the window as a press on that part of
+/// its frame.
+#[cfg(windows)]
+pub fn begin_resize(handle: WindowHandle<'_>, edge: Edge) {
+    use iced::window::raw_window_handle::RawWindowHandle;
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+    const NON_CLIENT_BUTTON_DOWN: u32 = 0x00A1;
+    #[link(name = "user32")]
+    extern "system" {
+        fn ReleaseCapture() -> i32;
+        fn GetCursorPos(point: *mut Point) -> i32;
+        fn PostMessageW(window: *mut c_void, message: u32, wparam: usize, lparam: isize) -> i32;
+    }
+
+    let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+        return;
+    };
+    // The parts of the frame, as the system numbers them.
+    let part: usize = match edge {
+        Edge::West => 10,
+        Edge::East => 11,
+        Edge::North => 12,
+        Edge::NorthWest => 13,
+        Edge::NorthEast => 14,
+        Edge::South => 15,
+        Edge::SouthWest => 16,
+        Edge::SouthEast => 17,
+    };
+    let window = win32.hwnd.get() as *mut c_void;
+    let mut point = Point { x: 0, y: 0 };
+    // SAFETY: the point lives for the call, and the window belongs to this
+    // process; this runs on the thread of the window, which holds the
+    // capture of the pointer that is released.
+    unsafe {
+        if GetCursorPos(&mut point) == 0 {
+            return;
+        }
+        ReleaseCapture();
+        let position = (point.x as i16 as u16 as u32) | ((point.y as i16 as u16 as u32) << 16);
+        PostMessageW(window, NON_CLIENT_BUTTON_DOWN, part, position as isize);
+    }
+}
+
+/// On X11 the window manager is asked to resize the window from the place
+/// of the pointer (`_NET_WM_MOVERESIZE`).
+#[cfg(target_os = "linux")]
+pub fn begin_resize(handle: WindowHandle<'_>, edge: Edge) {
+    use iced::window::raw_window_handle::RawWindowHandle;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ClientMessageEvent, ConnectionExt, EventMask};
+
+    let window: u32 = match handle.as_raw() {
+        RawWindowHandle::Xlib(xlib) => xlib.window as u32,
+        RawWindowHandle::Xcb(xcb) => xcb.window.get(),
+        _ => return,
+    };
+    let Ok((connection, screen)) = x11rb::connect(None) else {
+        return;
+    };
+    let root = connection.setup().roots[screen].root;
+    let Some(atom) = connection
+        .intern_atom(false, b"_NET_WM_MOVERESIZE")
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.atom)
+    else {
+        return;
+    };
+    let Some(pointer) = connection
+        .query_pointer(root)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    else {
+        return;
+    };
+    // The directions of the specification, from the top left clockwise.
+    let direction: u32 = match edge {
+        Edge::NorthWest => 0,
+        Edge::North => 1,
+        Edge::NorthEast => 2,
+        Edge::East => 3,
+        Edge::SouthEast => 4,
+        Edge::South => 5,
+        Edge::SouthWest => 6,
+        Edge::West => 7,
+    };
+    let _ = connection.ungrab_pointer(x11rb::CURRENT_TIME);
+    let event = ClientMessageEvent::new(
+        32,
+        window,
+        atom,
+        [
+            pointer.root_x as i32 as u32,
+            pointer.root_y as i32 as u32,
+            direction,
+            1,
+            1,
+        ],
+    );
+    let _ = connection.send_event(
+        false,
+        root,
+        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+        event,
+    );
+    let _ = connection.flush();
+}
+
+/// Elsewhere the system frames the window and resizes it.
+#[cfg(not(any(target_os = "linux", windows)))]
+pub fn begin_resize(_handle: WindowHandle<'_>, _edge: Edge) {}

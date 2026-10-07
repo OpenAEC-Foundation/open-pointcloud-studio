@@ -68,11 +68,12 @@ pub fn label_font(active: bool) -> iced::Font {
 /// What the font system had loaded when a width was measured.
 type FontVersion = iced::advanced::graphics::text::Version;
 
+/// How wide a name is, by its text and whether it is set in medium,
+/// measured with the fonts of a version of the font system.
+type Widths = (FontVersion, HashMap<(String, bool), f32>);
+
 thread_local! {
-    /// How wide a name is, by its text and whether it is set in medium,
-    /// measured with the fonts of a version of the font system.
-    static WIDTHS: RefCell<(FontVersion, HashMap<(String, bool), f32>)> =
-        RefCell::new((FontVersion::default(), HashMap::new()));
+    static WIDTHS: RefCell<Widths> = RefCell::new((FontVersion::default(), HashMap::new()));
 }
 
 /// The lines the name of a large button is set in: on one line when it fits
@@ -364,24 +365,17 @@ pub fn line<'a>(color: fn(&ui_theme::UiColors) -> Color) -> container::Container
 }
 
 /// The row of the tabs: the lighter shell with the accent line at its
-/// bottom, the tabs standing on it from the left and `right` at the right.
-/// The tab that is open covers the line under it, so that it reads as one
-/// with the groups below.
-pub fn tab_row<'a>(
-    tabs: Vec<Element<'a, Message>>,
-    right: Element<'a, Message>,
-) -> Element<'a, Message> {
+/// bottom, the tabs standing on it from the left. The tab that is open
+/// covers the line under it, so that it reads as one with the groups below.
+pub fn tab_row<'a>(tabs: Vec<Element<'a, Message>>) -> Element<'a, Message> {
     let base = column![
         Space::with_height(TAB_ROW_H - 1.0),
         line(|colors| colors.accent).width(Fill).height(1),
     ]
     .width(Fill)
     .height(TAB_ROW_H);
-    let mut strip = row(tabs).spacing(2).height(TAB_ROW_H);
-    strip = strip
-        .push(Space::with_width(Fill))
-        .push(container(right).height(TAB_ROW_H).center_y(TAB_ROW_H));
-    container(iced::widget::stack![base, strip.padding([0, 8])])
+    let strip = row(tabs).spacing(2).height(TAB_ROW_H).padding([0, 8]);
+    container(iced::widget::stack![base, strip])
         .width(Fill)
         .height(TAB_ROW_H)
         .style(|theme| container::Style::default().background(ui_theme::colors(theme).bg_lighter))

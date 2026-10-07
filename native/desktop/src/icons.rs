@@ -171,6 +171,35 @@ impl ToolIcon {
     }
 }
 
+/// The glyphs of the buttons of the window, drawn on a square of 10 as the
+/// template draws them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowGlyph {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+impl WindowGlyph {
+    pub fn handle(self) -> svg::Handle {
+        svg::Handle::from_memory(match self {
+            Self::Minimize => {
+                include_bytes!("../../assets/ui-icons/window_minimize.svg").as_slice()
+            }
+            Self::Maximize => include_bytes!("../../assets/ui-icons/window_maximize.svg"),
+            Self::Restore => include_bytes!("../../assets/ui-icons/window_restore.svg"),
+            Self::Close => include_bytes!("../../assets/ui-icons/window_close.svg"),
+        })
+    }
+}
+
+/// The logo of the application, the nine points, which the title bar draws
+/// in the accent colour.
+pub fn logo() -> svg::Handle {
+    svg::Handle::from_memory(include_bytes!("../../assets/icons/logo.svg").as_slice())
+}
+
 /// `icon` at `size` pixels, in the colour of the text around it.
 pub fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
     glyph(icon.handle(), size).into()
