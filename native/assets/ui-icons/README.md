@@ -22,6 +22,8 @@ the copyright line of the OpenAEC Foundation, is `OpenAEC-icons-MIT.txt`:
   `save.svg`, and the glyphs of the buttons of the window,
   `window_minimize.svg`, `window_maximize.svg`, `window_restore.svg` and
   `window_close.svg`, which are drawn on a square of 10 as the template
-  draws them.
+  draws them;
+- from `project-templates/Tauri+React/src/components/DocumentBar.tsx`:
+  `tab_close.svg`, the × of a tab, on a square of 10.
 
 The other icons are drawn for this application in the same style.

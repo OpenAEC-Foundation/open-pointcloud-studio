@@ -1201,8 +1201,8 @@ fn main() -> iced::Result {
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                     Some(Message::FileDropped(path))
                 }
-                // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs above
-                // the main area.
+                // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs under
+                // the ribbon.
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
                     modifiers,
@@ -2077,7 +2077,7 @@ enum Message {
     /// the orbit point.
     PickOrbitPoint([f32; 2], Size),
     Browser(project_browser::BrowserAction),
-    /// A tab above the main area was clicked or closed, or Ctrl+Tab pressed.
+    /// A tab under the ribbon was clicked or closed, or Ctrl+Tab pressed.
     Tabs(view_tabs::TabAction),
     Sheet(sheet_dialog::SheetAction),
     OrbitPointPicked(Option<[f64; 3]>),
@@ -2254,7 +2254,7 @@ struct Studio {
     views: views::ViewTool,
     /// Which groups of the Project Browser are collapsed.
     browser: project_browser::BrowserState,
-    /// The tabs above the main area: the 3D model and the views and
+    /// The tabs under the ribbon: the 3D model and the views and
     /// drawings opened from VIEWS.
     tabs: view_tabs::ViewTabs,
     /// How deep `update` is called within itself; the tabs follow what the
@@ -10998,9 +10998,8 @@ impl Studio {
             properties.into()
         };
 
-        // The tabs of the 3D model and of the views and drawings opened from
-        // VIEWS, with what the main area shows at their right.
-        let mut viewport = column![self.tab_strip()].height(Fill).width(Fill);
+        // What the active tab shows, under its progress lines.
+        let mut viewport = column![].height(Fill).width(Fill);
         if let Some(progress) = self.progress_strip() {
             viewport = viewport.push(progress);
         }
@@ -11044,9 +11043,13 @@ impl Studio {
         ]
         .height(Fill);
         let mesh_status = self.mesh_job.as_ref().map(MeshJob::progress_text);
+        // The tabs of the 3D model and of the views, drawings and sheets
+        // opened from the Project Browser, over the width of the window
+        // under the ribbon, as the document bar of the style book.
         let window = column![
             self.title_bar(),
             self.ribbon(),
+            self.tab_strip(),
             content,
             self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
         ]

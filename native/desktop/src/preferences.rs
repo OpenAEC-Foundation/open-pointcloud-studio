@@ -48,7 +48,7 @@ pub(crate) struct Preferences {
     /// is no list of texts reads as none, and leaves the other settings.
     #[serde(deserialize_with = "texts_or_none")]
     pub browser_collapsed: Vec<String>,
-    /// The tabs open above the main area after the 3D model, as
+    /// The tabs open under the ribbon after the 3D model, as
     /// `model`, `view:` or `drawing:` and an identifier, read in the same
     /// way.
     #[serde(deserialize_with = "texts_or_none")]

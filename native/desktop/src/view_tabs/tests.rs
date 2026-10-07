@@ -125,7 +125,7 @@ fn names_shrink_with_an_ellipsis_before_the_strip_scrolls() {
     assert_eq!(shortened("abcdefghij", 5), "abcd…");
     let names: Vec<(String, bool)> = [
         ("3D model", false),
-        ("Ground floor plan at +1.20 m", true),
+        ("Ground floor plan +1.20 m", true),
         ("Front", true),
     ]
     .into_iter()
@@ -137,7 +137,7 @@ fn names_shrink_with_an_ellipsis_before_the_strip_scrolls() {
         .sum();
     // Wide enough: every name as it is.
     let (shown, scrolls) = fitted_names(&names, natural);
-    assert_eq!(shown, ["3D model", "Ground floor plan at +1.20 m", "Front"]);
+    assert_eq!(shown, ["3D model", "Ground floor plan +1.20 m", "Front"]);
     assert!(!scrolls);
     // Narrower: the long name is shortened first, the short ones stay.
     let (shown, scrolls) = fitted_names(&names, natural - 60.0);
@@ -157,6 +157,14 @@ fn names_shrink_with_an_ellipsis_before_the_strip_scrolls() {
     assert!(scrolls);
     assert!(shown[1].chars().count() <= MIN_CHARS && shown[1].ends_with('…'));
     assert_eq!(shown[2], "Front");
+    // A name is never shown wider than the 160 pixels of the style book,
+    // however wide the bar.
+    assert_eq!(MAX_CHARS, 25);
+    assert!(MAX_CHARS as f32 * CHAR_WIDTH <= 160.0);
+    let long = vec![("Ground floor plan at +1.20 m".to_owned(), true)];
+    let (shown, _) = fitted_names(&long, 2000.0);
+    assert_eq!(shown[0].chars().count(), MAX_CHARS);
+    assert!(shown[0].ends_with('…'));
 }
 
 #[test]
@@ -198,40 +206,42 @@ fn the_strip_scrolls_to_the_start_of_a_whole_tab() {
 }
 
 #[test]
-fn the_x_of_the_active_tab_reads_on_the_sheet_and_on_the_scene_in_every_theme() {
-    // The contrast of two colours, as WCAG works it out.
-    fn luminance(color: Color) -> f32 {
-        let channel = |value: f32| {
-            if value <= 0.039_28 {
-                value / 12.92
-            } else {
-                ((value + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
-    }
-    fn contrast(a: Color, b: Color) -> f32 {
-        let (a, b) = (luminance(a), luminance(b));
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
-    }
+fn a_tab_is_outlined_and_the_active_one_is_the_accent_on_the_soft_accent() {
     for theme in crate::ui_theme::UiTheme::ALL {
         let iced = theme.iced();
-        for drawing in [true, false] {
-            let surface = active_surface(theme, drawing);
-            for status in [button::Status::Active, button::Status::Hovered] {
-                let style = close_style(&iced, Some(surface), status);
-                let behind = match style.background {
-                    Some(Background::Color(color)) => mixed(color, surface.0, color.a),
-                    _ => surface.0,
-                };
-                let ratio = contrast(style.text_color, behind);
-                assert!(
-                    ratio >= 4.5,
-                    "{theme:?} drawing {drawing} {status:?}: {ratio:.2}"
-                );
-            }
+        let colors = theme.colors();
+        let quiet = tab_style(&iced, false, false);
+        assert_eq!(quiet.background, None);
+        assert_eq!(quiet.text_color, colors.text_muted);
+        assert_eq!(quiet.border.color, colors.border);
+        assert_eq!(quiet.border.radius, iced::border::Radius::default().top(3));
+        let over = tab_style(&iced, false, true);
+        assert_eq!(over.background, Some(Background::Color(colors.hover)));
+        assert_eq!(over.text_color, colors.text);
+        for hovered in [false, true] {
+            let active = tab_style(&iced, true, hovered);
+            assert_eq!(
+                active.background,
+                Some(Background::Color(colors.accent_soft))
+            );
+            assert_eq!(active.text_color, colors.accent);
+            assert_eq!(active.border.color, colors.accent);
         }
+        // The × is muted, in the accent colour under the pointer.
+        assert_eq!(
+            close_style(&iced, button::Status::Active).text_color,
+            colors.text_muted
+        );
+        let over = close_style(&iced, button::Status::Hovered);
+        assert_eq!(over.text_color, colors.accent);
+        assert_eq!(
+            over.background,
+            Some(Background::Color(colors.ribbon_btn_hover))
+        );
     }
+    // The × shows on the active tab and the one under the pointer only.
+    assert!(shows_cross(true, false) && shows_cross(false, true) && shows_cross(true, true));
+    assert!(!shows_cross(false, false));
 }
 
 /// A studio with one scan, its views and drawings in a folder of the test.
@@ -382,6 +392,90 @@ fn what_views_shows_opens_a_tab_and_a_click_on_a_tab_shows_it_again() {
     let _ = studio.update(Message::WindowResized(Size::new(1600.0, 900.0)));
     assert_eq!(studio.strip_layout().fitted, names(&studio));
     let _ = studio.view();
+}
+
+#[test]
+fn the_document_bar_draws_the_active_tab_in_the_accent_and_the_hovered_one_tinted() {
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+    let (mut studio, _directory) = studio_with_scan();
+    let plan = made_drawing(&mut studio, "Ground floor", 4.0);
+    let roof = made_drawing(&mut studio, "Roof", 8.0);
+    for guid in [&plan, &roof] {
+        let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(
+            guid.clone(),
+        )));
+    }
+    assert_eq!(studio.shown_tab(), Some(drawing(&roof)));
+    let size = Size::new(800.0, 30.0);
+    for theme in [
+        crate::ui_theme::UiTheme::Light,
+        crate::ui_theme::UiTheme::Forge,
+    ] {
+        studio.ui_theme = theme;
+        studio.tabs.hovered = None;
+        let colors = theme.colors();
+        let picture = crate::test_render::render(studio.tab_strip(), &theme.iced(), size);
+        // The bar: its line of the accent above, its border below, the
+        // tabs in between.
+        assert!(picture.is(790, 15, colors.docbar_bg), "{}", theme.key());
+        let line = crate::ui_theme::DOCBAR_RULE;
+        assert!(
+            picture.is(790, 0, mixed(line, colors.docbar_bg, line.a)),
+            "{}",
+            theme.key()
+        );
+        assert!(
+            picture.is(
+                790,
+                29,
+                mixed(colors.border, colors.docbar_bg, colors.border.a)
+            ),
+            "{}",
+            theme.key()
+        );
+        // The active tab is filled with the soft accent over the bar and
+        // outlined in the accent colour, from 5 to the bottom.
+        let fill = tab_fill(&colors, true, false);
+        let filled: Vec<u32> = (0..800).filter(|&x| picture.is(x, 8, fill)).collect();
+        assert!(filled.len() > 20, "{}: {filled:?}", theme.key());
+        // The sides of a tab may fall between two pixels, which then share
+        // the accent of its outline.
+        let accent_near = |x: u32, y: u32| {
+            let [r, g, b, _] = colors.accent.into_rgba8();
+            let [red, green, blue] = picture.rgb(x, y);
+            red.abs_diff(r) < 48 && green.abs_diff(g) < 48 && blue.abs_diff(b) < 48
+        };
+        let left = filled[0];
+        assert!(
+            accent_near(left - 1, 12) || accent_near(left - 2, 12),
+            "{}: {:?}",
+            theme.key(),
+            (left - 3..=left)
+                .map(|x| picture.rgb(x, 12))
+                .collect::<Vec<_>>()
+        );
+        assert!(accent_near(filled[1], 5), "{}", theme.key());
+        // Open at its bottom: its fill reaches the line of the bar.
+        assert!(picture.is(filled[1], 28, fill), "{}", theme.key());
+        // The tab under the pointer is tinted, and shows its ×.
+        studio.tabs.hovered = Some(drawing(&plan));
+        let over = crate::test_render::render(studio.tab_strip(), &theme.iced(), size);
+        // (The tint may be the soft accent itself, as in Light.)
+        let tint = tab_fill(&colors, false, true);
+        let tinted = |picture: &crate::test_render::Picture| {
+            (0..800).filter(|&x| picture.is(x, 8, tint)).count()
+        };
+        assert!(
+            tinted(&over) > tinted(&picture) + 20,
+            "{}: the hovered tab",
+            theme.key()
+        );
+    }
+    // The pointer leaving another tab leaves the hovered one as it is.
+    let _ = studio.update(Message::Tabs(TabAction::Leave(drawing(&roof))));
+    assert_eq!(studio.tabs.hovered, Some(drawing(&plan)));
+    let _ = studio.update(Message::Tabs(TabAction::Leave(drawing(&plan))));
+    assert_eq!(studio.tabs.hovered, None);
 }
 
 #[test]

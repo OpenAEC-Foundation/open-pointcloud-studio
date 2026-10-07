@@ -98,6 +98,9 @@ fn changes_the_view(message: &Message) -> bool {
     )
 }
 
+/// The width of the padlock on a tab: its icon of 11 and 2 beside it.
+pub(crate) const TAB_PADLOCK_WIDTH: f32 = 15.0;
+
 /// The small button of a row that locks or unlocks it.
 fn padlock<'a>(locked: bool, message: Message) -> Element<'a, Message> {
     let (icon, tip) = if locked {
@@ -303,7 +306,8 @@ impl Studio {
         }
     }
 
-    /// The padlock on the tab of a locked view or drawing, which unlocks it.
+    /// The padlock on the tab of a locked view or drawing, which unlocks it,
+    /// `TAB_PADLOCK_WIDTH` wide.
     pub(crate) fn tab_padlock<'a>(
         &self,
         tab: &crate::view_tabs::TabId,
@@ -318,6 +322,7 @@ impl Studio {
                 button(crate::icons::tool_glyph(ToolIcon::Locked, 11.0, true))
                     .on_press(Message::Lock(target))
                     .style(ui_style::tool)
+                    .width(TAB_PADLOCK_WIDTH)
                     .padding([0, 2]),
                 tr("Locked: click to unlock").to_owned(),
             )

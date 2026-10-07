@@ -840,6 +840,11 @@ const CONTRAST: UiColors = UiColors {
     dom: DOM_DARK,
 };
 
+/// The line over the document bar, the same in every theme: the template
+/// writes it into `DocumentBar.css` (`border-top: 1px solid rgba(217, 119,
+/// 6, 0.15)`) rather than taking a variable of a theme.
+pub const DOCBAR_RULE: Color = rgba(217, 119, 6, 0.15);
+
 /// The tokens of the theme a widget is drawn in, found by its background.
 pub fn colors(theme: &Theme) -> UiColors {
     let background = theme.palette().background;

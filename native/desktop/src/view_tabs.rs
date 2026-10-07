@@ -1,4 +1,5 @@
-//! The tabs above the viewport, side by side as the pages of a document: the
+//! The tabs of the document bar under the ribbon, side by side as the pages
+//! of a document: the
 //! 3D model first, which never closes, and after it every view and drawing
 //! opened from VIEWS of the Project Browser, in the order they were opened.
 //! A click on a tab shows it; its × or a middle click closes the tab and
@@ -17,16 +18,17 @@
 use std::path::{Path, PathBuf};
 
 use iced::widget::scrollable::{self, AbsoluteOffset, Direction, Scrollbar};
-use iced::widget::{button, container, mouse_area, row, text};
+use iced::widget::{button, column, container, mouse_area, row, stack, text, Space};
 use iced::{Background, Border, Color, Element, Fill, Padding, Task, Theme};
 use pointcloud_core::Bounds;
 use serde_json::{json, Value};
 
 use crate::i18n::tr;
+use crate::icons::{self, WindowGlyph};
 use crate::project_browser::{ViewKind, ViewRow};
 use crate::station_photos::WalkView;
 use crate::ui_style;
-use crate::{icon_svg, ui_theme, ColorMode, Message, Studio, ToolIcon};
+use crate::{ui_theme, ColorMode, Message, Studio, ToolIcon};
 
 /// A tab, by what it shows.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -121,17 +123,30 @@ impl TabId {
 pub const MAX_TABS: usize = 32;
 /// The pixels a character of the name of a tab takes, about.
 const CHAR_WIDTH: f32 = 6.3;
-/// The pixels of a tab besides its name: its padding, its icon, the gap
-/// after it and the gap between two tabs.
-const TAB_CHROME: f32 = 37.0;
-/// The pixels the × of a tab adds.
-const CLOSE_WIDTH: f32 = 22.0;
+/// The pixels of a tab besides its name: its padding of 10 and 4 within its
+/// border, its icon of 13 and the gap after it, and the gap between two
+/// tabs.
+const TAB_CHROME: f32 = 11.0 + 5.0 + 13.0 + 6.0 + 1.0;
+/// The × of a tab, 16 square, and the room before it.
+const CROSS: f32 = 16.0;
+const CROSS_GAP: f32 = 6.0;
+/// The pixels the × of a tab adds: the gap of the row and its own room.
+const CLOSE_WIDTH: f32 = 6.0 + CROSS_GAP + CROSS;
 /// A name is shortened to no fewer characters than this before the strip
-/// scrolls, and is never shown longer than `MAX_CHARS`.
+/// scrolls, and is never shown longer than `MAX_CHARS`, the 160 pixels of
+/// the style book.
 const MIN_CHARS: usize = 8;
-const MAX_CHARS: usize = 32;
-/// The height of a tab, without the accent line over the active one.
-const TAB_HEIGHT: f32 = 26.0;
+const MAX_CHARS: usize = 25;
+/// The document bar of the style book: 30 high with its two lines, the tabs
+/// 24 high on its bottom, and 4 at its sides.
+const BAR_HEIGHT: f32 = 30.0;
+const TABS_H: f32 = BAR_HEIGHT - 2.0;
+const BAR_PADDING: f32 = 4.0;
+const TAB_HEIGHT: f32 = 24.0;
+/// The content of a tab, 16 high as its ×, in the middle of the 21 within
+/// its border of 1 above and 2 below.
+const CONTENT_H: f32 = 16.0;
+const CONTENT_TOP: f32 = 1.0 + (21.0 - CONTENT_H) / 2.0;
 
 /// How wide a tab is with a name of so many characters.
 pub fn tab_width(chars: usize, closable: bool) -> f32 {
@@ -295,6 +310,8 @@ pub struct ViewTabs {
     /// A tab opened or closed, or the one kept as active let go, since the
     /// preferences last got the tabs.
     changed: bool,
+    /// The tab under the pointer, which shows its × as the active one does.
+    hovered: Option<TabId>,
 }
 
 impl Default for ViewTabs {
@@ -314,6 +331,7 @@ impl ViewTabs {
             model: None,
             kept: (Vec::new(), None),
             changed: false,
+            hovered: None,
         };
         for key in keys {
             if let Some(tab) = TabId::from_key(key) {
@@ -402,6 +420,9 @@ pub enum TabAction {
     /// Ctrl+Tab steps to the next tab (true), Ctrl+Shift+Tab to the one
     /// before (false).
     Cycle(bool),
+    /// The pointer came over a tab, and left it.
+    Hover(TabId),
+    Leave(TabId),
 }
 
 /// The scrollable that holds the tabs.
@@ -432,6 +453,18 @@ impl Studio {
                     Some(tab) => self.update_tabs(TabAction::Show(tab)),
                     None => Task::none(),
                 }
+            }
+            TabAction::Hover(tab) => {
+                self.tabs.hovered = Some(tab);
+                Task::none()
+            }
+            // The pointer may come over the next tab before it is said to
+            // have left the last one.
+            TabAction::Leave(tab) => {
+                if self.tabs.hovered.as_ref() == Some(&tab) {
+                    self.tabs.hovered = None;
+                }
+                Task::none()
             }
         }
     }
@@ -814,12 +847,11 @@ impl Studio {
         }))
     }
 
-    /// The width the strip has for its tabs: that of the
-    /// window between the Project Browser and Properties, else as the main
-    /// area was last drawn.
+    /// The width the strip has for its tabs: that of the window within the
+    /// padding of the bar, else as the main area was last drawn.
     fn strip_width(&self) -> f32 {
         if let Some(window) = self.window_size {
-            return window.width - crate::project_browser::WIDTH - self.properties_width();
+            return window.width - 2.0 * BAR_PADDING;
         }
         self.drawing_view
             .canvas_bounds()
@@ -836,7 +868,7 @@ impl Studio {
             .iter()
             .map(|tab| (self.tab_name(tab), tab.closable()))
             .collect();
-        let available = self.strip_width() - 12.0;
+        let available = self.strip_width();
         let (fitted, _) = fitted_names(&names, available);
         StripLayout {
             listed,
@@ -867,7 +899,9 @@ impl Studio {
         ))
     }
 
-    /// The strip of tabs above the main area.
+    /// The document bar of the style book over the width of the window,
+    /// under the ribbon: 30 high, a faint line of the accent above it and the
+    /// border under it, with the tabs standing on its bottom.
     pub(crate) fn tab_strip(&self) -> Element<'_, Message> {
         let shown = self.shown_tab();
         let StripLayout {
@@ -876,105 +910,135 @@ impl Studio {
             fitted,
             ..
         } = self.strip_layout();
-        let surface = active_surface(self.ui_theme, self.drawing_view.shown);
-        let mut tabs = row![].spacing(2).align_y(iced::Alignment::End);
+        let mut tabs = row![].spacing(1).align_y(iced::Alignment::End);
         for ((tab, (full, _)), short) in listed.iter().zip(names).zip(fitted) {
-            let active = (shown.as_ref() == Some(tab)).then_some(surface);
-            tabs = tabs.push(self.tab_button(tab.clone(), full, short, active));
+            let active = shown.as_ref() == Some(tab);
+            let hovered = self.tabs.hovered.as_ref() == Some(tab);
+            tabs = tabs.push(self.tab_button(tab.clone(), full, short, active, hovered));
         }
-        // The bar under the tabs stays 3 pixels, so that it does not cover
-        // them.
-        let strip = ui_style::scrollable(tabs)
-            .direction(Direction::Horizontal(
-                Scrollbar::new().width(3).scroller_width(3).margin(0),
-            ))
-            .id(strip_id())
-            .width(Fill);
-        let line = row![strip].align_y(iced::Alignment::End);
-        container(line)
-            .padding(Padding {
-                top: 4.0,
-                left: 6.0,
-                ..Padding::ZERO
+        // A bar of 2 under the tabs, which it lies over while they scroll.
+        let strip =
+            ui_style::scrollable(container(tabs).height(TABS_H).align_y(iced::Alignment::End))
+                .direction(Direction::Horizontal(
+                    Scrollbar::new().width(2).scroller_width(2).margin(0),
+                ))
+                .id(strip_id())
+                .width(Fill)
+                .height(TABS_H);
+        let rule = |color: fn(&ui_theme::UiColors) -> Color| {
+            container(Space::new(Fill, 1)).style(move |theme| {
+                container::Style::default().background(color(&ui_theme::colors(theme)))
             })
-            .width(Fill)
-            .style(|theme| {
-                container::Style::default().background(ui_theme::colors(theme).docbar_bg)
-            })
-            .into()
+        };
+        container(column![
+            rule(|_| ui_theme::DOCBAR_RULE),
+            container(strip).padding([0.0, BAR_PADDING]),
+            rule(|colors| colors.border),
+        ])
+        .width(Fill)
+        .height(BAR_HEIGHT)
+        .style(|theme| container::Style::default().background(ui_theme::colors(theme).docbar_bg))
+        .into()
     }
 
-    /// One tab: the icon of its kind, its name and its ×, with its full name
-    /// and kind in a tooltip. The active one has the colour and the ink of
-    /// what is shown under it, under a line of the accent.
+    /// One tab: the icon of its kind, its name and, on the active tab and
+    /// the one under the pointer, its ×, with its full name and kind in a
+    /// tooltip. The active one is outlined in the accent colour on the soft
+    /// accent, the others in the border colour, open at their bottom.
     fn tab_button(
         &self,
         tab: TabId,
         full: String,
         short: String,
-        active: Option<(Color, Color)>,
+        active: bool,
+        hovered: bool,
     ) -> Element<'_, Message> {
         let closable = tab.closable();
+        // The tab is a whole number of pixels wide, so that its outline
+        // falls on pixels: its padding, icon and name, its padlock and its ×.
+        let mut width =
+            11.0 + 13.0 + 6.0 + crate::fonts::width(&short, 11.0, crate::fonts::REGULAR) + 5.0;
+        let icon = icons::glyph(self.tab_icon(&tab).handle(), 13.0);
+        let icon = if active {
+            icon.tint(|colors| colors.accent)
+        } else {
+            icon.opacity(0.6)
+        };
         let mut content = row![
-            icon_svg(self.tab_icon(&tab), 13.0),
+            icon,
             text(short)
                 .size(11)
                 .wrapping(iced::widget::text::Wrapping::None),
         ]
         .spacing(6)
+        .height(CONTENT_H)
         .align_y(iced::Alignment::Center);
         if let Some(padlock) = self.tab_padlock(&tab) {
             content = content.push(padlock);
+            width += 6.0 + crate::locks::TAB_PADLOCK_WIDTH;
         }
         if closable {
-            content = content.push(
-                button(text("×").size(12))
+            width += 6.0 + CROSS_GAP + CROSS;
+            // The × keeps its place on every tab, so that a tab does not
+            // grow under the pointer.
+            let cross: Element<'_, Message> = if shows_cross(active, hovered) {
+                button(icons::glyph(WindowGlyph::TabClose.handle(), 10.0))
                     .on_press(Message::Tabs(TabAction::Close(tab.clone())))
-                    .style(move |theme, status| close_style(theme, active, status))
-                    .padding([0, 4]),
-            );
+                    .width(CROSS)
+                    .height(CROSS)
+                    .padding((CROSS - 10.0) / 2.0)
+                    .style(close_style)
+                    .into()
+            } else {
+                Space::new(CROSS, CROSS).into()
+            };
+            content = content.push(container(cross).padding(Padding {
+                left: CROSS_GAP,
+                ..Padding::ZERO
+            }));
         }
+        // Tinted while the pointer is over it, as its open bottom is.
         let body = button(content)
             .on_press(Message::Tabs(TabAction::Show(tab.clone())))
-            .style(move |theme, status| tab_style(theme, active, status))
+            .style(move |theme, status| {
+                let over = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                tab_style(theme, active, hovered || over)
+            })
+            .width(width.ceil())
             .height(TAB_HEIGHT)
             .padding(Padding {
-                top: 4.0,
-                bottom: 4.0,
-                left: 8.0,
-                right: if closable { 3.0 } else { 8.0 },
+                top: CONTENT_TOP,
+                bottom: TAB_HEIGHT - CONTENT_TOP - CONTENT_H,
+                left: 11.0,
+                right: 5.0,
             });
-        let framed = container(body)
-            .padding(Padding {
-                top: 2.0,
-                ..Padding::ZERO
-            })
-            .style(move |theme| {
-                let colors = ui_theme::colors(theme);
-                container::Style::default()
-                    .background(if active.is_some() {
-                        colors.accent
-                    } else {
-                        Color::TRANSPARENT
-                    })
-                    .border(Border {
-                        radius: iced::border::Radius::default().top(4),
-                        ..Border::default()
-                    })
-            });
+        // The bottom of a tab has no border: the 2 pixels of the style book
+        // in the colour of the tab, between its sides.
+        let open_bottom = container(container(Space::new(Fill, 2)).style(move |theme| {
+            container::Style::default().background(tab_fill(
+                &ui_theme::colors(theme),
+                active,
+                hovered,
+            ))
+        }))
+        .padding(Padding {
+            left: 1.0,
+            right: 1.0,
+            ..Padding::ZERO
+        })
+        .height(TAB_HEIGHT)
+        .align_y(iced::Alignment::End);
+        let mut area = mouse_area(stack![body, open_bottom])
+            .on_enter(Message::Tabs(TabAction::Hover(tab.clone())))
+            .on_exit(Message::Tabs(TabAction::Leave(tab.clone())));
+        if closable {
+            area = area.on_middle_press(Message::Tabs(TabAction::Close(tab.clone())));
+        }
         let kind = match &tab {
             TabId::Layout(_) => tr("Sheets"),
             _ => tr(self.tab_kind(&tab).label()),
         };
-        let tip = format!("{full}\n{kind}");
-        let element: Element<'_, Message> = if closable {
-            mouse_area(framed)
-                .on_middle_press(Message::Tabs(TabAction::Close(tab)))
-                .into()
-        } else {
-            framed.into()
-        };
-        ui_style::tooltip(element, tip).into()
+        ui_style::tooltip(area, format!("{full}\n{kind}")).into()
     }
 
     /// What `status.result.view_tabs` reports: the tabs the strip shows, in
@@ -1118,74 +1182,66 @@ impl Studio {
     }
 }
 
-/// What the active tab lies on, as its colour and its ink: the sheet of a
-/// drawing (`drawing`), else the scene.
-fn active_surface(theme: ui_theme::UiTheme, drawing: bool) -> (Color, Color) {
-    if drawing {
-        (
-            crate::drawing_view::paper(theme),
-            Color::from_rgb8(28, 25, 23),
-        )
-    } else {
-        let dom = theme.colors().dom;
-        (dom.scene, dom.scene_text)
-    }
-}
-
 fn refused(error: String) -> (Value, Task<Message>) {
     (json!({"ok": false, "error": error}), Task::none())
 }
 
-/// A tab: the active one in the colour and the ink of what is shown under
-/// it, the others quiet until the pointer is over them.
-fn tab_style(
-    theme: &Theme,
-    active: Option<(Color, Color)>,
-    status: button::Status,
-) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    let (background, text_color) = if let Some(surface) = active {
-        surface
+/// Whether a tab shows its ×: the active one and the one under the
+/// pointer, as the style book shows it.
+fn shows_cross(active: bool, hovered: bool) -> bool {
+    active || hovered
+}
+
+/// What fills a tab: the soft accent on the active one, the hover tint on
+/// the one under the pointer, nothing on the others, laid over the bar.
+fn tab_fill(colors: &ui_theme::UiColors, active: bool, hovered: bool) -> Color {
+    let tint = if active {
+        colors.accent_soft
     } else if hovered {
-        (colors.hover, colors.text)
+        colors.hover
     } else {
-        (Color::TRANSPARENT, colors.text_muted)
+        return colors.docbar_bg;
+    };
+    mixed(tint, colors.docbar_bg, tint.a)
+}
+
+/// A tab of the document bar: outlined in the border colour with its text
+/// muted, tinted with the text in full under the pointer; the active one in
+/// the accent colour on the soft accent.
+fn tab_style(theme: &Theme, active: bool, hovered: bool) -> button::Style {
+    let colors = ui_theme::colors(theme);
+    let (background, text_color, border) = if active {
+        (Some(colors.accent_soft), colors.accent, colors.accent)
+    } else if hovered {
+        (Some(colors.hover), colors.text, colors.border)
+    } else {
+        (None, colors.text_muted, colors.border)
     };
     button::Style {
-        background: Some(Background::Color(background)),
+        background: background.map(Background::Color),
         text_color,
         border: Border {
-            radius: if active.is_some() {
-                0.0.into()
-            } else {
-                iced::border::Radius::default().top(3)
-            },
-            ..Border::default()
+            color: border,
+            width: 1.0,
+            radius: iced::border::Radius::default().top(3),
         },
         ..button::Style::default()
     }
 }
 
-/// The × of a tab: on the active one in the ink of what is shown under it,
-/// a little quieter until the pointer is over it, so that it reads as well
-/// on the sheet of a drawing as on the scene; on the others in the quiet
-/// colour of the strip.
-fn close_style(
-    theme: &Theme,
-    active: Option<(Color, Color)>,
-    status: button::Status,
-) -> button::Style {
+/// The × of a tab: muted, in the accent colour on the hover tint of the
+/// ribbon under the pointer.
+fn close_style(theme: &Theme, status: button::Status) -> button::Style {
     let colors = ui_theme::colors(theme);
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    let (quiet, hover, ink) = match active {
-        Some((surface, ink)) => (mixed(ink, surface, 0.7), Color { a: 0.12, ..ink }, ink),
-        None => (colors.text_muted, colors.ribbon_btn_hover, colors.text),
-    };
     button::Style {
-        background: hovered.then_some(Background::Color(hover)),
-        text_color: if hovered { ink } else { quiet },
-        border: Border::default().rounded(3.0),
+        background: hovered.then_some(Background::Color(colors.ribbon_btn_hover)),
+        text_color: if hovered {
+            colors.accent
+        } else {
+            colors.text_muted
+        },
+        border: Border::default().rounded(2.0),
         ..button::Style::default()
     }
 }

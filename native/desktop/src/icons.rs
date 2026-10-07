@@ -171,14 +171,15 @@ impl ToolIcon {
     }
 }
 
-/// The glyphs of the buttons of the window, drawn on a square of 10 as the
-/// template draws them.
+/// The glyphs of the buttons of the window and of the × of a tab, drawn on
+/// a square of 10 as the template draws them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowGlyph {
     Minimize,
     Maximize,
     Restore,
     Close,
+    TabClose,
 }
 
 impl WindowGlyph {
@@ -190,6 +191,7 @@ impl WindowGlyph {
             Self::Maximize => include_bytes!("../../assets/ui-icons/window_maximize.svg"),
             Self::Restore => include_bytes!("../../assets/ui-icons/window_restore.svg"),
             Self::Close => include_bytes!("../../assets/ui-icons/window_close.svg"),
+            Self::TabClose => include_bytes!("../../assets/ui-icons/tab_close.svg"),
         })
     }
 }

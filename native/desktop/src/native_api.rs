@@ -361,7 +361,7 @@ pub enum ApiCommand {
         group: String,
         open: bool,
     },
-    /// The tabs above the main area, in their order, and the active one.
+    /// The tabs under the ribbon, in their order, and the active one.
     ListTabs,
     /// Show an open tab, by its place as `list_tabs` gives it or by its
     /// name, as a click on it does.

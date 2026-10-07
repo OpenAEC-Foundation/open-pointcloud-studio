@@ -49,6 +49,7 @@ Files: native/assets/ui-icons/import.svg native/assets/ui-icons/export.svg
  native/assets/ui-icons/window_maximize.svg
  native/assets/ui-icons/window_restore.svg
  native/assets/ui-icons/window_close.svg
+ native/assets/ui-icons/tab_close.svg
 Copyright: 2026 OpenAEC Foundation
 License: Expat
 Comment: Taken from the OpenAEC style book. The licence text with its
