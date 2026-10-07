@@ -95,6 +95,8 @@ pub struct CutPreview {
     /// The slab the regions were traced from, with its cut plane.
     pub slab: Slab,
     pub regions: Vec<PreviewRegion>,
+    /// Editable straight-line rings in scene coordinates on the same plane.
+    pub straight_rings: Vec<Vec<[f64; 3]>>,
     /// As an export reports them; no points are drawn and nothing is written.
     pub stats: DrawingStats,
 }
@@ -462,9 +464,14 @@ pub fn preview_cut_regions(
             holes: region.holes.into_iter().map(world).collect(),
         })
         .collect();
+    let straight_rings = section
+        .straight
+        .map(|lines| lines.rings.into_iter().map(world).collect())
+        .unwrap_or_default();
     Ok(CutPreview {
         slab,
         regions,
+        straight_rings,
         stats,
     })
 }
@@ -545,6 +552,10 @@ fn preview_section(
             holes: region.holes.iter().map(|hole| world(hole)).collect(),
         })
         .collect();
+    let straight_rings = straight
+        .as_ref()
+        .map(|lines| lines.rings.iter().map(|ring| world(ring)).collect())
+        .unwrap_or_default();
     let drawn = if request.fill || request.straight_lines.is_some() {
         regions
     } else {
@@ -562,6 +573,7 @@ fn preview_section(
         CutPreview {
             slab,
             regions: preview_regions,
+            straight_rings,
             stats,
         },
         drawing,
@@ -735,6 +747,21 @@ mod tests {
             assert!(lines
                 .iter()
                 .all(|(_, entity)| matches!(entity, DrawingEntity::Polyline { closed: true, .. })));
+            let (preview, preview_drawing) =
+                preview_section_drawing(&sources, bounds, &request, &everything, &mut |_| Ok(()))
+                    .unwrap();
+            assert_eq!(preview_drawing, drawing);
+            assert_eq!(preview.straight_rings.len(), lines.len());
+            for (ring, (_, entity)) in preview.straight_rings.iter().zip(&lines) {
+                let DrawingEntity::Polyline { points, .. } = entity else {
+                    unreachable!()
+                };
+                for (world, uv) in ring.iter().zip(points) {
+                    let shown = preview.slab.frame.to_uv(*world);
+                    assert!((shown[0] - uv[0]).abs() < 1e-9);
+                    assert!((shown[1] - uv[1]).abs() < 1e-9);
+                }
+            }
             for extension in ["dxf", "dwg"] {
                 let path = directory.path().join(format!("straight.{extension}"));
                 super::super::write_drawing(

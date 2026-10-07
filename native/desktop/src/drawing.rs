@@ -2483,6 +2483,21 @@ impl PointViewport<'_> {
             });
             frame.stroke(&edges, outline);
         }
+        let straight = canvas::Stroke::default()
+            .with_color(Color::from_rgb8(40, 110, 210))
+            .with_width(2.0);
+        let lines = canvas::Path::new(|path| {
+            for ring in &preview.straight_rings {
+                for (edge, from) in ring.iter().enumerate() {
+                    let to = ring[(edge + 1) % ring.len()];
+                    if let Some([start, end]) = measure::project_edge(projection, *from, to, size) {
+                        path.move_to(start);
+                        path.line_to(end);
+                    }
+                }
+            }
+        });
+        frame.stroke(&lines, straight);
     }
 }
 

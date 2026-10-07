@@ -417,7 +417,8 @@ controls the existing tracing step; genuinely angled walls remain angled
 unless they lie within that step's 30 mm squaring tolerance.
 
 The blue **OPS-STRAIGHT-LINES** layer appears beside the original contour and
-fill layers. Switch layers on and off to compare them in Drawing view. DXF
+fill layers. The model preview also draws these blue lines over the measured
+contour on the cut plane. Switch layers on and off to compare them in Drawing view. DXF
 and DWG exports contain closed editable polylines on that separate layer.
 The job reports segment counts and maximum/RMS deviation from the traced
 contour vertices, not from the raw scan points. Original hatches and
