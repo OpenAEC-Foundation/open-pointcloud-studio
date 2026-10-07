@@ -3,14 +3,14 @@
 //! buttons at its left, the name and the version of the application in its
 //! middle, and Send Feedback and the buttons of the window at its right.
 //!
-//! On Windows and X11 the window has no frame of the system: the bar is
-//! dragged to move the window, a double click maximises it or gives it back
-//! its size, and the edges of the window, 6 pixels wide, resize it. On
-//! macOS the buttons of the system stay at the left of the bar, which runs
-//! under them; on Wayland, where iced cannot resize a window without a
-//! frame, the frame of the system stays and the bar holds no title and no
-//! window buttons. Closing goes the way the system's close button goes,
-//! through `Message::Exit`.
+//! On Windows the window has no frame of the system: the bar is dragged to
+//! move the window, a double click maximises it or gives it back its size,
+//! and the edges of the window, 6 pixels wide, resize it. On macOS the buttons of the system stay at the
+//! left of the bar, which runs under them; on Linux, where iced 0.13 cannot
+//! have a window without a frame resized by the window manager of X11 or
+//! the compositor of Wayland, the frame of the system stays and the bar
+//! holds no title and no window buttons. Closing goes the way the system's
+//! close button goes, through `Message::Exit`.
 
 use std::time::{Duration, Instant};
 
@@ -43,28 +43,24 @@ pub const ISSUES_URL: &str = "https://github.com/OpenAEC-Foundation/open-pointcl
 /// Who frames the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Frame {
-    /// The application: Windows and X11.
+    /// The application: Windows.
     Own,
     /// The system, whose buttons stay at the left of the bar: macOS.
     MacOs,
-    /// The system, whose frame stays above the bar: Wayland.
+    /// The system, whose frame stays above the bar: Linux, on X11 and on
+    /// Wayland.
     System,
 }
 
 impl Frame {
     /// The frame of the window on this system.
     pub fn current() -> Self {
-        if cfg!(target_os = "macos") {
-            Self::MacOs
-        } else if cfg!(target_os = "linux")
-            && on_wayland(
-                std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
-                std::env::var("WAYLAND_SOCKET").ok().as_deref(),
-            )
-        {
-            Self::System
-        } else {
+        if cfg!(windows) {
             Self::Own
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::System
         }
     }
 
@@ -81,14 +77,6 @@ impl Frame {
             Self::System => "system",
         }
     }
-}
-
-/// Whether the window opens on Wayland, as winit chooses: when either
-/// variable names a display.
-pub fn on_wayland(display: Option<&str>, socket: Option<&str>) -> bool {
-    [display, socket]
-        .into_iter()
-        .any(|value| value.is_some_and(|value| !value.is_empty()))
 }
 
 /// An edge or a corner of the window that a press resizes it from.
@@ -571,11 +559,17 @@ mod tests {
     }
 
     #[test]
-    fn wayland_is_found_as_winit_finds_it() {
-        assert!(on_wayland(Some("wayland-0"), None));
-        assert!(on_wayland(None, Some("3")));
-        assert!(!on_wayland(Some(""), None));
-        assert!(!on_wayland(None, None));
+    fn only_windows_has_the_frame_of_the_application() {
+        // Linux keeps the frame of the system, on X11 as on Wayland, until a
+        // window without one can be resized there.
+        let expected = if cfg!(windows) {
+            Frame::Own
+        } else if cfg!(target_os = "macos") {
+            Frame::MacOs
+        } else {
+            Frame::System
+        };
+        assert_eq!(Frame::current(), expected);
         assert!(!Frame::Own.decorations());
         assert!(Frame::MacOs.decorations() && Frame::System.decorations());
     }
@@ -647,8 +641,8 @@ mod tests {
             let differs = (1360..1400)
                 .any(|x| (0..HEIGHT as u32).any(|y| own.rgb(x, y) != maximized.rgb(x, y)));
             assert!(differs, "{}", theme.key());
-            // Under the frame of Wayland: no title and no window buttons,
-            // Send Feedback at the right end.
+            // Under the frame of the system on Linux: no title and no
+            // window buttons, Send Feedback at the right end.
             studio.title_bar = TitleBar::new(Frame::System);
             let system = picture(&studio);
             assert!(!inked(&system, 660..780, colors.accent), "{}", theme.key());

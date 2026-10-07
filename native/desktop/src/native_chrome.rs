@@ -1,7 +1,8 @@
 //! The parts of the frame of the window that the system keeps: the light
 //! or dark hint of the frame on X11 and the colours of the frame on
 //! Windows, which the shadow around a window without its frame takes, and
-//! the resize from an edge of a window that has no frame of the system.
+//! on Windows the resize from an edge of the window, which has no frame of
+//! the system there.
 
 use iced::window::raw_window_handle::WindowHandle;
 
@@ -212,71 +213,6 @@ pub fn begin_resize(handle: WindowHandle<'_>, edge: Edge) {
     }
 }
 
-/// On X11 the window manager is asked to resize the window from the place
-/// of the pointer (`_NET_WM_MOVERESIZE`).
-#[cfg(target_os = "linux")]
-pub fn begin_resize(handle: WindowHandle<'_>, edge: Edge) {
-    use iced::window::raw_window_handle::RawWindowHandle;
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{ClientMessageEvent, ConnectionExt, EventMask};
-
-    let window: u32 = match handle.as_raw() {
-        RawWindowHandle::Xlib(xlib) => xlib.window as u32,
-        RawWindowHandle::Xcb(xcb) => xcb.window.get(),
-        _ => return,
-    };
-    let Ok((connection, screen)) = x11rb::connect(None) else {
-        return;
-    };
-    let root = connection.setup().roots[screen].root;
-    let Some(atom) = connection
-        .intern_atom(false, b"_NET_WM_MOVERESIZE")
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .map(|reply| reply.atom)
-    else {
-        return;
-    };
-    let Some(pointer) = connection
-        .query_pointer(root)
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-    else {
-        return;
-    };
-    // The directions of the specification, from the top left clockwise.
-    let direction: u32 = match edge {
-        Edge::NorthWest => 0,
-        Edge::North => 1,
-        Edge::NorthEast => 2,
-        Edge::East => 3,
-        Edge::SouthEast => 4,
-        Edge::South => 5,
-        Edge::SouthWest => 6,
-        Edge::West => 7,
-    };
-    let _ = connection.ungrab_pointer(x11rb::CURRENT_TIME);
-    let event = ClientMessageEvent::new(
-        32,
-        window,
-        atom,
-        [
-            pointer.root_x as i32 as u32,
-            pointer.root_y as i32 as u32,
-            direction,
-            1,
-            1,
-        ],
-    );
-    let _ = connection.send_event(
-        false,
-        root,
-        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-        event,
-    );
-    let _ = connection.flush();
-}
-
 /// Elsewhere the system frames the window and resizes it.
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(windows))]
 pub fn begin_resize(_handle: WindowHandle<'_>, _edge: Edge) {}

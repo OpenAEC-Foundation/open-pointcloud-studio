@@ -1324,8 +1324,8 @@ fn main() -> iced::Result {
         .window(iced::window::Settings {
             size: Size::new(1440.0, 900.0),
             min_size: Some(title_bar::MIN_SIZE),
-            // The title bar of the style book frames the window on Windows
-            // and X11; macOS and Wayland keep the frame of the system.
+            // The title bar of the style book frames the window on Windows;
+            // macOS and Linux keep the frame of the system.
             decorations: title_bar::Frame::current().decorations(),
             icon: iced::window::icon::from_file_data(
                 include_bytes!("../../assets/icons/icon-64.png"),
