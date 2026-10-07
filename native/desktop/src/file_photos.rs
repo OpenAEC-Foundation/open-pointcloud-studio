@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame};
-use iced::widget::{button, column, container, row, text, tooltip};
+use iced::widget::{button, column, container, row, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Size, Task};
 use pointcloud_core::{FilePhoto, FilePhotos, PhotoKind, PhotoProjection, ScanImageFormat};
 use serde_json::{json, Value};
@@ -1248,7 +1248,6 @@ impl Studio {
                     .style(ui_style::tool)
                     .padding([1, 8]),
                 tr(tip),
-                tooltip::Position::Bottom,
             )
         };
         let panel = row![

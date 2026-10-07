@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use iced::widget::{button, column, container, row, stack, text, tooltip, Canvas};
+use iced::widget::{button, column, container, row, stack, text, Canvas};
 use iced::{Element, Fill};
 
 use crate::i18n::tr;
@@ -133,7 +133,6 @@ impl Studio {
                 .style(ui_style::tool)
                 .padding(3),
             tr("New sheet…").to_owned(),
-            tooltip::Position::Bottom,
         );
         let mut group = column![band(
             SHEETS.to_owned(),

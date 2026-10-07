@@ -1833,7 +1833,9 @@ impl Studio {
         let in_3d = !self.drawing_view.shown && self.active.is_some();
         let note_tool = |kind: NoteKind| self.notes.kind == Some(kind);
         let item = |button: Element<'static, Message>, lines: Vec<String>| {
-            opencad_ribbon::RibbonItem::Small(opencad_properties::explained(button, lines))
+            opencad_ribbon::RibbonItem::Small(opencad_properties::explained_in_ribbon(
+                button, lines,
+            ))
         };
         let line_message = if on_drawing || on_sheet {
             Message::Notes(NoteAction::Tool(NoteKind::Line))

@@ -3,7 +3,7 @@
 // Changes: read-only point-cloud fields, a row that holds a control and the
 // iced 0.13 palette API.
 
-use iced::widget::{container, row, text, tooltip};
+use iced::widget::{container, row, text};
 use iced::{Background, Border, Element, Fill, Length, Theme};
 
 use crate::ui_style;
@@ -168,8 +168,8 @@ pub fn section_header(title: &'static str) -> Element<'static, Message> {
     .into()
 }
 
-/// A control whose explanation shows in a tooltip instead of as text on the
-/// panel.
+/// A control whose explanation shows in a tooltip above it instead of as
+/// text on the panel.
 pub fn explained<'a>(
     content: impl Into<Element<'a, Message>>,
     lines: Vec<String>,
@@ -177,7 +177,18 @@ pub fn explained<'a>(
     if lines.is_empty() {
         return content.into();
     }
-    ui_style::tooltip(content, lines.join("\n\n"), tooltip::Position::Bottom).into()
+    ui_style::tooltip(content, lines.join("\n\n")).into()
+}
+
+/// A tool of the ribbon whose explanation shows in a tooltip below it.
+pub fn explained_in_ribbon<'a>(
+    content: impl Into<Element<'a, Message>>,
+    lines: Vec<String>,
+) -> Element<'a, Message> {
+    if lines.is_empty() {
+        return content.into();
+    }
+    ui_style::ribbon_tooltip(content, lines.join("\n\n")).into()
 }
 
 /// A small mark in the accent colour whose tooltip holds warnings or
@@ -198,5 +209,5 @@ pub fn warning_mark<'a>(lines: Vec<String>) -> Option<Element<'a, Message>> {
             radius: 9.0.into(),
         })
     });
-    Some(ui_style::tooltip(mark, lines.join("\n\n"), tooltip::Position::Bottom).into())
+    Some(ui_style::tooltip(mark, lines.join("\n\n")).into())
 }

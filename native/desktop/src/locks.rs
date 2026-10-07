@@ -17,7 +17,7 @@
 //! view keeps the room on its row for its name, and shows its lock in the
 //! icon of the row.
 
-use iced::widget::{button, container, row, text, tooltip};
+use iced::widget::{button, container, row, text};
 use iced::{Element, Fill, Task};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -111,7 +111,6 @@ fn padlock<'a>(locked: bool, message: Message) -> Element<'a, Message> {
             .style(ui_style::tool)
             .padding([3, 4]),
         tip.to_owned(),
-        tooltip::Position::Bottom,
     )
     .into()
 }
@@ -321,7 +320,6 @@ impl Studio {
                     .style(ui_style::tool)
                     .padding([0, 2]),
                 tr("Locked: click to unlock").to_owned(),
-                tooltip::Position::Bottom,
             )
             .into()
         })
@@ -344,7 +342,6 @@ impl Studio {
                 .style(ui_style::tool)
                 .padding([3, 4]),
             tip.to_owned(),
-            tooltip::Position::Bottom,
         )
         .into()
     }

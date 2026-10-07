@@ -514,13 +514,36 @@ pub fn tip<'a>(content: impl text::IntoFragment<'a>) -> Element<'a, Message> {
         .into()
 }
 
-/// `content` with `tip` in a tooltip.
+/// The space between a tooltip and what it explains.
+const TIP_GAP: f32 = 8.0;
+
+/// `content` with `tip_text` in a tooltip above it, where the style book
+/// opens a tooltip in the panels, the tabs, the dialogs and on the scene.
 pub fn tooltip<'a>(
     content: impl Into<Element<'a, Message>>,
     tip_text: impl text::IntoFragment<'a>,
-    position: tip_widget::Position,
 ) -> tip_widget::Tooltip<'a, Message> {
-    tip_widget::Tooltip::new(content, tip(tip_text), position).gap(8)
+    tip_widget::Tooltip::new(content, tip(tip_text), tip_widget::Position::Top).gap(TIP_GAP)
+}
+
+/// `content` of the ribbon or the top strip with `tip_text` in a tooltip
+/// below it, as the style book opens the tooltips of its ribbon and title
+/// bar.
+pub fn ribbon_tooltip<'a>(
+    content: impl Into<Element<'a, Message>>,
+    tip_text: impl text::IntoFragment<'a>,
+) -> tip_widget::Tooltip<'a, Message> {
+    tip_widget::Tooltip::new(content, tip(tip_text), tip_widget::Position::Bottom).gap(TIP_GAP)
+}
+
+/// A wide row with `tip_text` in a tooltip above the pointer, for a tip
+/// that belongs to the place pointed at rather than to the middle of the
+/// row, such as the path of a scan.
+pub fn pointer_tooltip<'a>(
+    content: impl Into<Element<'a, Message>>,
+    tip_text: impl text::IntoFragment<'a>,
+) -> tip_widget::Tooltip<'a, Message> {
+    tip_widget::Tooltip::new(content, tip(tip_text), tip_widget::Position::FollowCursor)
 }
 
 /// `content` with `tint` of the theme laid over it while the pointer is
@@ -1159,6 +1182,72 @@ mod tests {
         }
     }
 
+    /// What a tooltip made by `make` explains, a box of 40 by 20 in the
+    /// middle of a window of 400 by 300, and where the tooltip opens while
+    /// the pointer is on that box.
+    fn tip_around(
+        make: fn(Element<'static, Message>, &'static str) -> tip_widget::Tooltip<'static, Message>,
+    ) -> (Rectangle, Rectangle) {
+        let renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            crate::fonts::REGULAR,
+            iced::Pixels(12.0),
+        ));
+        let size = Size::new(400.0, 300.0);
+        let target: Element<'static, Message> = container(text("")).width(40).height(20).into();
+        let mut element: Element<'static, Message> = container(make(target, "What it does"))
+            .center(Length::Fill)
+            .into();
+        let mut tree = Tree::new(&element);
+        let node = element.as_widget().layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, size),
+        );
+        let target = node.children()[0].bounds();
+        let pointer = target.center();
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        let _ = element.as_widget_mut().on_event(
+            &mut tree,
+            Event::Mouse(mouse::Event::CursorMoved { position: pointer }),
+            Layout::new(&node),
+            mouse::Cursor::Available(pointer),
+            &renderer,
+            &mut iced::advanced::clipboard::Null,
+            &mut shell,
+            &Rectangle::with_size(size),
+        );
+        let mut overlay = element
+            .as_widget_mut()
+            .overlay(&mut tree, Layout::new(&node), &renderer, Vector::ZERO)
+            .expect("the tooltip while the pointer is on the box");
+        let tip = overlay.layout(&renderer, size).children()[0].bounds();
+        (target, tip)
+    }
+
+    #[test]
+    fn a_tooltip_opens_above_except_in_the_ribbon() {
+        // In the panels, the tabs, the dialogs and on the scene: above.
+        let (target, tip) = tip_around(tooltip);
+        assert_eq!(target.size(), Size::new(40.0, 20.0));
+        assert!(
+            (target.y - (tip.y + tip.height) - TIP_GAP).abs() < 0.5,
+            "{tip:?} above {target:?}"
+        );
+        assert!((tip.center_x() - target.center_x()).abs() < 0.5);
+        // In the ribbon and the top strip: below.
+        let (target, tip) = tip_around(ribbon_tooltip);
+        assert!(
+            (tip.y - (target.y + target.height) - TIP_GAP).abs() < 0.5,
+            "{tip:?} below {target:?}"
+        );
+        // Beside the pointer, and above it.
+        let (target, tip) = tip_around(pointer_tooltip);
+        let pointer = target.center();
+        assert!(tip.center_x() > pointer.x, "{tip:?}");
+        assert!(tip.center_y() < pointer.y, "{tip:?}");
+    }
+
     #[test]
     fn an_item_is_tinted_while_the_pointer_is_over_it() {
         for (theme, colors) in themes() {
@@ -1346,6 +1435,13 @@ mod tests {
             for at in calls(&source, "button") {
                 if !chain(&source, at + "button".len()).contains(&"style") {
                     found.push(format!("{name}: a button without a style at {at}"));
+                }
+            }
+            // A tooltip opens where the style book has it for its part of
+            // the window: above, or below in the ribbon.
+            for place in ["Position::", "Tooltip::new("] {
+                if source.contains(place) {
+                    found.push(format!("{name}: a tooltip placed by hand ({place})"));
                 }
             }
             // A primary or a secondary button is made with its size, by its

@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use iced::widget::{button, checkbox, column, container, mouse_area, row, text, tooltip, Column};
+use iced::widget::{button, checkbox, column, container, mouse_area, row, text, Column};
 use iced::{Color, Element, Fill, Task};
 use serde_json::{json, Value};
 
@@ -432,7 +432,6 @@ fn icon_button<'a>(icon: ToolIcon, tip: &str, message: Message) -> Element<'a, M
             .style(ui_style::tool)
             .padding(3),
         tip.to_owned(),
-        tooltip::Position::Bottom,
     )
     .into()
 }
@@ -446,7 +445,6 @@ fn band_action<'a>(icon: ToolIcon, tip: &str, message: Option<Message>) -> Eleme
             .style(ui_style::tool)
             .padding(3),
         tip.to_owned(),
-        tooltip::Position::Bottom,
     )
     .into()
 }
@@ -504,7 +502,7 @@ pub fn view_row<'a>(
     .padding([3, 5])
     .width(Fill);
     let pick: Element<'a, Message> = if cut {
-        ui_style::tooltip(pick, name, tooltip::Position::Bottom).into()
+        ui_style::tooltip(pick, name).into()
     } else {
         pick.into()
     };
@@ -539,7 +537,6 @@ pub fn row_button<'a>(icon: ToolIcon, tip: &str, message: Message) -> Element<'a
             .style(ui_style::tool)
             .padding([3, 4]),
         tip.to_owned(),
-        tooltip::Position::Bottom,
     )
     .into()
 }
@@ -846,7 +843,7 @@ impl Studio {
                 |name| name.to_string_lossy().into_owned(),
             );
             let target = folder.clone();
-            let header = ui_style::tooltip(
+            let header = ui_style::pointer_tooltip(
                 band(
                     key,
                     folder_open,
@@ -859,7 +856,6 @@ impl Studio {
                     true,
                 ),
                 folder.display().to_string(),
-                tooltip::Position::FollowCursor,
             );
             let mut sub = column![header].spacing(2);
             if folder_open {
@@ -914,7 +910,7 @@ impl Studio {
         let name = display_name(&entry.cloud.path);
         let readable_name = name.replace('_', "_\u{200b}");
         let remaining = entry.remaining_count();
-        let file_button = ui_style::tooltip(
+        let file_button = ui_style::pointer_tooltip(
             button(
                 row![
                     icon_svg(ToolIcon::Scan, 13.0),
@@ -935,7 +931,6 @@ impl Studio {
                 entry.cloud.path.display(),
                 format_count(remaining)
             ),
-            tooltip::Position::FollowCursor,
         );
         let mut item = column![row![
             ui_style::checkbox("", entry.visible)
@@ -1088,7 +1083,6 @@ impl Studio {
                 .style(move |theme, status| ui_style::ribbon_button(theme, model_shown, status))
                 .padding(3),
             tr("Show the 3D model").to_owned(),
-            tooltip::Position::Bottom,
         );
         // Making and opening drawings are icons on the band, beside the 3D
         // model, so that the group holds only views.

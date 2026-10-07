@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame};
-use iced::widget::{button, column, container, row, text, text_input, tooltip};
+use iced::widget::{button, column, container, row, text, text_input};
 use iced::window::Screenshot;
 use iced::{Color, Element, Fill, Point as UiPoint, Rectangle, Size, Task};
 use pointcloud_core::{Bounds, IndexedPoint, OrientedBox};
@@ -1880,7 +1880,6 @@ impl Studio {
                 ui_style::tooltip(
                     crate::icon_svg(ToolIcon::SectionBox, 12.0),
                     i18n::tr("Has a section box"),
-                    tooltip::Position::Bottom,
                 )
                 .into(),
             );

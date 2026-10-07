@@ -3,7 +3,7 @@
 // Copyright OpenCADStudio contributors. Licensed under GPL-3.0.
 // Changes: adapted the ribbon primitives to iced 0.13 and point-cloud commands.
 
-use iced::widget::{button, column, container, row, text, tooltip};
+use iced::widget::{button, column, container, row, text};
 use iced::{Background, Border, Element, Fill, Length, Theme};
 
 use crate::{ui_style, ui_theme, Message};
@@ -26,7 +26,7 @@ pub fn quick_access_btn<'a>(
         .height(26)
         .padding([2, 0]);
     // Below the tools of the ribbon, which it would cover.
-    ui_style::tooltip(control, crate::i18n::tr(label), tooltip::Position::Bottom)
+    ui_style::ribbon_tooltip(control, crate::i18n::tr(label))
         .gap(98)
         .into()
 }

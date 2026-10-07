@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use iced::widget::scrollable::{self, AbsoluteOffset, Direction, Scrollbar};
-use iced::widget::{button, container, mouse_area, row, text, tooltip};
+use iced::widget::{button, container, mouse_area, row, text};
 use iced::{Background, Border, Color, Element, Fill, Padding, Task, Theme};
 use pointcloud_core::Bounds;
 use serde_json::{json, Value};
@@ -974,7 +974,7 @@ impl Studio {
         } else {
             framed.into()
         };
-        ui_style::tooltip(element, tip, tooltip::Position::Bottom).into()
+        ui_style::tooltip(element, tip).into()
     }
 
     /// What `status.result.view_tabs` reports: the tabs the strip shows, in

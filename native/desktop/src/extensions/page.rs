@@ -5,7 +5,7 @@
 
 use iced::widget::{
     button, center, column, container, horizontal_space, mouse_area, opaque, row, svg, text,
-    tooltip, Column, Space,
+    Column, Space,
 };
 use iced::{Border, Element, Fill, Length};
 
@@ -569,7 +569,7 @@ impl Studio {
                     tip = format!("{tip}\n{}", tr("Runs; click to stop it"));
                 }
                 items.push(opencad_ribbon::RibbonItem::Large(
-                    ui_style::tooltip(control, tip, tooltip::Position::Bottom).into(),
+                    ui_style::ribbon_tooltip(control, tip).into(),
                 ));
             }
         }
