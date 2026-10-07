@@ -106,7 +106,7 @@ fn padlock<'a>(locked: bool, message: Message) -> Element<'a, Message> {
         (ToolIcon::Unlocked, tr("Lock"))
     };
     ui_style::tooltip(
-        button(icon_svg(icon, 12.0))
+        button(crate::icons::tool_glyph(icon, 12.0, locked))
             .on_press(message)
             .style(ui_style::tool)
             .padding([3, 4]),
@@ -315,7 +315,7 @@ impl Studio {
         };
         self.is_locked(&target).then(|| {
             ui_style::tooltip(
-                button(icon_svg(ToolIcon::Locked, 11.0))
+                button(crate::icons::tool_glyph(ToolIcon::Locked, 11.0, true))
                     .on_press(Message::Lock(target))
                     .style(ui_style::tool)
                     .padding([0, 2]),

@@ -1,13 +1,15 @@
 Open Pointcloud Studio
 
 The desktop application is licensed GPL-3.0-only (LICENSE-GPL-3.0.txt).
-It contains ribbon and properties-panel code and icons adapted from a
-GPL-3.0 project that is credited in the source headers and in
-native/README.md of the source repository. The point-cloud core is
+It contains ribbon and properties-panel code adapted from a GPL-3.0
+project that is credited in the source headers and in native/README.md of
+the source repository. The point-cloud core is
 licensed LGPL-3.0-or-later (LICENSE-LGPL-3.0.md).
 
 The embedded fonts Inter and Space Grotesk are licensed under the SIL
-Open Font License (the *-OFL.txt files).
+Open Font License (the *-OFL.txt files). Some of the embedded icons are
+taken from the OpenAEC style book and are licensed under the MIT licence
+(OpenAEC-icons-MIT.txt).
 
 The application links Rust crates, each one unmodified and under its own
 licence. Writing a drawing as DXF or DWG uses the crate acadrust, version

@@ -80,6 +80,7 @@ copy_licences() {
     cp "$repo_dir/LICENSE.md" "$destination/LICENSE-LGPL-3.0.md"
     cp "$native_dir/desktop/LICENSE-GPL-3.0" "$destination/LICENSE-GPL-3.0.txt"
     cp "$native_dir"/assets/fonts/*-OFL.txt "$destination/"
+    cp "$native_dir"/assets/ui-icons/*-MIT.txt "$destination/"
     cp "$notice_file" "$destination/NOTICE.txt"
     copy_cad_licence "$destination"
     copy_cad_notice "$destination" "$number"

@@ -1165,7 +1165,7 @@ impl Studio {
         let active = open || busy.is_some();
         let enabled = self.active.is_some() || active;
         let mut label = column![
-            icon_svg(ToolIcon::MeshPointcloud, 32.0),
+            crate::icons::tool_glyph(ToolIcon::MeshPointcloud, 32.0, active),
             Space::with_height(4),
             text(tr("Mesh Pointcloud"))
                 .size(11)

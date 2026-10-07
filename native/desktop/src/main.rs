@@ -28,6 +28,7 @@ mod file_view;
 mod fonts;
 mod gpu_viewport;
 mod i18n;
+mod icons;
 mod index_jobs;
 mod job_scene;
 mod kept_slabs;
@@ -81,6 +82,7 @@ use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
 use iced::widget::{button, column, container, row, scrollable, stack, svg, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
+pub(crate) use icons::{icon_svg, ToolIcon};
 use lod_pace::{
     first_pass_budget, plan_first_pass, preview_improves, preview_tier_points, LodPace, ScreenFill,
 };
@@ -1356,6 +1358,18 @@ enum ColorMode {
     Elevation,
     Intensity,
     Classification,
+}
+
+impl ColorMode {
+    /// The icon of the colouring on its button.
+    fn icon(self) -> ToolIcon {
+        match self {
+            Self::Rgb => ToolIcon::ColourRgb,
+            Self::Elevation => ToolIcon::ColourElevation,
+            Self::Intensity => ToolIcon::ColourIntensity,
+            Self::Classification => ToolIcon::ColourClasses,
+        }
+    }
 }
 
 impl fmt::Display for ColorMode {
@@ -11102,7 +11116,7 @@ fn large_tool_button_when(
     let icon = tool_icon(&message);
     button(
         column![
-            icon_svg(icon, 32.0),
+            icons::tool_glyph(icon, 32.0, active),
             iced::widget::Space::with_height(4),
             text(i18n::tr(label))
                 .size(11)
@@ -11140,7 +11154,7 @@ fn icon_tool_button_when(
 ) -> Element<'static, Message> {
     let icon = tool_icon(&message);
     opencad_properties::explained(
-        button(icon_svg(icon, 18.0))
+        button(icons::tool_glyph(icon, 18.0, active))
             .on_press_maybe(enabled.then_some(message))
             .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
             .height(opencad_ribbon::ROW_H)
@@ -11158,7 +11172,7 @@ fn small_tool_button_when(
     let icon = tool_icon(&message);
     button(
         row![
-            icon_svg(icon, 18.0),
+            icons::tool_glyph(icon, 18.0, active),
             text(i18n::tr(label)).size(12).font(label_font(active)),
         ]
         .spacing(4)
@@ -11228,9 +11242,7 @@ fn small_color_button(
 ) -> Element<'static, Message> {
     button(
         row![
-            Canvas::new(ColorModeGlyph(mode, mode == current))
-                .width(24)
-                .height(24),
+            icons::tool_glyph(mode.icon(), 18.0, mode == current),
             text(i18n::tr(label))
                 .size(12)
                 .font(label_font(mode == current)),
@@ -11243,118 +11255,6 @@ fn small_color_button(
     .height(opencad_ribbon::ROW_H)
     .padding([2, 6])
     .into()
-}
-
-/// Compact, theme-aware line icons for the four point-cloud color modes.
-/// These use the same visual scale as the OpenCADStudio ribbon icons while
-/// remaining native Iced geometry rather than web assets.
-struct ColorModeGlyph(ColorMode, bool);
-
-impl canvas::Program<Message> for ColorModeGlyph {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        // The glyphs are drawn on an 18-unit square.
-        frame.scale(bounds.width.min(bounds.height) / 18.0);
-        let colors = ui_theme::colors(theme);
-        let highlight = if self.1 {
-            colors.accent
-        } else {
-            colors.text_muted
-        };
-        let stroke = canvas::Stroke::default()
-            .with_color(colors.text)
-            .with_width(1.35);
-        let line = |points: &[[f32; 2]]| {
-            canvas::Path::new(|path| {
-                path.move_to(UiPoint::new(points[0][0], points[0][1]));
-                for point in &points[1..] {
-                    path.line_to(UiPoint::new(point[0], point[1]));
-                }
-            })
-        };
-        match self.0 {
-            ColorMode::Rgb => {
-                frame.stroke(&canvas::Path::circle(UiPoint::new(9.0, 9.0), 6.5), stroke);
-                for (point, color) in [
-                    ([6.3, 6.5], colors.text_muted),
-                    ([11.7, 6.5], colors.text_muted),
-                    ([9.0, 11.6], highlight),
-                ] {
-                    frame.fill(
-                        &canvas::Path::circle(UiPoint::new(point[0], point[1]), 1.5),
-                        color,
-                    );
-                }
-            }
-            ColorMode::Elevation => {
-                frame.stroke(
-                    &line(&[
-                        [2.0, 14.0],
-                        [5.7, 9.0],
-                        [8.2, 11.0],
-                        [11.6, 4.0],
-                        [16.0, 14.0],
-                    ]),
-                    stroke,
-                );
-                frame.stroke(&line(&[[2.0, 16.0], [16.0, 16.0]]), stroke);
-                frame.stroke(&line(&[[10.1, 9.2], [13.1, 9.2]]), stroke);
-            }
-            ColorMode::Intensity => {
-                frame.fill(
-                    &canvas::Path::new(|path| {
-                        path.move_to(UiPoint::new(9.0, 2.5));
-                        for point in [
-                            [5.7, 3.5],
-                            [3.5, 5.7],
-                            [2.5, 9.0],
-                            [3.5, 12.3],
-                            [5.7, 14.5],
-                            [9.0, 15.5],
-                        ] {
-                            path.line_to(UiPoint::new(point[0], point[1]));
-                        }
-                        path.close();
-                    }),
-                    colors.text_muted,
-                );
-                frame.stroke(&canvas::Path::circle(UiPoint::new(9.0, 9.0), 6.5), stroke);
-                frame.stroke(&line(&[[9.0, 2.5], [9.0, 15.5]]), stroke);
-            }
-            ColorMode::Classification => {
-                for (origin, filled) in [
-                    ([2.5, 2.5], false),
-                    ([10.0, 2.5], false),
-                    ([2.5, 10.0], false),
-                    ([10.0, 10.0], true),
-                ] {
-                    if filled {
-                        frame.fill_rectangle(
-                            UiPoint::new(origin[0], origin[1]),
-                            Size::new(5.5, 5.5),
-                            highlight,
-                        );
-                    } else {
-                        frame.stroke_rectangle(
-                            UiPoint::new(origin[0], origin[1]),
-                            Size::new(5.5, 5.5),
-                            stroke,
-                        );
-                    }
-                }
-            }
-        }
-        vec![frame.into_geometry()]
-    }
 }
 
 fn ribbon_group<'a>(label: &'static str, contents: Element<'a, Message>) -> Element<'a, Message> {
@@ -11447,164 +11347,6 @@ fn sidebar_style(theme: &Theme) -> container::Style {
 
 fn viewport_style(theme: &Theme) -> container::Style {
     container::Style::default().background(ui_theme::colors(theme).dom.scene)
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ToolIcon {
-    Open,
-    OpenFolder,
-    Export,
-    Fit,
-    Cloud,
-    Select,
-    SectionBox,
-    Pick,
-    MeasureDistance,
-    MeasureArea,
-    Note,
-    Line,
-    Clear,
-    Undo,
-    Redo,
-    Camera(CameraPreset),
-    Save,
-    Move,
-    Scale,
-    Decimate,
-    Mesh,
-    Building,
-    Shading,
-    Drawing,
-    ClosedMesh,
-    Faces,
-    MeshToPlans,
-    /// Mesh Pointcloud, and two of its methods.
-    MeshPointcloud,
-    MeshTerrain,
-    MeshSurface,
-    /// The kinds of the Project Browser: a scan, the classes, the views
-    /// and the 3D model, a saved view, a plan, an elevation, a section, a
-    /// drawing file and BCF.
-    Scan,
-    Classes,
-    Views,
-    Model,
-    SavedView,
-    PlanSheet,
-    ElevationSheet,
-    SectionSheet,
-    DrawingFile,
-    Bcf,
-    /// The chevron of an open and of a collapsed group.
-    ChevronOpen,
-    ChevronClosed,
-    /// Duplicate a row of VIEWS.
-    Duplicate,
-    /// Rename a saved view, and overwrite it with what the scene shows.
-    Rename,
-    Update,
-    /// A sheet of SHEETS.
-    Sheet,
-    /// The padlock of something locked, and of something that is not.
-    Locked,
-    Unlocked,
-    /// A text, a dimension and a leader on a drawing.
-    Text,
-    Dimension,
-    Leader,
-}
-
-// SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
-fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
-    let bytes: &'static [u8] = match icon {
-        ToolIcon::Open => include_bytes!("../../assets/opencad-icons/folder_open.svg"),
-        // The scan-folder and section-box icons are drawn for this app in the
-        // same palette.
-        ToolIcon::OpenFolder => include_bytes!("../../assets/opencad-icons/folder_scans.svg"),
-        ToolIcon::Export => include_bytes!("../../assets/opencad-icons/file_export.svg"),
-        ToolIcon::Fit => include_bytes!("../../assets/opencad-icons/zoom_ext.svg"),
-        ToolIcon::Cloud => include_bytes!("../../assets/opencad-icons/revcloud.svg"),
-        ToolIcon::Select => include_bytes!("../../assets/opencad-icons/select_objects.svg"),
-        ToolIcon::SectionBox => include_bytes!("../../assets/opencad-icons/section_box.svg"),
-        ToolIcon::Pick => include_bytes!("../../assets/opencad-icons/pick_point.svg"),
-        // The two measure icons are drawn for this app in the same palette.
-        ToolIcon::MeasureDistance => {
-            include_bytes!("../../assets/opencad-icons/measure_distance.svg")
-        }
-        ToolIcon::MeasureArea => include_bytes!("../../assets/opencad-icons/measure_area.svg"),
-        // So are the two annotation icons.
-        ToolIcon::Note => include_bytes!("../../assets/opencad-icons/annotation_note.svg"),
-        ToolIcon::Line => include_bytes!("../../assets/opencad-icons/annotation_line.svg"),
-        ToolIcon::Clear => include_bytes!("../../assets/opencad-icons/xclip_remove.svg"),
-        ToolIcon::Undo => include_bytes!("../../assets/opencad-icons/undo.svg"),
-        ToolIcon::Redo => include_bytes!("../../assets/opencad-icons/redo.svg"),
-        ToolIcon::Camera(CameraPreset::Top | CameraPreset::Bottom) => {
-            include_bytes!("../../assets/opencad-icons/view_top.svg")
-        }
-        ToolIcon::Camera(CameraPreset::Front | CameraPreset::Back) => {
-            include_bytes!("../../assets/opencad-icons/view_front.svg")
-        }
-        ToolIcon::Camera(CameraPreset::Right | CameraPreset::Left) => {
-            include_bytes!("../../assets/opencad-icons/view_right.svg")
-        }
-        ToolIcon::Camera(CameraPreset::Isometric) => {
-            include_bytes!("../../assets/opencad-icons/view_iso.svg")
-        }
-        ToolIcon::Save => include_bytes!("../../assets/opencad-icons/save.svg"),
-        ToolIcon::Move => include_bytes!("../../assets/opencad-icons/move.svg"),
-        ToolIcon::Scale => include_bytes!("../../assets/opencad-icons/scale.svg"),
-        ToolIcon::Decimate => include_bytes!("../../assets/opencad-icons/point.svg"),
-        ToolIcon::Mesh => include_bytes!("../../assets/opencad-icons/region.svg"),
-        ToolIcon::Building => include_bytes!("../../assets/opencad-icons/solid.svg"),
-        ToolIcon::Shading => include_bytes!("../../assets/opencad-icons/sphere.svg"),
-        // The section drawing icon is drawn for this app in the same palette.
-        ToolIcon::Drawing => include_bytes!("../../assets/opencad-icons/section_drawing.svg"),
-        // So is the closed mesh icon.
-        ToolIcon::ClosedMesh => include_bytes!("../../assets/opencad-icons/closed_mesh.svg"),
-        // And so is the icon of the Detect faces tool.
-        ToolIcon::Faces => include_bytes!("../../assets/opencad-icons/detect_faces.svg"),
-        // And so is the icon of the Pointcloud to Drawing wizard.
-        ToolIcon::MeshToPlans => include_bytes!("../../assets/opencad-icons/mesh_to_plans.svg"),
-        // And so are the icons of Mesh Pointcloud and of its terrain mesh
-        // and 3D surface.
-        ToolIcon::MeshPointcloud => {
-            include_bytes!("../../assets/opencad-icons/mesh_pointcloud.svg")
-        }
-        ToolIcon::MeshTerrain => include_bytes!("../../assets/opencad-icons/mesh_terrain.svg"),
-        ToolIcon::MeshSurface => include_bytes!("../../assets/opencad-icons/mesh_surface.svg"),
-        // The icons of the Project Browser are drawn for this app in the
-        // same style: grey with amber for scans and with blue for views.
-        ToolIcon::Scan => include_bytes!("../../assets/opencad-icons/browser_scan.svg"),
-        ToolIcon::Classes => include_bytes!("../../assets/opencad-icons/browser_classes.svg"),
-        ToolIcon::Views => include_bytes!("../../assets/opencad-icons/browser_views.svg"),
-        ToolIcon::Model => include_bytes!("../../assets/opencad-icons/browser_model.svg"),
-        ToolIcon::SavedView => include_bytes!("../../assets/opencad-icons/browser_saved_view.svg"),
-        ToolIcon::PlanSheet => include_bytes!("../../assets/opencad-icons/browser_plan.svg"),
-        ToolIcon::ElevationSheet => {
-            include_bytes!("../../assets/opencad-icons/browser_elevation.svg")
-        }
-        ToolIcon::SectionSheet => include_bytes!("../../assets/opencad-icons/browser_section.svg"),
-        ToolIcon::DrawingFile => include_bytes!("../../assets/opencad-icons/browser_file.svg"),
-        ToolIcon::Bcf => include_bytes!("../../assets/opencad-icons/browser_bcf.svg"),
-        ToolIcon::ChevronOpen => include_bytes!("../../assets/opencad-icons/chevron_open.svg"),
-        ToolIcon::ChevronClosed => include_bytes!("../../assets/opencad-icons/chevron_closed.svg"),
-        ToolIcon::Duplicate => include_bytes!("../../assets/opencad-icons/browser_duplicate.svg"),
-        ToolIcon::Rename => include_bytes!("../../assets/opencad-icons/browser_rename.svg"),
-        ToolIcon::Update => include_bytes!("../../assets/opencad-icons/browser_update.svg"),
-        ToolIcon::Sheet => include_bytes!("../../assets/opencad-icons/browser_sheet.svg"),
-        ToolIcon::Locked => include_bytes!("../../assets/opencad-icons/browser_locked.svg"),
-        ToolIcon::Unlocked => include_bytes!("../../assets/opencad-icons/browser_unlocked.svg"),
-        // The annotations of drawings are drawn like those of the views.
-        ToolIcon::Text => include_bytes!("../../assets/opencad-icons/annotation_text.svg"),
-        ToolIcon::Dimension => {
-            include_bytes!("../../assets/opencad-icons/annotation_dimension.svg")
-        }
-        ToolIcon::Leader => include_bytes!("../../assets/opencad-icons/annotation_leader.svg"),
-    };
-    svg(svg::Handle::from_memory(bytes))
-        .width(size)
-        .height(size)
-        .into()
 }
 
 fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
