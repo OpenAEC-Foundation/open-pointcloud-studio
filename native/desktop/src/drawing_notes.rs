@@ -1493,6 +1493,7 @@ pub(crate) fn draw_marks(
                         Align::Right => alignment::Horizontal::Right,
                     },
                     vertical_alignment: alignment::Vertical::Bottom,
+                    font: crate::fonts::DRAWING,
                     ..canvas::Text::default()
                 };
                 frame.with_save(|frame| {

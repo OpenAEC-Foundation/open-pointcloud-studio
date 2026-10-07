@@ -607,6 +607,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                     Align::Right => alignment::Horizontal::Right,
                 },
                 vertical_alignment: alignment::Vertical::Bottom,
+                font: crate::fonts::DRAWING,
                 ..canvas::Text::default()
             };
             frame.with_save(|frame| {
@@ -734,6 +735,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                 size: Pixels(13.0),
                 horizontal_alignment: alignment::Horizontal::Center,
                 vertical_alignment: alignment::Vertical::Top,
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
         }

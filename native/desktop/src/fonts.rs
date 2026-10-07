@@ -40,6 +40,11 @@ pub const HEADING: Font = Font {
     ..Font::DEFAULT
 };
 
+/// The texts of a drawing and of a sheet: not the interface but what the
+/// drawing says, which its PDF sets in Helvetica. A sans-serif of the
+/// system shows them.
+pub const DRAWING: Font = Font::DEFAULT;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +91,59 @@ mod tests {
         assert!(semibold > medium, "{semibold} against {medium}");
         // Space Grotesk is a font of its own.
         assert_ne!(heading, medium);
+    }
+
+    /// The sources of the window, by their path under `src`.
+    fn sources() -> Vec<(String, String)> {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources = Vec::new();
+        let mut folders = vec![directory.clone()];
+        while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(&folder).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    let name = path.strip_prefix(&directory).unwrap().display().to_string();
+                    sources.push((name, std::fs::read_to_string(&path).unwrap()));
+                }
+            }
+        }
+        sources
+    }
+
+    #[test]
+    fn every_text_drawn_on_a_canvas_names_its_font() {
+        // The font of a canvas text is not the default font of the window:
+        // without one of its own a text falls back to a font of the system.
+        let mut found = Vec::new();
+        let mut texts = 0;
+        for (name, source) in sources() {
+            if name == "fonts.rs" {
+                continue;
+            }
+            for (at, _) in source.match_indices("Text::default()") {
+                texts += 1;
+                let literal = source[..at].rfind("Text {").map(|start| &source[start..at]);
+                if !source[..at].ends_with("..canvas::")
+                    || !literal.is_some_and(|literal| literal.contains("font:"))
+                {
+                    found.push(format!("{name}: a text without a font at {at}"));
+                }
+            }
+            // A text given as a string takes the default font too.
+            for (at, _) in source.match_indices("fill_text(") {
+                let argument = source[at + "fill_text(".len()..].trim_start();
+                if argument.starts_with('"')
+                    || argument.starts_with("format!")
+                    || argument.starts_with("tr(")
+                {
+                    found.push(format!("{name}: a text without a font at {at}"));
+                }
+            }
+        }
+        assert!(texts > 25, "{texts}");
+        assert!(found.is_empty(), "{found:#?}");
     }
 
     /// Whether the table directory of a TrueType file lists `tag`.

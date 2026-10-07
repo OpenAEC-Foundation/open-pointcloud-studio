@@ -730,6 +730,7 @@ fn badge(frame: &mut Frame, content: String, centre: UiPoint, summary: bool) {
         position,
         size: iced::Pixels(10.0),
         color: Color::from_rgb8(245, 188, 100),
+        font: crate::fonts::REGULAR,
         ..canvas::Text::default()
     });
 }

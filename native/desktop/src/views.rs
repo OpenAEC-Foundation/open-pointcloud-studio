@@ -2196,6 +2196,7 @@ fn draw_notes(frame: &mut Frame, notes: &[(UiPoint, &str)], size: Size) {
             position: UiPoint::new(label.x + 5.0, label.y + 3.0),
             size: iced::Pixels(11.0),
             color: Color::from_rgb8(245, 245, 244),
+            font: crate::fonts::REGULAR,
             ..canvas::Text::default()
         });
     }

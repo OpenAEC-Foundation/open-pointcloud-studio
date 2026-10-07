@@ -1401,6 +1401,7 @@ impl Overlay<'_> {
                 size: Pixels(13.0),
                 horizontal_alignment: alignment::Horizontal::Center,
                 vertical_alignment: alignment::Vertical::Center,
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
         }
@@ -1430,6 +1431,7 @@ impl Overlay<'_> {
                 color,
                 size: Pixels(16.0),
                 vertical_alignment: alignment::Vertical::Bottom,
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
         }
@@ -1645,6 +1647,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                 size: Pixels(14.0),
                 horizontal_alignment: alignment::Horizontal::Center,
                 vertical_alignment: alignment::Vertical::Center,
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
             return vec![frame.into_geometry()];
@@ -1682,6 +1685,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                     size: Pixels(pixels * 1.4),
                     horizontal_alignment: alignment::Horizontal::Left,
                     vertical_alignment: alignment::Vertical::Bottom,
+                    font: crate::fonts::DRAWING,
                     ..canvas::Text::default()
                 };
                 frame.with_save(|frame| {
@@ -1721,6 +1725,7 @@ impl canvas::Program<Message> for Overlay<'_> {
             color: ink_color,
             size: Pixels(12.0),
             vertical_alignment: alignment::Vertical::Bottom,
+            font: crate::fonts::REGULAR,
             ..canvas::Text::default()
         });
 
@@ -1739,6 +1744,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                 size: Pixels(12.0),
                 horizontal_alignment: alignment::Horizontal::Right,
                 vertical_alignment: alignment::Vertical::Bottom,
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
         }

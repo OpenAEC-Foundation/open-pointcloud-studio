@@ -12352,6 +12352,7 @@ fn draw_context_menu(
         position: UiPoint::new(menu.x + 10.0, menu.y + 5.0),
         size: iced::Pixels(10.0),
         color: Color::from_rgb8(161, 161, 170),
+        font: crate::fonts::SEMIBOLD,
         ..canvas::Text::default()
     });
     let hovered_action = hovered.and_then(|point| context_action_at(point, at, viewport));
@@ -12374,6 +12375,7 @@ fn draw_context_menu(
             position: UiPoint::new(menu.x + 12.0, y + 5.0),
             size: iced::Pixels(12.0),
             color: Color::from_rgb8(241, 241, 240),
+            font: crate::fonts::REGULAR,
             ..canvas::Text::default()
         });
     }
@@ -12954,8 +12956,10 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 position: UiPoint::new(bounds.width * 0.5, bounds.height * 0.5 - 14.0),
                 horizontal_alignment: iced::alignment::Horizontal::Center,
                 vertical_alignment: iced::alignment::Vertical::Center,
-                size: iced::Pixels(16.0),
+                // The heading of an empty work area of the style book.
+                size: iced::Pixels(18.0),
                 color: self.scene.dom.scene_text,
+                font: crate::fonts::HEADING,
                 ..canvas::Text::default()
             });
             if let Some(status) = self.loading_status {
@@ -12964,8 +12968,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     position: UiPoint::new(bounds.width * 0.5, bounds.height * 0.5 + 18.0),
                     horizontal_alignment: iced::alignment::Horizontal::Center,
                     vertical_alignment: iced::alignment::Vertical::Center,
-                    size: iced::Pixels(12.0),
+                    size: iced::Pixels(13.0),
                     color: self.scene.dom.scene_muted,
+                    font: crate::fonts::REGULAR,
                     ..canvas::Text::default()
                 });
             }
@@ -13100,6 +13105,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                             position: UiPoint::new(x + 8.0, y + 3.0),
                             size: iced::Pixels(10.0),
                             color: self.scene.dom.scene_label,
+                            font: crate::fonts::REGULAR,
                             ..canvas::Text::default()
                         });
                     }
@@ -13128,6 +13134,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         position: UiPoint::new(x + 12.0, y - 12.0),
                         size: iced::Pixels(16.0),
                         color: self.scene.dom.scene_label,
+                        font: crate::fonts::REGULAR,
                         ..canvas::Text::default()
                     });
                 }
@@ -13267,6 +13274,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                                 position: UiPoint::new(tip.x + 2.0, tip.y + 2.0),
                                 size: iced::Pixels(9.0),
                                 color,
+                                font: crate::fonts::MEDIUM,
                                 ..canvas::Text::default()
                             });
                         }
@@ -13317,6 +13325,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         position,
                         size: iced::Pixels(10.0),
                         color: Color::from_rgb8(245, 188, 100),
+                        font: crate::fonts::REGULAR,
                         ..canvas::Text::default()
                     });
                 }
@@ -13718,6 +13727,7 @@ impl PointViewport<'_> {
                 position,
                 size: iced::Pixels(10.0),
                 color: Color::from_rgb8(245, 188, 100),
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
         };

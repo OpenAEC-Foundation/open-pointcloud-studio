@@ -337,6 +337,7 @@ impl canvas::Program<Message> for BagMap {
                 position: Point::new(8.0, bounds.height - 9.0),
                 size: iced::Pixels(10.0),
                 color: Color::from_rgb8(35, 35, 40),
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
         }

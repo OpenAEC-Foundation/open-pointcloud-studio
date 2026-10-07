@@ -1803,6 +1803,7 @@ impl canvas::Program<Message> for Histogram<'_> {
                 size: iced::Pixels(10.0),
                 color,
                 vertical_alignment: alignment::Vertical::Center,
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
         };
@@ -1838,6 +1839,7 @@ impl canvas::Program<Message> for Histogram<'_> {
             size: iced::Pixels(10.0),
             color: INK_MUTED,
             vertical_alignment: alignment::Vertical::Bottom,
+            font: crate::fonts::REGULAR,
             ..canvas::Text::default()
         });
         vec![frame.into_geometry()]
@@ -2004,6 +2006,7 @@ impl canvas::Program<Message> for TopView<'_> {
                 position,
                 size: iced::Pixels(10.0),
                 color: *color,
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
         }
@@ -2048,6 +2051,7 @@ impl canvas::Program<Message> for TopView<'_> {
                     position: at(to),
                     size: iced::Pixels(11.0),
                     color: INK,
+                    font: crate::fonts::REGULAR,
                     ..canvas::Text::default()
                 });
             };
@@ -2078,6 +2082,7 @@ impl canvas::Program<Message> for TopView<'_> {
             size: iced::Pixels(10.0),
             color: INK,
             vertical_alignment: alignment::Vertical::Center,
+            font: crate::fonts::REGULAR,
             ..canvas::Text::default()
         });
         vec![frame.into_geometry()]

@@ -1657,6 +1657,7 @@ impl PointViewport<'_> {
                 position: place,
                 size: iced::Pixels(10.0),
                 color: Color::from_rgb8(186, 230, 253),
+                font: crate::fonts::REGULAR,
                 ..canvas::Text::default()
             });
         }
@@ -1682,6 +1683,7 @@ impl PointViewport<'_> {
             position,
             size: iced::Pixels(10.0),
             color: Color::from_rgb8(186, 230, 253),
+            font: crate::fonts::REGULAR,
             ..canvas::Text::default()
         });
     }
