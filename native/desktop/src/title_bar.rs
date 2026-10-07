@@ -5,7 +5,8 @@
 //!
 //! On Windows the window has no frame of the system: the bar is dragged to
 //! move the window, a double click maximises it or gives it back its size,
-//! and the edges of the window, 6 pixels wide, resize it. On macOS the buttons of the system stay at the
+//! a right click opens the menu of the window of the system, and the edges
+//! of the window resize it. On macOS the buttons of the system stay at the
 //! left of the bar, which runs under them; on Linux, where iced 0.13 cannot
 //! have a window without a frame resized by the window manager of X11 or
 //! the compositor of Wayland, the frame of the system stays and the bar
@@ -31,9 +32,15 @@ pub const HEIGHT: f32 = 32.0;
 pub const MIN_SIZE: Size = Size::new(800.0, 600.0);
 /// Two presses on the bar within this time are a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
-/// The width of the edges that resize the window, and how far a corner
-/// reaches along them.
-const EDGE: f32 = 6.0;
+/// The width of the edges at the left and the right that resize the
+/// window, and the height of those at the top and the bottom, which are
+/// thinner, as the buttons of the title bar and the items of the status bar
+/// reach the edge there. A corner reaches `CORNER` along its edges. Beside
+/// the title bar, where the close button reaches the right edge, only the
+/// corner at the top resizes; Properties keeps its scroll bar out of the
+/// edge at the right.
+pub const EDGE: f32 = 6.0;
+const BAND: f32 = 4.0;
 const CORNER: f32 = 12.0;
 /// The room the buttons of macOS take at the left of the bar.
 const MACOS_BUTTONS: f32 = 72.0;
@@ -98,6 +105,8 @@ impl Edge {
         if !(0.0..size.width).contains(&point.x) || !(0.0..size.height).contains(&point.y) {
             return None;
         }
+        // Whether `value` lies within `reach` of the start of `length`
+        // (false) or of its end (true).
         let near = |value: f32, reach: f32, length: f32| {
             if value < reach {
                 Some(false)
@@ -108,8 +117,10 @@ impl Edge {
             }
         };
         let (on_x, on_y) = (
-            near(point.x, EDGE, size.width),
-            near(point.y, EDGE, size.height),
+            near(point.x, EDGE, size.width)
+                // The close button reaches the right edge of the bar.
+                .filter(|&right| !right || point.y >= HEIGHT),
+            near(point.y, BAND, size.height),
         );
         if on_x.is_none() && on_y.is_none() {
             return None;
@@ -561,6 +572,24 @@ mod tests {
         assert_eq!(at(1434.0, 450.0), Some(Edge::East));
         assert_eq!(at(-1.0, 450.0), None);
         assert_eq!(at(720.0, 900.0), None);
+        // The top and the bottom resize over 4 pixels, which leaves the
+        // quick-access buttons, from 4 to 28, and most of the height of the
+        // buttons of the window and of the items of the status bar.
+        assert_eq!(at(720.0, 3.0), Some(Edge::North));
+        assert_eq!(at(720.0, 4.0), None);
+        assert_eq!(at(720.0, 895.0), None);
+        assert_eq!(at(720.0, 896.0), Some(Edge::South));
+        // Beside the title bar the close button reaches the right edge:
+        // only the band along the top, its corner, resizes there.
+        assert_eq!(at(1437.0, 4.0), None);
+        assert_eq!(at(1439.0, HEIGHT - 1.0), None);
+        assert_eq!(at(1437.0, 3.0), Some(Edge::NorthEast));
+        assert_eq!(at(1428.0, 0.0), Some(Edge::NorthEast));
+        assert_eq!(at(1427.0, 0.0), Some(Edge::North));
+        assert_eq!(at(1437.0, HEIGHT), Some(Edge::East));
+        // At the left the bar has nothing at the edge.
+        assert_eq!(at(2.0, 20.0), Some(Edge::West));
+        assert_eq!(at(2.0, 8.0), Some(Edge::NorthWest));
         // The pointer says which way.
         assert_eq!(
             Edge::North.interaction(),
@@ -802,6 +831,36 @@ mod tests {
                 .any(|message| matches!(message, Message::Open)),
             "{messages:?}"
         );
+    }
+
+    #[test]
+    fn the_scroll_bar_of_properties_stands_left_of_the_edge_that_resizes_the_window() {
+        let mut studio = Studio::default();
+        studio.title_bar = TitleBar::new(Frame::Own);
+        let bounds = |studio: &Studio| {
+            crate::test_render::scrollable_bounds(
+                studio.view(),
+                WINDOW,
+                crate::properties_scroll_id(),
+            )
+            .expect("the scrollable of Properties")
+        };
+        // The scroll bar runs along the right of the scrollable, which ends
+        // where the edge begins; Properties keeps its width.
+        let resizing = bounds(&studio);
+        assert_eq!(resizing.x + resizing.width, WINDOW.width - EDGE);
+        assert_eq!(resizing.width, studio.properties_width());
+        let scroll_bar = Point::new(resizing.x + resizing.width - 3.0, 400.0);
+        assert_eq!(Edge::at(scroll_bar, WINDOW), None);
+        assert_eq!(
+            Edge::at(Point::new(WINDOW.width - 3.0, 400.0), WINDOW),
+            Some(Edge::East)
+        );
+        // A maximised window has no edges, and Properties reaches its side.
+        let _ = studio.update(Message::Window(WindowAction::Maximized(true)));
+        let maximised = bounds(&studio);
+        assert_eq!(maximised.x + maximised.width, WINDOW.width);
+        assert_eq!(maximised.width, studio.properties_width());
     }
 
     #[test]

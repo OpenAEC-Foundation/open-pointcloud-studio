@@ -155,6 +155,62 @@ pub(crate) fn messages(
     messages
 }
 
+/// Where the scrollable `id` of `element`, laid out in `size`, lies.
+pub(crate) fn scrollable_bounds(
+    element: Element<'_, Message>,
+    size: Size,
+    id: iced::widget::scrollable::Id,
+) -> Option<Rectangle> {
+    use iced::advanced::widget::{operation, Id, Operation};
+
+    struct Find {
+        id: Id,
+        found: Option<Rectangle>,
+    }
+    impl Operation for Find {
+        fn container(
+            &mut self,
+            _id: Option<&Id>,
+            _bounds: Rectangle,
+            operate_on_children: &mut dyn FnMut(&mut dyn Operation),
+        ) {
+            operate_on_children(self);
+        }
+
+        fn scrollable(
+            &mut self,
+            _state: &mut dyn operation::Scrollable,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            _content_bounds: Rectangle,
+            _translation: iced::Vector,
+        ) {
+            if id == Some(&self.id) {
+                self.found = Some(bounds);
+            }
+        }
+    }
+
+    load_fonts();
+    let renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
+        crate::fonts::REGULAR,
+        iced::Pixels(12.0),
+    ));
+    let mut tree = Tree::new(&element);
+    let node =
+        element
+            .as_widget()
+            .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    let mut find = Find {
+        id: id.into(),
+        found: None,
+    };
+    element
+        .as_widget()
+        .operate(&mut tree, Layout::new(&node), &renderer, &mut find);
+    find.found
+}
+
 /// A press of `button` of the mouse at `at`, and its release.
 pub(crate) fn click(button: mouse::Button) -> [iced::Event; 2] {
     [

@@ -1416,6 +1416,10 @@ fn ribbon_scroll_id() -> scrollable::Id {
     scrollable::Id::new("ops-ribbon")
 }
 
+fn properties_scroll_id() -> scrollable::Id {
+    scrollable::Id::new("ops-properties")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MeshMode {
     Terrain,
@@ -2973,6 +2977,16 @@ impl Default for Studio {
 impl Studio {
     /// The width of the panel at the right: Properties, or the wider panel
     /// of the 3D BAG.
+    /// The room the edge of the window that resizes it takes at the right
+    /// of Properties, while it does.
+    fn right_edge(&self) -> f32 {
+        if self.title_bar.resizes() {
+            title_bar::EDGE
+        } else {
+            0.0
+        }
+    }
+
     fn properties_width(&self) -> f32 {
         if self.bag_panel {
             440.0
@@ -11036,10 +11050,20 @@ impl Studio {
                 .width(Fill)
                 .height(Fill)
                 .style(viewport_style),
-            container(ui_style::scrollable(properties).height(Fill))
-                .width(self.properties_width())
-                .height(Fill)
-                .style(sidebar_style),
+            // While the edges of the window resize it, the scroll bar of
+            // Properties stands left of the edge at the right.
+            container(
+                ui_style::scrollable(properties)
+                    .id(properties_scroll_id())
+                    .height(Fill)
+            )
+            .width(self.properties_width() + self.right_edge())
+            .padding(iced::Padding {
+                right: self.right_edge(),
+                ..iced::Padding::ZERO
+            })
+            .height(Fill)
+            .style(sidebar_style),
         ]
         .height(Fill);
         let mesh_status = self.mesh_job.as_ref().map(MeshJob::progress_text);
