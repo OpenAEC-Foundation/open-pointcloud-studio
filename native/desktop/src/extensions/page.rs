@@ -617,7 +617,7 @@ impl Studio {
                 .on_press_maybe(
                     (!run.control.stopping()).then(|| send(ExtensionAction::Stop(id.clone()))),
                 )
-                .style(ui_style::status_item)
+                .style(ui_style::status_button)
                 .padding([1, 6]),
         );
         Some(segment.into())

@@ -175,7 +175,7 @@ pub fn link(theme: &Theme, status: button::Status) -> button::Style {
 }
 
 /// An item of the status bar that can be clicked, such as Cancel import.
-pub fn status_item(theme: &Theme, status: button::Status) -> button::Style {
+pub fn status_button(theme: &Theme, status: button::Status) -> button::Style {
     let colors = colors(theme);
     button::Style {
         background: hovered(status).then_some(Background::Color(colors.status_hover)),
@@ -481,6 +481,137 @@ pub fn tooltip<'a>(
     tip_widget::Tooltip::new(content, tip(tip_text), position).gap(8)
 }
 
+/// `content` with `tint` of the theme laid over it while the pointer is
+/// over it, as an item of the status bar of the style book.
+pub fn hover_tint<'a>(
+    content: impl Into<Element<'a, Message>>,
+    tint: fn(&UiColors) -> Color,
+) -> Element<'a, Message> {
+    Element::new(HoverTint {
+        content: content.into(),
+        tint,
+    })
+}
+
+/// A widget that is its content, tinted under the pointer.
+struct HoverTint<'a> {
+    content: Element<'a, Message>,
+    tint: fn(&UiColors) -> Color,
+}
+
+impl Widget<Message, Theme, Renderer> for HoverTint<'_> {
+    fn size(&self) -> Size<Length> {
+        self.content.as_widget().size()
+    }
+
+    fn size_hint(&self) -> Size<Length> {
+        self.content.as_widget().size_hint()
+    }
+
+    fn tag(&self) -> tree::Tag {
+        self.content.as_widget().tag()
+    }
+
+    fn state(&self) -> tree::State {
+        self.content.as_widget().state()
+    }
+
+    fn children(&self) -> Vec<Tree> {
+        self.content.as_widget().children()
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        self.content.as_widget().diff(tree);
+    }
+
+    fn layout(
+        &self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.content.as_widget().layout(tree, renderer, limits)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        if cursor.is_over(layout.bounds()) {
+            use iced::advanced::Renderer as _;
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: layout.bounds(),
+                    ..renderer::Quad::default()
+                },
+                (self.tint)(&colors(theme)),
+            );
+        }
+        self.content
+            .as_widget()
+            .draw(tree, renderer, theme, style, layout, cursor, viewport);
+    }
+
+    fn operate(
+        &self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        self.content
+            .as_widget()
+            .operate(tree, layout, renderer, operation);
+    }
+
+    fn on_event(
+        &mut self,
+        tree: &mut Tree,
+        event: Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) -> event::Status {
+        self.content.as_widget_mut().on_event(
+            tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+        )
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.content
+            .as_widget()
+            .mouse_interaction(tree, layout, cursor, viewport, renderer)
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        self.content
+            .as_widget_mut()
+            .overlay(tree, layout, renderer, translation)
+    }
+}
+
 /// The arrow over everything that can be clicked: the shell of the style
 /// book shows no hand on its buttons, tabs and items.
 pub fn no_hand<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
@@ -767,10 +898,10 @@ mod tests {
                 link(&theme, button::Status::Hovered).text_color,
                 colors.accent_hover
             );
-            let item = status_item(&theme, button::Status::Active);
+            let item = status_button(&theme, button::Status::Active);
             assert_eq!(background(&item), None);
             assert_eq!(item.text_color, colors.status_text);
-            let over = status_item(&theme, button::Status::Hovered);
+            let over = status_button(&theme, button::Status::Hovered);
             assert_eq!(background(&over), Some(colors.status_hover));
         }
     }
@@ -913,6 +1044,38 @@ mod tests {
             assert_eq!(style.text_color, Some(Color::from_rgb8(0xFA, 0xFA, 0xF9)));
             assert_eq!(style.border.radius, 4.0.into());
         }
+    }
+
+    #[test]
+    fn an_item_is_tinted_while_the_pointer_is_over_it() {
+        for (theme, colors) in themes() {
+            // An item on the bar, as the status bar lays its items.
+            let item = || -> Element<'_, Message> {
+                container(hover_tint(
+                    container(text("")).width(Length::Fill).height(Length::Fill),
+                    |colors| colors.status_hover,
+                ))
+                .style(|theme| container::Style::default().background(colors_of(theme)))
+                .into()
+            };
+            let size = Size::new(40.0, 22.0);
+            let away = crate::test_render::render(item(), &theme, size);
+            assert!(away.is(20, 11, colors.status_bg));
+            let over = crate::test_render::render_under(
+                item(),
+                &theme,
+                size,
+                mouse::Cursor::Available(Point::new(20.0, 11.0)),
+            );
+            // The tint of the theme over the bar.
+            let [r, g, b] = over.rgb(20, 11);
+            let tinted = Color::from_rgb8(r, g, b);
+            assert_ne!(tinted, colors.status_bg, "{colors:?}");
+        }
+    }
+
+    fn colors_of(theme: &Theme) -> Color {
+        colors(theme).status_bg
     }
 
     /// What the pointer looks like over the upper left of `element`.

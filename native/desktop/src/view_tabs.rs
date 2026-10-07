@@ -22,7 +22,6 @@ use iced::{Background, Border, Color, Element, Fill, Padding, Task, Theme};
 use pointcloud_core::Bounds;
 use serde_json::{json, Value};
 
-use crate::fonts;
 use crate::i18n::tr;
 use crate::project_browser::{ViewKind, ViewRow};
 use crate::station_photos::WalkView;
@@ -133,9 +132,6 @@ const MIN_CHARS: usize = 8;
 const MAX_CHARS: usize = 32;
 /// The height of a tab, without the accent line over the active one.
 const TAB_HEIGHT: f32 = 26.0;
-/// The caption at the right of the strip is shortened to this many
-/// characters.
-const CAPTION_CHARS: usize = 28;
 
 /// How wide a tab is with a name of so many characters.
 pub fn tab_width(chars: usize, closable: bool) -> f32 {
@@ -394,7 +390,6 @@ struct StripLayout {
     listed: Vec<TabId>,
     names: Vec<(String, bool)>,
     fitted: Vec<String>,
-    caption: Option<(&'static str, String)>,
     /// The pixels the tabs have.
     available: f32,
 }
@@ -819,7 +814,7 @@ impl Studio {
         }))
     }
 
-    /// The width the strip has for its tabs and its caption: that of the
+    /// The width the strip has for its tabs: that of the
     /// window between the Project Browser and Properties, else as the main
     /// area was last drawn.
     fn strip_width(&self) -> f32 {
@@ -832,46 +827,21 @@ impl Studio {
             .map_or_else(|| self.drawn_viewport().width, |bounds| bounds.width)
     }
 
-    /// The title and the caption at the right of the strip: the model space
-    /// and how the camera looks, or the drawing and what it is.
-    fn strip_caption(&self) -> (&'static str, String) {
-        if let Some(caption) = self.layout_caption() {
-            return (tr("SHEET"), shortened(&caption, CAPTION_CHARS));
-        }
-        if self.drawing_view.shown {
-            (
-                tr("DRAWING"),
-                shortened(&self.drawing_view_caption(), CAPTION_CHARS),
-            )
-        } else {
-            (tr("MODEL SPACE"), self.view_caption().to_owned())
-        }
-    }
-
     /// How the strip lays out: the tabs it lists with their names and
-    /// whether they close, the names as it shows them, and its caption,
-    /// which gives way to the tabs when they do not fit beside it.
+    /// whether they close, and the names as it shows them. What the main
+    /// area shows is said in the status bar.
     fn strip_layout(&self) -> StripLayout {
         let listed = self.listed_tabs();
         let names: Vec<(String, bool)> = listed
             .iter()
             .map(|tab| (self.tab_name(tab), tab.closable()))
             .collect();
-        let width = self.strip_width() - 12.0;
-        let (title, caption) = self.strip_caption();
-        let caption_width =
-            (title.chars().count() + caption.chars().count()) as f32 * CHAR_WIDTH + 40.0;
-        let (fitted, scrolls) = fitted_names(&names, width - caption_width);
-        let (fitted, caption, available) = if scrolls {
-            (fitted_names(&names, width).0, None, width)
-        } else {
-            (fitted, Some((title, caption)), width - caption_width)
-        };
+        let available = self.strip_width() - 12.0;
+        let (fitted, _) = fitted_names(&names, available);
         StripLayout {
             listed,
             names,
             fitted,
-            caption,
             available,
         }
     }
@@ -897,16 +867,13 @@ impl Studio {
         ))
     }
 
-    /// The strip of tabs above the main area, with at its right what the
-    /// main area shows.
+    /// The strip of tabs above the main area.
     pub(crate) fn tab_strip(&self) -> Element<'_, Message> {
-        let colors = self.ui_theme.colors();
         let shown = self.shown_tab();
         let StripLayout {
             listed,
             names,
             fitted,
-            caption,
             ..
         } = self.strip_layout();
         let surface = active_surface(self.ui_theme, self.drawing_view.shown);
@@ -923,25 +890,7 @@ impl Studio {
             ))
             .id(strip_id())
             .width(Fill);
-        let mut line = row![strip].align_y(iced::Alignment::End);
-        if let Some((title, caption)) = caption {
-            line = line.push(
-                container(
-                    row![
-                        text(title).size(11).font(fonts::MEDIUM).color(colors.text),
-                        text(caption)
-                            .size(11)
-                            .color(colors.text_muted)
-                            .wrapping(iced::widget::text::Wrapping::None),
-                    ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),
-                )
-                .height(TAB_HEIGHT + 2.0)
-                .align_y(iced::Alignment::Center)
-                .padding([0, 12]),
-            );
-        }
+        let line = row![strip].align_y(iced::Alignment::End);
         container(line)
             .padding(Padding {
                 top: 4.0,

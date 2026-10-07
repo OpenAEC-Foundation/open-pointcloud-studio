@@ -63,6 +63,7 @@ mod sheet_dialog;
 #[cfg(test)]
 mod shell_tests;
 mod station_photos;
+mod status_bar;
 mod survey;
 #[cfg(test)]
 mod test_render;
@@ -10358,59 +10359,6 @@ impl Studio {
             .into()
     }
 
-    /// The bar along the bottom of the window: what is going on at the left,
-    /// the totals beside it and the version of the application at the right.
-    fn status_bar(&self, message: String) -> Element<'_, Message> {
-        let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
-        // One line: a long message is cut off at the right instead of
-        // wrapping, which squeezed the counts into a column and made the
-        // status bar grow over the window.
-        let mut details = row![
-            container(
-                text(message)
-                    .size(11)
-                    .wrapping(iced::widget::text::Wrapping::None),
-            )
-            .width(Fill)
-            .clip(true),
-            text(format!(
-                "{} files  ·  {} points  ·  {} selected",
-                self.clouds.len(),
-                format_count(total_points),
-                format_count(self.selected_total())
-            ))
-            .size(11)
-            .wrapping(iced::widget::text::Wrapping::None),
-        ]
-        .spacing(24)
-        .align_y(iced::Alignment::Center)
-        .width(Fill);
-        if let Some((&id, job)) = self.imports.iter().max_by_key(|(id, _)| *id) {
-            details = details.push(
-                button(i18n::tr("Cancel import"))
-                    .on_press_maybe(
-                        (!job.cancel.load(Ordering::Relaxed)).then_some(Message::CancelImport(id)),
-                    )
-                    .style(ui_style::status_item),
-            );
-        }
-        if let Some(runs) = self.extension_runs_status() {
-            details = details.push(runs);
-        }
-        // The version is measured first and the rest fills what is left, so
-        // a long message cannot push the version out of the window.
-        let status_bar = row![
-            details,
-            text(VERSION_LABEL)
-                .size(11)
-                .color(self.ui_theme.colors().status_text_label),
-        ]
-        .spacing(24)
-        .padding([7, 12])
-        .align_y(iced::Alignment::Center);
-        container(status_bar).width(Fill).style(status_style).into()
-    }
-
     /// What the header of the model space shows beside its name: the view,
     /// or that a box is being drawn. The label of the view stays English in
     /// the state, since the command API reports it, and is translated here.
@@ -11502,13 +11450,6 @@ fn sidebar_style(theme: &Theme) -> container::Style {
 
 fn viewport_style(theme: &Theme) -> container::Style {
     container::Style::default().background(ui_theme::colors(theme).dom.scene)
-}
-
-fn status_style(theme: &Theme) -> container::Style {
-    let colors = ui_theme::colors(theme);
-    container::Style::default()
-        .background(colors.status_bg)
-        .color(colors.status_text)
 }
 
 #[derive(Debug, Clone, Copy)]

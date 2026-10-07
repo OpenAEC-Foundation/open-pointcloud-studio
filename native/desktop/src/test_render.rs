@@ -59,6 +59,16 @@ pub(crate) fn load_fonts() {
 
 /// Lay out `element` in `size` and draw it in `theme`.
 pub(crate) fn render(element: Element<'_, Message>, theme: &Theme, size: Size) -> Picture {
+    render_under(element, theme, size, mouse::Cursor::Unavailable)
+}
+
+/// As `render`, with the pointer at `cursor`.
+pub(crate) fn render_under(
+    element: Element<'_, Message>,
+    theme: &Theme,
+    size: Size,
+    cursor: mouse::Cursor,
+) -> Picture {
     load_fonts();
     let mut renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
         crate::fonts::REGULAR,
@@ -77,7 +87,7 @@ pub(crate) fn render(element: Element<'_, Message>, theme: &Theme, size: Size) -
             text_color: theme.palette().text,
         },
         Layout::new(&node),
-        mouse::Cursor::Unavailable,
+        cursor,
         &Rectangle::with_size(size),
     );
     let iced::Renderer::Secondary(mut software) = renderer else {

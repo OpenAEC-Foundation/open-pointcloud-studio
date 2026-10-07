@@ -372,18 +372,15 @@ fn what_views_shows_opens_a_tab_and_a_click_on_a_tab_shows_it_again() {
     }
     studio.viewport_size = Size::new(1400.0, 800.0);
     let wide = studio.strip_layout();
-    assert!(wide.caption.is_some());
     assert_eq!(wide.fitted, names(&studio), "every name as it is");
-    // Too narrow: the names shrink, the caption gives way and the strip
-    // scrolls to the tab shown.
+    // Too narrow: the names shrink and the strip scrolls to the tab shown.
     studio.viewport_size = Size::new(260.0, 300.0);
     let narrow = studio.strip_layout();
-    assert!(narrow.caption.is_none());
     assert!(narrow.fitted.iter().any(|name| name.ends_with('…')));
     assert!(studio.scroll_to_shown_tab().is_some());
     // The window says how wide the strip is, once it has opened.
     let _ = studio.update(Message::WindowResized(Size::new(1600.0, 900.0)));
-    assert!(studio.strip_layout().caption.is_some());
+    assert_eq!(studio.strip_layout().fitted, names(&studio));
     let _ = studio.view();
 }
 

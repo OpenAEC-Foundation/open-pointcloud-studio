@@ -465,6 +465,7 @@ mod tests {
         ("section_detail.rs", include_str!("section_detail.rs")),
         ("section_fill.rs", include_str!("section_fill.rs")),
         ("settings_dialog.rs", include_str!("settings_dialog.rs")),
+        ("status_bar.rs", include_str!("status_bar.rs")),
         ("station_photos.rs", include_str!("station_photos.rs")),
         ("ui_theme.rs", include_str!("ui_theme.rs")),
         ("view_cube.rs", include_str!("view_cube.rs")),
