@@ -1440,6 +1440,12 @@ mod tests {
                     found.push(format!("{name}: a button without a style at {at}"));
                 }
             }
+            // Nothing asks for the hand, which the style book never shows:
+            // what can be dragged shows that it can be, what can be
+            // clicked lights up under the arrow.
+            if source.contains("Interaction::Pointer") {
+                found.push(format!("{name}: the hand of a link"));
+            }
             // A tooltip opens where the style book has it for its part of
             // the window: above, or below in the ribbon.
             for place in ["Position::", "Tooltip::new("] {

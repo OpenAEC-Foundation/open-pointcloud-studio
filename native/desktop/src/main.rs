@@ -12523,7 +12523,26 @@ fn scan_pose_at(
     pointer: UiPoint,
     photos: Option<&PhotoAtlas>,
 ) -> Option<(usize, usize)> {
-    let mut nearest: Option<(usize, usize, f32)> = None;
+    scan_pose_near(clouds, projection, pointer, photos).map(|station| (station.cloud, station.pose))
+}
+
+/// A station a click reaches, where it is drawn and how far its reach is.
+#[derive(Debug, Clone, Copy)]
+struct StationHit {
+    cloud: usize,
+    pose: usize,
+    at: UiPoint,
+    reach: f32,
+}
+
+/// The station nearest the pointer that a click on it reaches.
+fn scan_pose_near(
+    clouds: &[CloudEntry],
+    projection: Projection,
+    pointer: UiPoint,
+    photos: Option<&PhotoAtlas>,
+) -> Option<StationHit> {
+    let mut nearest: Option<(StationHit, f32)> = None;
     for (cloud_index, entry) in clouds.iter().enumerate().filter(|(_, entry)| entry.visible) {
         for (pose_index, pose) in entry.cloud.scan_poses.iter().enumerate() {
             let Some((x, y, depth)) = projection.project(entry.transform.xyz(pose.position)) else {
@@ -12537,13 +12556,33 @@ fn scan_pose_at(
                 });
             let distance = (pointer.x - x).hypot(pointer.y - y);
             if distance <= reach
-                && nearest.is_none_or(|(_, _, previous_distance)| distance < previous_distance)
+                && nearest.is_none_or(|(_, previous_distance)| distance < previous_distance)
             {
-                nearest = Some((cloud_index, pose_index, distance));
+                let hit = StationHit {
+                    cloud: cloud_index,
+                    pose: pose_index,
+                    at: UiPoint::new(x, y),
+                    reach,
+                };
+                nearest = Some((hit, distance));
             }
         }
     }
-    nearest.map(|(cloud_index, pose_index, _)| (cloud_index, pose_index))
+    nearest.map(|(hit, _)| hit)
+}
+
+/// The colour in which what a click acts on lights up under the pointer:
+/// the amber of the handles of the section box.
+const HOVER_RING: Color = Color::from_rgb(245.0 / 255.0, 158.0 / 255.0, 11.0 / 255.0);
+
+/// A ring around what a click acts on, while the pointer is on it.
+fn hover_ring(frame: &mut Frame, center: UiPoint, radius: f32) {
+    frame.stroke(
+        &canvas::Path::circle(center, radius),
+        canvas::Stroke::default()
+            .with_color(HOVER_RING)
+            .with_width(2.0),
+    );
 }
 
 impl canvas::Program<Message> for PointViewport<'_> {
@@ -12661,12 +12700,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         return (event::Status::Captured, None);
                     }
                 }
-                if self.show_scan_poses
-                    && !self.box_select
-                    && !self.pick_mode
-                    && self.measure.mode.is_none()
-                    && self.annotate.tool.is_none()
-                {
+                if self.stations_answer_clicks() {
                     if let (Some(overall), Some(position)) =
                         (combined_bounds(self.clouds), cursor.position_in(bounds))
                     {
@@ -12941,7 +12975,12 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 self.draw_faces(&mut frame, bounds.size());
                 self.draw_annotations(&mut frame, bounds.size());
             } else {
-                self.draw_walk_overlay(&mut frame, view, bounds.size());
+                self.draw_walk_overlay(
+                    &mut frame,
+                    view,
+                    bounds.size(),
+                    _cursor.position_in(bounds),
+                );
             }
             return vec![frame.into_geometry()];
         }
@@ -13330,6 +13369,15 @@ impl canvas::Program<Message> for PointViewport<'_> {
                     });
                 }
             }
+            // The station under the pointer lights up: a click steps into it.
+            if !self.clean && self.stations_answer_clicks() {
+                if let Some(station) = _cursor
+                    .position_in(bounds)
+                    .and_then(|point| scan_pose_near(self.clouds, projection, point, self.photos()))
+                {
+                    hover_ring(&mut frame, station.at, station.reach.max(11.0));
+                }
+            }
         }
         if self.show_scan_poses {
             self.draw_photo_marks(&mut frame, projection, bounds.size());
@@ -13391,94 +13439,71 @@ impl canvas::Program<Message> for PointViewport<'_> {
 
     fn mouse_interaction(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        // The pointer stays the arrow of the style book over what a click
+        // acts on, which lights up under it instead; only a handle that is
+        // dragged shows that it can be, as the views on a sheet do.
+        let Some(point) = cursor.position_in(bounds) else {
+            return mouse::Interaction::default();
+        };
+        let tool = self.measure.mode.is_some() || self.annotate.tool.is_some();
         if let Some(view) = self.walk {
-            return match cursor.position_in(bounds) {
-                Some(point)
-                    if self.walk_station_at(view, point, bounds.size()).is_some()
-                        || self
-                            .walk_photo_step_at(view, point, bounds.size())
-                            .is_some() =>
-                {
-                    mouse::Interaction::Pointer
-                }
-                Some(_) if self.measure.mode.is_some() || self.annotate.tool.is_some() => {
-                    mouse::Interaction::Crosshair
-                }
-                Some(_) => mouse::Interaction::Idle,
-                None => mouse::Interaction::default(),
-            };
-        }
-        if cursor.is_over(bounds) {
-            if self.context_menu.is_some_and(|menu| {
-                cursor
-                    .position_in(bounds)
-                    .and_then(|point| context_action_at(point, menu, bounds))
-                    .is_some()
-            }) || cursor
-                .position_in(bounds)
-                .and_then(|point| view_cube::hit(point, bounds, self.yaw, self.pitch))
-                .is_some()
-                || cursor.position_in(bounds).is_some_and(|point| {
-                    self.section.is_some_and(|section| {
-                        combined_bounds(self.clouds).is_some_and(|overall| {
-                            let projection = Projection::new(
-                                overall,
-                                self.yaw,
-                                self.pitch,
-                                self.zoom,
-                                self.pan,
-                                bounds.width,
-                                bounds.height,
-                            );
-                            section_handle_at(point, section, projection).is_some()
-                                || section_turn_handle_at(point, section, projection)
-                        })
-                    })
-                })
-                || (self.show_scan_poses
-                    && !self.box_select
-                    && !self.pick_mode
-                    && self.measure.mode.is_none()
-                    && self.annotate.tool.is_none())
-                    && cursor.position_in(bounds).is_some_and(|point| {
-                        combined_bounds(self.clouds).is_some_and(|overall| {
-                            scan_pose_at(
-                                self.clouds,
-                                Projection::new(
-                                    overall,
-                                    self.yaw,
-                                    self.pitch,
-                                    self.zoom,
-                                    self.pan,
-                                    bounds.width,
-                                    bounds.height,
-                                ),
-                                point,
-                                self.photos(),
-                            )
-                            .is_some()
-                        })
-                    })
-            {
-                mouse::Interaction::Pointer
-            } else if self.box_select
-                || self.pick_mode
-                || self.measure.mode.is_some()
-                || self.annotate.tool.is_some()
-            {
+            let target = self.walk_station_at(view, point, bounds.size()).is_some()
+                || self
+                    .walk_photo_step_at(view, point, bounds.size())
+                    .is_some();
+            return if tool && !target {
                 mouse::Interaction::Crosshair
             } else {
-                // Select is the plain mouse: an arrow, also while the view is
-                // turned or moved. The hand of the system reads as a move
-                // cursor on Windows.
                 mouse::Interaction::Idle
+            };
+        }
+        if state
+            .drag
+            .is_some_and(|drag| matches!(drag.mode, DragMode::Section(..) | DragMode::SectionTurn))
+        {
+            return mouse::Interaction::Grabbing;
+        }
+        if self
+            .context_menu
+            .is_some_and(|menu| context_action_at(point, menu, bounds).is_some())
+            || view_cube::hit(point, bounds, self.yaw, self.pitch).is_some()
+        {
+            return mouse::Interaction::Idle;
+        }
+        let projection = combined_bounds(self.clouds).map(|overall| {
+            Projection::new(
+                overall,
+                self.yaw,
+                self.pitch,
+                self.zoom,
+                self.pan,
+                bounds.width,
+                bounds.height,
+            )
+        });
+        if let (Some(section), Some(projection)) = (self.section, projection) {
+            if section_handle_at(point, section, projection).is_some()
+                || section_turn_handle_at(point, section, projection)
+            {
+                return mouse::Interaction::Grab;
             }
+        }
+        if self.stations_answer_clicks()
+            && projection.is_some_and(|projection| {
+                scan_pose_at(self.clouds, projection, point, self.photos()).is_some()
+            })
+        {
+            mouse::Interaction::Idle
+        } else if self.box_select || self.pick_mode || tool {
+            mouse::Interaction::Crosshair
         } else {
-            mouse::Interaction::default()
+            // Select is the plain mouse: an arrow, also while the view is
+            // turned or moved.
+            mouse::Interaction::Idle
         }
     }
 }
@@ -13497,6 +13522,16 @@ struct WalkStation<'a> {
 }
 
 impl PointViewport<'_> {
+    /// Whether a click on a station steps into it or centres it: in Select,
+    /// while the stations are shown.
+    fn stations_answer_clicks(&self) -> bool {
+        self.show_scan_poses
+            && !self.box_select
+            && !self.pick_mode
+            && self.measure.mode.is_none()
+            && self.annotate.tool.is_none()
+    }
+
     fn photos(&self) -> Option<&PhotoAtlas> {
         self.photo_atlas.map(|atlas| atlas.as_ref())
     }
@@ -13712,8 +13747,15 @@ impl PointViewport<'_> {
     }
 
     /// Labels over the walking view: the other stations, and inside a station
-    /// its name.
-    fn draw_walk_overlay(&self, frame: &mut Frame, view: WalkView, size: Size) {
+    /// its name. The photo or the station a click at `pointer` steps into
+    /// lights up.
+    fn draw_walk_overlay(
+        &self,
+        frame: &mut Frame,
+        view: WalkView,
+        size: Size,
+        pointer: Option<UiPoint>,
+    ) {
         let amber = Color::from_rgb8(245, 158, 11);
         let badge = |frame: &mut Frame, content: String, position: UiPoint| {
             let width = content.chars().count() as f32 * 6.0 + 2.0;
@@ -13735,12 +13777,21 @@ impl PointViewport<'_> {
         self.draw_faces(frame, size);
         self.draw_measure(frame, size);
         self.draw_annotations(frame, size);
+        // A click steps into the photo under the pointer before a station.
+        let step = pointer.and_then(|point| self.walk_photo_step_at(view, point, size));
+        let hovered_station = pointer
+            .filter(|_| step.is_none())
+            .and_then(|point| self.walk_station_at(view, point, size));
         if let Some(scene) = combined_bounds(self.clouds) {
             let projection = self.projection(scene, size.width, size.height);
-            self.draw_photo_steps(frame, projection, self.walk_eye(view));
+            self.draw_photo_steps(frame, projection, self.walk_eye(view), step.as_ref());
         }
         let inside = self.walk_station.is_some();
         for station in self.walk_stations(view, size) {
+            if hovered_station == Some((station.cloud, station.station)) {
+                let radius = if inside { 10.0 } else { station.reach + 2.0 };
+                hover_ring(frame, UiPoint::new(station.x, station.y), radius);
+            }
             if inside {
                 // From inside a photo the neighbours are not drawn as balls.
                 let ring = canvas::Path::circle(UiPoint::new(station.x, station.y), 7.0);
@@ -14430,6 +14481,135 @@ mod section_box_tests {
             combined_bounds(&studio.clouds)
         );
         assert!(near(plain.bounds.min, min, 1e-6) && near(plain.bounds.max, max, 1e-6));
+    }
+
+    #[test]
+    fn the_scene_never_shows_the_hand_and_grabs_the_handles_of_the_section_box() {
+        use iced::widget::canvas::Program;
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = studio_with_grid(directory.path());
+        let answer = send(
+            &mut studio,
+            native_api::ApiCommand::SetSection {
+                min: [207_004.0, 474_002.0, 0.5],
+                max: [207_012.0, 474_006.0, 2.5],
+                rotation: None,
+            },
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        let viewport = studio.point_viewport();
+        let bounds = Rectangle::new(UiPoint::ORIGIN, Size::new(800.0, 600.0));
+        let projection = Projection::new(
+            combined_bounds(&studio.clouds).unwrap(),
+            viewport.yaw,
+            viewport.pitch,
+            viewport.zoom,
+            viewport.pan,
+            bounds.width,
+            bounds.height,
+        );
+        let section = studio.section_box().unwrap();
+        let (x, y, _) = projection
+            .project_unclipped(section_handle_world(section, 2, false))
+            .unwrap();
+        let handle = UiPoint::new(x, y);
+        assert_eq!(
+            section_handle_at(handle, section, projection),
+            Some((2, false))
+        );
+        let at = mouse::Cursor::Available;
+        let idle = ViewportState::default();
+        // A handle that can be dragged shows that it can be.
+        assert_eq!(
+            viewport.mouse_interaction(&idle, bounds, at(handle)),
+            mouse::Interaction::Grab
+        );
+        let dragging = ViewportState {
+            drag: Some(DragState {
+                start: handle,
+                position: UiPoint::new(x + 40.0, y),
+                mode: DragMode::Section(2, false),
+            }),
+            ..ViewportState::default()
+        };
+        assert_eq!(
+            viewport.mouse_interaction(&dragging, bounds, at(UiPoint::new(x + 40.0, y))),
+            mouse::Interaction::Grabbing
+        );
+        // The view cube lights up a face under the pointer, which stays the
+        // arrow, as it does over the empty scene.
+        let cube = (0..80)
+            .flat_map(|row| (0..80).map(move |column| (row, column)))
+            .map(|(row, column)| UiPoint::new(800.0 - 2.0 * column as f32, 2.0 * row as f32))
+            .find(|&point| view_cube::hit(point, bounds, viewport.yaw, viewport.pitch).is_some())
+            .expect("the view cube in a corner");
+        assert_eq!(
+            viewport.mouse_interaction(&idle, bounds, at(cube)),
+            mouse::Interaction::Idle
+        );
+        let empty = UiPoint::new(4.0, bounds.height - 4.0);
+        assert_eq!(
+            viewport.mouse_interaction(&idle, bounds, at(empty)),
+            mouse::Interaction::Idle
+        );
+    }
+
+    #[test]
+    fn a_station_that_a_click_steps_into_lights_up_under_the_pointer() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut studio = studio_with_grid(directory.path());
+        let mut cloud = (*studio.clouds[0].cloud).clone();
+        cloud.scan_poses = vec![pointcloud_core::ScanPose {
+            label: "Station 1".into(),
+            position: [207_010.0, 474_005.0, 1.5],
+            axes: None,
+        }];
+        studio.clouds[0].cloud = Arc::new(cloud);
+        studio.show_scan_poses = true;
+        let size = Size::new(400.0, 300.0);
+        let viewport = studio.point_viewport();
+        let projection = Projection::new(
+            combined_bounds(&studio.clouds).unwrap(),
+            viewport.yaw,
+            viewport.pitch,
+            viewport.zoom,
+            viewport.pan,
+            size.width,
+            size.height,
+        );
+        let (x, y, _) = projection
+            .project(studio.clouds[0].transform.xyz([207_010.0, 474_005.0, 1.5]))
+            .unwrap();
+        let station = scan_pose_near(&studio.clouds, projection, UiPoint::new(x, y), None)
+            .expect("the station under the pointer");
+        assert_eq!((station.cloud, station.pose), (0, 0));
+        // A pixel of the ring, beyond the cross of the marker.
+        let ring = (
+            (station.at.x + station.reach.max(11.0)).round() as u32,
+            station.at.y.round() as u32,
+        );
+        let drawn = |studio: &Studio, pointer: UiPoint| {
+            crate::test_render::render_under(
+                Canvas::new(studio.point_viewport())
+                    .width(Fill)
+                    .height(Fill)
+                    .into(),
+                &studio.ui_theme.iced(),
+                size,
+                mouse::Cursor::Available(pointer),
+            )
+        };
+        let over = drawn(&studio, station.at);
+        let away = drawn(&studio, UiPoint::new(4.0, size.height - 4.0));
+        assert!(
+            over.is(ring.0, ring.1, HOVER_RING),
+            "{:?}",
+            over.rgb(ring.0, ring.1)
+        );
+        assert!(!away.is(ring.0, ring.1, HOVER_RING));
+        // Not while a tool takes the click.
+        studio.box_select = true;
+        assert!(!drawn(&studio, station.at).is(ring.0, ring.1, HOVER_RING));
     }
 
     #[test]

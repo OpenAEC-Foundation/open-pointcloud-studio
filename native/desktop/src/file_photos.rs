@@ -1504,20 +1504,28 @@ impl PointViewport<'_> {
     }
 
     /// The photos that can be stepped into, as rings in the colour of the
-    /// photo marks.
+    /// photo marks; the one a click would step into, `hovered`, larger and
+    /// heavier.
     pub(crate) fn draw_photo_steps(
         &self,
         frame: &mut Frame,
         projection: Projection,
         eye: [f64; 3],
+        hovered: Option<&(PathBuf, usize)>,
     ) {
         let color = mark_color();
         for mark in self.photo_steps(projection, eye) {
-            let ring = canvas::Path::circle(UiPoint::new(mark.x, mark.y), 7.0);
+            let over = hovered.is_some_and(|(source, index)| {
+                mark.source == source.as_path() && mark.index == *index
+            });
+            let ring =
+                canvas::Path::circle(UiPoint::new(mark.x, mark.y), if over { 9.0 } else { 7.0 });
             frame.fill(&ring, Color::from_rgba8(42, 42, 50, 0.6));
             frame.stroke(
                 &ring,
-                canvas::Stroke::default().with_color(color).with_width(2.0),
+                canvas::Stroke::default()
+                    .with_color(color)
+                    .with_width(if over { 3.0 } else { 2.0 }),
             );
         }
     }

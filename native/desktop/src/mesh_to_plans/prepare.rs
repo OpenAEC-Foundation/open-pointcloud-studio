@@ -1748,7 +1748,7 @@ impl canvas::Program<Message> for Histogram<'_> {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let plot = self.plot(bounds.size());
@@ -1811,6 +1811,10 @@ impl canvas::Program<Message> for Histogram<'_> {
             line(&mut frame, ground, GROUND, 1.0, true);
             label(&mut frame, ground, tr("ground").to_owned(), GROUND);
         }
+        // The level a click selects lights up under the pointer.
+        let hovered = cursor
+            .position_in(bounds)
+            .and_then(|point| self.level_at(&plot, point.y));
         for (place, level) in self.levels.iter().enumerate() {
             for ceiling in [level.ceiling_z, level.slab_underside]
                 .into_iter()
@@ -1825,7 +1829,8 @@ impl canvas::Program<Message> for Histogram<'_> {
             } else {
                 LEVEL
             };
-            line(&mut frame, z, color, 2.0, false);
+            let thickness = if hovered == Some(place) { 3.0 } else { 2.0 };
+            line(&mut frame, z, color, thickness, false);
             label(
                 &mut frame,
                 z,
@@ -1857,9 +1862,11 @@ impl canvas::Program<Message> for Histogram<'_> {
         let over = cursor
             .position_in(bounds)
             .and_then(|point| self.level_at(&self.plot(bounds.size()), point.y));
+        // A locked level is still selected with a click: it lights up under
+        // the pointer, which stays the arrow of the style book.
         match over {
             Some(_) if !self.locked => mouse::Interaction::ResizingVertically,
-            Some(_) => mouse::Interaction::Pointer,
+            Some(_) => mouse::Interaction::Idle,
             None => mouse::Interaction::default(),
         }
     }
