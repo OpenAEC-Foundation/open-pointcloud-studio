@@ -54,6 +54,22 @@ fn cell<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     )
 }
 
+/// Cancel import as an item of the bar: tinted under the pointer over the
+/// whole height of the bar, its name in the middle of that height as the
+/// text of every other item.
+fn cancel_import<'a>(message: Option<Message>) -> Element<'a, Message> {
+    button(
+        container(text(tr("Cancel import")).size(12))
+            .height(Fill)
+            .align_y(Alignment::Center),
+    )
+    .on_press_maybe(message)
+    .padding([0, 6])
+    .height(Fill)
+    .style(ui_style::status_button)
+    .into()
+}
+
 /// The line between two items.
 fn separator<'a>() -> Element<'a, Message> {
     container(Space::new(1, 14))
@@ -290,16 +306,9 @@ impl Studio {
         let mut right = row![].spacing(12).align_y(Alignment::Center);
         if let Some((&id, job)) = self.imports.iter().max_by_key(|(id, _)| *id) {
             right = right
-                .push(
-                    button(text(tr("Cancel import")).size(12))
-                        .on_press_maybe(
-                            (!job.cancel.load(Ordering::Relaxed))
-                                .then_some(Message::CancelImport(id)),
-                        )
-                        .padding([0, 6])
-                        .height(Fill)
-                        .style(ui_style::status_button),
-                )
+                .push(cancel_import(
+                    (!job.cancel.load(Ordering::Relaxed)).then_some(Message::CancelImport(id)),
+                ))
                 .push(separator());
         }
         let (label, value) = self.shown_item();
@@ -400,6 +409,36 @@ mod tests {
             "{message}"
         );
         assert_eq!((totals, width), (message + 12.0, 100.0));
+    }
+
+    /// How far down a bar of 21 pixels the text of `element` lies: the
+    /// middle of the text, laid out as the first leaf of its tree.
+    fn text_middle(element: Element<'_, Message>) -> f32 {
+        let renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            fonts::REGULAR,
+            iced::Pixels(12.0),
+        ));
+        let mut tree = Tree::new(&element);
+        let node = element.as_widget().layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(200.0, HEIGHT - 1.0)),
+        );
+        let mut layout = Layout::new(&node);
+        while let Some(child) = layout.children().next() {
+            layout = child;
+        }
+        layout.bounds().center_y()
+    }
+
+    #[test]
+    fn cancel_import_is_in_line_with_the_other_items() {
+        crate::test_render::load_fonts();
+        let colors = UiTheme::Light.colors();
+        let other = text_middle(item(&colors, "View:", "Top".to_owned()));
+        let cancel = text_middle(cancel_import(Some(Message::CancelImport(1))));
+        assert!((other - (HEIGHT - 1.0) / 2.0).abs() < 0.5, "{other}");
+        assert!((cancel - other).abs() < 0.5, "{cancel} against {other}");
     }
 
     #[test]
