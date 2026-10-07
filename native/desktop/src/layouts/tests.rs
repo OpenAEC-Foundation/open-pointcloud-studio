@@ -813,7 +813,8 @@ fn a_copy_of_a_sheet_has_notes_of_its_own() {
 }
 
 #[test]
-fn the_hint_on_an_empty_sheet_reads_on_the_desk_of_every_theme() {
+fn the_hint_on_an_empty_sheet_is_a_badge_that_reads_on_the_desk_and_on_the_paper() {
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
     fn luminance(color: Color) -> f32 {
         let channel = |value: f32| {
             if value <= 0.039_28 {
@@ -824,13 +825,53 @@ fn the_hint_on_an_empty_sheet_reads_on_the_desk_of_every_theme() {
         };
         0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
     }
+    let (mut studio, _directory) = studio_with_scan();
+    let sheet = studio
+        .create_layout("01", "Plans", Paper::A3, true)
+        .unwrap();
+    let _ = studio.show_layout(&sheet);
+    crate::test_render::load_fonts();
+    let hint =
+        crate::i18n::tr("Drag a view from VIEWS onto the paper, or use Place view in Properties");
+    // A sheet lower than the paper is wide, where the paper reaches up
+    // under the hint.
+    let size = Size::new(900.0, 500.0);
+    let (top_left, badge) = canvas::hint_badge(hint, size);
+    assert!(badge.width > 200.0 && badge.width < size.width, "{badge:?}");
     for theme in crate::ui_theme::UiTheme::ALL {
-        let (ink, desk) = (
-            luminance(canvas::desk_ink(theme)),
-            luminance(canvas::desk(theme)),
+        let dom = theme.colors().dom;
+        let (ink, ground) = (
+            luminance(dom.scene_badge_text),
+            luminance(dom.scene_badge_bg),
         );
-        let contrast = (ink.max(desk) + 0.05) / (ink.min(desk) + 0.05);
+        let contrast = (ink.max(ground) + 0.05) / (ink.min(ground) + 0.05);
         assert!(contrast >= 4.5, "{theme:?}: {contrast}");
+        studio.ui_theme = theme;
+        let picture =
+            crate::test_render::render(studio.layout_canvas().unwrap(), &theme.iced(), size);
+        let middle = (top_left.y + badge.height / 2.0) as u32;
+        // The ground of the badge at its left end, its ink in its middle.
+        assert!(
+            picture.is((top_left.x + 3.0) as u32, middle, dom.scene_badge_bg),
+            "{theme:?}"
+        );
+        let inked = (top_left.x as u32..(top_left.x + badge.width) as u32)
+            .filter(|&x| {
+                let [r, g, b] = picture.rgb(x, middle);
+                [r, g, b].iter().all(|channel| *channel > 200)
+            })
+            .count();
+        assert!(inked > 10, "{theme:?}: {inked}");
+        // Right under the badge lies the white paper, which the hint used
+        // to be written on in white.
+        assert!(
+            picture.is(
+                (size.width / 2.0) as u32,
+                (top_left.y + badge.height + 2.0) as u32,
+                dom.paper
+            ),
+            "{theme:?}"
+        );
     }
 }
 
@@ -875,6 +916,7 @@ fn a_viewport_taken_off_the_sheet_while_it_is_dragged_is_let_go() {
             dropping: None,
             accent: Color::BLACK,
             hint: None,
+            hint_back: Color::BLACK,
             hint_ink: Color::BLACK,
             tool_kind: None,
             picked: Vec::new(),

@@ -68,7 +68,8 @@ impl Studio {
                     dropping,
                     accent: colors.accent,
                     hint,
-                    hint_ink: canvas::desk_ink(self.ui_theme),
+                    hint_back: colors.dom.scene_badge_bg,
+                    hint_ink: colors.dom.scene_badge_text,
                     tool_kind: self.notes.kind,
                     picked: self
                         .notes

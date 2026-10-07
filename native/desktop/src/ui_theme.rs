@@ -282,10 +282,8 @@ pub struct DomainColors {
     /// The paper of a drawing and of a sheet: white in every theme, as the
     /// page of the template's report preview.
     pub paper: Color,
-    /// What lies around the paper of a sheet, as around that page, and what
-    /// is written on it.
+    /// What lies around the paper of a sheet, as around that page.
     pub desk: Color,
-    pub desk_text: Color,
     /// The crop region of a drawing, on the paper that is always light.
     pub crop: Color,
     /// Photo marks and the slab of a drawing in the scene: information.
@@ -317,7 +315,6 @@ const DOM_LIGHT: DomainColors = DomainColors {
     scene_badge_text: hex(0xFAFAF9),
     paper: hex(0xFFFFFF),
     desk: hex(0x52525B),
-    desk_text: hex(0xFAFAF9),
     crop: hex(0x2563EB),
     photo_mark: hex(0x2563EB),
     slab: hex(0x2563EB),
@@ -344,7 +341,6 @@ const DOM_DARK: DomainColors = DomainColors {
     scene_badge_text: hex(0xFAFAF9),
     paper: hex(0xFFFFFF),
     desk: hex(0x52525B),
-    desk_text: hex(0xFAFAF9),
     crop: hex(0x2563EB),
     photo_mark: hex(0x60A5FA),
     slab: hex(0x60A5FA),

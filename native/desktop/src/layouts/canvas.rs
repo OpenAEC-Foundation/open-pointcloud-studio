@@ -39,9 +39,26 @@ pub(crate) fn desk(theme: UiTheme) -> Color {
     theme.colors().dom.desk
 }
 
-/// What is written on the desk.
-pub(crate) fn desk_ink(theme: UiTheme) -> Color {
-    theme.colors().dom.desk_text
+/// The badge of the hint on an empty sheet, as a label on the scene: its
+/// text, the room around it above and beside it, its corners and how far
+/// down from the top it lies.
+const HINT_TEXT: f32 = 11.0;
+const HINT_PADDING: [f32; 2] = [2.0, 6.0];
+const HINT_RADIUS: f32 = 4.0;
+const HINT_TOP: f32 = 10.0;
+
+/// Where the badge of `hint` lies on a canvas of `size`: in the middle at
+/// the top, and how large it is.
+pub(crate) fn hint_badge(hint: &str, size: Size) -> (UiPoint, Size) {
+    let text = crate::fonts::width(hint, HINT_TEXT, crate::fonts::REGULAR);
+    let line = iced::widget::text::LineHeight::default()
+        .to_absolute(Pixels(HINT_TEXT))
+        .0;
+    let badge = Size::new(text + 2.0 * HINT_PADDING[1], line + 2.0 * HINT_PADDING[0]);
+    (
+        UiPoint::new((size.width - badge.width) / 2.0, HINT_TOP),
+        badge,
+    )
 }
 
 /// An iced colour from a colour of the plot.
@@ -339,9 +356,11 @@ pub(crate) struct Overlay<'a> {
     /// is dragged.
     pub dropping: Option<[f64; 2]>,
     pub accent: Color,
-    /// What the paper says while no view is placed on it, and the ink it
-    /// is written in on the desk.
+    /// What the paper says while no view is placed on it, as a badge of
+    /// the scene that reads on the desk and on the paper: its ground and
+    /// its ink.
     pub hint: Option<String>,
+    pub hint_back: Color,
     pub hint_ink: Color,
     /// The tool that places a text or a line on the paper, and the points
     /// clicked with it.
@@ -728,11 +747,16 @@ impl canvas::Program<Message> for Overlay<'_> {
             );
         }
         if let Some(hint) = &self.hint {
+            let (top_left, badge) = hint_badge(hint, size);
+            frame.fill(
+                &canvas::Path::rounded_rectangle(top_left, badge, HINT_RADIUS.into()),
+                self.hint_back,
+            );
             frame.fill_text(canvas::Text {
                 content: hint.clone(),
-                position: UiPoint::new(size.width / 2.0, 14.0),
+                position: UiPoint::new(size.width / 2.0, top_left.y + HINT_PADDING[0]),
                 color: self.hint_ink,
-                size: Pixels(13.0),
+                size: Pixels(HINT_TEXT),
                 horizontal_alignment: alignment::Horizontal::Center,
                 vertical_alignment: alignment::Vertical::Top,
                 font: crate::fonts::REGULAR,

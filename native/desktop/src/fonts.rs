@@ -40,6 +40,25 @@ pub const HEADING: Font = Font {
     ..Font::DEFAULT
 };
 
+/// How wide `content` is on one line in `font` at `size` pixels, as a
+/// canvas draws it.
+pub fn width(content: &str, size: f32, font: Font) -> f32 {
+    use iced::advanced::text::Paragraph as _;
+    type Paragraph = <iced::Renderer as iced::advanced::text::Renderer>::Paragraph;
+    Paragraph::with_text(iced::advanced::Text {
+        content,
+        bounds: iced::Size::INFINITY,
+        size: iced::Pixels(size),
+        line_height: iced::widget::text::LineHeight::default(),
+        font,
+        horizontal_alignment: iced::alignment::Horizontal::Left,
+        vertical_alignment: iced::alignment::Vertical::Top,
+        shaping: iced::widget::text::Shaping::Advanced,
+        wrapping: iced::widget::text::Wrapping::None,
+    })
+    .min_width()
+}
+
 /// The texts of a drawing and of a sheet: not the interface but what the
 /// drawing says, which its PDF sets in Helvetica. A sans-serif of the
 /// system shows them.
