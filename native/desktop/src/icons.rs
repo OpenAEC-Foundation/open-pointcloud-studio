@@ -63,9 +63,11 @@ pub enum ToolIcon {
     SectionSheet,
     DrawingFile,
     Bcf,
-    /// The chevron of an open and of a collapsed group.
+    /// The chevron of an open and of a collapsed group, which point right
+    /// and left as the arrows that scroll the ribbon.
     ChevronOpen,
     ChevronClosed,
+    ChevronLeft,
     /// Duplicate a row of VIEWS.
     Duplicate,
     /// Rename a saved view, and overwrite it with what the scene shows.
@@ -85,6 +87,8 @@ pub enum ToolIcon {
     ColourElevation,
     ColourIntensity,
     ColourClasses,
+    /// Settings.
+    Settings,
 }
 
 impl ToolIcon {
@@ -144,6 +148,7 @@ impl ToolIcon {
             Self::Bcf => include_bytes!("../../assets/ui-icons/bcf.svg"),
             Self::ChevronOpen => include_bytes!("../../assets/ui-icons/chevron_down.svg"),
             Self::ChevronClosed => include_bytes!("../../assets/ui-icons/chevron_right.svg"),
+            Self::ChevronLeft => include_bytes!("../../assets/ui-icons/chevron_left.svg"),
             Self::Duplicate => include_bytes!("../../assets/ui-icons/duplicate.svg"),
             Self::Rename => include_bytes!("../../assets/ui-icons/rename.svg"),
             Self::Update => include_bytes!("../../assets/ui-icons/update.svg"),
@@ -157,6 +162,7 @@ impl ToolIcon {
             Self::ColourElevation => include_bytes!("../../assets/ui-icons/colour_elevation.svg"),
             Self::ColourIntensity => include_bytes!("../../assets/ui-icons/colour_intensity.svg"),
             Self::ColourClasses => include_bytes!("../../assets/ui-icons/colour_classes.svg"),
+            Self::Settings => include_bytes!("../../assets/ui-icons/settings.svg"),
         }
     }
 

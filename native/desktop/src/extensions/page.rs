@@ -538,28 +538,23 @@ impl Studio {
             }
             let running = self.extension_host.runs.contains_key(&manifest.id);
             for each in &manifest.ribbon {
+                // The icon of an extension keeps the colours its author
+                // drew it in, at the size of the icon of a large button.
                 let icon: Element<'_, Message> = match installed.icons.get(&each.id) {
-                    Some(handle) => svg(handle.clone()).width(32).height(32).into(),
-                    None => Space::new(32, 32).into(),
+                    Some(handle) => svg(handle.clone()).width(24).height(24).into(),
+                    None => Space::new(24, 24).into(),
                 };
-                let control = button(
-                    column![
-                        icon,
-                        Space::with_height(4),
-                        text(each.label.get().to_owned())
-                            .size(11)
-                            .wrapping(iced::widget::text::Wrapping::None),
-                        Space::with_width(46),
-                    ]
-                    .align_x(iced::Alignment::Center),
-                )
-                .on_press(send(ExtensionAction::Press(
-                    manifest.id.clone(),
-                    Some(each.id.clone()),
-                )))
-                .style(move |theme, status| ui_style::ribbon_button(theme, running, status))
-                .height(Fill)
-                .padding([6, 3]);
+                let control = opencad_ribbon::tool_button(
+                    opencad_ribbon::ButtonSize::Large,
+                    icon,
+                    each.label.get(),
+                    running,
+                    Some(send(ExtensionAction::Press(
+                        manifest.id.clone(),
+                        Some(each.id.clone()),
+                    ))),
+                );
+
                 let mut tip = each
                     .tooltip
                     .as_ref()

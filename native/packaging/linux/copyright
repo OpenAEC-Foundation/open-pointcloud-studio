@@ -44,6 +44,7 @@ Files: native/assets/ui-icons/import.svg native/assets/ui-icons/export.svg
  native/assets/ui-icons/undo.svg native/assets/ui-icons/redo.svg
  native/assets/ui-icons/duplicate.svg native/assets/ui-icons/rename.svg
  native/assets/ui-icons/drawing_file.svg native/assets/ui-icons/sheet.svg
+ native/assets/ui-icons/settings.svg
  native/assets/ui-icons/save.svg
 Copyright: 2026 OpenAEC Foundation
 License: Expat

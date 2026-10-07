@@ -37,8 +37,8 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 
 ## The window
 
-- The **top strip** starts with the application logo, the **File** button and the **Home** tab. At its right end are five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo and Redo), and the **Settings** button. Actions that are not available are shown muted.
-- The **ribbon** holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE, POINTCLOUD TO DRAWING and INDEX. While an enabled installed extension has a button, the group EXTENSIONS with those buttons comes after SELECTION, where the default window still shows it; see [Settings, language and extensions](#settings-language-and-extensions). The ribbon is wider than the default window of 1440 pixels. The groups that do not fit scroll sideways, with the wheel, the scrollbar or the arrow buttons that appear at both ends; in a window wide enough for all groups the arrows go away. The icons of the ribbon, as all icons of the window, are drawn in lines of one colour: the colour of the text beside them, the accent colour under the pointer, and the accent colour of the theme while their tool is on. The icon of a button of an extension keeps the colours its author gave it.
+- The **row of tabs** of the ribbon starts with **File**, which opens the File view, and **Home**, the open tab, outlined in the accent colour and open to the ribbon under it. At its right end are six quick-access buttons, shown as icons whose names and keys appear when the pointer rests on them: Import point cloud, Open scan folder, Export active point cloud, Undo (Ctrl+Z), Redo (Ctrl+Y) and Settings (Ctrl+,). Actions that are not available are shown faded.
+- The **ribbon** under the tabs is that of the OpenAEC style book, 94 pixels high: a large button shows its icon above its name, which is broken at a space into two lines where it is wider than the button and never cut off; small buttons show their icon before their name and stand in stacks of up to three; each group has its caption under a thin line and a line at its right. It holds all tools on one row of groups: VIEW, DISPLAY, SECTION BOX, SELECTION, MEASURE, VIEWS, EDIT, SURFACE, POINTCLOUD TO DRAWING and INDEX. While an enabled installed extension has a button, the group EXTENSIONS with those buttons comes after SELECTION, where the default window still shows it; see [Settings, language and extensions](#settings-language-and-extensions). The ribbon is wider than the default window of 1440 pixels. The groups that do not fit scroll sideways, with the wheel, the thin scrollbar under the captions or the arrow buttons that appear at both ends, as tall as a large button; in a window wide enough for all groups the arrows go away. The icons of the ribbon, as all icons of the window, are drawn in lines of one colour: the colour of the text beside them, the accent colour under the pointer, and the accent colour of the theme while their tool is on. The icon of a button of an extension keeps the colours its author gave it.
 - The **Project Browser** at the left has five groups, each under a band with an icon, its name and a count: **SCANS**, **CLASSES**, **VIEWS**, **SHEETS** and **BCF**. The bands are alike in every group; the icons on the bands and the rows tell a scan from a view or a drawing. A click on a band collapses the group or opens it again; the window remembers which groups are collapsed. Collapsing never closes or hides anything.
   - **SCANS** lists the open clouds in name order, one row each with a visibility switch, the icon of a scan, the point count and a button to close the cloud. A second line appears only while a cloud is loading or indexing, or when it has selected or deleted points. Its band shows how many scans are open and their points, a switch that shows or hides every scan (with a dash while only some are shown; a click on the dash shows them all), and buttons to add a point cloud and to open a scan folder. While scans open or index, a line under the band says how many are ready, with a thin bar, also while the group is collapsed. Scans from more than one folder are grouped per folder, each folder with its own band, switch and count.
   - **CLASSES** lists the classes that occur in the open clouds, each with a switch.
@@ -59,7 +59,7 @@ In the project panel, click a row to make that scan the **active scan**; its row
 
 A file opens in any of these ways:
 
-- **Import point cloud…** in the File view, the Import point cloud icon in the top strip, or **+ Add point cloud** in the project panel.
+- **Import point cloud…** in the File view, the Import point cloud icon beside the tabs of the ribbon, or **+ Add point cloud** in the project panel.
 - Dropping files, folders or scan project files on the window.
 - Naming them on the command line: `open-pointcloud-studio scan.laz other.e57`.
 - The `open` command of the [command API](../native/API.md).
@@ -230,7 +230,7 @@ Selections honour the section box, the hidden classes and the points deleted bef
 
 ### Editing
 
-- **Delete**, or the Delete key, hides the selected points. **Undo** and **Redo** (the Undo and Redo icons in the top strip, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z; Command on macOS) restore and repeat up to eight edits: deletions, and the colours given from photos (see [Colour from photos](#colour-from-photos)).
+- **Delete**, or the Delete key, hides the selected points. **Undo** and **Redo** (the Undo and Redo icons beside the tabs of the ribbon, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z; Command on macOS) restore and repeat up to eight edits: deletions, and the colours given from photos (see [Colour from photos](#colour-from-photos)).
 - **Thin** reduces the number of points: it keeps the percentage set with the **Keep** slider, from 1 to 100, of the points that remain, taken at even steps through the file, so every part of the scan thins by the same share. Keep 25 % removes three points in four. It counts as a deletion and can be undone. To write a reduced copy without thinning the open scan, use **Every Nth point…** among the exports.
 - **Move** shifts the active scan by the X, Y and Z values typed beside it.
 - **Scale** scales the active scan by the X, Y and Z factors typed beside it, around the centre of gravity of the points that remain. For a large cloud that centre is calculated in the background, with progress in Properties and a **Cancel** button in place of Scale.
@@ -309,7 +309,7 @@ The exports are in the File view under **EXPORT**. Each asks where to save and t
 
 | Entry | What it writes |
 | --- | --- |
-| **Full resolution…** | The active scan without its deleted points, moved and scaled as in the scene. The Export active point cloud icon in the top strip does the same |
+| **Full resolution…** | The active scan without its deleted points, moved and scaled as in the scene. The Export active point cloud icon beside the tabs of the ribbon does the same |
 | **Selected points…** | The selected points of the active scan |
 | **Without selected points…** | The active scan without the selected and the deleted points |
 | **Section box…** | The points of the active scan inside the section box; available while the box is on |
@@ -1028,7 +1028,7 @@ While the camera moves, the points on screen stay. Shortly after it stops, the d
 
 ## Settings, language and extensions
 
-The **Settings** button at the right of the top strip, **Settings…** in the File view and Ctrl+, (Command+, on macOS) open the same dialog:
+The **Settings** icon beside the tabs of the ribbon, **Settings…** in the File view and Ctrl+, (Command+, on macOS) open the same dialog:
 
 - **General** has the language and the CAD viewer: the program that opens exported DXF and DWG files, see [Viewing a drawing in Open CAD Studio](#viewing-a-drawing-in-open-cad-studio). The language is Auto-detect, English or Nederlands. With Auto-detect the language is that of the system: the first of the user's preferred languages on macOS, the locale of the user on Windows and of the environment on Linux.
 - **Appearance** has the theme, one of the five of the OpenAEC style book: Light, Forge (dark), OpenAEC (dark), Blueprint or High contrast. A new installation starts in Light. The scene is white in Light and dark in the other themes; the paper of a drawing and of a sheet is white in every theme.

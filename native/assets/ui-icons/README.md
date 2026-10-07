@@ -15,8 +15,9 @@ the copyright line of the OpenAEC Foundation, is `OpenAEC-icons-MIT.txt`:
   with three points added), `fit.svg`, `measure_distance.svg`, `eye_dome.svg`
   (its orbit icon) and `model.svg` (its load icon) of its 3D viewer tab,
   `line.svg` (its arrow), `undo.svg`, `redo.svg`, `duplicate.svg` (its copy
-  icon), `rename.svg` (its pencil), `drawing_file.svg` (its new report icon)
-  and `sheet.svg` (its report template icon);
+  icon), `rename.svg` (its pencil), `settings.svg` (its gear),
+  `drawing_file.svg` (its new report icon) and `sheet.svg` (its report
+  template icon);
 - from `project-templates/Tauri+React/src/components/TitleBar.tsx`:
   `save.svg`.
 

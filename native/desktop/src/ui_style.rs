@@ -150,6 +150,43 @@ pub fn ribbon_button(theme: &Theme, active: bool, status: button::Status) -> but
     }
 }
 
+/// A button of the quick-access row: its icon in the accent colour,
+/// tinted and outlined under the pointer as a ribbon button, darker while
+/// it is pressed.
+pub fn quick_button(theme: &Theme, status: button::Status) -> button::Style {
+    let colors = colors(theme);
+    let (background, text_color, border) = match status {
+        button::Status::Hovered => (
+            Some(colors.ribbon_btn_hover),
+            colors.ribbon_text_hover,
+            colors.ribbon_btn_hover_border,
+        ),
+        button::Status::Pressed => (
+            Some(colors.ribbon_btn_active_bg),
+            colors.ribbon_text_hover,
+            colors.ribbon_btn_active_border,
+        ),
+        button::Status::Active | button::Status::Disabled => {
+            (None, colors.accent, Color::TRANSPARENT)
+        }
+    };
+    let style = button::Style {
+        background: background.map(Background::Color),
+        text_color,
+        border: Border {
+            color: border,
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        shadow: Shadow::default(),
+    };
+    if status == button::Status::Disabled {
+        faded(style, RIBBON_DISABLED)
+    } else {
+        style
+    }
+}
+
 /// A small action in a panel or on a row: a ribbon button that is not on.
 pub fn tool(theme: &Theme, status: button::Status) -> button::Style {
     ribbon_button(theme, false, status)

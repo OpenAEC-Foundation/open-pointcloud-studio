@@ -1158,39 +1158,26 @@ impl Studio {
     }
 
     /// The one button of the SURFACE group. While a job of one of the
-    /// methods runs it is highlighted and says how far the job is.
+    /// methods runs it is highlighted and says in place of its name how far
+    /// the job is, with its name in its tooltip.
     pub(crate) fn mesh_wizard_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
         let busy = self.mesh_busy_label();
         let open = self.mesh_wizard.open;
         let active = open || busy.is_some();
         let enabled = self.active.is_some() || active;
-        let mut label = column![
-            crate::icons::tool_glyph(ToolIcon::MeshPointcloud, 32.0, active),
-            Space::with_height(4),
-            text(tr("Mesh Pointcloud"))
-                .size(11)
-                .wrapping(iced::widget::text::Wrapping::None),
-        ]
-        .align_x(iced::Alignment::Center);
-        if let Some(busy) = busy {
-            label = label.push(
-                text(busy)
-                    .size(10)
-                    .wrapping(iced::widget::text::Wrapping::None)
-                    .style(|theme: &Theme| text::Style {
-                        color: Some(ui_theme::colors(theme).accent),
-                    }),
-            );
-        }
-        label = label.push(Space::with_width(crate::LARGE_TOOL_MIN_WIDTH));
-        opencad_ribbon::RibbonItem::Large(
-            button(label)
-                .on_press_maybe(enabled.then_some(Message::MeshWizard(MeshWizardAction::Open)))
-                .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-                .height(Fill)
-                .padding([8, 6])
-                .into(),
-        )
+        let name = tr("Mesh Pointcloud");
+        let control = opencad_ribbon::tool_button(
+            opencad_ribbon::ButtonSize::Large,
+            crate::icons::tool_glyph(ToolIcon::MeshPointcloud, 24.0, active),
+            busy.as_deref().unwrap_or(name),
+            active,
+            enabled.then_some(Message::MeshWizard(MeshWizardAction::Open)),
+        );
+        opencad_ribbon::RibbonItem::Large(if busy.is_some() {
+            ui_style::ribbon_tooltip(control, name).into()
+        } else {
+            control
+        })
     }
 
     /// The card over the dimmed window, while it is shown. A click beside it

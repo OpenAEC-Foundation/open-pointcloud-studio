@@ -80,7 +80,7 @@ use file_view::{FileAction, FilePage};
 use iced::futures::SinkExt;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
-use iced::widget::{button, column, container, row, scrollable, stack, svg, text};
+use iced::widget::{button, column, container, row, scrollable, stack, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 pub(crate) use icons::{icon_svg, ToolIcon};
 use lod_pace::{
@@ -123,6 +123,16 @@ const APPLICATION_ID: &str = "org.openaec.OpenPointcloudStudio";
 /// The name and the version of the application as one text.
 pub(crate) fn app_title() -> String {
     format!("{APP_NAME} {VERSION_LABEL}")
+}
+
+/// The keys that do what a button does with the command key of the system:
+/// Control, and Command on macOS.
+fn command_key(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("Cmd+{key}")
+    } else {
+        format!("Ctrl+{key}")
+    }
 }
 
 /// The title of the window: the application, after the file name of the
@@ -9920,78 +9930,80 @@ impl Studio {
         }
     }
 
-    fn ribbon(&self) -> Element<'_, Message> {
-        use opencad_ribbon::RibbonItem;
-
-        let file_button = container(
-            button(text(i18n::tr("File")).size(12).font(fonts::SEMIBOLD))
-                .on_press(Message::ToggleFile)
-                .style(|theme, status| {
-                    opencad_ribbon::file_tab_style(theme, self.file_open, status)
-                })
-                .padding([5, 13]),
-        )
-        .padding([1, 8]);
-        // The one tab of the ribbon; it also leads back from the File view.
-        let home_tab = button(text(i18n::tr("Home")).size(12).font(fonts::MEDIUM))
-            .on_press_maybe(self.file_open.then_some(Message::ToggleFile))
-            .style(|theme, status| opencad_ribbon::tab_style(theme, !self.file_open, status))
-            .padding([5, 13]);
-        let quick_access = row![
+    /// The buttons beside the tabs of the ribbon: import, open a scan
+    /// folder, export, undo, redo and Settings, as icons named in their
+    /// tooltips.
+    fn quick_access(&self) -> Element<'_, Message> {
+        let icon = |icon: ToolIcon| icon_svg(icon, 16.0);
+        row![
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Open, 20.0),
+                icon(ToolIcon::Open),
                 "Import point cloud",
+                None,
                 Some(Message::Open),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::OpenFolder, 20.0),
+                icon(ToolIcon::OpenFolder),
                 "Open scan folder",
+                None,
                 Some(Message::OpenFolder),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Export, 20.0),
+                icon(ToolIcon::Export),
                 "Export active point cloud",
+                None,
                 self.active.map(|_| Message::Export),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Undo, 20.0),
+                icon(ToolIcon::Undo),
                 "Undo",
+                Some(&command_key("Z")),
                 (!self.undo_deletions.is_empty()).then_some(Message::UndoDelete),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Redo, 20.0),
+                icon(ToolIcon::Redo),
                 "Redo",
+                Some(&command_key("Y")),
                 (!self.redo_deletions.is_empty()).then_some(Message::RedoDelete),
             ),
+            opencad_ribbon::quick_access_btn(
+                icon(ToolIcon::Settings),
+                "Settings",
+                Some(&command_key(",")),
+                Some(Message::Settings(settings_dialog::SettingsAction::Open)),
+            ),
         ]
-        .spacing(4);
-        let settings_button = button(text(i18n::tr("Settings")).size(12).font(fonts::MEDIUM))
-            .on_press(Message::Settings(settings_dialog::SettingsAction::Open))
-            .style(|theme, status| opencad_ribbon::tab_style(theme, false, status))
-            .padding([5, 13]);
-        let logo = svg(svg::Handle::from_memory(
-            include_bytes!("../../assets/icons/logo.svg").as_slice(),
-        ))
-        .width(20)
-        .height(20);
-        let top_strip = container(
-            row![
-                logo,
-                file_button,
-                home_tab,
-                iced::widget::horizontal_space(),
-                quick_access,
-                settings_button
-            ]
-            .width(Fill)
-            .align_y(iced::Alignment::Center)
-            .padding([0, 8]),
+        .spacing(1)
+        .into()
+    }
+
+    /// The row of the tabs of the ribbon: File, which opens the File view,
+    /// and Home, the one tab, open while the File view is not.
+    fn ribbon_tabs<'a>(&'a self, right: Element<'a, Message>) -> Element<'a, Message> {
+        opencad_ribbon::tab_row(
+            vec![
+                opencad_ribbon::file_tab(i18n::tr("File"), Message::ToggleFile),
+                // The one tab of the ribbon; it also leads back from the
+                // File view.
+                opencad_ribbon::tab(
+                    i18n::tr("Home"),
+                    !self.file_open,
+                    self.file_open.then_some(Message::ToggleFile),
+                ),
+            ],
+            right,
         )
-        .width(Fill)
-        .height(29)
-        .style(|theme| container::Style::default().background(ui_theme::colors(theme).bg_lighter));
+    }
+
+    /// The ribbon of the style book: the row of its tabs, and under it the
+    /// groups of the Home tab, which scroll sideways where the window is
+    /// too narrow for them.
+    fn ribbon(&self) -> Element<'_, Message> {
+        use opencad_ribbon::RibbonItem;
+
+        let tabs = self.ribbon_tabs(self.quick_access());
         if self.file_open {
-            return container(top_strip).width(Fill).style(ribbon_style).into();
+            return tabs;
         }
 
         let has_active = self.active.is_some();
@@ -10019,6 +10031,15 @@ impl Studio {
                 preset("Isometric", CameraPreset::Isometric, "ISOMETRIC"),
             ],
         );
+        // The value beside a slider, in the secondary text colour.
+        let value = |shown: String, width: f32| {
+            text(shown)
+                .size(11)
+                .width(width)
+                .style(|theme| text::Style {
+                    color: Some(ui_theme::colors(theme).text_secondary),
+                })
+        };
         let display = ribbon_group(
             "DISPLAY",
             column![
@@ -10032,7 +10053,7 @@ impl Studio {
                         self.color_mode
                     ),
                 ]
-                .spacing(2),
+                .spacing(1),
                 row![
                     small_tool_button(
                         "Eye-dome",
@@ -10044,32 +10065,34 @@ impl Studio {
                         Message::ShowScanPoses(!self.show_scan_poses),
                         self.show_scan_poses,
                     ),
-                    iced::widget::Space::with_width(4),
-                    text(i18n::tr("Size")).size(12),
+                    iced::widget::Space::with_width(6),
+                    text(i18n::tr("Size")).size(11),
                     ui_style::slider(0.1..=20.0, self.point_size, Message::PointSize)
                         .step(0.1_f32)
                         .width(88),
-                    text(format!("{:.1}", self.point_size)).size(11).width(26),
+                    value(format!("{:.1}", self.point_size), 26.0),
                 ]
                 .spacing(4)
                 .align_y(iced::Alignment::Center)
-                .height(opencad_ribbon::ROW_H),
+                .height(opencad_ribbon::SMALL_H),
                 row![
-                    text(i18n::tr("Budget")).size(12),
+                    iced::widget::Space::with_width(7),
+                    text(i18n::tr("Budget")).size(11),
                     ui_style::slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
                         .step(100_000_u32)
                         .width(230),
-                    text(if self.budget >= 1_000_000 {
-                        format!("{:.1}M", self.budget as f64 / 1_000_000.0)
-                    } else {
-                        format!("{}k", self.budget / 1_000)
-                    })
-                    .size(11)
-                    .width(34),
+                    value(
+                        if self.budget >= 1_000_000 {
+                            format!("{:.1}M", self.budget as f64 / 1_000_000.0)
+                        } else {
+                            format!("{}k", self.budget / 1_000)
+                        },
+                        34.0,
+                    ),
                 ]
                 .spacing(5)
                 .align_y(iced::Alignment::Center)
-                .height(opencad_ribbon::ROW_H),
+                .height(opencad_ribbon::SMALL_H),
             ]
             .spacing(1)
             .into(),
@@ -10166,90 +10189,83 @@ impl Studio {
         // button.
         let mesh_to_plans = opencad_ribbon::render_group_items(
             "POINTCLOUD TO DRAWING",
-            vec![RibbonItem::Large(
-                container(large_tool_button(
-                    "Pointcloud to Drawing",
-                    Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
-                    self.mesh_to_plans.is_open(),
-                ))
-                .width(96)
-                .height(Fill)
-                .align_x(iced::alignment::Horizontal::Center)
-                .into(),
-            )],
+            vec![RibbonItem::Large(large_tool_button(
+                "Pointcloud to Drawing",
+                Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
+                self.mesh_to_plans.is_open(),
+            ))],
         );
         // The buttons of extensions come after the groups that look at the
         // cloud, where the default window of 1440 pixels still shows them;
         // the ribbon is wider than that.
-        let groups = row![view, display, section, selection]
-            .push_maybe(self.extensions_ribbon())
-            .push(self.measure.ribbon())
-            .push(self.views_ribbon())
-            .push(opencad_ribbon::render_group_items("SURFACE", surface_tools))
-            .push(mesh_to_plans)
-            .push(index)
-            .spacing(2);
-        let group_strip = ui_style::scrollable(
-            container(groups)
-                .padding([0, 4])
-                .width(iced::Length::Shrink)
-                .height(opencad_ribbon::TOOL_BAR_H),
-        )
-        .id(ribbon_scroll_id())
-        .on_scroll(|viewport| {
-            Message::RibbonViewport(
-                viewport.absolute_offset().x,
-                viewport.bounds().width,
-                viewport.content_bounds().width,
-            )
-        })
-        .direction(scrollable::Direction::Horizontal(ui_style::scrollbar()))
-        .width(Fill)
-        .height(opencad_ribbon::TOOL_BAR_H);
-        let scroll_button = |label: &'static str, direction: f32, enabled: bool| {
-            container(
-                button(text(label).size(26))
-                    .on_press_maybe(enabled.then_some(Message::RibbonScroll(direction)))
-                    .style(|theme, status| ui_style::ribbon_button(theme, false, status))
-                    .width(26)
-                    .height(38)
-                    .padding(0),
-            )
-            .width(30)
-            .height(opencad_ribbon::TOOL_BAR_H)
-            .align_y(iced::Alignment::Center)
-            .align_x(iced::Alignment::Center)
+        let mut groups = vec![view, display, section, selection];
+        groups.extend(self.extensions_ribbon());
+        groups.extend([
+            self.measure.ribbon(),
+            self.views_ribbon(),
+            opencad_ribbon::render_group_items("SURFACE", surface_tools),
+            mesh_to_plans,
+            index,
+        ]);
+        let group_strip = ui_style::scrollable(opencad_ribbon::groups(groups))
+            .id(ribbon_scroll_id())
+            .on_scroll(|viewport| {
+                Message::RibbonViewport(
+                    viewport.absolute_offset().x,
+                    viewport.bounds().width,
+                    viewport.content_bounds().width,
+                )
+            })
+            // A bar of 2 under the captions of the groups, which the
+            // groups do not leave room for: the arrows and the wheel scroll
+            // too.
+            .direction(scrollable::Direction::Horizontal(
+                scrollable::Scrollbar::new()
+                    .width(2)
+                    .scroller_width(2)
+                    .margin(0),
+            ))
+            .width(Fill)
+            .height(opencad_ribbon::group_height());
+        // The arrows that scroll to the groups out of view: small ribbon
+        // buttons without a name, as tall as a large one.
+        let scroll_button = |icon: ToolIcon, name: &str, direction: f32, enabled: bool| {
+            container(opencad_ribbon::arrow_button(
+                icon_svg(icon, 16.0),
+                name,
+                enabled.then_some(Message::RibbonScroll(direction)),
+            ))
+            .padding([1, 0])
+            .height(opencad_ribbon::group_height())
         };
         let tool_strip: Element<'_, Message> = if let Some((offset, width, content_width)) = self
             .ribbon_viewport
             .filter(|(_, width, content_width)| *content_width > *width + 1.0)
         {
             row![
-                scroll_button("‹", -1.0, offset > 1.0),
+                scroll_button(
+                    ToolIcon::ChevronLeft,
+                    i18n::tr("Scroll left"),
+                    -1.0,
+                    offset > 1.0,
+                ),
                 group_strip,
-                scroll_button("›", 1.0, offset + width < content_width - 1.0),
+                scroll_button(
+                    ToolIcon::ChevronClosed,
+                    i18n::tr("Scroll right"),
+                    1.0,
+                    offset + width < content_width - 1.0,
+                ),
             ]
-            .height(opencad_ribbon::TOOL_BAR_H)
-            .align_y(iced::Alignment::Center)
+            .spacing(2)
+            .height(opencad_ribbon::group_height())
             .into()
         } else {
             group_strip.into()
         };
-        container(
-            column![
-                top_strip,
-                container(text(""))
-                    .width(Fill)
-                    .height(1)
-                    .style(|theme| container::Style::default()
-                        .background(ui_theme::colors(theme).accent)),
-                tool_strip,
-            ]
-            .spacing(0),
-        )
-        .width(Fill)
-        .style(ribbon_style)
-        .into()
+        column![tabs, opencad_ribbon::content(tool_strip)]
+            .width(Fill)
+            .into()
     }
 
     fn point_viewport(&self) -> PointViewport<'_> {
@@ -10335,7 +10351,7 @@ impl Studio {
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
-            .height(opencad_ribbon::ROW_H),
+            .height(PROPERTY_TOOL_ROW_H),
             row![
                 axis_input("X", "1", &self.scale_inputs[0], |value| {
                     Message::ScaleAxis(0, value)
@@ -10350,7 +10366,7 @@ impl Studio {
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
-            .height(opencad_ribbon::ROW_H),
+            .height(PROPERTY_TOOL_ROW_H),
             row![
                 text(i18n::tr("Keep")).size(12).width(44),
                 ui_style::slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
@@ -10364,7 +10380,7 @@ impl Studio {
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
-            .height(opencad_ribbon::ROW_H),
+            .height(PROPERTY_TOOL_ROW_H),
         ]
         .spacing(1)
         .padding([4, 8]);
@@ -11103,10 +11119,9 @@ fn large_tool_button(
     large_tool_button_when(label, message, active, true)
 }
 
-/// The main tool of a ribbon group: a large icon above its name, over the
-/// full height of the group. The button is as wide as its name on one line,
-/// so that a long word is never broken, and never narrower than
-/// `LARGE_TOOL_MIN_WIDTH`.
+/// The main tool of a ribbon group: a large button of the style book, its
+/// icon above its name in two lines at most. A name is broken at a space
+/// only and never cut off: the button is as wide as it needs.
 fn large_tool_button_when(
     label: &'static str,
     message: Message,
@@ -11114,36 +11129,17 @@ fn large_tool_button_when(
     enabled: bool,
 ) -> Element<'static, Message> {
     let icon = tool_icon(&message);
-    button(
-        column![
-            icons::tool_glyph(icon, 32.0, active),
-            iced::widget::Space::with_height(4),
-            text(i18n::tr(label))
-                .size(11)
-                .font(label_font(active))
-                .wrapping(iced::widget::text::Wrapping::None),
-            iced::widget::Space::with_width(LARGE_TOOL_MIN_WIDTH),
-        ]
-        .align_x(iced::Alignment::Center),
+    opencad_ribbon::tool_button(
+        opencad_ribbon::ButtonSize::Large,
+        icons::tool_glyph(icon, 24.0, active),
+        i18n::tr(label),
+        active,
+        enabled.then_some(message),
     )
-    .on_press_maybe(enabled.then_some(message))
-    .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-    .height(Fill)
-    .padding([6, 3])
-    .into()
 }
 
-/// The narrowest a large ribbon button gets, for a short name.
-const LARGE_TOOL_MIN_WIDTH: f32 = 46.0;
-
-/// The font of the name of a ribbon button: medium while it is on.
-fn label_font(active: bool) -> iced::Font {
-    if active {
-        fonts::MEDIUM
-    } else {
-        fonts::REGULAR
-    }
-}
+/// The height of a row of Properties with a tool in it.
+const PROPERTY_TOOL_ROW_H: f32 = 32.0;
 
 /// A tool as its icon alone, named in its tooltip: for a narrow panel.
 fn icon_tool_button_when(
@@ -11157,12 +11153,13 @@ fn icon_tool_button_when(
         button(icons::tool_glyph(icon, 18.0, active))
             .on_press_maybe(enabled.then_some(message))
             .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-            .height(opencad_ribbon::ROW_H)
+            .height(PROPERTY_TOOL_ROW_H)
             .padding([2, 6]),
         vec![i18n::tr(label).to_owned()],
     )
 }
 
+/// A small button of the ribbon: its icon of 16 before its name.
 fn small_tool_button_when(
     label: &'static str,
     message: Message,
@@ -11170,19 +11167,13 @@ fn small_tool_button_when(
     enabled: bool,
 ) -> Element<'static, Message> {
     let icon = tool_icon(&message);
-    button(
-        row![
-            icons::tool_glyph(icon, 18.0, active),
-            text(i18n::tr(label)).size(12).font(label_font(active)),
-        ]
-        .spacing(4)
-        .align_y(iced::Alignment::Center),
+    opencad_ribbon::tool_button(
+        opencad_ribbon::ButtonSize::Small,
+        icons::tool_glyph(icon, 16.0, active),
+        i18n::tr(label),
+        active,
+        enabled.then_some(message),
     )
-    .on_press_maybe(enabled.then_some(message))
-    .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-    .height(opencad_ribbon::ROW_H)
-    .padding([2, 3])
-    .into()
 }
 
 fn tool_icon(message: &Message) -> ToolIcon {
@@ -11235,34 +11226,24 @@ fn tool_icon(message: &Message) -> ToolIcon {
     }
 }
 
+/// A colouring of the points as a small button of the ribbon.
 fn small_color_button(
     label: &'static str,
     mode: ColorMode,
     current: ColorMode,
 ) -> Element<'static, Message> {
-    button(
-        row![
-            icons::tool_glyph(mode.icon(), 18.0, mode == current),
-            text(i18n::tr(label))
-                .size(12)
-                .font(label_font(mode == current)),
-        ]
-        .spacing(6)
-        .align_y(iced::Alignment::Center),
+    let on = mode == current;
+    opencad_ribbon::tool_button(
+        opencad_ribbon::ButtonSize::Small,
+        icons::tool_glyph(mode.icon(), 16.0, on),
+        i18n::tr(label),
+        on,
+        Some(Message::ColorMode(mode)),
     )
-    .on_press(Message::ColorMode(mode))
-    .style(move |theme, status| ui_style::ribbon_button(theme, mode == current, status))
-    .height(opencad_ribbon::ROW_H)
-    .padding([2, 6])
-    .into()
 }
 
 fn ribbon_group<'a>(label: &'static str, contents: Element<'a, Message>) -> Element<'a, Message> {
     opencad_ribbon::render_group(label, contents)
-}
-
-fn ribbon_style(theme: &Theme) -> container::Style {
-    container::Style::default().background(ui_theme::colors(theme).bg)
 }
 
 #[cfg(test)]
@@ -11331,6 +11312,159 @@ mod ribbon_tests {
         assert_eq!(studio.measure.mode, Some(measure::MeasureMode::Distance));
         assert!(studio.section_enabled);
         assert_eq!(studio.view_label, "TOP");
+    }
+
+    /// The size `element` takes in a window of 1440 by 400.
+    fn laid_out(element: Element<'_, Message>) -> Size {
+        use iced::advanced::layout::Limits;
+        use iced::advanced::widget::Tree;
+        test_render::load_fonts();
+        let renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            fonts::REGULAR,
+            iced::Pixels(12.0),
+        ));
+        let mut tree = Tree::new(&element);
+        element
+            .as_widget()
+            .layout(
+                &mut tree,
+                &renderer,
+                &Limits::new(Size::ZERO, Size::new(1440.0, 400.0)),
+            )
+            .size()
+    }
+
+    #[test]
+    fn the_ribbon_is_a_tab_row_of_28_over_groups_of_94() {
+        let mut studio = Studio::default();
+        assert_eq!(opencad_ribbon::HEIGHT, 122.0);
+        assert_eq!(laid_out(studio.ribbon()).height, opencad_ribbon::HEIGHT);
+        // The File view keeps the row of the tabs only.
+        let _ = studio.update(Message::ToggleFile);
+        assert_eq!(laid_out(studio.ribbon()).height, opencad_ribbon::TAB_ROW_H);
+    }
+
+    #[test]
+    fn the_line_under_the_tabs_opens_under_the_open_tab() {
+        let studio = Studio::default();
+        for theme in [UiTheme::Light, UiTheme::Forge, UiTheme::Blueprint] {
+            let colors = theme.colors();
+            let picture = test_render::render(
+                studio.ribbon(),
+                &theme.iced(),
+                Size::new(1440.0, opencad_ribbon::HEIGHT),
+            );
+            // The tab row on the lighter shell, its line in the accent
+            // colour beside the tabs, the groups on the shell under it.
+            assert!(picture.is(1000, 14, colors.bg_lighter), "{}", theme.key());
+            assert!(picture.is(1000, 27, colors.accent), "{}", theme.key());
+            assert!(picture.is(1000, 28, colors.bg), "{}", theme.key());
+            // Under the open tab, Home, the line gives way to the shell of
+            // the groups: one run of it, between the sides of the tab in the
+            // accent colour.
+            let under: Vec<u32> = (0..400).filter(|&x| picture.is(x, 27, colors.bg)).collect();
+            assert!(!under.is_empty(), "{}", theme.key());
+            let (first, last) = (under[0], under[under.len() - 1]);
+            assert_eq!(under.len() as u32, last - first + 1, "{}", theme.key());
+            assert!(last - first > 40, "{first}..{last}");
+            // The sides of the tab go down to the line, which goes on
+            // beside the tab.
+            assert!(picture.is(first - 1, 26, colors.accent), "{}", theme.key());
+            assert!(picture.is(last + 1, 26, colors.accent), "{}", theme.key());
+            assert!(picture.is(first - 3, 27, colors.accent), "{}", theme.key());
+            assert!(picture.is(last + 3, 27, colors.accent), "{}", theme.key());
+            // The tab is the shell of the groups, outlined in the accent.
+            assert!(picture.is(first + 2, 3, colors.bg), "{}", theme.key());
+            assert!(picture.is(first - 1, 14, colors.accent), "{}", theme.key());
+            // File before it is filled with its own colour.
+            assert!(picture.is(12, 14, colors.file_tab_bg), "{}", theme.key());
+        }
+    }
+
+    #[test]
+    fn no_name_of_a_large_button_is_cut_off_or_broken_in_a_word() {
+        use i18n::source_scan::literal_arguments;
+        let _language = i18n::TestLanguage::hold(i18n::Language::English);
+        test_render::load_fonts();
+        let mut labels: Vec<String> = Vec::new();
+        for source in [
+            include_str!("main.rs"),
+            include_str!("drawing.rs"),
+            include_str!("measure.rs"),
+        ] {
+            for name in ["large_tool_button", "large_tool_button_when"] {
+                labels.extend(literal_arguments(source, name, 0));
+            }
+        }
+        assert!(labels.contains(&"Pointcloud to Drawing".to_owned()));
+        assert!(labels.len() >= 6, "{labels:?}");
+        // The names given by their tools rather than as a text.
+        labels.extend(["Distance", "Area", "Mesh Pointcloud"].map(str::to_owned));
+        let width = |part: &str| fonts::width(part, opencad_ribbon::LABEL_SIZE, fonts::REGULAR);
+        for language in [i18n::Language::English, i18n::Language::Table(0)] {
+            i18n::set(language);
+            for label in &labels {
+                let name = i18n::tr(label);
+                let lines = opencad_ribbon::label_lines(name, false);
+                // Two lines at most, of whole words, holding the whole name.
+                assert!(lines.len() <= 2, "{name}: {lines:?}");
+                assert_eq!(lines.join(" "), name, "{lines:?}");
+                // A line is wider than the label width of the style book only
+                // where the name has no narrower break in two lines.
+                let words: Vec<&str> = name.split(' ').collect();
+                let narrowest = if words.len() < 2 || width(name) <= opencad_ribbon::LABEL_WIDTH {
+                    width(name)
+                } else {
+                    (1..words.len())
+                        .map(|split| {
+                            width(&words[..split].join(" ")).max(width(&words[split..].join(" ")))
+                        })
+                        .fold(f32::INFINITY, f32::min)
+                };
+                let room = narrowest.max(opencad_ribbon::LABEL_WIDTH);
+                // The button is as wide as its widest line, with its padding
+                // and border.
+                let button = laid_out(opencad_ribbon::tool_button(
+                    opencad_ribbon::ButtonSize::Large,
+                    icon_svg(ToolIcon::Fit, 24.0),
+                    name,
+                    false,
+                    None,
+                ));
+                assert_eq!(button.height, opencad_ribbon::LARGE_H, "{name}");
+                for line in &lines {
+                    assert!(width(line) <= room + 0.5, "{name}: {line}");
+                    assert!(
+                        width(line) + 8.0 <= button.width + 0.5,
+                        "{name}: {line} in {button:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_small_button_is_22_high_and_at_least_70_wide() {
+        for label in ["RGB", "Classification"] {
+            let size = laid_out(opencad_ribbon::tool_button(
+                opencad_ribbon::ButtonSize::Small,
+                icon_svg(ToolIcon::ColourRgb, 16.0),
+                label,
+                false,
+                None,
+            ));
+            assert_eq!(size.height, opencad_ribbon::SMALL_H);
+            assert!(size.width >= 70.0, "{size:?}");
+        }
+        let medium = laid_out(opencad_ribbon::tool_button(
+            opencad_ribbon::ButtonSize::Medium,
+            icon_svg(ToolIcon::ColourRgb, 20.0),
+            "RGB",
+            false,
+            None,
+        ));
+        assert_eq!(medium.height, opencad_ribbon::MEDIUM_H);
+        assert_eq!(medium.width, 70.0);
     }
 }
 
