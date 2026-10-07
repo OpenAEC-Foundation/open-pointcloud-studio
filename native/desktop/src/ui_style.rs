@@ -192,7 +192,8 @@ pub fn status_button(theme: &Theme, status: button::Status) -> button::Style {
 }
 
 /// A text field: the input colours of the dialogs, square, with the focus
-/// colour as its border while it has the focus.
+/// colour as its border while it has the focus, and selected text on the
+/// soft accent.
 pub fn input(theme: &Theme, status: field::Status) -> field::Style {
     let colors = colors(theme);
     let style = field::Style {
@@ -209,7 +210,7 @@ pub fn input(theme: &Theme, status: field::Status) -> field::Style {
         icon: colors.text_muted,
         placeholder: colors.text_faint,
         value: colors.dialog_input_text,
-        selection: colors.hover_strong,
+        selection: colors.accent_soft,
     };
     if status == field::Status::Disabled {
         field::Style {
@@ -1051,6 +1052,8 @@ mod tests {
             assert_eq!(idle.border.radius, 0.0.into());
             assert_eq!(idle.value, colors.dialog_input_text);
             assert_eq!(idle.placeholder, colors.text_faint);
+            // Selected text lies on the soft accent of the theme.
+            assert_eq!(idle.selection, colors.accent_soft);
             let focused = input(&theme, field::Status::Focused);
             assert_eq!(focused.border.color, colors.focus);
             assert_eq!(focused.background, idle.background);
