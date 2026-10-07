@@ -58,7 +58,8 @@ fn hovered(status: button::Status) -> bool {
 }
 
 /// The button that goes on: Save, Create, Next, Run. Filled with the accent
-/// colour, Signal Orange under the pointer.
+/// colour, Signal Orange under the pointer. A button is made in it with
+/// [`primary_button`], which gives it its size too.
 pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
     let colors = colors(theme);
     let (background, text_color) = if hovered(status) {
@@ -83,7 +84,8 @@ pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// Every other button of a dialog or a form: Cancel, Back, Reset.
+/// Every other button of a dialog or a form: Cancel, Back, Reset. A button
+/// is made in it with [`secondary_button`].
 pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
     let colors = colors(theme);
     let (background, border) = if hovered(status) {
@@ -384,6 +386,46 @@ pub fn tip_style(theme: &Theme) -> container::Style {
         .background(colors.tooltip_bg)
         .color(colors.tooltip_text)
         .border(Border::default().rounded(4))
+}
+
+/// The size of a button of a dialog or a form in the style book: 20 pixels
+/// beside the label and 5 above and below, at least 75 wide and 27 high,
+/// the label in 11.
+const BUTTON_PADDING: [u16; 2] = [5, 20];
+const BUTTON_MIN_WIDTH: f32 = 75.0;
+const BUTTON_TEXT: f32 = 11.0;
+/// The line of the label: 27 high with the padding.
+const BUTTON_LINE: f32 = 17.0;
+
+/// A button of a dialog or a form with `label` in the middle, in `style`.
+fn dialog_button<'a>(
+    label: impl text::IntoFragment<'a>,
+    style: fn(&Theme, button::Status) -> button::Style,
+) -> button::Button<'a, Message> {
+    button(
+        iced::widget::column![
+            text(label)
+                .size(BUTTON_TEXT)
+                .font(crate::fonts::REGULAR)
+                .line_height(text::LineHeight::Absolute(BUTTON_LINE.into())),
+            iced::widget::Space::with_width(BUTTON_MIN_WIDTH - 2.0 * f32::from(BUTTON_PADDING[1])),
+        ]
+        .align_x(iced::Alignment::Center),
+    )
+    .padding(BUTTON_PADDING)
+    .style(style)
+}
+
+/// The button that goes on, in the size of the style book: Save, Create,
+/// Next, Add.
+pub fn primary_button<'a>(label: impl text::IntoFragment<'a>) -> button::Button<'a, Message> {
+    dialog_button(label, primary)
+}
+
+/// Every other button of a dialog or a form, in the size of the style
+/// book: Cancel, Back, Reset.
+pub fn secondary_button<'a>(label: impl text::IntoFragment<'a>) -> button::Button<'a, Message> {
+    dialog_button(label, secondary)
 }
 
 /// A text field in the style of the style book.
@@ -864,6 +906,77 @@ mod tests {
         }
     }
 
+    /// The size `element` takes when it may take up to 400 by 100.
+    fn laid_out(element: Element<'_, Message>) -> Size {
+        let renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            crate::fonts::REGULAR,
+            iced::Pixels(12.0),
+        ));
+        let mut tree = Tree::new(&element);
+        element
+            .as_widget()
+            .layout(
+                &mut tree,
+                &renderer,
+                &layout::Limits::new(Size::ZERO, Size::new(400.0, 100.0)),
+            )
+            .size()
+    }
+
+    #[test]
+    fn a_button_of_a_dialog_is_27_high_and_at_least_75_wide() {
+        let makers: [fn(&'static str) -> button::Button<'static, Message>; 2] =
+            [primary_button, secondary_button];
+        for make in makers {
+            // A short label keeps the width of the style book.
+            assert_eq!(
+                laid_out(make("OK").on_press(Message::ToggleFile).into()),
+                Size::new(75.0, 27.0)
+            );
+            // A long one widens the button by itself, 20 on each side.
+            let wide = laid_out(make("Reset to Defaults").into());
+            assert_eq!(wide.height, 27.0);
+            assert!(wide.width > 100.0, "{wide:?}");
+        }
+        // The label is centred: a short label lies as far from either side.
+        let picture = crate::test_render::render(
+            container(primary_button("OK").on_press(Message::ToggleFile))
+                .style(|_| container::Style::default().background(Color::WHITE))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            &UiTheme::Light.iced(),
+            Size::new(75.0, 27.0),
+        );
+        let text = UiTheme::Light.colors().btn_primary_text;
+        let inked: Vec<u32> = (0..75)
+            .filter(|&x| {
+                (6..21).any(|y| {
+                    let [r, g, b] = picture.rgb(x, y);
+                    // The text colour of the button, not its fill.
+                    (f32::from(r) / 255.0 - text.r).abs() < 0.2
+                        && (f32::from(g) / 255.0 - text.g).abs() < 0.2
+                        && (f32::from(b) / 255.0 - text.b).abs() < 0.2
+                })
+            })
+            .collect();
+        let (first, last) = (inked[0], inked[inked.len() - 1]);
+        assert!(first.abs_diff(74 - last) <= 2, "{first}..{last}");
+        // And in the middle between its top and bottom.
+        let rows: Vec<u32> = (0..27)
+            .filter(|&y| {
+                (first..=last).any(|x| {
+                    let [r, g, b] = picture.rgb(x, y);
+                    (f32::from(r) / 255.0 - text.r).abs() < 0.2
+                        && (f32::from(g) / 255.0 - text.g).abs() < 0.2
+                        && (f32::from(b) / 255.0 - text.b).abs() < 0.2
+                })
+            })
+            .collect();
+        let (top, bottom) = (rows[0], rows[rows.len() - 1]);
+        assert!(top.abs_diff(26 - bottom) <= 3, "{top}..{bottom}");
+    }
+
     #[test]
     fn a_ribbon_button_is_tinted_under_the_pointer_and_while_it_is_on() {
         for (theme, colors) in themes() {
@@ -1233,6 +1346,17 @@ mod tests {
             for at in calls(&source, "button") {
                 if !chain(&source, at + "button".len()).contains(&"style") {
                     found.push(format!("{name}: a button without a style at {at}"));
+                }
+            }
+            // A primary or a secondary button is made with its size, by its
+            // constructor; its style alone is only compared with in tests.
+            for style in ["ui_style::primary", "ui_style::secondary"] {
+                for (at, _) in source.match_indices(style) {
+                    let after = &source[at + style.len()..];
+                    let other_name = after.starts_with(|c: char| c.is_alphanumeric() || c == '_');
+                    if !other_name && !after.starts_with("(&") {
+                        found.push(format!("{name}: {style} on a button made by hand at {at}"));
+                    }
                 }
             }
         }

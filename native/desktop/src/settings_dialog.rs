@@ -286,19 +286,11 @@ impl Studio {
         };
 
         let footer = row![
-            button(text(tr("Reset to Defaults")).size(12))
-                .on_press(send(SettingsAction::Reset))
-                .style(ui_style::secondary)
-                .padding([5, 12]),
+            ui_style::secondary_button(tr("Reset to Defaults"))
+                .on_press(send(SettingsAction::Reset)),
             horizontal_space(),
-            button(text(tr("Cancel")).size(12))
-                .on_press(send(SettingsAction::Cancel))
-                .style(ui_style::secondary)
-                .padding([5, 12]),
-            button(text(tr("Save")).size(12))
-                .on_press(send(SettingsAction::Save))
-                .style(ui_style::primary)
-                .padding([5, 16]),
+            ui_style::secondary_button(tr("Cancel")).on_press(send(SettingsAction::Cancel)),
+            ui_style::primary_button(tr("Save")).on_press(send(SettingsAction::Save)),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center);

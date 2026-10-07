@@ -516,19 +516,15 @@ fn scope_row<'a>(
 /// A plain button of the card, outlined so that it reads as a button among
 /// the text of a page.
 fn plain_button<'a>(label: &str, message: Option<Message>) -> Element<'a, Message> {
-    button(text(label.to_owned()).size(12))
+    ui_style::secondary_button(label.to_owned())
         .on_press_maybe(message)
-        .style(ui_style::secondary)
-        .padding([5, 12])
         .into()
 }
 
 /// The button that goes on.
 fn primary_button<'a>(label: &str, message: Option<Message>) -> Element<'a, Message> {
-    button(text(label.to_owned()).size(12))
+    ui_style::primary_button(label.to_owned())
         .on_press_maybe(message)
-        .style(ui_style::primary)
-        .padding([5, 16])
         .into()
 }
 

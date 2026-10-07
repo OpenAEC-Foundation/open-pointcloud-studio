@@ -2038,12 +2038,10 @@ impl Studio {
                     .on_input(|value| Message::Views(ViewAction::NoteText(value)))
                     .on_submit(Message::Views(ViewAction::NoteSubmit))
                     .width(300),
-                button(text(i18n::tr("Add")).size(12))
-                    .on_press_maybe(ready.then_some(Message::Views(ViewAction::NoteSubmit)))
-                    .style(ui_style::primary),
-                button(text(i18n::tr("Cancel")).size(12))
-                    .on_press(Message::Views(ViewAction::CancelPlacing))
-                    .style(ui_style::secondary),
+                ui_style::primary_button(i18n::tr("Add"))
+                    .on_press_maybe(ready.then_some(Message::Views(ViewAction::NoteSubmit))),
+                ui_style::secondary_button(i18n::tr("Cancel"))
+                    .on_press(Message::Views(ViewAction::CancelPlacing)),
             ]
             .spacing(6)
             .align_y(iced::Alignment::Center),

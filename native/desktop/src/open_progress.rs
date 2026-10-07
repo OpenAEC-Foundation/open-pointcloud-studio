@@ -6,7 +6,7 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use iced::widget::{button, column, container, row, text};
+use iced::widget::{column, container, row, text};
 use iced::{Element, Fill};
 use pointcloud_core::IndexStage;
 
@@ -18,6 +18,11 @@ use crate::{compact_count, display_name, i18n, ui_theme, CloudEntry, Message, St
 /// advance than these says nothing yet about how long the rest will take.
 const MIN_TIMED: Duration = Duration::from_secs(3);
 const MIN_ADVANCE: f32 = 0.01;
+
+/// The height of the title line of a task, and of one with Cancel: the
+/// height of a button of the style book.
+const TITLE_LINE: f32 = 20.0;
+const CANCEL_LINE: f32 = 27.0;
 
 /// The tasks that can be under way at once, each timed on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -462,18 +467,16 @@ impl Studio {
             ]
             .spacing(14)
             .align_y(iced::Alignment::Center);
+            let mut heading_height = TITLE_LINE;
             if let Some(cancel) = line.cancel {
-                heading = heading.push(
-                    button(text(crate::i18n::tr("Cancel")).size(11))
-                        .on_press(cancel)
-                        .style(ui_style::secondary)
-                        .padding([1, 8]),
-                );
+                heading = heading
+                    .push(ui_style::secondary_button(crate::i18n::tr("Cancel")).on_press(cancel));
+                heading_height = CANCEL_LINE;
             }
             // One line each: a narrow scene cuts the text off instead of
             // pushing the scene down.
             let mut task = column![
-                container(heading).height(20).clip(true),
+                container(heading).height(heading_height).clip(true),
                 container(text(line.detail).size(11).color(colors.dom.scene_muted))
                     .height(15)
                     .width(Fill)

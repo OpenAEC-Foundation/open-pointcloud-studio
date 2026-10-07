@@ -668,9 +668,8 @@ impl Studio {
                 panel = panel.push(ui_style::progress_bar(0.0..=1.0, fraction));
             }
             panel = panel.push(
-                button(tr("Cancel"))
-                    .on_press_maybe((!cancelling).then_some(Message::CancelBag))
-                    .style(ui_style::secondary),
+                ui_style::secondary_button(tr("Cancel"))
+                    .on_press_maybe((!cancelling).then_some(Message::CancelBag)),
             );
         } else {
             let ready = problem.is_none() && !self.bag_dialog_pending;

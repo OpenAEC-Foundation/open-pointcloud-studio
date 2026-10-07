@@ -153,13 +153,10 @@ impl Studio {
         } else {
             tr("Install extension…")
         };
-        let mut install_row = row![button(text(install_label).size(13))
-            .on_press_maybe(
-                (host.root.is_some() && !host.preparing && host.dialog.is_none())
-                    .then_some(send(ExtensionAction::Install)),
-            )
-            .style(ui_style::primary)
-            .padding([7, 16])]
+        let mut install_row = row![ui_style::primary_button(install_label).on_press_maybe(
+            (host.root.is_some() && !host.preparing && host.dialog.is_none())
+                .then_some(send(ExtensionAction::Install)),
+        )]
         .spacing(12)
         .align_y(iced::Alignment::Center);
         if host.root.is_none() {
@@ -499,14 +496,9 @@ impl Studio {
                 body,
                 row![
                     horizontal_space(),
-                    button(text(tr("Cancel")).size(12))
-                        .on_press(send(ExtensionAction::CloseDialog))
-                        .style(ui_style::secondary)
-                        .padding([5, 12]),
-                    button(text(confirm.to_owned()).size(12))
-                        .on_press(send(confirm_action))
-                        .style(ui_style::primary)
-                        .padding([5, 16]),
+                    ui_style::secondary_button(tr("Cancel"))
+                        .on_press(send(ExtensionAction::CloseDialog)),
+                    ui_style::primary_button(confirm.to_owned()).on_press(send(confirm_action)),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),

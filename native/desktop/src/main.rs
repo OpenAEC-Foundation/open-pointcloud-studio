@@ -10534,8 +10534,7 @@ impl Studio {
                 )
                 .push(
                     container(
-                        button(i18n::tr("Cancel mesh"))
-                            .style(ui_style::secondary)
+                        ui_style::secondary_button(i18n::tr("Cancel mesh"))
                             .on_press(Message::CancelMesh),
                     )
                     .padding([5, 8]),
@@ -10556,8 +10555,7 @@ impl Studio {
                 )
                 .push(
                     container(
-                        button(i18n::tr("Cancel merge"))
-                            .style(ui_style::secondary)
+                        ui_style::secondary_button(i18n::tr("Cancel merge"))
                             .on_press(Message::CancelMerge),
                     )
                     .padding([5, 8]),
@@ -10586,8 +10584,7 @@ impl Studio {
                 )
                 .push(
                     container(
-                        button(i18n::tr("Cancel scale"))
-                            .style(ui_style::secondary)
+                        ui_style::secondary_button(i18n::tr("Cancel scale"))
                             .on_press(Message::CancelScale),
                     )
                     .padding([5, 8]),

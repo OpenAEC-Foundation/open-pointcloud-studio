@@ -635,15 +635,10 @@ impl Studio {
                 form,
                 row![
                     horizontal_space(),
-                    button(text(tr("Cancel")).size(12))
-                        .on_press(send(SheetAction::Close))
-                        .style(ui_style::secondary),
-                    button(text(tr("Create")).size(12))
-                        .on_press_maybe(
-                            (!self.clouds.is_empty()).then_some(send(SheetAction::Create))
-                        )
-                        .padding([5, 16])
-                        .style(ui_style::primary),
+                    ui_style::secondary_button(tr("Cancel")).on_press(send(SheetAction::Close)),
+                    ui_style::primary_button(tr("Create")).on_press_maybe(
+                        (!self.clouds.is_empty()).then_some(send(SheetAction::Create))
+                    ),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),

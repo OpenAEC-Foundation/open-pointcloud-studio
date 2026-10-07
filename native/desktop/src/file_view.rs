@@ -622,8 +622,7 @@ impl Studio {
                         job.path.display()
                     ))
                     .size(11),
-                    button(text(tr("Cancel merge")))
-                        .style(ui_style::secondary)
+                    ui_style::secondary_button(tr("Cancel merge"))
                         .on_press(Message::FileAction(FileAction::CancelMerge)),
                 ]
                 .spacing(8)

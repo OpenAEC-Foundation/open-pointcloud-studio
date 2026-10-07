@@ -1799,12 +1799,10 @@ impl Studio {
                     .on_input(|value| Message::Notes(NoteAction::Typed(value)))
                     .on_submit(Message::Notes(NoteAction::Submit))
                     .width(300),
-                button(text(tr("Add")).size(12))
-                    .on_press_maybe(ready.then_some(Message::Notes(NoteAction::Submit)))
-                    .style(ui_style::primary),
-                button(text(tr("Cancel")).size(12))
-                    .on_press(Message::Notes(NoteAction::Cancel))
-                    .style(ui_style::secondary),
+                ui_style::primary_button(tr("Add"))
+                    .on_press_maybe(ready.then_some(Message::Notes(NoteAction::Submit))),
+                ui_style::secondary_button(tr("Cancel"))
+                    .on_press(Message::Notes(NoteAction::Cancel)),
             ]
             .spacing(6)
             .align_y(iced::Alignment::Center),

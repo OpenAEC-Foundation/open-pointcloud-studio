@@ -2079,13 +2079,9 @@ impl Studio {
             block = block
                 .push(container(text(state).size(11)).padding([6, 8]))
                 .push(
-                    container(
-                        button(tr("Cancel"))
-                            .on_press_maybe(
-                                (!cancelling).then_some(Message::Drawing(DrawingAction::Cancel)),
-                            )
-                            .style(ui_style::secondary),
-                    )
+                    container(ui_style::secondary_button(tr("Cancel")).on_press_maybe(
+                        (!cancelling).then_some(Message::Drawing(DrawingAction::Cancel)),
+                    ))
                     .padding([3, 8]),
                 );
         } else {

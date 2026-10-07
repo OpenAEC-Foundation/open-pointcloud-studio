@@ -8,7 +8,6 @@ use iced::{Background, Border, Color, Element, Fill};
 
 use super::WizardAction;
 use crate::i18n::{key, tr};
-use crate::ui_style;
 use crate::{ui_theme, Message, Studio};
 
 /// The colour of the text of the scene with this much of it.
@@ -16,8 +15,9 @@ fn faded(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
 }
 
-/// A button of the strip: the text colour of the scene, light on the dark
-/// scene of a dark theme and dark on the white one of the light theme.
+/// A button of the strip, small as a button of the ribbon in a strip of 24
+/// pixels: the text colour of the scene, light on the dark scene of a dark
+/// theme and dark on the white one of the light theme.
 fn strip_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
     let ink = ui_theme::colors(theme).dom.scene_text;
     let (background, text_color) = match status {
@@ -83,10 +83,7 @@ impl Studio {
                 key("Next"),
                 ready.is_ok().then_some(send(WizardAction::Next))
             ),
-            button(text(tr("Back to wizard")).size(11))
-                .on_press(send(WizardAction::Restore))
-                .style(ui_style::primary)
-                .padding([2, 12]),
+            plain(key("Back to wizard"), Some(send(WizardAction::Restore))),
             button(text("×").size(13))
                 .on_press(send(WizardAction::Close))
                 .style(strip_button_style)

@@ -1493,10 +1493,8 @@ impl Studio {
                 key("Confirm")
             };
             page = page.push(
-                button(text(tr(label)).size(12))
-                    .on_press(Message::MeshToPlans(WizardAction::Confirm))
-                    .style(ui_style::primary)
-                    .padding([5, 16]),
+                ui_style::primary_button(tr(label))
+                    .on_press(Message::MeshToPlans(WizardAction::Confirm)),
             );
         }
         if step == WizardStep::Prepare {
@@ -1576,10 +1574,8 @@ impl Studio {
             } else {
                 plain(key("Run this step"), Some(send(WizardAction::Run)))
             },
-            button(text(tr("Next")).size(12))
-                .on_press_maybe(ready.is_ok().then_some(send(WizardAction::Next)))
-                .style(ui_style::primary)
-                .padding([5, 16]),
+            ui_style::primary_button(tr("Next"))
+                .on_press_maybe(ready.is_ok().then_some(send(WizardAction::Next))),
             plain(
                 key("Run all automatically"),
                 (!wizard.is_running()).then_some(send(WizardAction::RunAll)),

@@ -262,12 +262,10 @@ impl Studio {
                     .into(),
                 ),
                 row![
-                    button(text(tr("Create")).size(11))
-                        .on_press(Message::Layouts(LayoutAction::Create))
-                        .style(ui_style::primary),
-                    button(text(tr("Cancel")).size(11))
-                        .on_press(Message::Layouts(LayoutAction::NewSheet))
-                        .style(ui_style::secondary),
+                    ui_style::primary_button(tr("Create"))
+                        .on_press(Message::Layouts(LayoutAction::Create)),
+                    ui_style::secondary_button(tr("Cancel"))
+                        .on_press(Message::Layouts(LayoutAction::NewSheet)),
                 ]
                 .spacing(4),
             ]
@@ -383,9 +381,8 @@ impl Studio {
                         })
                         .placeholder(tr("Choose a view"))
                         .width(Fill),
-                        button(text(tr("Place")).size(11))
-                            .on_press_maybe(ready.then_some(Message::Layouts(LayoutAction::Place)))
-                            .style(ui_style::secondary),
+                        ui_style::secondary_button(tr("Place"))
+                            .on_press_maybe(ready.then_some(Message::Layouts(LayoutAction::Place))),
                     ]
                     .spacing(4)
                     .align_y(iced::Alignment::Center),
