@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{mouse, overlay, renderer, Clipboard, Renderer as _, Shell};
-use iced::widget::{button, container, row, text};
+use iced::widget::{button, column, container, row, text};
 use iced::{
     event, Background, Border, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     Vector,
@@ -30,21 +30,28 @@ impl<'a> AdaptivePanel<'a> {
     pub(crate) fn new(
         id: &'static str,
         short_label: &'static str,
+        icon: Element<'a, Message>,
         full: Element<'a, Message>,
         open: bool,
     ) -> Self {
         let toggle = button(
-            row![
-                text(crate::i18n::tr(short_label)).size(11),
-                text("⌄").size(12),
+            column![
+                row![icon, text("⌄").size(10)]
+                    .spacing(2)
+                    .align_y(iced::Alignment::Center),
+                text(crate::i18n::tr(short_label))
+                    .size(9)
+                    .font(crate::fonts::MEDIUM)
+                    .wrapping(iced::widget::text::Wrapping::None),
             ]
-            .spacing(3)
-            .align_y(iced::Alignment::Center),
+            .spacing(2)
+            .align_x(iced::Alignment::Center),
         )
         .on_press(Message::ToggleRibbonPanel(id))
         .style(move |theme, status| ui_style::ribbon_button(theme, open, status))
-        .height(32)
-        .padding([2, 6]);
+        .width(60)
+        .height(58)
+        .padding([3, 1]);
         Self {
             id,
             full,

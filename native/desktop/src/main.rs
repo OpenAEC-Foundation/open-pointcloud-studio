@@ -10195,26 +10195,39 @@ impl Studio {
         );
         use opencad_ribbon::AdaptivePanel;
         let open = self.ribbon_panel_open;
-        let panel = |id, short, full| AdaptivePanel::new(id, short, full, open == Some(id));
+        let panel = |id, short, icon, full| {
+            AdaptivePanel::new(id, short, icon_svg(icon, 20.0), full, open == Some(id))
+        };
         let mut groups = vec![
-            panel("view", "VIEW", view),
-            panel("display", "DISPLAY", display),
-            panel("section", "SECTION BOX", section),
-            panel("selection", "SELECTION", selection),
+            panel("view", "VIEW", ToolIcon::Fit, view),
+            panel("display", "DISPLAY", ToolIcon::Shading, display),
+            panel("section", "SECTION BOX", ToolIcon::SectionBox, section),
+            panel("selection", "SELECTION", ToolIcon::Select, selection),
         ];
         if let Some(extensions) = self.extensions_ribbon() {
-            groups.push(panel("extensions", "EXTENSIONS", extensions));
+            groups.push(panel(
+                "extensions",
+                "EXTENSIONS",
+                ToolIcon::Building,
+                extensions,
+            ));
         }
         groups.extend([
-            panel("measure", "MEASURE", self.measure.ribbon()),
-            panel("views", "VIEWS", self.views_ribbon()),
+            panel(
+                "measure",
+                "MEASURE",
+                ToolIcon::MeasureDistance,
+                self.measure.ribbon(),
+            ),
+            panel("views", "VIEWS", ToolIcon::SavedView, self.views_ribbon()),
             panel(
                 "surface",
                 "SURFACE",
+                ToolIcon::MeshSurface,
                 opencad_ribbon::render_group_items("SURFACE", surface_tools),
             ),
-            panel("plans", "2D", mesh_to_plans),
-            panel("index", "INDEX", index),
+            panel("plans", "2D", ToolIcon::MeshToPlans, mesh_to_plans),
+            panel("index", "INDEX", ToolIcon::Cloud, index),
         ]);
         let tool_strip: Element<'_, Message> =
             container(opencad_ribbon::AdaptiveRibbon::new(groups, open))
