@@ -49,3 +49,5 @@ dist-debug/
 sessions/
 website-screenshots/
 PROMPTS.md
+promo/.work/
+promo/__pycache__/
