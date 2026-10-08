@@ -1157,6 +1157,9 @@ impl Studio {
                 .position(|sheet| view.is_current(sheet))
                 .map(ViewRow::File);
         }
+        if self.photos.view.is_some() {
+            return None;
+        }
         Some(match self.active_view_index() {
             Some(index) => ViewRow::Saved(self.views.list[index].guid.clone()),
             None => ViewRow::Model,

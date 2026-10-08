@@ -938,6 +938,10 @@ side by side, as the pages of a document. The tab of the 3D model comes first
 and never closes; after it come the views and drawings opened from VIEWS of
 the Project Browser, in the order they were opened: saved 3D views, plans,
 elevations, sections, the preview, exports and opened DXF and DWG files.
+Entering an E57 photo opens a session-only photo tab named after the photo;
+stepping along that scan's photos reuses the tab. Switching to another tab
+restores the previous 3D camera, and returning to the photo restores its
+look direction, zoom and blend.
 Whatever is shown, by a click on a row, by `restore_view`, `show_drawing`,
 `open_drawing` or `duplicate_view`, opens its tab, or makes it active when it
 is open, and the row of VIEWS of the active tab is the one highlighted.
@@ -956,11 +960,12 @@ zoomed as it was left, with its layers as they were, also from its row.
 
 `list_tabs` answers with `tabs`, each with its `index`, `name` (`3D model`
 for the 3D model in every language, as `project_browser` names it), `kind`
-(`model`, `view`, `drawing`, `file` or `sheet`), the `guid` of a view, a
+(`model`, `view`, `drawing`, `file`, `sheet` or `photo`), the `guid` of a view, a
 drawing or a sheet or the `path` of a file (`null` for the preview), `active`,
 `closable` and `locked` (a locked view or drawing; see [Locks](#locks)), and with
 `active`, the index of the active tab or `null` while the Drawing view holds
-no drawing. `status.result.view_tabs` holds the same. `show_tab` shows an open
+no drawing. A photo tab reports its scan `path` and `photo_index`.
+`status.result.view_tabs` holds the same. `show_tab` shows an open
 tab as a click on it does, by its `index` or its `name` in any case; a drawing
 that is not made in this session yet is made, and the answer then has
 `accepted: true` and a `job_id`. It is refused while Settings, the dialog of
