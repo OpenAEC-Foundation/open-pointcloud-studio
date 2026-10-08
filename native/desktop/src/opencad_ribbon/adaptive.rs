@@ -40,7 +40,7 @@ impl<'a> AdaptivePanel<'a> {
                     .spacing(2)
                     .align_y(iced::Alignment::Center),
                 text(crate::i18n::tr(short_label))
-                    .size(9)
+                    .size(8.5)
                     .font(crate::fonts::MEDIUM)
                     .wrapping(iced::widget::text::Wrapping::None),
             ]

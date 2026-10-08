@@ -11119,7 +11119,7 @@ fn large_tool_button_when(
             icon_svg(icon, 26.0),
             iced::widget::Space::with_height(2),
             text(i18n::tr(label))
-                .size(11)
+                .size(10)
                 .font(label_font(active))
                 .wrapping(iced::widget::text::Wrapping::None),
             iced::widget::Space::with_width(LARGE_TOOL_MIN_WIDTH),
@@ -11173,7 +11173,7 @@ fn small_tool_button_when(
     button(
         row![
             icon_svg(icon, 16.0),
-            text(i18n::tr(label)).size(11).font(label_font(active)),
+            text(i18n::tr(label)).size(10).font(label_font(active)),
         ]
         .spacing(2)
         .align_y(iced::Alignment::Center),
@@ -11246,7 +11246,7 @@ fn small_color_button(
                 .width(18)
                 .height(18),
             text(i18n::tr(label))
-                .size(11)
+                .size(10)
                 .font(label_font(mode == current)),
         ]
         .spacing(2)
