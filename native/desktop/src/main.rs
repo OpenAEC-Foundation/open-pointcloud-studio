@@ -2925,6 +2925,31 @@ impl Default for Studio {
 }
 
 impl Studio {
+    fn can_show_color_mode(&self, mode: ColorMode) -> bool {
+        let mut visible = self.clouds.iter().filter(|entry| entry.visible);
+        if visible.clone().next().is_none() {
+            return true;
+        }
+        match mode {
+            ColorMode::Rgb => visible.clone().any(|entry| entry.cloud.has_rgb),
+            ColorMode::Elevation => true,
+            ColorMode::Intensity => visible.clone().any(|entry| entry.cloud.has_intensity),
+            ColorMode::Classification => visible.any(|entry| entry.cloud.has_classification),
+        }
+    }
+
+    fn effective_color_mode(&self) -> ColorMode {
+        if self.can_show_color_mode(self.color_mode) {
+            self.color_mode
+        } else if self.can_show_color_mode(ColorMode::Rgb) {
+            ColorMode::Rgb
+        } else if self.can_show_color_mode(ColorMode::Intensity) {
+            ColorMode::Intensity
+        } else {
+            ColorMode::Elevation
+        }
+    }
+
     /// The width of the panel at the right: Properties, or the wider panel
     /// of the 3D BAG.
     fn properties_width(&self) -> f32 {
@@ -3871,7 +3896,7 @@ impl Studio {
                         "measure": self.measure.value(),
                         "measure_mode": self.measure.mode.map(measure::MeasureMode::key),
                         "thin_pending": self.thin_pending,
-                        "color_mode": self.color_mode.to_string(),
+                        "color_mode": self.effective_color_mode().to_string(),
                         "theme": self.ui_theme.key(),
                         "hidden_classes": (0..=u8::MAX)
                             .filter(|code| !self.class_visibility.allows(Some(*code)))
@@ -4218,14 +4243,19 @@ impl Studio {
                     "classification" => Some(ColorMode::Classification),
                     _ => None,
                 };
-                if let Some(mode) = mode {
-                    let task = self.update(Message::ColorMode(mode));
-                    (json!({"ok": true}), task)
-                } else {
-                    (
+                match mode {
+                    Some(mode) if self.can_show_color_mode(mode) => {
+                        let task = self.update(Message::ColorMode(mode));
+                        (json!({"ok": true}), task)
+                    }
+                    Some(_) => (
+                        json!({"ok": false, "error": "color mode is unavailable for the visible point clouds"}),
+                        Task::none(),
+                    ),
+                    None => (
                         json!({"ok": false, "error": "unknown color mode"}),
                         Task::none(),
-                    )
+                    ),
                 }
             }
             ApiCommand::SetClassVisible { code, visible } => {
@@ -10034,17 +10064,29 @@ impl Studio {
                 preset("Isometric", CameraPreset::Isometric, "ISOMETRIC"),
             ],
         );
+        let color_mode = self.effective_color_mode();
         let display = ribbon_group(
             "DISPLAY",
             column![
                 row![
-                    small_color_button("RGB", ColorMode::Rgb, self.color_mode),
-                    small_color_button("Elevation", ColorMode::Elevation, self.color_mode),
-                    small_color_button("Intensity", ColorMode::Intensity, self.color_mode),
+                    small_color_button(
+                        "RGB",
+                        ColorMode::Rgb,
+                        color_mode,
+                        self.can_show_color_mode(ColorMode::Rgb)
+                    ),
+                    small_color_button("Elevation", ColorMode::Elevation, color_mode, true),
+                    small_color_button(
+                        "Intensity",
+                        ColorMode::Intensity,
+                        color_mode,
+                        self.can_show_color_mode(ColorMode::Intensity)
+                    ),
                     small_color_button(
                         "Classification",
                         ColorMode::Classification,
-                        self.color_mode
+                        color_mode,
+                        self.can_show_color_mode(ColorMode::Classification),
                     ),
                 ]
                 .spacing(1),
@@ -10257,7 +10299,7 @@ impl Studio {
             clouds: &self.clouds,
             scene: self.ui_theme.colors(),
             loading_status: (!self.imports.is_empty()).then_some(self.status.as_str()),
-            color_mode: self.color_mode,
+            color_mode: self.effective_color_mode(),
             point_size: self.point_size,
             eye_dome: self.eye_dome,
             eye_dome_strength: self.eye_dome_strength,
@@ -11239,6 +11281,7 @@ fn small_color_button(
     label: &'static str,
     mode: ColorMode,
     current: ColorMode,
+    available: bool,
 ) -> Element<'static, Message> {
     button(
         row![
@@ -11252,7 +11295,7 @@ fn small_color_button(
         .spacing(2)
         .align_y(iced::Alignment::Center),
     )
-    .on_press(Message::ColorMode(mode))
+    .on_press_maybe(available.then_some(Message::ColorMode(mode)))
     .style(move |theme, status| ui_style::ribbon_button(theme, mode == current, status))
     .height(opencad_ribbon::ROW_H)
     .padding([1, 3])
