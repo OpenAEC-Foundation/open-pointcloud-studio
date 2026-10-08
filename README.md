@@ -173,7 +173,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - Four colour modes (stored colour, elevation, intensity, classification), eye-dome lighting, and a point size from 0.1 to 20.
 - The classes that occur in the open clouds are listed in the project panel and can be shown or hidden one by one.
 - A view cube, seven camera directions, **Zoom all** and a right-click menu in the scene.
-- Tabs above the scene put the 3D model and the opened views and drawings side by side; Ctrl+Tab steps through them, the 3D model keeps its own camera and a drawing its zoom, and the window remembers which tabs were open.
+- Tabs above the scene put the 3D model, opened views and drawings, and E57 photos side by side; Ctrl+Tab steps through them. A photo tab remembers its look while the model keeps its own camera, and the window remembers saved-view and drawing tabs.
 - Scanner stations of E57, PCD and PTX scans are shown as markers. Stations with photos are drawn as balls: click one to stand in that station and look around.
 - Panoramas and photos taken along a path in an E57 file are marked along their path. Double-click a mark, or a photo under its scan in the project panel, to stand where it was taken: the photo lies over the points, a **Photo** slider sets how much, `Page Up` and `Page Down` step along the path, and `Esc` returns. Measuring and picking work on the points under the photo.
 - **Colour from photos** gives the points of a scan the colours its photos see them with, for a scan without colours or to replace them: only from photos that see a point unhidden, in the background, with Undo; exports write the new colours.

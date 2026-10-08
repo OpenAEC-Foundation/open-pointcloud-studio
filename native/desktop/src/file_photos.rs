@@ -575,7 +575,7 @@ fn camera_for(
 #[derive(Debug)]
 pub(crate) struct Refusal {
     english: String,
-    shown: String,
+    pub(crate) shown: String,
 }
 
 /// A refusal with every `{name}` in it filled in, as `tr_args` does.
@@ -810,13 +810,25 @@ impl Studio {
             .transform
             .axes(Some(photo.axes))
             .ok_or_else(|| refusal("The layer is scaled flat: the photo cannot be placed", &[]))?;
-        let walk = camera_for(photo, eye, axes, self.walk, self.yaw);
+        let saved = self
+            .photos
+            .view
+            .is_none()
+            .then(|| self.tabs.photo_looks.get(source).copied())
+            .flatten()
+            .filter(|saved| saved.index == index);
+        let walk = saved.map_or_else(
+            || camera_for(photo, eye, axes, self.walk, self.yaw),
+            |saved| saved.walk,
+        );
         let kind = photo.kind();
         let count = photos.photos.len();
         let back = match &self.photos.view {
             Some(view) => view.back,
             None => ReturnCamera::of(self),
         };
+        self.drawing_view.shown = false;
+        self.file_open = false;
         self.walk = Some(walk);
         self.walk_station = None;
         self.panorama_photos = None;
@@ -830,12 +842,18 @@ impl Studio {
         self.photos.view = Some(PhotoView {
             source: source.to_path_buf(),
             index,
-            pinned: kind == PhotoKind::Pinhole,
-            zoom: 1.0,
+            pinned: saved.map_or(kind == PhotoKind::Pinhole, |saved| saved.pinned),
+            zoom: saved.map_or(1.0, |saved| saved.zoom),
             entered: Instant::now(),
             shown_after: cached.then_some(Duration::ZERO),
             back,
         });
+        self.tabs.photo_indexes.insert(source.to_path_buf(), index);
+        self.tabs
+            .add(crate::view_tabs::TabId::Photo(source.to_path_buf()));
+        if let Some(saved) = saved {
+            self.photos.blend = saved.blend;
+        }
         self.photos.touch(source, index);
         self.revision += 1;
         self.status = tr_args(
@@ -875,6 +893,7 @@ impl Studio {
     /// Leave the photo that is entered and put the camera back where it was
     /// before; `None` when no photo is entered.
     pub(crate) fn leave_photo(&mut self) -> Option<Task<Message>> {
+        self.remember_photo_tab();
         let back = self.photos.view.take()?.back;
         self.photos.close();
         self.leave_walk();
@@ -897,6 +916,22 @@ impl Studio {
         self.revision += 1;
         self.status = tr("Back where the camera was before the photo").into();
         Some(Task::batch([station, self.schedule_detail()]))
+    }
+
+    /// Keep the look of the photo tab before another view takes the scene.
+    pub(crate) fn remember_photo_tab(&mut self) {
+        if let (Some(view), Some(walk)) = (&self.photos.view, self.walk) {
+            self.tabs.photo_looks.insert(
+                view.source.clone(),
+                crate::view_tabs::PhotoTabLook {
+                    index: view.index,
+                    walk,
+                    pinned: view.pinned,
+                    zoom: view.zoom,
+                    blend: self.photos.blend,
+                },
+            );
+        }
     }
 
     /// Start decoding what the entered photo needs: the photo itself first,
@@ -2055,6 +2090,48 @@ mod tests {
         studio.status = "unchanged".into();
         let _ = studio.update(Message::Photos(PhotoAction::Step(1)));
         assert_eq!(studio.status, "unchanged");
+    }
+
+    #[test]
+    fn photo_tab_reuses_the_scan_and_restores_the_model_camera() {
+        let _language = i18n::TestLanguage::hold(i18n::Language::English);
+        let (mut studio, _directory, source) = studio_with_photos();
+        studio.yaw = 0.4;
+        studio.pitch = 0.3;
+        studio.zoom = 0.5;
+        studio.pan = [12.0, -4.0];
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let listed = send(&mut studio, json!({"command": "list_tabs"}));
+        assert_eq!(listed["tabs"][1]["kind"], "photo", "{listed}");
+        assert_eq!(listed["tabs"][1]["photo_index"], 0);
+        assert_eq!(listed["active"], 1);
+
+        let _ = studio.update(Message::Photos(PhotoAction::Step(1)));
+        let listed = send(&mut studio, json!({"command": "list_tabs"}));
+        assert_eq!(listed["tabs"].as_array().unwrap().len(), 2);
+        assert_eq!(listed["tabs"][1]["photo_index"], 1);
+        let _ = studio.update(Message::Photos(PhotoAction::Look(40.0, 10.0)));
+        let photo_walk = studio.walk.unwrap();
+        let _ = studio.update(Message::Photos(PhotoAction::Blend(0.35)));
+
+        let model = send(&mut studio, json!({"command": "show_tab", "index": 0}));
+        assert_eq!(model["ok"], true, "{model}");
+        assert!(studio.photos.view.is_none());
+        assert_eq!(
+            (studio.yaw, studio.pitch, studio.zoom, studio.pan),
+            (0.4, 0.3, 0.5, [12.0, -4.0])
+        );
+        let photo = send(&mut studio, json!({"command": "show_tab", "index": 1}));
+        assert_eq!(photo["ok"], true, "{photo}");
+        assert_eq!(studio.photos.view.as_ref().unwrap().index, 1);
+        assert_eq!(studio.walk, Some(photo_walk));
+        assert_eq!(studio.photos.blend, 0.35);
+
+        let closed = send(&mut studio, json!({"command": "close_tab", "index": 1}));
+        assert_eq!(closed["ok"], true, "{closed}");
+        assert!(studio.photos.view.is_none());
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+        assert_eq!(studio.listed_tabs().len(), 1);
     }
 
     #[test]

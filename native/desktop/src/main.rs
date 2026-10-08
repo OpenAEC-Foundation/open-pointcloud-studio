@@ -3482,6 +3482,7 @@ impl Studio {
 
     fn leave_walk(&mut self) -> bool {
         self.panorama_photos = None;
+        self.remember_photo_tab();
         self.photos.close();
         self.walk_station = None;
         self.walk_keys = [false; 6];
