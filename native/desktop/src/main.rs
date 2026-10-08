@@ -10067,68 +10067,75 @@ impl Studio {
         let color_mode = self.effective_color_mode();
         let display = ribbon_group(
             "DISPLAY",
-            column![
-                row![
-                    small_color_button(
-                        "RGB",
-                        ColorMode::Rgb,
-                        color_mode,
-                        self.can_show_color_mode(ColorMode::Rgb)
-                    ),
-                    small_color_button("Elevation", ColorMode::Elevation, color_mode, true),
-                    small_color_button(
-                        "Intensity",
-                        ColorMode::Intensity,
-                        color_mode,
-                        self.can_show_color_mode(ColorMode::Intensity)
-                    ),
-                    small_color_button(
-                        "Classification",
-                        ColorMode::Classification,
-                        color_mode,
-                        self.can_show_color_mode(ColorMode::Classification),
-                    ),
+            container(
+                column![
+                    row![
+                        small_color_button(
+                            "RGB",
+                            ColorMode::Rgb,
+                            color_mode,
+                            self.can_show_color_mode(ColorMode::Rgb)
+                        ),
+                        small_color_button("Elevation", ColorMode::Elevation, color_mode, true),
+                        small_color_button(
+                            "Intensity",
+                            ColorMode::Intensity,
+                            color_mode,
+                            self.can_show_color_mode(ColorMode::Intensity)
+                        ),
+                        small_color_button(
+                            "Class",
+                            ColorMode::Classification,
+                            color_mode,
+                            self.can_show_color_mode(ColorMode::Classification),
+                        ),
+                    ]
+                    .spacing(3),
+                    row![
+                        small_tool_button(
+                            "Eye-dome",
+                            Message::SetEyeDome(!self.eye_dome),
+                            self.eye_dome,
+                        ),
+                        small_tool_button(
+                            "Stations",
+                            Message::ShowScanPoses(!self.show_scan_poses),
+                            self.show_scan_poses,
+                        ),
+                        iced::widget::Space::with_width(2),
+                        text(i18n::tr("Size")).size(10),
+                        ui_style::slider(0.1..=20.0, self.point_size, Message::PointSize)
+                            .step(0.1_f32)
+                            .width(72),
+                        text(format!("{:.1}", self.point_size))
+                            .size(10)
+                            .width(26)
+                            .align_x(iced::Alignment::End),
+                    ]
+                    .spacing(2)
+                    .align_y(iced::Alignment::Center)
+                    .height(opencad_ribbon::ROW_H),
+                    row![
+                        text(i18n::tr("Budget")).size(10),
+                        ui_style::slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
+                            .step(100_000_u32)
+                            .width(200),
+                        text(if self.budget >= 1_000_000 {
+                            format!("{:.1}M", self.budget as f64 / 1_000_000.0)
+                        } else {
+                            format!("{}k", self.budget / 1_000)
+                        })
+                        .size(10)
+                        .width(34)
+                        .align_x(iced::Alignment::End),
+                    ]
+                    .spacing(2)
+                    .align_y(iced::Alignment::Center)
+                    .height(opencad_ribbon::ROW_H),
                 ]
-                .spacing(1),
-                row![
-                    small_tool_button(
-                        "Eye-dome",
-                        Message::SetEyeDome(!self.eye_dome),
-                        self.eye_dome,
-                    ),
-                    small_tool_button(
-                        "Stations",
-                        Message::ShowScanPoses(!self.show_scan_poses),
-                        self.show_scan_poses,
-                    ),
-                    iced::widget::Space::with_width(2),
-                    text(i18n::tr("Size")).size(12),
-                    ui_style::slider(0.1..=20.0, self.point_size, Message::PointSize)
-                        .step(0.1_f32)
-                        .width(72),
-                    text(format!("{:.1}", self.point_size)).size(11).width(26),
-                ]
-                .spacing(2)
-                .align_y(iced::Alignment::Center)
-                .height(opencad_ribbon::ROW_H),
-                row![
-                    text(i18n::tr("Budget")).size(12),
-                    ui_style::slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
-                        .step(100_000_u32)
-                        .width(170),
-                    text(if self.budget >= 1_000_000 {
-                        format!("{:.1}M", self.budget as f64 / 1_000_000.0)
-                    } else {
-                        format!("{}k", self.budget / 1_000)
-                    })
-                    .size(11)
-                    .width(34),
-                ]
-                .spacing(2)
-                .align_y(iced::Alignment::Center)
-                .height(opencad_ribbon::ROW_H),
-            ]
-            .spacing(0)
+                .spacing(0),
+            )
+            .padding([0, 4])
             .into(),
         );
         let section = opencad_ribbon::render_group_items(
