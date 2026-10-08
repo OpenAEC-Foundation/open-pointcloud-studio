@@ -323,6 +323,7 @@ impl Widget<Message, Theme, Renderer> for AdaptiveRibbon<'_> {
                     content: &mut self.panels[index].full,
                     tree: &mut tree.children[Self::slot(index, false)],
                     anchor,
+                    ribbon_bottom: layout.bounds().y + layout.bounds().height + translation.y,
                 })));
             }
         }
@@ -363,6 +364,7 @@ struct Flyout<'a, 'b> {
     content: &'b mut Element<'a, Message>,
     tree: &'b mut Tree,
     anchor: Point,
+    ribbon_bottom: f32,
 }
 
 impl overlay::Overlay<Message, Theme, Renderer> for Flyout<'_, '_> {
@@ -441,6 +443,15 @@ impl overlay::Overlay<Message, Theme, Renderer> for Flyout<'_, '_> {
         if matches!(event, Event::Mouse(mouse::Event::ButtonPressed(_)))
             && !cursor.is_over(child.bounds())
         {
+            // The underlying ribbon handles its own buttons. Publishing a
+            // close message as well would close the newly opened group (or
+            // reopen this one), depending on the message dispatch order.
+            if cursor
+                .position()
+                .is_some_and(|position| position.y < self.ribbon_bottom)
+            {
+                return event::Status::Ignored;
+            }
             shell.publish(Message::CloseRibbonPanel);
             return event::Status::Captured;
         }
