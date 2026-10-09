@@ -104,7 +104,7 @@ fn choose_collapsed(widths: &[(f32, f32)], available: f32) -> Vec<bool> {
     let mut result = vec![false; widths.len()];
     let mut total: f32 = widths.iter().map(|(full, _)| full).sum();
     for index in (0..widths.len()).rev() {
-        if total <= (available - 8.0).max(0.0) {
+        if total <= (available - 2.0).max(0.0) {
             break;
         }
         result[index] = true;
@@ -120,7 +120,7 @@ fn collapsed_gap(widths: &[(f32, f32)], collapsed: &[bool], available: f32) -> f
         return 0.0;
     }
     let total: f32 = widths.iter().map(|(_, button)| button).sum();
-    ((total - (available - 8.0).max(0.0)) / (collapsed.len() - 1) as f32).clamp(0.0, 8.0)
+    ((total - (available - 2.0).max(0.0)) / (collapsed.len() - 1) as f32).clamp(0.0, 8.0)
 }
 
 impl Widget<Message, Theme, Renderer> for AdaptiveRibbon<'_> {
@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn collapsed_buttons_reclaim_their_edge_padding_at_narrow_widths() {
         let widths = [(200.0, 70.0), (180.0, 60.0), (100.0, 50.0)];
-        assert_eq!(collapsed_gap(&widths, &[true, true, true], 170.0), 8.0);
+        assert_eq!(collapsed_gap(&widths, &[true, true, true], 170.0), 6.0);
         assert_eq!(collapsed_gap(&widths, &[true, true, true], 190.0), 0.0);
         assert_eq!(collapsed_gap(&widths, &[false, true, true], 100.0), 0.0);
     }

@@ -359,7 +359,7 @@ pub(crate) fn band<'a>(
     };
     // The head of a group as a section head, a sub-group as a row.
     let label = text(caption)
-        .size(11)
+        .size(12)
         .font(if sub { fonts::REGULAR } else { fonts::SEMIBOLD })
         .wrapping(iced::widget::text::Wrapping::None);
     let toggle = button(
@@ -716,7 +716,7 @@ impl Studio {
     /// The panel at the left of the window.
     pub(crate) fn project_panel(&self) -> Element<'_, Message> {
         let mut panel =
-            column![text(tr("Project Browser")).size(11).font(fonts::SEMIBOLD)].spacing(8);
+            column![text(tr("Project Browser")).size(12).font(fonts::SEMIBOLD)].spacing(8);
         panel = panel.push(self.scans_group());
         if let Some(classes) = self.classes_group() {
             panel = panel.push(classes);
@@ -729,8 +729,13 @@ impl Studio {
         if let Some(resume) = self.mesh_to_plans_browser() {
             panel = panel.push(resume);
         }
+        let width = if self.window_size.is_some_and(|size| size.width >= 1500.0) {
+            300.0
+        } else {
+            WIDTH
+        };
         container(ui_style::scrollable(panel.padding(14)).height(Fill))
-            .width(WIDTH)
+            .width(width)
             .height(Fill)
             .style(crate::sidebar_style)
             .into()

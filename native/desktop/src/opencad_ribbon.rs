@@ -4,19 +4,18 @@
 // Changes: adapted the ribbon primitives to iced 0.13 and point-cloud commands.
 
 use iced::widget::{button, column, container, row, text};
-use iced::{Background, Border, Element, Fill, Length, Theme};
+use iced::{Background, Color, Element, Fill, Length, Theme};
 
 use crate::{ui_style, ui_theme, Message};
 
 mod adaptive;
 pub use adaptive::{AdaptivePanel, AdaptiveRibbon};
 
-pub const ROW_H: f32 = 22.0;
-pub const TOOL_BAR_H: f32 = 3.0 * ROW_H + 20.0;
-pub const QUICK_ACCESS_W: f32 = 26.0;
+pub const ROW_H: f32 = 29.0;
+pub const TOOL_BAR_H: f32 = 114.0;
+pub const QUICK_ACCESS_W: f32 = 40.0;
 
-/// OpenCADStudio's compact top-strip action, adapted to native point-cloud
-/// commands and OpenAEC colors. Unavailable actions remain visible and muted.
+/// Compact quick access actions on the dark title strip.
 pub fn quick_access_btn<'a>(
     icon: Element<'a, Message>,
     label: &'static str,
@@ -24,14 +23,52 @@ pub fn quick_access_btn<'a>(
 ) -> Element<'a, Message> {
     let control = button(container(icon).width(Fill).height(Fill).center(Fill))
         .on_press_maybe(message)
-        .style(ui_style::tool)
+        .style(title_action_style)
         .width(Length::Fixed(QUICK_ACCESS_W))
-        .height(23)
+        .height(32)
         .padding([1, 0]);
     // Below the tools of the ribbon, which it would cover.
     ui_style::ribbon_tooltip(control, crate::i18n::tr(label))
         .gap(90)
         .into()
+}
+
+/// The wider, single-row groups of the approved desktop reference. The
+/// adaptive ribbon still measures and collapses each complete group.
+pub fn render_reference_group<'a>(
+    title: &'static str,
+    width: f32,
+    tools: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let caption = text(crate::i18n::tr(title))
+        .size(11)
+        .font(crate::fonts::MEDIUM)
+        .style(|theme| text::Style {
+            color: Some(ui_theme::colors(theme).ribbon_group_label),
+        });
+    let content = column![
+        container(tools)
+            .width(Fill)
+            .height(77)
+            .center_x(Fill)
+            .align_y(iced::Alignment::Center),
+        container(caption).width(Fill).center_x(Fill),
+    ]
+    .spacing(4)
+    .padding([7, 0])
+    .width(Length::Fixed(width - 1.0))
+    .height(TOOL_BAR_H);
+    row![
+        content,
+        container(text(""))
+            .width(1)
+            .height(96)
+            .style(|theme| container::Style::default()
+                .background(ui_theme::colors(theme).ribbon_group_separator)),
+    ]
+    .align_y(iced::Alignment::Center)
+    .width(Length::Fixed(width))
+    .into()
 }
 
 pub enum RibbonItem<'a> {
@@ -120,47 +157,24 @@ pub fn render_group_items<'a>(
     .into()
 }
 
-/// A tab of the ribbon: the open one joins the tool bar below it.
-pub fn tab_style(theme: &Theme, active: bool, status: button::Status) -> button::Style {
-    let colors = ui_theme::colors(theme);
+fn title_action_style(_theme: &Theme, status: button::Status) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered);
     button::Style {
-        background: Some(Background::Color(if active {
-            colors.bg
-        } else if hovered {
-            colors.ribbon_btn_hover
-        } else {
-            colors.bg_lighter
-        })),
-        text_color: if active || hovered {
-            colors.accent
-        } else {
-            colors.text
-        },
-        border: Border {
-            radius: iced::border::Radius::default().top(4),
-            ..Border::default()
-        },
+        background: hovered.then_some(Background::Color(Color::from_rgb8(78, 78, 86))),
+        text_color: Color::from_rgb8(250, 250, 249),
         ..button::Style::default()
     }
 }
 
-/// OpenAEC's File entry stays at the start of the native ribbon and opens the
-/// backstage workspace. Its solid accent is the style book's File-tab exception.
-pub fn file_tab_style(theme: &Theme, _open: bool, status: button::Status) -> button::Style {
-    let colors = ui_theme::colors(theme);
+/// Dark title tabs with a separate amber underline on the active tab.
+pub fn tab_style(_theme: &Theme, active: bool, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered);
     button::Style {
-        background: Some(Background::Color(
-            if matches!(status, button::Status::Hovered) {
-                colors.file_tab_hover
-            } else {
-                colors.file_tab_bg
-            },
-        )),
-        text_color: colors.file_tab_text,
-        border: Border {
-            radius: iced::border::Radius::default().top(4),
-            ..Border::default()
+        background: hovered.then_some(Background::Color(Color::from_rgb8(78, 78, 86))),
+        text_color: if active || hovered {
+            Color::from_rgb8(250, 250, 249)
+        } else {
+            Color::from_rgb8(188, 188, 194)
         },
         ..button::Style::default()
     }

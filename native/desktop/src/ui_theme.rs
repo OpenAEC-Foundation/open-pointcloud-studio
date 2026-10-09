@@ -429,8 +429,8 @@ const LIGHT: UiColors = UiColors {
     ribbon_group_label: rgba(54, 54, 62, 0.58),
     status_bg: hex(0x36363E),
     status_border: hex(0x27272A),
-    status_text: hex(0xA1A1AA),
-    status_text_label: rgba(161, 161, 170, 0.7),
+    status_text: hex(0xF5F5F4),
+    status_text_label: hex(0xD4D4D8),
     status_hover: rgba(250, 250, 249, 0.1),
     status_separator: rgba(250, 250, 249, 0.15),
     backstage_item_shortcut: rgba(54, 54, 62, 0.5),
@@ -1142,11 +1142,11 @@ mod tests {
         (
             "--theme-ribbon-group-label",
             [
-                "rgba(217, 119, 6, 0.8)",
-                "rgba(217, 119, 6, 0.8)",
-                "rgba(217, 119, 6, 0.8)",
-                "rgba(96, 165, 250, 0.85)",
-                "#FFD700",
+                "rgba(54, 54, 62, 0.58)",
+                "rgba(250, 250, 249, 0.58)",
+                "rgba(250, 250, 249, 0.58)",
+                "rgba(224, 231, 255, 0.58)",
+                "#FFFFFF",
             ],
         ),
         (
@@ -1159,12 +1159,12 @@ mod tests {
         ),
         (
             "--theme-status-text",
-            ["#A1A1AA", "#A1A1AA", "#A1A1AA", "#9CA3AF", "#FFFFFF"],
+            ["#F5F5F4", "#A1A1AA", "#A1A1AA", "#9CA3AF", "#FFFFFF"],
         ),
         (
             "--theme-status-text-label",
             [
-                "rgba(161, 161, 170, 0.7)",
+                "#D4D4D8",
                 "rgba(161, 161, 170, 0.7)",
                 "rgba(161, 161, 170, 0.7)",
                 "rgba(156, 163, 175, 0.7)",

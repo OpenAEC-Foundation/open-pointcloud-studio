@@ -29,7 +29,7 @@ PAPER = "#FAFAF9"
 SCENES = [
     ("intro", None, 2.4, "Open Pointcloud Studio", "Van grote scan naar bruikbare 3D en 2D"),
     ("overview", "01-overview.png", 3.6, "Grote scans, direct bruikbaar", "E57 · 46,6 miljoen punten · adaptieve detailniveaus"),
-    ("selection", "02-selection.png", 3.6, "Selecteer punten op volle resolutie", "4,12 miljoen punten in één selectie"),
+    ("selection", "02-selection.png", 3.6, "Selecteer punten op volle resolutie", "Miljoenen punten in één selectie"),
     ("section", "03-section.png", 3.6, "Snijd de scan met een 3D-section box", "Direct zicht op het gebied dat telt"),
     ("mesher", "04-mesher.png", 3.3, "Van punten naar mesh", "Gesloten mesh, terrein, 3D-oppervlak en vlakken"),
     ("mesher-options", "05-mesher-options.png", 3.3, "Bepaal de reconstructie", "Instelbare meshgrootte, buren en randfactor"),

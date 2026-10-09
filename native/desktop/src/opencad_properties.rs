@@ -10,8 +10,8 @@ use crate::ui_style;
 use crate::ui_theme;
 use crate::Message;
 
-const ROW_H: f32 = 26.0;
-const FONT_SZ: f32 = ROW_H * 0.42;
+const ROW_H: f32 = 28.0;
+const FONT_SZ: f32 = 12.0;
 
 /// OpenCADStudio's two-column label/value row, adapted for read-only scan data.
 pub fn property_row(label: &'static str, value: String) -> Element<'static, Message> {
@@ -156,7 +156,7 @@ pub fn property_control<'a>(
 pub fn section_header(title: &'static str) -> Element<'static, Message> {
     container(
         text(crate::i18n::tr(title))
-            .size(11)
+            .size(12)
             .font(crate::fonts::SEMIBOLD),
     )
     .width(Fill)

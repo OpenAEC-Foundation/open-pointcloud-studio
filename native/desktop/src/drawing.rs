@@ -41,8 +41,8 @@ use crate::ui_style;
 use crate::selection::DeletionMask;
 use crate::sheet_dialog::SheetJob;
 use crate::{
-    camera_views, compact_count, format_count, measure, opencad_properties, opencad_ribbon,
-    same_deletion_mask, CloudEntry, Message, PointViewport, Studio,
+    camera_views, compact_count, format_count, measure, opencad_properties, same_deletion_mask,
+    CloudEntry, Message, PointViewport, Studio,
 };
 
 /// The formats in the order the save dialog offers them, each with the name
@@ -1932,16 +1932,6 @@ impl Studio {
     /// no job or save dialog of the tool is under way.
     pub(crate) fn drawing_entry_enabled(&self) -> bool {
         self.section_enabled && !self.drawing.busy()
-    }
-
-    /// The button of the tool in the SECTION BOX group of the ribbon.
-    pub(crate) fn drawing_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
-        opencad_ribbon::RibbonItem::Large(crate::large_tool_button_when(
-            "Section drawing",
-            Message::Drawing(DrawingAction::Toggle),
-            self.drawing.open,
-            self.drawing_button_enabled(),
-        ))
     }
 
     /// The block of the tool in Properties: its choices, the buttons that
