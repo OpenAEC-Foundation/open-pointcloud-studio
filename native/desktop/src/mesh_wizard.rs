@@ -1164,32 +1164,21 @@ impl Studio {
         let open = self.mesh_wizard.open;
         let active = open || busy.is_some();
         let enabled = self.active.is_some() || active;
-        let mut label = column![
-            icon_svg(ToolIcon::MeshPointcloud, 24.0),
-            Space::with_height(2),
-            text(tr("Mesh Pointcloud"))
-                .size(11)
-                .wrapping(iced::widget::text::Wrapping::None),
-        ]
-        .align_x(iced::Alignment::Center);
-        if let Some(busy) = busy {
-            label = label.push(
-                text(busy)
-                    .size(10)
-                    .wrapping(iced::widget::text::Wrapping::None)
-                    .style(|theme: &Theme| text::Style {
-                        color: Some(ui_theme::colors(theme).accent),
-                    }),
-            );
-        }
-        label = label.push(Space::with_width(crate::LARGE_TOOL_MIN_WIDTH));
+        let tip = busy.map_or_else(
+            || tr("Mesh Pointcloud").to_owned(),
+            |busy| format!("{}\n{busy}", tr("Mesh Pointcloud")),
+        );
         opencad_ribbon::RibbonItem::Large(
-            button(label)
-                .on_press_maybe(enabled.then_some(Message::MeshWizard(MeshWizardAction::Open)))
-                .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-                .height(Fill)
-                .padding([2, 4])
-                .into(),
+            ui_style::ribbon_tooltip(
+                button(container(icon_svg(ToolIcon::MeshPointcloud, 26.0)).center(Fill))
+                    .on_press_maybe(enabled.then_some(Message::MeshWizard(MeshWizardAction::Open)))
+                    .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
+                    .width(crate::LARGE_TOOL_MIN_WIDTH)
+                    .height(Fill)
+                    .padding([3, 2]),
+                tip,
+            )
+            .into(),
         )
     }
 

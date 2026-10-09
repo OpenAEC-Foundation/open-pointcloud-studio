@@ -1849,8 +1849,7 @@ impl Studio {
         };
         vec![
             item(
-                crate::small_tool_button_when(
-                    "Note",
+                crate::small_tool_button_face_when(
                     Message::Views(ViewAction::Tool(AnnotationKind::Note)),
                     self.views.tool == Some(AnnotationKind::Note),
                     in_3d,
@@ -1858,8 +1857,7 @@ impl Studio {
                 vec![tr("A note at a point of the scan, kept with the saved view; in the 3D view").to_owned()],
             ),
             item(
-                crate::small_tool_button_when(
-                    "Line",
+                crate::small_tool_button_face_when(
                     line_message,
                     line_active,
                     in_3d || on_drawing || on_sheet,
@@ -1867,8 +1865,7 @@ impl Studio {
                 vec![tr("An arrow between two points of the scan in the 3D view; a line on a drawing, snapping to its lines, or on the paper of a sheet").to_owned()],
             ),
             item(
-                crate::small_tool_button_when(
-                    "Text",
+                crate::small_tool_button_face_when(
                     Message::Notes(NoteAction::Tool(NoteKind::Text)),
                     note_tool(NoteKind::Text),
                     on_drawing || on_sheet,
@@ -1876,8 +1873,7 @@ impl Studio {
                 vec![tr("A text on a plan, an elevation or a section, 2.5 mm high on the paper unless set in Properties; or on the paper of a sheet").to_owned()],
             ),
             item(
-                crate::small_tool_button_when(
-                    "Dimension",
+                crate::small_tool_button_face_when(
                     Message::Notes(NoteAction::Tool(NoteKind::Dimension)),
                     note_tool(NoteKind::Dimension),
                     on_drawing,
@@ -1885,8 +1881,7 @@ impl Studio {
                 vec![tr("A dimension on a plan, an elevation or a section: two points that snap to the ends and corners of the lines, then its line; it shows the distance in millimetres").to_owned()],
             ),
             item(
-                crate::small_tool_button_when(
-                    "Leader",
+                crate::small_tool_button_face_when(
                     Message::Notes(NoteAction::Tool(NoteKind::Leader)),
                     note_tool(NoteKind::Leader),
                     on_drawing,

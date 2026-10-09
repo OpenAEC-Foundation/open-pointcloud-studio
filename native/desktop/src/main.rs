@@ -10226,21 +10226,13 @@ impl Studio {
                 )),
             ],
         );
-        // The group is as wide as its name, which is wider than its one
-        // button.
         let mesh_to_plans = opencad_ribbon::render_group_items(
-            "POINTCLOUD TO DRAWING",
-            vec![RibbonItem::Large(
-                container(large_tool_button(
-                    "Pointcloud to Drawing",
-                    Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
-                    self.mesh_to_plans.is_open(),
-                ))
-                .width(96)
-                .height(Fill)
-                .align_x(iced::alignment::Horizontal::Center)
-                .into(),
-            )],
+            "2D",
+            vec![RibbonItem::Large(large_tool_button(
+                "Pointcloud to Drawing",
+                Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
+                self.mesh_to_plans.is_open(),
+            ))],
         );
         use opencad_ribbon::AdaptivePanel;
         let open = self.ribbon_panel_open;
@@ -11152,10 +11144,8 @@ fn large_tool_button(
     large_tool_button_when(label, message, active, true)
 }
 
-/// The main tool of a ribbon group: a large icon above its name, over the
-/// full height of the group. The button is as wide as its name on one line,
-/// so that a long word is never broken, and never narrower than
-/// `LARGE_TOOL_MIN_WIDTH`.
+/// A full-height ribbon action. Keep the name in a tooltip while testing
+/// OpenCADStudio's compact, icon-only tool presentation.
 fn large_tool_button_when(
     label: &'static str,
     message: Message,
@@ -11163,36 +11153,20 @@ fn large_tool_button_when(
     enabled: bool,
 ) -> Element<'static, Message> {
     let icon = tool_icon(&message);
-    button(
-        column![
-            icon_svg(icon, 26.0),
-            iced::widget::Space::with_height(2),
-            text(i18n::tr(label))
-                .size(10)
-                .font(label_font(active))
-                .wrapping(iced::widget::text::Wrapping::None),
-            iced::widget::Space::with_width(LARGE_TOOL_MIN_WIDTH),
-        ]
-        .align_x(iced::Alignment::Center),
+    ui_style::ribbon_tooltip(
+        button(container(icon_svg(icon, 26.0)).center(Fill))
+            .on_press_maybe(enabled.then_some(message))
+            .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
+            .width(LARGE_TOOL_MIN_WIDTH)
+            .height(Fill)
+            .padding([3, 2]),
+        i18n::tr(label),
     )
-    .on_press_maybe(enabled.then_some(message))
-    .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-    .height(Fill)
-    .padding([3, 2])
     .into()
 }
 
-/// The narrowest a large ribbon button gets, for a short name.
+/// Fixed width of an icon-only large ribbon button.
 const LARGE_TOOL_MIN_WIDTH: f32 = 42.0;
-
-/// The font of the name of a ribbon button: medium while it is on.
-fn label_font(active: bool) -> iced::Font {
-    if active {
-        fonts::MEDIUM
-    } else {
-        fonts::REGULAR
-    }
-}
 
 /// A tool as its icon alone, named in its tooltip: for a narrow panel.
 fn icon_tool_button_when(
@@ -11218,20 +11192,27 @@ fn small_tool_button_when(
     active: bool,
     enabled: bool,
 ) -> Element<'static, Message> {
-    let icon = tool_icon(&message);
-    button(
-        row![
-            icon_svg(icon, 16.0),
-            text(i18n::tr(label)).size(10).font(label_font(active)),
-        ]
-        .spacing(2)
-        .align_y(iced::Alignment::Center),
+    ui_style::ribbon_tooltip(
+        small_tool_button_face_when(message, active, enabled),
+        i18n::tr(label),
     )
-    .on_press_maybe(enabled.then_some(message))
-    .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-    .height(opencad_ribbon::ROW_H)
-    .padding([1, 2])
     .into()
+}
+
+/// The bare face lets tools with a longer explanation provide one tooltip.
+fn small_tool_button_face_when(
+    message: Message,
+    active: bool,
+    enabled: bool,
+) -> Element<'static, Message> {
+    let icon = tool_icon(&message);
+    button(container(icon_svg(icon, 16.0)).center(Fill))
+        .on_press_maybe(enabled.then_some(message))
+        .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
+        .width(26)
+        .height(opencad_ribbon::ROW_H)
+        .padding(1)
+        .into()
 }
 
 fn tool_icon(message: &Message) -> ToolIcon {
@@ -11290,22 +11271,19 @@ fn small_color_button(
     current: ColorMode,
     available: bool,
 ) -> Element<'static, Message> {
-    button(
-        row![
+    ui_style::ribbon_tooltip(
+        button(
             Canvas::new(ColorModeGlyph(mode, mode == current))
                 .width(18)
                 .height(18),
-            text(i18n::tr(label))
-                .size(10)
-                .font(label_font(mode == current)),
-        ]
-        .spacing(2)
-        .align_y(iced::Alignment::Center),
+        )
+        .on_press_maybe(available.then_some(Message::ColorMode(mode)))
+        .style(move |theme, status| ui_style::ribbon_button(theme, mode == current, status))
+        .width(26)
+        .height(opencad_ribbon::ROW_H)
+        .padding([1, 4]),
+        i18n::tr(label),
     )
-    .on_press_maybe(available.then_some(Message::ColorMode(mode)))
-    .style(move |theme, status| ui_style::ribbon_button(theme, mode == current, status))
-    .height(opencad_ribbon::ROW_H)
-    .padding([1, 3])
     .into()
 }
 
