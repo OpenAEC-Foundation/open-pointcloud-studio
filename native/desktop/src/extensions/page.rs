@@ -542,24 +542,15 @@ impl Studio {
                     Some(handle) => svg(handle.clone()).width(32).height(32).into(),
                     None => Space::new(32, 32).into(),
                 };
-                let control = button(
-                    column![
-                        icon,
-                        Space::with_height(4),
-                        text(each.label.get().to_owned())
-                            .size(11)
-                            .wrapping(iced::widget::text::Wrapping::None),
-                        Space::with_width(46),
-                    ]
-                    .align_x(iced::Alignment::Center),
-                )
-                .on_press(send(ExtensionAction::Press(
-                    manifest.id.clone(),
-                    Some(each.id.clone()),
-                )))
-                .style(move |theme, status| ui_style::ribbon_button(theme, running, status))
-                .height(Fill)
-                .padding([6, 3]);
+                let control = button(container(icon).center(Fill))
+                    .on_press(send(ExtensionAction::Press(
+                        manifest.id.clone(),
+                        Some(each.id.clone()),
+                    )))
+                    .style(move |theme, status| ui_style::ribbon_button(theme, running, status))
+                    .width(46)
+                    .height(Fill)
+                    .padding([3, 2]);
                 let mut tip = each
                     .tooltip
                     .as_ref()

@@ -2328,7 +2328,11 @@ mod tests {
     fn camera_redraw_reuses_geometry_and_data_changes_invalidate_it() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("camera.xyz");
-        std::fs::write(&source, "0 0 0\n1 0 0\n0 1 0\n1 1 1\n").unwrap();
+        std::fs::write(
+            &source,
+            "0 0 0 255 0 0\n1 0 0 255 0 0\n0 1 0 255 0 0\n1 1 1 255 0 0\n",
+        )
+        .unwrap();
         let cloud = Arc::new(pointcloud_core::open(&source, 4).unwrap());
         let mut studio = Studio::default();
         studio.clouds.push(CloudEntry {
@@ -2610,12 +2614,12 @@ mod section_box_tests {
         for x in 0..10 {
             for y in 0..10 {
                 for z in 0..10 {
-                    text.push_str(&format!("{x}.5 {y}.5 {z}.5\n"));
+                    text.push_str(&format!("{x}.5 {y}.5 {z}.5 255 0 0\n"));
                 }
             }
         }
         for z in 0..10 {
-            text.push_str(&format!("5 5 {z}.5\n"));
+            text.push_str(&format!("5 5 {z}.5 255 0 0\n"));
         }
         std::fs::write(&source, text).unwrap();
         let cloud = Arc::new(pointcloud_core::open(&source, 2_000).unwrap());

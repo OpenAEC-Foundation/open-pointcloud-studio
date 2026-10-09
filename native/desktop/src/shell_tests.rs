@@ -292,8 +292,8 @@ fn the_window_is_drawn_in_the_tokens_of_each_theme() {
             theme.key(),
             picture.rgb(500, 750)
         );
-        // The panel at the left lies on the shell, the strip at the top on
-        // the lighter shell.
+        // The panel at the left follows the theme; the approved ribbon keeps
+        // the same charcoal title strip in every theme.
         assert!(
             picture.is(100, 700, colors.bg),
             "{}: the panel is {:?}",
@@ -301,7 +301,7 @@ fn the_window_is_drawn_in_the_tokens_of_each_theme() {
             picture.rgb(100, 700)
         );
         assert!(
-            picture.is(700, 14, colors.bg_lighter),
+            picture.is(700, 14, iced::Color::from_rgb8(54, 54, 62)),
             "{}: the strip is {:?}",
             theme.key(),
             picture.rgb(700, 14)

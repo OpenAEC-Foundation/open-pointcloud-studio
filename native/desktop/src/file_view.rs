@@ -232,7 +232,7 @@ impl Studio {
         if open != self.file_open {
             self.file_open = open;
             self.file_page = FilePage::default();
-            self.ribbon_viewport = None;
+            self.ribbon_panel_open = None;
         }
         if let Some(page) = page {
             self.file_page = page;

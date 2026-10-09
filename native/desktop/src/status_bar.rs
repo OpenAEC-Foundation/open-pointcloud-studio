@@ -1,8 +1,8 @@
-//! The status bar of the style book along the bottom of the window: 22
+//! The status bar along the bottom of the window: 32
 //! pixels on the dark status colour, with what is going on and the totals
 //! at the left, the name and the version of the application in the middle
-//! and what the main area shows at the right. Every item is tinted under the
-//! pointer; the items that do something are buttons.
+//! and what the main area shows and the application's resident RAM at the
+//! right. Every item is tinted under the pointer; items that act are buttons.
 
 use std::sync::atomic::Ordering;
 
@@ -22,7 +22,7 @@ use crate::{app_title, fonts, format_count, format_zoom_level, ui_style, ui_them
 use crate::{CloudEntry, Message, Studio};
 
 /// The height of the bar, its line along the top included.
-pub(crate) const HEIGHT: f32 = 22.0;
+pub(crate) const HEIGHT: f32 = 32.0;
 
 /// The most characters the name of a drawing or a sheet takes at the right.
 const SHOWN_CHARS: usize = 40;
@@ -269,9 +269,56 @@ impl Studio {
     pub(crate) fn status_bar(&self, message: String) -> Element<'_, Message> {
         let colors = self.ui_theme.colors();
         let total_points: u64 = self.clouds.iter().map(CloudEntry::remaining_count).sum();
+        let compact = self.window_size.is_some_and(|size| size.width < 1100.0);
+        if compact {
+            let narrow = self.window_size.is_some_and(|size| size.width < 700.0);
+            let (view_label, view_value) = self.shown_item();
+            let mut compact_bar = row![item(&colors, tr("Points:"), format_count(total_points))]
+                .spacing(8)
+                .height(Fill)
+                .align_y(Alignment::Center);
+            if !narrow {
+                compact_bar = compact_bar.push(separator()).push(item(
+                    &colors,
+                    tr("Selected:"),
+                    format_count(self.selected_total()),
+                ));
+            }
+            compact_bar = compact_bar.push(Space::new(Fill, 1));
+            if !narrow {
+                compact_bar = compact_bar
+                    .push(item(&colors, view_label, view_value))
+                    .push(separator());
+            }
+            compact_bar = compact_bar.push(item(&colors, tr("RAM:"), self.memory_usage.label()));
+            return iced::widget::column![
+                container(Space::new(Fill, 1)).style(|theme| {
+                    container::Style::default().background(ui_theme::colors(theme).status_border)
+                }),
+                container(compact_bar)
+                    .padding([0, 8])
+                    .width(Fill)
+                    .height(Length::Fixed(HEIGHT - 1.0))
+                    .style(|theme| {
+                        let colors = ui_theme::colors(theme);
+                        container::Style::default()
+                            .background(colors.status_bg)
+                            .color(colors.status_text)
+                    }),
+            ]
+            .height(Length::Fixed(HEIGHT))
+            .into();
+        }
         // The message comes first and gives way to the totals after it: a
         // long one is cut off at its right instead of wrapping or pushing
         // them out.
+        let message = if self.window_size.is_some_and(|size| size.width < 1500.0) {
+            shortened(&message, 18)
+        } else if self.window_size.is_some_and(|size| size.width < 1700.0) {
+            shortened(&message, 30)
+        } else {
+            message
+        };
         let message = cell(
             container(
                 text(message)
@@ -322,6 +369,9 @@ impl Studio {
                 format_zoom_level(self.zoom),
             ));
         }
+        right = right
+            .push(separator())
+            .push(item(&colors, tr("RAM:"), self.memory_usage.label()));
 
         let bar = row![
             container(left).width(Fill).clip(true),
@@ -479,14 +529,14 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_is_22_pixels_of_the_status_colour_under_its_line() {
+    fn the_bar_is_32_pixels_of_the_status_colour_under_its_line() {
         let mut studio = Studio::default();
         for theme in UiTheme::ALL {
             studio.ui_theme = theme;
             let colors = theme.colors();
             // At the left edge, in the padding of the bar.
             let (rows, above) = bar_rows(&studio, 4);
-            assert_eq!(rows, 21, "{}", theme.key());
+            assert_eq!(rows, 31, "{}", theme.key());
             let [r, g, b, _] = colors.status_border.into_rgba8();
             assert_eq!(above, [r, g, b], "{}", theme.key());
         }

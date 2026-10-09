@@ -38,6 +38,7 @@ mod lod_pace;
 mod macos_open;
 mod mcp;
 mod measure;
+mod memory_usage;
 mod mesh_export;
 mod mesh_to_plans;
 mod mesh_wizard;
@@ -79,7 +80,7 @@ use file_view::{FileAction, FilePage};
 use iced::futures::SinkExt;
 use iced::mouse;
 use iced::widget::canvas::{self, event, Canvas, Frame, Geometry};
-use iced::widget::{button, column, container, row, scrollable, stack, svg, text};
+use iced::widget::{button, column, container, row, stack, svg, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Rectangle, Renderer, Size, Task, Theme};
 use lod_pace::{
     first_pass_budget, plan_first_pass, preview_improves, preview_tier_points, LodPace, ScreenFill,
@@ -1303,7 +1304,8 @@ fn main() -> iced::Result {
             } else {
                 iced::Subscription::none()
             };
-            iced::Subscription::batch([keyboard, api, opened, walking, clock])
+            let memory = iced::time::every(Duration::from_secs(2)).map(|_| Message::MemoryTick);
+            iced::Subscription::batch([keyboard, api, opened, walking, clock, memory])
         })
         .default_font(fonts::REGULAR)
         .theme(|studio: &Studio| studio.ui_theme.iced())
@@ -1326,6 +1328,7 @@ fn main() -> iced::Result {
         })
         .run_with(move || {
             let mut studio = Studio::default();
+            studio.memory_usage.refresh();
             if let Some((receiver, handle)) = api {
                 studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
                 studio.api_handle = Some(handle);
@@ -1367,10 +1370,6 @@ impl fmt::Display for ColorMode {
             Self::Classification => "Classification",
         })
     }
-}
-
-fn ribbon_scroll_id() -> scrollable::Id {
-    scrollable::Id::new("ops-ribbon")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1769,6 +1768,25 @@ impl WalkKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RibbonTab {
+    Start,
+    View,
+    Extensions,
+}
+
+impl RibbonTab {
+    const CORE: [Self; 2] = [Self::Start, Self::View];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Start => i18n::key("Home"),
+            Self::View => i18n::key("Display"),
+            Self::Extensions => i18n::key("Extensions"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Message {
     SyncWindowChrome(u8),
@@ -1787,14 +1805,16 @@ enum Message {
     ),
     ApiPickReady(String, u64, usize, Result<Option<IndexedPoint>, String>),
     ToggleFile,
+    OpenExtensionsPage,
+    RibbonTabSelected(RibbonTab),
     FileAction(FileAction),
     /// Show a page of the File view.
     FilePage(FilePage),
     /// Open a web page of the application in the browser of the system.
     OpenUrl(&'static str),
     Exit,
-    RibbonScroll(f32),
-    RibbonViewport(f32, f32, f32),
+    ToggleRibbonPanel(&'static str),
+    CloseRibbonPanel,
     /// The window opened or got another size: the ribbon measures its
     /// overflow again.
     WindowResized(Size),
@@ -1992,6 +2012,7 @@ enum Message {
     Crop(drawing_crop::CropAction),
     Modifiers(iced::keyboard::Modifiers),
     WalkTick(Instant),
+    MemoryTick,
     WalkStop,
     PanoramaReady(PathBuf, usize, Result<Arc<PhotoSet>, String>),
     /// The photos of a file that are not those of its stations.
@@ -2166,6 +2187,7 @@ struct Studio {
     walk_keys: [bool; 6],
     walk_fast: bool,
     walk_tick: Option<Instant>,
+    memory_usage: memory_usage::MemoryUsage,
     /// Modifier keys held down, for range and toggle clicks in the project list.
     modifiers: iced::keyboard::Modifiers,
     budget: u32,
@@ -2219,7 +2241,8 @@ struct Studio {
     viewport_size: Size,
     /// The size of the window, once it opened.
     window_size: Option<Size>,
-    ribbon_viewport: Option<(f32, f32, f32)>,
+    ribbon_panel_open: Option<&'static str>,
+    ribbon_tab: RibbonTab,
     file_open: bool,
     /// The page the File view shows.
     file_page: FilePage,
@@ -2815,6 +2838,7 @@ impl Default for Studio {
             walk_keys: [false; 6],
             walk_fast: false,
             walk_tick: None,
+            memory_usage: memory_usage::MemoryUsage::default(),
             modifiers: iced::keyboard::Modifiers::default(),
             budget: settings.budget,
             // The four class groups no longer have switches; classes are
@@ -2855,7 +2879,8 @@ impl Default for Studio {
             sheet_dialog: None,
             viewport_size: Size::new(915.0, 743.0),
             window_size: None,
-            ribbon_viewport: None,
+            ribbon_panel_open: None,
+            ribbon_tab: RibbonTab::Start,
             file_open: false,
             file_page: FilePage::default(),
             extensions,
@@ -2923,11 +2948,38 @@ impl Default for Studio {
 }
 
 impl Studio {
+    fn can_show_color_mode(&self, mode: ColorMode) -> bool {
+        let mut visible = self.clouds.iter().filter(|entry| entry.visible);
+        if visible.clone().next().is_none() {
+            return true;
+        }
+        match mode {
+            ColorMode::Rgb => visible.clone().any(|entry| entry.cloud.has_rgb),
+            ColorMode::Elevation => true,
+            ColorMode::Intensity => visible.clone().any(|entry| entry.cloud.has_intensity),
+            ColorMode::Classification => visible.any(|entry| entry.cloud.has_classification),
+        }
+    }
+
+    fn effective_color_mode(&self) -> ColorMode {
+        if self.can_show_color_mode(self.color_mode) {
+            self.color_mode
+        } else if self.can_show_color_mode(ColorMode::Rgb) {
+            ColorMode::Rgb
+        } else if self.can_show_color_mode(ColorMode::Intensity) {
+            ColorMode::Intensity
+        } else {
+            ColorMode::Elevation
+        }
+    }
+
     /// The width of the panel at the right: Properties, or the wider panel
     /// of the 3D BAG.
     fn properties_width(&self) -> f32 {
         if self.bag_panel {
             440.0
+        } else if self.window_size.is_some_and(|size| size.width >= 1500.0) {
+            300.0
         } else {
             270.0
         }
@@ -3378,6 +3430,23 @@ impl Studio {
             .map(|canvas| canvas.size())
             .filter(|size| size.width > 0.0 && size.height > 0.0)
             .unwrap_or(self.viewport_size)
+    }
+
+    /// Pan is measured in viewport pixels. Preserve its relative position
+    /// when the canvas changes size, so a fitted scan stays in view.
+    fn resize_viewport(&mut self, size: Size) {
+        let previous = self.viewport_size;
+        if previous.width <= 0.0 || previous.height <= 0.0 {
+            self.viewport_size = size;
+            return;
+        }
+        let was_automatic = self.auto_camera == Some((self.yaw, self.pitch, self.zoom, self.pan));
+        self.pan[0] *= size.width / previous.width;
+        self.pan[1] *= size.height / previous.height;
+        self.viewport_size = size;
+        if was_automatic {
+            self.auto_camera = Some((self.yaw, self.pitch, self.zoom, self.pan));
+        }
     }
 
     fn camera_value(&self) -> Value {
@@ -3852,7 +3921,7 @@ impl Studio {
                         "measure": self.measure.value(),
                         "measure_mode": self.measure.mode.map(measure::MeasureMode::key),
                         "thin_pending": self.thin_pending,
-                        "color_mode": self.color_mode.to_string(),
+                        "color_mode": self.effective_color_mode().to_string(),
                         "theme": self.ui_theme.key(),
                         "hidden_classes": (0..=u8::MAX)
                             .filter(|code| !self.class_visibility.allows(Some(*code)))
@@ -4199,14 +4268,19 @@ impl Studio {
                     "classification" => Some(ColorMode::Classification),
                     _ => None,
                 };
-                if let Some(mode) = mode {
-                    let task = self.update(Message::ColorMode(mode));
-                    (json!({"ok": true}), task)
-                } else {
-                    (
+                match mode {
+                    Some(mode) if self.can_show_color_mode(mode) => {
+                        let task = self.update(Message::ColorMode(mode));
+                        (json!({"ok": true}), task)
+                    }
+                    Some(_) => (
+                        json!({"ok": false, "error": "color mode is unavailable for the visible point clouds"}),
+                        Task::none(),
+                    ),
+                    None => (
                         json!({"ok": false, "error": "unknown color mode"}),
                         Task::none(),
-                    )
+                    ),
                 }
             }
             ApiCommand::SetClassVisible { code, visible } => {
@@ -5964,6 +6038,12 @@ impl Studio {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // The RAM label needs a fresh sample, not the model and drawing
+        // settlement work that follows every normal UI action.
+        if matches!(&message, Message::MemoryTick) {
+            self.memory_usage.refresh();
+            return Task::none();
+        }
         self.update_depth += 1;
         let task = self.handle(message);
         self.update_depth -= 1;
@@ -6192,7 +6272,17 @@ impl Studio {
             Message::ToggleFile => {
                 self.file_open = !self.file_open;
                 self.file_page = FilePage::default();
-                self.ribbon_viewport = None;
+                self.ribbon_panel_open = None;
+            }
+            Message::OpenExtensionsPage => {
+                self.file_open = true;
+                self.file_page = FilePage::Extensions;
+                self.ribbon_panel_open = None;
+            }
+            Message::RibbonTabSelected(tab) => {
+                self.ribbon_tab = tab;
+                self.file_open = false;
+                self.ribbon_panel_open = None;
             }
             Message::FileAction(action) => return self.file_action(action),
             Message::FilePage(page) => self.file_page = page,
@@ -6208,21 +6298,22 @@ impl Studio {
                 self.stop_background_work();
                 return iced::exit();
             }
-            Message::RibbonScroll(direction) => {
-                return scrollable::scroll_by(
-                    ribbon_scroll_id(),
-                    scrollable::AbsoluteOffset {
-                        x: direction * 320.0,
-                        y: 0.0,
-                    },
-                );
+            Message::ToggleRibbonPanel(id) => {
+                self.ribbon_panel_open = (self.ribbon_panel_open != Some(id)).then_some(id);
             }
-            Message::RibbonViewport(offset, width, content_width) => {
-                self.ribbon_viewport = Some((offset, width, content_width));
-            }
+            Message::CloseRibbonPanel => self.ribbon_panel_open = None,
             Message::WindowResized(size) => {
-                self.window_size = Some(size);
-                self.ribbon_viewport = None;
+                let previous = self.window_size.replace(size);
+                self.ribbon_panel_open = None;
+                if let Some(previous) = previous {
+                    let viewport = Size::new(
+                        (self.viewport_size.width + size.width - previous.width).max(1.0),
+                        (self.viewport_size.height + size.height - previous.height).max(1.0),
+                    );
+                    self.resize_viewport(viewport);
+                    self.revision += 1;
+                    return self.schedule_detail();
+                }
             }
             Message::Theme(theme) => {
                 self.ui_theme = theme;
@@ -6286,7 +6377,7 @@ impl Studio {
                 if self.file_open {
                     self.file_open = false;
                     self.file_page = FilePage::default();
-                    self.ribbon_viewport = None;
+                    self.ribbon_panel_open = None;
                 }
                 self.mesh_to_plans.minimize();
                 return self.open_paths(paths);
@@ -8269,6 +8360,7 @@ impl Studio {
                 self.revision += 1;
                 return Task::batch([self.sync_walk_station(), self.schedule_detail()]);
             }
+            Message::MemoryTick => self.memory_usage.refresh(),
             Message::Budget(budget) => {
                 self.budget = budget;
                 self.revision += 1;
@@ -8741,8 +8833,7 @@ impl Studio {
             }
             Message::ViewportSize(size) => {
                 if size.width > 0.0 && size.height > 0.0 {
-                    self.viewport_size = size;
-                    self.ribbon_viewport = None;
+                    self.resize_viewport(size);
                     self.revision += 1;
                     return self.schedule_detail();
                 }
@@ -8822,6 +8913,9 @@ impl Studio {
             }
             Message::Escape if self.turn.is_some() => return self.cancel_turn(),
             Message::Escape => {
+                if self.ribbon_panel_open.take().is_some() {
+                    return Task::none();
+                }
                 if self.settings.is_some() {
                     self.settings_action(settings_dialog::SettingsAction::Cancel);
                     return Task::none();
@@ -9909,73 +10003,125 @@ impl Studio {
     fn ribbon(&self) -> Element<'_, Message> {
         use opencad_ribbon::RibbonItem;
 
-        let file_button = container(
-            button(text(i18n::tr("File")).size(12).font(fonts::SEMIBOLD))
-                .on_press(Message::ToggleFile)
-                .style(|theme, status| {
-                    opencad_ribbon::file_tab_style(theme, self.file_open, status)
-                })
-                .padding([5, 13]),
+        let active_tab = self.ribbon_tab;
+        let compact = self.window_size.is_some_and(|size| size.width < 930.0);
+        let file_button = button(
+            row![
+                text(i18n::tr("File")).size(14).font(fonts::MEDIUM),
+                text("⌄").size(15),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
         )
-        .padding([1, 8]);
-        // The one tab of the ribbon; it also leads back from the File view.
-        let home_tab = button(text(i18n::tr("Home")).size(12).font(fonts::MEDIUM))
-            .on_press_maybe(self.file_open.then_some(Message::ToggleFile))
-            .style(|theme, status| opencad_ribbon::tab_style(theme, !self.file_open, status))
-            .padding([5, 13]);
-        let quick_access = row![
+        .on_press(Message::ToggleFile)
+        .style(|theme, status| opencad_ribbon::tab_style(theme, self.file_open, status))
+        .width(if compact { 100 } else { 139 })
+        .height(44)
+        .padding([4, if compact { 9 } else { 19 }]);
+        let tab_buttons: Vec<Element<'_, Message>> = RibbonTab::CORE
+            .into_iter()
+            .map(|tab| {
+                ribbon_title_tab(
+                    tab.label(),
+                    Message::RibbonTabSelected(tab),
+                    !self.file_open && active_tab == tab,
+                    compact,
+                )
+            })
+            .collect();
+        let tabs = row(tab_buttons).spacing(1).width(iced::Length::Shrink);
+        let quick_access: Element<'_, Message> = row![
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Open, 20.0),
+                title_icon(TitleIcon::OpenFolder, 24.0),
                 "Import point cloud",
                 Some(Message::Open),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::OpenFolder, 20.0),
+                title_icon(TitleIcon::OpenRecent, 24.0),
                 "Open scan folder",
                 Some(Message::OpenFolder),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Export, 20.0),
+                title_icon(TitleIcon::Save, 24.0),
                 "Export active point cloud",
                 self.active.map(|_| Message::Export),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Undo, 20.0),
+                title_icon(TitleIcon::Undo, 24.0),
                 "Undo",
                 (!self.undo_deletions.is_empty()).then_some(Message::UndoDelete),
             ),
             opencad_ribbon::quick_access_btn(
-                icon_svg(ToolIcon::Redo, 20.0),
+                title_icon(TitleIcon::Redo, 24.0),
                 "Redo",
                 (!self.redo_deletions.is_empty()).then_some(Message::RedoDelete),
             ),
         ]
-        .spacing(4);
-        let settings_button = button(text(i18n::tr("Settings")).size(12).font(fonts::MEDIUM))
+        .spacing(0)
+        .into();
+        let quick_access = if compact {
+            iced::widget::Space::with_width(0).into()
+        } else {
+            quick_access
+        };
+        let settings_content: Element<'_, Message> = if compact {
+            title_icon(TitleIcon::Settings, 22.0)
+        } else {
+            row![
+                title_icon(TitleIcon::Settings, 22.0),
+                text(i18n::tr("Settings")).size(13)
+            ]
+            .spacing(7)
+            .align_y(iced::Alignment::Center)
+            .into()
+        };
+        let settings_button = button(settings_content)
             .on_press(Message::Settings(settings_dialog::SettingsAction::Open))
             .style(|theme, status| opencad_ribbon::tab_style(theme, false, status))
-            .padding([5, 13]);
+            .width(if compact { 42 } else { 132 })
+            .height(42)
+            .padding([3, 8]);
         let logo = svg(svg::Handle::from_memory(
             include_bytes!("../../assets/icons/logo.svg").as_slice(),
         ))
-        .width(20)
-        .height(20);
+        .width(24)
+        .height(24);
+        let divider = || {
+            container(text(""))
+                .width(1)
+                .height(25)
+                .style(|_| container::Style::default().background(Color::from_rgb8(105, 105, 112)))
+        };
         let top_strip = container(
             row![
-                logo,
+                container(logo)
+                    .width(if compact { 34 } else { 50 })
+                    .align_x(iced::Alignment::Center),
                 file_button,
-                home_tab,
+                divider(),
+                iced::widget::Space::with_width(if compact { 7 } else { 19 }),
+                tabs,
+                iced::widget::Space::with_width(if compact { 7 } else { 17 }),
+                divider(),
+                ribbon_title_tab(
+                    RibbonTab::Extensions.label(),
+                    Message::RibbonTabSelected(RibbonTab::Extensions),
+                    !self.file_open && active_tab == RibbonTab::Extensions,
+                    compact,
+                ),
                 iced::widget::horizontal_space(),
                 quick_access,
+                divider(),
                 settings_button
             ]
             .width(Fill)
             .align_y(iced::Alignment::Center)
-            .padding([0, 8]),
+            .spacing(0)
+            .padding([0, 2]),
         )
         .width(Fill)
-        .height(29)
-        .style(|theme| container::Style::default().background(ui_theme::colors(theme).bg_lighter));
+        .height(48)
+        .style(|_| container::Style::default().background(Color::from_rgb8(54, 54, 62)));
         if self.file_open {
             return container(top_strip).width(Fill).style(ribbon_style).into();
         }
@@ -9990,7 +10136,7 @@ impl Studio {
             ))
         };
         let view = opencad_ribbon::render_group_items(
-            "VIEW",
+            "NAVIGATION",
             vec![
                 RibbonItem::Large(large_tool_button("Zoom all", Message::ResetCamera, false)),
                 RibbonItem::Small(small_tool_button_when(
@@ -10001,118 +10147,100 @@ impl Studio {
                         .iter()
                         .any(|entry| entry.visible && !entry.cloud.scan_poses.is_empty()),
                 )),
-                // The six directions are on the view cube.
-                preset("Isometric", CameraPreset::Isometric, "ISOMETRIC"),
-            ],
-        );
-        let display = ribbon_group(
-            "DISPLAY",
-            column![
-                row![
-                    small_color_button("RGB", ColorMode::Rgb, self.color_mode),
-                    small_color_button("Elevation", ColorMode::Elevation, self.color_mode),
-                    small_color_button("Intensity", ColorMode::Intensity, self.color_mode),
-                    small_color_button(
-                        "Classification",
-                        ColorMode::Classification,
-                        self.color_mode
-                    ),
-                ]
-                .spacing(2),
-                row![
-                    small_tool_button(
-                        "Eye-dome",
-                        Message::SetEyeDome(!self.eye_dome),
-                        self.eye_dome,
-                    ),
-                    small_tool_button(
-                        "Stations",
-                        Message::ShowScanPoses(!self.show_scan_poses),
-                        self.show_scan_poses,
-                    ),
-                    iced::widget::Space::with_width(4),
-                    text(i18n::tr("Size")).size(12),
-                    ui_style::slider(0.1..=20.0, self.point_size, Message::PointSize)
-                        .step(0.1_f32)
-                        .width(88),
-                    text(format!("{:.1}", self.point_size)).size(11).width(26),
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center)
-                .height(opencad_ribbon::ROW_H),
-                row![
-                    text(i18n::tr("Budget")).size(12),
-                    ui_style::slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
-                        .step(100_000_u32)
-                        .width(230),
-                    text(if self.budget >= 1_000_000 {
-                        format!("{:.1}M", self.budget as f64 / 1_000_000.0)
-                    } else {
-                        format!("{}k", self.budget / 1_000)
-                    })
-                    .size(11)
-                    .width(34),
-                ]
-                .spacing(5)
-                .align_y(iced::Alignment::Center)
-                .height(opencad_ribbon::ROW_H),
-            ]
-            .spacing(1)
-            .into(),
-        );
-        let section = opencad_ribbon::render_group_items(
-            "SECTION BOX",
-            vec![
-                RibbonItem::Large(large_tool_button(
-                    "Section box",
-                    Message::SetSectionEnabled(!self.section_enabled),
-                    self.section_enabled,
-                )),
-                self.drawing_ribbon_item(),
+                RibbonItem::Small(if self.selection_pending {
+                    small_tool_button("Cancel selection", Message::CancelSelection, false)
+                } else {
+                    small_tool_button_when(
+                        "Zoom selection",
+                        Message::ZoomToSelection,
+                        false,
+                        selected > 0 && !self.selection_bounds_pending,
+                    )
+                }),
                 RibbonItem::Small(small_tool_button_when(
                     "Fit selection",
                     Message::FitSectionToSelection,
                     false,
                     selected > 0 && !self.selection_bounds_pending,
                 )),
-                RibbonItem::Small(small_tool_button(
-                    "Reset box",
-                    Message::ResetSectionBox,
-                    false,
-                )),
+                // The six directions are on the view cube.
+                preset("Isometric", CameraPreset::Isometric, "ISOMETRIC"),
             ],
         );
-        // A running selection scan offers its cancel action instead of the zoom.
-        let zoom_selection = if self.selection_pending {
-            small_tool_button("Cancel selection", Message::CancelSelection, false)
-        } else {
-            small_tool_button_when(
-                "Zoom selection",
-                Message::ZoomToSelection,
-                false,
-                selected > 0 && !self.selection_bounds_pending,
+        let color_mode = self.effective_color_mode();
+        let display = ribbon_group(
+            "DISPLAY",
+            container(
+                column![
+                    row![
+                        small_color_button(
+                            "RGB",
+                            ColorMode::Rgb,
+                            color_mode,
+                            self.can_show_color_mode(ColorMode::Rgb)
+                        ),
+                        small_color_button("Elevation", ColorMode::Elevation, color_mode, true),
+                        small_color_button(
+                            "Intensity",
+                            ColorMode::Intensity,
+                            color_mode,
+                            self.can_show_color_mode(ColorMode::Intensity)
+                        ),
+                        small_color_button(
+                            "Class",
+                            ColorMode::Classification,
+                            color_mode,
+                            self.can_show_color_mode(ColorMode::Classification),
+                        ),
+                    ]
+                    .spacing(3),
+                    row![
+                        small_tool_button(
+                            "Eye-dome",
+                            Message::SetEyeDome(!self.eye_dome),
+                            self.eye_dome,
+                        ),
+                        small_tool_button(
+                            "Stations",
+                            Message::ShowScanPoses(!self.show_scan_poses),
+                            self.show_scan_poses,
+                        ),
+                        iced::widget::Space::with_width(2),
+                        text(i18n::tr("Size")).size(10),
+                        ui_style::slider(0.1..=20.0, self.point_size, Message::PointSize)
+                            .step(0.1_f32)
+                            .width(72),
+                        text(format!("{:.1}", self.point_size))
+                            .size(10)
+                            .width(26)
+                            .align_x(iced::Alignment::End),
+                    ]
+                    .spacing(2)
+                    .align_y(iced::Alignment::Center)
+                    .height(opencad_ribbon::ROW_H),
+                    row![
+                        text(i18n::tr("Budget")).size(10),
+                        ui_style::slider(100_000..=MAX_POINT_BUDGET, self.budget, Message::Budget)
+                            .step(100_000_u32)
+                            .width(200),
+                        text(if self.budget >= 1_000_000 {
+                            format!("{:.1}M", self.budget as f64 / 1_000_000.0)
+                        } else {
+                            format!("{}k", self.budget / 1_000)
+                        })
+                        .size(10)
+                        .width(34)
+                        .align_x(iced::Alignment::End),
+                    ]
+                    .spacing(2)
+                    .align_y(iced::Alignment::Center)
+                    .height(opencad_ribbon::ROW_H),
+                ]
+                .spacing(0),
             )
-        };
-        let selection = opencad_ribbon::render_group_items(
-            "SELECTION",
-            vec![
-                RibbonItem::Small(small_tool_button(
-                    "Pick point",
-                    Message::TogglePickSelect,
-                    self.pick_mode,
-                )),
-                RibbonItem::Small(small_tool_button("Clear", Message::ClearSelection, false)),
-                RibbonItem::Small(small_tool_button_when(
-                    "Delete",
-                    Message::DeleteSelection,
-                    false,
-                    selected > 0,
-                )),
-                RibbonItem::Small(zoom_selection),
-            ],
+            .padding([0, 4])
+            .into(),
         );
-        // The four ways to mesh are one wizard.
-        let surface_tools = vec![self.mesh_wizard_ribbon_item()];
         // While the active layer cannot get an octree of its own, running or
         // waiting builds offer their cancel action instead of the start.
         let can_build = self
@@ -10148,79 +10276,103 @@ impl Studio {
                 )),
             ],
         );
-        // The group is as wide as its name, which is wider than its one
-        // button.
         let mesh_to_plans = opencad_ribbon::render_group_items(
-            "POINTCLOUD TO DRAWING",
-            vec![RibbonItem::Large(
-                container(large_tool_button(
-                    "Pointcloud to Drawing",
-                    Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
-                    self.mesh_to_plans.is_open(),
-                ))
-                .width(96)
-                .height(Fill)
-                .align_x(iced::alignment::Horizontal::Center)
-                .into(),
-            )],
+            "2D",
+            vec![RibbonItem::Large(large_tool_button(
+                "Pointcloud to Drawing",
+                Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
+                self.mesh_to_plans.is_open(),
+            ))],
         );
-        // The buttons of extensions come after the groups that look at the
-        // cloud, where the default window of 1440 pixels still shows them;
-        // the ribbon is wider than that.
-        let groups = row![view, display, section, selection]
-            .push_maybe(self.extensions_ribbon())
-            .push(self.measure.ribbon())
-            .push(self.views_ribbon())
-            .push(opencad_ribbon::render_group_items("SURFACE", surface_tools))
-            .push(mesh_to_plans)
-            .push(index)
-            .spacing(2);
-        let group_strip = ui_style::scrollable(
-            container(groups)
+        let export_tools = opencad_ribbon::render_group_items(
+            "EXPORT",
+            vec![
+                RibbonItem::Large(large_tool_button_with_caption_when(
+                    "Export active point cloud",
+                    "Export",
+                    Message::Export,
+                    false,
+                    has_active,
+                )),
+                RibbonItem::Small(small_tool_button_when(
+                    "Export selection",
+                    Message::ExportSelection,
+                    false,
+                    selected > 0,
+                )),
+                RibbonItem::Small(small_tool_button_when(
+                    "Export section",
+                    Message::ExportSection,
+                    false,
+                    has_active && self.section_enabled,
+                )),
+                RibbonItem::Small(small_tool_button_when(
+                    "Export mesh",
+                    Message::ExportMesh,
+                    false,
+                    has_active,
+                )),
+            ],
+        );
+        use opencad_ribbon::AdaptivePanel;
+        let open = self.ribbon_panel_open;
+        let panel = |id, short, icon, full| {
+            AdaptivePanel::new(id, short, icon_svg(icon, 20.0), full, open == Some(id))
+        };
+        let groups = match active_tab {
+            RibbonTab::Start => self.reference_start_groups(),
+            RibbonTab::View => vec![
+                panel("view", "NAVIGATION", ToolIcon::Fit, view),
+                panel("display", "DISPLAY", ToolIcon::Shading, display),
+                panel("views", "VIEWS", ToolIcon::SavedView, self.views_ribbon()),
+                panel("plans", "2D", ToolIcon::MeshToPlans, mesh_to_plans),
+                panel(
+                    "measure",
+                    "MEASURE",
+                    ToolIcon::MeasureDistance,
+                    self.measure.ribbon(),
+                ),
+                panel("index", "INDEX", ToolIcon::Cloud, index),
+                panel("export", "EXPORT", ToolIcon::Export, export_tools),
+            ],
+            RibbonTab::Extensions => {
+                let mut groups = self
+                    .extensions_ribbon()
+                    .map_or_else(Vec::new, |extensions| {
+                        vec![panel(
+                            "extensions",
+                            "EXTENSIONS",
+                            ToolIcon::Building,
+                            extensions,
+                        )]
+                    });
+                groups.push(panel(
+                    "manage-extensions",
+                    "EXTENSIONS",
+                    ToolIcon::Building,
+                    opencad_ribbon::render_reference_group(
+                        "EXTENSIONS",
+                        180.0,
+                        reference_action(
+                            icon_svg(ToolIcon::Building, 42.0),
+                            i18n::key("Extensions"),
+                            i18n::key("Extensions"),
+                            Message::OpenExtensionsPage,
+                            false,
+                            true,
+                            ReferenceActionSize::Large(110.0),
+                        ),
+                    ),
+                ));
+                groups
+            }
+        };
+        let tool_strip: Element<'_, Message> =
+            container(opencad_ribbon::AdaptiveRibbon::new(groups, open))
                 .padding([0, 4])
-                .width(iced::Length::Shrink)
-                .height(opencad_ribbon::TOOL_BAR_H),
-        )
-        .id(ribbon_scroll_id())
-        .on_scroll(|viewport| {
-            Message::RibbonViewport(
-                viewport.absolute_offset().x,
-                viewport.bounds().width,
-                viewport.content_bounds().width,
-            )
-        })
-        .direction(scrollable::Direction::Horizontal(ui_style::scrollbar()))
-        .width(Fill)
-        .height(opencad_ribbon::TOOL_BAR_H);
-        let scroll_button = |label: &'static str, direction: f32, enabled: bool| {
-            container(
-                button(text(label).size(26))
-                    .on_press_maybe(enabled.then_some(Message::RibbonScroll(direction)))
-                    .style(|theme, status| ui_style::ribbon_button(theme, false, status))
-                    .width(26)
-                    .height(38)
-                    .padding(0),
-            )
-            .width(30)
-            .height(opencad_ribbon::TOOL_BAR_H)
-            .align_y(iced::Alignment::Center)
-            .align_x(iced::Alignment::Center)
-        };
-        let tool_strip: Element<'_, Message> = if let Some((offset, width, content_width)) = self
-            .ribbon_viewport
-            .filter(|(_, width, content_width)| *content_width > *width + 1.0)
-        {
-            row![
-                scroll_button("‹", -1.0, offset > 1.0),
-                group_strip,
-                scroll_button("›", 1.0, offset + width < content_width - 1.0),
-            ]
-            .height(opencad_ribbon::TOOL_BAR_H)
-            .align_y(iced::Alignment::Center)
-            .into()
-        } else {
-            group_strip.into()
-        };
+                .width(Fill)
+                .height(opencad_ribbon::TOOL_BAR_H)
+                .into();
         container(
             column![
                 top_strip,
@@ -10228,7 +10380,7 @@ impl Studio {
                     .width(Fill)
                     .height(1)
                     .style(|theme| container::Style::default()
-                        .background(ui_theme::colors(theme).accent)),
+                        .background(ui_theme::colors(theme).border_subtle)),
                 tool_strip,
             ]
             .spacing(0),
@@ -10238,12 +10390,351 @@ impl Studio {
         .into()
     }
 
+    /// The seven groups and their widths follow the approved 1584 px mockup.
+    /// On a narrower window AdaptiveRibbon folds complete groups into menus.
+    fn reference_start_groups(&self) -> Vec<opencad_ribbon::AdaptivePanel<'_>> {
+        use mesh_wizard::{MeshMethod, MeshWizardAction};
+        let selected = self.selected_total();
+        let active = self.active.is_some();
+        let open = self.ribbon_panel_open;
+        let panel = |id, title, icon, width, tools| {
+            opencad_ribbon::AdaptivePanel::new(
+                id,
+                title,
+                icon_svg(icon, 22.0),
+                opencad_ribbon::render_reference_group(title, width, tools),
+                open == Some(id),
+            )
+        };
+        let big = |kind, caption, tooltip, message, on, enabled, width| {
+            reference_action(
+                ribbon_primary_icon(kind, 49.0),
+                caption,
+                tooltip,
+                message,
+                on,
+                enabled,
+                ReferenceActionSize::Large(width),
+            )
+        };
+        let small = |kind, caption, tooltip, message, on, enabled, width| {
+            reference_action(
+                ribbon_primary_icon(kind, 34.0),
+                caption,
+                tooltip,
+                message,
+                on,
+                enabled,
+                ReferenceActionSize::Small(width),
+            )
+        };
+        let file = row![
+            big(
+                RibbonPrimaryIcon::Open,
+                "Open",
+                "Import point cloud",
+                Message::Open,
+                false,
+                true,
+                78.0
+            ),
+            column![
+                row![
+                    reference_icon_action(
+                        icon_svg(ToolIcon::Save, 31.0),
+                        "Export active point cloud",
+                        Message::Export,
+                        active
+                    ),
+                    reference_icon_action(
+                        icon_svg(ToolIcon::OpenFolder, 31.0),
+                        "Open scan folder",
+                        Message::OpenFolder,
+                        true
+                    ),
+                ],
+                row![
+                    reference_icon_action(
+                        icon_svg(ToolIcon::Undo, 31.0),
+                        "Undo",
+                        Message::UndoDelete,
+                        !self.undo_deletions.is_empty()
+                    ),
+                    reference_icon_action(
+                        icon_svg(ToolIcon::Redo, 31.0),
+                        "Redo",
+                        Message::RedoDelete,
+                        !self.redo_deletions.is_empty()
+                    ),
+                ],
+            ]
+            .spacing(2),
+        ]
+        .spacing(3)
+        .align_y(iced::Alignment::Center);
+        let centre = [
+            self.viewport_size.width * 0.5,
+            self.viewport_size.height * 0.5,
+        ];
+        let navigation = row![
+            big(
+                RibbonPrimaryIcon::Fit,
+                "Zoom all",
+                "Zoom all",
+                Message::ResetCamera,
+                false,
+                true,
+                96.0
+            ),
+            column![
+                row![
+                    reference_icon_action(
+                        ribbon_primary_icon(RibbonPrimaryIcon::ZoomIn, 31.0),
+                        "Zoom in",
+                        Message::Zoom(1.0, centre, self.viewport_size),
+                        true
+                    ),
+                    reference_icon_action(
+                        ribbon_primary_icon(RibbonPrimaryIcon::ZoomOut, 31.0),
+                        "Zoom out",
+                        Message::Zoom(-1.0, centre, self.viewport_size),
+                        true
+                    ),
+                    reference_icon_action(
+                        icon_svg(ToolIcon::Camera(CameraPreset::Isometric), 31.0),
+                        "Isometric",
+                        Message::CameraPreset(CameraPreset::Isometric),
+                        true
+                    ),
+                ],
+                row![
+                    reference_icon_action(
+                        icon_svg(ToolIcon::Camera(CameraPreset::Top), 31.0),
+                        "Top",
+                        Message::CameraPreset(CameraPreset::Top),
+                        true
+                    ),
+                    reference_icon_action(
+                        icon_svg(ToolIcon::Camera(CameraPreset::Front), 31.0),
+                        "Front",
+                        Message::CameraPreset(CameraPreset::Front),
+                        true
+                    ),
+                    reference_icon_action(
+                        icon_svg(ToolIcon::Fit, 31.0),
+                        "Fit stations",
+                        Message::FitScanPoses,
+                        self.clouds
+                            .iter()
+                            .any(|entry| entry.visible && !entry.cloud.scan_poses.is_empty())
+                    ),
+                ],
+            ]
+            .spacing(2),
+        ]
+        .spacing(3)
+        .align_y(iced::Alignment::Center);
+        let selection = row![
+            big(
+                RibbonPrimaryIcon::Select,
+                "Select",
+                "Pick point",
+                Message::TogglePickSelect,
+                self.pick_mode,
+                true,
+                88.0
+            ),
+            small(
+                RibbonPrimaryIcon::Window,
+                i18n::key("Window"),
+                "Box select",
+                Message::ToggleBoxSelect,
+                self.box_select,
+                true,
+                59.0
+            ),
+            small(
+                RibbonPrimaryIcon::Clear,
+                i18n::key("Clear short"),
+                "Clear",
+                Message::ClearSelection,
+                false,
+                selected > 0,
+                52.0
+            ),
+            small(
+                RibbonPrimaryIcon::Cut,
+                i18n::key("Cut points"),
+                "Delete",
+                Message::DeleteSelection,
+                false,
+                selected > 0,
+                52.0
+            ),
+        ]
+        .spacing(3)
+        .align_y(iced::Alignment::Center);
+        let section = row![
+            big(
+                RibbonPrimaryIcon::Section,
+                "Section box",
+                "Section box",
+                Message::SetSectionEnabled(!self.section_enabled),
+                self.section_enabled,
+                true,
+                88.0
+            ),
+            small(
+                RibbonPrimaryIcon::SectionCut,
+                i18n::key("Slice"),
+                "Section drawing",
+                Message::Drawing(drawing::DrawingAction::Toggle),
+                false,
+                self.drawing_button_enabled(),
+                58.0
+            ),
+            small(
+                RibbonPrimaryIcon::Reset,
+                i18n::key("Reset short"),
+                "Reset box",
+                Message::ResetSectionBox,
+                false,
+                self.section_enabled,
+                58.0
+            ),
+        ]
+        .spacing(3)
+        .align_y(iced::Alignment::Center);
+        let mesh = row![
+            big(
+                RibbonPrimaryIcon::Mesh,
+                "Mesh",
+                "Mesh Pointcloud",
+                Message::MeshWizard(MeshWizardAction::Open),
+                self.mesh_wizard.is_open() || self.mesh_busy_label().is_some(),
+                active,
+                84.0
+            ),
+            small(
+                RibbonPrimaryIcon::MeshWire,
+                i18n::key("Wireframe"),
+                "3D surface",
+                Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Surface)),
+                false,
+                active,
+                57.0
+            ),
+            small(
+                RibbonPrimaryIcon::MeshSmooth,
+                i18n::key("Smooth"),
+                "Terrain mesh",
+                Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Terrain)),
+                false,
+                active,
+                52.0
+            ),
+            small(
+                RibbonPrimaryIcon::MeshEdit,
+                i18n::key("Edit mesh"),
+                "Detect faces",
+                Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Faces)),
+                false,
+                active,
+                59.0
+            ),
+            small(
+                RibbonPrimaryIcon::MeshExport,
+                i18n::key("Export mesh short"),
+                "Export mesh",
+                Message::ExportMesh,
+                false,
+                self.active
+                    .and_then(|index| self.clouds.get(index))
+                    .is_some_and(|entry| entry.mesh.is_some()),
+                70.0
+            ),
+        ]
+        .spacing(2)
+        .align_y(iced::Alignment::Center);
+        let measure = big(
+            RibbonPrimaryIcon::Measure,
+            "Measure",
+            "Distance",
+            Message::Measure(measure::MeasureAction::Toggle(
+                measure::MeasureMode::Distance,
+            )),
+            self.measure.mode == Some(measure::MeasureMode::Distance),
+            active,
+            96.0,
+        );
+        let export = big(
+            RibbonPrimaryIcon::Export,
+            i18n::key("Export short"),
+            "Export active point cloud",
+            Message::Export,
+            false,
+            active,
+            100.0,
+        );
+        vec![
+            panel(
+                "file",
+                i18n::key("FILE"),
+                ToolIcon::Open,
+                218.0,
+                file.into(),
+            ),
+            panel(
+                "view",
+                i18n::key("NAVIGATION"),
+                ToolIcon::Fit,
+                290.0,
+                navigation.into(),
+            ),
+            panel(
+                "selection",
+                i18n::key("SELECTION"),
+                ToolIcon::Select,
+                285.0,
+                selection.into(),
+            ),
+            panel(
+                "section",
+                i18n::key("SECTION BOX"),
+                ToolIcon::SectionBox,
+                230.0,
+                section.into(),
+            ),
+            panel(
+                "surface",
+                i18n::key("SURFACE"),
+                ToolIcon::MeshSurface,
+                333.0,
+                mesh.into(),
+            ),
+            panel(
+                "measure",
+                i18n::key("MEASURE"),
+                ToolIcon::MeasureDistance,
+                105.0,
+                measure,
+            ),
+            panel(
+                "export",
+                i18n::key("EXPORT"),
+                ToolIcon::Export,
+                110.0,
+                export,
+            ),
+        ]
+    }
+
     fn point_viewport(&self) -> PointViewport<'_> {
         PointViewport {
             clouds: &self.clouds,
             scene: self.ui_theme.colors(),
             loading_status: (!self.imports.is_empty()).then_some(self.status.as_str()),
-            color_mode: self.color_mode,
+            color_mode: self.effective_color_mode(),
             point_size: self.point_size,
             eye_dome: self.eye_dome,
             eye_dome_strength: self.eye_dome_strength,
@@ -10321,7 +10812,7 @@ impl Studio {
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
-            .height(opencad_ribbon::ROW_H),
+            .height(32),
             row![
                 axis_input("X", "1", &self.scale_inputs[0], |value| {
                     Message::ScaleAxis(0, value)
@@ -10336,7 +10827,7 @@ impl Studio {
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
-            .height(opencad_ribbon::ROW_H),
+            .height(32),
             row![
                 text(i18n::tr("Keep")).size(12).width(44),
                 ui_style::slider(1..=100, self.thin_percent, Message::ThinPercent).width(102),
@@ -10350,7 +10841,7 @@ impl Studio {
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
-            .height(opencad_ribbon::ROW_H),
+            .height(32),
         ]
         .spacing(1)
         .padding([4, 8]);
@@ -10462,7 +10953,7 @@ impl Studio {
             display_name(&entry.cloud.path)
         });
         let mut properties = column![
-            container(text(i18n::tr("Properties")).size(11).font(fonts::SEMIBOLD))
+            container(text(i18n::tr("Properties")).size(12).font(fonts::SEMIBOLD))
                 .padding([5, 8])
                 .width(Fill),
             container(text(filename).size(11))
@@ -10472,7 +10963,7 @@ impl Studio {
                     .background(ui_theme::colors(theme).bg_lighter)),
         ]
         .spacing(0)
-        .width(270);
+        .width(self.properties_width());
         // The block of the sheet or of the Drawing view comes first while
         // it is shown.
         if let Some(view) = self
@@ -11073,6 +11564,124 @@ fn axis_input<'a>(
     .into()
 }
 
+fn ribbon_title_tab(
+    label: &'static str,
+    message: Message,
+    active: bool,
+    compact: bool,
+) -> Element<'static, Message> {
+    let width = match (compact, label) {
+        (true, "Display") => 100.0,
+        (true, "Extensions") => 120.0,
+        (true, _) => 72.0,
+        (false, "Display") => 118.0,
+        (false, "Extensions") => 145.0,
+        (false, _) => 92.0,
+    };
+    let label: Element<'static, Message> = if label == "Extensions" {
+        row![
+            title_icon(TitleIcon::Extensions, 23.0),
+            text(i18n::tr(label)).size(14).font(fonts::MEDIUM),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center)
+        .into()
+    } else {
+        text(i18n::tr(label))
+            .size(14)
+            .font(if active {
+                fonts::SEMIBOLD
+            } else {
+                fonts::MEDIUM
+            })
+            .width(Fill)
+            .align_x(iced::Alignment::Center)
+            .into()
+    };
+    column![
+        iced::widget::Space::with_height(7),
+        button(container(label).width(Fill).center_x(Fill))
+            .on_press(message)
+            .style(move |theme, status| opencad_ribbon::tab_style(theme, active, status))
+            .width(Fill)
+            .height(37)
+            .padding([5, 6]),
+        container(iced::widget::Space::with_height(4))
+            .width(Fill)
+            .style(move |theme| {
+                container::Style::default().background(if active {
+                    ui_theme::colors(theme).accent
+                } else {
+                    Color::TRANSPARENT
+                })
+            }),
+    ]
+    .spacing(0)
+    .width(iced::Length::Fixed(width))
+    .into()
+}
+
+enum ReferenceActionSize {
+    Large(f32),
+    Small(f32),
+}
+
+fn reference_action(
+    icon: Element<'static, Message>,
+    caption: &'static str,
+    tooltip: &'static str,
+    message: Message,
+    active: bool,
+    enabled: bool,
+    size: ReferenceActionSize,
+) -> Element<'static, Message> {
+    let (width, large) = match size {
+        ReferenceActionSize::Large(width) => (width, true),
+        ReferenceActionSize::Small(width) => (width, false),
+    };
+    let icon_size = if large { 50.0 } else { 35.0 };
+    let face = column![
+        container(icon)
+            .width(Fill)
+            .height(icon_size + if large { 7.0 } else { 2.0 })
+            .center(Fill),
+        text(i18n::tr(caption))
+            .size(if large { 12 } else { 11 })
+            .width(Fill)
+            .align_x(iced::Alignment::Center)
+            .wrapping(iced::widget::text::Wrapping::None),
+    ]
+    .align_x(iced::Alignment::Center);
+    ui_style::ribbon_tooltip(
+        button(face)
+            .on_press_maybe(enabled.then_some(message))
+            .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
+            .width(width)
+            .height(78.0)
+            .padding([2, 1]),
+        i18n::tr(tooltip),
+    )
+    .into()
+}
+
+fn reference_icon_action(
+    icon: Element<'static, Message>,
+    tooltip: &'static str,
+    message: Message,
+    enabled: bool,
+) -> Element<'static, Message> {
+    ui_style::ribbon_tooltip(
+        button(container(icon).width(Fill).height(Fill).center(Fill))
+            .on_press_maybe(enabled.then_some(message))
+            .style(|theme, status| ui_style::ribbon_button(theme, false, status))
+            .width(42)
+            .height(36)
+            .padding(1),
+        i18n::tr(tooltip),
+    )
+    .into()
+}
+
 fn small_tool_button(
     label: &'static str,
     message: Message,
@@ -11089,45 +11698,517 @@ fn large_tool_button(
     large_tool_button_when(label, message, active, true)
 }
 
-/// The main tool of a ribbon group: a large icon above its name, over the
-/// full height of the group. The button is as wide as its name on one line,
-/// so that a long word is never broken, and never narrower than
-/// `LARGE_TOOL_MIN_WIDTH`.
+/// The principal action of a group: a larger icon and a short caption.
+/// The full translated name remains available in the tooltip.
 fn large_tool_button_when(
     label: &'static str,
     message: Message,
     active: bool,
     enabled: bool,
 ) -> Element<'static, Message> {
-    let icon = tool_icon(&message);
-    button(
-        column![
-            icon_svg(icon, 32.0),
-            iced::widget::Space::with_height(4),
-            text(i18n::tr(label))
-                .size(11)
-                .font(label_font(active))
-                .wrapping(iced::widget::text::Wrapping::None),
-            iced::widget::Space::with_width(LARGE_TOOL_MIN_WIDTH),
-        ]
-        .align_x(iced::Alignment::Center),
+    let caption = match label {
+        "Section drawing" => i18n::key("Drawing"),
+        "Build index" => "Index",
+        "Cancel index" => "Cancel",
+        "Pointcloud to Drawing" => "2D",
+        _ => label,
+    };
+    large_tool_button_with_caption_when(label, caption, message, active, enabled)
+}
+
+fn large_tool_button_with_caption_when(
+    label: &'static str,
+    caption: &'static str,
+    message: Message,
+    active: bool,
+    enabled: bool,
+) -> Element<'static, Message> {
+    let icon = match &message {
+        Message::Open => ribbon_primary_icon(RibbonPrimaryIcon::Open, 28.0),
+        Message::ResetCamera => ribbon_primary_icon(RibbonPrimaryIcon::Fit, 28.0),
+        Message::TogglePickSelect => ribbon_primary_icon(RibbonPrimaryIcon::Select, 28.0),
+        Message::SetSectionEnabled(_) => ribbon_primary_icon(RibbonPrimaryIcon::Section, 28.0),
+        _ => icon_svg(tool_icon(&message), 28.0),
+    };
+    ui_style::ribbon_tooltip(
+        button(
+            column![
+                container(icon).width(Fill).height(Fill).center(Fill),
+                text(i18n::tr(caption))
+                    .size(10)
+                    .width(Fill)
+                    .align_x(iced::Alignment::Center)
+                    .wrapping(iced::widget::text::Wrapping::Word),
+            ]
+            .align_x(iced::Alignment::Center),
+        )
+        .on_press_maybe(enabled.then_some(message))
+        .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
+        .width(LARGE_TOOL_MIN_WIDTH)
+        .height(Fill)
+        .padding([4, 3]),
+        i18n::tr(label),
     )
-    .on_press_maybe(enabled.then_some(message))
-    .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-    .height(Fill)
-    .padding([6, 3])
     .into()
 }
 
-/// The narrowest a large ribbon button gets, for a short name.
-const LARGE_TOOL_MIN_WIDTH: f32 = 46.0;
+/// Width of a large tool including its short caption.
+const LARGE_TOOL_MIN_WIDTH: f32 = 70.0;
 
-/// The font of the name of a ribbon button: medium while it is on.
-fn label_font(active: bool) -> iced::Font {
-    if active {
-        fonts::MEDIUM
-    } else {
-        fonts::REGULAR
+#[derive(Debug, Clone, Copy)]
+enum RibbonPrimaryIcon {
+    Open,
+    Fit,
+    Select,
+    Section,
+    Mesh,
+    ZoomIn,
+    ZoomOut,
+    Window,
+    Clear,
+    Cut,
+    SectionCut,
+    Reset,
+    MeshWire,
+    MeshSmooth,
+    MeshEdit,
+    MeshExport,
+    Measure,
+    Export,
+}
+
+fn ribbon_primary_icon(kind: RibbonPrimaryIcon, size: f32) -> Element<'static, Message> {
+    Canvas::new(RibbonPrimaryGlyph(kind))
+        .width(size)
+        .height(size)
+        .into()
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TitleIcon {
+    Extensions,
+    Settings,
+    OpenFolder,
+    OpenRecent,
+    Save,
+    Undo,
+    Redo,
+}
+
+fn title_icon(kind: TitleIcon, size: f32) -> Element<'static, Message> {
+    Canvas::new(TitleGlyph(kind))
+        .width(size)
+        .height(size)
+        .into()
+}
+
+struct TitleGlyph(TitleIcon);
+
+impl canvas::Program<Message> for TitleGlyph {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        frame.scale(bounds.width.min(bounds.height) / 24.0);
+        let white = Color::from_rgb8(250, 250, 249);
+        let amber = Color::from_rgb8(217, 119, 6);
+        let stroke = canvas::Stroke::default().with_color(white).with_width(1.8);
+        let accent = canvas::Stroke::default().with_color(amber).with_width(1.8);
+        let line = |points: &[[f32; 2]]| {
+            canvas::Path::new(|path| {
+                path.move_to(UiPoint::new(points[0][0], points[0][1]));
+                for point in &points[1..] {
+                    path.line_to(UiPoint::new(point[0], point[1]));
+                }
+            })
+        };
+        match self.0 {
+            TitleIcon::Extensions => {
+                frame.stroke(
+                    &line(&[
+                        [3.0, 5.0],
+                        [8.0, 5.0],
+                        [8.0, 3.0],
+                        [10.0, 2.0],
+                        [12.0, 3.0],
+                        [12.0, 5.0],
+                        [18.0, 5.0],
+                        [18.0, 10.0],
+                    ]),
+                    stroke,
+                );
+                frame.stroke(&canvas::Path::circle(UiPoint::new(19.0, 12.0), 2.0), stroke);
+                frame.stroke(
+                    &line(&[
+                        [18.0, 14.0],
+                        [18.0, 19.0],
+                        [13.0, 19.0],
+                        [13.0, 17.0],
+                        [11.0, 16.0],
+                        [9.0, 17.0],
+                        [9.0, 19.0],
+                        [3.0, 19.0],
+                        [3.0, 13.0],
+                        [5.0, 13.0],
+                        [6.0, 11.0],
+                        [5.0, 9.0],
+                        [3.0, 9.0],
+                        [3.0, 5.0],
+                    ]),
+                    stroke,
+                );
+            }
+            TitleIcon::Settings => {
+                frame.stroke(&canvas::Path::circle(UiPoint::new(12.0, 12.0), 7.0), stroke);
+                frame.stroke(&canvas::Path::circle(UiPoint::new(12.0, 12.0), 2.5), stroke);
+                for points in [
+                    [[12.0, 2.0], [12.0, 5.0]],
+                    [[12.0, 19.0], [12.0, 22.0]],
+                    [[2.0, 12.0], [5.0, 12.0]],
+                    [[19.0, 12.0], [22.0, 12.0]],
+                    [[5.0, 5.0], [7.0, 7.0]],
+                    [[17.0, 17.0], [19.0, 19.0]],
+                    [[5.0, 19.0], [7.0, 17.0]],
+                    [[17.0, 7.0], [19.0, 5.0]],
+                ] {
+                    frame.stroke(&line(&points), stroke);
+                }
+            }
+            TitleIcon::OpenFolder | TitleIcon::OpenRecent => {
+                frame.stroke(
+                    &line(&[
+                        [2.0, 7.0],
+                        [2.0, 5.0],
+                        [9.0, 5.0],
+                        [11.0, 7.0],
+                        [21.0, 7.0],
+                        [21.0, 18.0],
+                        [3.0, 18.0],
+                        [2.0, 7.0],
+                    ]),
+                    stroke,
+                );
+                frame.stroke(&line(&[[3.0, 11.0], [21.0, 11.0]]), stroke);
+                if matches!(self.0, TitleIcon::OpenRecent) {
+                    frame.stroke(&line(&[[13.0, 14.0], [18.0, 14.0]]), accent);
+                }
+            }
+            TitleIcon::Save => {
+                frame.stroke(
+                    &line(&[
+                        [4.0, 3.0],
+                        [18.0, 3.0],
+                        [21.0, 6.0],
+                        [21.0, 21.0],
+                        [3.0, 21.0],
+                        [3.0, 3.0],
+                    ]),
+                    stroke,
+                );
+                frame.stroke(
+                    &line(&[[7.0, 3.0], [7.0, 10.0], [17.0, 10.0], [17.0, 3.0]]),
+                    stroke,
+                );
+                frame.stroke(
+                    &line(&[[7.0, 21.0], [7.0, 14.0], [17.0, 14.0], [17.0, 21.0]]),
+                    stroke,
+                );
+            }
+            TitleIcon::Undo | TitleIcon::Redo => {
+                let mirror = matches!(self.0, TitleIcon::Redo);
+                let x = |value: f32| if mirror { 24.0 - value } else { value };
+                frame.stroke(
+                    &line(&[[x(8.0), 8.0], [x(4.0), 12.0], [x(8.0), 16.0]]),
+                    stroke,
+                );
+                frame.stroke(
+                    &line(&[
+                        [x(4.0), 12.0],
+                        [x(15.0), 12.0],
+                        [x(19.0), 15.0],
+                        [x(19.0), 19.0],
+                    ]),
+                    stroke,
+                );
+            }
+        }
+        vec![frame.into_geometry()]
+    }
+}
+
+struct RibbonPrimaryGlyph(RibbonPrimaryIcon);
+
+impl canvas::Program<Message> for RibbonPrimaryGlyph {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        frame.scale(bounds.width.min(bounds.height) / 24.0);
+        let colors = ui_theme::colors(theme);
+        let outline = canvas::Stroke::default()
+            .with_color(colors.text)
+            .with_width(1.8);
+        let accent = canvas::Stroke::default()
+            .with_color(colors.accent)
+            .with_width(1.8);
+        let line = |points: &[[f32; 2]]| {
+            canvas::Path::new(|path| {
+                path.move_to(UiPoint::new(points[0][0], points[0][1]));
+                for point in &points[1..] {
+                    path.line_to(UiPoint::new(point[0], point[1]));
+                }
+            })
+        };
+        let dot = |frame: &mut Frame, x: f32, y: f32| {
+            frame.fill(
+                &canvas::Path::circle(UiPoint::new(x, y), 1.2),
+                colors.accent,
+            );
+        };
+        match self.0 {
+            RibbonPrimaryIcon::Open => {
+                frame.stroke(
+                    &line(&[
+                        [2.5, 7.0],
+                        [2.5, 4.5],
+                        [9.0, 4.5],
+                        [11.0, 7.0],
+                        [21.0, 7.0],
+                        [21.0, 18.5],
+                        [2.5, 18.5],
+                        [2.5, 7.0],
+                    ]),
+                    outline,
+                );
+                frame.stroke(&line(&[[2.5, 9.5], [21.0, 9.5]]), outline);
+                dot(&mut frame, 13.0, 14.0);
+                dot(&mut frame, 17.0, 14.0);
+                dot(&mut frame, 15.0, 17.0);
+            }
+            RibbonPrimaryIcon::Fit => {
+                for points in [
+                    [[3.0, 8.0], [3.0, 3.0], [8.0, 3.0]],
+                    [[16.0, 3.0], [21.0, 3.0], [21.0, 8.0]],
+                    [[3.0, 16.0], [3.0, 21.0], [8.0, 21.0]],
+                    [[16.0, 21.0], [21.0, 21.0], [21.0, 16.0]],
+                ] {
+                    frame.stroke(&line(&points), outline);
+                }
+                for (x, y) in [(9.0, 11.0), (13.0, 9.0), (15.5, 14.0), (10.0, 15.5)] {
+                    dot(&mut frame, x, y);
+                }
+            }
+            RibbonPrimaryIcon::Select => {
+                frame.stroke(&line(&[[12.0, 2.0], [12.0, 8.0]]), outline);
+                frame.stroke(&line(&[[12.0, 16.0], [12.0, 22.0]]), outline);
+                frame.stroke(&line(&[[2.0, 12.0], [8.0, 12.0]]), outline);
+                frame.stroke(&line(&[[16.0, 12.0], [22.0, 12.0]]), outline);
+                frame.stroke(&canvas::Path::circle(UiPoint::new(12.0, 12.0), 3.1), accent);
+                dot(&mut frame, 12.0, 12.0);
+            }
+            RibbonPrimaryIcon::Section => {
+                frame.stroke(
+                    &line(&[
+                        [12.0, 2.0],
+                        [21.0, 6.5],
+                        [21.0, 17.5],
+                        [12.0, 22.0],
+                        [3.0, 17.5],
+                        [3.0, 6.5],
+                        [12.0, 2.0],
+                    ]),
+                    outline,
+                );
+                frame.stroke(&line(&[[3.0, 6.5], [12.0, 11.0], [21.0, 6.5]]), outline);
+                frame.stroke(&line(&[[12.0, 11.0], [12.0, 22.0]]), outline);
+                frame.stroke(&line(&[[15.8, 4.0], [15.8, 19.8]]), accent);
+            }
+            RibbonPrimaryIcon::Mesh => {
+                frame.fill(
+                    &canvas::Path::new(|path| {
+                        path.move_to(UiPoint::new(10.0, 11.0));
+                        path.line_to(UiPoint::new(17.5, 12.5));
+                        path.line_to(UiPoint::new(14.0, 20.0));
+                        path.close();
+                    }),
+                    Color::from_rgba8(217, 119, 6, 0.7),
+                );
+                for points in [
+                    &[
+                        [2.0, 15.0],
+                        [7.5, 3.0],
+                        [15.0, 4.0],
+                        [22.0, 17.0],
+                        [14.0, 21.0],
+                        [2.0, 15.0],
+                    ][..],
+                    &[[7.5, 3.0], [10.0, 11.0], [2.0, 15.0]][..],
+                    &[
+                        [7.5, 3.0],
+                        [15.0, 4.0],
+                        [17.5, 12.5],
+                        [10.0, 11.0],
+                        [14.0, 21.0],
+                    ][..],
+                    &[[15.0, 4.0], [22.0, 17.0], [17.5, 12.5], [14.0, 21.0]][..],
+                    &[[2.0, 15.0], [14.0, 21.0]][..],
+                ] {
+                    frame.stroke(&line(points), outline);
+                }
+                for (x, y) in [(7.5, 3.0), (10.0, 11.0), (17.5, 12.5)] {
+                    frame.fill(&canvas::Path::circle(UiPoint::new(x, y), 0.8), colors.text);
+                }
+            }
+            RibbonPrimaryIcon::ZoomIn | RibbonPrimaryIcon::ZoomOut => {
+                frame.stroke(
+                    &canvas::Path::circle(UiPoint::new(10.0, 10.0), 6.0),
+                    outline,
+                );
+                frame.stroke(&line(&[[14.3, 14.3], [21.0, 21.0]]), outline);
+                frame.stroke(&line(&[[6.5, 10.0], [13.5, 10.0]]), outline);
+                if matches!(self.0, RibbonPrimaryIcon::ZoomIn) {
+                    frame.stroke(&line(&[[10.0, 6.5], [10.0, 13.5]]), outline);
+                }
+            }
+            RibbonPrimaryIcon::Window => {
+                for points in [
+                    [[3.0, 8.0], [3.0, 3.0], [8.0, 3.0]],
+                    [[16.0, 3.0], [21.0, 3.0], [21.0, 8.0]],
+                    [[3.0, 16.0], [3.0, 21.0], [8.0, 21.0]],
+                    [[16.0, 21.0], [21.0, 21.0], [21.0, 16.0]],
+                ] {
+                    frame.stroke(&line(&points), outline);
+                }
+            }
+            RibbonPrimaryIcon::Clear => {
+                frame.stroke(&line(&[[5.0, 7.0], [19.0, 7.0]]), outline);
+                frame.stroke(
+                    &line(&[[7.0, 7.0], [8.0, 21.0], [16.0, 21.0], [17.0, 7.0]]),
+                    outline,
+                );
+                frame.stroke(&line(&[[9.0, 4.0], [15.0, 4.0]]), outline);
+            }
+            RibbonPrimaryIcon::Cut => {
+                frame.stroke(&line(&[[4.0, 3.0], [19.0, 20.0]]), outline);
+                frame.stroke(&line(&[[20.0, 3.0], [5.0, 20.0]]), outline);
+                frame.stroke(&canvas::Path::circle(UiPoint::new(5.0, 20.0), 2.0), outline);
+                frame.stroke(
+                    &canvas::Path::circle(UiPoint::new(19.0, 20.0), 2.0),
+                    outline,
+                );
+            }
+            RibbonPrimaryIcon::SectionCut => {
+                frame.stroke(
+                    &line(&[
+                        [4.0, 5.0],
+                        [12.0, 2.0],
+                        [20.0, 5.0],
+                        [20.0, 18.0],
+                        [12.0, 22.0],
+                        [4.0, 18.0],
+                        [4.0, 5.0],
+                    ]),
+                    outline,
+                );
+                frame.stroke(&line(&[[4.0, 5.0], [12.0, 9.0], [20.0, 5.0]]), outline);
+                frame.stroke(&line(&[[12.0, 9.0], [12.0, 22.0]]), accent);
+            }
+            RibbonPrimaryIcon::Reset => {
+                frame.stroke(
+                    &line(&[
+                        [18.0, 7.0],
+                        [15.0, 5.0],
+                        [10.0, 5.0],
+                        [6.0, 8.0],
+                        [5.0, 13.0],
+                        [8.0, 18.0],
+                        [13.0, 19.0],
+                        [18.0, 16.0],
+                    ]),
+                    outline,
+                );
+                frame.stroke(&line(&[[19.0, 8.0], [19.0, 3.0], [14.0, 3.0]]), accent);
+            }
+            RibbonPrimaryIcon::MeshWire
+            | RibbonPrimaryIcon::MeshSmooth
+            | RibbonPrimaryIcon::MeshEdit
+            | RibbonPrimaryIcon::MeshExport => {
+                if matches!(self.0, RibbonPrimaryIcon::MeshSmooth) {
+                    frame.fill(
+                        &canvas::Path::new(|path| {
+                            path.move_to(UiPoint::new(3.0, 16.0));
+                            path.line_to(UiPoint::new(8.0, 5.0));
+                            path.line_to(UiPoint::new(17.0, 7.0));
+                            path.line_to(UiPoint::new(20.0, 18.0));
+                            path.close();
+                        }),
+                        colors.ribbon_btn_active_bg,
+                    );
+                }
+                for points in [
+                    &[
+                        [3.0, 16.0],
+                        [8.0, 5.0],
+                        [17.0, 7.0],
+                        [20.0, 18.0],
+                        [12.0, 21.0],
+                        [3.0, 16.0],
+                    ][..],
+                    &[[8.0, 5.0], [11.0, 13.0], [3.0, 16.0]][..],
+                    &[[17.0, 7.0], [11.0, 13.0], [20.0, 18.0]][..],
+                    &[[11.0, 13.0], [12.0, 21.0]][..],
+                ] {
+                    frame.stroke(&line(points), outline);
+                }
+                if matches!(self.0, RibbonPrimaryIcon::MeshEdit) {
+                    dot(&mut frame, 17.0, 7.0);
+                    frame.stroke(&line(&[[18.5, 5.5], [22.0, 2.0], [22.0, 6.0]]), accent);
+                }
+                if matches!(self.0, RibbonPrimaryIcon::MeshExport) {
+                    frame.stroke(&line(&[[16.0, 12.0], [23.0, 12.0], [20.0, 9.0]]), accent);
+                    frame.stroke(&line(&[[23.0, 12.0], [20.0, 15.0]]), accent);
+                }
+            }
+            RibbonPrimaryIcon::Measure => {
+                frame.stroke(
+                    &line(&[
+                        [4.0, 17.0],
+                        [17.0, 4.0],
+                        [21.0, 8.0],
+                        [8.0, 21.0],
+                        [4.0, 17.0],
+                    ]),
+                    outline,
+                );
+                for (x, y) in [(8.0, 15.0), (11.0, 12.0), (14.0, 9.0)] {
+                    frame.stroke(&line(&[[x, y], [x + 2.0, y + 2.0]]), outline);
+                }
+            }
+            RibbonPrimaryIcon::Export => {
+                frame.stroke(
+                    &line(&[[4.0, 3.0], [15.0, 3.0], [19.0, 7.0], [19.0, 14.0]]),
+                    outline,
+                );
+                frame.stroke(&line(&[[4.0, 3.0], [4.0, 21.0], [15.0, 21.0]]), outline);
+                frame.stroke(&line(&[[13.0, 16.0], [22.0, 16.0], [18.0, 12.0]]), accent);
+                frame.stroke(&line(&[[22.0, 16.0], [18.0, 20.0]]), accent);
+            }
+        }
+        vec![frame.into_geometry()]
     }
 }
 
@@ -11143,7 +12224,7 @@ fn icon_tool_button_when(
         button(icon_svg(icon, 18.0))
             .on_press_maybe(enabled.then_some(message))
             .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-            .height(opencad_ribbon::ROW_H)
+            .height(32)
             .padding([2, 6]),
         vec![i18n::tr(label).to_owned()],
     )
@@ -11155,20 +12236,27 @@ fn small_tool_button_when(
     active: bool,
     enabled: bool,
 ) -> Element<'static, Message> {
-    let icon = tool_icon(&message);
-    button(
-        row![
-            icon_svg(icon, 18.0),
-            text(i18n::tr(label)).size(12).font(label_font(active)),
-        ]
-        .spacing(4)
-        .align_y(iced::Alignment::Center),
+    ui_style::ribbon_tooltip(
+        small_tool_button_face_when(message, active, enabled),
+        i18n::tr(label),
     )
-    .on_press_maybe(enabled.then_some(message))
-    .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-    .height(opencad_ribbon::ROW_H)
-    .padding([2, 3])
     .into()
+}
+
+/// The bare face lets tools with a longer explanation provide one tooltip.
+fn small_tool_button_face_when(
+    message: Message,
+    active: bool,
+    enabled: bool,
+) -> Element<'static, Message> {
+    let icon = tool_icon(&message);
+    button(container(icon_svg(icon, 16.0)).center(Fill))
+        .on_press_maybe(enabled.then_some(message))
+        .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
+        .width(26)
+        .height(opencad_ribbon::ROW_H)
+        .padding(1)
+        .into()
 }
 
 fn tool_icon(message: &Message) -> ToolIcon {
@@ -11225,23 +12313,21 @@ fn small_color_button(
     label: &'static str,
     mode: ColorMode,
     current: ColorMode,
+    available: bool,
 ) -> Element<'static, Message> {
-    button(
-        row![
+    ui_style::ribbon_tooltip(
+        button(
             Canvas::new(ColorModeGlyph(mode, mode == current))
-                .width(24)
-                .height(24),
-            text(i18n::tr(label))
-                .size(12)
-                .font(label_font(mode == current)),
-        ]
-        .spacing(6)
-        .align_y(iced::Alignment::Center),
+                .width(18)
+                .height(18),
+        )
+        .on_press_maybe(available.then_some(Message::ColorMode(mode)))
+        .style(move |theme, status| ui_style::ribbon_button(theme, mode == current, status))
+        .width(26)
+        .height(opencad_ribbon::ROW_H)
+        .padding([1, 4]),
+        i18n::tr(label),
     )
-    .on_press(Message::ColorMode(mode))
-    .style(move |theme, status| ui_style::ribbon_button(theme, mode == current, status))
-    .height(opencad_ribbon::ROW_H)
-    .padding([2, 6])
     .into()
 }
 
@@ -11396,14 +12482,37 @@ mod ribbon_tests {
     }
 
     #[test]
-    fn ribbon_overflow_is_measured_again_after_a_resize() {
+    fn collapsed_ribbon_panel_closes_on_resize_and_escape() {
         let mut studio = Studio::default();
-        let _ = studio.update(Message::RibbonViewport(0.0, 900.0, 1400.0));
-        assert_eq!(studio.ribbon_viewport, Some((0.0, 900.0, 1400.0)));
+        let _ = studio.update(Message::ToggleRibbonPanel("surface"));
+        assert_eq!(studio.ribbon_panel_open, Some("surface"));
         let _ = studio.view();
-
         let _ = studio.update(Message::WindowResized(Size::new(1200.0, 800.0)));
-        assert_eq!(studio.ribbon_viewport, None);
+        assert_eq!(studio.ribbon_panel_open, None);
+        let _ = studio.update(Message::ToggleRibbonPanel("surface"));
+        let _ = studio.update(Message::Escape);
+        assert_eq!(studio.ribbon_panel_open, None);
+    }
+
+    #[test]
+    fn narrowing_window_keeps_the_camera_pan_in_the_viewport() {
+        let mut studio = Studio::default();
+        studio.window_size = Some(Size::new(1440.0, 900.0));
+        studio.viewport_size = Size::new(900.0, 700.0);
+        studio.pan = [-600.0, 120.0];
+        studio.auto_camera = Some((studio.yaw, studio.pitch, studio.zoom, studio.pan));
+
+        let _ = studio.update(Message::WindowResized(Size::new(920.0, 900.0)));
+        assert_eq!(studio.viewport_size, Size::new(380.0, 700.0));
+        assert!((studio.pan[0] + 253.333_34).abs() < 0.001);
+        assert_eq!(studio.pan[1], 120.0);
+        assert_eq!(
+            studio.auto_camera,
+            Some((studio.yaw, studio.pitch, studio.zoom, studio.pan))
+        );
+
+        let _ = studio.update(Message::ViewportSize(Size::new(378.0, 700.0)));
+        assert!((studio.pan[0] + 252.0).abs() < 0.001);
     }
 
     #[test]
@@ -11431,6 +12540,22 @@ mod ribbon_tests {
         assert_eq!(studio.measure.mode, Some(measure::MeasureMode::Distance));
         assert!(studio.section_enabled);
         assert_eq!(studio.view_label, "TOP");
+    }
+
+    #[test]
+    fn every_ribbon_tab_renders_and_switching_closes_file_and_flyout() {
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::ToggleFile);
+        assert!(studio.file_open);
+        assert_eq!(RibbonTab::CORE.len(), 2);
+        for tab in RibbonTab::CORE {
+            studio.ribbon_panel_open = Some("selection");
+            let _ = studio.update(Message::RibbonTabSelected(tab));
+            assert_eq!(studio.ribbon_tab, tab);
+            assert!(!studio.file_open);
+            assert_eq!(studio.ribbon_panel_open, None);
+            let _ = studio.ribbon();
+        }
     }
 }
 

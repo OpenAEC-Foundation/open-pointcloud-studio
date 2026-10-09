@@ -27,8 +27,8 @@ use crate::i18n::{key, tr, tr_args};
 use crate::selection::ClassFilter;
 use crate::ui_style;
 use crate::{
-    display_name, format_count, icon_svg, opencad_properties, opencad_ribbon, ui_theme, CloudEntry,
-    MeshMode, Message, Studio, ToolIcon,
+    display_name, format_count, icon_svg, opencad_properties, ui_theme, CloudEntry, MeshMode,
+    Message, Studio, ToolIcon,
 };
 
 #[cfg(test)]
@@ -372,6 +372,8 @@ impl RunState {
 pub enum MeshWizardAction {
     /// Show the card: on the Run step of a job that runs, else where it was.
     Open,
+    /// Open the wizard with one reconstruction method selected.
+    OpenMethod(MeshMethod),
     /// Take the card away; a job goes on.
     Close,
     Step(WizardStep),
@@ -584,6 +586,10 @@ impl Studio {
     pub(crate) fn update_mesh_wizard(&mut self, action: MeshWizardAction) -> Task<Message> {
         match action {
             MeshWizardAction::Open => self.open_mesh_wizard(),
+            MeshWizardAction::OpenMethod(method) => {
+                self.mesh_wizard.method = method;
+                self.open_mesh_wizard()
+            }
             MeshWizardAction::Close => {
                 self.mesh_wizard.close();
             }
@@ -1155,42 +1161,6 @@ impl Studio {
             }
             _ => tr("Running").to_owned(),
         })
-    }
-
-    /// The one button of the SURFACE group. While a job of one of the
-    /// methods runs it is highlighted and says how far the job is.
-    pub(crate) fn mesh_wizard_ribbon_item(&self) -> opencad_ribbon::RibbonItem<'static> {
-        let busy = self.mesh_busy_label();
-        let open = self.mesh_wizard.open;
-        let active = open || busy.is_some();
-        let enabled = self.active.is_some() || active;
-        let mut label = column![
-            icon_svg(ToolIcon::MeshPointcloud, 32.0),
-            Space::with_height(4),
-            text(tr("Mesh Pointcloud"))
-                .size(11)
-                .wrapping(iced::widget::text::Wrapping::None),
-        ]
-        .align_x(iced::Alignment::Center);
-        if let Some(busy) = busy {
-            label = label.push(
-                text(busy)
-                    .size(10)
-                    .wrapping(iced::widget::text::Wrapping::None)
-                    .style(|theme: &Theme| text::Style {
-                        color: Some(ui_theme::colors(theme).accent),
-                    }),
-            );
-        }
-        label = label.push(Space::with_width(crate::LARGE_TOOL_MIN_WIDTH));
-        opencad_ribbon::RibbonItem::Large(
-            button(label)
-                .on_press_maybe(enabled.then_some(Message::MeshWizard(MeshWizardAction::Open)))
-                .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-                .height(Fill)
-                .padding([8, 6])
-                .into(),
-        )
     }
 
     /// The card over the dimmed window, while it is shown. A click beside it
