@@ -584,6 +584,7 @@ impl Studio {
                     self.views.leave_tool();
                     self.box_select = false;
                     self.pick_mode = false;
+                    self.pan_tool = false;
                     self.drag_rectangle = None;
                     self.status = format!(
                         "{} measuring active; click points, Enter finishes, Backspace removes the last point, Escape cancels",

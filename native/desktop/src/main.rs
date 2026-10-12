@@ -2075,6 +2075,7 @@ enum Message {
     CancelSelection,
     ToggleBoxSelect,
     TogglePickSelect,
+    TogglePanTool,
     Measure(measure::MeasureAction),
     Drawing(drawing::DrawingAction),
     DrawingView(drawing_view::DrawingViewAction),
@@ -2253,6 +2254,7 @@ struct Studio {
     settings_revision: u64,
     box_select: bool,
     pick_mode: bool,
+    pan_tool: bool,
     measure: measure::MeasureTool,
     /// The Section drawing tool: its choices, its job and its preview.
     drawing: drawing::DrawingTool,
@@ -2890,6 +2892,7 @@ impl Default for Studio {
             settings_revision: 0,
             box_select: false,
             pick_mode: false,
+            pan_tool: false,
             measure: measure::MeasureTool::default(),
             drawing: drawing::DrawingTool::default(),
             drawing_view: {
@@ -8312,6 +8315,7 @@ impl Studio {
                 self.context_menu = None;
                 self.box_select = false;
                 self.pick_mode = false;
+                self.pan_tool = false;
                 self.drag_rectangle = None;
                 return self.panorama_task(cloud_index, station);
             }
@@ -8969,6 +8973,7 @@ impl Studio {
             }
             Message::Escape if self.turn.is_some() => return self.cancel_turn(),
             Message::Escape => {
+                self.pan_tool = false;
                 if self.ribbon_panel_open.take().is_some() {
                     return Task::none();
                 }
@@ -9052,12 +9057,22 @@ impl Studio {
             Message::ToggleBoxSelect => {
                 self.box_select = !self.box_select;
                 self.pick_mode = false;
+                self.pan_tool = false;
                 self.measure.leave(true);
                 self.views.leave_tool();
                 self.drag_rectangle = None;
             }
             Message::TogglePickSelect => {
                 self.pick_mode = !self.pick_mode;
+                self.box_select = false;
+                self.pan_tool = false;
+                self.measure.leave(true);
+                self.views.leave_tool();
+                self.drag_rectangle = None;
+            }
+            Message::TogglePanTool => {
+                self.pan_tool = !self.pan_tool;
+                self.pick_mode = false;
                 self.box_select = false;
                 self.measure.leave(true);
                 self.views.leave_tool();
@@ -10061,7 +10076,7 @@ impl Studio {
         let compact = self.window_size.is_some_and(|size| size.width < 930.0);
         let file_button = button(
             row![
-                text(i18n::tr("File")).size(14).font(fonts::MEDIUM),
+                text(i18n::tr("File")).size(16).font(fonts::MEDIUM),
                 text("⌄").size(15),
             ]
             .spacing(12)
@@ -10241,7 +10256,7 @@ impl Studio {
             ),
             action(
                 ToolIcon::Camera(CameraPreset::Isometric),
-                "Isometric",
+                i18n::key("Isometric"),
                 "Isometric",
                 Message::CameraPreset(CameraPreset::Isometric),
                 self.view_label == "ISOMETRIC",
@@ -10442,8 +10457,13 @@ impl Studio {
             )
         };
         let big = |kind, caption, tooltip, message, on, enabled, width| {
+            let icon_size = match kind {
+                RibbonPrimaryIcon::Mesh => 60.0,
+                RibbonPrimaryIcon::Section => 56.0,
+                _ => 49.0,
+            };
             reference_action(
-                ribbon_primary_icon(kind, 49.0),
+                ribbon_primary_icon(kind, icon_size),
                 caption,
                 tooltip,
                 message,
@@ -10453,8 +10473,19 @@ impl Studio {
             )
         };
         let small = |kind, caption, tooltip, message, on, enabled, width| {
+            let icon_size = if matches!(
+                kind,
+                RibbonPrimaryIcon::MeshWire
+                    | RibbonPrimaryIcon::MeshSmooth
+                    | RibbonPrimaryIcon::MeshEdit
+                    | RibbonPrimaryIcon::MeshExport
+            ) {
+                42.0
+            } else {
+                34.0
+            };
             reference_action(
-                ribbon_primary_icon(kind, 34.0),
+                ribbon_primary_icon(kind, icon_size),
                 caption,
                 tooltip,
                 message,
@@ -10482,26 +10513,28 @@ impl Studio {
                         active
                     ),
                     reference_icon_action(
-                        icon_svg(ToolIcon::OpenFolder, 31.0),
+                        icon_svg(ToolIcon::FileImport, 33.0),
+                        "Import point cloud",
+                        Message::Open,
+                        true
+                    ),
+                ]
+                .spacing(13),
+                row![
+                    reference_icon_action(
+                        icon_svg(ToolIcon::FolderImport, 33.0),
                         "Open scan folder",
                         Message::OpenFolder,
                         true
                     ),
-                ],
-                row![
                     reference_icon_action(
-                        icon_svg(ToolIcon::Undo, 31.0),
-                        "Undo",
-                        Message::UndoDelete,
-                        !self.undo_deletions.is_empty()
+                        icon_svg(ToolIcon::SelectionExport, 33.0),
+                        i18n::key("Export selection"),
+                        Message::ExportSelection,
+                        selected > 0
                     ),
-                    reference_icon_action(
-                        icon_svg(ToolIcon::Redo, 31.0),
-                        "Redo",
-                        Message::RedoDelete,
-                        !self.redo_deletions.is_empty()
-                    ),
-                ],
+                ]
+                .spacing(13),
             ]
             .spacing(2),
         ]
@@ -10519,55 +10552,53 @@ impl Studio {
                 Message::ResetCamera,
                 false,
                 true,
-                96.0
+                80.0
             ),
             column![
                 row![
                     reference_icon_action(
-                        ribbon_primary_icon(RibbonPrimaryIcon::ZoomIn, 31.0),
+                        icon_svg(ToolIcon::ZoomIn, 36.0),
                         "Zoom in",
                         Message::Zoom(1.0, centre, self.viewport_size),
                         true
                     ),
                     reference_icon_action(
-                        ribbon_primary_icon(RibbonPrimaryIcon::ZoomOut, 31.0),
+                        icon_svg(ToolIcon::ZoomOut, 36.0),
                         "Zoom out",
                         Message::Zoom(-1.0, centre, self.viewport_size),
                         true
                     ),
                     reference_icon_action(
-                        icon_svg(ToolIcon::Camera(CameraPreset::Isometric), 31.0),
-                        "Isometric",
-                        Message::CameraPreset(CameraPreset::Isometric),
-                        true
-                    ),
-                ],
-                row![
-                    reference_icon_action(
-                        icon_svg(ToolIcon::Camera(CameraPreset::Top), 31.0),
-                        "Top",
-                        Message::CameraPreset(CameraPreset::Top),
-                        true
-                    ),
-                    reference_icon_action(
-                        icon_svg(ToolIcon::Camera(CameraPreset::Front), 31.0),
-                        "Front",
-                        Message::CameraPreset(CameraPreset::Front),
-                        true
-                    ),
-                    reference_icon_action(
-                        icon_svg(ToolIcon::Fit, 31.0),
+                        icon_svg(ToolIcon::RibbonFitArrows, 36.0),
                         "Fit stations",
                         Message::FitScanPoses,
                         self.clouds
                             .iter()
                             .any(|entry| entry.visible && !entry.cloud.scan_poses.is_empty())
                     ),
-                ],
+                ]
+                .spacing(13),
+                row![
+                    iced::widget::Space::with_width(42),
+                    reference_icon_action(
+                        icon_svg(ToolIcon::RibbonTarget, 36.0),
+                        "Zoom selection",
+                        Message::ZoomToSelection,
+                        selected > 0 && !self.selection_bounds_pending
+                    ),
+                    reference_icon_action_state(
+                        icon_svg(ToolIcon::Pan, 36.0),
+                        "Pan",
+                        Message::TogglePanTool,
+                        self.pan_tool,
+                        true
+                    ),
+                ]
+                .spacing(13),
             ]
             .spacing(2),
         ]
-        .spacing(3)
+        .spacing(17)
         .align_y(iced::Alignment::Center);
         let selection = row![
             big(
@@ -10793,6 +10824,7 @@ impl Studio {
             orbit_point: self.orbit_pivot(),
             box_select: self.box_select,
             pick_mode: self.pick_mode,
+            pan_tool: self.pan_tool,
             measure: &self.measure,
             drawing: self.drawing.overlay(),
             drawing_slab: self.drawing_slab(),
@@ -11085,7 +11117,6 @@ impl Studio {
         }
         if self.active.is_some() {
             properties = properties.push(self.transform_properties());
-            properties = properties.push(self.index_properties());
         }
         properties = properties.push(opencad_properties::section_header("Geometry"));
         if let Some(job) = &self.mesh_job {
@@ -11336,6 +11367,9 @@ impl Studio {
         }
         if let Some(section) = self.measure.properties() {
             properties = properties.push(section);
+        }
+        if self.active.is_some() {
+            properties = properties.push(self.index_properties());
         }
         properties = properties.push(self.views_properties());
         if let Some(lock) = self.view_lock_properties() {
@@ -11663,14 +11697,14 @@ fn ribbon_title_tab(
     let label: Element<'static, Message> = if label == "Extensions" {
         row![
             title_icon(TitleIcon::Extensions, 23.0),
-            text(i18n::tr(label)).size(14).font(fonts::MEDIUM),
+            text(i18n::tr(label)).size(16).font(fonts::MEDIUM),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center)
         .into()
     } else {
         text(i18n::tr(label))
-            .size(14)
+            .size(16)
             .font(if active {
                 fonts::SEMIBOLD
             } else {
@@ -11721,14 +11755,14 @@ fn reference_action(
         ReferenceActionSize::Large(width) => (width, true),
         ReferenceActionSize::Small(width) => (width, false),
     };
-    let icon_size = if large { 50.0 } else { 35.0 };
+    let icon_size = if large { 51.0 } else { 40.0 };
     let face = column![
         container(icon)
             .width(Fill)
             .height(icon_size + if large { 7.0 } else { 2.0 })
             .center(Fill),
         text(i18n::tr(caption))
-            .size(if large { 12 } else { 11 })
+            .size(13)
             .width(Fill)
             .align_x(iced::Alignment::Center)
             .wrapping(iced::widget::text::Wrapping::None),
@@ -11752,10 +11786,20 @@ fn reference_icon_action(
     message: Message,
     enabled: bool,
 ) -> Element<'static, Message> {
+    reference_icon_action_state(icon, tooltip, message, false, enabled)
+}
+
+fn reference_icon_action_state(
+    icon: Element<'static, Message>,
+    tooltip: &'static str,
+    message: Message,
+    active: bool,
+    enabled: bool,
+) -> Element<'static, Message> {
     ui_style::ribbon_tooltip(
         button(container(icon).width(Fill).height(Fill).center(Fill))
             .on_press_maybe(enabled.then_some(message))
-            .style(|theme, status| ui_style::ribbon_button(theme, false, status))
+            .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
             .width(42)
             .height(36)
             .padding(1),
@@ -11771,8 +11815,6 @@ enum RibbonPrimaryIcon {
     Select,
     Section,
     Mesh,
-    ZoomIn,
-    ZoomOut,
     Window,
     Clear,
     Cut,
@@ -12082,17 +12124,6 @@ impl canvas::Program<Message> for RibbonPrimaryGlyph {
                     frame.fill(&canvas::Path::circle(UiPoint::new(x, y), 0.8), colors.text);
                 }
             }
-            RibbonPrimaryIcon::ZoomIn | RibbonPrimaryIcon::ZoomOut => {
-                frame.stroke(
-                    &canvas::Path::circle(UiPoint::new(10.0, 10.0), 6.0),
-                    outline,
-                );
-                frame.stroke(&line(&[[14.3, 14.3], [21.0, 21.0]]), outline);
-                frame.stroke(&line(&[[6.5, 10.0], [13.5, 10.0]]), outline);
-                if matches!(self.0, RibbonPrimaryIcon::ZoomIn) {
-                    frame.stroke(&line(&[[10.0, 6.5], [10.0, 13.5]]), outline);
-                }
-            }
             RibbonPrimaryIcon::Window => {
                 for points in [
                     [[3.0, 8.0], [3.0, 3.0], [8.0, 3.0]],
@@ -12274,6 +12305,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::ApplyScale => ToolIcon::Scale,
         Message::ToggleBoxSelect => ToolIcon::Select,
         Message::TogglePickSelect => ToolIcon::Pick,
+        Message::TogglePanTool => ToolIcon::Pan,
         Message::Measure(action) => action.icon(),
         Message::Drawing(_) => ToolIcon::Drawing,
         Message::ClosedMesh(_) => ToolIcon::ClosedMesh,
@@ -12385,6 +12417,43 @@ mod ribbon_tests {
     }
 
     #[test]
+    fn pan_tool_gives_way_to_measure_and_escape() {
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::TogglePanTool);
+        assert!(studio.pan_tool);
+
+        let _ = studio.update(Message::Measure(measure::MeasureAction::Toggle(
+            measure::MeasureMode::Distance,
+        )));
+        assert!(!studio.pan_tool);
+        assert_eq!(studio.measure.mode, Some(measure::MeasureMode::Distance));
+
+        let _ = studio.update(Message::TogglePanTool);
+        assert!(studio.pan_tool);
+        assert_eq!(studio.measure.mode, None);
+        let _ = studio.update(Message::Escape);
+        assert!(!studio.pan_tool);
+    }
+
+    #[test]
+    fn pan_tool_left_drag_finishes_as_navigation() {
+        let drag = DragState {
+            start: UiPoint::new(20.0, 30.0),
+            position: UiPoint::new(35.0, 45.0),
+            mode: DragMode::Pan,
+        };
+        assert!(matches!(
+            finish_viewport_drag(
+                mouse::Button::Left,
+                drag,
+                UiPoint::new(40.0, 50.0),
+                Size::new(800.0, 600.0)
+            ),
+            Some(Message::FinishPan(dx, dy)) if dx == 5.0 && dy == 5.0
+        ));
+    }
+
+    #[test]
     fn every_ribbon_tab_renders_and_switching_closes_file_and_flyout() {
         let mut studio = Studio::default();
         let _ = studio.update(Message::ToggleFile);
@@ -12420,8 +12489,16 @@ fn viewport_style(theme: &Theme) -> container::Style {
 enum ToolIcon {
     Open,
     OpenFolder,
+    FileImport,
+    FolderImport,
+    SelectionExport,
     Export,
     Fit,
+    ZoomIn,
+    ZoomOut,
+    Pan,
+    RibbonFitArrows,
+    RibbonTarget,
     FitSelection,
     FitStations,
     Cloud,
@@ -12496,8 +12573,20 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         // The scan-folder and section-box icons are drawn for this app in the
         // same palette.
         ToolIcon::OpenFolder => include_bytes!("../../assets/opencad-icons/folder_scans.svg"),
+        ToolIcon::FileImport => include_bytes!("../../assets/opencad-icons/file_import.svg"),
+        ToolIcon::FolderImport => include_bytes!("../../assets/opencad-icons/folder_import.svg"),
+        ToolIcon::SelectionExport => {
+            include_bytes!("../../assets/opencad-icons/selection_export.svg")
+        }
         ToolIcon::Export => include_bytes!("../../assets/opencad-icons/file_export.svg"),
         ToolIcon::Fit => include_bytes!("../../assets/opencad-icons/zoom_ext.svg"),
+        ToolIcon::ZoomIn => include_bytes!("../../assets/opencad-icons/zoom_in.svg"),
+        ToolIcon::ZoomOut => include_bytes!("../../assets/opencad-icons/zoom_out.svg"),
+        ToolIcon::Pan => include_bytes!("../../assets/opencad-icons/pan.svg"),
+        ToolIcon::RibbonFitArrows => {
+            include_bytes!("../../assets/opencad-icons/ribbon_fit_arrows.svg")
+        }
+        ToolIcon::RibbonTarget => include_bytes!("../../assets/opencad-icons/ribbon_target.svg"),
         ToolIcon::FitSelection => include_bytes!("../../assets/opencad-icons/fit_selection.svg"),
         ToolIcon::FitStations => include_bytes!("../../assets/opencad-icons/fit_stations.svg"),
         ToolIcon::Cloud => include_bytes!("../../assets/opencad-icons/revcloud.svg"),
@@ -13022,6 +13111,7 @@ struct PointViewport<'a> {
     orbit_point: Option<[f64; 3]>,
     box_select: bool,
     pick_mode: bool,
+    pan_tool: bool,
     measure: &'a measure::MeasureTool,
     /// The filled cut of a section drawing that is previewed.
     drawing: Option<&'a pointcloud_core::CutPreview>,
@@ -13231,7 +13321,9 @@ fn finish_viewport_drag(
         (mouse::Button::Right, DragMode::RightPending) => {
             Some(Message::ShowContextMenu([position.x, position.y]))
         }
-        (mouse::Button::Middle | mouse::Button::Right, DragMode::Pan) if total > 0.5 => {
+        (mouse::Button::Left | mouse::Button::Middle | mouse::Button::Right, DragMode::Pan)
+            if total > 0.5 =>
+        {
             Some(Message::FinishPan(dx, dy))
         }
         (mouse::Button::Left | mouse::Button::Middle, DragMode::Orbit) if total > 0.5 => {
@@ -13689,7 +13781,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
                         return (event::Status::Captured, None);
                     }
                 }
-                if self.stations_answer_clicks() {
+                if !self.pan_tool && self.stations_answer_clicks() {
                     if let (Some(overall), Some(position)) =
                         (combined_bounds(self.clouds), cursor.position_in(bounds))
                     {
@@ -13720,7 +13812,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
                 *state = cursor.position_in(bounds).map(|position| DragState {
                     start: position,
                     position,
-                    mode: if self.box_select || self.pick_mode {
+                    mode: if self.pan_tool {
+                        DragMode::Pan
+                    } else if self.box_select || self.pick_mode {
                         DragMode::Select
                     } else if self.measure.mode.is_some() {
                         DragMode::MeasurePending

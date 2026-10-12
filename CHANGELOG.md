@@ -12,6 +12,12 @@ drops those that begin with the name of an operating system or with
 "Unreleased"; the release step gives that section its version and date.
 -->
 
+## 0.9.4 - 2026-10-12
+
+- The Start ribbon follows the approved reference more closely, with larger and clearer file, navigation and mesh icons. A dedicated Pan button supports left-drag navigation and gives way when Measure is chosen.
+- Distance and area measuring were checked in the desktop UI on a 46.6-million-point E57 scan. Point picking, values in the 3D view and Properties, Escape, and switching from Pan to Measure work together.
+- The feature promo was recaptured from this build with the Start ribbon as its opening desktop scene and an area measurement among the demonstrated tools.
+
 ## 0.9.3 - 2026-10-12
 
 - The native Rust ribbon now has just **Start** and **View**. The View tab groups camera, colour, point density, effects and saved viewpoints in a compact layout that folds into dropdowns on narrow windows. Extensions remain available from File → Extensions.

@@ -30,9 +30,9 @@ use crate::Message;
 
 /// What a control that cannot be used keeps of its colours: the template
 /// draws buttons and fields that wait at half their strength, and the
-/// buttons of the ribbon at 40 %.
+/// buttons of the ribbon remain legible while unavailable.
 const DISABLED: f32 = 0.5;
-const RIBBON_DISABLED: f32 = 0.4;
+const RIBBON_DISABLED: f32 = 0.72;
 
 fn colors(theme: &Theme) -> UiColors {
     ui_theme::colors(theme)
@@ -1017,7 +1017,7 @@ mod tests {
             assert_eq!(on.border.color, colors.ribbon_btn_active_border);
             assert_eq!(on.text_color, colors.ribbon_btn_active_text);
             let waiting = ribbon_button(&theme, false, button::Status::Disabled);
-            assert_eq!(waiting.text_color, colors.text.scale_alpha(0.4));
+            assert_eq!(waiting.text_color, colors.text.scale_alpha(RIBBON_DISABLED));
             // A small action of a panel is a ribbon button that is not on.
             for status in [button::Status::Active, button::Status::Hovered] {
                 assert_eq!(tool(&theme, status), ribbon_button(&theme, false, status));

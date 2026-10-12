@@ -6,9 +6,9 @@ A desktop application for viewing, measuring, editing and converting laser scans
 [![Checks](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/workflows/ci.yml)
 [![Licence: GPL-3.0-only and LGPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--only%20%7C%20LGPL--3.0--or--later-blue)](#licences)
 
-![Open Pointcloud Studio v0.9.3 with its native Rust ribbon, a 46.6-million-point E57 scan, the Project Browser and Properties](docs/screenshots/weergave-ribbon-v093.png)
+![Open Pointcloud Studio v0.9.4 with its native Rust Start ribbon, a 46.6-million-point E57 scan, the Project Browser and Properties](docs/screenshots/start-ribbon-v094.png)
 
-*A 46.6-million-point Matterport lobby scan in the native Rust v0.9.3 interface, with Start and View in the title strip. See the [Start ribbon](docs/screenshots/start-ribbon-v093.png) as well.*
+*A 46.6-million-point Matterport lobby scan in the native Rust v0.9.4 interface, with Start and View in the title strip. See the [View ribbon](docs/screenshots/weergave-ribbon-v094.png) as well.*
 
 Watch the [feature promo](promo/open-pointcloud-studio-features.mp4) for point selection, the section box, meshing, 2D drawings, E57 station photos and the responsive ribbon in the new white interface.
 
@@ -29,7 +29,7 @@ The [user guide](docs/guide.md) describes every tool in detail. [CHANGELOG.md](C
 
 ## Download and install
 
-The files are on the [releases page](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/latest). In the names below `VERSION` is the number of the release, for example `open-pointcloud-studio_0.9.3_x64-setup.exe`.
+The files are on the [releases page](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/latest). In the names below `VERSION` is the number of the release, for example `open-pointcloud-studio_0.9.4_x64-setup.exe`.
 
 | System | File | What it is |
 | --- | --- | --- |
@@ -73,14 +73,14 @@ Linux needs a C library of version 2.35 or newer and the C++ runtime of GCC 12 o
 The `.deb` installs the application as `/usr/bin/open-pointcloud-studio` with a menu entry, its icon and the libraries it needs, puts Open CAD Studio in `/usr/lib/open-pointcloud-studio`, and offers the application for E57, LAS, LAZ, PLY, PCD, PTX and PTS files and scan project files:
 
 ```bash
-sudo apt install ./open-pointcloud-studio_0.9.3_amd64.deb
+sudo apt install ./open-pointcloud-studio_0.9.4_amd64.deb
 ```
 
 The AppImage needs no installation. Make it executable once and start it:
 
 ```bash
-chmod +x open-pointcloud-studio_0.9.3_amd64.AppImage
-./open-pointcloud-studio_0.9.3_amd64.AppImage
+chmod +x open-pointcloud-studio_0.9.4_amd64.AppImage
+./open-pointcloud-studio_0.9.4_amd64.AppImage
 ```
 
 It mounts itself through FUSE (`fusermount3` or `fusermount`). Without FUSE, start it with `--appimage-extract-and-run` after the file name.
@@ -92,13 +92,13 @@ The `.tar.gz` holds the binary, Open CAD Studio beside it and the licence texts.
 A `.sha256` file holds the SHA-256 checksum of the file it is named after. With both in the same folder:
 
 ```bash
-sha256sum -c open-pointcloud-studio_0.9.3_amd64.deb.sha256              # Linux
-shasum -a 256 -c open-pointcloud-studio_0.9.3_macos-universal.dmg.sha256  # macOS
+sha256sum -c open-pointcloud-studio_0.9.4_amd64.deb.sha256              # Linux
+shasum -a 256 -c open-pointcloud-studio_0.9.4_macos-universal.dmg.sha256  # macOS
 ```
 
 ```powershell
-Get-FileHash open-pointcloud-studio_0.9.3_x64-setup.exe -Algorithm SHA256   # Windows
-Get-Content open-pointcloud-studio_0.9.3_x64-setup.exe.sha256
+Get-FileHash open-pointcloud-studio_0.9.4_x64-setup.exe -Algorithm SHA256   # Windows
+Get-Content open-pointcloud-studio_0.9.4_x64-setup.exe.sha256
 ```
 
 On Linux and macOS the command answers `OK`. On Windows, compare the two outputs: the hash must be the same, apart from upper and lower case.

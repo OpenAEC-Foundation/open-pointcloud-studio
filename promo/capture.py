@@ -49,7 +49,8 @@ def main() -> None:
         print(f"{path.name}: {result.get('width')}×{result.get('height')}", flush=True)
 
     size(1584)
-    command("set_ribbon_tab", tab="view")
+    command("set_ribbon_tab", tab="start")
+    command("clear_measure")
     if command("status")["walk"] is not None:
         command("close_panorama")
     command("clear_section")
@@ -57,9 +58,11 @@ def main() -> None:
     command("show_tab", index=0)
     if command("status")["view_tabs"]["active"] != 0:
         raise RuntimeError("The 3D model tab did not open")
-    command("set_camera", yaw=-0.8, pitch=0.6, zoom=0.1612183, pan=[-500.0, 106.0])
+    command("set_point_size", size=3.5)
+    command("set_camera", yaw=-0.8, pitch=0.6, zoom=0.15, pan=[-645.0, 150.0])
     capture(1, "overview")
 
+    command("set_ribbon_tab", tab="view")
     command("set_color", mode="elevation")
     capture(11, "elevation")
     command("set_color", mode="rgb")
@@ -84,6 +87,19 @@ def main() -> None:
     capture(2, "selection")
 
     command("clear_selection")
+    command("set_scan_poses_visible", visible=False)
+    command(
+        "measure",
+        mode="area",
+        points=[
+            [-6.088917913422734, -33.02902547028664, 2.872678799066441],
+            [0.22886960311853932, -25.716804089341533, 3.749726043361721],
+            [6.506600485445442, -35.990820942486764, 2.7760313235014396],
+        ],
+    )
+    capture(13, "measure")
+    command("clear_measure")
+    command("set_scan_poses_visible", visible=True)
     command("set_ribbon_tab", tab="view")
     command("set_section", min=[-29.0, -118.0, -1.8], max=[0.0, 11.0, 5.3])
     capture(3, "section")

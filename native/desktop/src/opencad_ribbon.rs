@@ -40,7 +40,7 @@ pub fn render_reference_group<'a>(
     tools: Element<'a, Message>,
 ) -> Element<'a, Message> {
     let caption = text(crate::i18n::tr(title))
-        .size(11)
+        .size(12)
         .font(crate::fonts::MEDIUM)
         .style(|theme| text::Style {
             color: Some(ui_theme::colors(theme).ribbon_group_label),

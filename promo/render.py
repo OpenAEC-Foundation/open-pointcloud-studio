@@ -32,6 +32,7 @@ SCENES = [
     ("elevation", "11-elevation.png", 3.3, "Kies hoe de scan eruitziet", "Schakel direct van fotokleur naar hoogteweergave"),
     ("point-detail", "12-point-detail.png", 3.4, "Stuur het detail in de viewport", "Puntgrootte, puntenbudget en Eye-dome in de Weergave-ribbon"),
     ("selection", "02-selection.png", 3.6, "Selecteer punten op volle resolutie", "Miljoenen punten in één selectie"),
+    ("measure", "13-measure.png", 3.6, "Meet in de puntenwolk", "Afstand en oppervlakte op exacte scanpunten"),
     ("section", "03-section.png", 3.6, "Snijd de scan met een 3D-section box", "Direct zicht op het gebied dat telt"),
     ("mesher", "04-mesher.png", 3.3, "Van punten naar mesh", "Gesloten mesh, terrein, 3D-oppervlak en vlakken"),
     ("mesher-options", "05-mesher-options.png", 3.3, "Bepaal de reconstructie", "Instelbare meshgrootte, buren en randfactor"),
