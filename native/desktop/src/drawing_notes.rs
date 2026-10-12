@@ -41,7 +41,7 @@ use crate::layouts::model::PaperNote;
 use crate::layouts::plot::Align;
 use crate::saved_drawings::SavedDrawing;
 use crate::ui_style;
-use crate::{opencad_properties, opencad_ribbon, Message, Studio};
+use crate::{opencad_properties, Message, Studio};
 
 /// The longest text of an annotation.
 pub const MAX_NOTE_CHARS: usize = 240;
@@ -1820,75 +1820,6 @@ impl Studio {
                 })
         });
         Some(container(prompt).padding(10).into())
-    }
-
-    /// The tools of the VIEWS group of the ribbon: Note and Line in the 3D
-    /// view; Text, Dimension, Leader and Line on a drawing; Text and Line on
-    /// a sheet. Each says in its tooltip what it does and where.
-    pub(crate) fn annotation_tools(&self) -> Vec<opencad_ribbon::RibbonItem<'static>> {
-        use crate::views::{AnnotationKind, ViewAction};
-        let target = self.note_target();
-        let on_drawing = matches!(target, Some(NoteTarget::Drawing(_)));
-        let on_sheet = matches!(target, Some(NoteTarget::Sheet(_)));
-        let in_3d = !self.drawing_view.shown && self.active.is_some();
-        let note_tool = |kind: NoteKind| self.notes.kind == Some(kind);
-        let item = |button: Element<'static, Message>, lines: Vec<String>| {
-            opencad_ribbon::RibbonItem::Small(opencad_properties::explained_in_ribbon(
-                button, lines,
-            ))
-        };
-        let line_message = if on_drawing || on_sheet {
-            Message::Notes(NoteAction::Tool(NoteKind::Line))
-        } else {
-            Message::Views(ViewAction::Tool(AnnotationKind::Line))
-        };
-        let line_active = if on_drawing || on_sheet {
-            note_tool(NoteKind::Line)
-        } else {
-            self.views.tool == Some(AnnotationKind::Line)
-        };
-        vec![
-            item(
-                crate::small_tool_button_face_when(
-                    Message::Views(ViewAction::Tool(AnnotationKind::Note)),
-                    self.views.tool == Some(AnnotationKind::Note),
-                    in_3d,
-                ),
-                vec![tr("A note at a point of the scan, kept with the saved view; in the 3D view").to_owned()],
-            ),
-            item(
-                crate::small_tool_button_face_when(
-                    line_message,
-                    line_active,
-                    in_3d || on_drawing || on_sheet,
-                ),
-                vec![tr("An arrow between two points of the scan in the 3D view; a line on a drawing, snapping to its lines, or on the paper of a sheet").to_owned()],
-            ),
-            item(
-                crate::small_tool_button_face_when(
-                    Message::Notes(NoteAction::Tool(NoteKind::Text)),
-                    note_tool(NoteKind::Text),
-                    on_drawing || on_sheet,
-                ),
-                vec![tr("A text on a plan, an elevation or a section, 2.5 mm high on the paper unless set in Properties; or on the paper of a sheet").to_owned()],
-            ),
-            item(
-                crate::small_tool_button_face_when(
-                    Message::Notes(NoteAction::Tool(NoteKind::Dimension)),
-                    note_tool(NoteKind::Dimension),
-                    on_drawing,
-                ),
-                vec![tr("A dimension on a plan, an elevation or a section: two points that snap to the ends and corners of the lines, then its line; it shows the distance in millimetres").to_owned()],
-            ),
-            item(
-                crate::small_tool_button_face_when(
-                    Message::Notes(NoteAction::Tool(NoteKind::Leader)),
-                    note_tool(NoteKind::Leader),
-                    on_drawing,
-                ),
-                vec![tr("An arrow with a text on a plan, an elevation or a section: the point it points at, then where its text goes").to_owned()],
-            ),
-        ]
     }
 
     /// The annotation tools stay in Properties after the compact View ribbon

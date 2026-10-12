@@ -1803,7 +1803,6 @@ enum Message {
     ),
     ApiPickReady(String, u64, usize, Result<Option<IndexedPoint>, String>),
     ToggleFile,
-    OpenExtensionsPage,
     RibbonTabSelected(RibbonTab),
     FileAction(FileAction),
     /// Show a page of the File view.
@@ -6334,11 +6333,6 @@ impl Studio {
             Message::ToggleFile => {
                 self.file_open = !self.file_open;
                 self.file_page = FilePage::default();
-                self.ribbon_panel_open = None;
-            }
-            Message::OpenExtensionsPage => {
-                self.file_open = true;
-                self.file_page = FilePage::Extensions;
                 self.ribbon_panel_open = None;
             }
             Message::RibbonTabSelected(tab) => {
@@ -11770,79 +11764,6 @@ fn reference_icon_action(
     .into()
 }
 
-fn small_tool_button(
-    label: &'static str,
-    message: Message,
-    active: bool,
-) -> Element<'static, Message> {
-    small_tool_button_when(label, message, active, true)
-}
-
-fn large_tool_button(
-    label: &'static str,
-    message: Message,
-    active: bool,
-) -> Element<'static, Message> {
-    large_tool_button_when(label, message, active, true)
-}
-
-/// The principal action of a group: a larger icon and a short caption.
-/// The full translated name remains available in the tooltip.
-fn large_tool_button_when(
-    label: &'static str,
-    message: Message,
-    active: bool,
-    enabled: bool,
-) -> Element<'static, Message> {
-    let caption = match label {
-        "Section drawing" => i18n::key("Drawing"),
-        "Build index" => "Index",
-        "Cancel index" => "Cancel",
-        "Pointcloud to Drawing" => "2D",
-        _ => label,
-    };
-    large_tool_button_with_caption_when(label, caption, message, active, enabled)
-}
-
-fn large_tool_button_with_caption_when(
-    label: &'static str,
-    caption: &'static str,
-    message: Message,
-    active: bool,
-    enabled: bool,
-) -> Element<'static, Message> {
-    let icon = match &message {
-        Message::Open => ribbon_primary_icon(RibbonPrimaryIcon::Open, 28.0),
-        Message::ResetCamera => ribbon_primary_icon(RibbonPrimaryIcon::Fit, 28.0),
-        Message::TogglePickSelect => ribbon_primary_icon(RibbonPrimaryIcon::Select, 28.0),
-        Message::SetSectionEnabled(_) => ribbon_primary_icon(RibbonPrimaryIcon::Section, 28.0),
-        _ => icon_svg(tool_icon(&message), 28.0),
-    };
-    ui_style::ribbon_tooltip(
-        button(
-            column![
-                container(icon).width(Fill).height(Fill).center(Fill),
-                text(i18n::tr(caption))
-                    .size(10)
-                    .width(Fill)
-                    .align_x(iced::Alignment::Center)
-                    .wrapping(iced::widget::text::Wrapping::Word),
-            ]
-            .align_x(iced::Alignment::Center),
-        )
-        .on_press_maybe(enabled.then_some(message))
-        .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-        .width(LARGE_TOOL_MIN_WIDTH)
-        .height(Fill)
-        .padding([4, 3]),
-        i18n::tr(label),
-    )
-    .into()
-}
-
-/// Width of a large tool including its short caption.
-const LARGE_TOOL_MIN_WIDTH: f32 = 70.0;
-
 #[derive(Debug, Clone, Copy)]
 enum RibbonPrimaryIcon {
     Open,
@@ -12318,35 +12239,6 @@ fn icon_tool_button_when(
     )
 }
 
-fn small_tool_button_when(
-    label: &'static str,
-    message: Message,
-    active: bool,
-    enabled: bool,
-) -> Element<'static, Message> {
-    ui_style::ribbon_tooltip(
-        small_tool_button_face_when(message, active, enabled),
-        i18n::tr(label),
-    )
-    .into()
-}
-
-/// The bare face lets tools with a longer explanation provide one tooltip.
-fn small_tool_button_face_when(
-    message: Message,
-    active: bool,
-    enabled: bool,
-) -> Element<'static, Message> {
-    let icon = tool_icon(&message);
-    button(container(icon_svg(icon, 16.0)).center(Fill))
-        .on_press_maybe(enabled.then_some(message))
-        .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-        .width(26)
-        .height(opencad_ribbon::ROW_H)
-        .padding(1)
-        .into()
-}
-
 fn tool_icon(message: &Message) -> ToolIcon {
     match message {
         Message::Open => ToolIcon::Open,
@@ -12395,144 +12287,6 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::FitSectionToSelection => ToolIcon::Select,
         _ => ToolIcon::Cloud,
     }
-}
-
-fn small_color_button(
-    label: &'static str,
-    mode: ColorMode,
-    current: ColorMode,
-    available: bool,
-) -> Element<'static, Message> {
-    ui_style::ribbon_tooltip(
-        button(
-            Canvas::new(ColorModeGlyph(mode, mode == current))
-                .width(18)
-                .height(18),
-        )
-        .on_press_maybe(available.then_some(Message::ColorMode(mode)))
-        .style(move |theme, status| ui_style::ribbon_button(theme, mode == current, status))
-        .width(26)
-        .height(opencad_ribbon::ROW_H)
-        .padding([1, 4]),
-        i18n::tr(label),
-    )
-    .into()
-}
-
-/// Compact, theme-aware line icons for the four point-cloud color modes.
-/// These use the same visual scale as the OpenCADStudio ribbon icons while
-/// remaining native Iced geometry rather than web assets.
-struct ColorModeGlyph(ColorMode, bool);
-
-impl canvas::Program<Message> for ColorModeGlyph {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        // The glyphs are drawn on an 18-unit square.
-        frame.scale(bounds.width.min(bounds.height) / 18.0);
-        let colors = ui_theme::colors(theme);
-        let highlight = if self.1 {
-            colors.accent
-        } else {
-            colors.text_muted
-        };
-        let stroke = canvas::Stroke::default()
-            .with_color(colors.text)
-            .with_width(1.35);
-        let line = |points: &[[f32; 2]]| {
-            canvas::Path::new(|path| {
-                path.move_to(UiPoint::new(points[0][0], points[0][1]));
-                for point in &points[1..] {
-                    path.line_to(UiPoint::new(point[0], point[1]));
-                }
-            })
-        };
-        match self.0 {
-            ColorMode::Rgb => {
-                frame.stroke(&canvas::Path::circle(UiPoint::new(9.0, 9.0), 6.5), stroke);
-                for (point, color) in [
-                    ([6.3, 6.5], colors.text_muted),
-                    ([11.7, 6.5], colors.text_muted),
-                    ([9.0, 11.6], highlight),
-                ] {
-                    frame.fill(
-                        &canvas::Path::circle(UiPoint::new(point[0], point[1]), 1.5),
-                        color,
-                    );
-                }
-            }
-            ColorMode::Elevation => {
-                frame.stroke(
-                    &line(&[
-                        [2.0, 14.0],
-                        [5.7, 9.0],
-                        [8.2, 11.0],
-                        [11.6, 4.0],
-                        [16.0, 14.0],
-                    ]),
-                    stroke,
-                );
-                frame.stroke(&line(&[[2.0, 16.0], [16.0, 16.0]]), stroke);
-                frame.stroke(&line(&[[10.1, 9.2], [13.1, 9.2]]), stroke);
-            }
-            ColorMode::Intensity => {
-                frame.fill(
-                    &canvas::Path::new(|path| {
-                        path.move_to(UiPoint::new(9.0, 2.5));
-                        for point in [
-                            [5.7, 3.5],
-                            [3.5, 5.7],
-                            [2.5, 9.0],
-                            [3.5, 12.3],
-                            [5.7, 14.5],
-                            [9.0, 15.5],
-                        ] {
-                            path.line_to(UiPoint::new(point[0], point[1]));
-                        }
-                        path.close();
-                    }),
-                    colors.text_muted,
-                );
-                frame.stroke(&canvas::Path::circle(UiPoint::new(9.0, 9.0), 6.5), stroke);
-                frame.stroke(&line(&[[9.0, 2.5], [9.0, 15.5]]), stroke);
-            }
-            ColorMode::Classification => {
-                for (origin, filled) in [
-                    ([2.5, 2.5], false),
-                    ([10.0, 2.5], false),
-                    ([2.5, 10.0], false),
-                    ([10.0, 10.0], true),
-                ] {
-                    if filled {
-                        frame.fill_rectangle(
-                            UiPoint::new(origin[0], origin[1]),
-                            Size::new(5.5, 5.5),
-                            highlight,
-                        );
-                    } else {
-                        frame.stroke_rectangle(
-                            UiPoint::new(origin[0], origin[1]),
-                            Size::new(5.5, 5.5),
-                            stroke,
-                        );
-                    }
-                }
-            }
-        }
-        vec![frame.into_geometry()]
-    }
-}
-
-fn ribbon_group<'a>(label: &'static str, contents: Element<'a, Message>) -> Element<'a, Message> {
-    opencad_ribbon::render_group(label, contents)
 }
 
 fn ribbon_style(theme: &Theme) -> container::Style {

@@ -24,8 +24,8 @@ use crate::selection::Projection;
 use crate::station_photos::WalkView;
 use crate::ui_style;
 use crate::{
-    bcf, combined_bounds, i18n, measure, opencad_properties, opencad_ribbon, ColorMode, Message,
-    PointViewport, Studio, ToolIcon,
+    bcf, combined_bounds, i18n, measure, opencad_properties, ColorMode, Message, PointViewport,
+    Studio, ToolIcon,
 };
 
 type Xyz = [f64; 3];
@@ -1796,14 +1796,6 @@ impl Studio {
             "snapshots_pending": self.views.snapshots.len(),
             "export_pending": self.views.export_pending,
         })
-    }
-
-    /// The VIEWS group of the ribbon: Note and Line in the 3D view, and the
-    /// annotations of drawings and sheets; see `drawing_notes`.
-    pub fn views_ribbon(&self) -> Element<'static, Message> {
-        // Saving a view is in the Project Browser, the BCF export in the
-        // File view.
-        opencad_ribbon::render_group_items("VIEWS", self.annotation_tools())
     }
 
     /// Whether the active scan has views to export and no export is running.

@@ -404,6 +404,7 @@ impl Wizard {
     }
 
     /// Whether the wizard is shown, as a card or as a strip.
+    #[cfg(test)]
     pub(crate) fn is_open(&self) -> bool {
         self.open
     }
