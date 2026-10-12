@@ -17,7 +17,7 @@ WORK = ROOT / ".work"
 OUTPUT = ROOT / "open-pointcloud-studio-features.mp4"
 SIZE = (1920, 1080)
 SCREEN_POS = (192, 106)
-SCREEN_SIZE = (1536, 960)
+SCREEN_SIZE = (1800, 960)
 INK = "#27272A"
 MUTED = "#57534E"
 AMBER = "#D97706"
@@ -28,8 +28,9 @@ PAPER = "#FAFAF9"
 # frame, title and fade are rendered here.
 SCENES = [
     ("intro", None, 2.4, "Open Pointcloud Studio", "Van grote scan naar bruikbare 3D en 2D"),
-    ("overview", "01-overview.png", 3.6, "Grote scans, direct bruikbaar", "E57 · 46,6 miljoen punten · adaptieve detailniveaus"),
-    ("view", "10-view.png", 3.6, "Weergave onder controle", "Kleur, puntdetail en scanposities in één compacte ribbon"),
+    ("overview", "01-overview.png", 4.0, "De nieuwe native interface", "Weergave, projectbrowser en eigenschappen rond één grote 3D-scan"),
+    ("elevation", "11-elevation.png", 3.3, "Kies hoe de scan eruitziet", "Schakel direct van fotokleur naar hoogteweergave"),
+    ("point-detail", "12-point-detail.png", 3.4, "Stuur het detail in de viewport", "Puntgrootte, puntenbudget en Eye-dome in de Weergave-ribbon"),
     ("selection", "02-selection.png", 3.6, "Selecteer punten op volle resolutie", "Miljoenen punten in één selectie"),
     ("section", "03-section.png", 3.6, "Snijd de scan met een 3D-section box", "Direct zicht op het gebied dat telt"),
     ("mesher", "04-mesher.png", 3.3, "Van punten naar mesh", "Gesloten mesh, terrein, 3D-oppervlak en vlakken"),
@@ -37,7 +38,8 @@ SCENES = [
     ("plan", "06-plan.png", 3.6, "Maak een 2D-plattegrond", "Lijnen, vullingen en DXF/DWG-lagen"),
     ("section-2d", "07-section-2d.png", 3.3, "Bekijk een verticale doorsnede", "Uit dezelfde E57-scan"),
     ("panorama", "08-panorama.png", 4.0, "Stap de scan in", "Stationfoto's rechtstreeks uit de E57"),
-    ("responsive", "09-responsive.png", 3.6, "Een ribbon die meeschakelt", "Groepen klappen in tot compacte iconen en dropdowns"),
+    ("responsive", "09-responsive.png", 3.6, "Een ribbon die meeschakelt", "De Weergave-groepen klappen in op een smal scherm"),
+    ("view", "10-view.png", 3.0, "Alles op één plek", "Native Rust · twee heldere tabs · ruimte voor de scan"),
     ("outro", None, 2.6, "Open Pointcloud Studio", "Native Rust · E57, LAS en LAZ · 3D en 2D"),
 ]
 

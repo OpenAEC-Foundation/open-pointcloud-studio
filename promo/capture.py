@@ -12,6 +12,8 @@ import sys
 import time
 import urllib.request
 
+from Xlib import display
+
 
 ROOT = pathlib.Path(__file__).resolve().parent
 
@@ -38,11 +40,16 @@ def main() -> None:
 
     def capture(number: int, name: str):
         path = ROOT / "stills" / f"{number:02d}-{name}.png"
+        x11 = display.Display()
+        x11.create_resource_object("window", int(window_id, 0)).warp_pointer(10, 850)
+        x11.sync()
+        x11.close()
+        time.sleep(0.2)
         result = command("screenshot", path=str(path), window=True)
         print(f"{path.name}: {result.get('width')}×{result.get('height')}", flush=True)
 
     size(1584)
-    command("set_ribbon_tab", tab="start")
+    command("set_ribbon_tab", tab="view")
     if command("status")["walk"] is not None:
         command("close_panorama")
     command("clear_section")
@@ -53,6 +60,18 @@ def main() -> None:
     command("set_camera", yaw=-0.8, pitch=0.6, zoom=0.1612183, pan=[-500.0, 106.0])
     capture(1, "overview")
 
+    command("set_color", mode="elevation")
+    capture(11, "elevation")
+    command("set_color", mode="rgb")
+    command("set_point_size", size=3.5)
+    command("set_budget", points=2_000_000)
+    command("set_eye_dome", enabled=True)
+    capture(12, "point-detail")
+    command("set_eye_dome", enabled=False)
+    command("set_point_size", size=2.0)
+    command("set_budget", points=1_000_000)
+
+    command("set_ribbon_tab", tab="start")
     selected = command(
         "select_world", min=[4.0, -26.0, -1.9], max=[7.0, -20.0, 5.4]
     )
@@ -65,10 +84,12 @@ def main() -> None:
     capture(2, "selection")
 
     command("clear_selection")
-    command("set_section", min=[-29.0, -117.5, -1.8], max=[19.0, 10.5, 5.3])
+    command("set_ribbon_tab", tab="view")
+    command("set_section", min=[-29.0, -118.0, -1.8], max=[0.0, 11.0, 5.3])
     capture(3, "section")
     command("clear_section")
 
+    command("set_ribbon_tab", tab="start")
     command("mesh_wizard", open=True, step="method", method="closed")
     capture(4, "mesher")
     command("mesh_wizard", open=True, step="options", method="closed")
@@ -101,6 +122,7 @@ def main() -> None:
         if walk is not None and walk.get("station", {}).get("full_resolution"):
             break
         time.sleep(0.5)
+    command("set_ribbon_tab", tab="view")
     capture(8, "panorama")
     command("close_panorama")
 
@@ -109,7 +131,6 @@ def main() -> None:
     capture(9, "responsive")
     size(1584)
     command("set_camera", yaw=-0.8, pitch=0.6, zoom=0.1612183, pan=[-500.0, 106.0])
-    command("set_ribbon_tab", tab="view")
     capture(10, "view")
     command("set_ribbon_tab", tab="start")
     size(1584)
