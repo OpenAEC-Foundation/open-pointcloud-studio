@@ -173,6 +173,7 @@ impl Studio {
             | ApiCommand::SetCamera { .. }
             | ApiCommand::Orbit { .. }
             | ApiCommand::ZoomAll
+            | ApiCommand::FitScanPoses
             | ApiCommand::SetSection { .. }
             | ApiCommand::ClearSection
             | ApiCommand::AlignSectionToWalls

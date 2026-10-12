@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Elevation colours" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M2 19 9 6l4 7 2-3 7 9Z" stroke="#A1A1AA" stroke-width="1.6"/>
+  <path d="M9 6 2 19h11Z" fill="#D97706" opacity=".85"/>
+  <path d="M15 10 10 19h12Z" fill="#A1A1AA" opacity=".55"/>
+</svg>

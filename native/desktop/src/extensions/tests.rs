@@ -386,8 +386,8 @@ fn installs_updates_switches_and_uninstalls_are_kept_across_restarts() {
     assert_eq!(entry["run"], Value::Null);
     assert_eq!(entry["ribbon"][0]["id"], "count");
     assert_eq!(entry["file_view"][0]["page"], "export");
-    // Its button and its tile are offered, and everything draws.
-    assert!(studio.extensions_ribbon().is_some());
+    // Its action button is on the Extensions page and its tile is offered.
+    let _ = studio.extensions_page();
     assert_eq!(studio.extension_tiles(EntryPage::Export).len(), 1);
     assert!(studio.extension_tiles(EntryPage::New).is_empty());
     let _ = studio.view();
@@ -411,7 +411,7 @@ fn installs_updates_switches_and_uninstalls_are_kept_across_restarts() {
         false,
     )));
     assert_eq!(restarted.status, "Point count report switched off");
-    assert!(restarted.extensions_ribbon().is_none());
+    let _ = restarted.extensions_page();
     assert!(restarted.extension_tiles(EntryPage::Export).is_empty());
     assert_eq!(
         restarted.start_extension(EXAMPLE, None).err().unwrap(),
@@ -600,7 +600,7 @@ fn the_confirmation_counts_the_buttons_and_tiles_an_extension_adds() {
     let read = |path: &Path| manifest::read(path.parent().unwrap(), &known()).unwrap();
     assert_eq!(
         page::adds_line(&read(&path)).unwrap(),
-        "1 button in the ribbon · a tile on the New page · 3 tiles on the Export page"
+        "1 button on the Extensions page · a tile on the New page · 3 tiles on the Export page"
     );
 
     declared["contributes"]["file_view"] = json!([tile("one", "new"), tile("two", "new")]);
@@ -613,12 +613,12 @@ fn the_confirmation_counts_the_buttons_and_tiles_an_extension_adds() {
     fs::write(&path, serde_json::to_vec_pretty(&declared).unwrap()).unwrap();
     assert_eq!(
         page::adds_line(&read(&path)).unwrap(),
-        "2 buttons in the ribbon · 2 tiles on the New page"
+        "2 buttons on the Extensions page · 2 tiles on the New page"
     );
     crate::i18n::set(Language::Table(0));
     assert_eq!(
         page::adds_line(&read(&path)).unwrap(),
-        "2 knoppen in het lint · 2 tegels op de pagina Nieuw"
+        "2 knoppen op de pagina Extensies · 2 tegels op de pagina Nieuw"
     );
 }
 

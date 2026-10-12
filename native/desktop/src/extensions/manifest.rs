@@ -164,7 +164,7 @@ pub struct Uses {
     pub commands: Commands,
 }
 
-/// A button the extension adds to the EXTENSIONS group of the ribbon.
+/// An action button the extension adds to its card on the Extensions page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RibbonButton {
     pub id: String,

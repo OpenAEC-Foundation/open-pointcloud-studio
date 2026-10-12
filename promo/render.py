@@ -29,6 +29,7 @@ PAPER = "#FAFAF9"
 SCENES = [
     ("intro", None, 2.4, "Open Pointcloud Studio", "Van grote scan naar bruikbare 3D en 2D"),
     ("overview", "01-overview.png", 3.6, "Grote scans, direct bruikbaar", "E57 · 46,6 miljoen punten · adaptieve detailniveaus"),
+    ("view", "10-view.png", 3.6, "Weergave onder controle", "Kleur, puntdetail en scanposities in één compacte ribbon"),
     ("selection", "02-selection.png", 3.6, "Selecteer punten op volle resolutie", "Miljoenen punten in één selectie"),
     ("section", "03-section.png", 3.6, "Snijd de scan met een 3D-section box", "Direct zicht op het gebied dat telt"),
     ("mesher", "04-mesher.png", 3.3, "Van punten naar mesh", "Gesloten mesh, terrein, 3D-oppervlak en vlakken"),
@@ -70,8 +71,8 @@ def render_card(title: str, subtitle: str) -> Image.Image:
 
 def render_scene(source: Path, title: str, subtitle: str) -> Image.Image:
     screenshot = Image.open(source).convert("RGB")
-    if screenshot.height != 900 or screenshot.width not in (920, 1440):
-        raise ValueError(f"Expected a 920×900 or 1440×900 desktop capture: {source}")
+    if screenshot.height != 900 or screenshot.width not in (920, 1584):
+        raise ValueError(f"Expected a 920×900 or 1584×900 desktop capture: {source}")
     image = Image.new("RGB", SIZE, PAPER)
     scale = min(SCREEN_SIZE[0] / screenshot.width, SCREEN_SIZE[1] / screenshot.height)
     shown_size = (round(screenshot.width * scale), round(screenshot.height * scale))
@@ -102,6 +103,8 @@ def main() -> None:
     clips: list[Path] = []
     for number, (slug, source, duration, title, subtitle) in enumerate(SCENES, 1):
         image = render_card(title, subtitle) if source is None else render_scene(ROOT / "stills" / source, title, subtitle)
+        if slug == "overview":
+            image.save(ROOT / "poster.png", optimize=True)
         slide = WORK / f"{number:02d}-{slug}.png"
         clip = WORK / f"{number:02d}-{slug}.mp4"
         image.save(slide, optimize=True)

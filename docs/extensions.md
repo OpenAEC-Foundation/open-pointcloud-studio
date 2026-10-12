@@ -8,9 +8,9 @@ file, opens what it wrote as a layer, and whatever else the API offers. It
 runs as a process of its own, so an extension that fails or crashes ends its
 own run and never the window.
 
-An extension can add buttons to the **EXTENSIONS** group of the ribbon and
+An extension can add action buttons to its card on the **Extensions** page and
 tiles to the **New** and the **Export** page of the File view. The user starts
-it with one of those, or with **Run** on the **Extensions** page of the File
+it with one of those, or with **Run** on its card in the File
 view; a script or an MCP client can start it with `run_extension`.
 
 This page is for authors. The [user guide](guide.md#settings-language-and-extensions)
@@ -155,15 +155,15 @@ application cannot check them, see [Security](#security).
 
 ### contributes
 
-`ribbon` holds up to 8 buttons. They appear in the **EXTENSIONS** group of
-the ribbon, after SELECTION, which the ribbon shows while an enabled
-extension has a button.
+`ribbon` holds up to 8 buttons. They appear on the installed extension's card
+on **File → Extensions**. The manifest field keeps its name for compatibility
+with existing extensions.
 
 | Field | What it is |
 | --- | --- |
 | `id` | 1 to 64 lowercase letters and digits in parts joined by dots or dashes, unique within the extension |
-| `label` | Text of at most 24 characters under the icon |
-| `icon` | An `.svg` file in the folder of at most 64 KiB, shown at 32 by 32 pixels. It may not hold scripts, `<image>`, `<foreignObject>`, entities or style sheet imports, and links and `url()` may only point inside the image (`#id`). It is drawn as it is in every theme, light and dark: `currentColor` and a shape without a fill are black. Give it colours that read on a light and on a dark ribbon, as the grey and orange of the example do |
+| `label` | Text of at most 24 characters beside the icon |
+| `icon` | An `.svg` file in the folder of at most 64 KiB, shown at 20 by 20 pixels. It may not hold scripts, `<image>`, `<foreignObject>`, entities or style sheet imports, and links and `url()` may only point inside the image (`#id`). It is drawn as it is in every theme, light and dark: `currentColor` and a shape without a fill are black. Give it colours that read on a light and on a dark background, as the grey and orange of the example do |
 | `tooltip` | Optional text of at most 200 characters |
 | `args` | Optional arguments added after those of the command |
 

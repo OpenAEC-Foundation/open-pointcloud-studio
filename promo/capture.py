@@ -41,12 +41,15 @@ def main() -> None:
         result = command("screenshot", path=str(path), window=True)
         print(f"{path.name}: {result.get('width')}×{result.get('height')}", flush=True)
 
-    size(1440)
+    size(1584)
+    command("set_ribbon_tab", tab="start")
     if command("status")["walk"] is not None:
         command("close_panorama")
     command("clear_section")
     command("clear_selection")
-    command("show_drawing", name="3D model")
+    command("show_tab", index=0)
+    if command("status")["view_tabs"]["active"] != 0:
+        raise RuntimeError("The 3D model tab did not open")
     command("set_camera", yaw=-0.8, pitch=0.6, zoom=0.1612183, pan=[-500.0, 106.0])
     capture(1, "overview")
 
@@ -84,11 +87,14 @@ def main() -> None:
             time.sleep(0.5)
         capture(number, slug)
 
-    command("show_drawing", name="3D model")
+    command("show_tab", index=0)
     for _ in range(20):
-        if not command("status")["drawing_view"]["shown"]:
+        state = command("status")
+        if state["view_tabs"]["active"] == 0 and not state["drawing_view"]["shown"]:
             break
         time.sleep(0.2)
+    else:
+        raise RuntimeError("The 3D model tab did not reopen after the drawings")
     command("open_panorama", index=0, station=0)
     for _ in range(120):
         walk = command("status")["walk"]
@@ -101,6 +107,11 @@ def main() -> None:
     size(920)
     command("set_camera", yaw=-0.8, pitch=0.6, zoom=0.1612183, pan=[-226.0, 106.0])
     capture(9, "responsive")
+    size(1584)
+    command("set_camera", yaw=-0.8, pitch=0.6, zoom=0.1612183, pan=[-500.0, 106.0])
+    command("set_ribbon_tab", tab="view")
+    capture(10, "view")
+    command("set_ribbon_tab", tab="start")
     size(1584)
 
 

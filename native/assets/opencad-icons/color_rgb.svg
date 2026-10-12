@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="RGB colours" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="9" cy="9" r="5" stroke="#A1A1AA" stroke-width="1.5"/>
+  <circle cx="15" cy="9" r="5" stroke="#D97706" stroke-width="1.5"/>
+  <circle cx="12" cy="15" r="5" stroke="#A1A1AA" stroke-width="1.5"/>
+  <circle cx="12" cy="11" r="1.2" fill="#D97706"/>
+</svg>

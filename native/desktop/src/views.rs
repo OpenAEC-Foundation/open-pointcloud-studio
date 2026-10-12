@@ -1817,7 +1817,7 @@ impl Studio {
     /// The "Camera" section of the Properties panel: the direction and the
     /// zoom of the orbit camera. The saved views are in the project browser.
     pub fn views_properties(&self) -> Element<'_, Message> {
-        column![
+        let mut block = column![
             opencad_properties::section_header("Camera"),
             opencad_properties::property_row(
                 "Yaw / pitch",
@@ -1829,8 +1829,45 @@ impl Studio {
             ),
             opencad_properties::property_row("Zoom", crate::format_zoom_level(self.zoom)),
         ]
-        .spacing(0)
-        .into()
+        .spacing(0);
+        if self.active.is_some() && !self.drawing_view.shown {
+            let note_active = self.views.tool == Some(AnnotationKind::Note);
+            let line_active = self.views.tool == Some(AnnotationKind::Line);
+            block = block.push(opencad_properties::section_header("Annotations"));
+            block = block.push(
+                container(
+                    row![
+                        button(
+                            row![
+                                crate::icon_svg(ToolIcon::Note, 18.0),
+                                text(i18n::tr("Note")).size(11),
+                            ]
+                            .spacing(5)
+                            .align_y(iced::Alignment::Center)
+                        )
+                        .on_press(Message::Views(ViewAction::Tool(AnnotationKind::Note)))
+                        .style(move |theme, status| {
+                            ui_style::ribbon_button(theme, note_active, status)
+                        }),
+                        button(
+                            row![
+                                crate::icon_svg(ToolIcon::Line, 18.0),
+                                text(i18n::tr("Line")).size(11),
+                            ]
+                            .spacing(5)
+                            .align_y(iced::Alignment::Center)
+                        )
+                        .on_press(Message::Views(ViewAction::Tool(AnnotationKind::Line)))
+                        .style(move |theme, status| {
+                            ui_style::ribbon_button(theme, line_active, status)
+                        }),
+                    ]
+                    .spacing(5),
+                )
+                .padding([3, 8]),
+            );
+        }
+        block.into()
     }
 
     /// The saved views of the active scan, in the order they were saved, as
@@ -1965,7 +2002,7 @@ impl Studio {
         .spacing(0);
         if view.annotations.is_empty() {
             list = list.push(
-                container(text(i18n::tr("Place a Note or a Line from the ribbon")).size(10))
+                container(text(i18n::tr("Place a Note or a Line from Properties")).size(10))
                     .padding([2, 0]),
             );
         }

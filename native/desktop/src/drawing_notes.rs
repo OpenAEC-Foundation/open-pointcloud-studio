@@ -2,7 +2,7 @@
 //! leaders and lines.
 //!
 //! On a plan, an elevation or a section in the Drawing view, **Text**,
-//! **Dimension**, **Leader** and **Line** of the VIEWS group of the ribbon
+//! **Dimension**, **Leader** and **Line** in Properties
 //! place annotations. They are kept with the drawing, at points of the model
 //! on the plane of the drawing, so they stay in place when the drawing is
 //! made again. Their sizes are those of the paper at the annotation scale of
@@ -1891,6 +1891,42 @@ impl Studio {
         ]
     }
 
+    /// The annotation tools stay in Properties after the compact View ribbon
+    /// replaced its former VIEWS group.
+    fn note_tool_controls(&self, on_sheet: bool) -> Element<'static, Message> {
+        let tool = |kind: NoteKind, label: &'static str| {
+            let active = self.notes.kind == Some(kind);
+            let icon = match kind {
+                NoteKind::Text => crate::ToolIcon::Text,
+                NoteKind::Dimension => crate::ToolIcon::Dimension,
+                NoteKind::Leader => crate::ToolIcon::Leader,
+                NoteKind::Line => crate::ToolIcon::Line,
+            };
+            button(
+                row![crate::icon_svg(icon, 16.0), text(tr(label)).size(11)]
+                    .spacing(5)
+                    .align_y(iced::Alignment::Center),
+            )
+            .on_press(Message::Notes(NoteAction::Tool(kind)))
+            .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
+            .width(Fill)
+            .padding([4, 6])
+        };
+        let mut controls =
+            column![row![tool(NoteKind::Text, "Text"), tool(NoteKind::Line, "Line")].spacing(4)]
+                .spacing(4);
+        if !on_sheet {
+            controls = controls.push(
+                row![
+                    tool(NoteKind::Dimension, "Dimension"),
+                    tool(NoteKind::Leader, "Leader"),
+                ]
+                .spacing(4),
+            );
+        }
+        container(controls).padding([3, 8]).into()
+    }
+
     /// The Annotations section of Properties for the drawing shown: its
     /// annotation scale, the height of new texts, every annotation with ×,
     /// the text or value of the selected one, and Export DXF/DWG….
@@ -1904,6 +1940,7 @@ impl Studio {
             .map(|known| crate::layouts::ScaleChoice(*known));
         let mut block = column![
             opencad_properties::section_header("Annotations"),
+            self.note_tool_controls(false),
             opencad_properties::property_control(
                 "Annotation scale",
                 ui_style::pick_list(
@@ -1968,6 +2005,7 @@ impl Studio {
         Some(
             column![
                 opencad_properties::section_header("Annotations"),
+                self.note_tool_controls(true),
                 opencad_properties::property_input(
                     "Text height (mm)",
                     "2.5",

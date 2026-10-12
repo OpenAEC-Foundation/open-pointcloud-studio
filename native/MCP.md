@@ -137,6 +137,8 @@ follows when that view is restored.
 | `orbit` | `yaw`, `pitch` (radians) | Turns the orbit camera as a left drag does, about the orbit point |
 | `pick_orbit_point` | `pointer` (`[x, y]` pixels) | Makes the drawn point at a viewport pixel the orbit point, as a double click does |
 | `zoom_all` | — | Fits the whole model |
+| `fit_scan_poses` | — | Frames the visible scanner stations and points together and shows the markers |
+| `set_scan_poses_visible` | `visible` | Shows or hides the scanner station markers |
 | `open_panorama` | `index`, `station` | Stands in a scanner station and shows its photos |
 | `set_panorama` | `yaw`, `pitch`, `field_of_view` (radians) | Turns the walking camera |
 | `walk` | `eye` (`[x, y, z]`), `yaw`, `pitch` | Places the walking camera |
@@ -164,6 +166,7 @@ follows when that view is restored.
 | `export_bcf` | `path` (`.bcf`) | Writes the views of the active scan as BCF |
 | `set_theme` | `theme` | `light` (Light), `forge` (Forge (dark)), `openaec` (OpenAEC (dark)), `blueprint` (Blueprint) or `contrast` (High contrast); `night` is the same as `openaec`, which is what `status` reports |
 | `set_language` | `language` | `auto` (the language of the system), `en` or `nl`; kept for later sessions |
+| `set_ribbon_tab` | `tab` | Chooses `start` or `view` in the native ribbon |
 | `set_color` | `mode` | `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code` (0–255), `visible` | Shows or hides a classification code |
 | `set_point_size` | `size` (0.1–20 pixels) | Point size |
@@ -212,6 +215,7 @@ follows when that view is restored.
 | `preview_drawing` | the choices of `export_drawing` without `path`, optional `wait_seconds` | Traces the filled cut of that slab and lays it over the points in the viewport; job |
 | `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
 | `drawing_view` | `show` | Shows the Drawing view in place of the 3D scene, or the 3D scene again |
+| `set_section_drawing_panel` | `open` | Opens or closes the Section drawing controls in Properties; opening needs a section box |
 | `open_drawing` | `path` (`.dxf` or `.dwg`), optional `wait_seconds` | Reads a DXF or DWG file into the Drawing view and shows it; job |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view |
 | `set_drawing_layer` | `layer` (name or `*`), `visible` | Shows or hides a layer of the drawing in the Drawing view |

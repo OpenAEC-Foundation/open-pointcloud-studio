@@ -95,6 +95,10 @@ pub enum ApiCommand {
     NextPhoto,
     PreviousPhoto,
     ZoomAll,
+    FitScanPoses,
+    SetScanPosesVisible {
+        visible: bool,
+    },
     ListCameraViews,
     SaveCameraView {
         /// Empty or absent for the next free "View N".
@@ -154,6 +158,10 @@ pub enum ApiCommand {
         /// `auto` for the language of the system, `en`, or the code of a
         /// translation such as `nl`.
         language: String,
+    },
+    SetRibbonTab {
+        /// `start`, `view` or `extensions`.
+        tab: String,
     },
     SetColor {
         mode: String,
@@ -328,6 +336,10 @@ pub enum ApiCommand {
     /// Show the Drawing view in the main area, or the 3D scene again.
     DrawingView {
         show: bool,
+    },
+    /// Show or hide the section drawing controls in Properties.
+    SetSectionDrawingPanel {
+        open: bool,
     },
     /// Read a DXF or DWG file into the Drawing view and show it.
     OpenDrawing {

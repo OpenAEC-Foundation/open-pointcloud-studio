@@ -1928,6 +1928,10 @@ impl Studio {
         self.section_enabled || self.drawing.open
     }
 
+    pub(crate) fn drawing_panel_open(&self) -> bool {
+        self.drawing.open
+    }
+
     /// Whether the File view entry can be chosen: the section box is on and
     /// no job or save dialog of the tool is under way.
     pub(crate) fn drawing_entry_enabled(&self) -> bool {

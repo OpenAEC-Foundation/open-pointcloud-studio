@@ -1,7 +1,7 @@
 //! What extensions look like in the window: the Extensions page of the File
 //! view, the dialogs that confirm an install and an uninstall, the
-//! EXTENSIONS group of the ribbon, the runs in the status bar and the tiles
-//! extensions add to the New and Export pages.
+//! action buttons of installed extensions, the runs in the status bar and
+//! the tiles extensions add to the New and Export pages.
 
 use iced::widget::{
     button, center, column, container, horizontal_space, mouse_area, opaque, row, svg, text,
@@ -15,7 +15,7 @@ use crate::file_view::FilePage;
 use crate::fonts;
 use crate::i18n::{tr, tr_args};
 use crate::ui_style;
-use crate::{opencad_ribbon, ui_theme, Message, Studio, VERSION_LABEL};
+use crate::{ui_theme, Message, Studio, VERSION_LABEL};
 
 /// The widest the cards of the page grow.
 const CARD_W: f32 = 620.0;
@@ -105,9 +105,9 @@ pub(super) fn adds_line(manifest: &Manifest) -> Option<String> {
     let mut parts = Vec::new();
     match manifest.ribbon.len() {
         0 => {}
-        1 => parts.push(tr("1 button in the ribbon").to_owned()),
+        1 => parts.push(tr("1 button on the Extensions page").to_owned()),
         count => parts.push(tr_args(
-            "{count} buttons in the ribbon",
+            "{count} buttons on the Extensions page",
             &[("count", &count)],
         )),
     }
@@ -361,6 +361,34 @@ impl Studio {
             }
             details = details.push(text(line).size(12).color(colors.accent));
         }
+        for pair in manifest.ribbon.chunks(2) {
+            let mut row = row![].spacing(8).width(Fill);
+            for entry in pair {
+                let icon: Element<'_, Message> = installed.icons.get(&entry.id).map_or_else(
+                    || Space::new(20, 20).into(),
+                    |handle| svg(handle.clone()).width(20).height(20).into(),
+                );
+                let action = button(
+                    row![icon, text(entry.label.get().to_owned()).size(12)]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                )
+                .on_press_maybe(
+                    enabled
+                        .then(|| send(ExtensionAction::Press(id.clone(), Some(entry.id.clone())))),
+                )
+                .style(move |theme, status| ui_style::ribbon_button(theme, run.is_some(), status))
+                .width(Length::FillPortion(1))
+                .height(34)
+                .padding([4, 8]);
+                let tooltip = entry
+                    .tooltip
+                    .as_ref()
+                    .map_or_else(|| entry.label.get().to_owned(), |tip| tip.get().to_owned());
+                row = row.push(ui_style::ribbon_tooltip(action, tooltip));
+            }
+            details = details.push(row);
+        }
         let mut actions = row![].spacing(8);
         actions = actions.push(match run {
             Some(run) => small_button(
@@ -524,47 +552,6 @@ impl Studio {
             }))
             .on_press(send(ExtensionAction::CloseDialog)),
         ))
-    }
-
-    /// The EXTENSIONS group of the ribbon: the buttons of the enabled
-    /// installed extensions, highlighted while their extension runs. A
-    /// click on one of them then stops the run.
-    pub(crate) fn extensions_ribbon(&self) -> Option<Element<'_, Message>> {
-        let mut items = Vec::new();
-        for installed in &self.extension_host.installed {
-            let manifest = &installed.manifest;
-            if !self.extensions.enabled(&manifest.id) {
-                continue;
-            }
-            let running = self.extension_host.runs.contains_key(&manifest.id);
-            for each in &manifest.ribbon {
-                let icon: Element<'_, Message> = match installed.icons.get(&each.id) {
-                    Some(handle) => svg(handle.clone()).width(32).height(32).into(),
-                    None => Space::new(32, 32).into(),
-                };
-                let control = button(container(icon).center(Fill))
-                    .on_press(send(ExtensionAction::Press(
-                        manifest.id.clone(),
-                        Some(each.id.clone()),
-                    )))
-                    .style(move |theme, status| ui_style::ribbon_button(theme, running, status))
-                    .width(46)
-                    .height(Fill)
-                    .padding([3, 2]);
-                let mut tip = each
-                    .tooltip
-                    .as_ref()
-                    .map_or_else(|| each.label.get().to_owned(), |tip| tip.get().to_owned());
-                tip = format!("{tip}\n{}", manifest.name.get());
-                if running {
-                    tip = format!("{tip}\n{}", tr("Runs; click to stop it"));
-                }
-                items.push(opencad_ribbon::RibbonItem::Large(
-                    ui_style::ribbon_tooltip(control, tip).into(),
-                ));
-            }
-        }
-        (!items.is_empty()).then(|| opencad_ribbon::render_group_items("EXTENSIONS", items))
     }
 
     /// The runs of extensions in the status bar: the name, how far it is,

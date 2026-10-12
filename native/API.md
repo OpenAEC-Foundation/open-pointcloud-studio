@@ -1045,7 +1045,7 @@ There are two kinds of extension: the optional features built into the
 application, such as `bag3d`, and installed extensions. An installed
 extension is a separate program in a folder of the configuration directory,
 `extensions/<id>/`, that drives the window through this API; it can add
-buttons to the EXTENSIONS group of the ribbon and tiles to the New and Export
+action buttons on its card in File → Extensions and tiles on the New and Export
 pages of the File view. [docs/extensions.md](../docs/extensions.md) describes
 the folder, its `extension.json` and how to write one.
 
@@ -1618,6 +1618,8 @@ layer with photo colours.
 | `orbit` | `yaw`, `pitch` | Turns the orbit camera by these angles in radians (yaw within ±2π, pitch within ±π; the elevation stays within ±1.56), as a left drag in the viewport does: about the orbit point while it is in view, keeping it on its pixel and the picture around it at its scale, otherwise about the centre of the model. Returns `camera`; refused while walking |
 | `pick_orbit_point` | `pointer` | Makes the drawn point nearest to the camera within 8 pixels of viewport pixel `[x, y]`, over all visible layers, the orbit point, as a double click in the viewport does; with no drawn point there the camera turns about the centre of the model again. Returns `orbit_point`, the point or `null`; refused while walking |
 | `zoom_all` | — | Fits the complete model at the default isometric orientation, matching the ribbon button and `F` shortcut |
+| `fit_scan_poses` | — | Frames the visible scanner stations and points together and shows the station markers; requires visible stations |
+| `set_scan_poses_visible` | `visible` | Shows or hides the scanner station markers; `status.result.scan_positions_visible` reports the state |
 | `open_panorama` | `index`, `station` | Stands in a scanner station of a layer and shows its photos; `status.result.walk` reports the view and whether full-resolution photos are loaded |
 | `set_panorama` | `yaw`, `pitch`, `field_of_view` | Turns the walking camera; yaw within ±π, pitch within ±1.55 and a horizontal field of view from 0.35 to 2.1 radians |
 | `walk` | `eye`, `yaw`, `pitch` | Places the walking camera at a position in scene coordinates, looking along the heading `yaw` and elevation `pitch`; inside a station ball it shows that station's photos |
@@ -1645,6 +1647,7 @@ layer with photo colours.
 | `export_bcf` | `path` | Writes all views of the active scan as one BCF 2.1 file at an absolute `.bcf` path |
 | `set_theme` | `theme` | Chooses and persists one of the five themes of the OpenAEC style book: `light` (Light), `forge` (Forge (dark)), `openaec` (OpenAEC (dark)), `blueprint` (Blueprint) or `contrast` (High contrast); `night` is the same as `openaec`. The reply and `status` give the key |
 | `set_language` | `language` | Chooses and persists the language of the user interface: `auto` for the language of the system when there is a translation for it, `en` for English or `nl` for Dutch. Returns the `language` now chosen, as `status.result.language` reports it; an unknown value is refused and changes nothing |
+| `set_ribbon_tab` | `tab` | Selects `start` or `view` in the native ribbon; `status.result.ribbon_tab` reports the active tab |
 | `set_color` | `mode` | Chooses `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code`, `visible` | Shows or hides one classification code in the viewport and exact selection |
 | `set_point_size` | `size` | Sets point size from 0.1 to 20 |
@@ -1712,6 +1715,7 @@ layer with photo colours.
 | `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
 | `cancel_drawing` | — | Requests cancellation of the running section drawing or preview |
 | `drawing_view` | `show` | Shows the Drawing view in the main area in place of the 3D scene (`true`) or the 3D scene again (`false`); answers with `drawing_view` |
+| `set_section_drawing_panel` | `open` | Opens or closes the Section drawing controls in Properties; opening requires an enabled section box, and `status.result.section_drawing_open` reports the state |
 | `open_drawing` | `path` | Reads an absolute `.dxf` or `.dwg` file into the Drawing view and shows it; returns a job ID whose complete job reports units, layers, entities drawn and skipped |
 | `create_drawing` | `kind`, optional `basis`, `side`, `height`, `position`, `thickness`, `sample_percent`, `name` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; returns a job ID. See [Drawings of the Project Browser](#drawings-of-the-project-browser) |
 | `list_drawings` | — | Lists the drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |

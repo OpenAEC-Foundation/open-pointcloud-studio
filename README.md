@@ -6,9 +6,9 @@ A desktop application for viewing, measuring, editing and converting laser scans
 [![Checks](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/workflows/ci.yml)
 [![Licence: GPL-3.0-only and LGPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--only%20%7C%20LGPL--3.0--or--later-blue)](#licences)
 
-![Open Pointcloud Studio v0.9.2 with its compact native Rust ribbon, a 46.6-million-point E57 scan, the Project Browser and Properties](docs/screenshots/ribbon-approved-build.png)
+![Open Pointcloud Studio v0.9.3 with its native Rust ribbon, a 46.6-million-point E57 scan, the Project Browser and Properties](docs/screenshots/weergave-ribbon-v093.png)
 
-*A 46.6-million-point Matterport lobby scan in the native Rust v0.9.2 interface, with Start, View and Extensions in the title strip.*
+*A 46.6-million-point Matterport lobby scan in the native Rust v0.9.3 interface, with Start and View in the title strip. See the [Start ribbon](docs/screenshots/start-ribbon-v093.png) as well.*
 
 Watch the [feature promo](promo/open-pointcloud-studio-features.mp4) for point selection, the section box, meshing, 2D drawings, E57 station photos and the responsive ribbon in the new white interface.
 
@@ -29,7 +29,7 @@ The [user guide](docs/guide.md) describes every tool in detail. [CHANGELOG.md](C
 
 ## Download and install
 
-The files are on the [releases page](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/latest). In the names below `VERSION` is the number of the release, for example `open-pointcloud-studio_0.9.2_x64-setup.exe`.
+The files are on the [releases page](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/latest). In the names below `VERSION` is the number of the release, for example `open-pointcloud-studio_0.9.3_x64-setup.exe`.
 
 | System | File | What it is |
 | --- | --- | --- |
@@ -73,14 +73,14 @@ Linux needs a C library of version 2.35 or newer and the C++ runtime of GCC 12 o
 The `.deb` installs the application as `/usr/bin/open-pointcloud-studio` with a menu entry, its icon and the libraries it needs, puts Open CAD Studio in `/usr/lib/open-pointcloud-studio`, and offers the application for E57, LAS, LAZ, PLY, PCD, PTX and PTS files and scan project files:
 
 ```bash
-sudo apt install ./open-pointcloud-studio_0.9.2_amd64.deb
+sudo apt install ./open-pointcloud-studio_0.9.3_amd64.deb
 ```
 
 The AppImage needs no installation. Make it executable once and start it:
 
 ```bash
-chmod +x open-pointcloud-studio_0.9.2_amd64.AppImage
-./open-pointcloud-studio_0.9.2_amd64.AppImage
+chmod +x open-pointcloud-studio_0.9.3_amd64.AppImage
+./open-pointcloud-studio_0.9.3_amd64.AppImage
 ```
 
 It mounts itself through FUSE (`fusermount3` or `fusermount`). Without FUSE, start it with `--appimage-extract-and-run` after the file name.
@@ -92,13 +92,13 @@ The `.tar.gz` holds the binary, Open CAD Studio beside it and the licence texts.
 A `.sha256` file holds the SHA-256 checksum of the file it is named after. With both in the same folder:
 
 ```bash
-sha256sum -c open-pointcloud-studio_0.9.2_amd64.deb.sha256              # Linux
-shasum -a 256 -c open-pointcloud-studio_0.9.2_macos-universal.dmg.sha256  # macOS
+sha256sum -c open-pointcloud-studio_0.9.3_amd64.deb.sha256              # Linux
+shasum -a 256 -c open-pointcloud-studio_0.9.3_macos-universal.dmg.sha256  # macOS
 ```
 
 ```powershell
-Get-FileHash open-pointcloud-studio_0.9.2_x64-setup.exe -Algorithm SHA256   # Windows
-Get-Content open-pointcloud-studio_0.9.2_x64-setup.exe.sha256
+Get-FileHash open-pointcloud-studio_0.9.3_x64-setup.exe -Algorithm SHA256   # Windows
+Get-Content open-pointcloud-studio_0.9.3_x64-setup.exe.sha256
 ```
 
 On Linux and macOS the command answers `OK`. On Windows, compare the two outputs: the hash must be the same, apart from upper and lower case.
@@ -133,7 +133,7 @@ open-pointcloud-studio --help
 
 ## The first five minutes
 
-The window has the **ribbon** with the tools along the top, the **project panel** with the open scans at the left, the **scene** (the 3D view) in the middle and the **Properties panel** (*Eigenschappen*) at the right. The ribbon is wider than the window at its first size: the arrow buttons at both ends of the ribbon, or the wheel over it, scroll to the groups that do not fit, among them EDIT (*BEWERKEN*), SURFACE (*OPPERVLAK*) and INDEX. **File** (*Bestand*) at the top left opens the File view, with the pages New, Open, Import and Export (*Nieuw*, *Openen*, *Importeren*, *Exporteren*) and the Workspace page (*Werkruimte*).
+The native Rust window has **Start** and **View** ribbons above the 3D scene, a Project Browser at the left and Properties at the right. Start holds the common file, navigation, selection, section, surface and export tools. View holds camera, colour, point density, effects and viewpoints. Groups fold into dropdowns when the window narrows. **File** (*Bestand*) opens the File view, including its Extensions page.
 
 The interface follows the language of the system, English or Dutch; **Settings > General** (*Instellingen > Algemeen*) changes it. This page uses the English names and, in the steps below, gives the Dutch name in brackets where it differs.
 
@@ -142,9 +142,9 @@ The interface follows the language of the system, English or Dutch; **Settings >
    With several scans open, one of them is the active scan: its row in the project panel has a coloured outline, and a click on a row makes that scan the active one. The section box and **Box select** (*Vak selecteren*) act on every visible scan. The tools that pick a point (measuring, notes and lines, and **Pick point**, *Punt kiezen*) and the exports of step 7 use the active scan only.
 
 2. **Look around.** Drag with the middle button while Shift is held to orbit (or with the left button while Alt is held), with the middle or right button to pan, and turn the wheel to zoom at the pointer. The left button selects: a click picks a point, a drag draws a selection rectangle. Double-click a point to orbit about that point. `F` or **Zoom all** (*Alles tonen*) goes back to the isometric overview of the whole model. The cube in the corner turns the view to a face or a corner.
-3. **Choose how points are shown.** In the **DISPLAY** group (*WEERGAVE*) of the ribbon, pick **RGB**, **Elevation** (*Hoogte*), **Intensity** (*Intensiteit*) or **Classification** (*Classificatie*), and set the point **Size** (*Grootte*) and the **Budget**: the most points drawn at once. A higher budget shows more detail and asks more of the graphics card.
+3. **Choose how points are shown.** On the **View** tab (*Weergave*), pick **RGB**, **Elevation** (*Hoogte*), **Intensity** (*Intensiteit*) or **Classification** (*Classificatie*), and set the point **Size** (*Grootte*) and the **Budget**: the most points drawn at once. A higher budget shows more detail and asks more of the graphics card.
 4. **Cut a floor plan.** Switch on **Section box** (*Snedebox*). A box appears around the whole model, with a round handle in the middle of each face. Drag the handle of the top face down to about a metre above a floor, so that the box cuts through the walls. Then click the top face of the view cube (*BOVEN*) to look straight down. Seen from straight above, dragging the top handle has little or no effect; to change the height there, use the **Z max** slider under **Section box** in the Properties panel, or type the height as Z **Max** and choose **Apply XYZ limits** (*XYZ-grenzen toepassen*).
-5. **Measure.** Choose **Distance** (*Afstand*) in the **MEASURE** group (*METEN*), click two points and press Enter. The length appears in the scene; the Properties panel also lists the horizontal length and the height difference.
+5. **Measure.** Choose **Distance** (*Afstand*) in Properties, click two points and press Enter. The length appears in the scene; the Properties panel also lists the horizontal length and the height difference.
 6. **Save the view.** Choose **Save view** (*View opslaan*) under **VIEWS** in the Project Browser. The view is listed there under 3D views, after the 3D model; a click on its name brings back the camera, the section box while it was on, and the colour mode. **Create 2D plan / elevation / section…** (*2D-plattegrond / aanzicht / doorsnede maken…*) under it makes a plan, an elevation or a section, which VIEWS then lists under its kind and which opens as a tab beside **3D model** (*3D-model*) above the scene; click a tab to switch, × to close it. Click the outline of its crop region (*bijsnijgebied*) to select it, then drag its handles or type its figures in Properties to change what it shows; the drawing is made again from the points it already read. Copy it with **Duplicate** (*Dupliceren*) beside ×, and type **R** and then **O** to turn the crop region of a plan along the walls. With **Note** (*Notitie*), click a point, type a text and press Enter. **File → Export → Views as BCF…** (*Views als BCF…*) writes the views of the scan, with their notes and a picture each, as one `.bcf` file: the BIM Collaboration Format, an open format for passing viewpoints and remarks on a building between programs.
 7. **Export what you cut.** Choose **File** and then **Export** (*Exporteren*), pick a **Format** (*Formaat*) under POINT CLOUD (*PUNTENWOLK*), then choose **Section box…** (*Snedebox…*). The file holds every point of the active scan inside the box, not only the points on screen. With several scans open, make each one active in turn and export it, or first join LAS and LAZ scans with **Merge visible LAS/LAZ scans…** (*Zichtbare LAS/LAZ-scans samenvoegen…*).
 
@@ -228,7 +228,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - **SHEETS** in the Project Browser holds sheets: paper from A4 to A0, lying or standing, with a border and a title block with the project, the name, the number, the scale, the date and who drew it. A sheet opens in a tab of its own.
 - Drag a saved 3D view, a plan, an elevation or a section from VIEWS onto the paper, or use **Place view** in Properties. A drawing is placed as vectors at 1:100 or another scale, a 3D view as the picture of the view at about 200 dpi; each has its title under it, can be moved, scaled or resized, and follows its view.
 - **Export PDF…** writes the sheet as a PDF the size of its paper.
-- **Text**, **Dimension**, **Leader** and **Line** in the VIEWS group of the ribbon annotate a plan, an elevation or a section: a dimension snaps to the ends and corners of the lines and shows the distance in millimetres, rounded to the scale. Annotations stay with the drawing when it is made again, show on sheets and in the PDF, and are written to DXF and DWG as texts, real dimensions and leaders with **Export DXF/DWG…**.
+- **Text**, **Dimension**, **Leader** and **Line** in Properties annotate a plan, an elevation or a section: a dimension snaps to the ends and corners of the lines and shows the distance in millimetres, rounded to the scale. Annotations stay with the drawing when it is made again, show on sheets and in the PDF, and are written to DXF and DWG as texts, real dimensions and leaders with **Export DXF/DWG…**.
 - **Locked** in Properties locks a saved 3D view, a drawing or a view on a sheet: a locked 3D view keeps its camera and section box, also while a drawing or a sheet lies in front of it, a locked drawing its crop region, and a locked view on a sheet its place and scale.
 
 ### Mesh
@@ -265,7 +265,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 ### Other
 
 - **3D BAG buildings…** in the File view downloads building models of the Netherlands for an area in RD New coordinates and shows them with a scan. It is a built-in extension that can be switched off on the Extensions page.
-- **Extensions** from other authors add tasks: a folder or `.zip` with an `extension.json` and a program in any language, such as a PowerShell or Python script, that drives the window through the command API in a process of its own. **Install extension…** on the Extensions page checks it and shows what it declares before it is installed; its buttons appear in the EXTENSIONS group of the ribbon and its tiles on the New and Export pages. [Writing an extension](docs/extensions.md) describes the format, with an [example](native/extensions/examples/point-count-report).
+- **Extensions** from other authors add tasks: a folder or `.zip` with an `extension.json` and a program in any language, such as a PowerShell or Python script, that drives the window through the command API in a process of its own. **Install extension…** on **File → Extensions** checks it and shows what it declares before it is installed; installed extensions can be run from that page and their tiles appear on the New and Export pages. [Writing an extension](docs/extensions.md) describes the format, with an [example](native/extensions/examples/point-count-report).
 - **Settings** has the language (the language of the system, English or Dutch) and the five colour themes of the OpenAEC style book.
 - Display settings are kept between sessions. Settings and indexes are stored in the folders that the [user guide](docs/guide.md#where-settings-and-indexes-are-stored) names.
 

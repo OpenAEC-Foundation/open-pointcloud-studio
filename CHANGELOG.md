@@ -12,6 +12,12 @@ drops those that begin with the name of an operating system or with
 "Unreleased"; the release step gives that section its version and date.
 -->
 
+## 0.9.3 - 2026-10-12
+
+- The native Rust ribbon now has just **Start** and **View**. The View tab groups camera, colour, point density, effects and saved viewpoints in a compact layout that folds into dropdowns on narrow windows. Extensions remain available from File → Extensions.
+- Point size and point budget, colour modes, eye-dome shading, scan positions, camera fits, viewpoints and section drawings are available from the View tab. Measurement, view annotations, drawing annotations and indexing remain available in Properties.
+- The local API and MCP server can select either ribbon tab, fit the camera to scan positions, show or hide scan positions and open the section drawing panel. The feature promo was recaptured from the new interface.
+
 ## 0.9.2 - 2026-10-09
 
 - The native Rust interface follows the approved compact ribbon design: Start and View are the two main tabs, Extensions has its own entry, the most-used tools have clearer icons and short labels, and groups fold into working dropdowns as the window narrows. The Project Browser and Properties align with the white 3D workspace, and the title strip keeps file and settings shortcuts close at hand.
