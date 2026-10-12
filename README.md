@@ -10,7 +10,9 @@ A desktop application for viewing, measuring, editing and converting laser scans
 
 *A 46.6-million-point Matterport lobby scan in the native Rust v0.9.4 interface, with Start and View in the title strip. See the [View ribbon](docs/screenshots/weergave-ribbon-v094.png) as well.*
 
-Watch the [feature promo](promo/open-pointcloud-studio-features.mp4) for point selection, the section box, meshing, 2D drawings, E57 station photos and the responsive ribbon in the new white interface.
+[![Watch the Open Pointcloud Studio v0.9.4 feature video](promo/poster.png)](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v0.9.4/open-pointcloud-studio-features.mp4)
+
+**[Watch the feature video](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v0.9.4/open-pointcloud-studio-features.mp4)** — point selection, the section box, meshing, 2D drawings, E57 station photos and the responsive ribbon in the new white interface.
 
 ## Contents
 
