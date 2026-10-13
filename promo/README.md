@@ -1,6 +1,6 @@
 # Open Pointcloud Studio feature promo
 
-The silent MP4 uses thirteen desktop captures from the native Rust v0.9.4 build with a 46.6-million-point E57 scan. It opens on the Start ribbon, demonstrates the View controls, then shows point selection, measuring, the section box, mesher settings, 2D plan and section, an E57 station photo, and the responsive View ribbon. The screenshots are unaltered inside a white promo frame.
+The silent MP4 uses thirteen desktop captures from the native Rust v0.9.5 build with a 46.6-million-point E57 scan. It opens on the single Start ribbon, demonstrates the controls beneath the view cube, then shows point selection, measuring, the section box, mesher settings, 2D plan and section, an E57 station photo, and responsive groups. The screenshots are unaltered inside a white promo frame.
 
 Capture the scenes from a running build with the lobby scan open, using its process ID and X11 window ID:
 

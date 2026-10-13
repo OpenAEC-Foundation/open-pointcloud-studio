@@ -1647,7 +1647,7 @@ layer with photo colours.
 | `export_bcf` | `path` | Writes all views of the active scan as one BCF 2.1 file at an absolute `.bcf` path |
 | `set_theme` | `theme` | Chooses and persists one of the five themes of the OpenAEC style book: `light` (Light), `forge` (Forge (dark)), `openaec` (OpenAEC (dark)), `blueprint` (Blueprint) or `contrast` (High contrast); `night` is the same as `openaec`. The reply and `status` give the key |
 | `set_language` | `language` | Chooses and persists the language of the user interface: `auto` for the language of the system when there is a translation for it, `en` for English or `nl` for Dutch. Returns the `language` now chosen, as `status.result.language` reports it; an unknown value is refused and changes nothing |
-| `set_ribbon_tab` | `tab` | Selects `start` or `view` in the native ribbon; `status.result.ribbon_tab` reports the active tab |
+| `set_ribbon_tab` | `tab` | `start` shows the single ribbon; legacy `view` opens the controls beneath the view cube. `status.result.ribbon_tab` remains `start` and `view_controls_open` reports the menu. |
 | `set_color` | `mode` | Chooses `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code`, `visible` | Shows or hides one classification code in the viewport and exact selection |
 | `set_point_size` | `size` | Sets point size from 0.1 to 20 |

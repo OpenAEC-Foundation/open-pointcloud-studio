@@ -62,7 +62,7 @@ def main() -> None:
     command("set_camera", yaw=-0.8, pitch=0.6, zoom=0.15, pan=[-645.0, 150.0])
     capture(1, "overview")
 
-    command("set_ribbon_tab", tab="view")
+    command("set_ribbon_tab", tab="view")  # View controls beneath the view cube.
     command("set_color", mode="elevation")
     capture(11, "elevation")
     command("set_color", mode="rgb")
@@ -100,7 +100,7 @@ def main() -> None:
     capture(13, "measure")
     command("clear_measure")
     command("set_scan_poses_visible", visible=True)
-    command("set_ribbon_tab", tab="view")
+    command("set_ribbon_tab", tab="start")
     command("set_section", min=[-29.0, -118.0, -1.8], max=[0.0, 11.0, 5.3])
     capture(3, "section")
     command("clear_section")
@@ -116,12 +116,33 @@ def main() -> None:
         (6, "plan", "Matterport lobby - issue 11 fill"),
         (7, "section-2d", "Matterport lobby - issue 9 section"),
     ]:
-        command("show_drawing", name=name)
+        for _ in range(240):
+            try:
+                command("show_drawing", name=name)
+                break
+            except RuntimeError as error:
+                if "A section drawing is already open or running" not in str(error):
+                    raise
+                time.sleep(0.5)
+        else:
+            raise RuntimeError(f"Could not open drawing {name}: a previous drawing kept running")
         for _ in range(120):
-            state = command("status")["drawing_view"]
-            if state["shown"] and not state["reading"] and not state["remaking"]:
+            state = command("status")
+            drawing = state["drawing_view"]
+            tabs = state["view_tabs"]
+            active = next((tab for tab in tabs["tabs"] if tab["index"] == tabs["active"]), None)
+            if (
+                state["drawing"]["job"] is None
+                and drawing["shown"]
+                and not drawing["reading"]
+                and not drawing["remaking"]
+                and active is not None
+                and active["name"] == name
+            ):
                 break
             time.sleep(0.5)
+        else:
+            raise RuntimeError(f"Drawing {name} did not finish or appear in its own tab")
         capture(number, slug)
 
     command("show_tab", index=0)
@@ -138,7 +159,7 @@ def main() -> None:
         if walk is not None and walk.get("station", {}).get("full_resolution"):
             break
         time.sleep(0.5)
-    command("set_ribbon_tab", tab="view")
+    command("set_ribbon_tab", tab="start")
     capture(8, "panorama")
     command("close_panorama")
 
@@ -147,6 +168,7 @@ def main() -> None:
     capture(9, "responsive")
     size(1584)
     command("set_camera", yaw=-0.8, pitch=0.6, zoom=0.1612183, pan=[-500.0, 106.0])
+    command("set_ribbon_tab", tab="view")
     capture(10, "view")
     command("set_ribbon_tab", tab="start")
     size(1584)

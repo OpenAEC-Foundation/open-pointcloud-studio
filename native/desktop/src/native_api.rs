@@ -160,7 +160,8 @@ pub enum ApiCommand {
         language: String,
     },
     SetRibbonTab {
-        /// `start`, `view` or `extensions`.
+        /// `start` shows the sole ribbon; legacy `view` opens the controls
+        /// beneath the view cube without changing the active ribbon tab.
         tab: String,
     },
     SetColor {

@@ -12,6 +12,12 @@ drops those that begin with the name of an operating system or with
 "Unreleased"; the release step gives that section its version and date.
 -->
 
+## 0.9.5 - 2026-10-13
+
+- One compact Start ribbon groups file, navigation, selection, section box, meshing, drawing, measuring, annotation, indexing and export tools. Mesh to Plan and all four meshing methods are visible in the main ribbon; groups fold into live dropdowns on narrow windows.
+- Camera presets, point colours, point size, point budget, eye-dome shading and scan positions now open below the view cube. The local API and MCP command retain the `view` alias to open these controls.
+- The feature video and screenshots were captured again from the native Rust build with the new single-tab interface and a 46.6-million-point E57 scan.
+
 ## 0.9.4 - 2026-10-12
 
 - The Start ribbon follows the approved reference more closely, with larger and clearer file, navigation and mesh icons. A dedicated Pan button supports left-drag navigation and gives way when Measure is chosen.

@@ -353,8 +353,8 @@ fn table() -> Vec<Tool> {
             required("pointer", pixel("Viewport pixel [x, y] from the top-left corner")),
         ]),
         tool("zoom_all", Command, "Fits the complete model in the viewport at the default isometric direction, like the F key.", vec![]),
-        tool("fit_scan_poses", Command, "Frames the visible scan positions together with the point cloud, as Frame stations in the View ribbon does; switches scan positions on. Requires visible stations.", vec![]),
-        tool("set_scan_poses_visible", Command, "Shows or hides the scan position markers in the 3D viewport, as Scan positions in the View ribbon does.", vec![
+        tool("fit_scan_poses", Command, "Frames the visible scan positions together with the point cloud, as Stations passen under the view cube does; switches scan positions on. Requires visible stations.", vec![]),
+        tool("set_scan_poses_visible", Command, "Shows or hides the scan position markers in the 3D viewport, as Scanposities under the view cube does.", vec![
             required("visible", boolean("Whether scan position markers are shown")),
         ]),
         tool("open_panorama", Command, "Stands in a scanner station of a layer and shows the photos taken there (E57 scans with station images); status.result.walk reports the view.", vec![
@@ -442,8 +442,8 @@ fn table() -> Vec<Tool> {
         tool("set_language", Command, "Sets the language of the user interface and keeps it for later sessions.", vec![
             required("language", choice("auto for the language of the system when there is a translation for it, en for English, or the code of a translation such as nl for Dutch; status.result.language reports the choice", &crate::i18n::Language::keys())),
         ]),
-        tool("set_ribbon_tab", Command, "Selects the Start or View ribbon tab in the native window; status.result.ribbon_tab reports the active tab.", vec![
-            required("tab", choice("Ribbon tab", &["start", "view"])),
+        tool("set_ribbon_tab", Command, "Shows the sole Start ribbon; legacy view opens the controls beneath the view cube. status.result.view_controls_open reports that dropdown.", vec![
+            required("tab", choice("start, or view to open the view-cube controls", &["start", "view"])),
         ]),
         tool("set_color", Command, "Chooses how points are coloured.", vec![
             required("mode", choice("Colour source", &["rgb", "elevation", "intensity", "classification"])),
@@ -565,7 +565,7 @@ fn table() -> Vec<Tool> {
         tool("drawing_view", Command, "Shows the Drawing view in the main area in place of the 3D scene, or the 3D scene again. The view shows the drawing that preview_drawing or export_drawing made last, or the file open_drawing read. Answers with drawing_view as status.result.drawing_view reports it: shown, the source, units, counts, layers with their visibility, extents and the camera. A screenshot while it is shown captures the drawing.", vec![
             required("show", boolean("true to show the drawing, false to return to the 3D scene")),
         ]),
-        tool("set_section_drawing_panel", Command, "Shows or hides the Section drawing controls in Properties, as the Section drawing button in the View ribbon does. Opening requires an enabled section box.", vec![
+        tool("set_section_drawing_panel", Command, "Shows or hides the Section drawing controls in Properties, as 2D snede in the Start ribbon does. Opening requires an enabled section box.", vec![
             required("open", boolean("Whether to show the Section drawing controls")),
         ]),
         tool("open_drawing", Job, "Reads a DXF or DWG file into the Drawing view and shows it: points, lines, polylines with their arcs, circles, arcs, ellipses, solid fills with holes, 2D solids, texts and block references. Other entities are counted by type in skipped, 3D content such as meshes in skipped_3d; neither is shown. A file without units is read as millimetres. Answers with a job_id; the complete job reports the units, layers, points, polylines, fills, texts, inserts and what was skipped.", vec![

@@ -1771,16 +1771,14 @@ impl WalkKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RibbonTab {
     Start,
-    View,
 }
 
 impl RibbonTab {
-    const CORE: [Self; 2] = [Self::Start, Self::View];
+    const CORE: [Self; 1] = [Self::Start];
 
     fn label(self) -> &'static str {
         match self {
             Self::Start => i18n::key("Home"),
-            Self::View => i18n::key("Display"),
         }
     }
 }
@@ -1812,6 +1810,7 @@ enum Message {
     Exit,
     ToggleRibbonPanel(&'static str),
     CloseRibbonPanel,
+    ToggleViewControls,
     /// The window opened or got another size: the ribbon measures its
     /// overflow again.
     WindowResized(Size),
@@ -2240,6 +2239,7 @@ struct Studio {
     /// The size of the window, once it opened.
     window_size: Option<Size>,
     ribbon_panel_open: Option<&'static str>,
+    view_controls_open: bool,
     ribbon_tab: RibbonTab,
     file_open: bool,
     /// The page the File view shows.
@@ -2879,6 +2879,7 @@ impl Default for Studio {
             viewport_size: Size::new(915.0, 743.0),
             window_size: None,
             ribbon_panel_open: None,
+            view_controls_open: false,
             ribbon_tab: RibbonTab::Start,
             file_open: false,
             file_page: FilePage::default(),
@@ -3956,10 +3957,8 @@ impl Studio {
                 answer.0["result"]["detail_pending"] = Value::Bool(self.detail_pending);
                 answer.0["result"]["index"] = self.index_value();
                 answer.0["result"]["language"] = Value::from(i18n::choice().key());
-                answer.0["result"]["ribbon_tab"] = Value::from(match self.ribbon_tab {
-                    RibbonTab::Start => "start",
-                    RibbonTab::View => "view",
-                });
+                answer.0["result"]["ribbon_tab"] = Value::from("start");
+                answer.0["result"]["view_controls_open"] = Value::Bool(self.view_controls_open);
                 answer.0["result"]["bag3d"] =
                     json!(self.bag_job.as_ref().map(bag_panel::BagJob::progress_value));
                 answer.0["result"]["mesh_export_pending"] = Value::Bool(self.mesh_export_pending);
@@ -4288,20 +4287,17 @@ impl Studio {
                 }
             }
             ApiCommand::SetRibbonTab { tab } => {
-                let selected = match tab.to_ascii_lowercase().as_str() {
-                    "start" => Some(RibbonTab::Start),
-                    "view" => Some(RibbonTab::View),
-                    _ => None,
-                };
-                if let Some(selected) = selected {
-                    let task = self.update(Message::RibbonTabSelected(selected));
+                let requested = tab.to_ascii_lowercase();
+                if requested == "start" || requested == "view" {
+                    let task = self.update(Message::RibbonTabSelected(RibbonTab::Start));
+                    self.view_controls_open = requested == "view";
                     (
-                        json!({"ok": true, "ribbon_tab": tab.to_ascii_lowercase()}),
+                        json!({"ok": true, "ribbon_tab": "start", "view_controls_open": self.view_controls_open}),
                         task,
                     )
                 } else {
                     (
-                        json!({"ok": false, "error": "ribbon tab must be start or view"}),
+                        json!({"ok": false, "error": "ribbon tab must be start or view (view opens the view cube controls)"}),
                         Task::none(),
                     )
                 }
@@ -6337,11 +6333,13 @@ impl Studio {
                 self.file_open = !self.file_open;
                 self.file_page = FilePage::default();
                 self.ribbon_panel_open = None;
+                self.view_controls_open = false;
             }
             Message::RibbonTabSelected(tab) => {
                 self.ribbon_tab = tab;
                 self.file_open = false;
                 self.ribbon_panel_open = None;
+                self.view_controls_open = false;
             }
             Message::FileAction(action) => return self.file_action(action),
             Message::FilePage(page) => self.file_page = page,
@@ -6361,6 +6359,7 @@ impl Studio {
                 self.ribbon_panel_open = (self.ribbon_panel_open != Some(id)).then_some(id);
             }
             Message::CloseRibbonPanel => self.ribbon_panel_open = None,
+            Message::ToggleViewControls => self.view_controls_open = !self.view_controls_open,
             Message::WindowResized(size) => {
                 let previous = self.window_size.replace(size);
                 self.ribbon_panel_open = None;
@@ -8974,6 +8973,10 @@ impl Studio {
             Message::Escape if self.turn.is_some() => return self.cancel_turn(),
             Message::Escape => {
                 self.pan_tool = false;
+                if self.view_controls_open {
+                    self.view_controls_open = false;
+                    return Task::none();
+                }
                 if self.ribbon_panel_open.take().is_some() {
                     return Task::none();
                 }
@@ -10188,10 +10191,7 @@ impl Studio {
         }
 
         let open = self.ribbon_panel_open;
-        let groups = match active_tab {
-            RibbonTab::Start => self.reference_start_groups(),
-            RibbonTab::View => self.reference_view_groups(),
-        };
+        let groups = self.reference_start_groups();
         let tool_strip: Element<'_, Message> =
             container(opencad_ribbon::AdaptiveRibbon::new(groups, open))
                 .padding([0, 4])
@@ -10215,233 +10215,157 @@ impl Studio {
         .into()
     }
 
-    /// The five groups follow docs/design/weergave-ribbon-concept.md.
-    /// AdaptiveRibbon folds complete groups from the right on narrower screens.
-    fn reference_view_groups(&self) -> Vec<opencad_ribbon::AdaptivePanel<'_>> {
-        let open = self.ribbon_panel_open;
-        let panel = |id, title, icon, width, tools| {
-            opencad_ribbon::AdaptivePanel::new(
-                id,
-                title,
-                icon_svg(icon, 22.0),
-                opencad_ribbon::render_reference_group(title, width, tools),
-                open == Some(id),
-            )
+    /// The view-cube dropdown replaces the former View ribbon.
+    fn view_controls_panel(&self) -> Element<'_, Message> {
+        let view_choice = |caption: &'static str, message: Message, active: bool, enabled: bool| {
+            button(text(i18n::tr(caption)).size(11))
+                .on_press_maybe(enabled.then_some(message))
+                .style(move |theme, status| {
+                    let mut style = ui_style::ribbon_button(theme, active, status);
+                    if !active {
+                        style.background = Some(ui_theme::colors(theme).btn_secondary_bg.into());
+                        style.border.color = ui_theme::colors(theme).dialog_input_border;
+                    }
+                    style
+                })
+                .height(31)
+                .padding([5, 8])
         };
-        let action = |icon, caption, tooltip, message, active, enabled, width| {
-            reference_action(
-                icon_svg(icon, 34.0),
-                caption,
-                tooltip,
-                message,
-                active,
-                enabled,
-                ReferenceActionSize::Small(width),
-            )
-        };
+        let mode = self.effective_color_mode();
         let stations = self
             .clouds
             .iter()
             .any(|entry| entry.visible && !entry.cloud.scan_poses.is_empty());
-        let selected = self.selected_total();
-        let camera = row![
-            action(
-                ToolIcon::Fit,
-                "Zoom all",
-                "Zoom all",
-                Message::ResetCamera,
-                false,
-                true,
-                93.0
-            ),
-            action(
-                ToolIcon::Camera(CameraPreset::Isometric),
-                i18n::key("Isometric"),
-                "Isometric",
-                Message::CameraPreset(CameraPreset::Isometric),
-                self.view_label == "ISOMETRIC",
-                true,
-                93.0,
-            ),
-            action(
-                ToolIcon::FitSelection,
-                i18n::key("Show selection"),
-                i18n::key("Zoom selection"),
-                Message::ZoomToSelection,
-                false,
-                selected > 0 && !self.selection_bounds_pending,
-                93.0,
-            ),
-            action(
-                ToolIcon::FitStations,
-                i18n::key("Frame stations"),
-                "Fit stations",
-                Message::FitScanPoses,
-                false,
-                stations,
-                93.0,
-            ),
-        ]
-        .spacing(2)
-        .align_y(iced::Alignment::Center);
-        let color_mode = self.effective_color_mode();
-        let color = row![
-            action(
-                ToolIcon::ColorRgb,
-                "RGB",
-                "RGB",
-                Message::ColorMode(ColorMode::Rgb),
-                color_mode == ColorMode::Rgb,
-                self.can_show_color_mode(ColorMode::Rgb),
-                70.0
-            ),
-            action(
-                ToolIcon::ColorElevation,
-                i18n::key("Elevation"),
-                "Elevation",
-                Message::ColorMode(ColorMode::Elevation),
-                color_mode == ColorMode::Elevation,
-                true,
-                70.0
-            ),
-            action(
-                ToolIcon::ColorIntensity,
-                "Intensity",
-                "Intensity",
-                Message::ColorMode(ColorMode::Intensity),
-                color_mode == ColorMode::Intensity,
-                self.can_show_color_mode(ColorMode::Intensity),
-                70.0
-            ),
-            action(
-                ToolIcon::ColorClassification,
-                "Class",
-                "Class",
-                Message::ColorMode(ColorMode::Classification),
-                color_mode == ColorMode::Classification,
-                self.can_show_color_mode(ColorMode::Classification),
-                70.0
-            ),
-        ]
-        .spacing(2)
-        .align_y(iced::Alignment::Center);
-        let points = column![
+        let divider = || {
+            container(text("")).width(Fill).height(1).style(|theme| {
+                container::Style::default().background(ui_theme::colors(theme).border_subtle)
+            })
+        };
+        let panel = column![
+            text(i18n::tr("CAMERA")).size(10).font(fonts::MEDIUM),
             row![
-                text(i18n::tr("Point size")).size(12).width(104),
+                view_choice(
+                    "Iso",
+                    Message::CameraPreset(CameraPreset::Isometric),
+                    self.view_label == "ISOMETRIC",
+                    true
+                ),
+                view_choice(
+                    "Top",
+                    Message::CameraPreset(CameraPreset::Top),
+                    self.view_label == "TOP",
+                    true
+                ),
+                view_choice(
+                    "Front",
+                    Message::CameraPreset(CameraPreset::Front),
+                    self.view_label == "FRONT",
+                    true
+                ),
+                view_choice(
+                    "Right",
+                    Message::CameraPreset(CameraPreset::Right),
+                    self.view_label == "RIGHT",
+                    true
+                ),
+            ]
+            .spacing(5),
+            row![
+                view_choice("Zoom all", Message::ResetCamera, false, true),
+                view_choice(
+                    "Show selection",
+                    Message::ZoomToSelection,
+                    false,
+                    self.selected_total() > 0 && !self.selection_bounds_pending
+                ),
+                view_choice("Frame stations", Message::FitScanPoses, false, stations),
+            ]
+            .spacing(3),
+            divider(),
+            text(i18n::tr("COLOR")).size(10).font(fonts::MEDIUM),
+            row![
+                view_choice(
+                    "RGB",
+                    Message::ColorMode(ColorMode::Rgb),
+                    mode == ColorMode::Rgb,
+                    self.can_show_color_mode(ColorMode::Rgb)
+                ),
+                view_choice(
+                    "Elevation",
+                    Message::ColorMode(ColorMode::Elevation),
+                    mode == ColorMode::Elevation,
+                    true
+                ),
+                view_choice(
+                    "Intensity",
+                    Message::ColorMode(ColorMode::Intensity),
+                    mode == ColorMode::Intensity,
+                    self.can_show_color_mode(ColorMode::Intensity)
+                ),
+                view_choice(
+                    "Class",
+                    Message::ColorMode(ColorMode::Classification),
+                    mode == ColorMode::Classification,
+                    self.can_show_color_mode(ColorMode::Classification)
+                ),
+            ]
+            .spacing(5),
+            divider(),
+            text(i18n::tr("DETAIL")).size(10).font(fonts::MEDIUM),
+            row![
+                text(i18n::tr("Point size")).size(11).width(95),
                 ui_style::slider(0.1..=20.0, self.point_size, Message::PointSize)
                     .step(0.1_f32)
-                    .width(194),
-                text(format!("{:.1}", self.point_size))
-                    .size(12)
-                    .width(48)
-                    .align_x(iced::Alignment::End),
+                    .width(130),
+                text(format!("{:.1}", self.point_size)).size(11),
             ]
-            .spacing(8)
+            .spacing(6)
             .align_y(iced::Alignment::Center),
             row![
-                text(i18n::tr("Points in view")).size(12).width(104),
+                text(i18n::tr("Points in view")).size(11).width(95),
                 ui_style::slider(
                     MIN_POINT_BUDGET..=MAX_POINT_BUDGET,
                     self.budget,
                     Message::Budget
                 )
                 .step(100_000_u32)
-                .width(194),
-                text(format!("{:.1} M", f64::from(self.budget) / 1_000_000.0))
-                    .size(12)
-                    .width(48)
-                    .align_x(iced::Alignment::End),
+                .width(130),
+                text(format!("{:.1}M", f64::from(self.budget) / 1_000_000.0)).size(11),
             ]
-            .spacing(8)
+            .spacing(6)
             .align_y(iced::Alignment::Center),
-        ]
-        .spacing(14)
-        .align_x(iced::Alignment::Center);
-        let effects = row![
-            action(
-                ToolIcon::EyeDome,
-                i18n::key("Eye-dome"),
+            divider(),
+            view_choice(
                 "Eye-dome",
                 Message::SetEyeDome(!self.eye_dome),
                 self.eye_dome,
-                true,
-                112.0,
+                true
             ),
-            action(
-                ToolIcon::ScanPositions,
-                "Scan positions",
+            view_choice(
                 "Scan positions",
                 Message::ShowScanPoses(!self.show_scan_poses),
                 self.show_scan_poses,
-                stations,
-                112.0,
+                stations
             ),
         ]
-        .spacing(4)
-        .align_y(iced::Alignment::Center);
-        let views = row![
-            action(
-                ToolIcon::Save,
-                i18n::key("Save viewpoint"),
-                "Save view",
-                Message::Views(views::ViewAction::Save),
-                false,
-                self.active.is_some(),
-                140.0,
-            ),
-            action(
-                ToolIcon::Drawing,
-                "Section",
-                "Section drawing",
-                Message::Drawing(drawing::DrawingAction::Toggle),
-                self.drawing_panel_open(),
-                self.drawing_button_enabled(),
-                140.0,
-            ),
-        ]
-        .spacing(4)
-        .align_y(iced::Alignment::Center);
-        vec![
-            panel(
-                "view-camera",
-                i18n::key("CAMERA"),
-                ToolIcon::Camera(CameraPreset::Isometric),
-                382.0,
-                camera.into(),
-            ),
-            panel(
-                "view-color",
-                i18n::key("COLOR"),
-                ToolIcon::ColorRgb,
-                288.0,
-                color.into(),
-            ),
-            panel(
-                "view-points",
-                i18n::key("POINTS"),
-                ToolIcon::Cloud,
-                378.0,
-                points.into(),
-            ),
-            panel(
-                "view-effects",
-                i18n::key("EFFECTS"),
-                ToolIcon::EyeDome,
-                230.0,
-                effects.into(),
-            ),
-            panel(
-                "view-viewpoints",
-                i18n::key("VIEWPOINTS"),
-                ToolIcon::SavedView,
-                290.0,
-                views.into(),
-            ),
-        ]
+        .spacing(9)
+        .width(290);
+        container(panel)
+            .padding(12)
+            .width(315)
+            .style(|theme| {
+                container::Style::default()
+                    .background(ui_theme::colors(theme).bg)
+                    .border(iced::Border {
+                        color: ui_theme::colors(theme).border,
+                        width: 1.0,
+                        radius: 7.0.into(),
+                    })
+            })
+            .into()
     }
 
-    /// The seven groups and their widths follow the approved 1584 px mockup.
-    /// On a narrower window AdaptiveRibbon folds complete groups into menus.
+    /// One grouped Start ribbon; complete groups collapse from right to left.
     fn reference_start_groups(&self) -> Vec<opencad_ribbon::AdaptivePanel<'_>> {
         use mesh_wizard::{MeshMethod, MeshWizardAction};
         let selected = self.selected_total();
@@ -10456,14 +10380,9 @@ impl Studio {
                 open == Some(id),
             )
         };
-        let big = |kind, caption, tooltip, message, on, enabled, width| {
-            let icon_size = match kind {
-                RibbonPrimaryIcon::Mesh => 60.0,
-                RibbonPrimaryIcon::Section => 56.0,
-                _ => 49.0,
-            };
+        let big = |icon, caption, tooltip, message, on, enabled, width| {
             reference_action(
-                ribbon_primary_icon(kind, icon_size),
+                icon_svg(icon, 47.0),
                 caption,
                 tooltip,
                 message,
@@ -10472,324 +10391,398 @@ impl Studio {
                 ReferenceActionSize::Large(width),
             )
         };
-        let small = |kind, caption, tooltip, message, on, enabled, width| {
-            let icon_size = if matches!(
-                kind,
-                RibbonPrimaryIcon::MeshWire
-                    | RibbonPrimaryIcon::MeshSmooth
-                    | RibbonPrimaryIcon::MeshEdit
-                    | RibbonPrimaryIcon::MeshExport
-            ) {
-                42.0
-            } else {
-                34.0
-            };
-            reference_action(
-                ribbon_primary_icon(kind, icon_size),
-                caption,
-                tooltip,
-                message,
-                on,
-                enabled,
-                ReferenceActionSize::Small(width),
-            )
-        };
+        let centre = [
+            self.viewport_size.width * 0.5,
+            self.viewport_size.height * 0.5,
+        ];
         let file = row![
             big(
-                RibbonPrimaryIcon::Open,
+                ToolIcon::Open,
                 "Open",
                 "Import point cloud",
                 Message::Open,
                 false,
                 true,
-                78.0
+                72.0
             ),
-            column![
-                row![
-                    reference_icon_action(
-                        icon_svg(ToolIcon::Save, 31.0),
-                        "Export active point cloud",
-                        Message::Export,
-                        active
-                    ),
-                    reference_icon_action(
-                        icon_svg(ToolIcon::FileImport, 33.0),
-                        "Import point cloud",
-                        Message::Open,
-                        true
-                    ),
-                ]
-                .spacing(13),
-                row![
-                    reference_icon_action(
-                        icon_svg(ToolIcon::FolderImport, 33.0),
-                        "Open scan folder",
-                        Message::OpenFolder,
-                        true
-                    ),
-                    reference_icon_action(
-                        icon_svg(ToolIcon::SelectionExport, 33.0),
-                        i18n::key("Export selection"),
-                        Message::ExportSelection,
-                        selected > 0
-                    ),
-                ]
-                .spacing(13),
-            ]
-            .spacing(2),
+            reference_icon_action(
+                icon_svg(ToolIcon::OpenFolder, 29.0),
+                "Open scan folder",
+                Message::OpenFolder,
+                true
+            ),
         ]
-        .spacing(3)
+        .spacing(4)
         .align_y(iced::Alignment::Center);
-        let centre = [
-            self.viewport_size.width * 0.5,
-            self.viewport_size.height * 0.5,
-        ];
         let navigation = row![
             big(
-                RibbonPrimaryIcon::Fit,
+                ToolIcon::Fit,
                 "Zoom all",
                 "Zoom all",
                 Message::ResetCamera,
                 false,
                 true,
-                80.0
+                68.0
             ),
             column![
                 row![
                     reference_icon_action(
-                        icon_svg(ToolIcon::ZoomIn, 36.0),
+                        icon_svg(ToolIcon::ZoomIn, 27.0),
                         "Zoom in",
                         Message::Zoom(1.0, centre, self.viewport_size),
                         true
                     ),
                     reference_icon_action(
-                        icon_svg(ToolIcon::ZoomOut, 36.0),
+                        icon_svg(ToolIcon::ZoomOut, 27.0),
                         "Zoom out",
                         Message::Zoom(-1.0, centre, self.viewport_size),
                         true
                     ),
-                    reference_icon_action(
-                        icon_svg(ToolIcon::RibbonFitArrows, 36.0),
-                        "Fit stations",
-                        Message::FitScanPoses,
-                        self.clouds
-                            .iter()
-                            .any(|entry| entry.visible && !entry.cloud.scan_poses.is_empty())
-                    ),
                 ]
-                .spacing(13),
+                .spacing(0),
                 row![
-                    iced::widget::Space::with_width(42),
                     reference_icon_action(
-                        icon_svg(ToolIcon::RibbonTarget, 36.0),
+                        icon_svg(ToolIcon::FitSelection, 27.0),
                         "Zoom selection",
                         Message::ZoomToSelection,
                         selected > 0 && !self.selection_bounds_pending
                     ),
                     reference_icon_action_state(
-                        icon_svg(ToolIcon::Pan, 36.0),
+                        icon_svg(ToolIcon::Pan, 27.0),
                         "Pan",
                         Message::TogglePanTool,
                         self.pan_tool,
                         true
                     ),
                 ]
-                .spacing(13),
+                .spacing(0),
             ]
-            .spacing(2),
+            .spacing(1),
         ]
-        .spacing(17)
+        .spacing(1)
         .align_y(iced::Alignment::Center);
         let selection = row![
             big(
-                RibbonPrimaryIcon::Select,
+                ToolIcon::Select,
                 "Select",
                 "Pick point",
                 Message::TogglePickSelect,
                 self.pick_mode,
                 true,
-                88.0
+                67.0
             ),
-            small(
-                RibbonPrimaryIcon::Window,
-                i18n::key("Window"),
-                "Box select",
-                Message::ToggleBoxSelect,
-                self.box_select,
-                true,
-                59.0
-            ),
-            small(
-                RibbonPrimaryIcon::Clear,
-                i18n::key("Clear short"),
-                "Clear",
-                Message::ClearSelection,
-                false,
-                selected > 0,
-                52.0
-            ),
-            small(
-                RibbonPrimaryIcon::Cut,
-                i18n::key("Cut points"),
-                "Delete",
-                Message::DeleteSelection,
-                false,
-                selected > 0,
-                52.0
-            ),
+            column![
+                row![
+                    reference_icon_action_state(
+                        icon_svg(ToolIcon::WindowSelect, 25.0),
+                        "Box select",
+                        Message::ToggleBoxSelect,
+                        self.box_select,
+                        true
+                    ),
+                    reference_icon_action(
+                        icon_svg(ToolIcon::Clear, 25.0),
+                        "Clear selection",
+                        Message::ClearSelection,
+                        selected > 0
+                    ),
+                ]
+                .spacing(0),
+                row![
+                    reference_icon_action(
+                        icon_svg(ToolIcon::DeletePoints, 25.0),
+                        "Delete selection",
+                        Message::DeleteSelection,
+                        selected > 0
+                    ),
+                    reference_icon_action(
+                        icon_svg(ToolIcon::SelectionExport, 25.0),
+                        "Export selection",
+                        Message::ExportSelection,
+                        selected > 0
+                    ),
+                ]
+                .spacing(0),
+            ]
+            .spacing(1),
         ]
-        .spacing(3)
+        .spacing(4)
         .align_y(iced::Alignment::Center);
         let section = row![
             big(
-                RibbonPrimaryIcon::Section,
+                ToolIcon::SectionBox,
                 "Section box",
                 "Section box",
                 Message::SetSectionEnabled(!self.section_enabled),
                 self.section_enabled,
                 true,
-                88.0
+                74.0
             ),
-            small(
-                RibbonPrimaryIcon::SectionCut,
-                i18n::key("Slice"),
-                "Section drawing",
-                Message::Drawing(drawing::DrawingAction::Toggle),
-                false,
-                self.drawing_button_enabled(),
-                58.0
-            ),
-            small(
-                RibbonPrimaryIcon::Reset,
-                i18n::key("Reset short"),
-                "Reset box",
-                Message::ResetSectionBox,
-                false,
-                self.section_enabled,
-                58.0
-            ),
+            column![
+                reference_icon_action(
+                    icon_svg(ToolIcon::FitSelection, 26.0),
+                    "Fit section box to selection",
+                    Message::FitSectionToSelection,
+                    selected > 0
+                ),
+                reference_icon_action(
+                    icon_svg(ToolIcon::Fit, 26.0),
+                    "Reset box",
+                    Message::ResetSectionBox,
+                    self.section_enabled
+                ),
+            ]
+            .spacing(1),
         ]
-        .spacing(3)
+        .spacing(4)
         .align_y(iced::Alignment::Center);
         let mesh = row![
             big(
-                RibbonPrimaryIcon::Mesh,
+                ToolIcon::MeshPointcloud,
                 "Mesh",
                 "Mesh Pointcloud",
                 Message::MeshWizard(MeshWizardAction::Open),
                 self.mesh_wizard.is_open() || self.mesh_busy_label().is_some(),
                 active,
-                84.0
+                73.0
             ),
-            small(
-                RibbonPrimaryIcon::MeshWire,
-                i18n::key("Wireframe"),
-                "3D surface",
-                Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Surface)),
+            column![
+                row![
+                    compact_ribbon_action(
+                        ToolIcon::ClosedMesh,
+                        "Closed",
+                        "Closed mesh",
+                        Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Closed)),
+                        false,
+                        active,
+                        91.0
+                    ),
+                    compact_ribbon_action(
+                        ToolIcon::MeshTerrain,
+                        "Terrain",
+                        "Terrain mesh",
+                        Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Terrain)),
+                        false,
+                        active,
+                        91.0
+                    ),
+                ]
+                .spacing(2),
+                row![
+                    compact_ribbon_action(
+                        ToolIcon::MeshSurface,
+                        "3D mesh",
+                        "3D surface",
+                        Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Surface)),
+                        false,
+                        active,
+                        91.0
+                    ),
+                    compact_ribbon_action(
+                        ToolIcon::Faces,
+                        "Faces",
+                        "Detect faces",
+                        Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Faces)),
+                        false,
+                        active,
+                        91.0
+                    ),
+                ]
+                .spacing(2),
+            ]
+            .spacing(2),
+        ]
+        .spacing(2)
+        .align_y(iced::Alignment::Center);
+        let drawing = row![
+            big(
+                ToolIcon::MeshToPlans,
+                "Mesh to Plan",
+                "Pointcloud to Drawing",
+                Message::MeshToPlans(mesh_to_plans::WizardAction::Open),
                 false,
                 active,
-                57.0
+                92.0
             ),
-            small(
-                RibbonPrimaryIcon::MeshSmooth,
-                i18n::key("Smooth"),
-                "Terrain mesh",
-                Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Terrain)),
+            big(
+                ToolIcon::Drawing,
+                "2D section",
+                "Section drawing",
+                Message::Drawing(drawing::DrawingAction::Toggle),
+                self.drawing_panel_open(),
+                self.drawing_button_enabled(),
+                72.0
+            ),
+            big(
+                ToolIcon::Sheet,
+                "Sheet",
+                "Create sheet",
+                Message::Sheet(sheet_dialog::SheetAction::Open),
                 false,
                 active,
-                52.0
+                62.0
             ),
-            small(
-                RibbonPrimaryIcon::MeshEdit,
-                i18n::key("Edit mesh"),
-                "Detect faces",
-                Message::MeshWizard(MeshWizardAction::OpenMethod(MeshMethod::Faces)),
-                false,
+        ]
+        .spacing(1)
+        .align_y(iced::Alignment::Center);
+        let measure = row![
+            big(
+                ToolIcon::MeasureDistance,
+                "Distance",
+                "Measure distance",
+                Message::Measure(measure::MeasureAction::Toggle(
+                    measure::MeasureMode::Distance
+                )),
+                self.measure.mode == Some(measure::MeasureMode::Distance),
                 active,
-                59.0
+                65.0
             ),
-            small(
-                RibbonPrimaryIcon::MeshExport,
-                i18n::key("Export mesh short"),
-                "Export mesh",
-                Message::ExportMesh,
-                false,
-                self.active
-                    .and_then(|index| self.clouds.get(index))
-                    .is_some_and(|entry| entry.mesh.is_some()),
-                70.0
+            big(
+                ToolIcon::MeasureArea,
+                "Area",
+                "Measure area",
+                Message::Measure(measure::MeasureAction::Toggle(measure::MeasureMode::Area)),
+                self.measure.mode == Some(measure::MeasureMode::Area),
+                active,
+                67.0
             ),
         ]
         .spacing(2)
         .align_y(iced::Alignment::Center);
-        let measure = big(
-            RibbonPrimaryIcon::Measure,
-            "Measure",
-            "Distance",
-            Message::Measure(measure::MeasureAction::Toggle(
-                measure::MeasureMode::Distance,
-            )),
-            self.measure.mode == Some(measure::MeasureMode::Distance),
-            active,
-            96.0,
-        );
+        let annotation = column![
+            reference_icon_action(
+                icon_svg(ToolIcon::Note, 25.0),
+                "Add note",
+                Message::Views(views::ViewAction::Tool(views::AnnotationKind::Note)),
+                active
+            ),
+            reference_icon_action(
+                icon_svg(ToolIcon::Line, 25.0),
+                "Draw line",
+                Message::Views(views::ViewAction::Tool(views::AnnotationKind::Line)),
+                active
+            ),
+        ]
+        .spacing(1);
+        let can_build = self
+            .active
+            .and_then(|index| self.clouds.get(index))
+            .is_some_and(|entry| {
+                entry.index.is_none()
+                    && !entry.index_building
+                    && self.index_job_of(entry).is_none()
+                    && !self.index_queued(entry)
+            });
+        let can_cancel = self.index_pending() || self.index_waiting() > 0;
+        let indexed = self
+            .active
+            .and_then(|index| self.clouds.get(index))
+            .is_some_and(|entry| entry.index.is_some());
+        let index = row![
+            big(
+                ToolIcon::Model,
+                "Index",
+                if can_cancel {
+                    "Cancel index"
+                } else {
+                    "Build index"
+                },
+                if can_cancel {
+                    Message::CancelIndex
+                } else {
+                    Message::BuildIndex
+                },
+                can_cancel,
+                can_cancel || can_build,
+                58.0
+            ),
+            reference_icon_action(
+                icon_svg(ToolIcon::Fit, 23.0),
+                "Refresh LOD",
+                Message::RefreshLod,
+                indexed
+            ),
+        ]
+        .spacing(0)
+        .align_y(iced::Alignment::Center);
         let export = big(
-            RibbonPrimaryIcon::Export,
-            i18n::key("Export short"),
-            "Export active point cloud",
+            ToolIcon::Export,
+            "Export",
+            "Export point cloud",
             Message::Export,
             false,
             active,
-            100.0,
+            92.0,
         );
         vec![
             panel(
                 "file",
                 i18n::key("FILE"),
                 ToolIcon::Open,
-                218.0,
+                132.0,
                 file.into(),
             ),
             panel(
-                "view",
+                "navigation",
                 i18n::key("NAVIGATION"),
                 ToolIcon::Fit,
-                290.0,
+                158.0,
                 navigation.into(),
             ),
             panel(
                 "selection",
                 i18n::key("SELECTION"),
                 ToolIcon::Select,
-                285.0,
+                166.0,
                 selection.into(),
             ),
             panel(
                 "section",
                 i18n::key("SECTION BOX"),
                 ToolIcon::SectionBox,
-                230.0,
+                150.0,
                 section.into(),
             ),
             panel(
                 "surface",
                 i18n::key("SURFACE"),
-                ToolIcon::MeshSurface,
-                333.0,
+                ToolIcon::MeshPointcloud,
+                270.0,
                 mesh.into(),
+            ),
+            panel(
+                "drawing",
+                i18n::key("DRAWING"),
+                ToolIcon::MeshToPlans,
+                242.0,
+                drawing.into(),
             ),
             panel(
                 "measure",
                 i18n::key("MEASURE"),
                 ToolIcon::MeasureDistance,
-                105.0,
-                measure,
+                138.0,
+                measure.into(),
+            ),
+            panel(
+                "annotation",
+                i18n::key("ANNOTATION"),
+                ToolIcon::Note,
+                97.0,
+                annotation.into(),
+            ),
+            panel(
+                "index",
+                i18n::key("INDEX"),
+                ToolIcon::Model,
+                97.0,
+                index.into(),
             ),
             panel(
                 "export",
                 i18n::key("EXPORT"),
                 ToolIcon::Export,
-                110.0,
+                104.0,
                 export,
             ),
         ]
@@ -10992,7 +10985,9 @@ impl Studio {
                 .into(),
             );
         }
-        let canvas = if let Some(sheet) = self.layout_canvas() {
+        let sheet_canvas = self.layout_canvas();
+        let model_visible = sheet_canvas.is_none() && !self.drawing_view.shown;
+        let canvas = if let Some(sheet) = sheet_canvas {
             stack![sheet].width(Fill).height(Fill)
         } else if self.drawing_view.shown {
             stack![self.drawing_sheet()].width(Fill).height(Fill)
@@ -11053,6 +11048,54 @@ impl Studio {
         let canvas = match self.photo_controls().filter(|_| !self.drawing_view.shown) {
             Some(controls) => canvas.push(controls),
             None => canvas,
+        };
+        let canvas = if model_visible && self.walk.is_none() {
+            let toggle = button(
+                text(format!(
+                    "{} {}",
+                    i18n::tr("Display"),
+                    if self.view_controls_open {
+                        "⌃"
+                    } else {
+                        "⌄"
+                    }
+                ))
+                .size(11),
+            )
+            .on_press(Message::ToggleViewControls)
+            .style(move |theme, status| {
+                let mut style = ui_style::ribbon_button(theme, self.view_controls_open, status);
+                if !self.view_controls_open {
+                    style.background = Some(ui_theme::colors(theme).btn_secondary_bg.into());
+                    style.border.color = ui_theme::colors(theme).dialog_input_border;
+                }
+                style
+            })
+            .width(102)
+            .height(26)
+            .padding([3, 10]);
+            let controls = if self.view_controls_open {
+                Some(self.view_controls_panel())
+            } else {
+                None
+            };
+            let mut items = column![
+                iced::widget::Space::with_height(151),
+                container(toggle).width(315).align_x(iced::Alignment::End)
+            ]
+            .spacing(2);
+            if let Some(controls) = controls {
+                items = items.push(controls);
+            }
+            canvas.push(
+                container(items)
+                    .width(Fill)
+                    .height(Fill)
+                    .align_x(iced::Alignment::End)
+                    .padding([0, 22]),
+            )
+        } else {
+            canvas
         };
 
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
@@ -11739,7 +11782,6 @@ fn ribbon_title_tab(
 
 enum ReferenceActionSize {
     Large(f32),
-    Small(f32),
 }
 
 fn reference_action(
@@ -11751,18 +11793,15 @@ fn reference_action(
     enabled: bool,
     size: ReferenceActionSize,
 ) -> Element<'static, Message> {
-    let (width, large) = match size {
-        ReferenceActionSize::Large(width) => (width, true),
-        ReferenceActionSize::Small(width) => (width, false),
-    };
-    let icon_size = if large { 51.0 } else { 40.0 };
+    let ReferenceActionSize::Large(width) = size;
+    let icon_size = 51.0;
     let face = column![
         container(icon)
             .width(Fill)
-            .height(icon_size + if large { 7.0 } else { 2.0 })
+            .height(icon_size + 7.0)
             .center(Fill),
         text(i18n::tr(caption))
-            .size(13)
+            .size(11)
             .width(Fill)
             .align_x(iced::Alignment::Center)
             .wrapping(iced::widget::text::Wrapping::None),
@@ -11808,31 +11847,28 @@ fn reference_icon_action_state(
     .into()
 }
 
-#[derive(Debug, Clone, Copy)]
-enum RibbonPrimaryIcon {
-    Open,
-    Fit,
-    Select,
-    Section,
-    Mesh,
-    Window,
-    Clear,
-    Cut,
-    SectionCut,
-    Reset,
-    MeshWire,
-    MeshSmooth,
-    MeshEdit,
-    MeshExport,
-    Measure,
-    Export,
-}
-
-fn ribbon_primary_icon(kind: RibbonPrimaryIcon, size: f32) -> Element<'static, Message> {
-    Canvas::new(RibbonPrimaryGlyph(kind))
-        .width(size)
-        .height(size)
-        .into()
+fn compact_ribbon_action(
+    icon: ToolIcon,
+    caption: &'static str,
+    tooltip: &'static str,
+    message: Message,
+    active: bool,
+    enabled: bool,
+    width: f32,
+) -> Element<'static, Message> {
+    let content = row![icon_svg(icon, 21.0), text(i18n::tr(caption)).size(10)]
+        .spacing(4)
+        .align_y(iced::Alignment::Center);
+    ui_style::ribbon_tooltip(
+        button(content)
+            .on_press_maybe(enabled.then_some(message))
+            .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
+            .width(width)
+            .height(34)
+            .padding([2, 3]),
+        i18n::tr(tooltip),
+    )
+    .into()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -11994,265 +12030,6 @@ impl canvas::Program<Message> for TitleGlyph {
     }
 }
 
-struct RibbonPrimaryGlyph(RibbonPrimaryIcon);
-
-impl canvas::Program<Message> for RibbonPrimaryGlyph {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        frame.scale(bounds.width.min(bounds.height) / 24.0);
-        let colors = ui_theme::colors(theme);
-        let outline = canvas::Stroke::default()
-            .with_color(colors.text)
-            .with_width(1.8);
-        let accent = canvas::Stroke::default()
-            .with_color(colors.accent)
-            .with_width(1.8);
-        let line = |points: &[[f32; 2]]| {
-            canvas::Path::new(|path| {
-                path.move_to(UiPoint::new(points[0][0], points[0][1]));
-                for point in &points[1..] {
-                    path.line_to(UiPoint::new(point[0], point[1]));
-                }
-            })
-        };
-        let dot = |frame: &mut Frame, x: f32, y: f32| {
-            frame.fill(
-                &canvas::Path::circle(UiPoint::new(x, y), 1.2),
-                colors.accent,
-            );
-        };
-        match self.0 {
-            RibbonPrimaryIcon::Open => {
-                frame.stroke(
-                    &line(&[
-                        [2.5, 7.0],
-                        [2.5, 4.5],
-                        [9.0, 4.5],
-                        [11.0, 7.0],
-                        [21.0, 7.0],
-                        [21.0, 18.5],
-                        [2.5, 18.5],
-                        [2.5, 7.0],
-                    ]),
-                    outline,
-                );
-                frame.stroke(&line(&[[2.5, 9.5], [21.0, 9.5]]), outline);
-                dot(&mut frame, 13.0, 14.0);
-                dot(&mut frame, 17.0, 14.0);
-                dot(&mut frame, 15.0, 17.0);
-            }
-            RibbonPrimaryIcon::Fit => {
-                for points in [
-                    [[3.0, 8.0], [3.0, 3.0], [8.0, 3.0]],
-                    [[16.0, 3.0], [21.0, 3.0], [21.0, 8.0]],
-                    [[3.0, 16.0], [3.0, 21.0], [8.0, 21.0]],
-                    [[16.0, 21.0], [21.0, 21.0], [21.0, 16.0]],
-                ] {
-                    frame.stroke(&line(&points), outline);
-                }
-                for (x, y) in [(9.0, 11.0), (13.0, 9.0), (15.5, 14.0), (10.0, 15.5)] {
-                    dot(&mut frame, x, y);
-                }
-            }
-            RibbonPrimaryIcon::Select => {
-                frame.stroke(&line(&[[12.0, 2.0], [12.0, 8.0]]), outline);
-                frame.stroke(&line(&[[12.0, 16.0], [12.0, 22.0]]), outline);
-                frame.stroke(&line(&[[2.0, 12.0], [8.0, 12.0]]), outline);
-                frame.stroke(&line(&[[16.0, 12.0], [22.0, 12.0]]), outline);
-                frame.stroke(&canvas::Path::circle(UiPoint::new(12.0, 12.0), 3.1), accent);
-                dot(&mut frame, 12.0, 12.0);
-            }
-            RibbonPrimaryIcon::Section => {
-                frame.stroke(
-                    &line(&[
-                        [12.0, 2.0],
-                        [21.0, 6.5],
-                        [21.0, 17.5],
-                        [12.0, 22.0],
-                        [3.0, 17.5],
-                        [3.0, 6.5],
-                        [12.0, 2.0],
-                    ]),
-                    outline,
-                );
-                frame.stroke(&line(&[[3.0, 6.5], [12.0, 11.0], [21.0, 6.5]]), outline);
-                frame.stroke(&line(&[[12.0, 11.0], [12.0, 22.0]]), outline);
-                frame.stroke(&line(&[[15.8, 4.0], [15.8, 19.8]]), accent);
-            }
-            RibbonPrimaryIcon::Mesh => {
-                frame.fill(
-                    &canvas::Path::new(|path| {
-                        path.move_to(UiPoint::new(10.0, 11.0));
-                        path.line_to(UiPoint::new(17.5, 12.5));
-                        path.line_to(UiPoint::new(14.0, 20.0));
-                        path.close();
-                    }),
-                    Color::from_rgba8(217, 119, 6, 0.7),
-                );
-                for points in [
-                    &[
-                        [2.0, 15.0],
-                        [7.5, 3.0],
-                        [15.0, 4.0],
-                        [22.0, 17.0],
-                        [14.0, 21.0],
-                        [2.0, 15.0],
-                    ][..],
-                    &[[7.5, 3.0], [10.0, 11.0], [2.0, 15.0]][..],
-                    &[
-                        [7.5, 3.0],
-                        [15.0, 4.0],
-                        [17.5, 12.5],
-                        [10.0, 11.0],
-                        [14.0, 21.0],
-                    ][..],
-                    &[[15.0, 4.0], [22.0, 17.0], [17.5, 12.5], [14.0, 21.0]][..],
-                    &[[2.0, 15.0], [14.0, 21.0]][..],
-                ] {
-                    frame.stroke(&line(points), outline);
-                }
-                for (x, y) in [(7.5, 3.0), (10.0, 11.0), (17.5, 12.5)] {
-                    frame.fill(&canvas::Path::circle(UiPoint::new(x, y), 0.8), colors.text);
-                }
-            }
-            RibbonPrimaryIcon::Window => {
-                for points in [
-                    [[3.0, 8.0], [3.0, 3.0], [8.0, 3.0]],
-                    [[16.0, 3.0], [21.0, 3.0], [21.0, 8.0]],
-                    [[3.0, 16.0], [3.0, 21.0], [8.0, 21.0]],
-                    [[16.0, 21.0], [21.0, 21.0], [21.0, 16.0]],
-                ] {
-                    frame.stroke(&line(&points), outline);
-                }
-            }
-            RibbonPrimaryIcon::Clear => {
-                frame.stroke(&line(&[[5.0, 7.0], [19.0, 7.0]]), outline);
-                frame.stroke(
-                    &line(&[[7.0, 7.0], [8.0, 21.0], [16.0, 21.0], [17.0, 7.0]]),
-                    outline,
-                );
-                frame.stroke(&line(&[[9.0, 4.0], [15.0, 4.0]]), outline);
-            }
-            RibbonPrimaryIcon::Cut => {
-                frame.stroke(&line(&[[4.0, 3.0], [19.0, 20.0]]), outline);
-                frame.stroke(&line(&[[20.0, 3.0], [5.0, 20.0]]), outline);
-                frame.stroke(&canvas::Path::circle(UiPoint::new(5.0, 20.0), 2.0), outline);
-                frame.stroke(
-                    &canvas::Path::circle(UiPoint::new(19.0, 20.0), 2.0),
-                    outline,
-                );
-            }
-            RibbonPrimaryIcon::SectionCut => {
-                frame.stroke(
-                    &line(&[
-                        [4.0, 5.0],
-                        [12.0, 2.0],
-                        [20.0, 5.0],
-                        [20.0, 18.0],
-                        [12.0, 22.0],
-                        [4.0, 18.0],
-                        [4.0, 5.0],
-                    ]),
-                    outline,
-                );
-                frame.stroke(&line(&[[4.0, 5.0], [12.0, 9.0], [20.0, 5.0]]), outline);
-                frame.stroke(&line(&[[12.0, 9.0], [12.0, 22.0]]), accent);
-            }
-            RibbonPrimaryIcon::Reset => {
-                frame.stroke(
-                    &line(&[
-                        [18.0, 7.0],
-                        [15.0, 5.0],
-                        [10.0, 5.0],
-                        [6.0, 8.0],
-                        [5.0, 13.0],
-                        [8.0, 18.0],
-                        [13.0, 19.0],
-                        [18.0, 16.0],
-                    ]),
-                    outline,
-                );
-                frame.stroke(&line(&[[19.0, 8.0], [19.0, 3.0], [14.0, 3.0]]), accent);
-            }
-            RibbonPrimaryIcon::MeshWire
-            | RibbonPrimaryIcon::MeshSmooth
-            | RibbonPrimaryIcon::MeshEdit
-            | RibbonPrimaryIcon::MeshExport => {
-                if matches!(self.0, RibbonPrimaryIcon::MeshSmooth) {
-                    frame.fill(
-                        &canvas::Path::new(|path| {
-                            path.move_to(UiPoint::new(3.0, 16.0));
-                            path.line_to(UiPoint::new(8.0, 5.0));
-                            path.line_to(UiPoint::new(17.0, 7.0));
-                            path.line_to(UiPoint::new(20.0, 18.0));
-                            path.close();
-                        }),
-                        colors.ribbon_btn_active_bg,
-                    );
-                }
-                for points in [
-                    &[
-                        [3.0, 16.0],
-                        [8.0, 5.0],
-                        [17.0, 7.0],
-                        [20.0, 18.0],
-                        [12.0, 21.0],
-                        [3.0, 16.0],
-                    ][..],
-                    &[[8.0, 5.0], [11.0, 13.0], [3.0, 16.0]][..],
-                    &[[17.0, 7.0], [11.0, 13.0], [20.0, 18.0]][..],
-                    &[[11.0, 13.0], [12.0, 21.0]][..],
-                ] {
-                    frame.stroke(&line(points), outline);
-                }
-                if matches!(self.0, RibbonPrimaryIcon::MeshEdit) {
-                    dot(&mut frame, 17.0, 7.0);
-                    frame.stroke(&line(&[[18.5, 5.5], [22.0, 2.0], [22.0, 6.0]]), accent);
-                }
-                if matches!(self.0, RibbonPrimaryIcon::MeshExport) {
-                    frame.stroke(&line(&[[16.0, 12.0], [23.0, 12.0], [20.0, 9.0]]), accent);
-                    frame.stroke(&line(&[[23.0, 12.0], [20.0, 15.0]]), accent);
-                }
-            }
-            RibbonPrimaryIcon::Measure => {
-                frame.stroke(
-                    &line(&[
-                        [4.0, 17.0],
-                        [17.0, 4.0],
-                        [21.0, 8.0],
-                        [8.0, 21.0],
-                        [4.0, 17.0],
-                    ]),
-                    outline,
-                );
-                for (x, y) in [(8.0, 15.0), (11.0, 12.0), (14.0, 9.0)] {
-                    frame.stroke(&line(&[[x, y], [x + 2.0, y + 2.0]]), outline);
-                }
-            }
-            RibbonPrimaryIcon::Export => {
-                frame.stroke(
-                    &line(&[[4.0, 3.0], [15.0, 3.0], [19.0, 7.0], [19.0, 14.0]]),
-                    outline,
-                );
-                frame.stroke(&line(&[[4.0, 3.0], [4.0, 21.0], [15.0, 21.0]]), outline);
-                frame.stroke(&line(&[[13.0, 16.0], [22.0, 16.0], [18.0, 12.0]]), accent);
-                frame.stroke(&line(&[[22.0, 16.0], [18.0, 20.0]]), accent);
-            }
-        }
-        vec![frame.into_geometry()]
-    }
-}
-
-/// A tool as its icon alone, named in its tooltip: for a narrow panel.
 fn icon_tool_button_when(
     label: &'static str,
     message: Message,
@@ -12454,11 +12231,11 @@ mod ribbon_tests {
     }
 
     #[test]
-    fn every_ribbon_tab_renders_and_switching_closes_file_and_flyout() {
+    fn single_ribbon_and_view_cube_controls_render_and_escape_closes_the_menu() {
         let mut studio = Studio::default();
         let _ = studio.update(Message::ToggleFile);
         assert!(studio.file_open);
-        assert_eq!(RibbonTab::CORE.len(), 2);
+        assert_eq!(RibbonTab::CORE.len(), 1);
         for tab in RibbonTab::CORE {
             studio.ribbon_panel_open = Some("selection");
             let _ = studio.update(Message::RibbonTabSelected(tab));
@@ -12467,6 +12244,20 @@ mod ribbon_tests {
             assert_eq!(studio.ribbon_panel_open, None);
             let _ = studio.ribbon();
         }
+        let _ = studio.update(Message::ToggleViewControls);
+        assert!(studio.view_controls_open);
+        let _ = studio.view();
+        let _ = studio.update(Message::Escape);
+        assert!(!studio.view_controls_open);
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.update(Message::ApiRequest(native_api::ApiRequest {
+            command: native_api::ApiCommand::SetRibbonTab { tab: "view".into() },
+            reply,
+        }));
+        let answer = receive.recv().unwrap();
+        assert_eq!(answer["ribbon_tab"], "start");
+        assert_eq!(answer["view_controls_open"], true);
+        assert!(studio.view_controls_open);
     }
 }
 
@@ -12489,26 +12280,17 @@ fn viewport_style(theme: &Theme) -> container::Style {
 enum ToolIcon {
     Open,
     OpenFolder,
-    FileImport,
-    FolderImport,
     SelectionExport,
     Export,
     Fit,
     ZoomIn,
     ZoomOut,
     Pan,
-    RibbonFitArrows,
-    RibbonTarget,
     FitSelection,
-    FitStations,
     Cloud,
-    ColorRgb,
-    ColorElevation,
-    ColorIntensity,
-    ColorClassification,
-    EyeDome,
-    ScanPositions,
     Select,
+    WindowSelect,
+    DeletePoints,
     SectionBox,
     Pick,
     MeasureDistance,
@@ -12573,8 +12355,6 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         // The scan-folder and section-box icons are drawn for this app in the
         // same palette.
         ToolIcon::OpenFolder => include_bytes!("../../assets/opencad-icons/folder_scans.svg"),
-        ToolIcon::FileImport => include_bytes!("../../assets/opencad-icons/file_import.svg"),
-        ToolIcon::FolderImport => include_bytes!("../../assets/opencad-icons/folder_import.svg"),
         ToolIcon::SelectionExport => {
             include_bytes!("../../assets/opencad-icons/selection_export.svg")
         }
@@ -12583,26 +12363,11 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::ZoomIn => include_bytes!("../../assets/opencad-icons/zoom_in.svg"),
         ToolIcon::ZoomOut => include_bytes!("../../assets/opencad-icons/zoom_out.svg"),
         ToolIcon::Pan => include_bytes!("../../assets/opencad-icons/pan.svg"),
-        ToolIcon::RibbonFitArrows => {
-            include_bytes!("../../assets/opencad-icons/ribbon_fit_arrows.svg")
-        }
-        ToolIcon::RibbonTarget => include_bytes!("../../assets/opencad-icons/ribbon_target.svg"),
         ToolIcon::FitSelection => include_bytes!("../../assets/opencad-icons/fit_selection.svg"),
-        ToolIcon::FitStations => include_bytes!("../../assets/opencad-icons/fit_stations.svg"),
         ToolIcon::Cloud => include_bytes!("../../assets/opencad-icons/revcloud.svg"),
-        ToolIcon::ColorRgb => include_bytes!("../../assets/opencad-icons/color_rgb.svg"),
-        ToolIcon::ColorElevation => {
-            include_bytes!("../../assets/opencad-icons/color_elevation.svg")
-        }
-        ToolIcon::ColorIntensity => {
-            include_bytes!("../../assets/opencad-icons/color_intensity.svg")
-        }
-        ToolIcon::ColorClassification => {
-            include_bytes!("../../assets/opencad-icons/color_classification.svg")
-        }
-        ToolIcon::EyeDome => include_bytes!("../../assets/opencad-icons/eye_dome.svg"),
-        ToolIcon::ScanPositions => include_bytes!("../../assets/opencad-icons/scan_positions.svg"),
-        ToolIcon::Select => include_bytes!("../../assets/opencad-icons/select_objects.svg"),
+        ToolIcon::Select => include_bytes!("../../assets/opencad-icons/ribbon_target.svg"),
+        ToolIcon::WindowSelect => include_bytes!("../../assets/opencad-icons/select_objects.svg"),
+        ToolIcon::DeletePoints => include_bytes!("../../assets/opencad-icons/delete_points.svg"),
         ToolIcon::SectionBox => include_bytes!("../../assets/opencad-icons/section_box.svg"),
         ToolIcon::Pick => include_bytes!("../../assets/opencad-icons/pick_point.svg"),
         // The two measure icons are drawn for this app in the same palette.
