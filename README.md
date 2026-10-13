@@ -27,7 +27,7 @@ A desktop application for viewing, measuring, editing and converting laser scans
 - [Licences](#licences)
 - [Contributing](#contributing)
 
-The [user guide](docs/guide.md) describes every tool in detail. [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
+The [user guide](docs/guide.md) describes every tool in detail. There is also a [Dutch quick-start manual](docs/handleiding.md). [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
 
 ## Download and install
 
