@@ -14,6 +14,7 @@
 //! a preview, an export or an opened file lasts for the session, as its row
 //! does.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use iced::widget::scrollable::{self, AbsoluteOffset, Direction, Scrollbar};
@@ -43,6 +44,8 @@ pub enum TabId {
     File(Option<PathBuf>),
     /// A sheet of SHEETS, by its identifier.
     Layout(String),
+    /// The current photo of an open scan, kept for this session.
+    Photo(PathBuf),
 }
 
 /// How the preferences name the 3D model, and how they start the name of a
@@ -64,7 +67,7 @@ impl TabId {
             Self::View(guid) => Some(format!("{VIEW_KEY}{guid}")),
             Self::Drawing(guid) => Some(format!("{DRAWING_KEY}{guid}")),
             Self::Layout(guid) => Some(format!("{LAYOUT_KEY}{guid}")),
-            Self::File(_) => None,
+            Self::File(_) | Self::Photo(_) => None,
         }
     }
 
@@ -92,6 +95,7 @@ impl TabId {
             Self::Drawing(_) => "drawing",
             Self::File(_) => "file",
             Self::Layout(_) => "sheet",
+            Self::Photo(_) => "photo",
         }
     }
 
@@ -109,7 +113,7 @@ impl TabId {
     /// the drawing of this tab.
     fn look_key(&self) -> Option<String> {
         match self {
-            Self::Model | Self::View(_) | Self::Layout(_) => None,
+            Self::Model | Self::View(_) | Self::Layout(_) | Self::Photo(_) => None,
             Self::Drawing(guid) => Some(crate::drawing_view::sheet_look_key(guid)),
             Self::File(path) => Some(crate::drawing_view::file_look_key(path.as_deref())),
         }
@@ -271,6 +275,16 @@ pub(crate) struct ModelLook {
     color_mode: ColorMode,
 }
 
+/// Camera and blending kept when a photo tab is temporarily hidden.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PhotoTabLook {
+    pub index: usize,
+    pub walk: WalkView,
+    pub pinned: bool,
+    pub zoom: f32,
+    pub blend: f32,
+}
+
 /// The open tabs and what they keep.
 #[derive(Debug)]
 pub struct ViewTabs {
@@ -290,6 +304,9 @@ pub struct ViewTabs {
     /// The camera, the section box and the colour mode of the 3D model, as
     /// they were when the scene was last its own.
     model: Option<ModelLook>,
+    /// The last photo visited on each scan whose photo tab is open.
+    pub(crate) photo_indexes: HashMap<PathBuf, usize>,
+    pub(crate) photo_looks: HashMap<PathBuf, PhotoTabLook>,
     /// The open tabs and the active one as the preferences last got them.
     kept: (Vec<String>, Option<String>),
     /// A tab opened or closed, or the one kept as active let go, since the
@@ -312,6 +329,8 @@ impl ViewTabs {
             pending: None,
             owner: TabId::Model,
             model: None,
+            photo_indexes: HashMap::new(),
+            photo_looks: HashMap::new(),
             kept: (Vec::new(), None),
             changed: false,
         };
@@ -449,6 +468,11 @@ impl Studio {
         if let Some(guid) = self.drawing_view.shown_layout() {
             return Some(TabId::Layout(guid.to_owned()));
         }
+        if !self.drawing_view.shown {
+            if let Some(view) = &self.photos.view {
+                return Some(TabId::Photo(view.source.clone()));
+            }
+        }
         Some(match self.shown_row()? {
             ViewRow::Model => TabId::Model,
             ViewRow::Saved(guid) => TabId::View(guid),
@@ -486,6 +510,13 @@ impl Studio {
                 .any(|drawing| drawing.guid == *guid),
             TabId::File(path) => self.sheet_place(path.as_deref()).is_some(),
             TabId::Layout(guid) => self.layouts.layout(guid).is_some(),
+            TabId::Photo(source) => {
+                self.photos
+                    .files
+                    .get(source)
+                    .is_some_and(|photos| !photos.photos.is_empty())
+                    && self.clouds.iter().any(|entry| entry.cloud.path == *source)
+            }
         }
     }
 
@@ -501,6 +532,13 @@ impl Studio {
             TabId::Drawing(guid) => drawings.iter().any(|drawing| drawing.guid == *guid),
             TabId::File(path) => self.sheet_place(path.as_deref()).is_some(),
             TabId::Layout(guid) => self.layouts.layout(guid).is_some(),
+            TabId::Photo(source) => {
+                self.photos
+                    .files
+                    .get(source)
+                    .is_some_and(|photos| !photos.photos.is_empty())
+                    && self.clouds.iter().any(|entry| entry.cloud.path == *source)
+            }
         };
         std::iter::once(TabId::Model)
             .chain(self.tabs.open().iter().filter(listed).cloned())
@@ -532,6 +570,19 @@ impl Studio {
                 .layouts
                 .layout(guid)
                 .map_or_else(String::new, crate::layouts::Layout::caption),
+            TabId::Photo(source) => self
+                .photos
+                .files
+                .get(source)
+                .and_then(|photos| {
+                    self.tabs.photo_indexes.get(source).and_then(|index| {
+                        photos
+                            .photos
+                            .get(*index)
+                            .map(|photo| crate::file_photos::photo_label(photo, *index))
+                    })
+                })
+                .unwrap_or_else(|| crate::display_name(source).to_owned()),
         }
     }
 
@@ -554,7 +605,7 @@ impl Studio {
                 .iter()
                 .find(|drawing| drawing.guid == *guid)
                 .map_or(ViewKind::Plans, |drawing| ViewKind::of(drawing.kind)),
-            TabId::File(_) | TabId::Layout(_) => ViewKind::Files,
+            TabId::File(_) | TabId::Layout(_) | TabId::Photo(_) => ViewKind::Files,
         }
     }
 
@@ -563,6 +614,7 @@ impl Studio {
             TabId::Model => ToolIcon::Model,
             TabId::View(_) => ToolIcon::SavedView,
             TabId::Layout(_) => ToolIcon::Sheet,
+            TabId::Photo(_) => ToolIcon::SavedView,
             _ => self.tab_kind(tab).icon(),
         }
     }
@@ -574,7 +626,12 @@ impl Studio {
     pub(crate) fn show_tab(&mut self, tab: &TabId) -> Result<Task<Message>, String> {
         // A tab chosen by hand wins over the one kept as active.
         self.tabs.drop_pending();
-        match tab {
+        let leaving_photo = if !matches!(tab, TabId::Photo(_)) {
+            self.leave_photo()
+        } else {
+            None
+        };
+        let next = match tab {
             TabId::Model => Ok(self.show_model_tab()),
             TabId::View(guid) => {
                 let listed = self.listed_views().iter().any(|view| view.guid == *guid);
@@ -594,7 +651,7 @@ impl Studio {
                     self.drawing_view.shown = false;
                     self.file_open = false;
                     self.status = format!("View {}", self.views.list[index].name);
-                    return Ok(Task::none());
+                    return Ok(leaving_photo.unwrap_or_else(Task::none));
                 }
                 Ok(self.update_views(crate::views::ViewAction::Restore(guid.clone())))
             }
@@ -609,7 +666,26 @@ impl Studio {
                     .update_drawing_view(crate::drawing_view::DrawingViewAction::ShowSheet(place)))
             }
             TabId::Layout(guid) => self.show_layout(guid),
-        }
+            TabId::Photo(source) => {
+                if self
+                    .photos
+                    .view
+                    .as_ref()
+                    .is_some_and(|view| view.source == *source)
+                {
+                    return Ok(Task::none());
+                }
+                let index = *self
+                    .tabs
+                    .photo_indexes
+                    .get(source)
+                    .ok_or_else(|| "That photo tab has no selected photo".to_owned())?;
+                self.enter_photo(source, index).map_err(|error| error.shown)
+            }
+        }?;
+        Ok(Task::batch(
+            leaving_photo.into_iter().chain(std::iter::once(next)),
+        ))
     }
 
     /// Show the 3D model: the scene, with the camera, the section box and
@@ -617,6 +693,7 @@ impl Studio {
     /// active view lets go, so that the row of the 3D model is highlighted.
     pub(crate) fn show_model_tab(&mut self) -> Task<Message> {
         self.tabs.drop_pending();
+        let photo = self.leave_photo();
         self.drawing_view.shown = false;
         self.file_open = false;
         let task = match self.tabs.model.filter(|_| self.tabs.owner != TabId::Model) {
@@ -626,7 +703,7 @@ impl Studio {
         self.deactivate_view();
         self.tabs.owner = TabId::Model;
         self.status = "3D model".into();
-        task
+        Task::batch(photo.into_iter().chain(std::iter::once(task)))
     }
 
     /// Close a tab, which never deletes its view or drawing. When it was
@@ -642,6 +719,9 @@ impl Studio {
         let shown = self.shown_tab();
         if !self.tabs.remove(tab) {
             return Task::none();
+        }
+        if let TabId::Photo(source) = tab {
+            self.tabs.photo_indexes.remove(source);
         }
         if let Some(key) = tab.look_key() {
             self.drawing_view.forget_look(&key);
@@ -663,6 +743,9 @@ impl Studio {
                     self.show_model_tab()
                 }
             });
+        }
+        if let TabId::Photo(source) = tab {
+            self.tabs.photo_looks.remove(source);
         }
         Task::batch(tasks)
     }
@@ -723,6 +806,13 @@ impl Studio {
     /// get the tabs when they changed. Answers the work this needs, if any.
     pub(crate) fn settle_tabs(&mut self) -> Option<Task<Message>> {
         let mut tasks = Vec::new();
+        // A drawing opened from the Project Browser also leaves a photo,
+        // although it does not go through `show_tab`.
+        if self.drawing_view.shown {
+            if let Some(task) = self.leave_photo() {
+                tasks.push(task);
+            }
+        }
         // A saved view that had the scene and was deleted gives the scene
         // back to the 3D model, as closing its tab does, before the 3D model
         // takes what the scene shows as its own.
@@ -746,6 +836,10 @@ impl Studio {
             .collect();
         for tab in gone {
             self.tabs.remove(&tab);
+            if let TabId::Photo(source) = &tab {
+                self.tabs.photo_indexes.remove(source);
+                self.tabs.photo_looks.remove(source);
+            }
             if let Some(key) = tab.look_key() {
                 self.drawing_view.forget_look(&key);
             }
@@ -785,7 +879,7 @@ impl Studio {
         if let Some(tab) = shown.filter(TabId::is_3d) {
             self.tabs.owner = tab;
         }
-        if self.tabs.owner == TabId::Model {
+        if self.tabs.owner == TabId::Model && !matches!(self.tabs.shown, Some(TabId::Photo(_))) {
             self.tabs.model = Some(self.model_look());
         }
         moved
@@ -964,6 +1058,7 @@ impl Studio {
             });
         let kind = match &tab {
             TabId::Layout(_) => tr("Sheets"),
+            TabId::Photo(_) => tr("Photo"),
             _ => tr(self.tab_kind(&tab).label()),
         };
         let tip = format!("{full}\n{kind}");
@@ -999,6 +1094,10 @@ impl Studio {
                         entry["guid"] = json!(guid)
                     }
                     TabId::File(path) => entry["path"] = json!(path),
+                    TabId::Photo(path) => {
+                        entry["path"] = json!(path);
+                        entry["photo_index"] = json!(self.tabs.photo_indexes.get(path));
+                    }
                     TabId::Model => {}
                 }
                 entry
