@@ -166,7 +166,7 @@ follows when that view is restored.
 | `export_bcf` | `path` (`.bcf`) | Writes the views of the active scan as BCF |
 | `set_theme` | `theme` | `light` (Light), `forge` (Forge (dark)), `openaec` (OpenAEC (dark)), `blueprint` (Blueprint) or `contrast` (High contrast); `night` is the same as `openaec`, which is what `status` reports |
 | `set_language` | `language` | `auto` (the language of the system), `en` or `nl`; kept for later sessions |
-| `set_ribbon_tab` | `tab` | Chooses `start` or `view` in the native ribbon |
+| `set_ribbon_tab` | `tab` | `start` shows the single ribbon; legacy `view` opens the view-cube controls |
 | `set_color` | `mode` | `rgb`, `elevation`, `intensity` or `classification` |
 | `set_class_visible` | `code` (0–255), `visible` | Shows or hides a classification code |
 | `set_point_size` | `size` (0.1–20 pixels) | Point size |
