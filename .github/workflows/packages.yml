@@ -40,6 +40,9 @@ on:
       windows_signed:
         description: 'true when the Windows executable and installer carry a valid signature'
         value: ${{ jobs.windows.outputs.signed }}
+      macos_signed:
+        description: 'true when the macOS app and disk image are Developer ID signed and notarized'
+        value: ${{ jobs.macos.outputs.signed }}
   pull_request:
     paths:
       - 'native/packaging/**'
@@ -496,6 +499,8 @@ jobs:
     needs: [prepare, icons, open-cad-studio]
     runs-on: macos-15
     timeout-minutes: 90
+    outputs:
+      signed: ${{ steps.signing.outputs.macos_signed }}
     env:
       NUMBER: ${{ needs.prepare.outputs.number }}
       NUMERIC: ${{ needs.prepare.outputs.numeric }}
@@ -545,6 +550,25 @@ jobs:
           chmod 755 target/universal/OpenCADStudio
           codesign --force --sign - --timestamp=none target/universal/OpenCADStudio
           codesign --verify --strict target/universal/OpenCADStudio
+      - name: Prepare optional Developer ID signing and notarization
+        id: signing
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_DEVELOPER_IDENTITY: ${{ secrets.APPLE_DEVELOPER_IDENTITY }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: bash native/packaging/macos/prepare-signing.sh
+      - name: Sign the universal binaries for the command-line archive
+        if: env.MACOS_SIGN_IDENTITY != ''
+        run: |
+          for program in open-pointcloud-studio OpenCADStudio; do
+            codesign --force --sign "$MACOS_SIGN_IDENTITY" \
+              --keychain "$MACOS_SIGN_KEYCHAIN" --options runtime --timestamp \
+              "native/target/universal/$program"
+            codesign --verify --strict "native/target/universal/$program"
+          done
       - name: Smoke-test the built application
         run: bash native/packaging/smoke-test.sh native/target/universal/open-pointcloud-studio "$NUMBER"
       - name: Smoke-test the x86-64 half through translation
@@ -716,6 +740,13 @@ jobs:
           ls -la "$RUNNER_TEMP/ops-image"
           test -L "$RUNNER_TEMP/ops-image/Applications"
           test -f "$RUNNER_TEMP/ops-image/First start.txt"
+      - name: Verify Apple notarization when enabled
+        if: needs.macos.outputs.signed == 'true'
+        run: |
+          xcrun stapler validate "packages/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
+          xcrun stapler validate "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
+          spctl --assess --type execute --verbose \
+            "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
       - name: Smoke-test the application on the image
         run: |
           bash native/packaging/smoke-test.sh \

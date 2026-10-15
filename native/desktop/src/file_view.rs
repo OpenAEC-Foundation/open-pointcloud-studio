@@ -1,8 +1,7 @@
-//! The File view: the backstage the File button opens over the model. Its
-//! menu leads to the pages New, Open, Import and Export, which hold the file
-//! tasks as tiles, to the workspace with the open scans, the extensions and
-//! what the application is, and holds the Settings, Return and Exit entries
-//! of the OpenAEC style book.
+//! The File view: the backstage the File button opens over the model. Common
+//! file and export tasks are direct entries in the left menu, as in early OPS;
+//! the fuller New and Export pages remain available alongside the workspace,
+//! extensions and About pages.
 
 use std::sync::atomic::Ordering;
 
@@ -20,9 +19,8 @@ use crate::{
     Studio,
 };
 
-/// A page of the File view. A further page is a variant here, its names in
-/// `label` and `id`, its place in `ALL` and its content in
-/// `Studio::file_page_view`.
+/// A page of the File view. Some pages are reached from the menu, and all
+/// pages remain addressable by the local API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilePage {
     /// Start again with an empty workspace.
@@ -42,7 +40,7 @@ pub enum FilePage {
 }
 
 impl FilePage {
-    /// The pages in the order of the menu.
+    /// The pages in stable API order.
     pub const ALL: [Self; 7] = [
         Self::New,
         Self::Open,
@@ -86,12 +84,6 @@ impl FilePage {
     /// Every id `from_id` accepts, for the command that shows a page.
     pub fn ids() -> Vec<&'static str> {
         Self::ALL.into_iter().map(Self::id).collect()
-    }
-
-    /// The pages that do the file tasks; the menu sets them apart from the
-    /// pages that show what is open and what the application is.
-    fn is_task(self) -> bool {
-        matches!(self, Self::New | Self::Open | Self::Import | Self::Export)
     }
 }
 
@@ -240,25 +232,41 @@ impl Studio {
         json!({"ok": true, "file_view": self.file_view_value()})
     }
 
-    /// The menu at the left: the task pages, then the pages that show what
-    /// is open and what the application is, then the entries every OpenAEC
-    /// application has.
+    /// The classic OPS backstage menu keeps common file tasks one click away.
+    /// The fuller New and Export pages remain available for less common work.
     fn file_menu(&self) -> Element<'_, Message> {
+        let colors = self.ui_theme.colors();
         let rule = || {
             container(Space::new(Fill, 1)).style(|theme| {
                 container::Style::default().background(ui_theme::colors(theme).border_subtle)
             })
         };
-        let item = |label: &'static str, message: Message| {
+        let item = |label: &'static str, message: Option<Message>| {
             button(text(tr(label)).size(14))
-                .on_press(message)
+                .on_press_maybe(message)
                 .style(|theme, status| ui_style::ribbon_button(theme, false, status))
                 .width(Fill)
                 .padding([11, 18])
         };
+        let action = |label: &'static str, action: FileAction, available: bool| {
+            item(label, available.then_some(Message::FileAction(action)))
+        };
+        let caption = |label: &'static str| {
+            container(text(tr(label)).size(11).color(colors.accent)).padding(iced::Padding {
+                top: 19.0,
+                right: 18.0,
+                bottom: 6.0,
+                left: 18.0,
+            })
+        };
         // The open page carries the accent bar of the style book at its left.
         let page = |page: FilePage| {
             let open = self.file_page == page;
+            let label = if page == FilePage::Export {
+                key("All export options…")
+            } else {
+                page.label()
+            };
             row![
                 container(Space::new(3, Fill)).style(move |theme| {
                     let colors = ui_theme::colors(theme);
@@ -268,7 +276,7 @@ impl Studio {
                         iced::Color::TRANSPARENT
                     })
                 }),
-                button(text(tr(page.label())).size(14))
+                button(text(tr(label)).size(14))
                     .on_press(Message::FilePage(page))
                     .style(move |theme, status| ui_style::ribbon_button(theme, open, status))
                     .width(Fill)
@@ -277,24 +285,58 @@ impl Studio {
             ]
             .height(PAGE_ROW_H)
         };
-        let pages = |task: bool| {
-            FilePage::ALL
-                .into_iter()
-                .filter(|each| each.is_task() == task)
-                .fold(column![].width(Fill), |pages, each| pages.push(page(each)))
-        };
+        let active_cloud = self.active.and_then(|index| self.clouds.get(index));
+        let selected = active_cloud
+            .and_then(|entry| entry.selection.as_ref())
+            .is_some_and(|selection| selection.count > 0);
         let top = column![
-            Space::new(Fill, 14),
-            pages(true),
-            container(rule()).padding([10, 0]),
-            pages(false),
+            caption(key("FILE")),
+            page(FilePage::New),
+            action(key("Import point cloud"), FileAction::Import, true),
+            action(key("Open scan folder"), FileAction::ImportFolder, true),
+            action(key("Drawing (DXF/DWG)…"), FileAction::OpenDrawing, true),
+            action(
+                key("3D BAG buildings…"),
+                FileAction::Bag3d,
+                self.extensions.enabled(extensions::BAG3D),
+            ),
+            caption(key("EXPORT")),
+            action(
+                key("Full resolution…"),
+                FileAction::ExportFull,
+                active_cloud.is_some(),
+            ),
+            action(
+                key("Selected points…"),
+                FileAction::ExportSelection,
+                selected,
+            ),
+            action(
+                key("Section box…"),
+                FileAction::ExportSection,
+                active_cloud.is_some() && self.section_enabled && !self.section_export_pending,
+            ),
+            action(
+                key("Section drawing…"),
+                FileAction::ExportDrawing,
+                self.drawing_entry_enabled(),
+            ),
+            action(
+                key("Every Nth point…"),
+                FileAction::ExportDecimated,
+                active_cloud.is_some(),
+            ),
+            page(FilePage::Export),
         ]
         .width(Fill);
         let footer = column![
             rule(),
+            page(FilePage::Workspace),
+            page(FilePage::Extensions),
+            page(FilePage::About),
             item(
                 "Settings…",
-                Message::Settings(settings_dialog::SettingsAction::Open),
+                Some(Message::Settings(settings_dialog::SettingsAction::Open)),
             ),
             button(
                 text(tr("←  Return to model"))
@@ -308,7 +350,7 @@ impl Studio {
             // Exit ends the session at once: it stands apart, below the entry
             // that is used most.
             rule(),
-            item("Exit", Message::Exit),
+            item("Exit", Some(Message::Exit)),
         ]
         .width(Fill);
 
@@ -683,6 +725,36 @@ impl Studio {
             text(active_name).size(16),
             self.group_caption(key("OPEN SCANS")),
             container(open_scans).width(Fill).max_width(TILE_COLUMN_W),
+            self.group_caption(key("EXPORT")),
+            container(
+                column![
+                    row![
+                        text(tr("Format")).size(13).width(100),
+                        ui_style::pick_list(
+                            ExportFormat::ALL,
+                            Some(self.export_format),
+                            Message::ExportFormat,
+                        )
+                        .width(220),
+                    ]
+                    .spacing(12)
+                    .align_y(iced::Alignment::Center),
+                    row![
+                        text(tr("Keep 1 in")).size(13).width(100),
+                        ui_style::pick_list(
+                            [2u64, 5, 10, 20, 50, 100],
+                            Some(self.decimation_stride),
+                            Message::DecimationStride,
+                        )
+                        .width(90),
+                    ]
+                    .spacing(12)
+                    .align_y(iced::Alignment::Center),
+                ]
+                .spacing(10),
+            )
+            .width(Fill)
+            .max_width(TILE_COLUMN_W),
         ]
         .spacing(4)
         .width(Fill)

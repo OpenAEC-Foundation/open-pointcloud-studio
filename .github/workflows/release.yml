@@ -128,6 +128,7 @@ jobs:
       - name: Write the release notes
         env:
           WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}
+          MACOS_SIGNED: ${{ needs.packages.outputs.macos_signed }}
         run: bash native/packaging/release-notes.sh "$NUMBER" > notes.md
       # A draft left by an earlier run is taken over and moved to this commit.
       - name: Create the draft release

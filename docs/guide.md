@@ -49,7 +49,7 @@ The interface is in English or Dutch. The guide uses the English names. Its pict
 - The **tabs** above the scene put the 3D model and the views and drawings side by side, as the pages of a document. **3D model** comes first and never closes; after it come the saved views, plans, elevations, sections and files opened from VIEWS, in the order they were opened. A click on a row of VIEWS opens its tab, or makes it active when it is open already. A click on a tab shows it; its ×, or a click on it with the middle button, closes the tab and never deletes the view or the drawing; Ctrl+Tab and Ctrl+Shift+Tab step through the tabs, but not while the File view, Settings, the dialog of Create 2D or the card of the Pointcloud to Drawing wizard lies over them. The active tab has a line in the accent colour over it and the colour of what lies under it, and its row under VIEWS is the one highlighted. The 3D model keeps its own camera, section box and colour mode while a saved view is shown in the scene, and gets them back when its tab is clicked; a saved view is shown as it was left while the scene still has it, else as it was saved. A drawing comes back zoomed as it was left, with its layers as they were. Tabs that do not fit get shorter names, with the full name and the kind in a tooltip; names that would then read the same, such as those of copies, are shortened in the middle so that their number stays. When the tabs still do not fit the strip scrolls to the active tab, with the whole tab before it at its left when there is room. A saved view that the scene shows and that is deleted gives the scene back to the 3D model, with its own camera, as closing its tab does. The status bar says what is shown. The window remembers the open tabs and the active one, as it remembers the collapsed groups: a view comes back as a tab with its scan, a drawing with its scans, and the tab that was active is shown again once the scans are read. The tab of a preview, an export or a file lasts for the session, as its row does.
 - The **Properties panel** at the right shows what the active scan is and holds, and the settings that belong to what is in use: the camera, the current measurement, the selected point, the list of stations, the limits of the section box while it is on, the Drawing view block while that view is shown, the Section drawing block while that tool is open, the strength of eye-dome lighting while that is on, the size of the mesh of the active scan with its open edges and connected parts (and, for a closed mesh, how far the points lie from it), the faces found in the active scan with their list, and the progress of mesh, merge and scale jobs with their cancel buttons. The settings of the meshers are in [Mesh Pointcloud](#mesh-pointcloud).
 - The **status bar** at the bottom, dark in every theme, says at its left what is going on, how many files and points are open and how many points are selected; in its middle the name and the version of the application; and at its right what the main area shows: the view of the 3D model, such as Isometric, with its zoom, or the drawing or the sheet. While an import runs, **Cancel import** stands at its right.
-- The **File view** opens with the File button and covers the ribbon and the scene. Its menu leads to the pages **New**, **Open**, **Import** and **Export**, then **Workspace**, **Extensions** and **About**, and ends with **Settings…**, **Return to model** and **Exit**. Each task is a tile that says what it writes or what it needs, and is greyed while it cannot run. **New** closes every open scan (the files are not changed); **Open** has **Point cloud…**, **Scan folder…** and **Drawing (DXF/DWG)…**, which shows a drawing file in the Drawing view; **Import** has **3D BAG buildings…**; **Export** groups the point cloud exports (with the format and the "every Nth point" step), the drawings and models, the BCF views and the merge. The Workspace page lists the open scans (click one to make it the active scan, the same as a click on its row in the project panel). Escape or Return to model closes the File view.
+- The **File view** opens with the File button and covers the ribbon and scene. Its left menu gives direct access to **Import point cloud**, **Open scan folder**, **Drawing (DXF/DWG)…**, **3D BAG buildings…** and common exports, as in earlier OPS versions. **New** opens the page for an empty workspace (the files on disk are not changed) and Pointcloud to Drawing. **All export options…** opens the full Export page with point-cloud, drawing, model, BCF and merge tasks; unavailable actions are greyed out. The **Workspace** page lists open scans (click one to make it active) and the export format and thinning step. **Extensions**, **About**, **Settings…**, **Return to model** and **Exit** remain at the bottom of the menu. Escape or Return to model closes the File view.
 
 The title of the window is the file name of the active scan followed by the name and the version of the application, such as `rooms.las - Open Pointcloud Studio v0.9.5`; without a scan it is the name and the version alone.
 
@@ -305,7 +305,7 @@ The BCF 2.1 schema limits `FieldOfView` to 45–60 degrees and announces that re
 
 ## Exporting and merging
 
-The exports are in the File view under **EXPORT**. Each asks where to save and then runs in the background. The format is the one chosen under **EXPORT FORMAT** on the Workspace page: binary or ASCII PLY, LAS, LAZ, E57, XYZ, PTS or CSV.
+The common exports are directly under **EXPORT** in the File menu; **All export options…** opens the full Export page. Each asks where to save and then runs in the background. The format is the one chosen under **EXPORT** on the Workspace page: binary or ASCII PLY, LAS, LAZ, E57, XYZ, PTS or CSV.
 
 | Entry | What it writes |
 | --- | --- |
@@ -404,6 +404,27 @@ The format is chosen by the file name: `.dxf` or `.dwg`. The choices hold for th
 
 With national grid coordinates, a drawing in millimetres has numbers of hundreds of millions, and some drawing programs draw less precisely that far from zero. **Corner of the box** keeps the numbers small; the line of text in the drawing gives the model position of drawing zero.
 
+### Straight CAD lines
+
+Enable **Straight CAD lines** in **Create 2D plan / elevation / section** or
+in the Section drawing properties to add an editable line layer. It works
+for horizontal plans and vertical sections, including a rotated section box.
+**Line tolerance (m)** limits the additional deviation from the traced
+contour (default 0.01 m). **Minimum line (m)** is the preferred segment length
+(default 0.10 m): shorter edges remain where removing them would damage an
+opening, a hole or the requested accuracy. **Square to main directions**
+controls the existing tracing step; genuinely angled walls remain angled
+unless they lie within that step's 30 mm squaring tolerance.
+
+The blue **OPS-STRAIGHT-LINES** layer appears beside the original contour and
+fill layers. The model preview also draws these blue lines over the measured
+contour on the cut plane. Switch layers on and off to compare them in Drawing view. DXF
+and DWG exports contain closed editable polylines on that separate layer.
+The job reports segment counts and maximum/RMS deviation from the traced
+contour vertices, not from the raw scan points. Original hatches and
+contours are retained. The extra step works on the contours already in
+memory and does not read the point cloud again.
+
 ### Layers of the drawing
 
 | Layer | What is on it |
@@ -438,7 +459,7 @@ A drawing can be looked at in the application itself, without a drawing program.
 
 - **After an export** the Drawing view opens with the drawing that was written, as long as **Show after export** is on in the Section drawing block; it is on in a new installation and kept for later sessions. **Show drawing** beside it opens the view at any time.
 - **After a preview** the view holds the drawing an export with the same choices would write, made from the same read of the slab, but the window stays on the model. A preview therefore also collects the points of the drawing, and its result names them under **Points drawn**.
-- **A DXF or DWG file**, made here or elsewhere, opens in the view with **Drawing (DXF/DWG)…** on the **Open** page of the File view, or with **Open drawing…** in the Drawing view block.
+- **A DXF or DWG file**, made here or elsewhere, opens in the view with **Drawing (DXF/DWG)…** in the File menu, or with **Open drawing…** in the Drawing view block.
 
 The drawing shows the points as dots, in their own colour or in that of their layer, the filled cut as filled regions with their holes, the outlines, the frame and the line of text. White and black are drawn black on the sheet, and colours too light to read on it a little darker. Drag with any mouse button to pan and turn the wheel to zoom about the pointer. The scale bar at the lower left gives a round length in the units of the drawing, and the lower right the coordinates under the pointer, in millimetres or metres as the drawing has them.
 

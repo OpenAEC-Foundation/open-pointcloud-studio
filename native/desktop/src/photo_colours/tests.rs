@@ -606,6 +606,27 @@ fn undo_keeps_the_photo_colours_within_its_budget() {
 }
 
 #[test]
+fn photo_colours_enable_rgb_for_a_scan_without_stored_rgb() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut studio, _) = studio_with_photo(directory.path());
+    assert!(!studio.clouds[0].cloud.has_rgb);
+    assert!(!studio.can_show_color_mode(ColorMode::Rgb));
+
+    let mut colours = PointColours::new(studio.clouds[0].cloud.total_points);
+    colours.set(0, [35, 125, 215]);
+    studio.set_photo_colours(0, Some(Arc::new(colours)));
+    assert!(studio.can_show_color_mode(ColorMode::Rgb));
+    assert_eq!(
+        send(&mut studio, json!({"command": "set_color", "mode": "rgb"}))["ok"],
+        true
+    );
+    assert_eq!(studio.effective_color_mode(), ColorMode::Rgb);
+
+    studio.clear_photo_colours(0).unwrap();
+    assert!(!studio.can_show_color_mode(ColorMode::Rgb));
+}
+
+#[test]
 fn the_block_speaks_the_language_of_the_window() {
     let _language = TestLanguage::hold(Language::Table(0));
     let refusal = Refusal::NoPhotos("room.xyz".into());

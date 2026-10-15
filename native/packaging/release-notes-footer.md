@@ -1,7 +1,7 @@
 ## Downloads
 
 - **Windows** 10 and 11, x64: `open-pointcloud-studio_@VERSION@_x64-setup.exe` installs for the current user without administrator rights, or for all users. `open-pointcloud-studio_@VERSION@_windows-x64.zip` is the same application without an installer. @WINDOWS_SIGNING@
-- **macOS** 11 and later, arm64 and x86-64 processors in one file: open `open-pointcloud-studio_@VERSION@_macos-universal.dmg` and drag the application to Applications; read the note on the first start below. `open-pointcloud-studio_@VERSION@_macos-universal.tar.gz` holds the command-line binary without the application bundle, with Open CAD Studio beside it.
+- **macOS** 11 and later, arm64 and x86-64 processors in one file: open `open-pointcloud-studio_@VERSION@_macos-universal.dmg` and drag the application to Applications. @MACOS_SIGNING@ `open-pointcloud-studio_@VERSION@_macos-universal.tar.gz` holds the command-line binary without the application bundle, with Open CAD Studio beside it.
 - **Linux** x86-64: `open-pointcloud-studio_@VERSION@_amd64.deb` for Debian, Ubuntu and their relatives, `open-pointcloud-studio_@VERSION@_amd64.AppImage` for any distribution, or `open-pointcloud-studio_@VERSION@_linux-amd64.tar.gz` with the bare binary and Open CAD Studio beside it.
 - **Linux** 64-bit ARM, experimental: `open-pointcloud-studio_@VERSION@_arm64.deb`, `open-pointcloud-studio_@VERSION@_arm64.AppImage` and `open-pointcloud-studio_@VERSION@_linux-arm64.tar.gz`. They are built and tested on build machines with software rendering, not yet on real boards or laptops.
 - **Source of Open CAD Studio**: `@CAD_SOURCE@` holds the source that the Open CAD Studio in every package was built from, and `@CAD_VENDOR@` the crates it was built with from git repositories; see Licence below.
@@ -12,13 +12,7 @@ The Linux packages also carry a build attestation, kept by GitHub. With the GitH
 
 ### First start on macOS
 
-The application is not signed with a paid developer certificate and not notarised, so macOS refuses to start it the first time. It has to be allowed once.
-
-On macOS 15 and later: start the application, close the message, open System Settings > Privacy & Security, scroll to Security, choose **Open Anyway** and confirm. On macOS 11 to 14: Control-click the application, choose **Open** and confirm. On either, this command does the same:
-
-```
-xattr -dr com.apple.quarantine "/Applications/Open Pointcloud Studio.app"
-```
+@MACOS_FIRST_START@
 
 ### What Linux needs
 
@@ -42,4 +36,4 @@ De Linux-pakketten hebben ook een build-attestatie, bewaard door GitHub. Met de 
 
 Een gedownloade AppImage is nog niet uitvoerbaar. Maak het bestand één keer uitvoerbaar met `chmod +x open-pointcloud-studio_@VERSION@_amd64.AppImage`, of in de bestandsbeheerder onder Eigenschappen > Rechten, en start het daarna.
 
-macOS weigert de eerste start, omdat de applicatie niet met een betaald ontwikkelaarscertificaat is ondertekend en niet genotariseerd is. macOS 15 en nieuwer: start de applicatie, sluit de melding, open Systeeminstellingen > Privacy en beveiliging, scrol naar Beveiliging, kies **Open toch** en bevestig. macOS 11 tot en met 14: Control-klik op de applicatie, kies **Open** en bevestig.
+@MACOS_FIRST_START_NL@

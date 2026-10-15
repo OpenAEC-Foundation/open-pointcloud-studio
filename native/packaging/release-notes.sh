@@ -57,12 +57,23 @@ if [[ "${WINDOWS_SIGNED:-false}" == "true" ]]; then
 else
     signing="Installer and application are not code-signed in this release, so Windows may warn about an unknown publisher before the first start: choose More info and then Run anyway."
 fi
+if [[ "${MACOS_SIGNED:-false}" == "true" ]]; then
+    macos_signing="The app and disk image are Developer ID signed, notarized by Apple and stapled. Open the app normally after copying it to Applications."
+    macos_first_start="This release is signed with a Developer ID Application certificate and notarized by Apple. Open the application normally."
+    macos_first_start_nl="Deze release is met een Developer ID Application-certificaat ondertekend en door Apple genotariseerd. Open de app normaal."
+else
+    macos_signing="The app is signed ad hoc and is not notarized; see the first-start instructions below."
+    macos_first_start='The application is not signed with a paid developer certificate and not notarised, so macOS refuses to start it the first time. On macOS 15 and later, use System Settings > Privacy and Security > Open Anyway; on macOS 11 to 14, Control-click the app and choose Open. From Terminal, this also works: `xattr -dr com.apple.quarantine "/Applications/Open Pointcloud Studio.app"`.'
+    macos_first_start_nl="Deze app is alleen ad hoc ondertekend en niet genotariseerd. macOS 15 en nieuwer: gebruik Systeeminstellingen > Privacy en beveiliging > Open toch. macOS 11 tot en met 14: Control-klik op de app en kies Open."
+fi
 
 footer=$(mktemp)
 trap 'rm -f "$footer"' EXIT
 read_cad_pin
 fill_template "$packaging_dir/release-notes-footer.md" "$footer" \
     "VERSION=$number" "WINDOWS_SIGNING=$signing" \
+    "MACOS_SIGNING=$macos_signing" "MACOS_FIRST_START=$macos_first_start" \
+    "MACOS_FIRST_START_NL=$macos_first_start_nl" \
     "CAD_COMMIT=$cad_commit" "CAD_DATE=$cad_date" "CAD_URL=${cad_url%.git}" \
     "CAD_SOURCE=$(cad_source_archive_name)" "CAD_VENDOR=$(cad_vendor_archive_name)"
 

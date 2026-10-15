@@ -2,6 +2,8 @@
 
 A desktop application for viewing, measuring, editing and converting laser scans and other point clouds, and for turning them into section drawings, meshes and the flat faces of a building. It runs on Windows, Linux and macOS, is written in Rust and needs no browser or web view.
 
+**Browser edition:** there is no supported browser or Frappe edition. The frozen `classic/` 0.3.0 prototype is retained for reference only; it is not the current application and cannot handle the same large scans. To reproduce that historical prototype, run `cd classic && npm ci && npm run build`; the output is `classic/dist/`. Releases and supported builds come from the native Rust workspace in `native/`. The Classic deployment workflow has been retired so new native releases cannot be mistaken for web updates.
+
 [![Latest release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-pointcloud-studio)](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/latest)
 [![Checks](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/workflows/ci.yml)
 [![Licence: GPL-3.0-only and LGPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--only%20%7C%20LGPL--3.0--or--later-blue)](#licences)
@@ -27,7 +29,7 @@ A desktop application for viewing, measuring, editing and converting laser scans
 - [Licences](#licences)
 - [Contributing](#contributing)
 
-The [user guide](docs/guide.md) describes every tool in detail. [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
+The [user guide](docs/guide.md) describes every tool in detail; an [illustrated Dutch wiki manual](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/wiki/Handleiding) covers the main workflows ([source](docs/wiki/Handleiding.md)). [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
 
 ## Download and install
 
@@ -60,7 +62,7 @@ The zip holds the same application: unpack it anywhere and start `open-pointclou
 
 Open the disk image and drag **Open Pointcloud Studio** onto the Applications folder. The application is one file for Apple and Intel processors. It is offered under "Open With" for E57, LAS, LAZ, PLY, PCD, PTX and PTS files and scan project files (`.rcp`), without changing which program opens them by default.
 
-It is not signed with a paid developer certificate and not notarised, so macOS refuses to start it the first time. Allow it once:
+The v0.9.5 macOS package is signed ad hoc and not notarised, so macOS may refuse its first start. Later release notes state whether their app and disk image are Developer ID signed and notarized; when they are, open the app normally. For an ad hoc release, allow it once:
 
 - macOS 15 and later: start the application, close the message, open **System Settings > Privacy & Security**, scroll to **Security**, choose **Open Anyway** and confirm.
 - macOS 11 to 14: Control-click the application, choose **Open** and confirm.
@@ -135,7 +137,7 @@ open-pointcloud-studio --help
 
 ## The first five minutes
 
-The native Rust window has **Start** and **View** ribbons above the 3D scene, a Project Browser at the left and Properties at the right. Start holds the common file, navigation, selection, section, surface and export tools. View holds camera, colour, point density, effects and viewpoints. Groups fold into dropdowns when the window narrows. **File** (*Bestand*) opens the File view, including its Extensions page.
+The native Rust window has one compact **Start** ribbon above the 3D scene, a Project Browser at the left and Properties at the right. Start holds the common file, navigation, selection, section, surface and export tools; camera, colour and point-density controls sit beneath the view cube. Groups fold into dropdowns when the window narrows. **File** (*Bestand*) opens a backstage view with direct file and export actions, the open scans, export settings and an Extensions page.
 
 The interface follows the language of the system, English or Dutch; **Settings > General** (*Instellingen > Algemeen*) changes it. This page uses the English names and, in the steps below, gives the Dutch name in brackets where it differs.
 
@@ -173,7 +175,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - Four colour modes (stored colour, elevation, intensity, classification), eye-dome lighting, and a point size from 0.1 to 20.
 - The classes that occur in the open clouds are listed in the project panel and can be shown or hidden one by one.
 - A view cube, seven camera directions, **Zoom all** and a right-click menu in the scene.
-- Tabs above the scene put the 3D model and the opened views and drawings side by side; Ctrl+Tab steps through them, the 3D model keeps its own camera and a drawing its zoom, and the window remembers which tabs were open.
+- Tabs above the scene put the 3D model, opened views and drawings, and E57 photos side by side; Ctrl+Tab steps through them. A photo tab remembers its look while the model keeps its own camera, and the window remembers saved-view and drawing tabs.
 - Scanner stations of E57, PCD and PTX scans are shown as markers. Stations with photos are drawn as balls: click one to stand in that station and look around.
 - Panoramas and photos taken along a path in an E57 file are marked along their path. Double-click a mark, or a photo under its scan in the project panel, to stand where it was taken: the photo lies over the points, a **Photo** slider sets how much, `Page Up` and `Page Down` step along the path, and `Esc` returns. Measuring and picking work on the points under the photo.
 - **Colour from photos** gives the points of a scan the colours its photos see them with, for a scan without colours or to replace them: only from photos that see a point unhidden, in the background, with Undo; exports write the new colours.
@@ -222,7 +224,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - **Filled cut** adds the walls, columns and floors that the slab goes through as filled regions with outlines, and leaves door and window openings open. **Preview** shows these regions over the points before a file is saved.
 - The choices are millimetres or metres, model coordinates or the corner of the box as zero, a layer per scan or per class, layer colours or the colours of the scan, and the file versions R2004 to R2018.
 - **Open in CAD viewer** shows the saved DXF or DWG file read-only in [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio), the open-source CAD application that comes with the application, and **Open after export** does so after every export; the same holds for faces and meshes saved as DXF or DWG. Without it, as in a build from source that did not build it, the program chosen in Settings or an installed Open CAD Studio is used, and otherwise the program the system has for the file.
-- The **Drawing view** shows the drawing in the application itself in place of the 3D scene as soon as it is exported, or after a preview, and whenever it is chosen under VIEWS in the Project Browser: points, filled cut, outlines, frame and text on a light sheet, with a switch per layer, pan and zoom, a scale bar and the coordinates under the pointer. Any DXF or DWG file opens there too, from **Open** in the File view.
+- The **Drawing view** shows the drawing in the application itself in place of the 3D scene as soon as it is exported, or after a preview, and whenever it is chosen under VIEWS in the Project Browser: points, filled cut, outlines, frame and text on a light sheet, with a switch per layer, pan and zoom, a scale bar and the coordinates under the pointer. Any DXF or DWG file opens there too, from **Drawing (DXF/DWG)…** in the File menu.
 - The filled cut is traced from the points and has limits: a wall scanned from one side is drawn as a thin strip, gaps under about half a metre are closed, and furniture in the slab is drawn unless its points are deleted first. The [user guide](docs/guide.md#the-filled-cut-and-its-limits) lists them.
 
 ### Sheets

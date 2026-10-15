@@ -848,6 +848,84 @@ pub fn simplify_ring(ring: &[[f64; 2]], tolerance: f64) -> Vec<[f64; 2]> {
         .collect()
 }
 
+/// Reduce several closed contours together, keeping every contour and the
+/// gaps between them. Short edges are merged only where both the tolerance
+/// and the original contours allow it. Returned indices address each input
+/// ring in ascending order; no point is moved or invented.
+pub(crate) fn simplify_contours(
+    rings: &[&[[f64; 2]]],
+    tolerance: f64,
+    min_length: f64,
+    proceed: &mut dyn FnMut() -> Result<(), LoadError>,
+) -> Result<Vec<Vec<usize>>, LoadError> {
+    let corners = Corners::new(rings, tolerance);
+    let mut result = Vec::with_capacity(rings.len());
+    let mut offset = 0;
+    for ring in rings {
+        proceed()?;
+        let n = ring.len();
+        let (kept, mut examined) = reduce(&corners, offset, n, tolerance, proceed)?;
+        let mut count = kept.len();
+        if count < 3 {
+            result.push((0..n).collect());
+            offset += n;
+            continue;
+        }
+        let mut previous = vec![0; n];
+        let mut next = vec![0; n];
+        let mut live = vec![false; n];
+        for (i, &index) in kept.iter().enumerate() {
+            previous[index] = kept[(i + count - 1) % count];
+            next[index] = kept[(i + 1) % count];
+            live[index] = true;
+        }
+        let mut pending: std::collections::VecDeque<usize> = kept.into();
+        let mut queued = live.clone();
+        while let Some(edge) = pending.pop_front() {
+            proceed()?;
+            queued[edge] = false;
+            if !live[edge] || count <= 3 {
+                continue;
+            }
+            let to = next[edge];
+            if (ring[to][0] - ring[edge][0]).hypot(ring[to][1] - ring[edge][1]) >= min_length {
+                continue;
+            }
+            // Try each end of the short edge. All points of the original
+            // stretch, including previously removed ones, constrain it.
+            for remove in [to, edge] {
+                let a = previous[remove];
+                let b = next[remove];
+                let steps = (b + n - a) % n;
+                let worst = (1..steps)
+                    .map(|step| segment_distance(ring[(a + step) % n], ring[a], ring[b]))
+                    .fold(0.0, f64::max);
+                if worst > tolerance
+                    || corners
+                        .obstacle((offset, n), a, (0, steps), worst, &mut examined)
+                        .is_some()
+                {
+                    continue;
+                }
+                next[a] = b;
+                previous[b] = a;
+                live[remove] = false;
+                count -= 1;
+                for candidate in [previous[a], a, b] {
+                    if !queued[candidate] {
+                        queued[candidate] = true;
+                        pending.push_back(candidate);
+                    }
+                }
+                break;
+            }
+        }
+        result.push((0..n).filter(|index| live[*index]).collect());
+        offset += n;
+    }
+    Ok(result)
+}
+
 /// The corners of all rings of a region, one ring after another, in square
 /// cells for finding those near a segment. A segment that replaces a stretch
 /// of a ring may not pass over any of them: an edge can only come to cross

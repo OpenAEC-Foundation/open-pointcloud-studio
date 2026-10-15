@@ -14,9 +14,8 @@
 # Writes OUT_DIR/open-pointcloud-studio_NUMBER_macos-universal.dmg with a
 # .sha256 and leaves the bundle in OUT_DIR/Open Pointcloud Studio.app.
 #
-# The bundle is signed ad hoc: without any signature the arm64 half does not
-# start at all. That is not a developer signature, so macOS still asks the
-# user to allow the first start; first-start.txt in the image says how.
+# Without Developer ID credentials the bundle is signed ad hoc, which arm64
+# requires. With credentials it is hardened, notarized and stapled.
 set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
@@ -52,13 +51,35 @@ plutil -lint "$app/Contents/Info.plist"
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
 copy_licences "$app/Contents/Resources" "$number"
 
-# The second program of the bundle is signed before the bundle that seals it.
-codesign --force --sign - --timestamp=none "$app/Contents/MacOS/$CAD_BINARY_NAME"
-codesign --force --sign - --timestamp=none "$app"
-codesign --verify --strict --verbose=2 "$app"
-codesign -dv "$app" 2>&1 | tee "$out_dir/codesign.txt"
-grep -q 'Signature=adhoc' "$out_dir/codesign.txt" || fail "the bundle is not signed ad hoc"
-rm "$out_dir/codesign.txt"
+# Sign nested code before the bundle that seals it. Notarization also requires
+# the hardened runtime and a secure timestamp for both executables.
+if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+    for program in "$CAD_BINARY_NAME" "$BINARY_NAME"; do
+        codesign --force --sign "$MACOS_SIGN_IDENTITY" \
+            --keychain "$MACOS_SIGN_KEYCHAIN" --options runtime --timestamp \
+            "$app/Contents/MacOS/$program"
+    done
+    codesign --force --sign "$MACOS_SIGN_IDENTITY" \
+        --keychain "$MACOS_SIGN_KEYCHAIN" --options runtime --timestamp "$app"
+    codesign --verify --strict --deep --verbose=2 "$app"
+    zip="$out_dir/notarization.zip"
+    ditto -c -k --keepParent "$app" "$zip"
+    xcrun notarytool submit "$zip" --key "$MACOS_NOTARY_KEY" \
+        --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" \
+        --wait --output-format json > "$out_dir/notary-app.json"
+    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "Accepted"' \
+        "$out_dir/notary-app.json" || fail "Apple rejected the application; see notary-app.json"
+    xcrun stapler staple "$app"
+    xcrun stapler validate "$app"
+    rm -f "$zip" "$out_dir/notary-app.json"
+else
+    codesign --force --sign - --timestamp=none "$app/Contents/MacOS/$CAD_BINARY_NAME"
+    codesign --force --sign - --timestamp=none "$app"
+    codesign --verify --strict --verbose=2 "$app"
+    codesign -dv "$app" 2>&1 | tee "$out_dir/codesign.txt"
+    grep -q 'Signature=adhoc' "$out_dir/codesign.txt" || fail "the bundle is not signed ad hoc"
+    rm "$out_dir/codesign.txt"
+fi
 
 # What the mounted image shows: the application, the folder to drag it to,
 # and the note about the first start.
@@ -66,7 +87,11 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 ditto "$app" "$stage/$APP_NAME.app"
 ln -s /Applications "$stage/Applications"
-cp "$here/first-start.txt" "$stage/First start.txt"
+if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+    cp "$here/first-start-signed.txt" "$stage/First start.txt"
+else
+    cp "$here/first-start.txt" "$stage/First start.txt"
+fi
 
 # The disk tool now and then reports "resource busy" on a build machine.
 rm -f "$image"
@@ -78,5 +103,15 @@ for attempt in 1 2 3; do
     sleep 5
 done
 hdiutil verify "$image"
+if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+    xcrun notarytool submit "$image" --key "$MACOS_NOTARY_KEY" \
+        --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" \
+        --wait --output-format json > "$out_dir/notary-dmg.json"
+    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "Accepted"' \
+        "$out_dir/notary-dmg.json" || fail "Apple rejected the disk image; see notary-dmg.json"
+    xcrun stapler staple "$image"
+    xcrun stapler validate "$image"
+    rm -f "$out_dir/notary-dmg.json"
+fi
 write_sha256 "$image"
 echo "$image"

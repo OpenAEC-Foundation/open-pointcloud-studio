@@ -111,6 +111,7 @@
   "CC BY 4.0 · source and license ↗": "CC BY 4.0 · bron en licentie ↗",
   "Source and license ↗": "Bron en licentie ↗",
   "Full resolution…": "Volledige resolutie…",
+  "All export options…": "Alle exportopties…",
   "Selected points…": "Geselecteerde punten…",
   "Without selected points…": "Zonder geselecteerde punten…",
   "Section box…": "Snedebox…",
@@ -1043,5 +1044,12 @@
   "Top": "Boven",
   "Detect faces": "Vlakken herkennen",
   "Display": "Weergave",
-  "Eye-dome": "Eye-dome"
+  "Eye-dome": "Eye-dome",
+  "Straight CAD lines": "Rechte CAD-lijnen",
+  "Line tolerance (m)": "Lijnafwijking (m)",
+  "Minimum line (m)": "Minimumlijn (m)",
+  "Short edges stay where needed to preserve openings and tolerance.": "Korte randen blijven behouden waar openingen en nauwkeurigheid dat vereisen.",
+  "CAD segments": "CAD-segmenten",
+  "Contour deviation": "Contourafwijking",
+  "Short edges kept": "Korte randen behouden"
 }

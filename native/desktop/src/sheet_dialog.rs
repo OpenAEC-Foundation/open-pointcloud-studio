@@ -180,6 +180,8 @@ pub struct SheetJob {
     pub thickness: Option<f64>,
     /// The points used, in percent.
     pub sample_percent: f64,
+    pub straight_lines: Option<pointcloud_core::StraightLineOptions>,
+    pub square: bool,
     pub name: String,
 }
 
@@ -222,6 +224,10 @@ pub struct SheetDialog {
     thickness: String,
     /// The points used, in percent.
     points: String,
+    straight_lines: bool,
+    line_tolerance: String,
+    line_min_length: String,
+    square: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +241,10 @@ pub enum SheetAction {
     Position(String),
     Thickness(String),
     Points(String),
+    StraightLines(bool),
+    LineTolerance(String),
+    LineMinLength(String),
+    Square(bool),
     Create,
 }
 
@@ -272,6 +282,10 @@ impl Studio {
                 position: format!("{middle:.2}"),
                 thickness: "0.10".into(),
                 points: crate::drawing_crop::percent_text(DEFAULT_SAMPLE_PERCENT),
+                straight_lines: false,
+                line_tolerance: "0.01".into(),
+                line_min_length: "0.10".into(),
+                square: true,
             });
             return Task::none();
         }
@@ -297,6 +311,10 @@ impl Studio {
             SheetAction::Position(value) => dialog.position = value,
             SheetAction::Thickness(value) => dialog.thickness = value,
             SheetAction::Points(value) => dialog.points = value,
+            SheetAction::StraightLines(on) => dialog.straight_lines = on,
+            SheetAction::LineTolerance(value) => dialog.line_tolerance = value,
+            SheetAction::LineMinLength(value) => dialog.line_min_length = value,
+            SheetAction::Square(on) => dialog.square = on,
             SheetAction::Create => {
                 let dialog = dialog.clone();
                 match self
@@ -414,12 +432,26 @@ impl Studio {
                 (dialog.side.0, Some(thickness), name)
             }
         };
+        let straight_lines = if dialog.straight_lines {
+            let options = pointcloud_core::StraightLineOptions {
+                tolerance: parse(&dialog.line_tolerance)
+                    .ok_or("Line tolerance must be a number")?,
+                min_length: parse(&dialog.line_min_length)
+                    .ok_or("Minimum line length must be a number")?,
+            };
+            options.validate().map_err(|error| error.to_string())?;
+            Some(options)
+        } else {
+            None
+        };
         Ok(SheetJob {
             kind: dialog.kind,
             section: OrientedBox::new(bounds, base.rotation_degrees),
             view,
             thickness: slab,
             sample_percent,
+            straight_lines,
+            square: dialog.square,
             name,
         })
     }
@@ -482,6 +514,18 @@ impl Studio {
                 .sample_percent
                 .map(|value| SheetAction::Points(value.to_string())),
         );
+        actions.extend(options.straight_lines.map(SheetAction::StraightLines));
+        actions.extend(
+            options
+                .line_tolerance
+                .map(|value| SheetAction::LineTolerance(value.to_string())),
+        );
+        actions.extend(
+            options
+                .line_min_length
+                .map(|value| SheetAction::LineMinLength(value.to_string())),
+        );
+        actions.extend(options.square.map(SheetAction::Square));
         for action in actions {
             let _ = self.update_sheet_dialog(action);
         }
@@ -619,6 +663,38 @@ impl Studio {
             ]
             .align_y(iced::Alignment::Center),
         );
+        form = form.push(
+            ui_style::checkbox(tr("Straight CAD lines"), dialog.straight_lines)
+                .on_toggle(|on| Message::Sheet(SheetAction::StraightLines(on))),
+        );
+        if dialog.straight_lines {
+            form = form
+                .push(
+                    row![
+                        label("Line tolerance (m)"),
+                        field(&dialog.line_tolerance, SheetAction::LineTolerance)
+                    ]
+                    .align_y(iced::Alignment::Center),
+                )
+                .push(
+                    row![
+                        label("Minimum line (m)"),
+                        field(&dialog.line_min_length, SheetAction::LineMinLength)
+                    ]
+                    .align_y(iced::Alignment::Center),
+                )
+                .push(
+                    ui_style::checkbox(tr("Square to main directions"), dialog.square)
+                        .on_toggle(|on| Message::Sheet(SheetAction::Square(on))),
+                )
+                .push(
+                    text(tr(
+                        "Short edges stay where needed to preserve openings and tolerance.",
+                    ))
+                    .size(11)
+                    .color(colors.text_muted),
+                );
+        }
         let card = container(
             column![
                 row![

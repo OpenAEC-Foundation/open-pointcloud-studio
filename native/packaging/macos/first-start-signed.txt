@@ -1,0 +1,12 @@
+Open Pointcloud Studio - first start on macOS
+
+Drag Open Pointcloud Studio to Applications, then open it normally.
+This release is signed with a Developer ID Application certificate and
+notarized by Apple. The notarization ticket is attached to this disk image
+and to the application.
+
+Open Pointcloud Studio - eerste start op macOS
+
+Sleep Open Pointcloud Studio naar Programma's en open de app normaal.
+Deze release is met een Developer ID Application-certificaat ondertekend en
+door Apple genotariseerd. Het ticket zit bij de schijfkopie en de app.

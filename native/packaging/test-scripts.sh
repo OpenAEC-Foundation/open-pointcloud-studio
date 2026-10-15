@@ -190,6 +190,30 @@ else
     wrong "the release notes do not name:$missing"
 fi
 
+signed_notes=$(WINDOWS_SIGNED=true MACOS_SIGNED=true bash "$packaging_dir/release-notes.sh" "$number")
+if grep -qF 'Developer ID signed, notarized by Apple and stapled' <<< "$signed_notes" \
+    && ! grep -qF 'The application is not signed with a paid developer certificate' <<< "$signed_notes" \
+    && grep -qF 'notarized by Apple' <<< "$signed_notes"; then
+    passed "the release notes describe notarized macOS packages only when the build reports them"
+else
+    wrong "the release notes misreport Developer ID signing"
+fi
+
+signing_output="$work/macos-signing-output"
+if GITHUB_OUTPUT="$signing_output" bash "$packaging_dir/macos/prepare-signing.sh" > /dev/null \
+    && grep -qFx 'macos_signed=false' "$signing_output"; then
+    passed "the macOS job reports ad hoc signing without Apple credentials"
+else
+    wrong "the macOS job does not report its ad hoc signing status"
+fi
+if APPLE_DEVELOPER_IDENTITY='Developer ID Application: test' \
+    GITHUB_OUTPUT="$signing_output" \
+    bash "$packaging_dir/macos/prepare-signing.sh" > /dev/null 2>&1; then
+    wrong "the macOS job accepted incomplete Apple credentials"
+else
+    passed "the macOS job refuses a partial Apple credential set"
+fi
+
 # ---- open-cad-studio.pin and build-open-cad-studio.sh --------------------
 
 # The pin file of the repository holds only a URL, two hashes and a date.

@@ -2955,7 +2955,13 @@ impl Studio {
             return true;
         }
         match mode {
-            ColorMode::Rgb => visible.clone().any(|entry| entry.cloud.has_rgb),
+            ColorMode::Rgb => visible.clone().any(|entry| {
+                entry.cloud.has_rgb
+                    || entry
+                        .colours
+                        .as_ref()
+                        .is_some_and(|colours| !colours.is_empty())
+            }),
             ColorMode::Elevation => true,
             ColorMode::Intensity => visible.clone().any(|entry| entry.cloud.has_intensity),
             ColorMode::Classification => visible.any(|entry| entry.cloud.has_classification),
@@ -3552,6 +3558,7 @@ impl Studio {
 
     fn leave_walk(&mut self) -> bool {
         self.panorama_photos = None;
+        self.remember_photo_tab();
         self.photos.close();
         self.walk_station = None;
         self.walk_keys = [false; 6];
@@ -10077,19 +10084,33 @@ impl Studio {
     fn ribbon(&self) -> Element<'_, Message> {
         let active_tab = self.ribbon_tab;
         let compact = self.window_size.is_some_and(|size| size.width < 930.0);
-        let file_button = button(
-            row![
-                text(i18n::tr("File")).size(16).font(fonts::MEDIUM),
-                text("⌄").size(15),
-            ]
-            .spacing(12)
-            .align_y(iced::Alignment::Center),
-        )
-        .on_press(Message::ToggleFile)
-        .style(|theme, status| opencad_ribbon::tab_style(theme, self.file_open, status))
-        .width(if compact { 100 } else { 139 })
-        .height(44)
-        .padding([4, if compact { 9 } else { 19 }]);
+        let file_button = column![
+            iced::widget::Space::with_height(7),
+            button(
+                row![
+                    text(i18n::tr("File")).size(16).font(fonts::MEDIUM),
+                    text("⌄").size(15),
+                ]
+                .spacing(12)
+                .align_y(iced::Alignment::Center),
+            )
+            .on_press(Message::ToggleFile)
+            .style(|theme, status| opencad_ribbon::tab_style(theme, self.file_open, status))
+            .width(Fill)
+            .height(37)
+            .padding([5, if compact { 9 } else { 19 }]),
+            container(iced::widget::Space::with_height(4))
+                .width(Fill)
+                .style(|theme| {
+                    container::Style::default().background(if self.file_open {
+                        ui_theme::colors(theme).accent
+                    } else {
+                        Color::TRANSPARENT
+                    })
+                }),
+        ]
+        .spacing(0)
+        .width(if compact { 100 } else { 139 });
         let tab_buttons: Vec<Element<'_, Message>> = RibbonTab::CORE
             .into_iter()
             .map(|tab| {
