@@ -17,8 +17,8 @@
 use std::path::{Path, PathBuf};
 
 use iced::widget::scrollable::{self, AbsoluteOffset, Direction, Scrollbar};
-use iced::widget::{button, container, mouse_area, row, text};
-use iced::{Background, Border, Color, Element, Fill, Padding, Task, Theme};
+use iced::widget::{button, mouse_area, row, text};
+use iced::{Element, Fill, Padding, Task};
 use pointcloud_core::Bounds;
 use serde_json::{json, Value};
 
@@ -26,7 +26,7 @@ use crate::i18n::tr;
 use crate::project_browser::{ViewKind, ViewRow};
 use crate::station_photos::WalkView;
 use crate::ui_style;
-use crate::{icon_svg, ui_theme, ColorMode, Message, Studio, ToolIcon};
+use crate::{icon_svg, ColorMode, Message, Studio, ToolIcon};
 
 /// A tab, by what it shows.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -131,7 +131,7 @@ const CLOSE_WIDTH: f32 = 22.0;
 const MIN_CHARS: usize = 8;
 const MAX_CHARS: usize = 32;
 /// The height of a tab, without the accent line over the active one.
-const TAB_HEIGHT: f32 = 26.0;
+const TAB_HEIGHT: f32 = 24.0;
 
 /// How wide a tab is with a name of so many characters.
 pub fn tab_width(chars: usize, closable: bool) -> f32 {
@@ -814,17 +814,17 @@ impl Studio {
         }))
     }
 
-    /// The width the strip has for its tabs: that of the
-    /// window between the Project Browser and Properties, else as the main
-    /// area was last drawn.
+    /// The document strip spans the window above all three content regions.
     fn strip_width(&self) -> f32 {
         if let Some(window) = self.window_size {
-            return window.width - crate::project_browser::WIDTH - self.properties_width();
+            return window.width;
         }
         self.drawing_view
             .canvas_bounds()
             .filter(|_| self.drawing_view.shown)
             .map_or_else(|| self.drawn_viewport().width, |bounds| bounds.width)
+            + crate::project_browser::WIDTH
+            + self.properties_width()
     }
 
     /// How the strip lays out: the tabs it lists with their names and
@@ -867,7 +867,7 @@ impl Studio {
         ))
     }
 
-    /// The strip of tabs above the main area.
+    /// The shared 30 px document strip above the explorer, canvas and properties.
     pub(crate) fn tab_strip(&self) -> Element<'_, Message> {
         let shown = self.shown_tab();
         let StripLayout {
@@ -876,10 +876,9 @@ impl Studio {
             fitted,
             ..
         } = self.strip_layout();
-        let surface = active_surface(self.ui_theme, self.drawing_view.shown);
-        let mut tabs = row![].spacing(2).align_y(iced::Alignment::End);
+        let mut tabs = row![].spacing(1).align_y(iced::Alignment::End);
         for ((tab, (full, _)), short) in listed.iter().zip(names).zip(fitted) {
-            let active = (shown.as_ref() == Some(tab)).then_some(surface);
+            let active = shown.as_ref() == Some(tab);
             tabs = tabs.push(self.tab_button(tab.clone(), full, short, active));
         }
         // The bar under the tabs stays 3 pixels, so that it does not cover
@@ -891,28 +890,17 @@ impl Studio {
             .id(strip_id())
             .width(Fill);
         let line = row![strip].align_y(iced::Alignment::End);
-        container(line)
-            .padding(Padding {
-                top: 4.0,
-                left: 6.0,
-                ..Padding::ZERO
-            })
-            .width(Fill)
-            .style(|theme| {
-                container::Style::default().background(ui_theme::colors(theme).docbar_bg)
-            })
-            .into()
+        openaec_ui::frame::document_bar(self.ui_theme.shared(), line.into())
     }
 
-    /// One tab: the icon of its kind, its name and its ×, with its full name
-    /// and kind in a tooltip. The active one has the colour and the ink of
-    /// what is shown under it, under a line of the accent.
+    /// One tab: its icon, name and ×. The shared Style Book style owns the
+    /// 24 px body while Pointcloud keeps its identity and navigation actions.
     fn tab_button(
         &self,
         tab: TabId,
         full: String,
         short: String,
-        active: Option<(Color, Color)>,
+        active: bool,
     ) -> Element<'_, Message> {
         let closable = tab.closable();
         let mut content = row![
@@ -927,40 +915,26 @@ impl Studio {
             content = content.push(padlock);
         }
         if closable {
+            let theme = self.ui_theme.shared();
             content = content.push(
                 button(text("×").size(12))
                     .on_press(Message::Tabs(TabAction::Close(tab.clone())))
-                    .style(move |theme, status| close_style(theme, active, status))
+                    .style(move |_, status| {
+                        openaec_ui::widgets::document_close_style(theme, active, status)
+                    })
                     .padding([0, 4]),
             );
         }
+        let theme = self.ui_theme.shared();
         let body = button(content)
             .on_press(Message::Tabs(TabAction::Show(tab.clone())))
-            .style(move |theme, status| tab_style(theme, active, status))
+            .style(move |_, status| openaec_ui::widgets::document_tab_style(theme, active, status))
             .height(TAB_HEIGHT)
             .padding(Padding {
-                top: 4.0,
-                bottom: 4.0,
-                left: 8.0,
-                right: if closable { 3.0 } else { 8.0 },
-            });
-        let framed = container(body)
-            .padding(Padding {
-                top: 2.0,
-                ..Padding::ZERO
-            })
-            .style(move |theme| {
-                let colors = ui_theme::colors(theme);
-                container::Style::default()
-                    .background(if active.is_some() {
-                        colors.accent
-                    } else {
-                        Color::TRANSPARENT
-                    })
-                    .border(Border {
-                        radius: iced::border::Radius::default().top(4),
-                        ..Border::default()
-                    })
+                top: 0.0,
+                bottom: 0.0,
+                left: 10.0,
+                right: 4.0,
             });
         let kind = match &tab {
             TabId::Layout(_) => tr("Sheets"),
@@ -968,13 +942,17 @@ impl Studio {
         };
         let tip = format!("{full}\n{kind}");
         let element: Element<'_, Message> = if closable {
-            mouse_area(framed)
+            mouse_area(body)
                 .on_middle_press(Message::Tabs(TabAction::Close(tab)))
                 .into()
         } else {
-            framed.into()
+            body.into()
         };
-        ui_style::tooltip(element, tip).into()
+        ui_style::tooltip(
+            openaec_ui::widgets::document_tab_bottom_gap(theme, element),
+            tip,
+        )
+        .into()
     }
 
     /// What `status.result.view_tabs` reports: the tabs the strip shows, in
@@ -1118,86 +1096,8 @@ impl Studio {
     }
 }
 
-/// What the active tab lies on, as its colour and its ink: the sheet of a
-/// drawing (`drawing`), else the scene.
-fn active_surface(theme: ui_theme::UiTheme, drawing: bool) -> (Color, Color) {
-    if drawing {
-        (
-            crate::drawing_view::paper(theme),
-            Color::from_rgb8(28, 25, 23),
-        )
-    } else {
-        let dom = theme.colors().dom;
-        (dom.scene, dom.scene_text)
-    }
-}
-
 fn refused(error: String) -> (Value, Task<Message>) {
     (json!({"ok": false, "error": error}), Task::none())
-}
-
-/// A tab: the active one in the colour and the ink of what is shown under
-/// it, the others quiet until the pointer is over them.
-fn tab_style(
-    theme: &Theme,
-    active: Option<(Color, Color)>,
-    status: button::Status,
-) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    let (background, text_color) = if let Some(surface) = active {
-        surface
-    } else if hovered {
-        (colors.hover, colors.text)
-    } else {
-        (Color::TRANSPARENT, colors.text_muted)
-    };
-    button::Style {
-        background: Some(Background::Color(background)),
-        text_color,
-        border: Border {
-            radius: if active.is_some() {
-                0.0.into()
-            } else {
-                iced::border::Radius::default().top(3)
-            },
-            ..Border::default()
-        },
-        ..button::Style::default()
-    }
-}
-
-/// The × of a tab: on the active one in the ink of what is shown under it,
-/// a little quieter until the pointer is over it, so that it reads as well
-/// on the sheet of a drawing as on the scene; on the others in the quiet
-/// colour of the strip.
-fn close_style(
-    theme: &Theme,
-    active: Option<(Color, Color)>,
-    status: button::Status,
-) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    let (quiet, hover, ink) = match active {
-        Some((surface, ink)) => (mixed(ink, surface, 0.7), Color { a: 0.12, ..ink }, ink),
-        None => (colors.text_muted, colors.ribbon_btn_hover, colors.text),
-    };
-    button::Style {
-        background: hovered.then_some(Background::Color(hover)),
-        text_color: if hovered { ink } else { quiet },
-        border: Border::default().rounded(3.0),
-        ..button::Style::default()
-    }
-}
-
-/// `share` of `ink` laid over `surface`.
-fn mixed(ink: Color, surface: Color, share: f32) -> Color {
-    let mix = |a: f32, b: f32| a * share + b * (1.0 - share);
-    Color::from_rgb(
-        mix(ink.r, surface.r),
-        mix(ink.g, surface.g),
-        mix(ink.b, surface.b),
-    )
 }
 
 #[cfg(test)]

@@ -2,14 +2,12 @@
 //! what the application is. A choice shows at once; Cancel puts back what was
 //! in use when the dialog opened and Save keeps it for later sessions.
 
-use iced::widget::{
-    button, center, column, container, horizontal_space, mouse_area, opaque, row, text, Space,
-};
-use iced::{Border, Color, Element, Fill};
+use iced::widget::{button, column, horizontal_space, row, stack, text};
+use iced::{Element, Fill};
 
 use crate::i18n::{self, tr, Language};
 use crate::ui_style;
-use crate::ui_theme::{self, UiColors, UiTheme};
+use crate::ui_theme::{UiColors, UiTheme};
 use crate::{Message, Studio};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,9 +23,12 @@ pub enum SettingsAction {
     Tab(SettingsTab),
     Language(Language),
     Theme(UiTheme),
+    ThemeMenu(bool),
+    ResetPrompt(bool),
     Reset,
     Save,
     Cancel,
+    Escape,
 }
 
 /// The dialog while it is open: its tab, and what Cancel goes back to.
@@ -36,6 +37,8 @@ pub struct SettingsDialog {
     tab: SettingsTab,
     language: Language,
     theme: UiTheme,
+    theme_menu_open: bool,
+    reset_confirm: bool,
     cad_viewer: String,
 }
 
@@ -98,6 +101,8 @@ impl Studio {
                         tab: SettingsTab::General,
                         language: i18n::choice(),
                         theme: self.ui_theme,
+                        theme_menu_open: false,
+                        reset_confirm: false,
                         cad_viewer: self.cad_viewer.input.clone(),
                     });
                 }
@@ -105,15 +110,32 @@ impl Studio {
             SettingsAction::Tab(tab) => {
                 if let Some(dialog) = &mut self.settings {
                     dialog.tab = tab;
+                    dialog.theme_menu_open = false;
+                    dialog.reset_confirm = false;
+                }
+            }
+            SettingsAction::ThemeMenu(open) => {
+                if let Some(dialog) = &mut self.settings { dialog.theme_menu_open = open; }
+            }
+            SettingsAction::ResetPrompt(open) => {
+                if let Some(dialog) = &mut self.settings {
+                    dialog.reset_confirm = open;
+                    if open { dialog.theme_menu_open = false; }
                 }
             }
             SettingsAction::Language(language) => i18n::set(language),
-            SettingsAction::Theme(theme) => self.preview_theme(theme),
+            SettingsAction::Theme(theme) => {
+                self.preview_theme(theme);
+                if let Some(dialog) = &mut self.settings { dialog.theme_menu_open = false; }
+            }
             SettingsAction::Reset => {
-                i18n::set(Language::Auto);
-                self.preview_theme(UiTheme::Light);
-                self.cad_viewer.input.clear();
-                self.cad_viewer.refresh();
+                if self.settings.as_ref().is_some_and(|dialog| dialog.reset_confirm) {
+                    i18n::set(Language::Auto);
+                    self.preview_theme(UiTheme::Light);
+                    self.cad_viewer.input.clear();
+                    self.cad_viewer.refresh();
+                    if let Some(dialog) = &mut self.settings { dialog.reset_confirm = false; }
+                }
             }
             SettingsAction::Save => {
                 if self.settings.take().is_some() {
@@ -132,6 +154,13 @@ impl Studio {
                     self.cad_viewer.refresh();
                 }
             }
+            SettingsAction::Escape => {
+                if self.settings.as_ref().is_some_and(|dialog| dialog.reset_confirm) {
+                    self.settings_action(SettingsAction::ResetPrompt(false));
+                } else {
+                    self.settings_action(SettingsAction::Cancel);
+                }
+            }
         }
     }
 
@@ -148,33 +177,9 @@ impl Studio {
 
         let tab = |label: &'static str, tab: SettingsTab| {
             let active = dialog.tab == tab;
-            button(text(tr(label)).size(12).font(crate::fonts::MEDIUM))
-                .on_press(send(SettingsAction::Tab(tab)))
-                .width(Fill)
-                .padding([7, 12])
-                .style(move |theme, status| {
-                    let colors = ui_theme::colors(theme);
-                    let hovered = matches!(status, button::Status::Hovered);
-                    button::Style {
-                        background: (active || hovered).then_some(
-                            if active {
-                                colors.dialog_tab_active_bg
-                            } else {
-                                colors.dialog_tab_hover
-                            }
-                            .into(),
-                        ),
-                        text_color: if active {
-                            colors.dialog_tab_active_text
-                        } else if hovered {
-                            colors.dialog_tab_hover_text
-                        } else {
-                            colors.dialog_tab_text
-                        },
-                        border: Border::default().rounded(4),
-                        ..button::Style::default()
-                    }
-                })
+            openaec_ui::widgets::settings_tab(
+                tr(label), active, send(SettingsAction::Tab(tab)), self.ui_theme.shared(),
+            )
         };
         let sidebar = column![
             tab("General", SettingsTab::General),
@@ -182,13 +187,10 @@ impl Studio {
             tab("About", SettingsTab::About),
         ]
         .spacing(2)
-        .width(150);
+        .width(Fill);
 
         let heading = |label: &'static str| {
-            text(tr(label))
-                .size(13)
-                .font(crate::fonts::SEMIBOLD)
-                .color(colors.accent)
+            openaec_ui::widgets::settings_section_heading(tr(label), self.ui_theme.shared())
         };
         let label = |name: &'static str| {
             text(tr(name))
@@ -217,77 +219,32 @@ impl Studio {
             .spacing(14)
             .into(),
             SettingsTab::Appearance => {
-                let mut themes = column![
+                column![
                     heading("Theme"),
-                    text(tr("Choose a color theme for the application."))
-                        .size(11)
-                        .color(colors.dialog_content_secondary),
+                    row![
+                        horizontal_space(),
+                        openaec_ui::widgets::settings_theme_picker(
+                            UiTheme::ALL.into_iter().map(|theme| (
+                                theme.shared(),
+                                tr(&theme.to_string()).to_owned(),
+                                send(SettingsAction::Theme(theme)),
+                            )).collect(),
+                            self.ui_theme.shared(),
+                            self.ui_theme.shared(),
+                            dialog.theme_menu_open,
+                            send(SettingsAction::ThemeMenu(!dialog.theme_menu_open)),
+                        ),
+                    ],
                 ]
-                .spacing(8);
-                for theme in UiTheme::ALL {
-                    let [shell, lighter, accent, ink] = theme.swatches();
-                    let swatch = |color: Color| {
-                        container(Space::new(14, 14)).style(move |_| {
-                            container::Style::default()
-                                .background(color)
-                                .border(Border {
-                                    color: Color::from_rgba8(128, 128, 128, 0.6),
-                                    width: 1.0,
-                                    radius: 2.0.into(),
-                                })
-                        })
-                    };
-                    let chosen = theme == self.ui_theme;
-                    themes = themes.push(
-                        button(
-                            row![
-                                swatch(shell),
-                                swatch(lighter),
-                                swatch(accent),
-                                swatch(ink),
-                                text(tr(&theme.to_string()).to_owned()).size(12),
-                            ]
-                            .spacing(6)
-                            .align_y(iced::Alignment::Center),
-                        )
-                        .on_press(send(SettingsAction::Theme(theme)))
-                        .width(Fill)
-                        .padding([6, 10])
-                        .style(move |theme, status| {
-                            let colors = ui_theme::colors(theme);
-                            let hovered = matches!(status, button::Status::Hovered);
-                            button::Style {
-                                background: (chosen || hovered).then_some(
-                                    if chosen {
-                                        colors.dialog_tab_active_bg
-                                    } else {
-                                        colors.dialog_tab_hover
-                                    }
-                                    .into(),
-                                ),
-                                text_color: colors.dialog_content_text,
-                                border: Border {
-                                    color: if chosen {
-                                        colors.focus
-                                    } else {
-                                        Color::TRANSPARENT
-                                    },
-                                    width: 1.0,
-                                    radius: 4.0.into(),
-                                },
-                                ..button::Style::default()
-                            }
-                        }),
-                    );
-                }
-                themes.into()
+                .spacing(8)
+                .into()
             }
             SettingsTab::About => about(colors).into(),
         };
 
         let footer = row![
             ui_style::secondary_button(tr("Reset to Defaults"))
-                .on_press(send(SettingsAction::Reset)),
+                .on_press(send(SettingsAction::ResetPrompt(true))),
             horizontal_space(),
             ui_style::secondary_button(tr("Cancel")).on_press(send(SettingsAction::Cancel)),
             ui_style::primary_button(tr("Save")).on_press(send(SettingsAction::Save)),
@@ -295,47 +252,30 @@ impl Studio {
         .spacing(8)
         .align_y(iced::Alignment::Center);
 
-        let card = container(
-            column![
-                row![
-                    text(tr("Settings")).size(15).font(crate::fonts::SEMIBOLD),
-                    horizontal_space(),
-                    button(text("×").size(14))
-                        .on_press(send(SettingsAction::Cancel))
-                        .style(ui_style::tool)
-                        .padding([1, 8]),
-                ]
-                .align_y(iced::Alignment::Center),
-                row![
-                    sidebar,
-                    container(content).padding([4, 18]).width(Fill).height(Fill)
-                ]
-                .height(Fill),
-                footer,
-            ]
-            .spacing(14),
-        )
-        .width(640)
-        .height(460)
-        .padding(18)
-        .style(|theme| {
-            let colors = ui_theme::colors(theme);
-            container::Style::default()
-                .background(colors.dialog_bg)
-                .color(colors.dialog_content_text)
-                .border(Border {
-                    color: colors.dialog_border,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                })
-        });
-
-        Some(opaque(
-            mouse_area(center(opaque(card)).style(|theme| {
-                container::Style::default().background(ui_theme::colors(theme).dialog_overlay)
-            }))
-            .on_press(send(SettingsAction::Cancel)),
-        ))
+        let modal = openaec_ui::widgets::settings_modal(
+            tr("Settings"),
+            sidebar.into(),
+            content,
+            footer.into(),
+            send(SettingsAction::Cancel),
+            self.ui_theme.shared(),
+        );
+        if dialog.reset_confirm {
+            Some(stack![
+                modal,
+                openaec_ui::widgets::settings_reset_confirmation(
+                    tr("Reset to Defaults"),
+                    tr("Are you sure you want to reset all settings to their default values?"),
+                    tr("Cancel"),
+                    tr("Reset to Defaults"),
+                    send(SettingsAction::ResetPrompt(false)),
+                    send(SettingsAction::Reset),
+                    self.ui_theme.shared(),
+                ),
+            ].width(Fill).height(Fill).into())
+        } else {
+            Some(modal)
+        }
     }
 }
 
@@ -392,5 +332,43 @@ mod tests {
         studio.settings_action(SettingsAction::Cancel);
         assert_eq!(i18n::choice(), dutch);
         assert_eq!(tr("Cancel"), "Annuleren");
+    }
+
+    #[test]
+    fn theme_menu_opens_selects_and_closes_without_committing() {
+        let mut studio = Studio::default();
+        let original = studio.ui_theme;
+        let next = UiTheme::ALL.into_iter().find(|theme| *theme != original).unwrap();
+        studio.settings_action(SettingsAction::Open);
+        studio.settings_action(SettingsAction::Tab(SettingsTab::Appearance));
+        studio.settings_action(SettingsAction::ThemeMenu(true));
+        assert!(studio.settings.as_ref().unwrap().theme_menu_open);
+        studio.settings_action(SettingsAction::Theme(next));
+        assert_eq!(studio.ui_theme, next);
+        assert!(!studio.settings.as_ref().unwrap().theme_menu_open);
+        studio.settings_action(SettingsAction::Cancel);
+        assert_eq!(studio.ui_theme, original);
+    }
+
+    #[test]
+    fn reset_confirmation_stays_above_settings_and_cancel_restores_preview() {
+        let mut studio = Studio::default();
+        studio.ui_theme = UiTheme::Forge;
+        studio.settings_action(SettingsAction::Open);
+        studio.settings_action(SettingsAction::Reset);
+        assert_eq!(studio.ui_theme, UiTheme::Forge);
+        studio.settings_action(SettingsAction::ThemeMenu(true));
+        studio.settings_action(SettingsAction::ResetPrompt(true));
+        assert!(studio.settings.as_ref().unwrap().reset_confirm);
+        assert!(!studio.settings.as_ref().unwrap().theme_menu_open);
+        assert!(studio.settings_view().is_some());
+        studio.settings_action(SettingsAction::Escape);
+        assert!(studio.settings.is_some());
+        assert!(!studio.settings.as_ref().unwrap().reset_confirm);
+        studio.settings_action(SettingsAction::ResetPrompt(true));
+        studio.settings_action(SettingsAction::Reset);
+        assert_eq!(studio.ui_theme, UiTheme::Light);
+        studio.settings_action(SettingsAction::Cancel);
+        assert_eq!(studio.ui_theme, UiTheme::Forge);
     }
 }

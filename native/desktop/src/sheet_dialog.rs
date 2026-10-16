@@ -7,16 +7,14 @@
 
 use std::fmt;
 
-use iced::widget::{
-    button, center, column, container, horizontal_space, mouse_area, opaque, row, text,
-};
-use iced::{Border, Element, Task};
+use iced::widget::{button, column, container, horizontal_space, row, text};
+use iced::{Element, Task};
 use pointcloud_core::{DrawingView, OrientedBox};
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::{key, tr};
 use crate::ui_style;
-use crate::{combined_bounds, ui_theme, Message, Studio};
+use crate::{combined_bounds, Message, Studio};
 
 /// The cut of a plan lies this far above the floor of the box it starts
 /// from.
@@ -619,50 +617,23 @@ impl Studio {
             ]
             .align_y(iced::Alignment::Center),
         );
-        let card = container(
-            column![
-                row![
-                    text(tr("Create 2D plan / elevation / section"))
-                        .size(15)
-                        .font(crate::fonts::SEMIBOLD),
-                    horizontal_space(),
-                    button(text("×").size(14))
-                        .on_press(send(SheetAction::Close))
-                        .style(ui_style::tool)
-                        .padding([1, 8]),
-                ]
-                .align_y(iced::Alignment::Center),
-                form,
-                row![
-                    horizontal_space(),
-                    ui_style::secondary_button(tr("Cancel")).on_press(send(SheetAction::Close)),
-                    ui_style::primary_button(tr("Create")).on_press_maybe(
-                        (!self.clouds.is_empty()).then_some(send(SheetAction::Create))
-                    ),
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
-            ]
-            .spacing(18),
-        )
-        .width(480)
-        .padding(18)
-        .style(|theme| {
-            let colors = ui_theme::colors(theme);
-            container::Style::default()
-                .background(colors.dialog_bg)
-                .color(colors.dialog_content_text)
-                .border(Border {
-                    color: colors.dialog_border,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                })
-        });
-        Some(opaque(
-            mouse_area(center(opaque(card)).style(|theme| {
-                container::Style::default().background(ui_theme::colors(theme).dialog_overlay)
-            }))
-            .on_press(send(SheetAction::Close)),
+        let body = container(form).padding(18).width(iced::Fill).into();
+        let footer = row![
+            horizontal_space(),
+            ui_style::secondary_button(tr("Cancel")).on_press(send(SheetAction::Close)),
+            ui_style::primary_button(tr("Create"))
+                .on_press_maybe((!self.clouds.is_empty()).then_some(send(SheetAction::Create))),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center)
+        .into();
+        Some(openaec_ui::widgets::dialog_modal(
+            tr("Create 2D plan / elevation / section"),
+            body,
+            footer,
+            send(SheetAction::Close),
+            480.0,
+            self.ui_theme.shared(),
         ))
     }
 }

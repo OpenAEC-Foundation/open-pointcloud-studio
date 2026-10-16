@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use iced::Size;
+use iced::{Background, Color, Size};
 use pointcloud_core::{Drawing2d, DrawingUnits};
 use serde_json::Value;
 
@@ -198,7 +198,7 @@ fn the_strip_scrolls_to_the_start_of_a_whole_tab() {
 }
 
 #[test]
-fn the_x_of_the_active_tab_reads_on_the_sheet_and_on_the_scene_in_every_theme() {
+fn the_x_of_the_active_tab_reads_on_the_shared_style_in_every_theme() {
     // The contrast of two colours, as WCAG works it out.
     fn luminance(color: Color) -> f32 {
         let channel = |value: f32| {
@@ -215,21 +215,41 @@ fn the_x_of_the_active_tab_reads_on_the_sheet_and_on_the_scene_in_every_theme() 
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
     for theme in crate::ui_theme::UiTheme::ALL {
-        let iced = theme.iced();
-        for drawing in [true, false] {
-            let surface = active_surface(theme, drawing);
-            for status in [button::Status::Active, button::Status::Hovered] {
-                let style = close_style(&iced, Some(surface), status);
-                let behind = match style.background {
-                    Some(Background::Color(color)) => mixed(color, surface.0, color.a),
-                    _ => surface.0,
-                };
-                let ratio = contrast(style.text_color, behind);
-                assert!(
-                    ratio >= 4.5,
-                    "{theme:?} drawing {drawing} {status:?}: {ratio:.2}"
-                );
-            }
+        let shared = theme.shared();
+        let tab = openaec_ui::widgets::document_tab_style(shared, true, button::Status::Active);
+        let Background::Color(tab_background) = tab.background.unwrap() else {
+            panic!("document tabs use a flat color");
+        };
+        for status in [button::Status::Active, button::Status::Hovered] {
+            let style = openaec_ui::widgets::document_close_style(shared, true, status);
+            let behind = match style.background {
+                Some(Background::Color(color)) => color,
+                _ => tab_background,
+            };
+            let ratio = contrast(style.text_color, behind);
+            assert!(ratio >= 4.5, "{theme:?} {status:?}: {ratio:.2}");
+        }
+    }
+}
+
+#[test]
+fn active_document_tab_has_the_style_book_transparent_bottom_edge() {
+    // DocumentBar.css uses a two-pixel transparent lower border. The shared
+    // tab helper covers Iced's uniform lower rule with the document surface.
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+    let (mut studio, _directory) = studio_with_scan();
+    let _ = studio.update(Message::Views(ViewAction::Save));
+    let plan = made_drawing(&mut studio, "Ground floor", 4.0);
+    let roof = made_drawing(&mut studio, "Roof", 8.0);
+    let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(plan)));
+    let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(roof)));
+    for theme in [crate::ui_theme::UiTheme::Light, crate::ui_theme::UiTheme::Forge] {
+        studio.ui_theme = theme;
+        let picture = crate::test_render::render_window(&studio, Size::new(1280.0, 760.0));
+        let background = theme.colors().docbar_bg;
+        assert!(!picture.is(330, 180, background), "{} active tab body", theme.key());
+        for y in [181, 182] {
+            assert!(picture.is(330, y, background), "{} transparent edge y={y}: {:?}", theme.key(), picture.rgb(330,y));
         }
     }
 }
@@ -297,6 +317,29 @@ fn names(studio: &Studio) -> Vec<String> {
         .iter()
         .map(|tab| studio.tab_name(tab))
         .collect()
+}
+
+#[test]
+#[ignore = "regenerate native document-tab review images on demand"]
+fn export_shared_document_tab_previews() {
+    let _language = crate::i18n::TestLanguage::hold(crate::i18n::Language::English);
+    let (mut studio, _directory) = studio_with_scan();
+    let _ = studio.update(Message::Views(ViewAction::Save));
+    let plan = made_drawing(&mut studio, "Ground floor", 4.0);
+    let roof = made_drawing(&mut studio, "Roof", 8.0);
+    let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(plan)));
+    let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(roof)));
+    assert_eq!(studio.listed_tabs().len(), 4);
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../design");
+    std::fs::create_dir_all(&folder).unwrap();
+    for (theme, name) in [
+        (crate::ui_theme::UiTheme::Light, "light"),
+        (crate::ui_theme::UiTheme::Forge, "forge"),
+    ] {
+        studio.ui_theme = theme;
+        crate::test_render::render_window(&studio, Size::new(1280.0, 760.0))
+            .save_png(&folder.join(format!("pointcloud-document-tabs-{name}.png")));
+    }
 }
 
 #[test]
@@ -373,8 +416,9 @@ fn what_views_shows_opens_a_tab_and_a_click_on_a_tab_shows_it_again() {
     studio.viewport_size = Size::new(1400.0, 800.0);
     let wide = studio.strip_layout();
     assert_eq!(wide.fitted, names(&studio), "every name as it is");
-    // Too narrow: the names shrink and the strip scrolls to the tab shown.
-    studio.viewport_size = Size::new(260.0, 300.0);
+    // The document strip spans the whole window; shrink that width to test
+    // truncation rather than only narrowing the central 3D viewport.
+    studio.window_size = Some(Size::new(380.0, 300.0));
     let narrow = studio.strip_layout();
     assert!(narrow.fitted.iter().any(|name| name.ends_with('…')));
     assert!(studio.scroll_to_shown_tab().is_some());

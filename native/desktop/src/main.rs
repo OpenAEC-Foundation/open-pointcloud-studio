@@ -2982,7 +2982,7 @@ impl Studio {
         } else if self.window_size.is_some_and(|size| size.width >= 1500.0) {
             300.0
         } else {
-            270.0
+            openaec_ui::model::metrics::PANEL_DEFAULT as f32
         }
     }
 
@@ -8981,7 +8981,7 @@ impl Studio {
                     return Task::none();
                 }
                 if self.settings.is_some() {
-                    self.settings_action(settings_dialog::SettingsAction::Cancel);
+                    self.settings_action(settings_dialog::SettingsAction::Escape);
                     return Task::none();
                 }
                 if self.extension_host.dialog.is_some() {
@@ -10074,22 +10074,24 @@ impl Studio {
         }
     }
 
-    fn ribbon(&self) -> Element<'_, Message> {
+    fn ribbon_sections(
+        &self,
+    ) -> (Element<'_, Message>, Element<'_, Message>, Option<Element<'_, Message>>) {
         let active_tab = self.ribbon_tab;
         let compact = self.window_size.is_some_and(|size| size.width < 930.0);
-        let file_button = button(
+        let file_button = openaec_ui::widgets::ribbon_tab(
             row![
-                text(i18n::tr("File")).size(16).font(fonts::MEDIUM),
-                text("⌄").size(15),
+                text(i18n::tr("File")).size(12).font(fonts::SEMIBOLD),
+                text("⌄").size(12),
             ]
-            .spacing(12)
-            .align_y(iced::Alignment::Center),
-        )
-        .on_press(Message::ToggleFile)
-        .style(|theme, status| opencad_ribbon::tab_style(theme, self.file_open, status))
-        .width(if compact { 100 } else { 139 })
-        .height(44)
-        .padding([4, if compact { 9 } else { 19 }]);
+            .spacing(6)
+            .align_y(iced::Alignment::Center)
+            .into(),
+            Message::ToggleFile,
+            if compact { 70.0 } else { 80.0 },
+            openaec_ui::widgets::RibbonTabKind::File,
+            self.ui_theme.shared(),
+        );
         let tab_buttons: Vec<Element<'_, Message>> = RibbonTab::CORE
             .into_iter()
             .map(|tab| {
@@ -10098,35 +10100,41 @@ impl Studio {
                     Message::RibbonTabSelected(tab),
                     !self.file_open && active_tab == tab,
                     compact,
+                    self.ui_theme.shared(),
                 )
             })
             .collect();
         let tabs = row(tab_buttons).spacing(1).width(iced::Length::Shrink);
         let quick_access: Element<'_, Message> = row![
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::OpenFolder, 24.0),
+                title_icon(TitleIcon::OpenFolder, 16.0),
                 "Import point cloud",
                 Some(Message::Open),
+                self.ui_theme.shared(),
             ),
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::OpenRecent, 24.0),
+                title_icon(TitleIcon::OpenRecent, 16.0),
                 "Open scan folder",
                 Some(Message::OpenFolder),
+                self.ui_theme.shared(),
             ),
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::Save, 24.0),
+                title_icon(TitleIcon::Save, 16.0),
                 "Export active point cloud",
                 self.active.map(|_| Message::Export),
+                self.ui_theme.shared(),
             ),
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::Undo, 24.0),
+                title_icon(TitleIcon::Undo, 16.0),
                 "Undo",
                 (!self.undo_deletions.is_empty()).then_some(Message::UndoDelete),
+                self.ui_theme.shared(),
             ),
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::Redo, 24.0),
+                title_icon(TitleIcon::Redo, 16.0),
                 "Redo",
                 (!self.redo_deletions.is_empty()).then_some(Message::RedoDelete),
+                self.ui_theme.shared(),
             ),
         ]
         .spacing(0)
@@ -10136,58 +10144,49 @@ impl Studio {
         } else {
             quick_access
         };
-        let settings_content: Element<'_, Message> = if compact {
-            title_icon(TitleIcon::Settings, 22.0)
-        } else {
-            row![
-                title_icon(TitleIcon::Settings, 22.0),
-                text(i18n::tr("Settings")).size(13)
-            ]
-            .spacing(7)
-            .align_y(iced::Alignment::Center)
-            .into()
-        };
-        let settings_button = button(settings_content)
-            .on_press(Message::Settings(settings_dialog::SettingsAction::Open))
-            .style(|theme, status| opencad_ribbon::tab_style(theme, false, status))
-            .width(if compact { 42 } else { 132 })
-            .height(42)
-            .padding([3, 8]);
+        let settings_button = opencad_ribbon::quick_access_btn(
+            title_icon(TitleIcon::Settings, 16.0),
+            "Settings",
+            Some(Message::Settings(settings_dialog::SettingsAction::Open)),
+            self.ui_theme.shared(),
+        );
         let logo = svg(svg::Handle::from_memory(
             include_bytes!("../../assets/icons/logo.svg").as_slice(),
         ))
-        .width(24)
-        .height(24);
-        let divider = || {
-            container(text(""))
-                .width(1)
-                .height(25)
-                .style(|_| container::Style::default().background(Color::from_rgb8(105, 105, 112)))
-        };
-        let top_strip = container(
+        .width(18)
+        .height(18);
+        let title_strip = container(
             row![
                 container(logo)
-                    .width(if compact { 34 } else { 50 })
-                    .align_x(iced::Alignment::Center),
-                file_button,
-                divider(),
-                iced::widget::Space::with_width(if compact { 7 } else { 19 }),
-                tabs,
-                iced::widget::horizontal_space(),
-                quick_access,
-                divider(),
-                settings_button
+                    .width(iced::Length::FillPortion(1))
+                    .align_x(iced::Alignment::Start),
+                container(
+                    text("Open Pointcloud Studio")
+                        .font(fonts::MEDIUM)
+                        .size(12)
+                        .color(self.ui_theme.colors().accent),
+                )
+                .width(iced::Length::FillPortion(1))
+                .center_x(Fill),
+                container(row![quick_access, settings_button].spacing(0))
+                    .width(iced::Length::FillPortion(1))
+                    .align_x(iced::Alignment::End),
             ]
             .width(Fill)
             .align_y(iced::Alignment::Center)
             .spacing(0)
-            .padding([0, 2]),
+            .padding([0, 8]),
         )
         .width(Fill)
-        .height(48)
-        .style(|_| container::Style::default().background(Color::from_rgb8(54, 54, 62)));
+        .height(openaec_ui::model::metrics::TITLE)
+        .style(|theme| container::Style::default()
+            .background(ui_theme::colors(theme).bg_lighter)
+            .color(ui_theme::colors(theme).text));
+        let tab_strip = openaec_ui::widgets::ribbon_tab_strip(
+            row![file_button, tabs].spacing(2).into(), self.ui_theme.shared(),
+        );
         if self.file_open {
-            return container(top_strip).width(Fill).style(ribbon_style).into();
+            return (title_strip.into(), tab_strip.into(), None);
         }
 
         let open = self.ribbon_panel_open;
@@ -10197,22 +10196,19 @@ impl Studio {
                 .padding([0, 4])
                 .width(Fill)
                 .height(opencad_ribbon::TOOL_BAR_H)
+                .style(ribbon_style)
                 .into();
-        container(
-            column![
-                top_strip,
-                container(text(""))
-                    .width(Fill)
-                    .height(1)
-                    .style(|theme| container::Style::default()
-                        .background(ui_theme::colors(theme).border_subtle)),
-                tool_strip,
-            ]
-            .spacing(0),
-        )
-        .width(Fill)
-        .style(ribbon_style)
-        .into()
+        (title_strip.into(), tab_strip.into(), Some(tool_strip))
+    }
+
+    #[cfg(test)]
+    fn ribbon(&self) -> Element<'_, Message> {
+        let (title, tabs, tools) = self.ribbon_sections();
+        let mut bands = column![title, tabs].spacing(0);
+        if let Some(tools) = tools {
+            bands = bands.push(tools);
+        }
+        bands.width(Fill).into()
     }
 
     /// The view-cube dropdown replaces the former View ribbon.
@@ -10376,13 +10372,13 @@ impl Studio {
                 id,
                 title,
                 icon_svg(icon, 22.0),
-                opencad_ribbon::render_reference_group(title, width, tools),
+                opencad_ribbon::render_reference_group(self.ui_theme.shared(), title, width, tools),
                 open == Some(id),
             )
         };
         let big = |icon, caption, tooltip, message, on, enabled, width| {
             reference_action(
-                icon_svg(icon, 47.0),
+                icon_svg(icon, 36.0),
                 caption,
                 tooltip,
                 message,
@@ -10697,7 +10693,7 @@ impl Studio {
                 58.0
             ),
             reference_icon_action(
-                icon_svg(ToolIcon::Fit, 23.0),
+                icon_svg(ToolIcon::Update, 23.0),
                 "Refresh LOD",
                 Message::RefreshLod,
                 indexed
@@ -10975,15 +10971,15 @@ impl Studio {
 
     fn window_view(&self) -> Element<'_, Message> {
         if self.file_open {
-            return self.with_dialogs(
-                column![
-                    self.ribbon(),
-                    self.file_view(),
-                    self.status_bar(self.status.clone()),
-                ]
-                .height(Fill)
-                .into(),
-            );
+            let (titlebar, tabs, ribbon) = self.ribbon_sections();
+            return self.with_dialogs(openaec_ui::frame::frame(openaec_ui::frame::FrameSlots {
+                titlebar,
+                tabs,
+                ribbon,
+                documents: None,
+                content: self.file_view(),
+                status: self.status_bar(self.status.clone()),
+            }));
         }
         let sheet_canvas = self.layout_canvas();
         let model_visible = sheet_canvas.is_none() && !self.drawing_view.shown;
@@ -11074,19 +11070,19 @@ impl Studio {
             .width(102)
             .height(26)
             .padding([3, 10]);
-            let controls = if self.view_controls_open {
-                Some(self.view_controls_panel())
-            } else {
-                None
-            };
-            let mut items = column![
+            let anchor = container(toggle).width(315).align_x(iced::Alignment::End);
+            let controls = openaec_ui::widgets::popover_aligned(
+                anchor.into(),
+                self.view_controls_panel(),
+                self.view_controls_open,
+                Message::ToggleViewControls,
+                true,
+            );
+            let items = column![
                 iced::widget::Space::with_height(151),
-                container(toggle).width(315).align_x(iced::Alignment::End)
+                controls,
             ]
             .spacing(2);
-            if let Some(controls) = controls {
-                items = items.push(controls);
-            }
             canvas.push(
                 container(items)
                     .width(Fill)
@@ -11109,9 +11105,7 @@ impl Studio {
             display_name(&entry.cloud.path)
         });
         let mut properties = column![
-            container(text(i18n::tr("Properties")).size(12).font(fonts::SEMIBOLD))
-                .padding([5, 8])
-                .width(Fill),
+            openaec_ui::widgets::panel_header(i18n::tr("Properties"), self.ui_theme.shared()),
             container(text(filename).size(11))
                 .padding([5, 8])
                 .width(Fill)
@@ -11422,48 +11416,28 @@ impl Studio {
             properties = properties.push(opencad_properties::section_header("Section box"));
             for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
                 properties = properties
-                    .push(
-                        container(
-                            row![
-                                text(format!(
-                                    "{label} min {:.0}%",
-                                    self.section_min_percent[axis]
-                                ))
-                                .size(10)
-                                .width(78),
-                                ui_style::slider(
-                                    0.0..=100.0,
-                                    self.section_min_percent[axis] as f32,
-                                    move |value| { Message::SectionMin(axis, value) }
-                                )
-                                .width(156),
-                            ]
-                            .spacing(6)
-                            .align_y(iced::Alignment::Center),
+                    .push(openaec_ui::widgets::property_grid_control_with(
+                        format!("{label} min {:.0}%", self.section_min_percent[axis]),
+                        ui_style::slider(
+                            0.0..=100.0,
+                            self.section_min_percent[axis] as f32,
+                            move |value| Message::SectionMin(axis, value),
                         )
-                        .padding([2, 8]),
-                    )
-                    .push(
-                        container(
-                            row![
-                                text(format!(
-                                    "{label} max {:.0}%",
-                                    self.section_max_percent[axis]
-                                ))
-                                .size(10)
-                                .width(78),
-                                ui_style::slider(
-                                    0.0..=100.0,
-                                    self.section_max_percent[axis] as f32,
-                                    move |value| { Message::SectionMax(axis, value) }
-                                )
-                                .width(156),
-                            ]
-                            .spacing(6)
-                            .align_y(iced::Alignment::Center),
+                        .width(Fill)
+                        .into(),
+                        ui_theme::shared_theme,
+                    ))
+                    .push(openaec_ui::widgets::property_grid_control_with(
+                        format!("{label} max {:.0}%", self.section_max_percent[axis]),
+                        ui_style::slider(
+                            0.0..=100.0,
+                            self.section_max_percent[axis] as f32,
+                            move |value| Message::SectionMax(axis, value),
                         )
-                        .padding([2, 8]),
-                    );
+                        .width(Fill)
+                        .into(),
+                        ui_theme::shared_theme,
+                    ));
             }
             properties = properties.push(
                 container(text(i18n::tr("XYZ limits · model coordinates")).size(10))
@@ -11571,8 +11545,10 @@ impl Studio {
                                 Message::EyeDomeStrength,
                             )
                             .step(0.1_f32)
-                            .width(155),
-                            text(format!("{:.1}", self.eye_dome_strength)).size(11),
+                            .width(130),
+                            text(format!("{:.1}", self.eye_dome_strength))
+                                .size(11)
+                                .width(28),
                         ]
                         .spacing(5)
                         .align_y(iced::Alignment::Center),
@@ -11586,9 +11562,8 @@ impl Studio {
             properties.into()
         };
 
-        // The tabs of the 3D model and of the views and drawings opened from
-        // VIEWS, with what the main area shows at their right.
-        let mut viewport = column![self.tab_strip()].height(Fill).width(Fill);
+        // View-specific progress and the scene stay within the central area.
+        let mut viewport = column![].height(Fill).width(Fill);
         if let Some(progress) = self.progress_strip() {
             viewport = viewport.push(progress);
         }
@@ -11632,13 +11607,15 @@ impl Studio {
         ]
         .height(Fill);
         let mesh_status = self.mesh_job.as_ref().map(MeshJob::progress_text);
-        let window = column![
-            self.ribbon(),
-            content,
-            self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
-        ]
-        .height(Fill);
-        self.with_dialogs(window.into())
+        let (titlebar, tabs, ribbon) = self.ribbon_sections();
+        self.with_dialogs(openaec_ui::frame::frame(openaec_ui::frame::FrameSlots {
+            titlebar,
+            tabs,
+            ribbon,
+            documents: Some(self.tab_strip()),
+            content: content.into(),
+            status: self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
+        }))
     }
 
     /// The window with the card of the Pointcloud to Drawing wizard or of Mesh
@@ -11728,26 +11705,27 @@ fn ribbon_title_tab(
     message: Message,
     active: bool,
     compact: bool,
+    theme: openaec_ui::Theme,
 ) -> Element<'static, Message> {
     let width = match (compact, label) {
-        (true, "Display") => 100.0,
-        (true, "Extensions") => 120.0,
-        (true, _) => 72.0,
-        (false, "Display") => 118.0,
-        (false, "Extensions") => 145.0,
-        (false, _) => 92.0,
+        (true, "Display") => 82.0,
+        (true, "Extensions") => 100.0,
+        (true, _) => 62.0,
+        (false, "Display") => 94.0,
+        (false, "Extensions") => 118.0,
+        (false, _) => 76.0,
     };
     let label: Element<'static, Message> = if label == "Extensions" {
         row![
-            title_icon(TitleIcon::Extensions, 23.0),
-            text(i18n::tr(label)).size(16).font(fonts::MEDIUM),
+            title_icon(TitleIcon::Extensions, 16.0),
+            text(i18n::tr(label)).size(12).font(fonts::MEDIUM),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center)
         .into()
     } else {
         text(i18n::tr(label))
-            .size(16)
+            .size(12)
             .font(if active {
                 fonts::SEMIBOLD
             } else {
@@ -11757,27 +11735,13 @@ fn ribbon_title_tab(
             .align_x(iced::Alignment::Center)
             .into()
     };
-    column![
-        iced::widget::Space::with_height(7),
-        button(container(label).width(Fill).center_x(Fill))
-            .on_press(message)
-            .style(move |theme, status| opencad_ribbon::tab_style(theme, active, status))
-            .width(Fill)
-            .height(37)
-            .padding([5, 6]),
-        container(iced::widget::Space::with_height(4))
-            .width(Fill)
-            .style(move |theme| {
-                container::Style::default().background(if active {
-                    ui_theme::colors(theme).accent
-                } else {
-                    Color::TRANSPARENT
-                })
-            }),
-    ]
-    .spacing(0)
-    .width(iced::Length::Fixed(width))
-    .into()
+    openaec_ui::widgets::ribbon_tab(
+        label,
+        message,
+        width,
+        openaec_ui::widgets::RibbonTabKind::Regular { active },
+        theme,
+    )
 }
 
 enum ReferenceActionSize {
@@ -11794,11 +11758,11 @@ fn reference_action(
     size: ReferenceActionSize,
 ) -> Element<'static, Message> {
     let ReferenceActionSize::Large(width) = size;
-    let icon_size = 51.0;
+    let icon_size = 36.0;
     let face = column![
         container(icon)
             .width(Fill)
-            .height(icon_size + 7.0)
+            .height(icon_size + 4.0)
             .center(Fill),
         text(i18n::tr(caption))
             .size(11)
@@ -11812,7 +11776,7 @@ fn reference_action(
             .on_press_maybe(enabled.then_some(message))
             .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
             .width(width)
-            .height(78.0)
+            .height(60.0)
             .padding([2, 1]),
         i18n::tr(tooltip),
     )
@@ -11839,8 +11803,8 @@ fn reference_icon_action_state(
         button(container(icon).width(Fill).height(Fill).center(Fill))
             .on_press_maybe(enabled.then_some(message))
             .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-            .width(42)
-            .height(36)
+            .width(34)
+            .height(32)
             .padding(1),
         i18n::tr(tooltip),
     )
@@ -11883,151 +11847,22 @@ enum TitleIcon {
 }
 
 fn title_icon(kind: TitleIcon, size: f32) -> Element<'static, Message> {
-    Canvas::new(TitleGlyph(kind))
+    use openaec_ui::icons::Icon;
+    let canonical = match kind {
+        TitleIcon::Extensions => Icon::Extensions,
+        TitleIcon::Settings => Icon::Settings,
+        TitleIcon::OpenFolder | TitleIcon::OpenRecent => Icon::Open,
+        TitleIcon::Save => Icon::Save,
+        TitleIcon::Undo => Icon::Undo,
+        TitleIcon::Redo => Icon::Redo,
+    };
+    svg(svg::Handle::from_memory(canonical.bytes()))
         .width(size)
         .height(size)
+        .style(|theme, _| svg::Style {
+            color: Some(ui_theme::colors(theme).accent),
+        })
         .into()
-}
-
-struct TitleGlyph(TitleIcon);
-
-impl canvas::Program<Message> for TitleGlyph {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        frame.scale(bounds.width.min(bounds.height) / 24.0);
-        let white = Color::from_rgb8(250, 250, 249);
-        let amber = Color::from_rgb8(217, 119, 6);
-        let stroke = canvas::Stroke::default().with_color(white).with_width(1.8);
-        let accent = canvas::Stroke::default().with_color(amber).with_width(1.8);
-        let line = |points: &[[f32; 2]]| {
-            canvas::Path::new(|path| {
-                path.move_to(UiPoint::new(points[0][0], points[0][1]));
-                for point in &points[1..] {
-                    path.line_to(UiPoint::new(point[0], point[1]));
-                }
-            })
-        };
-        match self.0 {
-            TitleIcon::Extensions => {
-                frame.stroke(
-                    &line(&[
-                        [3.0, 5.0],
-                        [8.0, 5.0],
-                        [8.0, 3.0],
-                        [10.0, 2.0],
-                        [12.0, 3.0],
-                        [12.0, 5.0],
-                        [18.0, 5.0],
-                        [18.0, 10.0],
-                    ]),
-                    stroke,
-                );
-                frame.stroke(&canvas::Path::circle(UiPoint::new(19.0, 12.0), 2.0), stroke);
-                frame.stroke(
-                    &line(&[
-                        [18.0, 14.0],
-                        [18.0, 19.0],
-                        [13.0, 19.0],
-                        [13.0, 17.0],
-                        [11.0, 16.0],
-                        [9.0, 17.0],
-                        [9.0, 19.0],
-                        [3.0, 19.0],
-                        [3.0, 13.0],
-                        [5.0, 13.0],
-                        [6.0, 11.0],
-                        [5.0, 9.0],
-                        [3.0, 9.0],
-                        [3.0, 5.0],
-                    ]),
-                    stroke,
-                );
-            }
-            TitleIcon::Settings => {
-                frame.stroke(&canvas::Path::circle(UiPoint::new(12.0, 12.0), 7.0), stroke);
-                frame.stroke(&canvas::Path::circle(UiPoint::new(12.0, 12.0), 2.5), stroke);
-                for points in [
-                    [[12.0, 2.0], [12.0, 5.0]],
-                    [[12.0, 19.0], [12.0, 22.0]],
-                    [[2.0, 12.0], [5.0, 12.0]],
-                    [[19.0, 12.0], [22.0, 12.0]],
-                    [[5.0, 5.0], [7.0, 7.0]],
-                    [[17.0, 17.0], [19.0, 19.0]],
-                    [[5.0, 19.0], [7.0, 17.0]],
-                    [[17.0, 7.0], [19.0, 5.0]],
-                ] {
-                    frame.stroke(&line(&points), stroke);
-                }
-            }
-            TitleIcon::OpenFolder | TitleIcon::OpenRecent => {
-                frame.stroke(
-                    &line(&[
-                        [2.0, 7.0],
-                        [2.0, 5.0],
-                        [9.0, 5.0],
-                        [11.0, 7.0],
-                        [21.0, 7.0],
-                        [21.0, 18.0],
-                        [3.0, 18.0],
-                        [2.0, 7.0],
-                    ]),
-                    stroke,
-                );
-                frame.stroke(&line(&[[3.0, 11.0], [21.0, 11.0]]), stroke);
-                if matches!(self.0, TitleIcon::OpenRecent) {
-                    frame.stroke(&line(&[[13.0, 14.0], [18.0, 14.0]]), accent);
-                }
-            }
-            TitleIcon::Save => {
-                frame.stroke(
-                    &line(&[
-                        [4.0, 3.0],
-                        [18.0, 3.0],
-                        [21.0, 6.0],
-                        [21.0, 21.0],
-                        [3.0, 21.0],
-                        [3.0, 3.0],
-                    ]),
-                    stroke,
-                );
-                frame.stroke(
-                    &line(&[[7.0, 3.0], [7.0, 10.0], [17.0, 10.0], [17.0, 3.0]]),
-                    stroke,
-                );
-                frame.stroke(
-                    &line(&[[7.0, 21.0], [7.0, 14.0], [17.0, 14.0], [17.0, 21.0]]),
-                    stroke,
-                );
-            }
-            TitleIcon::Undo | TitleIcon::Redo => {
-                let mirror = matches!(self.0, TitleIcon::Redo);
-                let x = |value: f32| if mirror { 24.0 - value } else { value };
-                frame.stroke(
-                    &line(&[[x(8.0), 8.0], [x(4.0), 12.0], [x(8.0), 16.0]]),
-                    stroke,
-                );
-                frame.stroke(
-                    &line(&[
-                        [x(4.0), 12.0],
-                        [x(15.0), 12.0],
-                        [x(19.0), 15.0],
-                        [x(19.0), 19.0],
-                    ]),
-                    stroke,
-                );
-            }
-        }
-        vec![frame.into_geometry()]
-    }
 }
 
 fn icon_tool_button_when(
@@ -12058,7 +11893,7 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::MeshRequest(_) => ToolIcon::Mesh,
         Message::ToggleBagPanel => ToolIcon::Building,
         Message::BuildIndex => ToolIcon::Cloud,
-        Message::LoadDetail | Message::RefreshLod => ToolIcon::Fit,
+        Message::LoadDetail | Message::RefreshLod => ToolIcon::Update,
         Message::RemoveSelection | Message::DeleteSelection => ToolIcon::Clear,
         Message::CancelSelection
         | Message::CancelScale
@@ -12348,22 +12183,76 @@ enum ToolIcon {
     Leader,
 }
 
-// SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
+/// Commands whose meaning has been reviewed against the shared icon set.
+fn canonical_icon(icon: ToolIcon) -> Option<openaec_ui::icons::Icon> {
+    use openaec_ui::icons::Icon;
+    match icon {
+        ToolIcon::Open => Some(Icon::Open),
+        ToolIcon::Export => Some(Icon::Export),
+        ToolIcon::Fit => Some(Icon::Fit),
+        ToolIcon::FitSelection => Some(Icon::FitSelection),
+        ToolIcon::ZoomIn => Some(Icon::ZoomIn),
+        ToolIcon::ZoomOut => Some(Icon::ZoomOut),
+        ToolIcon::Pan => Some(Icon::Pan),
+        ToolIcon::Undo => Some(Icon::Undo),
+        ToolIcon::Redo => Some(Icon::Redo),
+        ToolIcon::Save => Some(Icon::Save),
+        ToolIcon::Duplicate => Some(Icon::Duplicate),
+        ToolIcon::Rename => Some(Icon::Rename),
+        ToolIcon::ChevronOpen => Some(Icon::DisclosureExpanded),
+        ToolIcon::ChevronClosed => Some(Icon::DisclosureCollapsed),
+        _ => None,
+    }
+}
+
+fn domain_icon(icon: ToolIcon) -> Option<openaec_ui::icons::DomainIcon> {
+    use openaec_ui::icons::DomainIcon;
+    match icon {
+        ToolIcon::Building => Some(DomainIcon::PointcloudBagPanel),
+        ToolIcon::Shading => Some(DomainIcon::PointcloudEyeDome),
+        ToolIcon::Dimension => Some(DomainIcon::DrawingDimension),
+        ToolIcon::Note => Some(DomainIcon::DrawingNote),
+        ToolIcon::Move => Some(DomainIcon::TransformMove),
+        ToolIcon::Line => Some(DomainIcon::DrawingLine),
+        ToolIcon::Text => Some(DomainIcon::DrawingText),
+        ToolIcon::Leader => Some(DomainIcon::DrawingLeader),
+        _ => None,
+    }
+}
+
+// Remaining SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
 fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
+    if let Some(shared) = canonical_icon(icon) {
+        return svg(svg::Handle::from_memory(shared.bytes()))
+            .width(size)
+            .height(size)
+            .style(|theme, _| svg::Style {
+                color: Some(ui_theme::colors(theme).text),
+            })
+            .into();
+    }
+    if let Some(shared) = domain_icon(icon) {
+        return svg(svg::Handle::from_memory(shared.bytes(size.round() as u16)))
+            .width(size)
+            .height(size)
+            .style(|theme, _| svg::Style {
+                color: Some(ui_theme::colors(theme).text),
+            })
+            .into();
+    }
     let bytes: &'static [u8] = match icon {
-        ToolIcon::Open => include_bytes!("../../assets/opencad-icons/folder_open.svg"),
+        ToolIcon::Open | ToolIcon::Export | ToolIcon::Fit | ToolIcon::FitSelection
+        | ToolIcon::ZoomIn | ToolIcon::ZoomOut | ToolIcon::Pan | ToolIcon::Undo
+        | ToolIcon::Redo | ToolIcon::Save | ToolIcon::Duplicate | ToolIcon::Rename
+        | ToolIcon::ChevronOpen | ToolIcon::ChevronClosed => {
+            unreachable!("canonical icons return above")
+        }
         // The scan-folder and section-box icons are drawn for this app in the
         // same palette.
         ToolIcon::OpenFolder => include_bytes!("../../assets/opencad-icons/folder_scans.svg"),
         ToolIcon::SelectionExport => {
             include_bytes!("../../assets/opencad-icons/selection_export.svg")
         }
-        ToolIcon::Export => include_bytes!("../../assets/opencad-icons/file_export.svg"),
-        ToolIcon::Fit => include_bytes!("../../assets/opencad-icons/zoom_ext.svg"),
-        ToolIcon::ZoomIn => include_bytes!("../../assets/opencad-icons/zoom_in.svg"),
-        ToolIcon::ZoomOut => include_bytes!("../../assets/opencad-icons/zoom_out.svg"),
-        ToolIcon::Pan => include_bytes!("../../assets/opencad-icons/pan.svg"),
-        ToolIcon::FitSelection => include_bytes!("../../assets/opencad-icons/fit_selection.svg"),
         ToolIcon::Cloud => include_bytes!("../../assets/opencad-icons/revcloud.svg"),
         ToolIcon::Select => include_bytes!("../../assets/opencad-icons/ribbon_target.svg"),
         ToolIcon::WindowSelect => include_bytes!("../../assets/opencad-icons/select_objects.svg"),
@@ -12375,12 +12264,10 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
             include_bytes!("../../assets/opencad-icons/measure_distance.svg")
         }
         ToolIcon::MeasureArea => include_bytes!("../../assets/opencad-icons/measure_area.svg"),
-        // So are the two annotation icons.
-        ToolIcon::Note => include_bytes!("../../assets/opencad-icons/annotation_note.svg"),
-        ToolIcon::Line => include_bytes!("../../assets/opencad-icons/annotation_line.svg"),
+        // The drawing annotations return from the shared domain-icon branch.
+        ToolIcon::Note => unreachable!("domain icon returns above"),
+        ToolIcon::Line => unreachable!("domain icon returns above"),
         ToolIcon::Clear => include_bytes!("../../assets/opencad-icons/xclip_remove.svg"),
-        ToolIcon::Undo => include_bytes!("../../assets/opencad-icons/undo.svg"),
-        ToolIcon::Redo => include_bytes!("../../assets/opencad-icons/redo.svg"),
         ToolIcon::Camera(CameraPreset::Top | CameraPreset::Bottom) => {
             include_bytes!("../../assets/opencad-icons/view_top.svg")
         }
@@ -12393,13 +12280,11 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Camera(CameraPreset::Isometric) => {
             include_bytes!("../../assets/opencad-icons/view_iso.svg")
         }
-        ToolIcon::Save => include_bytes!("../../assets/opencad-icons/save.svg"),
-        ToolIcon::Move => include_bytes!("../../assets/opencad-icons/move.svg"),
+        ToolIcon::Move => unreachable!("domain icon returns above"),
         ToolIcon::Scale => include_bytes!("../../assets/opencad-icons/scale.svg"),
         ToolIcon::Decimate => include_bytes!("../../assets/opencad-icons/point.svg"),
         ToolIcon::Mesh => include_bytes!("../../assets/opencad-icons/region.svg"),
-        ToolIcon::Building => include_bytes!("../../assets/opencad-icons/solid.svg"),
-        ToolIcon::Shading => include_bytes!("../../assets/opencad-icons/sphere.svg"),
+        ToolIcon::Building | ToolIcon::Shading => unreachable!("domain icons return above"),
         // The section drawing icon is drawn for this app in the same palette.
         ToolIcon::Drawing => include_bytes!("../../assets/opencad-icons/section_drawing.svg"),
         // So is the closed mesh icon.
@@ -12429,24 +12314,27 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::SectionSheet => include_bytes!("../../assets/opencad-icons/browser_section.svg"),
         ToolIcon::DrawingFile => include_bytes!("../../assets/opencad-icons/browser_file.svg"),
         ToolIcon::Bcf => include_bytes!("../../assets/opencad-icons/browser_bcf.svg"),
-        ToolIcon::ChevronOpen => include_bytes!("../../assets/opencad-icons/chevron_open.svg"),
-        ToolIcon::ChevronClosed => include_bytes!("../../assets/opencad-icons/chevron_closed.svg"),
-        ToolIcon::Duplicate => include_bytes!("../../assets/opencad-icons/browser_duplicate.svg"),
-        ToolIcon::Rename => include_bytes!("../../assets/opencad-icons/browser_rename.svg"),
         ToolIcon::Update => include_bytes!("../../assets/opencad-icons/browser_update.svg"),
         ToolIcon::Sheet => include_bytes!("../../assets/opencad-icons/browser_sheet.svg"),
         ToolIcon::Locked => include_bytes!("../../assets/opencad-icons/browser_locked.svg"),
         ToolIcon::Unlocked => include_bytes!("../../assets/opencad-icons/browser_unlocked.svg"),
-        // The annotations of drawings are drawn like those of the views.
-        ToolIcon::Text => include_bytes!("../../assets/opencad-icons/annotation_text.svg"),
-        ToolIcon::Dimension => {
-            include_bytes!("../../assets/opencad-icons/annotation_dimension.svg")
-        }
-        ToolIcon::Leader => include_bytes!("../../assets/opencad-icons/annotation_leader.svg"),
+        // The remaining drawing annotations are drawn like those of the views.
+        ToolIcon::Text => unreachable!("domain icon returns above"),
+        ToolIcon::Dimension => unreachable!("domain icon returns above"),
+        ToolIcon::Leader => unreachable!("domain icon returns above"),
     };
     svg(svg::Handle::from_memory(bytes))
         .width(size)
         .height(size)
+        .style(|theme, _| {
+            let colors = ui_theme::colors(theme);
+            svg::Style {
+                // Older multicolour OpenCAD assets contain fixed dark strokes.
+                // Tint their complete silhouette on dark shells until each
+                // semantic icon has a reviewed, theme-aware vector.
+                color: (colors.bg != openaec_ui::tokens::LIGHT.bg).then_some(colors.text),
+            }
+        })
         .into()
 }
 

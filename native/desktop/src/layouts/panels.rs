@@ -560,36 +560,19 @@ impl Studio {
     }
 }
 
-/// A row of Properties with a field whose text is made here, as
-/// `opencad_properties::property_input` lays it out; `label` is translated.
+/// A translated editable field in the same 28 px property grid as the other
+/// Pointcloud and Style Repo properties.
 fn typed_row<'a>(
     label: &str,
     placeholder: &str,
     value: &str,
     on_input: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let label = container(text(label.to_owned()).size(11).style(|theme| text::Style {
-        color: Some(ui_theme::colors(theme).text_secondary),
-    }))
-    .width(iced::Length::FillPortion(5))
-    .height(26)
-    .align_y(iced::Alignment::Center)
-    .padding([0, 6]);
-    let value = container(ui_style::text_input(placeholder, value).on_input(on_input))
-        .width(iced::Length::FillPortion(6))
-        .height(26)
-        .align_y(iced::Alignment::Center)
-        .padding([0, 5]);
-    container(row![label, value])
-        .height(26)
-        .width(Fill)
-        .style(|theme| container::Style {
-            border: iced::Border {
-                color: ui_theme::colors(theme).border_subtle,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
-            ..container::Style::default()
-        })
-        .into()
+    openaec_ui::widgets::property_grid_control_with(
+        label.to_owned(),
+        ui_style::text_input(placeholder, value)
+            .on_input(on_input)
+            .into(),
+        ui_theme::shared_theme,
+    )
 }
