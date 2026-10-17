@@ -12,9 +12,9 @@ A desktop application for viewing, measuring, editing and converting laser scans
 
 *A 46.6-million-point Matterport lobby scan in the native Rust v0.9.5 interface, with a single Start tab. See the [view controls beneath the view cube](docs/screenshots/view-controls-v095.png) as well.*
 
-[![Watch the Open Pointcloud Studio v0.9.5 feature video](promo/poster.png)](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v0.9.5/open-pointcloud-studio-features.mp4)
+[![Watch the Open Pointcloud Studio feature video](promo/poster.png)](promo/open-pointcloud-studio-features.mp4)
 
-**[Watch the feature video](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v0.9.5/open-pointcloud-studio-features.mp4)** — point selection, the section box, meshing, 2D drawings, E57 station photos and the responsive ribbon in the new white interface.
+**[Watch the feature video](promo/open-pointcloud-studio-features.mp4)** — point selection, the section box, meshing, 2D drawings, E57 station photos, a side-by-side comparison and the responsive ribbon in the white interface.
 
 ## Contents
 
@@ -176,6 +176,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - The classes that occur in the open clouds are listed in the project panel and can be shown or hidden one by one.
 - A view cube, seven camera directions, **Zoom all** and a right-click menu in the scene.
 - Tabs above the scene put the 3D model, opened views and drawings, and E57 photos side by side; Ctrl+Tab steps through them. A photo tab remembers its look while the model keeps its own camera, and the window remembers saved-view and drawing tabs.
+- In an E57 photo, **Compare with 3D** shows the photo and the preceding model camera in two panes with a draggable divider. Use **Stack panes** or **Side by side** beside it to switch the layout. The comparison choice, orientation and divider ratio survive a restart. The photo remains interactive for picking and measuring. The 3D pane has its own orbit, pan, zoom and view-cube controls; its header opens that camera as the full model tab. Free tab dragging, 2 × 2 grids and detached windows are still planned in issue #16.
 - Scanner stations of E57, PCD and PTX scans are shown as markers. Stations with photos are drawn as balls: click one to stand in that station and look around.
 - Panoramas and photos taken along a path in an E57 file are marked along their path. Double-click a mark, or a photo under its scan in the project panel, to stand where it was taken: the photo lies over the points, a **Photo** slider sets how much, `Page Up` and `Page Down` step along the path, and `Esc` returns. Measuring and picking work on the points under the photo.
 - **Colour from photos** gives the points of a scan the colours its photos see them with, for a scan without colours or to replace them: only from photos that see a point unhidden, in the background, with Undo; exports write the new colours.

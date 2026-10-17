@@ -275,6 +275,7 @@
   "LEFT": "LINKS",
   "CUSTOM": "AANGEPAST",
   "ISO CORNER": "ISO-HOEK",
+  "ISO EDGE": "ISO-RAND",
   "SAVED VIEW": "OPGESLAGEN VIEW",
   "TOP RIGHT": "BOVEN RECHTS",
   "TOP LEFT": "BOVEN LINKS",
@@ -1051,5 +1052,8 @@
   "Short edges stay where needed to preserve openings and tolerance.": "Korte randen blijven behouden waar openingen en nauwkeurigheid dat vereisen.",
   "CAD segments": "CAD-segmenten",
   "Contour deviation": "Contourafwijking",
-  "Short edges kept": "Korte randen behouden"
+  "Short edges kept": "Korte randen behouden",
+  "Compare with 3D": "Naast 3D tonen",
+  "Stack panes": "Onder elkaar",
+  "Side by side": "Naast elkaar"
 }

@@ -39,6 +39,7 @@ SCENES = [
     ("plan", "06-plan.png", 3.6, "Maak een 2D-plattegrond", "Lijnen, vullingen en DXF/DWG-lagen"),
     ("section-2d", "07-section-2d.png", 3.3, "Bekijk een verticale doorsnede", "Uit dezelfde E57-scan"),
     ("panorama", "08-panorama.png", 4.0, "Stap de scan in", "Stationfoto's rechtstreeks uit de E57"),
+    ("photo-compare", "14-photo-compare.png", 4.0, "Vergelijk scan en foto", "Echte Manitou E57 · foto © 2012 Calabi Yau Systems LLC"),
     ("responsive", "09-responsive.png", 3.6, "Een ribbon die meeschakelt", "Groepen klappen in op een smal scherm"),
     ("view", "10-view.png", 3.0, "Alles op één plek", "Native Rust · één Start-tab · Weergave onder de view cube"),
     ("outro", None, 2.6, "Open Pointcloud Studio", "Native Rust · E57, LAS en LAZ · 3D en 2D"),
@@ -74,8 +75,8 @@ def render_card(title: str, subtitle: str) -> Image.Image:
 
 def render_scene(source: Path, title: str, subtitle: str) -> Image.Image:
     screenshot = Image.open(source).convert("RGB")
-    if screenshot.height != 900 or screenshot.width not in (920, 1584):
-        raise ValueError(f"Expected a 920×900 or 1584×900 desktop capture: {source}")
+    if screenshot.height != 900 or screenshot.width not in (920, 1440, 1584):
+        raise ValueError(f"Expected a 920×900, 1440×900 or 1584×900 desktop capture: {source}")
     image = Image.new("RGB", SIZE, PAPER)
     scale = min(SCREEN_SIZE[0] / screenshot.width, SCREEN_SIZE[1] / screenshot.height)
     shown_size = (round(screenshot.width * scale), round(screenshot.height * scale))

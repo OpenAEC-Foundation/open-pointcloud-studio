@@ -47,7 +47,7 @@ Via **Bestand → Exporteren** vind je de beschikbare puntcloud-, mesh- en teken
 
 ## Scannerposities en foto's
 
-E57-scans kunnen stations en foto's bevatten. Zet scannerposities zichtbaar, klik op een stationbol om vanuit dat station rond te kijken en klik op een ander station om erheen te gaan. Een losse E57-foto opent in een eigen tabblad naast het 3D-model; de modelcamera blijft bewaard. Tijdens het lopen gebruik je **W/A/S/D** en **Q/E** voor omlaag/omhoog. Met **Escape** keer je terug naar de gewone 3D-weergave. Onder **Kleur uit foto's** kun je scanpunten kleuren met de bijbehorende foto's; controleer de maximale afstand tussen foto en punt voordat je dit uitvoert.
+E57-scans kunnen stations en foto's bevatten. Zet scannerposities zichtbaar, klik op een stationbol om vanuit dat station rond te kijken en klik op een ander station om erheen te gaan. Een losse E57-foto opent in een eigen tabblad; de modelcamera blijft bewaard. Met **Naast 3D tonen** zie je het model en de foto tegelijk. Versleep de scheidingslijn of kies **Onder elkaar** om ze boven elkaar te tonen. De modelhelft heeft een eigen draaibeweging, pan, zoom en kijkkubus. De indeling blijft na een herstart bewaard. Tijdens het lopen gebruik je **W/A/S/D** en **Q/E** voor omlaag/omhoog. Met **Escape** keer je terug naar de gewone 3D-weergave. Onder **Kleur uit foto's** kun je scanpunten kleuren met de bijbehorende foto's; controleer de maximale afstand tussen foto en punt voordat je dit uitvoert.
 
 ## Opgeslagen weergaven en bladen
 

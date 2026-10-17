@@ -2013,6 +2013,11 @@ enum Message {
     PanoramaReady(PathBuf, usize, Result<Arc<PhotoSet>, String>),
     /// The photos of a file that are not those of its stations.
     Photos(file_photos::PhotoAction),
+    TogglePhotoCompare,
+    PhotoSplitRatio(f32),
+    TogglePhotoSplitAxis,
+    PhotoSplitFinished,
+    CompareModel(view_tabs::CompareAction),
     Budget(u32),
     FilterClass(u8, bool),
     SetSectionEnabled(bool),
@@ -2180,6 +2185,9 @@ struct Studio {
     /// The photos of the open files that are not those of their stations,
     /// and the one that is entered.
     photos: file_photos::PhotoTool,
+    photo_compare: bool,
+    photo_split_ratio: f32,
+    photo_split_vertical: bool,
     /// Movement keys held down, indexed by `WalkKey`, and the faster pace.
     walk_keys: [bool; 6],
     walk_fast: bool,
@@ -2386,6 +2394,8 @@ struct CloudEntry {
     auto_index_queued: bool,
     index_building: bool,
     detail_points: Option<Arc<[IndexedPoint]>>,
+    /// Last model detail, retained while a photo or the next model view loads.
+    compare_points: Option<Arc<[IndexedPoint]>>,
     /// Points read inside the section box that `detail_points` does not
     /// hold, drawn beside them; see `section_detail`.
     focus_points: Option<Arc<[IndexedPoint]>>,
@@ -2681,6 +2691,37 @@ impl CloudEntry {
             .map_or(self.cloud.points.len(), |points| points.len())
     }
 
+    fn resident_len(&self) -> usize {
+        self.compare_points.as_ref().map_or_else(
+            || self.cloud.points.len().min(self.cloud.point_ordinals.len()),
+            |points| points.len(),
+        )
+    }
+
+    fn resident_records(&self) -> Box<dyn Iterator<Item = IndexedPoint> + '_> {
+        let transform = self.transform;
+        let records: Box<dyn Iterator<Item = IndexedPoint> + '_> = if let Some(points) =
+            &self.compare_points
+        {
+            Box::new(
+                points
+                    .iter()
+                    .copied()
+                    .map(move |point| transform.record(point)),
+            )
+        } else {
+            Box::new(
+                self.cloud
+                    .points
+                    .iter()
+                    .copied()
+                    .zip(self.cloud.point_ordinals.iter().copied())
+                    .map(move |(point, ordinal)| transform.record(IndexedPoint { point, ordinal })),
+            )
+        };
+        self.painted(records)
+    }
+
     fn view_records(&self) -> Box<dyn Iterator<Item = IndexedPoint> + '_> {
         let transform = self.transform;
         let records: Box<dyn Iterator<Item = IndexedPoint> + '_> = if let Some(detail) =
@@ -2834,6 +2875,9 @@ impl Default for Studio {
             walk_station: None,
             panorama_photos: None,
             photos: file_photos::PhotoTool::default(),
+            photo_compare: settings.photo_compare,
+            photo_split_ratio: settings.photo_split_ratio,
+            photo_split_vertical: settings.photo_split_vertical,
             walk_keys: [false; 6],
             walk_fast: false,
             walk_tick: None,
@@ -3016,6 +3060,9 @@ impl Studio {
             browser_collapsed: self.browser.collapsed().to_vec(),
             view_tabs: self.tabs.kept().0.clone(),
             view_tab: self.tabs.kept().1.clone(),
+            photo_compare: self.photo_compare,
+            photo_split_ratio: self.photo_split_ratio,
+            photo_split_vertical: self.photo_split_vertical,
         }
     }
 
@@ -3142,6 +3189,7 @@ impl Studio {
             picked: false,
             index_building: false,
             detail_points: None,
+            compare_points: None,
             focus_points: None,
         });
         self.import_headers.insert(id, Arc::clone(&header));
@@ -4223,6 +4271,39 @@ impl Studio {
             | ApiCommand::PhotoBlend { .. }
             | ApiCommand::NextPhoto
             | ApiCommand::PreviousPhoto) => self.api_photos(command),
+            ApiCommand::SetPhotoCompare { enabled } => {
+                if enabled && self.shown_photo().is_none() {
+                    (
+                        json!({"ok": false, "error": "enter an E57 photo first"}),
+                        Task::none(),
+                    )
+                } else {
+                    self.photo_compare = enabled;
+                    self.revision += 1;
+                    (
+                        json!({"ok": true, "enabled": enabled}),
+                        self.queue_preferences_save(),
+                    )
+                }
+            }
+            ApiCommand::SetPhotoSplit { ratio, vertical } => {
+                if !ratio.is_finite() || !(0.25..=0.75).contains(&ratio) {
+                    (
+                        json!({"ok": false, "error": "split ratio must be from 0.25 to 0.75"}),
+                        Task::none(),
+                    )
+                } else {
+                    self.photo_split_ratio = ratio;
+                    if let Some(vertical) = vertical {
+                        self.photo_split_vertical = vertical;
+                    }
+                    self.revision += 1;
+                    (
+                        json!({"ok": true, "ratio": ratio, "vertical": self.photo_split_vertical}),
+                        self.queue_preferences_save(),
+                    )
+                }
+            }
             ApiCommand::ZoomAll => {
                 let task = self.update(Message::ResetCamera);
                 (json!({"ok": true, "camera": self.camera_value()}), task)
@@ -5715,6 +5796,7 @@ impl Studio {
                         picked: false,
                         index_building: false,
                         detail_points: None,
+                        compare_points: None,
                         focus_points: None,
                     });
                     self.revision += 1;
@@ -6791,6 +6873,7 @@ impl Studio {
                         picked: false,
                         index_building: false,
                         detail_points: None,
+                        compare_points: None,
                         focus_points: None,
                     });
                     self.revision += 1;
@@ -8941,6 +9024,22 @@ impl Studio {
             Message::Browser(action) => return self.update_browser(action),
             Message::Tabs(action) => return self.update_tabs(action),
             Message::Photos(action) => return self.update_photos(action),
+            Message::TogglePhotoCompare => {
+                self.photo_compare = !self.photo_compare;
+                self.revision += 1;
+                return self.queue_preferences_save();
+            }
+            Message::PhotoSplitRatio(ratio) => {
+                self.photo_split_ratio = ratio.clamp(0.25, 0.75);
+                self.revision += 1;
+            }
+            Message::TogglePhotoSplitAxis => {
+                self.photo_split_vertical = !self.photo_split_vertical;
+                self.revision += 1;
+                return self.queue_preferences_save();
+            }
+            Message::PhotoSplitFinished => return self.queue_preferences_save(),
+            Message::CompareModel(action) => self.update_compare_model(action),
             Message::Sheet(action) => return self.update_sheet_dialog(action),
             Message::ShowContextMenu(point) => self.context_menu = Some(point),
             Message::DismissContextMenu => self.context_menu = None,
@@ -9963,7 +10062,11 @@ impl Studio {
         for (index, points) in details {
             count += points.len();
             if let Some(entry) = self.clouds.get_mut(index) {
-                entry.detail_points = Some(points.into());
+                let points: Arc<[IndexedPoint]> = Arc::from(points);
+                if self.photos.view.is_none() && self.tabs.owner == view_tabs::TabId::Model {
+                    entry.compare_points = Some(Arc::clone(&points));
+                }
+                entry.detail_points = Some(points);
             }
         }
         count
@@ -10863,6 +10966,9 @@ impl Studio {
             shift: self.modifiers.shift(),
             pointer: &self.viewport_pointer,
             photos: &self.photos,
+            photo_visible: true,
+            read_only: false,
+            resident_points: false,
             clean: self.views.capturing(),
         }
     }
@@ -11008,12 +11114,26 @@ impl Studio {
         }
         let sheet_canvas = self.layout_canvas();
         let model_visible = sheet_canvas.is_none() && !self.drawing_view.shown;
+        let compare_model = (self.photo_compare
+            && sheet_canvas.is_none()
+            && !self.drawing_view.shown
+            && self.shown_photo().is_some())
+        .then(|| self.compare_model_viewport(self.point_viewport()))
+        .flatten();
+        let photo_compare = compare_model.is_some();
         let canvas = if let Some(sheet) = sheet_canvas {
             stack![sheet].width(Fill).height(Fill)
         } else if self.drawing_view.shown {
             stack![self.drawing_sheet()].width(Fill).height(Fill)
         } else {
-            let point_view = self.point_viewport();
+            let mut point_view = self.point_viewport();
+            if photo_compare {
+                if self.photo_split_vertical {
+                    point_view.viewport_size.height *= 1.0 - self.photo_split_ratio;
+                } else {
+                    point_view.viewport_size.width *= 1.0 - self.photo_split_ratio;
+                }
+            }
             stack![
                 gpu_viewport::GpuViewport {
                     overlay: point_view
@@ -11026,7 +11146,11 @@ impl Studio {
             .width(Fill)
             .height(Fill)
         };
-        let canvas = if self.walk.is_some() && !self.drawing_view.shown && !self.views.capturing() {
+        let canvas = if self.walk.is_some()
+            && !photo_compare
+            && !self.drawing_view.shown
+            && !self.views.capturing()
+        {
             canvas.push(
                 container(
                     button(text(i18n::tr("Back to 3D view (Esc)")).size(12))
@@ -11618,7 +11742,88 @@ impl Studio {
         if let Some(strip) = self.mesh_to_plans_strip() {
             viewport = viewport.push(strip);
         }
-        viewport = viewport.push(container(canvas).width(Fill).height(Fill));
+        if let Some(mut model_view) = compare_model {
+            if self.photo_split_vertical {
+                model_view.viewport_size.height *= self.photo_split_ratio;
+            } else {
+                model_view.viewport_size.width *= self.photo_split_ratio;
+            }
+            let model_canvas = stack![
+                gpu_viewport::GpuViewport {
+                    overlay: model_view
+                }
+                .widget()
+                .width(Fill)
+                .height(Fill),
+                Canvas::new(model_view).width(Fill).height(Fill),
+            ]
+            .width(Fill)
+            .height(Fill);
+            let photo_name = self
+                .shown_photo()
+                .and_then(|shown| shown.photo.name.as_deref())
+                .map(str::to_owned)
+                .unwrap_or_else(|| i18n::tr("Photo").to_owned());
+            let header = |label: String| {
+                container(text(label).size(11))
+                    .padding([5, 9])
+                    .width(Fill)
+                    .style(|theme| {
+                        container::Style::default().background(ui_theme::colors(theme).bg_lighter)
+                    })
+            };
+            let model_weight = (self.photo_split_ratio * 1000.0).round() as u16;
+            let model = column![
+                button(text(i18n::tr("3D model")).size(11))
+                    .on_press(Message::Tabs(view_tabs::TabAction::Show(
+                        view_tabs::TabId::Model,
+                    )))
+                    .style(ui_style::tool)
+                    .width(Fill),
+                model_canvas,
+            ];
+            let photo = column![header(photo_name), canvas];
+            let panes: Element<'_, Message> = if self.photo_split_vertical {
+                column![
+                    model
+                        .width(Fill)
+                        .height(iced::Length::FillPortion(model_weight)),
+                    photo
+                        .width(Fill)
+                        .height(iced::Length::FillPortion(1000 - model_weight)),
+                ]
+                .width(Fill)
+                .height(Fill)
+                .into()
+            } else {
+                row![
+                    model
+                        .width(iced::Length::FillPortion(model_weight))
+                        .height(Fill),
+                    photo
+                        .width(iced::Length::FillPortion(1000 - model_weight))
+                        .height(Fill),
+                ]
+                .width(Fill)
+                .height(Fill)
+                .into()
+            };
+            viewport = viewport.push(
+                stack![
+                    panes,
+                    Canvas::new(CompareDivider {
+                        ratio: self.photo_split_ratio,
+                        vertical: self.photo_split_vertical,
+                    })
+                    .width(Fill)
+                    .height(Fill),
+                ]
+                .width(Fill)
+                .height(Fill),
+            );
+        } else {
+            viewport = viewport.push(container(canvas).width(Fill).height(Fill));
+        }
         if self
             .clouds
             .iter()
@@ -12920,6 +13125,11 @@ struct PointViewport<'a> {
     pointer: &'a std::cell::Cell<Option<[f32; 2]>>,
     /// The photos of the files that are not those of their stations.
     photos: &'a file_photos::PhotoTool,
+    photo_visible: bool,
+    read_only: bool,
+    /// Use the bounded resident sample when this camera differs from the
+    /// camera whose octree detail is currently loaded.
+    resident_points: bool,
     /// A snapshot of the view is being taken: only the scene is drawn,
     /// without the controls of the viewport.
     clean: bool,
@@ -13452,6 +13662,216 @@ fn hover_ring(frame: &mut Frame, center: UiPoint, radius: f32) {
     );
 }
 
+struct CompareDivider {
+    ratio: f32,
+    vertical: bool,
+}
+
+impl canvas::Program<Message> for CompareDivider {
+    type State = bool;
+
+    fn update(
+        &self,
+        dragging: &mut Self::State,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> (event::Status, Option<Message>) {
+        match event {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let near = cursor.position_in(bounds).is_some_and(|point| {
+                    let distance = if self.vertical {
+                        point.y - bounds.height * self.ratio
+                    } else {
+                        point.x - bounds.width * self.ratio
+                    };
+                    distance.abs() <= 8.0
+                });
+                *dragging = near;
+                (
+                    if near {
+                        event::Status::Captured
+                    } else {
+                        event::Status::Ignored
+                    },
+                    None,
+                )
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                if *dragging =>
+            {
+                *dragging = false;
+                (event::Status::Captured, Some(Message::PhotoSplitFinished))
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) if *dragging => {
+                let Some(position) = cursor.position_from(bounds.position()) else {
+                    return (event::Status::Captured, None);
+                };
+                let ratio = if self.vertical {
+                    position.y / bounds.height
+                } else {
+                    position.x / bounds.width
+                }
+                .clamp(0.25, 0.75);
+                (
+                    event::Status::Captured,
+                    Some(Message::PhotoSplitRatio(ratio)),
+                )
+            }
+            _ => (event::Status::Ignored, None),
+        }
+    }
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let line = if self.vertical {
+            let y = bounds.height * self.ratio;
+            canvas::Path::line(UiPoint::new(0.0, y), UiPoint::new(bounds.width, y))
+        } else {
+            let x = bounds.width * self.ratio;
+            canvas::Path::line(UiPoint::new(x, 0.0), UiPoint::new(x, bounds.height))
+        };
+        frame.stroke(
+            &line,
+            canvas::Stroke::default()
+                .with_color(Color::from_rgb8(205, 211, 220))
+                .with_width(1.0),
+        );
+        let handle = if self.vertical {
+            let y = bounds.height * self.ratio;
+            canvas::Path::line(
+                UiPoint::new(bounds.width * 0.5 - 18.0, y),
+                UiPoint::new(bounds.width * 0.5 + 18.0, y),
+            )
+        } else {
+            let x = bounds.width * self.ratio;
+            canvas::Path::line(
+                UiPoint::new(x, bounds.height * 0.5 - 18.0),
+                UiPoint::new(x, bounds.height * 0.5 + 18.0),
+            )
+        };
+        frame.stroke(
+            &handle,
+            canvas::Stroke::default()
+                .with_color(Color::from_rgb8(114, 124, 138))
+                .with_width(3.0),
+        );
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        dragging: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if *dragging
+            || cursor.position_in(bounds).is_some_and(|point| {
+                if self.vertical {
+                    (point.y - bounds.height * self.ratio).abs() <= 8.0
+                } else {
+                    (point.x - bounds.width * self.ratio).abs() <= 8.0
+                }
+            })
+        {
+            if self.vertical {
+                mouse::Interaction::ResizingVertically
+            } else {
+                mouse::Interaction::ResizingHorizontally
+            }
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+}
+
+impl PointViewport<'_> {
+    fn update_compare(
+        &self,
+        state: &mut ViewportState,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> (event::Status, Option<Message>) {
+        use view_tabs::CompareAction;
+        let message = |action| Some(Message::CompareModel(action));
+        match event {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(button)) if cursor.is_over(bounds) => {
+                let position = cursor.position_in(bounds).expect("cursor is over pane");
+                if button == mouse::Button::Left {
+                    if let Some(target) = view_cube::hit(position, bounds, self.yaw, self.pitch) {
+                        state.drag = None;
+                        return (
+                            event::Status::Captured,
+                            message(CompareAction::Cube(target)),
+                        );
+                    }
+                }
+                let mode = match button {
+                    mouse::Button::Left => DragMode::Orbit,
+                    mouse::Button::Right | mouse::Button::Middle => DragMode::Pan,
+                    _ => return (event::Status::Ignored, None),
+                };
+                state.drag = Some(DragState {
+                    start: position,
+                    position,
+                    mode,
+                });
+                (event::Status::Captured, None)
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(
+                mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle,
+            )) => {
+                state.drag = None;
+                (event::Status::Captured, None)
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                let Some(drag) = state.drag.as_mut() else {
+                    return (event::Status::Ignored, None);
+                };
+                let Some(position) = cursor.position_from(bounds.position()) else {
+                    return (event::Status::Captured, None);
+                };
+                let (dx, dy) = (position.x - drag.position.x, position.y - drag.position.y);
+                drag.position = position;
+                let action = match drag.mode {
+                    DragMode::Orbit => CompareAction::Orbit(-dx, dy, bounds.size()),
+                    DragMode::Pan => CompareAction::Pan(dx, dy),
+                    _ => return (event::Status::Captured, None),
+                };
+                (event::Status::Captured, message(action))
+            }
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta })
+                if cursor.is_over(bounds) =>
+            {
+                let amount = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 40.0,
+                };
+                let position = cursor
+                    .position_in(bounds)
+                    .unwrap_or(UiPoint::new(bounds.width * 0.5, bounds.height * 0.5));
+                (
+                    event::Status::Captured,
+                    message(CompareAction::Zoom(
+                        amount,
+                        [position.x, position.y],
+                        bounds.size(),
+                    )),
+                )
+            }
+            _ => (event::Status::Ignored, None),
+        }
+    }
+}
+
 impl canvas::Program<Message> for PointViewport<'_> {
     type State = ViewportState;
 
@@ -13462,6 +13882,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (event::Status, Option<Message>) {
+        if self.read_only {
+            return self.update_compare(state, event, bounds, cursor);
+        }
         if let canvas::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) = event {
             state.modifiers = modifiers;
             return (event::Status::Ignored, None);

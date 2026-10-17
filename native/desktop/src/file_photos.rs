@@ -827,6 +827,7 @@ impl Studio {
             Some(view) => view.back,
             None => ReturnCamera::of(self),
         };
+        self.remember_model_for_photo();
         self.drawing_view.shown = false;
         self.file_open = false;
         self.walk = Some(walk);
@@ -1092,6 +1093,15 @@ impl Studio {
             "listing": self.photos.listing.len(),
             "decoding": self.photos.decoding.len(),
             "blend": self.photos.blend,
+            "compare_with_3d": self.photo_compare && self.shown_photo().is_some(),
+            "model_sample": self.shown_photo().is_some().then(||
+                self.clouds.iter().filter(|entry| entry.visible).map(CloudEntry::resident_len).sum::<usize>()
+            ),
+            "model_camera": self.shown_photo().and_then(|_| self.compare_model_viewport(self.point_viewport())).map(|view|
+                json!({"yaw": view.yaw, "pitch": view.pitch, "zoom": view.zoom, "pan": view.pan, "walk": view.walk.is_some()})
+            ),
+            "split_ratio": self.photo_split_ratio,
+            "split_vertical": self.photo_split_vertical,
             "cached": self.photos.cache.len(),
             "cached_bytes": self.photos.cache.iter().map(|photo| photo.bytes()).sum::<usize>(),
             "view": view,
@@ -1285,7 +1295,7 @@ impl Studio {
                 tr(tip),
             )
         };
-        let panel = row![
+        let navigation = row![
             step(
                 "◀",
                 i18n::key("Previous photo (Page Up)"),
@@ -1303,19 +1313,44 @@ impl Studio {
                 1,
                 shown.index + 1 < shown.count
             ),
-            iced::widget::Space::with_width(10),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+        let blend = row![
             text(tr("Photo")).size(12),
             ui_style::slider(0.0_f32..=1.0, self.photos.blend, |blend| {
                 Message::Photos(PhotoAction::Blend(blend))
             })
             .step(0.01_f32)
-            .width(120),
+            .width(90),
             text(format!("{:.0}%", self.photos.blend * 100.0))
                 .size(11)
                 .width(34),
         ]
         .spacing(6)
         .align_y(iced::Alignment::Center);
+        let comparison = row![
+            button(text(tr("Compare with 3D")).size(11))
+                .on_press(Message::TogglePhotoCompare)
+                .style(move |theme, status| {
+                    ui_style::ribbon_button(theme, self.photo_compare, status)
+                })
+                .padding([2, 7]),
+            button(
+                text(if self.photo_split_vertical {
+                    tr("Side by side")
+                } else {
+                    tr("Stack panes")
+                })
+                .size(11)
+            )
+            .on_press_maybe(self.photo_compare.then_some(Message::TogglePhotoSplitAxis))
+            .style(ui_style::tool)
+            .padding([2, 7]),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+        let panel = column![navigation, blend, comparison].spacing(3);
         Some(
             container(container(panel).padding([4, 8]).style(|theme| {
                 let colors = crate::ui_theme::colors(theme);
@@ -1417,7 +1452,9 @@ fn label_places(
 impl PointViewport<'_> {
     /// The photo that is entered, as it is shown.
     pub(crate) fn shown_photo(&self) -> Option<ShownPhoto<'_>> {
-        shown(self.photos, self.clouds, self.walk)
+        self.photo_visible
+            .then(|| shown(self.photos, self.clouds, self.walk))
+            .flatten()
     }
 
     /// Every photo of the visible layers that is in front of the camera, in
@@ -2132,6 +2169,188 @@ mod tests {
         assert!(studio.photos.view.is_none());
         assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
         assert_eq!(studio.listed_tabs().len(), 1);
+    }
+
+    #[test]
+    fn photo_compare_keeps_the_model_camera_beside_the_interactive_photo() {
+        let (mut studio, _directory, source) = studio_with_photos();
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command": "set_photo_compare", "enabled": true})
+            )["ok"],
+            false
+        );
+        studio.yaw = 0.4;
+        studio.pitch = 0.3;
+        studio.zoom = 0.5;
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source, 0)));
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command": "set_photo_compare", "enabled": true})
+            )["enabled"],
+            true
+        );
+        let ratio = send(
+            &mut studio,
+            json!({"command": "set_photo_split", "ratio": 0.65}),
+        )["ratio"]
+            .as_f64()
+            .unwrap();
+        assert!((ratio - 0.65).abs() < 1e-5);
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command": "set_photo_split", "ratio": 0.9})
+            )["ok"],
+            false
+        );
+        assert_eq!(studio.photo_split_ratio, 0.65);
+        let stacked = send(
+            &mut studio,
+            json!({"command": "set_photo_split", "ratio": 0.6, "vertical": true}),
+        );
+        assert_eq!(stacked["vertical"], true);
+        assert!(studio.photo_split_vertical);
+        assert_eq!(
+            send(&mut studio, json!({"command": "status"}))["result"]["photos"]["split_vertical"],
+            true
+        );
+        let _ = studio.view();
+        let model = studio
+            .compare_model_viewport(studio.point_viewport())
+            .expect("the 3D model has a saved camera");
+        assert_eq!((model.yaw, model.pitch, model.zoom), (0.4, 0.3, 0.5));
+        assert!(!model.photo_visible);
+        assert!(model.read_only);
+        assert!(studio.point_viewport().photo_visible);
+        let model_camera = (model.yaw, model.pan, model.zoom);
+        let photo_camera = (studio.yaw, studio.pitch, studio.zoom, studio.pan);
+        let _ = studio.update(Message::CompareModel(
+            crate::view_tabs::CompareAction::Orbit(20.0, -10.0, Size::new(450.0, 650.0)),
+        ));
+        let _ = studio.update(Message::CompareModel(crate::view_tabs::CompareAction::Pan(
+            8.0, -4.0,
+        )));
+        let _ = studio.update(Message::CompareModel(
+            crate::view_tabs::CompareAction::Zoom(1.0, [225.0, 325.0], Size::new(450.0, 650.0)),
+        ));
+        assert_eq!(
+            (studio.yaw, studio.pitch, studio.zoom, studio.pan),
+            photo_camera
+        );
+        let moved_model = studio
+            .compare_model_viewport(studio.point_viewport())
+            .expect("the 3D model remains beside the photo");
+        assert_ne!(moved_model.yaw, model_camera.0);
+        assert_ne!(moved_model.pan, model_camera.1);
+        assert_ne!(moved_model.zoom, model_camera.2);
+        let moved_camera = (
+            moved_model.yaw,
+            moved_model.pitch,
+            moved_model.zoom,
+            moved_model.pan,
+        );
+        let status = send(&mut studio, json!({"command": "status"}));
+        let photos = &status["result"]["photos"];
+        assert_eq!(photos["compare_with_3d"], true);
+        assert!(photos["model_sample"].as_u64().unwrap() > 0);
+        assert_eq!(photos["model_camera"]["zoom"], moved_camera.2);
+        let _ = studio.view();
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        assert_eq!(
+            (studio.yaw, studio.pitch, studio.zoom, studio.pan),
+            moved_camera
+        );
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command": "set_photo_compare", "enabled": false})
+            )["enabled"],
+            false
+        );
+    }
+
+    #[test]
+    fn photo_compare_divider_drags_only_near_its_line() {
+        use iced::widget::canvas::Program;
+        use iced::{event, mouse, Rectangle};
+
+        let divider = crate::CompareDivider {
+            ratio: 0.5,
+            vertical: false,
+        };
+        let bounds = Rectangle::new(UiPoint::ORIGIN, Size::new(800.0, 600.0));
+        let mut dragging = false;
+        let press = canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        assert_eq!(
+            divider
+                .update(
+                    &mut dragging,
+                    press.clone(),
+                    bounds,
+                    mouse::Cursor::Available(UiPoint::new(100.0, 300.0))
+                )
+                .0,
+            event::Status::Ignored
+        );
+        assert!(!dragging);
+        assert_eq!(
+            divider
+                .update(
+                    &mut dragging,
+                    press,
+                    bounds,
+                    mouse::Cursor::Available(UiPoint::new(400.0, 300.0))
+                )
+                .0,
+            event::Status::Captured
+        );
+        assert!(dragging);
+        let (_, moved) = divider.update(
+            &mut dragging,
+            canvas::Event::Mouse(mouse::Event::CursorMoved {
+                position: UiPoint::new(600.0, 300.0),
+            }),
+            bounds,
+            mouse::Cursor::Available(UiPoint::new(600.0, 300.0)),
+        );
+        assert!(matches!(moved, Some(Message::PhotoSplitRatio(ratio)) if ratio == 0.75));
+        let vertical = crate::CompareDivider {
+            ratio: 0.5,
+            vertical: true,
+        };
+        let mut vertical_drag = false;
+        assert_eq!(
+            vertical
+                .update(
+                    &mut vertical_drag,
+                    canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    bounds,
+                    mouse::Cursor::Available(UiPoint::new(400.0, 300.0)),
+                )
+                .0,
+            event::Status::Captured
+        );
+        let (_, moved) = vertical.update(
+            &mut vertical_drag,
+            canvas::Event::Mouse(mouse::Event::CursorMoved {
+                position: UiPoint::new(400.0, 390.0),
+            }),
+            bounds,
+            mouse::Cursor::Available(UiPoint::new(400.0, 390.0)),
+        );
+        assert!(
+            matches!(moved, Some(Message::PhotoSplitRatio(ratio)) if (ratio - 0.65).abs() < 1e-5)
+        );
+        let _ = divider.update(
+            &mut dragging,
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            bounds,
+            mouse::Cursor::Available(UiPoint::new(600.0, 300.0)),
+        );
+        assert!(!dragging);
     }
 
     #[test]
