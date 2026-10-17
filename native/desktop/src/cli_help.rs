@@ -106,6 +106,12 @@ pub const MODES: &[Mode] = &[
         description: key("Writes a 3D surface mesh of a scan."),
     },
     Mode {
+        flag: "--texture-mesh",
+        short: None,
+        arguments: "INPUT_MESH OUTPUT.obj [--texel-size METRES] [--max-resolution PIXELS]",
+        description: key("Writes measured mesh vertex colours as a PNG texture atlas with an OBJ and MTL."),
+    },
+    Mode {
         flag: "--closed-mesh",
         short: None,
         arguments: "INPUT OUTPUT.obj|.ply|.stl|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic|centre|upward]",

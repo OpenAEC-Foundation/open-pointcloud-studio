@@ -3284,6 +3284,7 @@ dependencies = [
  "las",
  "laz",
  "memmap2",
+ "png",
  "rayon",
  "reqwest",
  "serde",

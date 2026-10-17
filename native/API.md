@@ -184,6 +184,24 @@ changes nothing in the options.
 `export_mesh` saves the mesh the active layer holds: a terrain mesh, a 3D
 surface, a closed mesh, the faces of an opened mesh file or downloaded 3D BAG
 buildings.
+
+`texture_mesh` is a separate job for a mesh with measured vertex colours.
+Give it a new absolute `.obj` `path`, optional `texel_size` in metres (default
+0.02) and `max_resolution` from 256 to 4096 pixels (default 4096). It writes
+editable geometry with UV coordinates, an MTL and one or more PNG atlas pages
+beside the OBJ. Vertex RGB is also retained as a native-viewport fallback.
+The complete job reports `pages`, `triangles` and
+`resolution_limited`, the number of triangles whose chart could not reach the
+requested texel size on one page. The atlas interpolates stored mesh
+vertex colours. For a newly reconstructed surface, colours previously applied
+to source points with `colour_from_photos` are carried into sampled mesh
+vertices; an existing mesh must be reconstructed again to receive those
+edits. The atlas does not yet project E57 photo pixels directly onto texels.
+A CAD export such as DWG or DXF
+cannot retain these texture images.
+While the job runs, `job` reports `processed` and `total` triangles.
+`cancel_texture_mesh` requests cancellation; after it completes the job state
+is `cancelled` and no export files are left behind.
 `path` is an absolute destination whose extension chooses the format:
 
 - `.obj`: text, with colours and normals per vertex where the mesh has them.
@@ -1706,6 +1724,8 @@ layer with photo colours.
 | `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Sets the settings of a closed mesh, its options in Mesh Pointcloud, atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, a share of 0.01–100 percent of the source points, sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task, of whatever mode |
 | `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
+| `texture_mesh` | `path`, optional `texel_size`, `max_resolution` | Writes the active coloured mesh as an OBJ, MTL and PNG atlas pages; returns a job ID |
+| `cancel_texture_mesh` | — | Cancels a running texture export |
 | `set_face_settings` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Sets the settings of a face detection, the options of Flat faces in Mesh Pointcloud, atomically: a distance tolerance of 0.001–0.5 m, an angle tolerance of 1–45 degrees, a smallest face of 0.01–10000 m², cylinders on or off, layers `active` or `visible`, and the colouring `face` or `deviation` of the faces that are shown. Returns the `settings` |
 | `detect_faces` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Finds the flat faces and the cylinders in the undeleted points inside the active section box and visible classification filters, with the settings of a face detection and the fields given, and keeps them with the active layer beside its mesh. Returns a job ID; the complete job reports the faces per type, the edges, the voxel used and the points on a face |
 | `cancel_detect_faces` | — | Requests cancellation of the running face detection |

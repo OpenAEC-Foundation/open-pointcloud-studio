@@ -24,6 +24,7 @@ mod mesh_formats;
 mod mesh_points;
 mod mesh_quality;
 mod mesh_simplify;
+mod mesh_texture;
 mod mesh_write;
 mod mesher;
 mod obj_mesh;
@@ -90,6 +91,7 @@ pub use mesh_quality::{
     MeshTopology,
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
+pub use mesh_texture::{write_colored_obj_atlas, AtlasOptions, AtlasReport};
 pub use mesh_write::{read_stl_origin, write_mesh, MeshFormat, MeshWriteReport};
 pub use mesher::{
     mesh_terrain_obj, mesh_terrain_obj_where, mesh_terrain_obj_where_progress, MeshConfig,
@@ -112,7 +114,8 @@ pub use section_caps::{
 };
 pub use surface_mesh::{
     mesh_surface_obj, mesh_surface_obj_from, mesh_surface_obj_where,
-    mesh_surface_obj_where_progress, SurfaceMeshConfig, SurfacePoints,
+    mesh_surface_obj_where_progress, mesh_surface_obj_where_progress_colours, SurfaceMeshConfig,
+    SurfacePoints,
 };
 pub use turns::SourceTurn;
 

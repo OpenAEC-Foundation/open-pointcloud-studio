@@ -15,6 +15,7 @@ use rayon::prelude::*;
 use super::{visit_points, LoadError, Point, PointCloud};
 use crate::local_fit::{cross, difference, dot, symmetric_eigen3, unit};
 use crate::mesher::{MeshProgress, MeshStage, MeshStats};
+use crate::photo_colour::PointColours;
 use crate::{IndexConfig, OctreeIndex};
 
 #[derive(Clone, Copy, Debug)]
@@ -405,10 +406,18 @@ impl Candidates {
 
     /// The candidates in the order of their ordinals, so that what comes
     /// after does not depend on the order they were offered in either.
-    fn into_points(self) -> Vec<Point> {
+    fn into_points(self, colours: Option<&PointColours>) -> Vec<Point> {
         let mut points = self.points;
         points.sort_unstable_by_key(|(ordinal, _)| *ordinal);
-        points.into_iter().map(|(_, point)| point).collect()
+        points
+            .into_iter()
+            .map(|(ordinal, mut point)| {
+                if let Some(rgb) = colours.and_then(|colours| colours.get(ordinal)) {
+                    point.rgb = Some(rgb);
+                }
+                point
+            })
+            .collect()
     }
 }
 
@@ -466,6 +475,28 @@ pub fn mesh_surface_obj_where_progress(
     )
 }
 
+/// Reconstruct a surface using edited point colours where they exist. Colour
+/// lookup happens only for the bounded candidate reservoir, after the full
+/// stream has been sampled; it does not add work for every source point.
+pub fn mesh_surface_obj_where_progress_colours(
+    cloud: &PointCloud,
+    destination: impl AsRef<Path>,
+    config: SurfaceMeshConfig,
+    colours: Option<&PointColours>,
+    mut include: impl FnMut(u64, &Point) -> bool,
+    mut progress: impl FnMut(MeshProgress) -> Result<(), LoadError>,
+) -> Result<MeshStats, LoadError> {
+    mesh_surface_obj_inner(
+        cloud,
+        SurfacePoints::Cached(&IndexConfig::default()),
+        destination.as_ref(),
+        config,
+        colours,
+        &mut include,
+        &mut progress,
+    )
+}
+
 /// Full-stream surface reconstruction that reads the points from where
 /// `points` says.
 pub fn mesh_surface_obj_from(
@@ -481,6 +512,7 @@ pub fn mesh_surface_obj_from(
         points,
         destination.as_ref(),
         config,
+        None,
         &mut include,
         &mut progress,
     )
@@ -494,6 +526,7 @@ fn mesh_surface_obj_inner(
     points: SurfacePoints<'_>,
     destination: &Path,
     config: SurfaceMeshConfig,
+    colours: Option<&PointColours>,
     include: &mut dyn FnMut(u64, &Point) -> bool,
     progress: &mut dyn FnMut(MeshProgress) -> Result<(), LoadError>,
 ) -> Result<MeshStats, LoadError> {
@@ -505,6 +538,11 @@ fn mesh_surface_obj_inner(
         ));
     }
     config.validate()?;
+    if colours.is_some_and(|colours| colours.total() != cloud.total_points) {
+        return Err(LoadError::InvalidData(
+            "point-colour table does not match the mesh source".into(),
+        ));
+    }
     cloud.validate_source()?;
     // Keep a bounded surplus so occupied regions have candidates even when
     // source density varies by orders of magnitude across a scan.
@@ -582,7 +620,7 @@ fn mesh_surface_obj_inner(
         ));
     }
     progress(MeshProgress::new(MeshStage::Reconstructing, 0, 0))?;
-    let candidates = candidates.into_points();
+    let candidates = candidates.into_points(colours);
     let candidate_xyz: Vec<_> = candidates.iter().map(|point| point.xyz).collect();
     let spaced = voxel_thin_indices(&candidate_xyz, config.mesh_size);
     let spaced_xyz: Vec<_> = spaced.iter().map(|&index| candidate_xyz[index]).collect();
@@ -1342,6 +1380,41 @@ mod tests {
             .unwrap()
             .iter()
             .all(|normal| normal[0].abs() > 0.99));
+    }
+
+    #[test]
+    fn surface_mesh_uses_edited_photo_colours_of_sampled_points() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("edited-wall.xyz");
+        let destination = directory.path().join("edited-wall.obj");
+        let mut data = String::new();
+        for y in 0..6 {
+            for z in 0..6 {
+                data.push_str(&format!("0 {y} {z} 0 0 0\n"));
+            }
+        }
+        fs::write(&source, data).unwrap();
+        let cloud = open(&source, 1).unwrap();
+        let mut colours = PointColours::new(cloud.total_points);
+        for ordinal in 0..cloud.total_points {
+            colours.set(ordinal, [255, 0, 255]);
+        }
+        mesh_surface_obj_where_progress_colours(
+            &cloud,
+            &destination,
+            SurfaceMeshConfig::default(),
+            Some(&colours),
+            |_, _| true,
+            |_| Ok(()),
+        )
+        .unwrap();
+        let mesh = read_obj_mesh(destination).unwrap();
+        assert!(!mesh.triangles.is_empty());
+        assert!(mesh
+            .colors
+            .unwrap()
+            .iter()
+            .all(|colour| *colour == [255, 0, 255]));
     }
 
     #[test]

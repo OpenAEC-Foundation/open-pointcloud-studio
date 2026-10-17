@@ -1051,5 +1051,12 @@
   "Short edges stay where needed to preserve openings and tolerance.": "Korte randen blijven behouden waar openingen en nauwkeurigheid dat vereisen.",
   "CAD segments": "CAD-segmenten",
   "Contour deviation": "Contourafwijking",
-  "Short edges kept": "Korte randen behouden"
+  "Short edges kept": "Korte randen behouden",
+  "Writes measured mesh vertex colours as a PNG texture atlas with an OBJ and MTL.": "Schrijft de gemeten hoekpuntkleuren van een mesh als PNG-textuuratlas met OBJ en MTL.",
+  "Texture surface…": "Oppervlak textureren…",
+  "Cancel texture": "Textureren annuleren",
+  "Texture progress": "Textuurvoortgang",
+  "triangles": "driehoeken",
+  "Texel (m)": "Texel (m)",
+  "Atlas (px)": "Atlas (px)"
 }

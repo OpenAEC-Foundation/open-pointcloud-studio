@@ -267,6 +267,14 @@ pub enum ApiCommand {
         /// chooses the format.
         path: PathBuf,
     },
+    TextureMesh {
+        path: PathBuf,
+        #[serde(default)]
+        texel_size: Option<f64>,
+        #[serde(default)]
+        max_resolution: Option<u32>,
+    },
+    CancelTextureMesh,
     SetFaceSettings {
         #[serde(flatten)]
         options: crate::faces::FaceOptions,
