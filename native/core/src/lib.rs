@@ -121,7 +121,7 @@ pub use section_caps::{
 pub use surface_mesh::{
     mesh_surface_obj, mesh_surface_obj_from, mesh_surface_obj_where,
     mesh_surface_obj_where_progress, mesh_surface_obj_where_progress_colours, SurfaceMeshConfig,
-    SurfacePoints,
+    SurfacePoints, SURFACE_MESH_NEIGHBORS, SURFACE_MESH_VERTICES,
 };
 pub use turns::SourceTurn;
 
