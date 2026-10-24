@@ -28,7 +28,7 @@ Klik links in de projectbrowser op een scan om die actief te maken; de eigenscha
 
 ## 3. Punten selecteren en meten
 
-Klik op een punt om het te selecteren of sleep een rechthoek rond een gebied. De groep SELECTIE heeft **Selecteer** (punt kiezen), **Vak selecteren**, **Selectie wissen**, **Geselecteerde punten verwijderen** en **Selectie exporteren**. **Rechtsklik** in de 3D-weergave opent het contextmenu. **Escape** verlaat het actieve gereedschap; daarna heft een volgende Escape de selectie op. **Delete** verbergt geselecteerde punten; **Ctrl+Z** en **Ctrl+Y** maken de laatste verwijdering of fotokleuring ongedaan of herhalen die.
+Klik op een punt om het te selecteren of sleep een rechthoek rond een gebied. De groep SELECTIE heeft **Selecteer** (punt kiezen), **Vak selecteren**, **Selectie wissen**, **Geselecteerde punten verwijderen** en **Selectie exporteren**. **Rechtsklik** in de 3D-weergave opent het contextmenu. **Escape** verlaat het actieve gereedschap en heft ook de selectie op. **Delete** verbergt geselecteerde punten; **Ctrl+Z** en **Ctrl+Y** maken de laatste verwijdering of fotokleuring ongedaan of herhalen die.
 
 Kies **Afstand** in de groep METEN en klik twee punten in de 3D-weergave; de meting eindigt bij het tweede punt. **Oppervlakte** meet een vlak: klik de hoekpunten en rond af met **Enter** of met een klik op het eerste punt. **Backspace** verwijdert het laatste meetpunt. De resultaten verschijnen onder **Meten** in **Eigenschappen**, waar ook dezelfde twee knoppen staan.
 
@@ -80,7 +80,7 @@ Het menu **Bestand** heeft vijf directe exports van de actieve scan: **Volledige
 | Delete | Verberg geselecteerde punten |
 | Enter | Rond een oppervlaktemeting af; plaats een notitie |
 | Backspace | Verwijder het laatste meetpunt |
-| Escape | Sluit een paneel of verlaat het gereedschap; hef daarna de selectie op |
+| Escape | Sluit een open paneel, dialoog of kaart; verlaat anders het gereedschap en hef de selectie op |
 | Ctrl+Z / Ctrl+Y | Ongedaan maken / opnieuw |
 | Ctrl+Tab | Volgend tabblad |
 
