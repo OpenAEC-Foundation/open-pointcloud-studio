@@ -487,6 +487,20 @@ impl Studio {
         Self::texture_poll_task()
     }
 
+    /// What `status.result.texture_export` reports: `null`, or the texture
+    /// export under way with its triangles as `job` gives them, and whether
+    /// it is being cancelled.
+    pub(crate) fn texture_export_value(&self) -> Value {
+        self.texture_export.as_ref().map_or(Value::Null, |control| {
+            json!({
+                "operation": "texture_mesh",
+                "processed": control.processed.load(Ordering::Relaxed),
+                "total": control.total,
+                "cancelling": control.cancelled.load(Ordering::Relaxed),
+            })
+        })
+    }
+
     pub(crate) fn cancel_texture_export(&mut self) -> Value {
         let Some(control) = self.texture_export.as_ref() else {
             return json!({"ok": false, "error": "no texture export is running"});
@@ -1611,8 +1625,16 @@ mod tests {
             .store(1, Ordering::Relaxed);
         let _ = studio.texture_poll();
         assert_eq!(job(&mut studio, &id)["processed"], 1);
+        // Status reports the export, and a wait for an idle window sees it.
         let status = send(&mut studio, ApiCommand::Status);
-        assert_eq!(crate::mcp::busy(&status["result"]), ["mesh_export"]);
+        assert_eq!(
+            status["result"]["texture_export"],
+            json!({"operation": "texture_mesh", "processed": 1, "total": 3, "cancelling": false})
+        );
+        assert_eq!(
+            crate::mcp::busy(&status["result"]),
+            ["mesh_export", "texture"]
+        );
         let result = write_texture(
             &studio.mesh_export_request().unwrap(),
             path.clone(),
@@ -1641,6 +1663,9 @@ mod tests {
             .join("hall-textured-atlas-000.png")
             .exists());
         assert!(!studio.mesh_export_pending);
+        let status = send(&mut studio, ApiCommand::Status);
+        assert!(status["result"]["texture_export"].is_null());
+        assert!(crate::mcp::busy(&status["result"]).is_empty());
     }
 
     #[test]
@@ -1664,6 +1689,8 @@ mod tests {
             true
         );
         assert!(control.cancelled.load(Ordering::Relaxed));
+        let status = send(&mut studio, ApiCommand::Status);
+        assert_eq!(status["result"]["texture_export"]["cancelling"], true);
         let result = write_texture(
             &studio.mesh_export_request().unwrap(),
             path.clone(),
@@ -1676,6 +1703,7 @@ mod tests {
         assert!(matches!(result, Err(LoadError::Cancelled)));
         studio.texture_exported(Some(id.clone()), Err("cancelled".into()));
         assert_eq!(job(&mut studio, &id)["state"], "cancelled");
+        assert!(send(&mut studio, ApiCommand::Status)["result"]["texture_export"].is_null());
         assert!(!path.exists());
         assert!(!directory.path().join("cancelled-texture.mtl").exists());
         assert!(!directory

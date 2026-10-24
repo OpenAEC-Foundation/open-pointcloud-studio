@@ -4095,6 +4095,7 @@ impl Studio {
                 answer.0["result"]["bag3d"] =
                     json!(self.bag_job.as_ref().map(bag_panel::BagJob::progress_value));
                 answer.0["result"]["mesh_export_pending"] = Value::Bool(self.mesh_export_pending);
+                answer.0["result"]["texture_export"] = self.texture_export_value();
                 answer.0["result"]["file_view"] = self.file_view_value();
                 answer.0["result"]["cad_viewer"] = self.cad_viewer.value();
                 answer.0["result"]["drawing"] = self.drawing.value();

@@ -12,10 +12,14 @@ use reqwest::blocking::Client;
 use serde_json::{json, Value};
 
 use super::tools::Link;
+use crate::native_api::API_NAME;
 
-const API_NAME: &str = "native-rust-v1";
-/// How long a running instance may take to answer `/info`.
-const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+/// How long a running instance may take to answer `/info`: longer than the
+/// 10 seconds a window takes at most to answer a command. A window of this
+/// version answers `/info` while commands wait, but one of an older version
+/// takes requests one at a time, and while it carries out a slow command,
+/// such as a screenshot that waits for its points, it is busy, not gone.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 /// How long a command may take; the window itself gives up after 10 seconds.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a started window may take until its command API answers.
@@ -34,6 +38,18 @@ pub struct Instance {
 }
 
 impl Instance {
+    /// What the server says when it drives a window of another version than
+    /// its own: the tools it lists may then differ from the commands that
+    /// window knows.
+    pub fn version_warning(&self) -> Option<String> {
+        let own = env!("CARGO_PKG_VERSION");
+        let version = self.version.as_deref().filter(|version| *version != own)?;
+        Some(format!(
+            "open-pointcloud-studio mcp: the window (pid {}) runs version {version} and this server version {own}; a tool whose command that window does not know is refused by it",
+            self.pid
+        ))
+    }
+
     /// The instance as tools report it, without its token.
     pub fn summary(&self, chosen: bool) -> Value {
         json!({
@@ -399,9 +415,18 @@ impl Connector {
             "open-pointcloud-studio mcp: using pid {} on port {}",
             instance.pid, instance.port
         );
-        self.current = Some(instance.clone());
-        self.chosen = false;
+        self.choose(&instance, false);
         Ok(instance)
+    }
+
+    /// Make an instance the current one, saying so when its version is not
+    /// that of this server.
+    fn choose(&mut self, instance: &Instance, by_client: bool) {
+        if let Some(warning) = instance.version_warning() {
+            eprintln!("{warning}");
+        }
+        self.current = Some(instance.clone());
+        self.chosen = by_client;
     }
 }
 
@@ -464,19 +489,18 @@ impl Link for Connector {
                 }
             ));
         };
-        self.current = Some(instance.clone());
-        self.chosen = true;
+        let instance = instance.clone();
         eprintln!(
             "open-pointcloud-studio mcp: selected pid {} on port {}",
             instance.pid, instance.port
         );
+        self.choose(&instance, true);
         Ok(json!({"ok": true, "selected": instance.summary(true)}))
     }
 
     fn start_instance(&mut self, files: &[PathBuf]) -> Result<Value, String> {
         let instance = start(&self.program, &self.directory, files, &self.client)?;
-        self.current = Some(instance.clone());
-        self.chosen = true;
+        self.choose(&instance, true);
         Ok(json!({"ok": true, "started": instance.summary(true)}))
     }
 }
@@ -484,7 +508,7 @@ impl Link for Connector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::mock::mock_api;
+    use crate::mcp::mock::{answering, mock_api};
     use std::thread;
 
     fn write_discovery(directory: &Path, name: &str, value: Value) -> PathBuf {
@@ -558,6 +582,71 @@ mod tests {
         assert!(discover(&directory.path().join("missing"), &client).is_empty());
         // Stale files are skipped, not removed.
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 9);
+    }
+
+    #[test]
+    fn a_window_that_holds_the_answer_to_a_command_is_still_found() {
+        let directory = tempfile::tempdir().unwrap();
+        let me = std::process::id();
+        // A window that takes requests one at a time, as those of older
+        // versions do, while a screenshot waits for its points.
+        let busy = answering(me, |command| {
+            if command["command"] == "screenshot" {
+                thread::sleep(Duration::from_secs(3));
+            }
+            json!({"ok": true})
+        });
+        let file = write_discovery(
+            directory.path(),
+            "instance-1.json",
+            json!({"pid": me, "port": busy.port, "token": "t", "api": API_NAME, "started": 1}),
+        );
+        let client = http_client().unwrap();
+        let instance = read_discovery(&file).unwrap();
+        let shot = {
+            let client = client.clone();
+            thread::spawn(move || send(&client, &instance, &json!({"command": "screenshot"})))
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while busy.bodies.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline, "the screenshot did not arrive");
+            thread::sleep(Duration::from_millis(10));
+        }
+        let probed = Instant::now();
+        let live = discover(directory.path(), &client);
+        assert!(
+            probed.elapsed() >= Duration::from_secs(1),
+            "the probe waited behind the screenshot"
+        );
+        let ports: Vec<u16> = live.iter().map(|instance| instance.port).collect();
+        assert_eq!(
+            ports,
+            [busy.port],
+            "a busy window is not taken for a closed one"
+        );
+        assert_eq!(shot.join().unwrap().unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn a_window_of_another_version_is_named_in_a_warning() {
+        let own = env!("CARGO_PKG_VERSION");
+        let mut instance = Instance {
+            pid: 7,
+            port: 47_910,
+            token: "t".into(),
+            started: 1,
+            version: Some(own.into()),
+            discovery_file: PathBuf::from("instance-7.json"),
+        };
+        assert_eq!(instance.version_warning(), None);
+        instance.version = None;
+        assert_eq!(instance.version_warning(), None);
+        instance.version = Some("0.1.0".into());
+        let warning = instance.version_warning().unwrap();
+        assert!(
+            warning.contains("pid 7") && warning.contains("0.1.0") && warning.contains(own),
+            "{warning}"
+        );
     }
 
     #[test]

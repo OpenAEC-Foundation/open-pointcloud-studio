@@ -59,8 +59,23 @@ call gets no answer. Unknown methods get error -32601, malformed messages
 except when `2025-11-25` was agreed: then they are a tool result with
 `isError: true`, so the caller can correct them. A whole number written with a
 fraction, such as `6.0`, counts as an integer. A command that the window
-refuses, or a window that does not answer, is a tool result with
-`isError: true` and the reason as text.
+refuses is a tool result with `isError: true` whose text is the window's
+JSON answer with `error`; a window that cannot be reached or does not answer
+gives `isError: true` with the reason as plain text.
+
+A command that the window does not answer within 10 seconds gets HTTP 504
+from the command API, and the tool result says so. That does not mean the
+command was not carried out: it waits in the window's queue and is carried
+out in its turn.
+Call `status` before calling a tool that changes something again, or it may
+be done twice.
+
+Tool calls are carried out one after another, in the order they arrive; a
+call that waits (`wait_seconds`, `wait_for_job`, `wait_until_idle`) delays
+the calls after it until it ends or is cancelled. Prefer short waits and
+repeat them, within the client's own request timeout. Batches are carried
+out in the same way, and `initialize`, `ping` and `tools/list` are answered
+at once.
 
 Closing the server's standard input ends the session: a running wait stops,
 calls still queued are dropped without an answer, and the server exits.
@@ -73,6 +88,9 @@ reads those files from the same configuration directory as the window
 (`XDG_CONFIG_HOME` is honoured, so a client that sets it for both finds its
 own windows only). A file counts when its process still runs and its port
 answers `GET /info` as that process; other files are skipped and left alone.
+The server waits up to 12 seconds for that answer, so that a window of an
+older version, which answered one request at a time, is not taken for a
+closed one while it carries out a slow command.
 
 The first tool call that needs a window uses the most recently started live
 one. When none runs, the server starts the application itself with
@@ -88,7 +106,10 @@ starts the unpacked executable instead.
 starts a new window, optionally opening files, and chooses it. A window that
 was picked automatically and has since closed is replaced by the next choice;
 a window chosen with `select_instance` or `start_instance` stays chosen, and
-calls report an error when it is gone.
+calls report an error when it is gone. When the window in use runs another
+version than the server, the server says so on standard error: the window
+refuses a tool whose command it does not know, with HTTP 400 and
+`unknown variant`. `GET /info` lists the commands a window knows.
 
 ## Tools
 
@@ -99,14 +120,28 @@ command of the same name with the same arguments, and return the window's
 JSON answer as text (and as `structuredContent` from protocol version
 `2025-06-18`).
 
+The annotations of each tool in `tools/list` say what it does to its
+surroundings. `readOnlyHint` is true for the tools that only read: `status`,
+`job`, `context`, the `list_` tools and the waits. Of the others,
+`destructiveHint` is true for those that may take away or overwrite work or
+files (see [Changes and undo](#changes-and-undo)): removing a layer,
+deleting or thinning points, giving or taking away photo colours, a new mesh
+or face detection, clearing faces, overwriting or deleting views, deleting
+drawings, sheets, viewports and annotations, the exports and downloads that
+replace a file at their path, and installing, running and stopping
+extensions. `texture_mesh` writes new files only. `idempotentHint` is true for
+`camera` and the `set_` and `show_` tools. `openWorldHint` is true for
+`bag3d`, which downloads over the internet, and for `run_extension` and
+`open_in_cad_viewer`, which start other programs.
+
 Exports, section drawings and their previews, selections, picks, meshes, mesh
 exports, face detections, faces exports, colourings from photos, merges,
 3D BAG downloads and the dialogs of `choose_path` answer at once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
-edits, meshing (a closed mesh included), mesh export, a face detection, a
-faces export, a section drawing or its preview, a drawing file being read, steps of Pointcloud to Drawing, a colouring from photos, merging, a 3D BAG download,
+edits, meshing (a closed mesh included), mesh export, texture export, a face detection, a
+faces export, a section drawing or its preview, a drawing file being read, a sheet being written as PDF, a drawing being written as DXF or DWG, steps of Pointcloud to Drawing, a colouring from photos, merging, a 3D BAG download,
 point loading for the camera, the fill of the cut of a mesh by the section
 box, the listing and decoding of photos and view snapshots have finished; call it after
 `open`, before `screenshot` when the camera changed, and before `export_bcf`.
@@ -129,7 +164,7 @@ follows when that view is restored.
 | `screenshot` | optional `path` (`.png`), `max_edge` (16–8192, default 1920), `window` | Image of the 3D viewport, or of the drawing while the Drawing view is shown, or with `window` of the whole window |
 | `open` | `path` | Opens a file, every supported file in a folder, or a scan project file |
 | `cancel_import` | `id` | Cancels a full-stream import |
-| `remove` | `index` | Removes a layer |
+| `remove` | `index` | Removes a layer, and empties the undo history of every layer |
 | `set_active` | `index` | Chooses the active layer |
 | `set_visible` | `index`, `visible` | Shows or hides a layer |
 | `camera` | `preset` | `top`, `bottom`, `front`, `back`, `left`, `right` or `isometric` |
@@ -215,7 +250,7 @@ follows when that view is restored.
 | `export_section` | `path`, optional `wait_seconds` | Exports the section box; job |
 | `export_selection` | `path`, optional `wait_seconds` | Exports the selected points; job |
 | `export_minus_selection` | `path`, optional `wait_seconds` | Exports all but the selected points; job |
-| `export_drawing` | `path` (`.dxf` or `.dwg`), optional `view` (`plan`, `front`, `back`, `left` or `right`), `thickness` (0.005–5 m), `units` (`mm` or `m`), `origin` (`model` or `box`), `fill`, `square`, `grid` (at least 0.005 m), `max_wall_thickness` (above 0, at most 2 m), `color` (`layer` or `rgb`), `point_layers` (`scan` or `class`), `max_points` (1–400,000), `version` (`r2004`, `r2010`, `r2013` or `r2018`), `wait_seconds` | Draws the slab behind one face of the section box as a 2D drawing in DXF or DWG; job. Choices left out keep what the Section drawing block has |
+| `export_drawing` | `path` (`.dxf` or `.dwg`), optional `view` (`plan`, `front`, `back`, `left` or `right`), `thickness` (0.005–5 m), `units` (`mm` or `m`), `origin` (`model` or `box`), `fill`, `square`, `straight_lines` (editable straight polylines on `OPS-STRAIGHT-LINES` beside the cut outlines), `line_tolerance` (0–1 m, default 0.01), `line_min_length` (0–10 m, default 0.10), `grid` (at least 0.005 m), `max_wall_thickness` (above 0, at most 2 m), `color` (`layer` or `rgb`), `point_layers` (`scan` or `class`), `max_points` (1–400,000), `version` (`r2004`, `r2010`, `r2013` or `r2018`), `wait_seconds` | Draws the slab behind one face of the section box as a 2D drawing in DXF or DWG; job. Choices left out keep what the Section drawing block has |
 | `preview_drawing` | the choices of `export_drawing` without `path`, optional `wait_seconds` | Traces the filled cut of that slab and lays it over the points in the viewport; job |
 | `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
 | `drawing_view` | `show` | Shows the Drawing view in place of the 3D scene, or the 3D scene again |
@@ -223,7 +258,7 @@ follows when that view is restored.
 | `open_drawing` | `path` (`.dxf` or `.dwg`), optional `wait_seconds` | Reads a DXF or DWG file into the Drawing view and shows it; job |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view |
 | `set_drawing_layer` | `layer` (name or `*`), `visible` | Shows or hides a layer of the drawing in the Drawing view |
-| `create_drawing` | `kind` (`plan`, `elevation` or `section`), optional `basis` (`model`, `section_box` or the name of a saved view with a section box), `side` (`front`, `back`, `left` or `right`), `height`, `position`, `thickness` (0.005–5 m), `sample_percent` (the points used, 0.1–100; 10 by default), `name`, `wait_seconds` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; job |
+| `create_drawing` | `kind` (`plan`, `elevation` or `section`), optional `basis` (`model`, `section_box` or the name of a saved view with a section box), `side` (`front`, `back`, `left` or `right`), `height`, `position`, `thickness` (0.005–5 m), `sample_percent` (the points used, 0.1–100; 10 by default), `name`, `straight_lines`, `line_tolerance`, `line_min_length` (as for `export_drawing`), `square` (default true), `wait_seconds` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; job |
 | `list_drawings` | — | The drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`; one not made in this session yet is made again from its scans, with a job to wait for. `3D model` shows the 3D model |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
@@ -245,12 +280,12 @@ follows when that view is restored.
 | `place_view` | optional `sheet`, `name`, optional `kind`, `at`, `scale` | Places a saved 3D view or a drawing on a sheet; a drawing at 1:100 unless given |
 | `update_viewport` | optional `sheet`, `viewport`, optional `at`, `size`, `scale`, `title` | Moves a viewport, sets the scale of a drawing, the size of a 3D view or the title |
 | `remove_viewport` | optional `sheet`, `viewport` | Takes a viewport off a sheet |
-| `export_sheet_pdf` | optional `sheet`, `path` (`.pdf`) | Writes a sheet as a PDF of the size of its paper; a job |
+| `export_sheet_pdf` | optional `sheet`, `path` (`.pdf`), optional `wait_seconds` | Writes a sheet as a PDF of the size of its paper; a job |
 | `lock_view` | optional `name`, `kind` (`view`, `drawing` or `viewport`), `sheet`, `viewport` | Locks a saved 3D view, a drawing or a viewport on a sheet |
 | `unlock_view` | optional `name`, `kind`, `sheet`, `viewport` | Unlocks it again |
 | `annotate_drawing` | optional `name`, `kind` (`text`, `dimension`, `leader` or `line`), optional `at`, `from`, `to`, `offset`, `text`, `height`, `snap` | Places a text, a dimension, a leader or a line on a drawing; points snap to its lines |
 | `annotate_sheet` | optional `sheet`, `kind` (`text` or `line`), optional `at`, `from`, `to`, `text`, `height` | Places a text or a line on the paper of a sheet |
-| `export_drawing_file` | optional `name`, `path` (`.dxf` or `.dwg`) | Writes a drawing with its annotations as DXF or DWG, with real dimensions; a job |
+| `export_drawing_file` | optional `name`, `path` (`.dxf` or `.dwg`), optional `wait_seconds` | Writes a drawing with its annotations as DXF or DWG, with real dimensions; a job |
 | `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, read-only in the Open CAD Studio that comes with the application, else in the program chosen in Settings or an installed Open CAD Studio; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |
@@ -279,6 +314,27 @@ follows when that view is restored.
 arguments with types, ranges, enumerations and units. The tools are listed in
 one table in [`desktop/src/mcp/tools.rs`](desktop/src/mcp/tools.rs); a new
 API command needs one entry there and one line here.
+
+## Changes and undo
+
+`undo_delete` takes back the latest edit and `redo_delete` does it again.
+Four tools make such an edit: `delete_selection`, `thin`,
+`colour_from_photos` and `clear_photo_colours`. At most eight edits are
+kept, of all layers together, and a new edit ends what `redo_delete` could
+do again. Earlier photo colours are kept up to about 1 GiB; beyond that a
+colouring lets go of the oldest edits. `remove` of any layer empties this
+history for every layer.
+
+`translate` and `scale` are taken back with `reset_transform`, which puts
+the active layer back at the coordinates of its source.
+
+Nothing else is taken back by Undo. A new mesh or a new face detection takes
+the place of what the layer had, and what `clear_faces`,
+`delete_camera_view`, `update_camera_view`, `delete_drawing`,
+`delete_sheet`, `remove_viewport` and `delete_annotation` take away or
+overwrite does not come back. The edits change the scans in the window, not
+their files; an export replaces the file at its destination, whatever file
+that is.
 
 ## Example session
 
