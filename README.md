@@ -14,7 +14,7 @@ A desktop application for viewing, measuring, editing and converting laser scans
 
 [![Watch the Open Pointcloud Studio feature video](promo/poster.png)](promo/open-pointcloud-studio-features.mp4)
 
-**[Watch the feature video](promo/open-pointcloud-studio-features.mp4)** — point selection, the section box, meshing, 2D drawings, E57 station photos, a side-by-side comparison and the responsive ribbon in the white interface.
+**[Watch the feature video](promo/open-pointcloud-studio-features.mp4)** — the generated house and rooms in the English interface and the theme Light: colour modes and detail, point selection, measuring, the section box, meshing, a 2D plan and section with straight CAD lines, a station photo in its own tab and beside the 3D model, the folding ribbon and the File view.
 
 ## Contents
 

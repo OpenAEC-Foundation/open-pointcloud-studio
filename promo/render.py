@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Render the native-app feature promo from verified desktop captures."""
+"""Render the feature promo and its poster from the stills of capture.py.
+
+The stills are the whole application window, captured from the generated
+demo scenes and kept at 960 pixels high, the height at which they are shown
+here. This script draws the white frame with the title of each scene around
+them, renders the title cards and joins every scene into one silent MP4 with
+FFmpeg; the overview becomes poster.png.
+"""
 
 from __future__ import annotations
 
@@ -24,25 +31,25 @@ AMBER = "#D97706"
 PAPER = "#FAFAF9"
 
 
-# Every image is an unaltered native-app capture; only the surrounding promo
-# frame, title and fade are rendered here.
+# Every image is an unaltered capture of the application; only the frame
+# around it, the title and the fade are rendered here.
 SCENES = [
-    ("intro", None, 2.4, "Open Pointcloud Studio", "Van grote scan naar bruikbare 3D en 2D"),
-    ("overview", "01-overview.png", 4.0, "De nieuwe native interface", "Weergave, projectbrowser en eigenschappen rond één grote 3D-scan"),
-    ("elevation", "11-elevation.png", 3.3, "Kies hoe de scan eruitziet", "Schakel direct van fotokleur naar hoogteweergave"),
-    ("point-detail", "12-point-detail.png", 3.4, "Stuur het detail in de viewport", "Puntgrootte, puntenbudget en Eye-dome onder de view cube"),
-    ("selection", "02-selection.png", 3.6, "Selecteer punten op volle resolutie", "Miljoenen punten in één selectie"),
-    ("measure", "13-measure.png", 3.6, "Meet in de puntenwolk", "Afstand en oppervlakte op exacte scanpunten"),
-    ("section", "03-section.png", 3.6, "Snijd de scan met een 3D-section box", "Direct zicht op het gebied dat telt"),
-    ("mesher", "04-mesher.png", 3.3, "Van punten naar mesh", "Gesloten mesh, terrein, 3D-oppervlak en vlakken"),
-    ("mesher-options", "05-mesher-options.png", 3.3, "Bepaal de reconstructie", "Instelbare meshgrootte, buren en randfactor"),
-    ("plan", "06-plan.png", 3.6, "Maak een 2D-plattegrond", "Lijnen, vullingen en DXF/DWG-lagen"),
-    ("section-2d", "07-section-2d.png", 3.3, "Bekijk een verticale doorsnede", "Uit dezelfde E57-scan"),
-    ("panorama", "08-panorama.png", 4.0, "Stap de scan in", "Stationfoto's rechtstreeks uit de E57"),
-    ("photo-compare", "14-photo-compare.png", 4.0, "Vergelijk scan en foto", "Echte Manitou E57 · foto © 2012 Calabi Yau Systems LLC"),
-    ("responsive", "09-responsive.png", 3.6, "Een ribbon die meeschakelt", "Groepen klappen in op een smal scherm"),
-    ("view", "10-view.png", 3.0, "Alles op één plek", "Native Rust · één Start-tab · Weergave onder de view cube"),
-    ("outro", None, 2.6, "Open Pointcloud Studio", "Native Rust · E57, LAS en LAZ · 3D en 2D"),
+    ("intro", None, 2.4, "Open Pointcloud Studio", "From a large scan to usable 3D and 2D"),
+    ("overview", "01-overview.png", 4.0, "The shared look of the OpenAEC tools", "File and Home tabs, Project Browser and Properties around a 24-million-point scan"),
+    ("elevation", "11-elevation.png", 3.3, "Choose how the scan looks", "Switch from scan colour to elevation in the Display panel"),
+    ("point-detail", "12-point-detail.png", 3.4, "Control the detail in the viewport", "Point size, points in view and Eye-dome beneath the view cube"),
+    ("selection", "02-selection.png", 3.6, "Select points at full resolution", "2.6 million points of a roof in one selection"),
+    ("measure", "13-measure.png", 3.6, "Measure in the point cloud", "Area, plan area and perimeter of a roof face"),
+    ("section", "03-section.png", 3.6, "Cut the scan with a 3D section box", "Take the ceiling off and look into the rooms"),
+    ("mesher", "04-mesher.png", 3.3, "From points to a mesh", "Closed mesh, terrain mesh, 3D surface and flat faces"),
+    ("mesher-options", "05-mesher-options.png", 3.3, "A closed mesh in the colours of the scan", "Export it as OBJ, PLY, STL, DXF, DWG or IFC, or as a textured OBJ"),
+    ("plan", "06-plan.png", 3.6, "Make a 2D plan", "Filled cut, points and straight CAD lines on DXF/DWG layers"),
+    ("section-2d", "07-section-2d.png", 3.3, "Draw a vertical section", "Through both rooms of the same E57 scan"),
+    ("panorama", "08-panorama.png", 4.0, "Open a station photo in its own tab", "Panoramas from the E57 file, laid over the points"),
+    ("photo-compare", "14-photo-compare.png", 4.0, "Compare the photo with the 3D model", "Side by side, each pane with its own camera"),
+    ("responsive", "09-responsive.png", 3.6, "A ribbon that adapts", "Groups fold into menus in a narrow window"),
+    ("view", "10-view.png", 3.0, "Everything in the File view", "Open, import and export the scan, drawings, meshes and faces"),
+    ("outro", None, 2.6, "Open Pointcloud Studio", "Native Rust · E57, LAS and LAZ · 3D and 2D"),
 ]
 
 
@@ -75,13 +82,12 @@ def render_card(title: str, subtitle: str) -> Image.Image:
 
 def render_scene(source: Path, title: str, subtitle: str) -> Image.Image:
     screenshot = Image.open(source).convert("RGB")
-    if screenshot.height != 900 or screenshot.width not in (920, 1440, 1584):
-        raise ValueError(f"Expected a 920×900, 1440×900 or 1584×900 desktop capture: {source}")
+    if screenshot.height != SCREEN_SIZE[1] or not 0 < screenshot.width <= SCREEN_SIZE[0]:
+        raise ValueError(f"Expected a capture {SCREEN_SIZE[1]} pixels high and at most {SCREEN_SIZE[0]} wide, as capture.py writes it: {source}")
     image = Image.new("RGB", SIZE, PAPER)
-    scale = min(SCREEN_SIZE[0] / screenshot.width, SCREEN_SIZE[1] / screenshot.height)
-    shown_size = (round(screenshot.width * scale), round(screenshot.height * scale))
-    shown_pos = ((SIZE[0] - shown_size[0]) // 2, SCREEN_POS[1] + (SCREEN_SIZE[1] - shown_size[1]) // 2)
-    image.paste(screenshot.resize(shown_size, Image.Resampling.LANCZOS), shown_pos)
+    shown_size = screenshot.size
+    shown_pos = ((SIZE[0] - shown_size[0]) // 2, SCREEN_POS[1])
+    image.paste(screenshot, shown_pos)
     draw = ImageDraw.Draw(image)
     draw.rectangle((0, 0, SIZE[0], 100), fill="#FFFFFF")
     draw.rectangle((0, 99, SIZE[0], 100), fill="#E7E5E4")
