@@ -58,3 +58,6 @@ tiny-skia = "0.11"
 # Tests look whether a task holds work; iced keeps that part of its runtime
 # to itself. The version is the one iced brings in.
 iced_runtime = "0.13"
+# Tests hold the tools of the cloud API to the command line and to the
+# window's own jobs.
+open-pointcloud-studio-api = { path = "../server" }

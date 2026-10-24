@@ -1,0 +1,33 @@
+[package]
+name = "open-pointcloud-studio-api"
+version.workspace = true
+edition.workspace = true
+# LGPL-3.0-or-later, as the core it serves; it holds no GPL code.
+license.workspace = true
+description = "The headless HTTP and MCP service of Open Pointcloud Studio"
+
+[lib]
+name = "pointcloud_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "open-pointcloud-studio-api"
+path = "src/main.rs"
+
+# The core without its bag3d feature, so that the service holds no HTTP
+# client and no TLS stack.
+[dependencies]
+pointcloud-core = { path = "../core", default-features = false }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "matched-path"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+tower-http = { version = "0.6", default-features = false, features = ["catch-panic"] }
+sha2 = "0.10"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
+tempfile = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

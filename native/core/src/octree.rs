@@ -1535,6 +1535,22 @@ fn write_cached_cloud_header(
     Ok(())
 }
 
+/// Whether index and preview caches are read and written under the cache
+/// folder, for the whole process.
+static DISK_CACHES: AtomicBool = AtomicBool::new(true);
+
+/// Whether index and preview caches are read and written under the cache
+/// folder. On by default; a service or a library turns them off.
+pub fn set_disk_caches(enabled: bool) {
+    DISK_CACHES.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether index and preview caches are read and written under the cache
+/// folder, as `set_disk_caches` last left it.
+pub fn disk_caches() -> bool {
+    DISK_CACHES.load(Ordering::Relaxed)
+}
+
 /// Where disk indexes are kept: `XDG_CACHE_HOME` when set, otherwise the
 /// local application data folder on Windows and `~/.cache` elsewhere. The
 /// temporary directory is the last resort because the system may empty it.
