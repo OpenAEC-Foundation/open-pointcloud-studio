@@ -73,9 +73,10 @@ The modal header now uses the pinned Style Book's vertical theme gradient,
 and the card uses its theme-specific 0 × 4 px, 16 px-blur shadow. Both
 modal variants now support bounded header dragging and a 90% viewport-height
 cap; tests cover short windows and the close-button exclusion.
-Legacy OpenCAD command SVGs with fixed dark strokes are tinted to the shared
-text color on dark themes. They need final per-icon vector harmonization; the
-current tint keeps every command legible during that work.
+Legacy OpenCAD command SVGs draw their outlines in fixed dark greys. The
+desktop replaces those greys with the theme's text color and keeps their amber
+and other colors, caching each recolored SVG per text color. They still need
+final per-icon vector harmonization.
 
 A field-by-field comparison found 378 values identical to the old Pointcloud
 tokens and seven deliberate changes to the Style Repo values: the five ribbon
