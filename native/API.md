@@ -20,9 +20,9 @@ port, version, API name and start time, `api_revision`, the revision of the
 commands (see [API changes](#api-changes)), and `commands`, the names of the
 commands the window knows in sorted order. `POST /exec` accepts one JSON
 command and requires the discovery file's token in the `X-OPS-Token`
-header. A request without a
-valid token receives HTTP 403. The legacy `POST /eval` endpoint returns HTTP
-410 because script evaluation is not part of the native application.
+header. A request without a valid token receives HTTP 403. The legacy
+`POST /eval` endpoint returns HTTP 410 because script evaluation is not part
+of the native application.
 
 For example, after reading `port` and `token` from the discovery file:
 
@@ -1431,7 +1431,8 @@ colouring lets go of the oldest edits. `remove` of any layer empties this
 history for every layer.
 
 `translate` and `scale` are taken back with `reset_transform`, which puts
-the active layer back at the coordinates of its source.
+the active layer back at the coordinates of its source; `reset_transform`
+itself is not taken back.
 
 Nothing else is taken back by Undo. A new mesh or a new face detection takes
 the place of what the layer had, and what `clear_faces`,
@@ -1646,6 +1647,16 @@ photo and puts the camera back where it was before the first photo was
 entered, into the station panorama it stood in then, which is decoded again;
 `walk` and walking on leave the photo where it was. `screenshot` and view
 snapshots wait for the photo as they wait for the points of the camera.
+
+`set_photo_compare` shows the entered photo beside a pane of the 3D model
+with its own orbit, pan, zoom and view cube, and `set_photo_split` divides
+the window between the two. `status.result.photos` has `compare_with_3d`,
+true while that pane is shown beside a photo, and `split_ratio` and
+`split_vertical`, the division. While a photo is shown it also has
+`model_sample`, the points of the visible layers held in memory, which that
+pane draws, and `model_camera`, the camera of the tab of the 3D model that
+the pane shows (`yaw`, `pitch`, `zoom`, `pan` and `walk`, true for the
+walking camera); both are `null` otherwise.
 
 ## Colour from photos
 
@@ -1884,4 +1895,4 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
-| 11 | The release after 0.9.5 | New commands `texture_mesh`, `cancel_texture_mesh`, `set_photo_compare` and `set_photo_split`. `export_drawing`, `preview_drawing` and `create_drawing` take `straight_lines`, `line_tolerance` and `line_min_length`, and `create_drawing` takes `square`. `status.result` has `texture_export`, and `photos` has `split_ratio` and `split_vertical`; `list_tabs` has tabs of the kind `photo`. `/info` has `api_revision` and `commands`, and answers while commands wait for the window |
+| 11 | The release after 0.9.5 | New commands `texture_mesh`, `cancel_texture_mesh`, `set_photo_compare` and `set_photo_split`. `export_drawing`, `preview_drawing` and `create_drawing` take `straight_lines`, `line_tolerance` and `line_min_length`, and `create_drawing` takes `square`; `status.result.drawing` reports the first three, and the statistics of a complete drawing have `straight_lines`. `status.result` has `texture_export`, and `photos` has `compare_with_3d`, `model_sample`, `model_camera`, `split_ratio` and `split_vertical`; `list_tabs` has tabs of the kind `photo`. `/info` has `api_revision` and `commands`, and answers while commands wait for the window |

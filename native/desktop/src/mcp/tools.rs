@@ -67,16 +67,17 @@ pub const READ_ONLY: &[&str] = &[
     "wait_until_idle",
 ];
 
-/// The tools that may take away or overwrite work: layers, points, views,
-/// drawings, sheets, viewports, annotations, meshes, faces or photo
-/// colours, or a file at the destination they are given; and those that
-/// install, start or stop the program of an extension. Changes of
-/// settings, the camera and what is shown are not counted, nor is the image
-/// screenshot writes when it is given a path.
+/// The tools that may take away or overwrite work: layers, points, the
+/// transform of a layer, views, drawings, sheets, viewports, annotations,
+/// meshes, faces or photo colours, or a file at the destination they are
+/// given; and those that install, start or stop the program of an
+/// extension. Changes of settings, the camera and what is shown are not
+/// counted, nor is the image screenshot writes when it is given a path.
 pub const DESTRUCTIVE: &[&str] = &[
     "remove",
     "delete_selection",
     "thin",
+    "reset_transform",
     "colour_from_photos",
     "clear_photo_colours",
     "update_camera_view",

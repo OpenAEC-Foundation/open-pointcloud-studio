@@ -66,9 +66,8 @@ gives `isError: true` with the reason as plain text.
 A command that the window does not answer within 10 seconds gets HTTP 504
 from the command API, and the tool result says so. That does not mean the
 command was not carried out: it waits in the window's queue and is carried
-out in its turn.
-Call `status` before calling a tool that changes something again, or it may
-be done twice.
+out in its turn. Call `status` before calling a tool that changes something
+again, or it may be done twice.
 
 Tool calls are carried out one after another, in the order they arrive; a
 call that waits (`wait_seconds`, `wait_for_job`, `wait_until_idle`) delays
@@ -125,11 +124,13 @@ surroundings. `readOnlyHint` is true for the tools that only read: `status`,
 `job`, `context`, the `list_` tools and the waits. Of the others,
 `destructiveHint` is true for those that may take away or overwrite work or
 files (see [Changes and undo](#changes-and-undo)): removing a layer,
-deleting or thinning points, giving or taking away photo colours, a new mesh
-or face detection, clearing faces, overwriting or deleting views, deleting
-drawings, sheets, viewports and annotations, the exports and downloads that
-replace a file at their path, and installing, running and stopping
-extensions. `texture_mesh` writes new files only. `idempotentHint` is true for
+deleting or thinning points, resetting the transform of a layer, giving or
+taking away photo colours, a new mesh or face detection, clearing faces,
+overwriting or deleting views, deleting drawings, sheets, viewports and
+annotations, the exports and downloads that replace a file at their path,
+and installing, running and stopping extensions. `texture_mesh` writes new
+files only, and `screenshot` is not counted, although with `path` it
+replaces a file there. `idempotentHint` is true for
 `camera` and the `set_` and `show_` tools. `openWorldHint` is true for
 `bag3d`, which downloads over the internet, and for `run_extension` and
 `open_in_cad_viewer`, which start other programs.
@@ -326,7 +327,8 @@ colouring lets go of the oldest edits. `remove` of any layer empties this
 history for every layer.
 
 `translate` and `scale` are taken back with `reset_transform`, which puts
-the active layer back at the coordinates of its source.
+the active layer back at the coordinates of its source; `reset_transform`
+itself is not taken back.
 
 Nothing else is taken back by Undo. A new mesh or a new face detection takes
 the place of what the layer had, and what `clear_faces`,

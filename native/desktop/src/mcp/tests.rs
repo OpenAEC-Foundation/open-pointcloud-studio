@@ -1881,6 +1881,8 @@ fn tool_annotations_say_what_a_tool_changes() {
     assert_eq!(hints("list_tabs")["readOnlyHint"], true);
     assert_eq!(hints("delete_sheet")["destructiveHint"], true);
     assert_eq!(hints("export")["destructiveHint"], true);
+    assert_eq!(hints("reset_transform")["destructiveHint"], true);
+    assert_eq!(hints("screenshot")["destructiveHint"], false);
     assert_eq!(hints("set_point_size")["destructiveHint"], false);
     assert_eq!(hints("set_point_size")["idempotentHint"], true);
     assert_eq!(hints("camera")["idempotentHint"], true);
