@@ -740,9 +740,19 @@ jobs:
       - name: Verify Apple notarization when enabled
         if: needs.macos.outputs.signed == 'true'
         run: |
-          xcrun stapler validate "packages/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
-          xcrun stapler validate "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
-          spctl --assess --type execute --verbose \
+          # These checks ask Apple's ticket service, whose connection a build
+          # machine now and then loses: each check is tried five times.
+          retry() {
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              [[ "$attempt" -lt 5 ]] || return 1
+              echo "attempt $attempt failed, trying again in 30 s: $*"
+              sleep 30
+            done
+          }
+          retry xcrun stapler validate "packages/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
+          retry xcrun stapler validate "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
+          retry spctl --assess --type execute --verbose \
             "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
       - name: Smoke-test the application on the image
         run: |

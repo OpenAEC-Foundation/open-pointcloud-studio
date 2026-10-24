@@ -52,16 +52,16 @@ copy_licences "$app/Contents/Resources" "$number"
 
 # Apple's notary and ticket services are reached over the network, which now
 # and then drops a connection on a build machine: such a step is tried up to
-# three times before the build fails.
+# five times, 30 seconds apart, before the build fails.
 with_retries() {
     local attempt
-    for attempt in 1 2 3; do
+    for attempt in 1 2 3 4 5; do
         if "$@"; then
             return 0
         fi
-        [[ "$attempt" -lt 3 ]] || return 1
-        echo "build-app.sh: attempt $attempt failed, trying again in 20 s: $*" >&2
-        sleep 20
+        [[ "$attempt" -lt 5 ]] || return 1
+        echo "build-app.sh: attempt $attempt failed, trying again in 30 s: $*" >&2
+        sleep 30
     done
 }
 
