@@ -1,0 +1,4 @@
+# These scripts are run by bash and python on Linux and macOS, and by the
+# bash of Git for Windows, also from a checkout made on Windows: keep their
+# line ends as they are.
+* text=auto eol=lf
