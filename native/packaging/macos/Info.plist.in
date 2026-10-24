@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- @VERSION@ is filled in when the bundle is built: three numbers, no suffix. -->
+<!-- @VERSION@ is filled in when the bundle is built: the version YYYY.W.N,
+     three numbers of at most four, two and two digits, as CFBundleVersion
+     takes them. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>

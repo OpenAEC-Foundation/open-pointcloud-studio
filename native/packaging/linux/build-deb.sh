@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Builds the .deb package for the processor type of this machine.
 #
-#   build-deb.sh BINARY CAD_BINARY ICONS NUMBER DEB_VERSION DATE OUT_DIR
+#   build-deb.sh BINARY CAD_BINARY ICONS NUMBER DATE OUT_DIR
 #
 # Writes OUT_DIR/open-pointcloud-studio_NUMBER_ARCH.deb with a .sha256, where
-# ARCH is what dpkg calls this machine (amd64, arm64). DEB_VERSION is the
-# version inside the package, which writes a pre-release as 1.2.3~rc1.
-# CAD_BINARY is the Open CAD Studio that build-open-cad-studio.sh built for
-# this machine; stage-tree.sh says where it goes.
+# ARCH is what dpkg calls this machine (amd64, arm64). NUMBER, the version
+# YYYY.W.N, is also the version inside the package; dpkg orders 2026.43.0
+# after 0.9.5, and 2026.43.10 after 2026.43.9. CAD_BINARY is the Open CAD
+# Studio that build-open-cad-studio.sh built for this machine; stage-tree.sh
+# says where it goes.
 #
 # The package has no maintainer scripts: the file triggers of the MIME
 # database, the desktop entry cache and the icon cache refresh them when the
@@ -16,14 +17,13 @@ set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 
-[[ $# -eq 7 ]] || fail "usage: build-deb.sh BINARY CAD_BINARY ICONS NUMBER DEB_VERSION DATE OUT_DIR"
+[[ $# -eq 6 ]] || fail "usage: build-deb.sh BINARY CAD_BINARY ICONS NUMBER DATE OUT_DIR"
 binary=$1
 cad_binary=$2
 icons=$3
 number=$4
-deb_version=$5
-date=$6
-out_dir=$7
+date=$5
+out_dir=$6
 here=$packaging_dir/linux
 
 arch=$(dpkg --print-architecture)
@@ -48,7 +48,7 @@ desktop-file-validate "$root/usr/share/applications/$APP_ID.desktop"
 size=$(du -sk "$root" | cut -f1)
 mkdir -p "$root/DEBIAN"
 fill_template "$here/control.in" "$root/DEBIAN/control" \
-    "DEBVERSION=$deb_version" "ARCH=$arch" "SIZE=$size"
+    "VERSION=$number" "ARCH=$arch" "SIZE=$size"
 
 # xz, because the zstd default of newer tools cannot be read by every dpkg
 # that is still in use.

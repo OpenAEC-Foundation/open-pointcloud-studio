@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Builds the macOS application bundle and the disk image that carries it.
 #
-#   build-app.sh BINARY CAD_BINARY ICONSET NUMBER NUMERIC OUT_DIR
+#   build-app.sh BINARY CAD_BINARY ICONSET NUMBER OUT_DIR
 #
 # BINARY      the universal binary (arm64 and x86-64 joined with lipo)
 # CAD_BINARY  the universal binary of Open CAD Studio, built for both by
 #             build-open-cad-studio.sh and joined the same way; it goes beside
 #             BINARY in Contents/MacOS, where the application looks for it
 # ICONSET     the AppIcon.iconset folder that make-icons.sh wrote
-# NUMBER      version for the file name; NUMERIC the same without a
-#             pre-release suffix, because the bundle takes three numbers only
+# NUMBER      the version YYYY.W.N, for the file name and the bundle, whose
+#             version takes three numbers
 #
 # Writes OUT_DIR/open-pointcloud-studio_NUMBER_macos-universal.dmg with a
 # .sha256 and leaves the bundle in OUT_DIR/Open Pointcloud Studio.app.
@@ -20,13 +20,12 @@ set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 
-[[ $# -eq 6 ]] || fail "usage: build-app.sh BINARY CAD_BINARY ICONSET NUMBER NUMERIC OUT_DIR"
+[[ $# -eq 5 ]] || fail "usage: build-app.sh BINARY CAD_BINARY ICONSET NUMBER OUT_DIR"
 binary=$1
 cad_binary=$2
 iconset=$3
 number=$4
-numeric=$5
-out_dir=$6
+out_dir=$5
 here=$packaging_dir/macos
 
 for file in "$binary" "$cad_binary"; do
@@ -46,7 +45,7 @@ cp "$binary" "$app/Contents/MacOS/$BINARY_NAME"
 chmod 755 "$app/Contents/MacOS/$BINARY_NAME"
 cp "$cad_binary" "$app/Contents/MacOS/$CAD_BINARY_NAME"
 chmod 755 "$app/Contents/MacOS/$CAD_BINARY_NAME"
-fill_template "$here/Info.plist.in" "$app/Contents/Info.plist" "VERSION=$numeric"
+fill_template "$here/Info.plist.in" "$app/Contents/Info.plist" "VERSION=$number"
 plutil -lint "$app/Contents/Info.plist"
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
 copy_licences "$app/Contents/Resources" "$number"

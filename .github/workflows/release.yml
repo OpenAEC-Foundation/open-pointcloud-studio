@@ -13,8 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (for example v1.0.0); must equal the version in native/Cargo.toml'
-        required: true
+        description: 'Version tag vYYYY.W.N, for example v2026.43.0; must equal the version in native/Cargo.toml. Empty: the next number of this week (name the tag to run again over its draft)'
+        required: false
+        default: ''
       draft_only:
         description: 'Leave the release as a draft to look at before publishing'
         type: boolean
@@ -31,19 +32,33 @@ defaults:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    # The next number of a week counts the draft releases too, and only a
+    # token that may write releases sees them.
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       number: ${{ steps.version.outputs.number }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
       - name: Check the version against the tag
         id: version
         env:
-          REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT: ${{ inputs.version }}
+          REF: ${{ github.ref_name }}
         run: |
-          [[ "$REQUESTED" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] \
-            || { echo "::error::'$REQUESTED' is not a version tag like v1.2.3 or v1.2.3-rc1"; exit 1; }
+          if [[ "$EVENT" != workflow_dispatch ]]; then
+            REQUESTED=$REF
+          elif [[ -n "$INPUT" ]]; then
+            REQUESTED=$INPUT
+          else
+            REQUESTED=v$(bash native/packaging/set-version.sh next)
+            echo "No version was given; the next one of this week is $REQUESTED. A draft that a failed run left behind counts, so give its tag to run again over it."
+          fi
+          [[ "$REQUESTED" =~ ^v[1-9][0-9]{3}\.([1-9]|[1-4][0-9]|5[0-3])\.(0|[1-9][0-9]?)$ ]] \
+            || { echo "::error::'$REQUESTED' is not a version tag like v2026.43.0 (year, ISO week without a leading zero, sequence from 0)"; exit 1; }
           bash native/packaging/version.sh "$REQUESTED" | tee -a "$GITHUB_OUTPUT"
       - name: Check that the changelog describes this version
         run: bash native/packaging/release-notes.sh --check "${{ steps.version.outputs.number }}"
@@ -132,9 +147,7 @@ jobs:
         run: bash native/packaging/release-notes.sh "$NUMBER" > notes.md
       # A draft left by an earlier run is taken over and moved to this commit.
       - name: Create the draft release
-        env:
-          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
-        run: bash native/packaging/draft-release.sh "$TAG" notes.md "$PRERELEASE"
+        run: bash native/packaging/draft-release.sh "$TAG" notes.md
       - name: Upload the packages
         working-directory: assets
         run: |
