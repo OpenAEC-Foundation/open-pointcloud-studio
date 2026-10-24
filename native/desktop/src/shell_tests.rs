@@ -678,6 +678,73 @@ fn shared_backstage_nav_keeps_page_rhythm_and_selected_marker() {
 }
 
 #[test]
+fn the_about_row_of_the_file_menu_is_reached_by_scrolling_at_760_pixels() {
+    use iced::mouse;
+
+    let mut studio = Studio {
+        file_open: true,
+        ..Studio::default()
+    };
+    // The page that is shown carries the accent bar at the left of its row.
+    studio.file_page = crate::file_view::FilePage::About;
+    let size = iced::Size::new(1280.0, 760.0);
+    let wheel = iced::Event::Mouse(mouse::Event::WheelScrolled {
+        delta: mouse::ScrollDelta::Lines { x: 0.0, y: -20.0 },
+    });
+    for theme in [UiTheme::Light, UiTheme::Forge] {
+        studio.ui_theme = theme;
+        let accent = theme.colors().accent;
+        // The marked rows of the menu, between the ribbon tabs and the
+        // status bar.
+        let marked = |picture: &crate::test_render::Picture| -> Vec<u32> {
+            (60..738).filter(|&y| picture.is(1, y, accent)).collect()
+        };
+        // At this height the menu ends above the About row ...
+        let still = crate::test_render::render_window(&studio, size);
+        assert!(marked(&still).len() < 40, "{} About in view", theme.key());
+        // ... and the wheel over the menu brings its 40 pixels in.
+        let over_menu = mouse::Cursor::Available(iced::Point::new(130.0, 300.0));
+        let (scrolled, _) = crate::test_render::render_after(
+            studio.view(),
+            &theme.iced(),
+            size,
+            over_menu,
+            std::slice::from_ref(&wheel),
+        );
+        // The scroll stops part of a pixel short of the row's last one.
+        let rows = marked(&scrolled);
+        assert!(rows.len() >= 39, "{} About after scrolling", theme.key());
+        assert_eq!(
+            rows.last().unwrap() - rows[0] + 1,
+            rows.len() as u32,
+            "{} one row",
+            theme.key()
+        );
+        // There a click opens the page.
+        let on_row = mouse::Cursor::Available(iced::Point::new(130.0, rows[20] as f32));
+        let (_, messages) = crate::test_render::render_after(
+            studio.view(),
+            &theme.iced(),
+            size,
+            on_row,
+            &[
+                wheel.clone(),
+                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ],
+        );
+        assert!(
+            messages.iter().any(|message| matches!(
+                message,
+                Message::FilePage(crate::file_view::FilePage::About)
+            )),
+            "{} About clicked",
+            theme.key()
+        );
+    }
+}
+
+#[test]
 #[ignore = "regenerate native review images on demand"]
 fn export_harmonized_shell_previews() {
     let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../design");
@@ -735,9 +802,10 @@ fn export_file_task_pages_review() {
         file_open: true,
         ..Studio::default()
     };
+    // Two pages with a row in the menu, which marks the one that is shown.
     for (page, page_name) in [
         (crate::file_view::FilePage::New, "new"),
-        (crate::file_view::FilePage::Open, "open"),
+        (crate::file_view::FilePage::Export, "export"),
     ] {
         studio.file_page = page;
         for (theme, theme_name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
@@ -757,7 +825,8 @@ fn export_file_minimum_window_review() {
         file_open: true,
         ..Studio::default()
     };
-    studio.file_page = crate::file_view::FilePage::Open;
+    // New, the first row, as the test of this size below has it.
+    studio.file_page = crate::file_view::FilePage::New;
     for (theme, name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
         studio.ui_theme = theme;
         crate::test_render::render_window(&studio, iced::Size::new(720.0, 480.0))

@@ -2354,6 +2354,45 @@ mod tests {
     }
 
     #[test]
+    fn the_caption_of_the_model_beside_a_photo_lights_up_and_shows_the_model() {
+        use iced::mouse;
+
+        let size = Size::new(300.0, 24.0);
+        // Right of its title, where the caption shows its own background.
+        let spot = UiPoint::new(250.0, 10.0);
+        for theme in crate::ui_theme::UiTheme::ALL {
+            let colors = theme.colors();
+            let away = crate::test_render::render(
+                crate::model_pane_caption(theme.shared()),
+                &theme.iced(),
+                size,
+            );
+            assert!(away.is(250, 10, colors.bg_lighter), "{theme:?}");
+            let (over, messages) = crate::test_render::render_after(
+                crate::model_pane_caption(theme.shared()),
+                &theme.iced(),
+                size,
+                mouse::Cursor::Available(spot),
+                &[iced::Event::Mouse(mouse::Event::ButtonPressed(
+                    mouse::Button::Left,
+                ))],
+            );
+            // Under the pointer it is tinted as a button of the ribbon.
+            assert!(
+                !over.is(250, 10, colors.bg_lighter),
+                "{theme:?}: {:?}",
+                over.rgb(250, 10)
+            );
+            assert!(matches!(
+                messages.as_slice(),
+                [Message::Tabs(crate::view_tabs::TabAction::Show(
+                    crate::view_tabs::TabId::Model
+                ))]
+            ));
+        }
+    }
+
+    #[test]
     fn walking_on_leaves_the_photo_and_a_photo_entered_while_walking_returns_there() {
         let (mut studio, _directory, source) = studio_with_photos();
         let walked = send(

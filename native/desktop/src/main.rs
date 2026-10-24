@@ -11873,20 +11873,10 @@ impl Studio {
                 .and_then(|shown| shown.photo.name.as_deref())
                 .map(str::to_owned)
                 .unwrap_or_else(|| i18n::tr("Photo").to_owned());
-            // Each pane carries the caption of a shared panel; a click on that
-            // of the 3D model shows its tab.
+            // Each pane carries the caption of a shared panel.
             let theme = self.ui_theme.shared();
             let model_weight = (self.photo_split_ratio * 1000.0).round() as u16;
-            let model = column![
-                iced::widget::mouse_area(openaec_ui::widgets::panel_header(
-                    i18n::tr("3D model"),
-                    theme,
-                ))
-                .on_press(Message::Tabs(view_tabs::TabAction::Show(
-                    view_tabs::TabId::Model,
-                ))),
-                model_canvas,
-            ];
+            let model = column![model_pane_caption(theme), model_canvas];
             let photo = column![openaec_ui::widgets::panel_header(photo_name, theme), canvas];
             let panes: Element<'_, Message> = if self.photo_split_vertical {
                 column![
@@ -12288,6 +12278,21 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::FitSectionToSelection => ToolIcon::Select,
         _ => ToolIcon::Cloud,
     }
+}
+
+/// The caption of the pane of the 3D model beside a photo. A click on it
+/// shows the tab of the model, and it lights up under the pointer as a
+/// button of the ribbon does; like every button of the window it keeps the
+/// arrow.
+fn model_pane_caption(theme: openaec_ui::Theme) -> Element<'static, Message> {
+    iced::widget::mouse_area(ui_style::hover_tint_filled(
+        openaec_ui::widgets::panel_header(i18n::tr("3D model"), theme),
+        |colors| colors.ribbon_btn_hover,
+    ))
+    .on_press(Message::Tabs(view_tabs::TabAction::Show(
+        view_tabs::TabId::Model,
+    )))
+    .into()
 }
 
 fn ribbon_style(theme: &Theme) -> container::Style {

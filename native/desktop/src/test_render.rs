@@ -77,11 +77,24 @@ pub(crate) fn render(element: Element<'_, Message>, theme: &Theme, size: Size) -
 
 /// As `render`, with the pointer at `cursor`.
 pub(crate) fn render_under(
-    mut element: Element<'_, Message>,
+    element: Element<'_, Message>,
     theme: &Theme,
     size: Size,
     cursor: mouse::Cursor,
 ) -> Picture {
+    render_after(element, theme, size, cursor, &[]).0
+}
+
+/// As `render_under`, after `events` have reached the element with the
+/// pointer at `cursor`, such as a turn of the wheel that scrolls a list;
+/// with the messages those events sent.
+pub(crate) fn render_after(
+    mut element: Element<'_, Message>,
+    theme: &Theme,
+    size: Size,
+    cursor: mouse::Cursor,
+    events: &[iced::Event],
+) -> (Picture, Vec<Message>) {
     load_fonts();
     let mut renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
         crate::fonts::REGULAR,
@@ -92,6 +105,20 @@ pub(crate) fn render_under(
         element
             .as_widget()
             .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    let mut messages = Vec::new();
+    for event in events {
+        let mut shell = iced::advanced::Shell::new(&mut messages);
+        let _ = element.as_widget_mut().on_event(
+            &mut tree,
+            event.clone(),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut iced::advanced::clipboard::Null,
+            &mut shell,
+            &Rectangle::with_size(size),
+        );
+    }
     element.as_widget().draw(
         &tree,
         &mut renderer,
@@ -135,11 +162,14 @@ pub(crate) fn render_under(
         CLEAR,
         &[],
     );
-    Picture {
-        width,
-        height,
-        bytes,
-    }
+    (
+        Picture {
+            width,
+            height,
+            bytes,
+        },
+        messages,
+    )
 }
 
 /// The whole window of `studio` in `size`, in its theme.

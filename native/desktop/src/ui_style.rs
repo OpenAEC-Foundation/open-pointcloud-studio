@@ -333,6 +333,21 @@ pub fn hover_tint<'a>(
     Element::new(HoverTint {
         content: content.into(),
         tint,
+        over_fill: false,
+    })
+}
+
+/// As [`hover_tint`], for content that fills its own background, such as
+/// the caption of a shared panel that can be clicked: the tint lies over
+/// that background and under the text.
+pub fn hover_tint_filled<'a>(
+    content: impl Into<Element<'a, Message>>,
+    tint: fn(&UiColors) -> Color,
+) -> Element<'a, Message> {
+    Element::new(HoverTint {
+        content: content.into(),
+        tint,
+        over_fill: true,
     })
 }
 
@@ -340,6 +355,10 @@ pub fn hover_tint<'a>(
 struct HoverTint<'a> {
     content: Element<'a, Message>,
     tint: fn(&UiColors) -> Color,
+    /// Whether the tint is drawn after the content, over the background
+    /// the content fills itself. The renderer draws the text of a layer
+    /// after its fills, so the text stays above the tint.
+    over_fill: bool,
 }
 
 impl Widget<Message, Theme, Renderer> for HoverTint<'_> {
@@ -386,19 +405,27 @@ impl Widget<Message, Theme, Renderer> for HoverTint<'_> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        if cursor.is_over(layout.bounds()) {
-            use iced::advanced::Renderer as _;
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: layout.bounds(),
-                    ..renderer::Quad::default()
-                },
-                (self.tint)(&colors(theme)),
-            );
+        let tint = |renderer: &mut Renderer| {
+            if cursor.is_over(layout.bounds()) {
+                use iced::advanced::Renderer as _;
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: layout.bounds(),
+                        ..renderer::Quad::default()
+                    },
+                    (self.tint)(&colors(theme)),
+                );
+            }
+        };
+        if !self.over_fill {
+            tint(renderer);
         }
         self.content
             .as_widget()
             .draw(tree, renderer, theme, style, layout, cursor, viewport);
+        if self.over_fill {
+            tint(renderer);
+        }
     }
 
     fn operate(
