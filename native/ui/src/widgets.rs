@@ -1,4 +1,5 @@
 //! Canonical controls for domain panels. Use these instead of restyling buttons per app.
+pub use crate::popover::{popover, popover_aligned};
 use crate::{
     dual_range::DualRange,
     fonts,
@@ -8,12 +9,11 @@ use crate::{
 };
 use iced::{
     widget::{
-        button, checkbox, column, container, pick_list, progress_bar, row,
-        scrollable, slider, stack, svg, text, text_input, tooltip, Space,
+        button, checkbox, column, container, pick_list, progress_bar, row, scrollable, slider,
+        stack, svg, text, text_input, tooltip, Space,
     },
     Alignment, Background, Border, Element, Fill, Length, Padding,
 };
-pub use crate::popover::{popover, popover_aligned};
 
 /// A destination in the shared File/Backstage navigation.
 pub struct BackstagePage<M> {
@@ -70,14 +70,14 @@ where
         .height(40)
     };
     let pages = |entries: Vec<BackstagePage<M>>| {
-        entries.into_iter().fold(column![].width(Fill), |list, entry| list.push(page(entry)))
+        entries
+            .into_iter()
+            .fold(column![].width(Fill), |list, entry| list.push(page(entry)))
     };
     let item = |label: String, message: M| {
         button(text(label).size(14))
             .on_press(message)
-            .style(move |theme, status| {
-                ribbon_button_style(resolve_theme(theme), false, status)
-            })
+            .style(move |theme, status| ribbon_button_style(resolve_theme(theme), false, status))
             .width(Fill)
             .padding([11, 18])
     };
@@ -102,20 +102,26 @@ where
         item(footer.exit.0, footer.exit.1),
     ]
     .width(Fill);
-    container(column![
-        scrollable(top)
-            .height(Fill)
-            .style(move |theme, status| scrollable_style(resolve_theme(theme), status)),
-        footer,
-    ]
-    .height(Fill))
+    container(
+        column![
+            scrollable(top)
+                .height(Fill)
+                .style(move |theme, status| scrollable_style(resolve_theme(theme), status)),
+            footer,
+        ]
+        .height(Fill),
+    )
     .width(260)
     .height(Fill)
     .style(move |theme| {
         let t = resolve_theme(theme).tokens();
         container::Style::default()
             .background(t.bg_lighter)
-            .border(Border { color: t.border, width: 1.0, radius: 0.0.into() })
+            .border(Border {
+                color: t.border,
+                width: 1.0,
+                radius: 0.0.into(),
+            })
     })
     .into()
 }
@@ -128,7 +134,9 @@ pub fn backstage_page_heading<'a, M: 'a>(
 ) -> Element<'a, M> {
     column![
         text(title.into()).size(22).font(fonts::HEADING),
-        text(lead.into()).size(13).color(theme.tokens().text_secondary),
+        text(lead.into())
+            .size(13)
+            .color(theme.tokens().text_secondary),
     ]
     .spacing(6)
     .into()
@@ -139,7 +147,11 @@ pub fn backstage_group_caption<'a, M: 'a>(
     theme: Theme,
 ) -> Element<'a, M> {
     container(text(label.into()).size(10).color(theme.tokens().text_muted))
-        .padding(Padding { top: 26.0, bottom: 6.0, ..Padding::ZERO })
+        .padding(Padding {
+            top: 26.0,
+            bottom: 6.0,
+            ..Padding::ZERO
+        })
         .into()
 }
 
@@ -157,9 +169,11 @@ where
     button(
         column![
             text(title.into()).size(15).font(fonts::STRONG),
-            text(detail.into()).size(12).style(move |theme| text::Style {
-                color: Some(resolve_theme(theme).tokens().text_secondary),
-            }),
+            text(detail.into())
+                .size(12)
+                .style(move |theme| text::Style {
+                    color: Some(resolve_theme(theme).tokens().text_secondary),
+                }),
         ]
         .spacing(3),
     )
@@ -184,10 +198,14 @@ where
 pub fn backstage_tile_column<'a, M: 'a>(
     tiles: impl IntoIterator<Item = Element<'a, M>>,
 ) -> Element<'a, M> {
-    container(iced::widget::Column::with_children(tiles).spacing(8).width(Fill))
-        .width(Fill)
-        .max_width(BACKSTAGE_TILE_WIDTH)
-        .into()
+    container(
+        iced::widget::Column::with_children(tiles)
+            .spacing(8)
+            .width(Fill),
+    )
+    .width(Fill)
+    .max_width(BACKSTAGE_TILE_WIDTH)
+    .into()
 }
 
 pub fn slider_style(theme: Theme, status: slider::Status) -> slider::Style {
@@ -357,11 +375,21 @@ pub fn form_field<'a, M: Clone + 'a>(
     let t = theme.tokens();
     let value = value.into();
     column![
-        text(label.into()).font(fonts::MEDIUM).size(12).color(t.text_secondary),
-        text_input("", &value).on_input(on_input)
-            .font(fonts::BODY).size(13).padding([11, 14]).width(Fill)
+        text(label.into())
+            .font(fonts::MEDIUM)
+            .size(12)
+            .color(t.text_secondary),
+        text_input("", &value)
+            .on_input(on_input)
+            .font(fonts::BODY)
+            .size(13)
+            .padding([11, 14])
+            .width(Fill)
             .style(move |_, status| text_input_style(theme, status)),
-    ].spacing(7).width(width).into()
+    ]
+    .spacing(7)
+    .width(width)
+    .into()
 }
 
 /// Full-page empty collection surface used by application workflow screens.
@@ -374,17 +402,37 @@ pub fn empty_collection<'a, M: Clone + 'a>(
     width: Length,
 ) -> Element<'a, M> {
     let t = theme.tokens();
-    container(column![
-        text(title.into()).font(fonts::HEADING).size(29).color(t.text),
-        button(text(action_label.into()).font(fonts::STRONG).size(13))
-            .padding([12, 22]).on_press(on_action)
-            .style(move |_, status| primary_button_style(theme, status)),
-        container(text(empty_label.into()).size(14).color(t.text_secondary))
-            .width(Fill).height(88).align_x(Alignment::Center).align_y(Alignment::Center),
-    ].spacing(26)).padding(32).width(width).height(300)
-        .style(move |_| container::Style::default().background(t.bg_lighter)
-            .border(Border { color: t.border, width: 1.0, radius: 10.0.into() }))
-        .into()
+    container(
+        column![
+            text(title.into())
+                .font(fonts::HEADING)
+                .size(29)
+                .color(t.text),
+            button(text(action_label.into()).font(fonts::STRONG).size(13))
+                .padding([12, 22])
+                .on_press(on_action)
+                .style(move |_, status| primary_button_style(theme, status)),
+            container(text(empty_label.into()).size(14).color(t.text_secondary))
+                .width(Fill)
+                .height(88)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center),
+        ]
+        .spacing(26),
+    )
+    .padding(32)
+    .width(width)
+    .height(300)
+    .style(move |_| {
+        container::Style::default()
+            .background(t.bg_lighter)
+            .border(Border {
+                color: t.border,
+                width: 1.0,
+                radius: 10.0.into(),
+            })
+    })
+    .into()
 }
 
 /// Choice field and its popup use the same tokens as text fields.
@@ -653,7 +701,10 @@ pub fn ribbon_tab_style(theme: Theme, active: bool, status: button::Status) -> b
 /// The source Style Book's 28 px tab, including the active outline and the
 /// gap that masks the continuous accent rule. Callers own labels and actions.
 #[derive(Clone, Copy)]
-pub enum RibbonTabKind { Regular { active: bool }, File }
+pub enum RibbonTabKind {
+    Regular { active: bool },
+    File,
+}
 
 pub fn ribbon_tab<'a, M: Clone + 'a>(
     content: Element<'a, M>,
@@ -674,9 +725,11 @@ pub fn ribbon_tab<'a, M: Clone + 'a>(
         RibbonTabKind::File => tokens.file_tab_bg,
         RibbonTabKind::Regular { active: false } => iced::Color::TRANSPARENT,
     };
-    let edge = || container(Space::new(1, Fill)).width(1).style(move |_| {
-        container::Style::default().background(outline)
-    });
+    let edge = || {
+        container(Space::new(1, Fill))
+            .width(1)
+            .style(move |_| container::Style::default().background(outline))
+    };
     let face = button(content)
         .on_press(message)
         .width(Fill)
@@ -694,15 +747,16 @@ pub fn ribbon_tab<'a, M: Clone + 'a>(
                 ..button::Style::default()
             },
         });
-    let top = container(container(Space::new(width - 8.0, 1)).style(move |_| {
-        container::Style::default().background(outline)
-    }))
+    let top = container(
+        container(Space::new(width - 8.0, 1))
+            .style(move |_| container::Style::default().background(outline)),
+    )
     .width(width)
     .height(1)
     .center_x(Fill);
-    let bottom = container(Space::new(Fill, 2)).height(2).style(move |_| {
-        container::Style::default().background(gap)
-    });
+    let bottom = container(Space::new(Fill, 2))
+        .height(2)
+        .style(move |_| container::Style::default().background(gap));
     column![top, row![edge(), face, edge()].height(25), bottom]
         .width(width)
         .height(metrics::TABS)
@@ -714,16 +768,18 @@ pub fn ribbon_tab_strip<'a, M: 'a>(content: Element<'a, M>, theme: Theme) -> Ele
     let tokens = theme.tokens();
     let baseline = column![
         Space::new(Fill, metrics::TABS - 1),
-        container(Space::new(Fill, 1)).style(move |_| {
-            container::Style::default().background(tokens.accent)
-        }),
+        container(Space::new(Fill, 1))
+            .style(move |_| { container::Style::default().background(tokens.accent) }),
     ]
     .height(metrics::TABS);
-    container(stack![baseline, container(content).padding([0, 8]).height(metrics::TABS)])
-        .width(Fill)
-        .height(metrics::TABS)
-        .style(move |_| container::Style::default().background(tokens.bg_lighter))
-        .into()
+    container(stack![
+        baseline,
+        container(content).padding([0, 8]).height(metrics::TABS)
+    ])
+    .width(Fill)
+    .height(metrics::TABS)
+    .style(move |_| container::Style::default().background(tokens.bg_lighter))
+    .into()
 }
 
 /// Tauri Style Book ribbon group: 94 px including the 4 px top inset,
@@ -776,14 +832,19 @@ pub fn ribbon_group<'a, M: 'a>(
 /// Typed ribbon input using the shared group height and a source-specific width.
 /// Values and actions remain app-owned.
 #[derive(Clone)]
-struct RibbonChoice { index: usize, label: String }
+struct RibbonChoice {
+    index: usize,
+    label: String,
+}
 impl std::fmt::Display for RibbonChoice {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.label.fmt(formatter)
     }
 }
 impl PartialEq for RibbonChoice {
-    fn eq(&self, other: &Self) -> bool { self.index == other.index }
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
+    }
 }
 
 pub fn ribbon_control<'a, M: Clone + 'a>(
@@ -795,43 +856,74 @@ pub fn ribbon_control<'a, M: Clone + 'a>(
     let title = label.into();
     let width = control.width();
     let compact = matches!(control, RibbonControl::FormStack { .. });
-    let dense_form = matches!(&control, RibbonControl::FormStack { fields, .. } if fields.len() >= 4);
+    let dense_form =
+        matches!(&control, RibbonControl::FormStack { fields, .. } if fields.len() >= 4);
     let body: Element<'a, M> = match control {
-        RibbonControl::Slider { minimum, maximum, value, step, unit, on_change } => {
-            column![
-                row![
-                    text(title).font(fonts::BODY).size(10).color(t.text),
-                    iced::widget::horizontal_space(),
-                    text(format!("{value:.0}{unit}")).font(fonts::STRONG).size(10).color(t.text),
-                ],
-                slider(minimum..=maximum, value, on_change)
-                    .step(step)
-                    .width(158)
-                    .style(move |_, status| slider_style(theme, status)),
-            ]
-            .spacing(3)
-            .into()
-        }
-        RibbonControl::Range { minimum, maximum, lower, upper, step, unit, on_lower, on_upper } => {
-            column![
-                row![
-                    text(title).font(fonts::BODY).size(10).color(t.text),
-                    iced::widget::horizontal_space(),
-                    text(format!("{lower:.0}–{upper:.0}{unit}")).font(fonts::STRONG).size(10).color(t.text),
-                ],
-                Element::new(DualRange { theme, minimum, maximum, lower, upper, step, on_lower, on_upper }),
-            ]
-            .spacing(3)
-            .into()
-        }
+        RibbonControl::Slider {
+            minimum,
+            maximum,
+            value,
+            step,
+            unit,
+            on_change,
+        } => column![
+            row![
+                text(title).font(fonts::BODY).size(10).color(t.text),
+                iced::widget::horizontal_space(),
+                text(format!("{value:.0}{unit}"))
+                    .font(fonts::STRONG)
+                    .size(10)
+                    .color(t.text),
+            ],
+            slider(minimum..=maximum, value, on_change)
+                .step(step)
+                .width(158)
+                .style(move |_, status| slider_style(theme, status)),
+        ]
+        .spacing(3)
+        .into(),
+        RibbonControl::Range {
+            minimum,
+            maximum,
+            lower,
+            upper,
+            step,
+            unit,
+            on_lower,
+            on_upper,
+        } => column![
+            row![
+                text(title).font(fonts::BODY).size(10).color(t.text),
+                iced::widget::horizontal_space(),
+                text(format!("{lower:.0}–{upper:.0}{unit}"))
+                    .font(fonts::STRONG)
+                    .size(10)
+                    .color(t.text),
+            ],
+            Element::new(DualRange {
+                theme,
+                minimum,
+                maximum,
+                lower,
+                upper,
+                step,
+                on_lower,
+                on_upper
+            }),
+        ]
+        .spacing(3)
+        .into(),
         RibbonControl::Segmented { options, selected } => {
             let mut choices = iced::widget::Row::new().spacing(1);
             for (index, (name, message)) in options.into_iter().enumerate() {
                 let active = selected == index;
                 let caption: Element<'a, M> = if let Some((first, second)) = name.split_once('\n') {
-                    column![text(first.to_owned()).size(9), text(second.to_owned()).size(9)]
-                        .align_x(Alignment::Center)
-                        .into()
+                    column![
+                        text(first.to_owned()).size(9),
+                        text(second.to_owned()).size(9)
+                    ]
+                    .align_x(Alignment::Center)
+                    .into()
                 } else {
                     text(name).size(9).into()
                 };
@@ -844,41 +936,88 @@ pub fn ribbon_control<'a, M: Clone + 'a>(
                         .style(move |_, status| ribbon_button_style(theme, active, status)),
                 );
             }
-            column![text(title).font(fonts::BODY).size(10).color(t.text), choices]
-                .spacing(3)
-                .into()
+            column![
+                text(title).font(fonts::BODY).size(10).color(t.text),
+                choices
+            ]
+            .spacing(3)
+            .into()
         }
-        RibbonControl::Select { options, selected, show_label, .. } => {
-            let choices: Vec<RibbonChoice> = options.iter().enumerate()
-                .map(|(index, (label, _))| RibbonChoice { index, label: label.clone() })
+        RibbonControl::Select {
+            options,
+            selected,
+            show_label,
+            ..
+        } => {
+            let choices: Vec<RibbonChoice> = options
+                .iter()
+                .enumerate()
+                .map(|(index, (label, _))| RibbonChoice {
+                    index,
+                    label: label.clone(),
+                })
                 .collect();
             let current = choices.get(selected).cloned();
-            let field = pick_list(choices, current, move |choice: RibbonChoice| options[choice.index].1.clone())
-                .font(fonts::MEDIUM)
-                .text_size(11)
-                .padding([4, 6])
-                .width(width - 12.0)
-                .style(move |_, status| pick_list_style(theme, status))
-                .menu_style(move |_| pick_list_menu_style(theme));
-            if !show_label { field.into() }
-            else { column![text(title).font(fonts::BODY).size(10).color(t.text), field].spacing(3).into() }
+            let field = pick_list(choices, current, move |choice: RibbonChoice| {
+                options[choice.index].1.clone()
+            })
+            .font(fonts::MEDIUM)
+            .text_size(11)
+            .padding([4, 6])
+            .width(width - 12.0)
+            .style(move |_, status| pick_list_style(theme, status))
+            .menu_style(move |_| pick_list_menu_style(theme));
+            if !show_label {
+                field.into()
+            } else {
+                column![text(title).font(fonts::BODY).size(10).color(t.text), field]
+                    .spacing(3)
+                    .into()
+            }
         }
-        RibbonControl::Sliders { items, minimum, maximum, step, unit, .. } => {
+        RibbonControl::Sliders {
+            items,
+            minimum,
+            maximum,
+            step,
+            unit,
+            ..
+        } => {
             let mut rows = iced::widget::Column::new().spacing(4);
             for item in items {
-                rows = rows.push(row![
-                    item.icon.view(14, t.text),
-                    text(item.label).font(fonts::BODY).size(11).color(t.text).width(58),
-                    slider(minimum..=maximum, item.value, item.on_change)
-                        .step(step).width(96).height(18)
-                        .style(move |_, status| slider_style(theme, status)),
-                    text(format!("{:.0}{unit}", item.value)).font(fonts::MEDIUM).size(11).color(t.text)
-                        .width(34).align_x(iced::alignment::Horizontal::Right),
-                ].spacing(4).align_y(Alignment::Center).height(20));
+                rows = rows.push(
+                    row![
+                        item.icon.view(14, t.text),
+                        text(item.label)
+                            .font(fonts::BODY)
+                            .size(11)
+                            .color(t.text)
+                            .width(58),
+                        slider(minimum..=maximum, item.value, item.on_change)
+                            .step(step)
+                            .width(96)
+                            .height(18)
+                            .style(move |_, status| slider_style(theme, status)),
+                        text(format!("{:.0}{unit}", item.value))
+                            .font(fonts::MEDIUM)
+                            .size(11)
+                            .color(t.text)
+                            .width(34)
+                            .align_x(iced::alignment::Horizontal::Right),
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center)
+                    .height(20),
+                );
             }
             rows.into()
         }
-        RibbonControl::Number { value, on_change, show_label, .. } => {
+        RibbonControl::Number {
+            value,
+            on_change,
+            show_label,
+            ..
+        } => {
             let field = text_input("", &value)
                 .on_input(on_change)
                 .font(fonts::MEDIUM)
@@ -887,130 +1026,279 @@ pub fn ribbon_control<'a, M: Clone + 'a>(
                 .style(move |_, status| text_input_style(theme, status));
             if show_label {
                 column![text(title).font(fonts::BODY).size(10).color(t.text), field]
-                    .spacing(3).into()
-            } else { field.into() }
+                    .spacing(3)
+                    .into()
+            } else {
+                field.into()
+            }
         }
-        RibbonControl::FormStack { fields, label_width, .. } => {
+        RibbonControl::FormStack {
+            fields,
+            label_width,
+            ..
+        } => {
             let mut form = iced::widget::Column::new().spacing(1);
             let field_width = (width - 16.0 - label_width).max(60.0);
             let row_height = if dense_form { 16 } else { 19 };
             let padding = if dense_form { [0, 2] } else { [1, 3] };
             for field in fields {
                 let (label, input): (String, Element<'a, M>) = match field {
-                    RibbonFormField::Number { label, value, on_change } => {
-                        let input = text_input("", &value).on_input(on_change)
-                            .font(fonts::MEDIUM).size(11).padding(padding).width(field_width)
+                    RibbonFormField::Number {
+                        label,
+                        value,
+                        on_change,
+                    } => {
+                        let input = text_input("", &value)
+                            .on_input(on_change)
+                            .font(fonts::MEDIUM)
+                            .size(11)
+                            .padding(padding)
+                            .width(field_width)
                             .style(move |_, status| text_input_style(theme, status));
                         (label, input.into())
                     }
-                    RibbonFormField::Select { label, options, selected } => {
-                        let choices: Vec<RibbonChoice> = options.iter().enumerate()
-                            .map(|(index, (label, _))| RibbonChoice { index, label: label.clone() })
+                    RibbonFormField::Select {
+                        label,
+                        options,
+                        selected,
+                    } => {
+                        let choices: Vec<RibbonChoice> = options
+                            .iter()
+                            .enumerate()
+                            .map(|(index, (label, _))| RibbonChoice {
+                                index,
+                                label: label.clone(),
+                            })
                             .collect();
                         let current = choices.get(selected).cloned();
-                        let input = pick_list(choices, current,
-                            move |choice: RibbonChoice| options[choice.index].1.clone())
-                            .font(fonts::MEDIUM).text_size(11).padding(padding).width(field_width)
-                            .style(move |_, status| pick_list_style(theme, status))
-                            .menu_style(move |_| pick_list_menu_style(theme));
+                        let input = pick_list(choices, current, move |choice: RibbonChoice| {
+                            options[choice.index].1.clone()
+                        })
+                        .font(fonts::MEDIUM)
+                        .text_size(11)
+                        .padding(padding)
+                        .width(field_width)
+                        .style(move |_, status| pick_list_style(theme, status))
+                        .menu_style(move |_| pick_list_menu_style(theme));
                         (label, input.into())
                     }
-                    RibbonFormField::Slider { label, minimum, maximum, value, step,
-                        value_text, unit, on_change, on_input } => {
+                    RibbonFormField::Slider {
+                        label,
+                        minimum,
+                        maximum,
+                        value,
+                        step,
+                        value_text,
+                        unit,
+                        on_change,
+                        on_input,
+                    } => {
                         let track = slider(minimum..=maximum, value, on_change)
-                            .step(step).width(96).height(14)
+                            .step(step)
+                            .width(96)
+                            .height(14)
                             .style(move |_, status| slider_style(theme, status));
-                        let value = text_input("", &value_text).on_input(on_input)
-                            .font(fonts::MEDIUM).size(11).padding([0, 2]).width(34)
+                        let value = text_input("", &value_text)
+                            .on_input(on_input)
+                            .font(fonts::MEDIUM)
+                            .size(11)
+                            .padding([0, 2])
+                            .width(34)
                             .style(move |_, status| text_input_style(theme, status));
-                        (label, row![track, value, text(unit).size(11).color(t.text)]
-                            .spacing(2).align_y(Alignment::Center).into())
+                        (
+                            label,
+                            row![track, value, text(unit).size(11).color(t.text)]
+                                .spacing(2)
+                                .align_y(Alignment::Center)
+                                .into(),
+                        )
                     }
                 };
-                form = form.push(row![
-                    text(label).font(fonts::BODY).size(11).color(t.text).width(label_width), input,
-                ].spacing(4).align_y(Alignment::Center).height(row_height));
+                form = form.push(
+                    row![
+                        text(label)
+                            .font(fonts::BODY)
+                            .size(11)
+                            .color(t.text)
+                            .width(label_width),
+                        input,
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center)
+                    .height(row_height),
+                );
             }
             form.into()
         }
-        RibbonControl::ColorSelect { options, selected, current, rows_per_column, open, on_toggle, on_close, none, custom, .. } => {
+        RibbonControl::ColorSelect {
+            options,
+            selected,
+            current,
+            rows_per_column,
+            open,
+            on_toggle,
+            on_close,
+            none,
+            custom,
+            ..
+        } => {
             let byte = |value: f32| (value * 255.0).round() as u8;
-            let color_label = format!("#{:02x}{:02x}{:02x}", byte(current.r), byte(current.g), byte(current.b));
-            let swatch = container(Space::new(16, 16)).style(move |_| container::Style::default()
-                .background(current)
-                .border(Border { color: theme.border_strong(), width: 1.0, radius: 1.0.into() }));
-            let anchor = button(row![swatch, text(color_label).font(fonts::MEDIUM).size(11).color(t.text),
-                text("▾").size(11).color(t.text_secondary)].spacing(5).align_y(Alignment::Center))
-                .padding([2, 4]).width(width - 12.0).height(24)
-                .on_press(on_toggle)
-                .style(move |_, status| ribbon_button_style(theme, open, status));
+            let color_label = format!(
+                "#{:02x}{:02x}{:02x}",
+                byte(current.r),
+                byte(current.g),
+                byte(current.b)
+            );
+            let swatch = container(Space::new(16, 16)).style(move |_| {
+                container::Style::default()
+                    .background(current)
+                    .border(Border {
+                        color: theme.border_strong(),
+                        width: 1.0,
+                        radius: 1.0.into(),
+                    })
+            });
+            let anchor = button(
+                row![
+                    swatch,
+                    text(color_label).font(fonts::MEDIUM).size(11).color(t.text),
+                    text("▾").size(11).color(t.text_secondary)
+                ]
+                .spacing(5)
+                .align_y(Alignment::Center),
+            )
+            .padding([2, 4])
+            .width(width - 12.0)
+            .height(24)
+            .on_press(on_toggle)
+            .style(move |_, status| ribbon_button_style(theme, open, status));
             let selected_swatch = (selected < options.len()).then_some(selected);
             let grid = color_grid(theme, options, rows_per_column, selected_swatch);
             let has_actions = none.is_some() || custom.is_some();
             let mut actions = iced::widget::Row::new().spacing(4);
             if let Some((name, message)) = none {
-                actions = actions.push(button(text(name).font(fonts::BODY).size(11))
-                    .padding([3, 6]).on_press(message)
-                    .style(move |_, status| ribbon_button_style(theme, false, status)));
+                actions = actions.push(
+                    button(text(name).font(fonts::BODY).size(11))
+                        .padding([3, 6])
+                        .on_press(message)
+                        .style(move |_, status| ribbon_button_style(theme, false, status)),
+                );
             }
             if let Some(editor) = &custom {
                 let editing = editor.editing;
-                actions = actions.push(button(text(editor.label.clone()).font(fonts::BODY).size(11))
-                    .padding([3, 6]).on_press(editor.on_toggle.clone())
-                    .style(move |_, status| ribbon_button_style(theme, editing, status)));
+                actions = actions.push(
+                    button(text(editor.label.clone()).font(fonts::BODY).size(11))
+                        .padding([3, 6])
+                        .on_press(editor.on_toggle.clone())
+                        .style(move |_, status| ribbon_button_style(theme, editing, status)),
+                );
             }
             let mut content = iced::widget::Column::new().spacing(5).push(grid);
             if has_actions {
-                content = content.push(container(Space::new(Fill, 1))
-                    .style(move |_| container::Style::default().background(t.border_subtle)))
-                    .push(actions);
+                content =
+                    content
+                        .push(container(Space::new(Fill, 1)).style(move |_| {
+                            container::Style::default().background(t.border_subtle)
+                        }))
+                        .push(actions);
             }
             if let Some(editor) = custom.filter(|editor| editor.editing) {
                 let field = text_input("#RRGGBB", &editor.draft)
-                    .on_input(editor.on_input).font(fonts::MEDIUM).size(11)
-                    .padding([4, 6]).width(Fill)
+                    .on_input(editor.on_input)
+                    .font(fonts::MEDIUM)
+                    .size(11)
+                    .padding([4, 6])
+                    .width(Fill)
                     .style(move |_, status| text_input_style(theme, status));
                 let mut apply = button(text("Toepassen").font(fonts::BODY).size(11))
-                    .padding([4, 6]).width(Fill)
+                    .padding([4, 6])
+                    .width(Fill)
                     .style(move |_, status| ribbon_button_style(theme, false, status));
-                if editor.valid { apply = apply.on_press(editor.on_apply); }
+                if editor.valid {
+                    apply = apply.on_press(editor.on_apply);
+                }
                 content = content.push(column![field, apply].spacing(4));
             }
-            let palette = container(content)
-                .padding(6).width(170)
-                .style(move |_| container::Style::default().background(t.bg_lighter)
-                    .border(Border { color: theme.border_strong(), width: 1.0, radius: 3.0.into() }));
-            column![text(title).font(fonts::BODY).size(10).color(t.text),
-                popover(anchor.into(), palette.into(), open, on_close)]
-                .spacing(3).into()
+            let palette = container(content).padding(6).width(170).style(move |_| {
+                container::Style::default()
+                    .background(t.bg_lighter)
+                    .border(Border {
+                        color: theme.border_strong(),
+                        width: 1.0,
+                        radius: 3.0.into(),
+                    })
+            });
+            column![
+                text(title).font(fonts::BODY).size(10).color(t.text),
+                popover(anchor.into(), palette.into(), open, on_close)
+            ]
+            .spacing(3)
+            .into()
         }
-        RibbonControl::StyleGallery { items, selected, visible, open, on_toggle, on_close } => {
-            let tile = |item: crate::model::RibbonSwatch<M>, active: bool, width: f32| -> Element<'a, M> {
+        RibbonControl::StyleGallery {
+            items,
+            selected,
+            visible,
+            open,
+            on_toggle,
+            on_close,
+        } => {
+            let tile = |item: crate::model::RibbonSwatch<M>,
+                        active: bool,
+                        width: f32|
+             -> Element<'a, M> {
                 let ink = item.color;
                 let bg = item.background;
                 let dashed = item.dashed_border;
                 let sample = container(text("T").font(fonts::STRONG).size(18).color(ink))
-                    .width(40).height(36).center(Fill)
-                    .style(move |_| container::Style::default().background(bg)
-                        .border(Border { color: ink, width: if dashed { 0.0 } else { 2.0 }, radius: 0.0.into() }));
+                    .width(40)
+                    .height(36)
+                    .center(Fill)
+                    .style(move |_| {
+                        container::Style::default().background(bg).border(Border {
+                            color: ink,
+                            width: if dashed { 0.0 } else { 2.0 },
+                            radius: 0.0.into(),
+                        })
+                    });
                 let sample: Element<'a, M> = if dashed {
                     let channel = |value: f32| (value * 255.0).round() as u8;
-                    let border = format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="36" viewBox="0 0 40 36"><rect x="1" y="1" width="38" height="34" fill="none" stroke="#{:02x}{:02x}{:02x}" stroke-width="2" stroke-dasharray="4 3"/></svg>"##,
-                        channel(ink.r), channel(ink.g), channel(ink.b));
-                    stack![sample, svg(svg::Handle::from_memory(border.into_bytes())).width(40).height(36)].into()
-                } else { sample.into() };
+                    let border = format!(
+                        r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="36" viewBox="0 0 40 36"><rect x="1" y="1" width="38" height="34" fill="none" stroke="#{:02x}{:02x}{:02x}" stroke-width="2" stroke-dasharray="4 3"/></svg>"##,
+                        channel(ink.r),
+                        channel(ink.g),
+                        channel(ink.b)
+                    );
+                    stack![
+                        sample,
+                        svg(svg::Handle::from_memory(border.into_bytes()))
+                            .width(40)
+                            .height(36)
+                    ]
+                    .into()
+                } else {
+                    sample.into()
+                };
                 let label = text(item.label).font(fonts::BODY).size(9).color(t.text);
                 button(column![sample, label].spacing(2).align_x(Alignment::Center))
-                    .padding(2).width(width).height(62).on_press(item.message)
-                    .style(move |_, status| ribbon_button_style(theme, active, status)).into()
+                    .padding(2)
+                    .width(width)
+                    .height(62)
+                    .on_press(item.message)
+                    .style(move |_, status| ribbon_button_style(theme, active, status))
+                    .into()
             };
             let mut gallery = iced::widget::Row::new().spacing(2);
             for (index, item) in items.iter().take(visible).cloned().enumerate() {
                 gallery = gallery.push(tile(item, selected == index, 50.0));
             }
-            gallery = gallery.push(button(text("›").font(fonts::BODY).size(18).color(t.text_secondary))
-                .width(18).height(62).on_press(on_toggle)
-                .style(move |_, status| ribbon_button_style(theme, open, status)));
+            gallery = gallery.push(
+                button(text("›").font(fonts::BODY).size(18).color(t.text_secondary))
+                    .width(18)
+                    .height(62)
+                    .on_press(on_toggle)
+                    .style(move |_, status| ribbon_button_style(theme, open, status)),
+            );
             let mut grid = iced::widget::Column::new().spacing(2);
             for (row_index, chunk) in items.chunks(5).enumerate() {
                 let mut row = iced::widget::Row::new().spacing(2);
@@ -1019,9 +1307,15 @@ pub fn ribbon_control<'a, M: Clone + 'a>(
                 }
                 grid = grid.push(row);
             }
-            let popup = container(grid).padding(6).width(300)
-                .style(move |_| container::Style::default().background(t.bg_lighter)
-                    .border(Border { color: theme.border_strong(), width: 1.0, radius: 3.0.into() }));
+            let popup = container(grid).padding(6).width(300).style(move |_| {
+                container::Style::default()
+                    .background(t.bg_lighter)
+                    .border(Border {
+                        color: theme.border_strong(),
+                        width: 1.0,
+                        radius: 3.0.into(),
+                    })
+            });
             popover_aligned(gallery.into(), popup.into(), open, on_close, true)
         }
     };
@@ -1050,19 +1344,34 @@ pub fn color_grid<'a, M: Clone + 'a>(
             let chosen = selected == Some(index);
             let fill = *color;
             let cell = button(Space::new(14, 14))
-                .padding(1).width(18).height(18)
+                .padding(1)
+                .width(18)
+                .height(18)
                 .on_press(message.clone())
                 .style(move |_, status| {
-                    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                    let hovered =
+                        matches!(status, button::Status::Hovered | button::Status::Pressed);
                     button::Style {
                         background: Some(fill.into()),
-                        border: Border { color: if chosen { t.accent } else if hovered { t.text }
-                            else { theme.border_strong() }, width: if chosen { 2.0 } else { 1.0 },
-                            radius: 1.0.into() },
+                        border: Border {
+                            color: if chosen {
+                                t.accent
+                            } else if hovered {
+                                t.text
+                            } else {
+                                theme.border_strong()
+                            },
+                            width: if chosen { 2.0 } else { 1.0 },
+                            radius: 1.0.into(),
+                        },
                         ..Default::default()
                     }
                 });
-            column = column.push(tooltip(cell, text(label.clone()).size(11), tooltip::Position::Bottom));
+            column = column.push(tooltip(
+                cell,
+                text(label.clone()).size(11),
+                tooltip::Position::Bottom,
+            ));
         }
         columns = columns.push(column);
     }
@@ -1096,7 +1405,11 @@ pub fn document_tab_style(theme: Theme, active: bool, status: button::Status) ->
             over_docbar(t.text_muted)
         },
         border: Border {
-            color: if active { t.accent } else { over_docbar(t.border) },
+            color: if active {
+                t.accent
+            } else {
+                over_docbar(t.border)
+            },
             width: 1.0,
             radius: iced::border::Radius::default().top(3),
         },
@@ -1149,7 +1462,11 @@ pub fn document_close_style(theme: Theme, active: bool, status: button::Status) 
     };
     button::Style {
         background: hovered.then_some(background.into()),
-        text_color: if active || hovered { t.text } else { t.text_muted },
+        text_color: if active || hovered {
+            t.text
+        } else {
+            t.text_muted
+        },
         border: Border::default().rounded(2),
         ..button::Style::default()
     }
@@ -1240,8 +1557,8 @@ pub fn title_action<'a, M: Clone + 'a>(
         .on_press_maybe(message)
         .style(move |_, status| title_action_style(theme, status));
     themed_tooltip(control, label.into(), tooltip::Position::Bottom, theme)
-    .gap(90)
-    .into()
+        .gap(90)
+        .into()
 }
 
 pub fn title_action_style(theme: Theme, status: button::Status) -> button::Style {
@@ -1271,34 +1588,61 @@ pub fn dialog_modal<'a, M: Clone + 'a>(
     theme: Theme,
 ) -> Element<'a, M> {
     let t = theme.tokens();
-    let header = container(row![
-        text(title.into()).font(fonts::STRONG).size(12).color(t.dialog_header_text).width(Fill),
-        button(text("×").size(16))
-            .on_press(close)
-            .width(30).height(30).padding(0)
-            .style(move |_, status| button::Style {
-                background: matches!(status, button::Status::Hovered).then_some(t.ribbon_btn_hover.into()),
-                text_color: t.dialog_content_text,
-                ..button::Style::default()
-            }),
-    ].align_y(Alignment::Center))
-        .height(30).width(Fill)
-        .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 10.0 })
-        .style(move |_| container::Style::default().background(modal_header_background(theme)));
-    let content = container(body)
-        .width(Fill)
-        .style(move |_| container::Style::default().background(t.dialog_content_bg).color(t.dialog_content_text));
+    let header = container(
+        row![
+            text(title.into())
+                .font(fonts::STRONG)
+                .size(12)
+                .color(t.dialog_header_text)
+                .width(Fill),
+            button(text("×").size(16))
+                .on_press(close)
+                .width(30)
+                .height(30)
+                .padding(0)
+                .style(move |_, status| button::Style {
+                    background: matches!(status, button::Status::Hovered)
+                        .then_some(t.ribbon_btn_hover.into()),
+                    text_color: t.dialog_content_text,
+                    ..button::Style::default()
+                }),
+        ]
+        .align_y(Alignment::Center),
+    )
+    .height(30)
+    .width(Fill)
+    .padding(Padding {
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 10.0,
+    })
+    .style(move |_| container::Style::default().background(modal_header_background(theme)));
+    let content = container(body).width(Fill).style(move |_| {
+        container::Style::default()
+            .background(t.dialog_content_bg)
+            .color(t.dialog_content_text)
+    });
     let footer = column![
-        container(Space::new(Fill, 1)).height(1).width(Fill)
+        container(Space::new(Fill, 1))
+            .height(1)
+            .width(Fill)
             .style(move |_| container::Style::default().background(t.dialog_border)),
-        container(footer).padding([8, 12]).height(43).width(Fill)
+        container(footer)
+            .padding([8, 12])
+            .height(43)
+            .width(Fill)
             .style(move |_| container::Style::default().background(t.dialog_sidebar_bg)),
     ];
     let card = container(column![header, content, footer].width(width))
         .width(width)
         .style(move |_| container::Style {
             background: Some(t.dialog_bg.into()),
-            border: Border { color: t.dialog_border, width: 1.0, radius: 0.0.into() },
+            border: Border {
+                color: t.dialog_border,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
             shadow: theme.dialog_shadow(),
             ..container::Style::default()
         });
@@ -1315,28 +1659,36 @@ pub fn settings_modal<'a, M: Clone + 'a>(
     theme: Theme,
 ) -> Element<'a, M> {
     let t = theme.tokens();
-    let header = container(row![
-        text(title.into())
-            .font(fonts::STRONG)
-            .size(12)
-            .color(t.dialog_header_text)
-            .width(Fill),
-        button(text("×").size(16))
-            .on_press(close)
-            .width(30)
-            .height(30)
-            .padding(0)
-            .style(move |_, status| button::Style {
-                background: matches!(status, button::Status::Hovered)
-                    .then_some(Background::Color(t.ribbon_btn_hover)),
-                text_color: t.dialog_content_text,
-                ..button::Style::default()
-            }),
-    ].align_y(Alignment::Center))
-        .width(Fill)
-        .height(30)
-        .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 10.0 })
-        .style(move |_| container::Style::default().background(modal_header_background(theme)));
+    let header = container(
+        row![
+            text(title.into())
+                .font(fonts::STRONG)
+                .size(12)
+                .color(t.dialog_header_text)
+                .width(Fill),
+            button(text("×").size(16))
+                .on_press(close)
+                .width(30)
+                .height(30)
+                .padding(0)
+                .style(move |_, status| button::Style {
+                    background: matches!(status, button::Status::Hovered)
+                        .then_some(Background::Color(t.ribbon_btn_hover)),
+                    text_color: t.dialog_content_text,
+                    ..button::Style::default()
+                }),
+        ]
+        .align_y(Alignment::Center),
+    )
+    .width(Fill)
+    .height(30)
+    .padding(Padding {
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 10.0,
+    })
+    .style(move |_| container::Style::default().background(modal_header_background(theme)));
     let sidebar = container(scrollable(sidebar).height(Fill))
         .width(120)
         .height(Fill)
@@ -1349,7 +1701,9 @@ pub fn settings_modal<'a, M: Clone + 'a>(
     let body = row![
         sidebar,
         rule,
-        scrollable(container(content).padding(12).width(Fill)).height(Fill).width(Fill),
+        scrollable(container(content).padding(12).width(Fill))
+            .height(Fill)
+            .width(Fill),
     ]
     .height(Fill)
     .width(Fill);
@@ -1371,7 +1725,11 @@ pub fn settings_modal<'a, M: Clone + 'a>(
         .height(500)
         .style(move |_| container::Style {
             background: Some(t.dialog_bg.into()),
-            border: Border { color: t.dialog_border, width: 1.0, radius: 0.0.into() },
+            border: Border {
+                color: t.dialog_border,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
             shadow: theme.dialog_shadow(),
             ..container::Style::default()
         });
@@ -1388,14 +1746,24 @@ pub fn settings_reset_confirmation<'a, M: Clone + 'a>(
     theme: Theme,
 ) -> Element<'a, M> {
     let body = container(text(question.into()).size(12).width(Fill))
-        .padding(12).width(Fill).into();
+        .padding(12)
+        .width(Fill)
+        .into();
     let footer = row![
         Space::with_width(Fill),
-        dialog_button(cancel_label.into(), move |_, status| secondary_button_style(theme, status))
-            .on_press(cancel.clone()),
-        dialog_button(reset_label.into(), move |_, status| primary_button_style(theme, status))
-            .on_press(reset),
-    ].spacing(6).align_y(Alignment::Center).into();
+        dialog_button(
+            cancel_label.into(),
+            move |_, status| secondary_button_style(theme, status)
+        )
+        .on_press(cancel.clone()),
+        dialog_button(reset_label.into(), move |_, status| primary_button_style(
+            theme, status
+        ))
+        .on_press(reset),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into();
     dialog_modal(title, body, footer, cancel, 340.0, theme)
 }
 /// Vertical settings navigation from the pinned Style Book template.
@@ -1413,10 +1781,20 @@ pub fn settings_tab<'a, M: Clone + 'a>(
         .style(move |_, status| {
             let hovered = matches!(status, button::Status::Hovered);
             button::Style {
-                background: if active { Some(t.dialog_tab_active_bg.into()) }
-                    else if hovered { Some(t.dialog_tab_hover.into()) } else { None },
-                text_color: if active { t.dialog_tab_active_text }
-                    else if hovered { t.dialog_tab_hover_text } else { t.dialog_tab_text },
+                background: if active {
+                    Some(t.dialog_tab_active_bg.into())
+                } else if hovered {
+                    Some(t.dialog_tab_hover.into())
+                } else {
+                    None
+                },
+                text_color: if active {
+                    t.dialog_tab_active_text
+                } else if hovered {
+                    t.dialog_tab_hover_text
+                } else {
+                    t.dialog_tab_text
+                },
                 ..button::Style::default()
             }
         })
@@ -1432,29 +1810,50 @@ pub fn settings_theme_option<'a, M: Clone + 'a>(
     current_theme: Theme,
 ) -> Element<'a, M> {
     let t = current_theme.tokens();
-    let swatches = option.swatches().into_iter().fold(row![].spacing(2), |row, color| {
-        row.push(container(Space::new(14, 14)).style(move |_| container::Style {
-            background: Some(color.into()),
-            border: Border { color: iced::Color::from_rgba8(128, 128, 128, 0.3), width: 1.0, radius: 0.0.into() },
-            ..container::Style::default()
-        }))
-    });
-    button(row![swatches, text(label.into()).size(11).font(fonts::MEDIUM)]
-        .spacing(8).align_y(Alignment::Center))
-        .on_press(on_press)
-        .height(26)
-        .width(Fill)
-        .padding([5, 8])
-        .style(move |_, status| {
-            let hovered = matches!(status, button::Status::Hovered);
-            button::Style {
-                background: if selected { Some(t.dialog_tab_active_bg.into()) }
-                    else if hovered { Some(t.dialog_tab_hover.into()) } else { None },
-                text_color: if selected { t.dialog_tab_active_text } else { t.dialog_content_text },
-                ..button::Style::default()
-            }
-        })
-        .into()
+    let swatches = option
+        .swatches()
+        .into_iter()
+        .fold(row![].spacing(2), |row, color| {
+            row.push(
+                container(Space::new(14, 14)).style(move |_| container::Style {
+                    background: Some(color.into()),
+                    border: Border {
+                        color: iced::Color::from_rgba8(128, 128, 128, 0.3),
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..container::Style::default()
+                }),
+            )
+        });
+    button(
+        row![swatches, text(label.into()).size(11).font(fonts::MEDIUM)]
+            .spacing(8)
+            .align_y(Alignment::Center),
+    )
+    .on_press(on_press)
+    .height(26)
+    .width(Fill)
+    .padding([5, 8])
+    .style(move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered);
+        button::Style {
+            background: if selected {
+                Some(t.dialog_tab_active_bg.into())
+            } else if hovered {
+                Some(t.dialog_tab_hover.into())
+            } else {
+                None
+            },
+            text_color: if selected {
+                t.dialog_tab_active_text
+            } else {
+                t.dialog_content_text
+            },
+            ..button::Style::default()
+        }
+    })
+    .into()
 }
 /// Expanded 200 px theme menu shown in the pinned Style Book reference.
 pub fn settings_theme_menu<'a, M: Clone + 'a>(
@@ -1463,14 +1862,26 @@ pub fn settings_theme_menu<'a, M: Clone + 'a>(
     current_theme: Theme,
 ) -> Element<'a, M> {
     let t = current_theme.tokens();
-    let items = options.into_iter().fold(column![], |items, (theme, label, message)| {
-        items.push(settings_theme_option(label, theme, theme == selected, message, current_theme))
-    });
+    let items = options
+        .into_iter()
+        .fold(column![], |items, (theme, label, message)| {
+            items.push(settings_theme_option(
+                label,
+                theme,
+                theme == selected,
+                message,
+                current_theme,
+            ))
+        });
     container(items)
         .width(200)
         .style(move |_| container::Style {
             background: Some(t.dialog_input_bg.into()),
-            border: Border { color: t.dialog_input_border, width: 1.0, radius: 0.0.into() },
+            border: Border {
+                color: t.dialog_input_border,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
             ..container::Style::default()
         })
         .into()
@@ -1484,36 +1895,63 @@ pub fn settings_theme_picker<'a, M: Clone + 'a>(
     on_toggle: M,
 ) -> Element<'a, M> {
     let t = current_theme.tokens();
-    let label = options.iter().find(|(theme, _, _)| *theme == selected)
-        .map(|(_, label, _)| label.clone()).unwrap_or_else(|| selected.to_string());
-    let swatches = selected.swatches().into_iter().fold(row![].spacing(2), |row, color| {
-        row.push(container(Space::new(14, 14)).style(move |_| container::Style {
-            background: Some(color.into()),
-            border: Border { color: iced::Color::from_rgba8(128, 128, 128, 0.3), width: 1.0, radius: 0.0.into() },
-            ..container::Style::default()
-        }))
-    });
-    let trigger = button(row![
-        swatches,
-        text(label).size(11).font(fonts::MEDIUM),
-        Space::with_width(Fill),
-        text("⌄").size(11).color(t.dialog_content_text),
-    ].spacing(8).align_y(Alignment::Center))
-        .on_press(on_toggle.clone())
-        .width(200)
-        .height(27)
-        .padding([5, 8])
-        .style(move |_, status| button::Style {
-            background: Some(t.dialog_input_bg.into()),
-            text_color: t.dialog_content_text,
-            border: Border {
-                color: if open { t.focus_color } else if matches!(status, button::Status::Hovered) { t.dialog_content_secondary } else { t.dialog_input_border },
-                width: 1.0,
-                radius: 0.0.into(),
-            },
-            ..button::Style::default()
+    let label = options
+        .iter()
+        .find(|(theme, _, _)| *theme == selected)
+        .map(|(_, label, _)| label.clone())
+        .unwrap_or_else(|| selected.to_string());
+    let swatches = selected
+        .swatches()
+        .into_iter()
+        .fold(row![].spacing(2), |row, color| {
+            row.push(
+                container(Space::new(14, 14)).style(move |_| container::Style {
+                    background: Some(color.into()),
+                    border: Border {
+                        color: iced::Color::from_rgba8(128, 128, 128, 0.3),
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..container::Style::default()
+                }),
+            )
         });
-    popover(trigger.into(), settings_theme_menu(options, selected, current_theme), open, on_toggle)
+    let trigger = button(
+        row![
+            swatches,
+            text(label).size(11).font(fonts::MEDIUM),
+            Space::with_width(Fill),
+            text("⌄").size(11).color(t.dialog_content_text),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .on_press(on_toggle.clone())
+    .width(200)
+    .height(27)
+    .padding([5, 8])
+    .style(move |_, status| button::Style {
+        background: Some(t.dialog_input_bg.into()),
+        text_color: t.dialog_content_text,
+        border: Border {
+            color: if open {
+                t.focus_color
+            } else if matches!(status, button::Status::Hovered) {
+                t.dialog_content_secondary
+            } else {
+                t.dialog_input_border
+            },
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        ..button::Style::default()
+    });
+    popover(
+        trigger.into(),
+        settings_theme_menu(options, selected, current_theme),
+        open,
+        on_toggle,
+    )
 }
 /// Section title and underline from SettingsDialog.css.
 pub fn settings_section_heading<'a, M: 'a>(
@@ -1522,7 +1960,10 @@ pub fn settings_section_heading<'a, M: 'a>(
 ) -> Element<'a, M> {
     let t = theme.tokens();
     column![
-        text(label.into()).font(fonts::STRONG).size(11).color(t.dialog_content_text),
+        text(label.into())
+            .font(fonts::STRONG)
+            .size(11)
+            .color(t.dialog_content_text),
         container(Space::new(Fill, 1))
             .height(1)
             .width(Fill)
@@ -1610,11 +2051,14 @@ pub fn property_grid_control_with<'a, M: 'a, F>(
 where
     F: Fn(&iced::Theme) -> Theme + Copy + 'a,
 {
-    let label = container(text(label.into()).font(fonts::BODY).size(12).style(move |theme| {
-        text::Style {
-            color: Some(resolve_theme(theme).tokens().text_secondary),
-        }
-    }))
+    let label = container(
+        text(label.into())
+            .font(fonts::BODY)
+            .size(12)
+            .style(move |theme| text::Style {
+                color: Some(resolve_theme(theme).tokens().text_secondary),
+            }),
+    )
     .width(Length::FillPortion(5))
     .height(27)
     .padding([0, 8])
@@ -1624,9 +2068,7 @@ where
         .height(27)
         .padding([0, 8])
         .align_y(iced::Alignment::Center)
-        .style(move |theme| {
-            container::Style::default().color(resolve_theme(theme).tokens().text)
-        });
+        .style(move |theme| container::Style::default().color(resolve_theme(theme).tokens().text));
     let rule = container(iced::widget::Space::new(Fill, 1))
         .width(Fill)
         .style(move |theme| {
@@ -1675,7 +2117,9 @@ where
         .align_y(iced::Alignment::Center)
         .style(move |theme| {
             let t = resolve_theme(theme).tokens();
-            container::Style::default().background(t.bg_lighter).color(t.text)
+            container::Style::default()
+                .background(t.bg_lighter)
+                .color(t.text)
         })
         .into()
 }

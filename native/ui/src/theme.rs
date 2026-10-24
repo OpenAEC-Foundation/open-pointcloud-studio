@@ -12,10 +12,18 @@ pub enum Theme {
     Contrast,
 }
 impl Theme {
-    pub const ALL: [Self; 5] = [Self::Light, Self::Forge, Self::OpenAec, Self::Blueprint, Self::Contrast];
+    pub const ALL: [Self; 5] = [
+        Self::Light,
+        Self::Forge,
+        Self::OpenAec,
+        Self::Blueprint,
+        Self::Contrast,
+    ];
     /// Four swatches from the pinned Tauri SettingsDialog THEME_OPTIONS.
     pub fn swatches(self) -> [iced::Color; 4] {
-        let hex = |value: u32| iced::Color::from_rgb8((value >> 16) as u8, (value >> 8) as u8, value as u8);
+        let hex = |value: u32| {
+            iced::Color::from_rgb8((value >> 16) as u8, (value >> 8) as u8, value as u8)
+        };
         match self {
             Self::Light => [hex(0xFAFAF9), hex(0xFFFFFF), hex(0xD97706), hex(0x36363E)],
             Self::Forge => [hex(0x36363E), hex(0x44444C), hex(0xD97706), hex(0xFAFAF9)],
@@ -25,7 +33,13 @@ impl Theme {
         }
     }
     pub fn tokens(self) -> Tokens {
-        match self { Self::Light => tokens::LIGHT, Self::Forge => tokens::FORGE, Self::OpenAec => tokens::OPENAEC, Self::Blueprint => tokens::BLUEPRINT, Self::Contrast => tokens::CONTRAST }
+        match self {
+            Self::Light => tokens::LIGHT,
+            Self::Forge => tokens::FORGE,
+            Self::OpenAec => tokens::OPENAEC,
+            Self::Blueprint => tokens::BLUEPRINT,
+            Self::Contrast => tokens::CONTRAST,
+        }
     }
     /// Brand strong-border token from the pinned Style Book colors.json (light/dark).
     pub fn border_strong(self) -> iced::Color {
@@ -43,18 +57,34 @@ impl Theme {
             Self::Blueprint => iced::Color::from_rgba8(0, 0, 0, 0.45),
             Self::Contrast => iced::Color::from_rgba8(255, 215, 0, 0.40),
         };
-        iced::Shadow { color, offset: iced::Vector::new(0.0, 4.0), blur_radius: 16.0 }
+        iced::Shadow {
+            color,
+            offset: iced::Vector::new(0.0, 4.0),
+            blur_radius: 16.0,
+        }
     }
     pub fn iced(self) -> iced::Theme {
         let t = self.tokens();
-        iced::Theme::custom(self.to_string(), iced::theme::Palette {
-            background: t.bg, text: t.text, primary: t.accent,
-            success: iced::Color::from_rgb8(22, 163, 74), danger: t.danger_color,
-        })
+        iced::Theme::custom(
+            self.to_string(),
+            iced::theme::Palette {
+                background: t.bg,
+                text: t.text,
+                primary: t.accent,
+                success: iced::Color::from_rgb8(22, 163, 74),
+                danger: t.danger_color,
+            },
+        )
     }
 }
 impl std::fmt::Display for Theme {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self { Self::Light => "Light", Self::Forge => "Forge", Self::OpenAec => "OpenAEC", Self::Blueprint => "Blueprint", Self::Contrast => "High contrast" })
+        f.write_str(match self {
+            Self::Light => "Light",
+            Self::Forge => "Forge",
+            Self::OpenAec => "OpenAEC",
+            Self::Blueprint => "Blueprint",
+            Self::Contrast => "High contrast",
+        })
     }
 }

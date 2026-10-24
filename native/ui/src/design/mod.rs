@@ -68,18 +68,32 @@ mod tests {
 
     #[test]
     fn settings_reach_the_look() {
-        let look = Look::new(ThemeId::Light, WorkspaceSetting::Dark, StatusbarSetting::Dark);
+        let look = Look::new(
+            ThemeId::Light,
+            WorkspaceSetting::Dark,
+            StatusbarSetting::Dark,
+        );
         assert_eq!(hex(look.color.workspace), "#26262D");
         assert_eq!(hex(look.workspace_accent_text), hex(DARK.color.accent_text));
         assert_eq!(hex(look.color.statusbar), "#2A2A32");
-        let hc = Look::new(ThemeId::HighContrastDark, WorkspaceSetting::Light, StatusbarSetting::Dark);
+        let hc = Look::new(
+            ThemeId::HighContrastDark,
+            WorkspaceSetting::Light,
+            StatusbarSetting::Dark,
+        );
         assert_eq!(hc.color, HIGH_CONTRAST_DARK.color);
     }
 
     #[test]
     fn mix_reproduces_the_light_status_tints() {
         // In Licht a status tint is the status colour at 10% over the panel.
-        assert_eq!(hex(mix(LIGHT.color.error, 0.10, LIGHT.color.panel)), hex(LIGHT.color.error_tint));
-        assert_eq!(hex(mix(LIGHT.color.info, 0.10, LIGHT.color.panel)), hex(LIGHT.color.info_tint));
+        assert_eq!(
+            hex(mix(LIGHT.color.error, 0.10, LIGHT.color.panel)),
+            hex(LIGHT.color.error_tint)
+        );
+        assert_eq!(
+            hex(mix(LIGHT.color.info, 0.10, LIGHT.color.panel)),
+            hex(LIGHT.color.info_tint)
+        );
     }
 }

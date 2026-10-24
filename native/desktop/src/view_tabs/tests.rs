@@ -243,13 +243,25 @@ fn active_document_tab_has_the_style_book_transparent_bottom_edge() {
     let roof = made_drawing(&mut studio, "Roof", 8.0);
     let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(plan)));
     let _ = studio.update(Message::DrawingView(DrawingViewAction::ShowDrawing(roof)));
-    for theme in [crate::ui_theme::UiTheme::Light, crate::ui_theme::UiTheme::Forge] {
+    for theme in [
+        crate::ui_theme::UiTheme::Light,
+        crate::ui_theme::UiTheme::Forge,
+    ] {
         studio.ui_theme = theme;
         let picture = crate::test_render::render_window(&studio, Size::new(1280.0, 760.0));
         let background = theme.colors().docbar_bg;
-        assert!(!picture.is(330, 180, background), "{} active tab body", theme.key());
+        assert!(
+            !picture.is(330, 180, background),
+            "{} active tab body",
+            theme.key()
+        );
         for y in [181, 182] {
-            assert!(picture.is(330, y, background), "{} transparent edge y={y}: {:?}", theme.key(), picture.rgb(330,y));
+            assert!(
+                picture.is(330, y, background),
+                "{} transparent edge y={y}: {:?}",
+                theme.key(),
+                picture.rgb(330, y)
+            );
         }
     }
 }

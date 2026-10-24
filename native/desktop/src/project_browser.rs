@@ -737,10 +737,10 @@ impl Studio {
             openaec_ui::widgets::panel_header(tr("Project Browser"), self.ui_theme.shared()),
             ui_style::scrollable(panel.padding([0, 14])).height(Fill),
         ])
-            .width(width)
-            .height(Fill)
-            .style(crate::sidebar_style)
-            .into()
+        .width(width)
+        .height(Fill)
+        .style(crate::sidebar_style)
+        .into()
     }
 
     fn scans_group(&self) -> Element<'_, Message> {

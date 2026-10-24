@@ -243,9 +243,13 @@ mod tests {
     fn test_renderer() -> iced::Renderer {
         let software = iced_tiny_skia::Renderer::new(crate::fonts::BODY, iced::Pixels(12.0));
         #[cfg(feature = "gpu-renderer")]
-        { iced::Renderer::Secondary(software) }
+        {
+            iced::Renderer::Secondary(software)
+        }
         #[cfg(not(feature = "gpu-renderer"))]
-        { software }
+        {
+            software
+        }
     }
 
     fn band(height: u16) -> Element<'static, ()> {

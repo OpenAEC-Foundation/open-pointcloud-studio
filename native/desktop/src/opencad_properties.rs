@@ -13,7 +13,9 @@ use crate::Message;
 /// Shared property-grid row with Pointcloud's translated field label.
 pub fn property_row(label: &'static str, value: String) -> Element<'static, Message> {
     openaec_ui::widgets::property_grid_row_with(
-        crate::i18n::tr(label), value, ui_theme::shared_theme,
+        crate::i18n::tr(label),
+        value,
+        ui_theme::shared_theme,
     )
 }
 
@@ -44,7 +46,12 @@ pub fn property_input<'a>(
     value: &'a str,
     on_input: impl Fn(String) -> Message + 'a,
 ) -> Element<'a, Message> {
-    property_control(label, ui_style::text_input(placeholder, value).on_input(on_input).into())
+    property_control(
+        label,
+        ui_style::text_input(placeholder, value)
+            .on_input(on_input)
+            .into(),
+    )
 }
 
 /// The two-column row with a control of the caller's choice, such as a
@@ -54,14 +61,14 @@ pub fn property_control<'a>(
     control: Element<'a, Message>,
 ) -> Element<'a, Message> {
     openaec_ui::widgets::property_grid_control_with(
-        crate::i18n::tr(label), control, ui_theme::shared_theme,
+        crate::i18n::tr(label),
+        control,
+        ui_theme::shared_theme,
     )
 }
 
 pub fn section_header(title: &'static str) -> Element<'static, Message> {
-    openaec_ui::widgets::property_section_with(
-        crate::i18n::tr(title), ui_theme::shared_theme,
-    )
+    openaec_ui::widgets::property_section_with(crate::i18n::tr(title), ui_theme::shared_theme)
 }
 
 /// A control whose explanation shows in a tooltip above it instead of as

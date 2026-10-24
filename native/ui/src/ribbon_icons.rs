@@ -126,11 +126,15 @@ impl RibbonIcon {
             Self::DrawingPencil => include_bytes!("../assets/ribbon-icons/drawing-pencil.svg"),
             Self::DrawingArrow => include_bytes!("../assets/ribbon-icons/drawing-arrow.svg"),
             Self::DrawingCircle => include_bytes!("../assets/ribbon-icons/drawing-circle.svg"),
-            Self::DrawingRectangle => include_bytes!("../assets/ribbon-icons/drawing-rectangle.svg"),
+            Self::DrawingRectangle => {
+                include_bytes!("../assets/ribbon-icons/drawing-rectangle.svg")
+            }
             Self::InsertImage => include_bytes!("../assets/ribbon-icons/insert-image.svg"),
             Self::InsertTable => include_bytes!("../assets/ribbon-icons/insert-table.svg"),
             Self::InsertLink => include_bytes!("../assets/ribbon-icons/insert-link.svg"),
-            Self::ApplicationAbout => include_bytes!("../assets/ribbon-icons/application-about.svg"),
+            Self::ApplicationAbout => {
+                include_bytes!("../assets/ribbon-icons/application-about.svg")
+            }
             Self::IfcImport => include_bytes!("../assets/ribbon-icons/ifc-import.svg"),
             Self::IfcExport => include_bytes!("../assets/ribbon-icons/ifc-export.svg"),
             Self::IfcStructure => include_bytes!("../assets/ribbon-icons/ifc-structure.svg"),
@@ -139,7 +143,9 @@ impl RibbonIcon {
             Self::ReportNew => include_bytes!("../assets/ribbon-icons/report-new.svg"),
             Self::ReportTemplate => include_bytes!("../assets/ribbon-icons/report-template.svg"),
             Self::ReportGenerate => include_bytes!("../assets/ribbon-icons/report-generate.svg"),
-            Self::ReportDownloadPdf => include_bytes!("../assets/ribbon-icons/report-download-pdf.svg"),
+            Self::ReportDownloadPdf => {
+                include_bytes!("../assets/ribbon-icons/report-download-pdf.svg")
+            }
             Self::ReportPageA4 => include_bytes!("../assets/ribbon-icons/report-page-a4.svg"),
             Self::ReportPageA3 => include_bytes!("../assets/ribbon-icons/report-page-a3.svg"),
             Self::ReportPortrait => include_bytes!("../assets/ribbon-icons/report-portrait.svg"),
