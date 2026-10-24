@@ -22,43 +22,91 @@ use iced::widget::{
     button, checkbox as check_box, pick_list as choice, progress_bar as progress,
     scrollable as scrolling, slider as slide, text, text_input as field, tooltip as tip_widget,
 };
-#[cfg(test)]
-use iced::Background;
 use iced::{
-    event, mouse, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector,
+    event, mouse, Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer,
+    Size, Theme, Vector,
 };
 
 use crate::ui_theme::{self, UiColors};
 use crate::Message;
 
-/// What a control that cannot be used keeps of its colours: the template
-/// draws buttons and fields that wait at half their strength, and the
-/// buttons of the ribbon remain legible while unavailable.
-#[cfg(test)]
-const RIBBON_DISABLED: f32 = 0.72;
-
 fn colors(theme: &Theme) -> UiColors {
     ui_theme::colors(theme)
+}
+
+/// A button that cannot be pressed, in the shape of `ready`, the same
+/// button while it can: a primary or a secondary button (`filled`) on the
+/// quiet surface of a secondary one inside the border of the theme, a
+/// button of the ribbon, a tool and a link on nothing; each with the faint
+/// text, and never in a colour of the pointer. The plain button of the
+/// shared crate waits in the faint text too, and the 0.4 design module of
+/// that crate draws its buttons by the same rules in its own tokens. Only
+/// fading the button, as before, left a primary button half amber, which
+/// looks as if it can be pressed. The muted text would not do: in Contrast
+/// it is next to white.
+fn waiting(theme: &Theme, ready: button::Style, filled: bool) -> button::Style {
+    let colors = colors(theme);
+    // Where every border is the accent colour itself, as in Contrast, the
+    // border of a button that waits is in its text colour instead, as the
+    // high contrast themes of the design module have it.
+    let edge = if colors.border == colors.accent {
+        colors.text_faint
+    } else {
+        colors.border
+    };
+    button::Style {
+        background: filled.then_some(Background::Color(colors.btn_secondary_bg)),
+        text_color: colors.text_faint,
+        border: Border {
+            color: if filled { edge } else { Color::TRANSPARENT },
+            ..ready.border
+        },
+        ..button::Style::default()
+    }
 }
 
 /// The button that goes on: Save, Create, Next, Run. Filled with the accent
 /// colour, Signal Orange under the pointer. A button is made in it with
 /// [`primary_button`], which gives it its size too.
 pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
-    openaec_ui::widgets::primary_button_style(ui_theme::shared_theme(theme), status)
+    let shared = ui_theme::shared_theme(theme);
+    match status {
+        button::Status::Disabled => waiting(
+            theme,
+            openaec_ui::widgets::primary_button_style(shared, button::Status::Active),
+            true,
+        ),
+        _ => openaec_ui::widgets::primary_button_style(shared, status),
+    }
 }
 
 /// Every other button of a dialog or a form: Cancel, Back, Reset. A button
 /// is made in it with [`secondary_button`].
 pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
-    openaec_ui::widgets::secondary_button_style(ui_theme::shared_theme(theme), status)
+    let shared = ui_theme::shared_theme(theme);
+    match status {
+        button::Status::Disabled => waiting(
+            theme,
+            openaec_ui::widgets::secondary_button_style(shared, button::Status::Active),
+            true,
+        ),
+        _ => openaec_ui::widgets::secondary_button_style(shared, status),
+    }
 }
 
 /// A button of the ribbon, and a small action in a panel drawn as one:
 /// transparent with a transparent border, tinted and outlined in the accent
 /// colour under the pointer and while it is on.
 pub fn ribbon_button(theme: &Theme, active: bool, status: button::Status) -> button::Style {
-    openaec_ui::widgets::ribbon_button_style(ui_theme::shared_theme(theme), active, status)
+    let shared = ui_theme::shared_theme(theme);
+    match status {
+        button::Status::Disabled => waiting(
+            theme,
+            openaec_ui::widgets::ribbon_button_style(shared, active, button::Status::Active),
+            false,
+        ),
+        _ => openaec_ui::widgets::ribbon_button_style(shared, active, status),
+    }
 }
 
 /// A small action in a panel or on a row: a ribbon button that is not on.
@@ -69,7 +117,15 @@ pub fn tool(theme: &Theme, status: button::Status) -> button::Style {
 /// A text link, such as the source of a map: the accent colour, Signal
 /// Orange under the pointer.
 pub fn link(theme: &Theme, status: button::Status) -> button::Style {
-    openaec_ui::widgets::link_button_style(ui_theme::shared_theme(theme), status)
+    let shared = ui_theme::shared_theme(theme);
+    match status {
+        button::Status::Disabled => waiting(
+            theme,
+            openaec_ui::widgets::link_button_style(shared, button::Status::Active),
+            false,
+        ),
+        _ => openaec_ui::widgets::link_button_style(shared, status),
+    }
 }
 
 /// An item of the status bar that can be clicked, such as Cancel import.
@@ -624,12 +680,57 @@ mod tests {
                 assert_eq!(background(&over), Some(colors.btn_primary_hover_bg));
                 assert_eq!(over.text_color, colors.btn_primary_hover_text);
             }
+            // While it cannot be pressed it is a quiet button with the faint
+            // text, in the shape it has when it can be.
             let waiting = primary(&theme, button::Status::Disabled);
-            assert_eq!(
-                background(&waiting),
-                Some(colors.btn_primary_bg.scale_alpha(0.5))
-            );
-            assert_eq!(waiting.text_color, colors.btn_primary_text.scale_alpha(0.5));
+            assert_eq!(background(&waiting), Some(colors.btn_secondary_bg));
+            assert_eq!(waiting.text_color, colors.text_faint);
+            assert_eq!(waiting.border.width, ready.border.width);
+            assert_eq!(waiting.border.radius, ready.border.radius);
+        }
+    }
+
+    /// How strong an accent colour of the theme `color` is: its alpha when
+    /// it is one of them laid over what lies under it, else nothing.
+    fn accent_strength(color: Color, colors: &UiColors) -> f32 {
+        let accents = [
+            colors.accent,
+            colors.accent_hover,
+            colors.btn_primary_bg,
+            colors.btn_primary_hover_bg,
+        ];
+        let rgb = |color: Color| [color.r, color.g, color.b];
+        if accents.into_iter().any(|accent| rgb(accent) == rgb(color)) {
+            color.a
+        } else {
+            0.0
+        }
+    }
+
+    #[test]
+    fn a_disabled_primary_button_carries_no_accent_colour() {
+        for (theme, colors) in themes() {
+            let waiting = primary(&theme, button::Status::Disabled);
+            // It looks as a secondary button that cannot be pressed.
+            assert_eq!(waiting, secondary(&theme, button::Status::Disabled));
+            // None of its colours is the accent. The dark themes tint their
+            // quiet surfaces and borders with at most a quarter of it; the
+            // faded button of before kept half of it, and all of it in its
+            // border in Contrast.
+            for (part, color) in [
+                ("fill", background(&waiting).expect("a fill")),
+                ("text", waiting.text_color),
+                ("border", waiting.border.color),
+            ] {
+                assert!(
+                    accent_strength(color, &colors) <= 0.25,
+                    "the {part} {color:?} of {colors:?}"
+                );
+            }
+            // Nor does it take a colour of the pointer.
+            let over = primary(&theme, button::Status::Hovered);
+            assert_ne!(background(&waiting), background(&over));
+            assert_ne!(waiting.text_color, over.text_color);
         }
     }
 
@@ -644,10 +745,9 @@ mod tests {
             assert_eq!(background(&over), Some(colors.btn_secondary_hover_bg));
             assert_eq!(over.border.color, colors.btn_secondary_hover_border);
             let waiting = secondary(&theme, button::Status::Disabled);
-            assert_eq!(
-                waiting.text_color,
-                colors.btn_secondary_text.scale_alpha(0.5)
-            );
+            assert_eq!(background(&waiting), Some(colors.btn_secondary_bg));
+            assert_eq!(waiting.text_color, colors.text_faint);
+            assert_ne!(waiting.border.color, over.border.color);
         }
     }
 
@@ -737,10 +837,22 @@ mod tests {
             assert_eq!(background(&on), Some(colors.ribbon_btn_active_bg));
             assert_eq!(on.border.color, colors.ribbon_btn_active_border);
             assert_eq!(on.text_color, colors.ribbon_btn_active_text);
+            // One that cannot be pressed has the faint text on nothing, also
+            // while it is on.
             let waiting = ribbon_button(&theme, false, button::Status::Disabled);
-            assert_eq!(waiting.text_color, colors.text.scale_alpha(RIBBON_DISABLED));
+            assert_eq!(background(&waiting), None);
+            assert_eq!(waiting.border.color, Color::TRANSPARENT);
+            assert_eq!(waiting.text_color, colors.text_faint);
+            assert_eq!(
+                ribbon_button(&theme, true, button::Status::Disabled),
+                waiting
+            );
             // A small action of a panel is a ribbon button that is not on.
-            for status in [button::Status::Active, button::Status::Hovered] {
+            for status in [
+                button::Status::Active,
+                button::Status::Hovered,
+                button::Status::Disabled,
+            ] {
                 assert_eq!(tool(&theme, status), ribbon_button(&theme, false, status));
             }
         }
@@ -756,6 +868,9 @@ mod tests {
                 link(&theme, button::Status::Hovered).text_color,
                 colors.accent_hover
             );
+            let waiting = link(&theme, button::Status::Disabled);
+            assert_eq!(background(&waiting), None);
+            assert_eq!(waiting.text_color, colors.text_faint);
             let item = status_button(&theme, button::Status::Active);
             assert_eq!(background(&item), None);
             assert_eq!(item.text_color, colors.status_text);

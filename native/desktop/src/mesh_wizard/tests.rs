@@ -770,7 +770,7 @@ fn the_run_button_says_run_again_only_after_a_result() {
 }
 
 #[test]
-fn a_button_of_the_card_that_waits_is_drawn_at_half_strength() {
+fn a_button_of_the_card_that_waits_is_drawn_faint() {
     for theme in crate::ui_theme::UiTheme::ALL {
         let iced = theme.iced();
         let colors = theme.colors();
@@ -778,11 +778,8 @@ fn a_button_of_the_card_that_waits_is_drawn_at_half_strength() {
         let waiting = crate::ui_style::secondary(&iced, button::Status::Disabled);
         assert_eq!(ready.border.color, colors.dialog_input_border, "{theme:?}");
         assert_eq!(ready.text_color, colors.btn_secondary_text, "{theme:?}");
-        assert_eq!(
-            waiting.text_color,
-            colors.btn_secondary_text.scale_alpha(0.5),
-            "{theme:?}"
-        );
+        assert_eq!(waiting.text_color, colors.text_faint, "{theme:?}");
+        assert_ne!(waiting.text_color, ready.text_color, "{theme:?}");
         // Hovered, it is outlined in the accent colour.
         let hovered = crate::ui_style::secondary(&iced, button::Status::Hovered);
         assert_eq!(
