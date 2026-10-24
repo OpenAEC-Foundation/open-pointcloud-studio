@@ -762,6 +762,67 @@ fn main() -> iced::Result {
             }
         }
     }
+    if first.as_deref() == Some(OsStr::new("--texture-mesh")) {
+        let (Some(source), Some(destination)) = (args.next(), args.next()) else {
+            eprintln!("Usage: open-pointcloud-studio --texture-mesh INPUT_MESH OUTPUT.obj [--texel-size METRES] [--max-resolution PIXELS]");
+            std::process::exit(2);
+        };
+        let mut options = pointcloud_core::AtlasOptions::default();
+        let mut remaining = args;
+        while let Some(flag) = remaining.next() {
+            let Some(value) = remaining.next() else {
+                eprintln!("Texture option needs a value: {}", flag.to_string_lossy());
+                std::process::exit(2);
+            };
+            match flag.to_str() {
+                Some("--texel-size") => {
+                    options.texel_size = value.to_string_lossy().parse().unwrap_or_else(|_| {
+                        eprintln!("--texel-size needs a positive number of metres");
+                        std::process::exit(2);
+                    });
+                }
+                Some("--max-resolution") => {
+                    options.max_resolution = value.to_string_lossy().parse().unwrap_or_else(|_| {
+                        eprintln!("--max-resolution needs a number from 256 to 4096");
+                        std::process::exit(2);
+                    });
+                }
+                _ => {
+                    eprintln!("Unknown texture option: {}", flag.to_string_lossy());
+                    std::process::exit(2);
+                }
+            }
+        }
+        let result = pointcloud_core::read_mesh_geometry(Path::new(&source))
+            .and_then(|mesh| {
+                mesh.ok_or_else(|| {
+                    pointcloud_core::LoadError::InvalidData("input has no mesh faces".into())
+                })
+            })
+            .and_then(|mesh| {
+                pointcloud_core::write_colored_obj_atlas(
+                    &mesh,
+                    Path::new(&destination),
+                    options,
+                    &|| false,
+                    &mut |done, total| {
+                        if done % 65_536 == 0 || done == total {
+                            eprintln!("Texture atlas: {done}/{total} triangles");
+                        }
+                    },
+                )
+            });
+        match result {
+            Ok(report) => {
+                println!("Textured OBJ ready: {} triangles, {} atlas page(s), {} triangles resolution-limited", report.triangles, report.pages, report.resolution_limited);
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Texture mesh failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if first.as_deref() == Some(OsStr::new("--merge")) {
         let Some(destination) = args.next() else {
             eprintln!(
@@ -1440,6 +1501,7 @@ struct MeshStart {
     surface_config: SurfaceMeshConfig,
     cloud: Arc<PointCloud>,
     deleted: Option<Arc<DeletionMask>>,
+    colours: Option<Arc<PointColours>>,
     filter: ClassFilter,
     transform: CloudTransform,
     path: PathBuf,
@@ -1909,6 +1971,16 @@ enum Message {
     CancelMesh,
     ExportMesh,
     MeshExportPathChosen(mesh_export::MeshExportRequest, Option<PathBuf>),
+    TextureMesh,
+    TextureTexelSize(String),
+    TextureMaxResolution(String),
+    TexturePoll,
+    CancelTextureExport,
+    TexturePathChosen(mesh_export::MeshExportRequest, Option<PathBuf>),
+    TextureExported(
+        Option<String>,
+        Result<mesh_export::TextureExportDone, String>,
+    ),
     /// A mesh file was written or could not be, with the job of the local
     /// API that asked for it.
     MeshExported(Option<String>, Result<mesh_export::MeshExportDone, String>),
@@ -2207,6 +2279,9 @@ struct Studio {
     section_enabled: bool,
     section_export_pending: bool,
     mesh_export_pending: bool,
+    texture_export: Option<Arc<mesh_export::TextureExportControl>>,
+    texture_texel_size: String,
+    texture_max_resolution: String,
     mesh_dialog_pending: bool,
     mesh_job: Option<MeshJob>,
     merge_job: Option<MergeJob>,
@@ -2895,6 +2970,9 @@ impl Default for Studio {
             section_enabled: false,
             section_export_pending: false,
             mesh_export_pending: false,
+            texture_export: None,
+            texture_texel_size: "0.02".into(),
+            texture_max_resolution: "4096".into(),
             mesh_dialog_pending: false,
             mesh_job: None,
             merge_job: None,
@@ -5001,6 +5079,7 @@ impl Studio {
                     } else if let Some(entry) = active {
                         let cloud = Arc::clone(&entry.cloud);
                         let deleted = entry.deleted.as_ref().map(Arc::clone);
+                        let colours = entry.colours.as_ref().map(Arc::clone);
                         let transform = entry.transform;
                         let id = self.record_api_job(json!({
                             "state": "running", "operation": "mesh", "mode": mode.label(), "path": path
@@ -5010,6 +5089,7 @@ impl Studio {
                             surface_config: config,
                             cloud,
                             deleted,
+                            colours,
                             filter: self.mesh_filter(),
                             transform,
                             path: path.clone(),
@@ -5049,6 +5129,12 @@ impl Studio {
                 }
             }
             ApiCommand::ExportMesh { path } => self.api_export_mesh(path),
+            ApiCommand::TextureMesh {
+                path,
+                texel_size,
+                max_resolution,
+            } => self.api_texture_mesh(path, texel_size, max_resolution),
+            ApiCommand::CancelTextureMesh => (self.cancel_texture_export(), Task::none()),
             ApiCommand::SetFaceSettings { options } => {
                 (self.api_set_face_settings(&options), Task::none())
             }
@@ -5484,6 +5570,7 @@ impl Studio {
         self.cancel_faces();
         self.cancel_mesh_to_plans();
         self.cancel_photo_colours();
+        self.cancel_texture_export();
         if let Some(job) = &self.merge_job {
             job.control.cancelled.store(true, Ordering::Relaxed);
         }
@@ -5646,6 +5733,7 @@ impl Studio {
             surface_config,
             cloud,
             deleted,
+            colours,
             filter,
             transform,
             path,
@@ -5677,15 +5765,24 @@ impl Studio {
                             },
                             |progress| control.report(progress),
                         ),
-                        MeshMode::Surface => pointcloud_core::mesh_surface_obj_where_progress(
-                            &cloud,
-                            &path,
-                            surface_config,
-                            |ordinal, point| {
-                                mesh_accepts(ordinal, point, deleted.as_deref(), filter, transform)
-                            },
-                            |progress| control.report(progress),
-                        ),
+                        MeshMode::Surface => {
+                            pointcloud_core::mesh_surface_obj_where_progress_colours(
+                                &cloud,
+                                &path,
+                                surface_config,
+                                colours.as_deref(),
+                                |ordinal, point| {
+                                    mesh_accepts(
+                                        ordinal,
+                                        point,
+                                        deleted.as_deref(),
+                                        filter,
+                                        transform,
+                                    )
+                                },
+                                |progress| control.report(progress),
+                            )
+                        }
                     };
                     result
                         .and_then(|stats| {
@@ -7147,11 +7244,11 @@ impl Studio {
                     self.status = "A mesh task is already running".into();
                     return Task::none();
                 }
-                let Some(transform) = self
+                let Some((transform, colours)) = self
                     .clouds
                     .iter()
                     .find(|entry| Arc::ptr_eq(&entry.cloud, &cloud))
-                    .map(|entry| entry.transform)
+                    .map(|entry| (entry.transform, entry.colours.as_ref().map(Arc::clone)))
                 else {
                     self.status = "Mesh source is no longer open".into();
                     return Task::none();
@@ -7161,6 +7258,7 @@ impl Studio {
                     surface_config: config,
                     cloud,
                     deleted,
+                    colours,
                     filter: self.mesh_filter(),
                     transform,
                     path,
@@ -7248,6 +7346,19 @@ impl Studio {
             Message::ExportMesh => return self.export_mesh(),
             Message::MeshExportPathChosen(request, path) => {
                 return self.mesh_export_path_chosen(request, path);
+            }
+            Message::TextureMesh => return self.export_texture_mesh(),
+            Message::TextureTexelSize(value) => self.texture_texel_size = value,
+            Message::TextureMaxResolution(value) => self.texture_max_resolution = value,
+            Message::TexturePoll => return self.texture_poll(),
+            Message::CancelTextureExport => {
+                self.cancel_texture_export();
+            }
+            Message::TexturePathChosen(request, path) => {
+                return self.texture_path_chosen(request, path);
+            }
+            Message::TextureExported(api_job_id, result) => {
+                self.texture_exported(api_job_id, result);
             }
             Message::MeshExported(api_job_id, result) => self.mesh_exported(api_job_id, result),
             Message::ToggleBagPanel => return self.set_bag_panel(!self.bag_panel),
@@ -11332,6 +11443,39 @@ impl Studio {
                     .padding([5, 8]),
                 );
         }
+        if let Some(control) = &self.texture_export {
+            let processed = control.processed.load(Ordering::Relaxed);
+            properties = properties
+                .push(opencad_properties::section_header("Texture progress"))
+                .push(
+                    container(
+                        text(format!(
+                            "{processed} / {} {}",
+                            control.total,
+                            i18n::tr("triangles")
+                        ))
+                        .size(11),
+                    )
+                    .padding([6, 8]),
+                )
+                .push(
+                    container(ui_style::progress_bar(
+                        0.0..=1.0,
+                        processed as f32 / control.total.max(1) as f32,
+                    ))
+                    .padding([2, 8])
+                    .width(Fill),
+                )
+                .push(
+                    container(
+                        ui_style::secondary_button(i18n::tr("Cancel texture")).on_press_maybe(
+                            (!control.cancelled.load(Ordering::Relaxed))
+                                .then_some(Message::CancelTextureExport),
+                        ),
+                    )
+                    .padding([5, 8]),
+                );
+        }
         if let Some(job) = &self.merge_job {
             let processed = job.control.processed.load(Ordering::Relaxed);
             properties = properties
@@ -12279,7 +12423,8 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::Export
         | Message::ExportSelection
         | Message::ExportSection
-        | Message::ExportMesh => ToolIcon::Export,
+        | Message::ExportMesh
+        | Message::TextureMesh => ToolIcon::Export,
         Message::Decimate | Message::Thin => ToolIcon::Decimate,
         Message::MeshRequest(_) => ToolIcon::Mesh,
         Message::ToggleBagPanel => ToolIcon::Building,

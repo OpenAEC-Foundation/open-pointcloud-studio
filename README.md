@@ -254,6 +254,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - A scan holds one mesh, which stays with the scan when it is moved or scaled. A new mesh takes the place of the previous one, and Undo does not apply to meshes.
 - Properties shows the vertices and triangles of a mesh, its open edges (the rims of the surface and of its holes) and the number of connected parts.
 - **Export mesh…** saves any mesh that is open, whether made here, opened from a file or downloaded from the 3D BAG, as OBJ, as binary PLY or as binary STL, and as editable 3D geometry for CAD and BIM programs: `MESH` entities in DXF or DWG, or an IFC4 element with a triangulated face set.
+- **Texture surface…** in Properties writes a coloured mesh as OBJ with UV coordinates, an MTL file and PNG atlas pages. It interpolates stored mesh vertex colours. Colours applied to points from E57 photos are carried into newly reconstructed surface meshes; reconstruct an older mesh again to include those edits. Set the texel size in metres and maximum atlas resolution in pixels in Properties before exporting; the CLI and MCP/API accept the same settings. Progress and cancellation are available while it runs; cancellation leaves no export files. The OBJ also retains vertex RGB so the native viewport can show its measured colours on reopening, although it cannot yet display the atlas image. This atlas writer does not yet project E57 photo pixels directly onto texels; CAD formats such as DWG do not retain texture images.
 
 ### Detected faces
 
@@ -285,7 +286,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 | PTX | yes | no | With the scanner position of each scan |
 | PTS | yes | yes | |
 | XYZ, ASC, TXT, CSV | yes | XYZ, CSV | Text with one point per line |
-| OBJ | yes | yes | Mesh with colours and normals; material colours are read, texture images are not. Detected faces are written as OBJ too, with one group per face |
+| OBJ | yes | yes | Mesh with colours and normals; material colours are read, texture images are not. `--texture-mesh` writes an OBJ with UV coordinates, MTL and PNG atlas from measured mesh vertex colours. Detected faces are written as OBJ too, with one group per face |
 | PLY as mesh | yes | yes | Shown as faces. Written as binary PLY with double coordinates, and with colours and normals where the mesh has them |
 | STL | yes | yes | Shown as faces. Written as binary STL: triangles only, without colours. A mesh more than 2,048 m from zero is written relative to a whole-metre origin that the file header names |
 | OFF | yes | no | Shown as faces; can be saved as OBJ, PLY, STL, DXF, DWG or IFC |
@@ -358,6 +359,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--merge OUTPUT.laz INPUT1.las INPUT2.laz [...]` | Merges LAS and LAZ scans into one file |
 | `--mesh INPUT OUTPUT.obj` | Writes a terrain mesh of a scan |
 | `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]` | Writes a 3D surface mesh of a scan; reads the points from the index of the scan when it has one |
+| `--texture-mesh INPUT_MESH OUTPUT.obj [--texel-size METRES] [--max-resolution PIXELS]` | Writes a coloured OBJ mesh with an MTL and one or more PNG texture atlases from the measured colours at its vertices; requires a new output name |
 | `--closed-mesh INPUT OUTPUT.obj\|.ply\|.stl\|.dxf\|.dwg\|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic\|centre\|upward]` | Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY, STL, DXF, DWG or IFC; `P` selects a deterministic source share (100% by default) |
 | `--faces INPUT OUTPUT.json\|.obj\|.dxf\|.dwg\|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on\|off]` | Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON, OBJ, DXF, DWG or IFC: with a distance tolerance of 0.02 m, an angle tolerance of 10 degrees, faces from 0.25 m² and cylinders on unless the options say otherwise |
 | `--survey INPUT OUTPUT.json` | Surveys a scanned building for Pointcloud to Drawing and writes what was found as JSON: the box around the building without stray points far out, the main direction of its walls, its footprint, the occupied cells of 5 by 5 by 2 cm per height, and its levels: every floor with its ceiling, slab, slope and cut height, the roof, the ground and P |

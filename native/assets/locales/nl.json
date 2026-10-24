@@ -1055,5 +1055,12 @@
   "Short edges kept": "Korte randen behouden",
   "Compare with 3D": "Naast 3D tonen",
   "Stack panes": "Onder elkaar",
-  "Side by side": "Naast elkaar"
+  "Side by side": "Naast elkaar",
+  "Writes measured mesh vertex colours as a PNG texture atlas with an OBJ and MTL.": "Schrijft de gemeten hoekpuntkleuren van een mesh als PNG-textuuratlas met OBJ en MTL.",
+  "Texture surface…": "Oppervlak textureren…",
+  "Cancel texture": "Textureren annuleren",
+  "Texture progress": "Textuurvoortgang",
+  "triangles": "driehoeken",
+  "Texel (m)": "Texel (m)",
+  "Atlas (px)": "Atlas (px)"
 }
