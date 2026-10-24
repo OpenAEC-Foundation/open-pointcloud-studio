@@ -234,7 +234,7 @@ Selections honour the section box, the hidden classes and the points deleted bef
 
 ### Editing
 
-- **Delete selection**, or the Delete key, hides the selected points. **Undo** and **Redo** (the Undo and Redo icons in the title strip, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z; Command on macOS) restore and repeat up to eight edits: deletions, and the colours given from photos (see [Colour from photos](#colour-from-photos)).
+- **Delete selection**, or the Delete key, hides the selected points. **Undo** and **Redo** (the Undo and Redo icons in the title strip, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z; Command on macOS) restore and repeat up to eight edits: deletions, **Thin**, and the colours given from photos (see [Colour from photos](#colour-from-photos)). Removing a scan empties that history.
 - **Thin**, **Move** and **Scale** are under **Transform** in Properties, as icons named in their tooltip.
 - **Thin** reduces the number of points: it keeps the percentage set with the **Keep** slider, from 1 to 100, of the points that remain, taken at even steps through the file, so every part of the scan thins by the same share. Keep 25 % removes three points in four. It counts as a deletion and can be undone. To write a reduced copy without thinning the open scan, use **Export every Nth point…** in the menu of the File view.
 - **Move** shifts the active scan by the X, Y and Z values typed beside it.

@@ -27,6 +27,11 @@ section its version and date.
 - A Dutch manual with pictures, *Handleiding*, is on the wiki of the project and linked from the README.
 - The web demo of the earlier Classic prototype is no longer published from this repository: there is no supported browser edition, and every release is the native application.
 - The release notes say whether the macOS app and disk image are signed with a Developer ID and notarized, and give the steps for a first start only when they are not.
+- Buttons that cannot be pressed are drawn in faint text on a quiet surface instead of half-transparent, so a disabled primary button no longer looks amber and active. The older ribbon and panel icons keep their amber in the dark themes; only their dark outlines take the theme's text colour. The 3D model caption beside a photo lights up under the pointer.
+- Measuring a distance says that it ends at the second point; an area still ends with Enter or a click on the first point.
+- The local command API answers `/health` and `/info` while commands wait, so an MCP client no longer starts a second window when the first is busy. `/info` reports `api_revision` and the list of commands, and the MCP server warns when the window's version differs from its own.
+- `wait_until_idle` also waits for texture, sheet PDF and drawing-file exports, and `status` reports `texture_export`. MCP tools carry read-only, destructive, idempotent and open-world hints.
+- Versions are numbered by year and ISO week from the next release on, such as 2026.43.0: the year, the week without a leading zero and a sequence number within the week.
 
 ## 0.9.5 - 2026-10-13
 

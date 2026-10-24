@@ -1,15 +1,25 @@
 # OpenAEC UI crate snapshot
 
-This portable snapshot comes from the sibling `OpenAEC-app-kopie` Style Repo.
-The private [OpenAEC-Style-Repo](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo)
-is the source of truth. The desktop application uses this local workspace crate
-so a public checkout builds without private GitHub access or another directory
-on the developer's machine. Run `python3 scripts/check_portable_ui.py` in the
-Style Repo before updating this snapshot.
+This snapshot comes from the [OpenAEC-Style-Repo](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo),
+which is the source of truth. The desktop application uses this local workspace
+crate so that a checkout builds without another directory on the developer's
+machine. Run `python3 scripts/check_portable_ui.py` in the Style Repo before
+updating this snapshot.
+
+Source: the crate as of Style Repo commit `214c01a` (22 October 2026), which is
+the same as `234cb10` for this crate: the last state on iced 0.13. Later commits
+of the crate need iced 0.14 and are not in this snapshot. Local changes, which a
+next sync must carry over or propose upstream:
+
+- `find_bar.rs`: an enum change for Clippy; `frame.rs` tests use the test
+  renderer; `shell.rs` drops a needless `.into()`; two Clippy allows.
+- The source files are formatted with rustfmt.
+- This file and the notes in `README.md` (links point to the Style Repo).
 
 This snapshot includes the 0.4 design module (`src/design/`) and the canonical
-crate license bundle. The parity check compares all 22 Rust source files,
-including nested modules, plus the packaged assets and license texts. The
+crate license bundle. The parity check compares the Rust source files
+directly under `src/`, the packaged assets and the license texts; it does not
+yet compare `src/design/`. The
 existing Pointcloud window still uses its integrated shell components; the 0.4
 module is available for gradual adoption by this and other tools.
 
