@@ -43,7 +43,7 @@ Maak vervolgens via **Doorsnedetekening** een **plattegrond**, **aanzicht** of *
 
 **Mesh Pointcloud** biedt verschillende methoden voor reconstructie; je kunt het gebied met de snedebox beperken en de gewenste resolutie instellen. Controleer het resultaat in de 3D-weergave voor export. De methode **Vlakke vlakken** zoekt onder andere wanden, vloeren en cilindrische elementen; dit levert semantische vlakken op en is iets anders dan een doorlopend driehoeksmesh. De nauwkeurigheid hangt af van puntdichtheid, ruis en gekozen resolutie. De volledige technische uitleg en de grenzen per methode staan in de [uitgebreide gebruikershandleiding](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/blob/main/docs/guide.md#mesh-pointcloud).
 
-Via **Bestand → Exporteren** vind je de beschikbare puntcloud-, mesh- en tekeningformaten. Kies bij puntcloudexport desgewenst een stapgrootte om bijvoorbeeld ieder tiende punt te schrijven. Bekijk vóór export welke scan actief is en welke punten zijn geselecteerd of verborgen.
+Via **Bestand → Alle exportopties…** vind je de beschikbare puntcloud-, mesh- en tekeningformaten; de meestgebruikte exports staan ook direct in het menu van **Bestand**. Kies bij puntcloudexport desgewenst een stapgrootte om bijvoorbeeld ieder tiende punt te schrijven. Bekijk vóór export welke scan actief is en welke punten zijn geselecteerd of verborgen.
 
 ## Scannerposities en foto's
 

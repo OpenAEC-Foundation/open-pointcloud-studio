@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use iced::widget::{button, column, container, row, text};
+use iced::widget::{button, column, container, text};
 use iced::{Element, Fill, Task};
 use pointcloud_core::{
     AtlasOptions, AtlasReport, LoadError, MeshFormat, MeshGeometry, MeshTopology,
@@ -793,25 +793,21 @@ impl Studio {
                 .padding([4, 8]),
             );
         }
+        // The texture settings are rows of the shared property grid.
         let texture_settings = column![
-            row![
-                text(tr("Texel (m)")).size(11).width(100),
-                ui_style::text_input("0.02", &self.texture_texel_size)
-                    .on_input(Message::TextureTexelSize)
-                    .width(Fill),
-            ]
-            .spacing(4)
-            .align_y(iced::Alignment::Center),
-            row![
-                text(tr("Atlas (px)")).size(11).width(100),
-                ui_style::text_input("4096", &self.texture_max_resolution)
-                    .on_input(Message::TextureMaxResolution)
-                    .width(Fill),
-            ]
-            .spacing(4)
-            .align_y(iced::Alignment::Center),
-        ]
-        .spacing(3);
+            opencad_properties::property_input(
+                "Texel (m)",
+                "0.02",
+                &self.texture_texel_size,
+                Message::TextureTexelSize,
+            ),
+            opencad_properties::property_input(
+                "Atlas (px)",
+                "4096",
+                &self.texture_max_resolution,
+                Message::TextureMaxResolution,
+            ),
+        ];
         let actions = iced::widget::row![
             button(tr("Export mesh…"))
                 .on_press_maybe((!self.mesh_export_pending).then_some(Message::ExportMesh))
@@ -827,7 +823,7 @@ impl Studio {
         ]
         .spacing(6);
         Some(
-            rows.push(container(texture_settings).padding([4, 8]))
+            rows.push(texture_settings)
                 .push(container(actions).padding([4, 8]))
                 .push(self.cad_viewer_controls())
                 .into(),

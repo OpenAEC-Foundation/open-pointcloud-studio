@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 pointcloud-core = { path = "../core" }
+openaec-ui = { path = "../ui", features = ["gpu-renderer"] }
 # "web-colors" lays a colour with alpha over what lies under it as CSS does,
 # so that the tokens of the OpenAEC style book look as its template shows them.
 iced = { version = "0.13.1", features = ["advanced", "canvas", "image", "svg", "tokio", "web-colors"] }

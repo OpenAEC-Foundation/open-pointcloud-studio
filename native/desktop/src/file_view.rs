@@ -5,7 +5,7 @@
 
 use std::sync::atomic::Ordering;
 
-use iced::widget::{button, column, container, horizontal_space, row, text, Column, Space};
+use iced::widget::{button, column, container, horizontal_space, row, text, Space};
 use iced::{Element, Fill, Task};
 use pointcloud_core::ExportFormat;
 use serde_json::{json, Value};
@@ -117,11 +117,6 @@ pub enum FileAction {
     MeshToPlans,
 }
 
-/// The height of a menu row that leads to a page.
-const PAGE_ROW_H: f32 = 40.0;
-/// The widest a column of tiles grows on a wide window.
-const TILE_COLUMN_W: f32 = 620.0;
-
 impl Studio {
     /// Carry out a tile of the File view and return to the model.
     pub(crate) fn file_action(&mut self, action: FileAction) -> Task<Message> {
@@ -232,66 +227,36 @@ impl Studio {
         json!({"ok": true, "file_view": self.file_view_value()})
     }
 
-    /// The classic OPS backstage menu keeps common file tasks one click away.
-    /// The fuller New and Export pages remain available for less common work.
+    /// The menu at the left, in the shared backstage navigation. Common file
+    /// and export tasks are direct entries, one click away as in early OPS,
+    /// beside New and the fuller Export page; then the pages that show what
+    /// is open and what the application is; then the entries every OpenAEC
+    /// application has.
     fn file_menu(&self) -> Element<'_, Message> {
-        let colors = self.ui_theme.colors();
-        let rule = || {
-            container(Space::new(Fill, 1)).style(|theme| {
-                container::Style::default().background(ui_theme::colors(theme).border_subtle)
-            })
-        };
-        let item = |label: &'static str, message: Option<Message>| {
-            button(text(tr(label)).size(14))
-                .on_press_maybe(message)
-                .style(|theme, status| ui_style::ribbon_button(theme, false, status))
-                .width(Fill)
-                .padding([11, 18])
-        };
-        let action = |label: &'static str, action: FileAction, available: bool| {
-            item(label, available.then_some(Message::FileAction(action)))
-        };
-        let caption = |label: &'static str| {
-            container(text(tr(label)).size(11).color(colors.accent)).padding(iced::Padding {
-                top: 19.0,
-                right: 18.0,
-                bottom: 6.0,
-                left: 18.0,
-            })
-        };
+        use openaec_ui::widgets::{BackstageFooter, BackstagePage};
         // The open page carries the accent bar of the style book at its left.
-        let page = |page: FilePage| {
-            let open = self.file_page == page;
-            let label = if page == FilePage::Export {
-                key("All export options…")
-            } else {
-                page.label()
-            };
-            row![
-                container(Space::new(3, Fill)).style(move |theme| {
-                    let colors = ui_theme::colors(theme);
-                    container::Style::default().background(if open {
-                        colors.accent
-                    } else {
-                        iced::Color::TRANSPARENT
-                    })
-                }),
-                button(text(tr(label)).size(14))
-                    .on_press(Message::FilePage(page))
-                    .style(move |theme, status| ui_style::ribbon_button(theme, open, status))
-                    .width(Fill)
-                    .height(Fill)
-                    .padding([11, 15]),
-            ]
-            .height(PAGE_ROW_H)
+        let page = |page: FilePage, label: &'static str| BackstagePage {
+            label: tr(label).into(),
+            message: Message::FilePage(page),
+            active: self.file_page == page,
+            enabled: true,
+        };
+        // A direct entry starts its task at once and is greyed while the
+        // task cannot run.
+        let action = |label: &'static str, action: FileAction, available: bool| BackstagePage {
+            label: tr(label).into(),
+            message: Message::FileAction(action),
+            active: false,
+            enabled: available,
         };
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
         let selected = active_cloud
             .and_then(|entry| entry.selection.as_ref())
             .is_some_and(|selection| selection.count > 0);
-        let top = column![
-            caption(key("FILE")),
-            page(FilePage::New),
+        // The shared navigation has no captions, so the direct exports say
+        // what they do in their own names.
+        let tasks = vec![
+            page(FilePage::New, FilePage::New.label()),
             action(key("Import point cloud"), FileAction::Import, true),
             action(key("Open scan folder"), FileAction::ImportFolder, true),
             action(key("Drawing (DXF/DWG)…"), FileAction::OpenDrawing, true),
@@ -300,100 +265,60 @@ impl Studio {
                 FileAction::Bag3d,
                 self.extensions.enabled(extensions::BAG3D),
             ),
-            caption(key("EXPORT")),
             action(
-                key("Full resolution…"),
+                key("Export full resolution…"),
                 FileAction::ExportFull,
                 active_cloud.is_some(),
             ),
             action(
-                key("Selected points…"),
+                key("Export selected points…"),
                 FileAction::ExportSelection,
                 selected,
             ),
             action(
-                key("Section box…"),
+                key("Export section box…"),
                 FileAction::ExportSection,
                 active_cloud.is_some() && self.section_enabled && !self.section_export_pending,
             ),
             action(
-                key("Section drawing…"),
+                key("Export section drawing…"),
                 FileAction::ExportDrawing,
                 self.drawing_entry_enabled(),
             ),
             action(
-                key("Every Nth point…"),
+                key("Export every Nth point…"),
                 FileAction::ExportDecimated,
                 active_cloud.is_some(),
             ),
-            page(FilePage::Export),
-        ]
-        .width(Fill);
-        let footer = column![
-            rule(),
-            page(FilePage::Workspace),
-            page(FilePage::Extensions),
-            page(FilePage::About),
-            item(
-                "Settings…",
-                Some(Message::Settings(settings_dialog::SettingsAction::Open)),
-            ),
-            button(
-                text(tr("←  Return to model"))
-                    .size(13)
-                    .font(fonts::SEMIBOLD),
-            )
-            .on_press(Message::ToggleFile)
-            .style(|theme, status| ui_style::ribbon_button(theme, false, status))
-            .width(Fill)
-            .padding([13, 18]),
-            // Exit ends the session at once: it stands apart, below the entry
-            // that is used most.
-            rule(),
-            item("Exit", Some(Message::Exit)),
-        ]
-        .width(Fill);
-
-        container(column![ui_style::scrollable(top).height(Fill), footer].height(Fill))
-            .width(260)
-            .height(Fill)
-            .style(|theme| {
-                let colors = ui_theme::colors(theme);
-                container::Style::default()
-                    .background(colors.bg_lighter)
-                    .border(iced::Border {
-                        color: colors.border,
-                        width: 1.0,
-                        radius: 0.0.into(),
-                    })
-            })
-            .into()
+            page(FilePage::Export, key("All export options…")),
+        ];
+        let others = [FilePage::Workspace, FilePage::Extensions, FilePage::About]
+            .into_iter()
+            .map(|each| page(each, each.label()))
+            .collect();
+        openaec_ui::widgets::backstage_nav_with(
+            tasks,
+            others,
+            BackstageFooter {
+                settings: (
+                    tr("Settings…").into(),
+                    Message::Settings(settings_dialog::SettingsAction::Open),
+                ),
+                back: (tr("←  Return to model").into(), Message::ToggleFile),
+                exit: (tr("Exit").into(), Message::Exit),
+            },
+            ui_theme::shared_theme,
+        )
     }
 
     /// The title of a page with one line under it that says what it is for.
-    fn page_heading(&self, title: &'static str, lead: &'static str) -> Column<'_, Message> {
-        column![
-            text(tr(title)).size(22).font(fonts::HEADING),
-            text(tr(lead))
-                .size(13)
-                .color(self.ui_theme.colors().text_secondary),
-        ]
-        .spacing(6)
+    fn page_heading(&self, title: &'static str, lead: &'static str) -> Element<'_, Message> {
+        openaec_ui::widgets::backstage_page_heading(tr(title), tr(lead), self.ui_theme.shared())
     }
 
     /// A small heading above a group of tiles.
     fn group_caption(&self, label: &'static str) -> Element<'_, Message> {
-        container(
-            text(tr(label))
-                .size(10)
-                .color(self.ui_theme.colors().text_muted),
-        )
-        .padding(iced::Padding {
-            top: 26.0,
-            bottom: 6.0,
-            ..iced::Padding::ZERO
-        })
-        .into()
+        openaec_ui::widgets::backstage_group_caption(tr(label), self.ui_theme.shared())
     }
 
     /// A task as a tile: its name, and under it what it writes or what it
@@ -405,29 +330,12 @@ impl Studio {
         action: FileAction,
         available: bool,
     ) -> Element<'_, Message> {
-        let muted = self.ui_theme.colors().text_secondary;
-        button(
-            column![
-                text(tr(title)).size(15).font(fonts::SEMIBOLD),
-                text(tr(detail)).size(12).color(muted),
-            ]
-            .spacing(3),
+        openaec_ui::widgets::backstage_task_tile_with(
+            tr(title),
+            tr(detail),
+            available.then_some(Message::FileAction(action)),
+            ui_theme::shared_theme,
         )
-        .on_press_maybe(available.then_some(Message::FileAction(action)))
-        .style(|theme, status| {
-            let mut style = ui_style::ribbon_button(theme, false, status);
-            let colors = ui_theme::colors(theme);
-            style.border.color = colors.border;
-            style.border.width = 1.0;
-            style.border.radius = 4.0.into();
-            if style.background.is_none() {
-                style.background = Some(colors.accent_soft.into());
-            }
-            style
-        })
-        .width(Fill)
-        .padding([12, 16])
-        .into()
     }
 
     /// The tile that opens the Pointcloud to Drawing wizard, on the New page and
@@ -443,10 +351,7 @@ impl Studio {
 
     /// A column of tiles that does not grow wider than reads well.
     fn tiles<'a>(tiles: impl IntoIterator<Item = Element<'a, Message>>) -> Element<'a, Message> {
-        container(Column::with_children(tiles).spacing(8).width(Fill))
-            .width(Fill)
-            .max_width(TILE_COLUMN_W)
-            .into()
+        openaec_ui::widgets::backstage_tile_column(tiles)
     }
 
     fn new_page(&self) -> Element<'_, Message> {
@@ -724,7 +629,9 @@ impl Studio {
             self.group_caption(key("CURRENT SCAN")),
             text(active_name).size(16),
             self.group_caption(key("OPEN SCANS")),
-            container(open_scans).width(Fill).max_width(TILE_COLUMN_W),
+            container(open_scans)
+                .width(Fill)
+                .max_width(openaec_ui::widgets::BACKSTAGE_TILE_WIDTH),
             self.group_caption(key("EXPORT")),
             container(
                 column![
@@ -754,7 +661,7 @@ impl Studio {
                 .spacing(10),
             )
             .width(Fill)
-            .max_width(TILE_COLUMN_W),
+            .max_width(openaec_ui::widgets::BACKSTAGE_TILE_WIDTH),
         ]
         .spacing(4)
         .width(Fill)

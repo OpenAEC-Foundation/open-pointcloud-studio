@@ -7,7 +7,7 @@ use std::sync::Once;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer;
 use iced::advanced::widget::Tree;
-use iced::{mouse, Color, Element, Rectangle, Size, Theme};
+use iced::{mouse, Color, Element, Rectangle, Size, Theme, Vector};
 
 use crate::{Message, Studio};
 
@@ -21,6 +21,19 @@ pub(crate) struct Picture {
 }
 
 impl Picture {
+    /// Save a software-rendered review image without launching a desktop window.
+    pub(crate) fn save_png(&self, path: &std::path::Path) {
+        let size = tiny_skia::IntSize::from_wh(self.width, self.height).expect("valid image size");
+        let mut rgba = self.bytes.clone();
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2); // iced_tiny_skia gives BGRA; PNG encoding expects RGBA.
+        }
+        tiny_skia::Pixmap::from_vec(rgba, size)
+            .expect("valid software-rendered pixels")
+            .save_png(path)
+            .expect("write review image");
+    }
+
     /// The colour of the pixel at `x`, `y`, as red, green and blue.
     pub(crate) fn rgb(&self, x: u32, y: u32) -> [u8; 3] {
         assert!(x < self.width && y < self.height, "({x}, {y}) lies outside");
@@ -64,7 +77,7 @@ pub(crate) fn render(element: Element<'_, Message>, theme: &Theme, size: Size) -
 
 /// As `render`, with the pointer at `cursor`.
 pub(crate) fn render_under(
-    element: Element<'_, Message>,
+    mut element: Element<'_, Message>,
     theme: &Theme,
     size: Size,
     cursor: mouse::Cursor,
@@ -90,6 +103,22 @@ pub(crate) fn render_under(
         cursor,
         &Rectangle::with_size(size),
     );
+    if let Some(mut overlay) =
+        element
+            .as_widget_mut()
+            .overlay(&mut tree, Layout::new(&node), &renderer, Vector::ZERO)
+    {
+        let popup_node = overlay.layout(&renderer, size);
+        overlay.draw(
+            &mut renderer,
+            theme,
+            &renderer::Style {
+                text_color: theme.palette().text,
+            },
+            Layout::new(&popup_node),
+            cursor,
+        );
+    }
     let iced::Renderer::Secondary(mut software) = renderer else {
         unreachable!("the software renderer was made above");
     };

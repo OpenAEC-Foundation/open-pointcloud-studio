@@ -16,13 +16,16 @@ use iced::advanced::overlay;
 use iced::advanced::renderer;
 use iced::advanced::widget::{tree, Operation, Tree, Widget};
 use iced::advanced::{Clipboard, Shell};
+#[cfg(test)]
+use iced::widget::container;
 use iced::widget::{
-    button, checkbox as check_box, container, pick_list as choice, progress_bar as progress,
+    button, checkbox as check_box, pick_list as choice, progress_bar as progress,
     scrollable as scrolling, slider as slide, text, text_input as field, tooltip as tip_widget,
 };
+#[cfg(test)]
+use iced::Background;
 use iced::{
-    event, mouse, Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer,
-    Shadow, Size, Theme, Vector,
+    event, mouse, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector,
 };
 
 use crate::ui_theme::{self, UiColors};
@@ -31,123 +34,31 @@ use crate::Message;
 /// What a control that cannot be used keeps of its colours: the template
 /// draws buttons and fields that wait at half their strength, and the
 /// buttons of the ribbon remain legible while unavailable.
-const DISABLED: f32 = 0.5;
+#[cfg(test)]
 const RIBBON_DISABLED: f32 = 0.72;
 
 fn colors(theme: &Theme) -> UiColors {
     ui_theme::colors(theme)
 }
 
-/// `style` at `share` of its strength.
-fn faded(style: button::Style, share: f32) -> button::Style {
-    button::Style {
-        background: style
-            .background
-            .map(|background| background.scale_alpha(share)),
-        text_color: style.text_color.scale_alpha(share),
-        border: Border {
-            color: style.border.color.scale_alpha(share),
-            ..style.border
-        },
-        shadow: style.shadow,
-    }
-}
-
-fn hovered(status: button::Status) -> bool {
-    matches!(status, button::Status::Hovered | button::Status::Pressed)
-}
-
 /// The button that goes on: Save, Create, Next, Run. Filled with the accent
 /// colour, Signal Orange under the pointer. A button is made in it with
 /// [`primary_button`], which gives it its size too.
 pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
-    let colors = colors(theme);
-    let (background, text_color) = if hovered(status) {
-        (colors.btn_primary_hover_bg, colors.btn_primary_hover_text)
-    } else {
-        (colors.btn_primary_bg, colors.btn_primary_text)
-    };
-    let style = button::Style {
-        background: Some(Background::Color(background)),
-        text_color,
-        border: Border {
-            color: colors.btn_primary_border,
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        shadow: Shadow::default(),
-    };
-    if status == button::Status::Disabled {
-        faded(style, DISABLED)
-    } else {
-        style
-    }
+    openaec_ui::widgets::primary_button_style(ui_theme::shared_theme(theme), status)
 }
 
 /// Every other button of a dialog or a form: Cancel, Back, Reset. A button
 /// is made in it with [`secondary_button`].
 pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
-    let colors = colors(theme);
-    let (background, border) = if hovered(status) {
-        (
-            colors.btn_secondary_hover_bg,
-            colors.btn_secondary_hover_border,
-        )
-    } else {
-        (colors.btn_secondary_bg, colors.dialog_input_border)
-    };
-    let style = button::Style {
-        background: Some(Background::Color(background)),
-        text_color: colors.btn_secondary_text,
-        border: Border {
-            color: border,
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        shadow: Shadow::default(),
-    };
-    if status == button::Status::Disabled {
-        faded(style, DISABLED)
-    } else {
-        style
-    }
+    openaec_ui::widgets::secondary_button_style(ui_theme::shared_theme(theme), status)
 }
 
 /// A button of the ribbon, and a small action in a panel drawn as one:
 /// transparent with a transparent border, tinted and outlined in the accent
 /// colour under the pointer and while it is on.
 pub fn ribbon_button(theme: &Theme, active: bool, status: button::Status) -> button::Style {
-    let colors = colors(theme);
-    let (background, text_color, border) = if active {
-        (
-            Some(colors.ribbon_btn_active_bg),
-            colors.ribbon_btn_active_text,
-            colors.ribbon_btn_active_border,
-        )
-    } else if hovered(status) {
-        (
-            Some(colors.ribbon_btn_hover),
-            colors.ribbon_text_hover,
-            colors.ribbon_btn_hover_border,
-        )
-    } else {
-        (None, colors.text, Color::TRANSPARENT)
-    };
-    let style = button::Style {
-        background: background.map(Background::Color),
-        text_color,
-        border: Border {
-            color: border,
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        shadow: Shadow::default(),
-    };
-    if status == button::Status::Disabled {
-        faded(style, RIBBON_DISABLED)
-    } else {
-        style
-    }
+    openaec_ui::widgets::ribbon_button_style(ui_theme::shared_theme(theme), active, status)
 }
 
 /// A small action in a panel or on a row: a ribbon button that is not on.
@@ -158,275 +69,78 @@ pub fn tool(theme: &Theme, status: button::Status) -> button::Style {
 /// A text link, such as the source of a map: the accent colour, Signal
 /// Orange under the pointer.
 pub fn link(theme: &Theme, status: button::Status) -> button::Style {
-    let colors = colors(theme);
-    let style = button::Style {
-        background: None,
-        text_color: if hovered(status) {
-            colors.accent_hover
-        } else {
-            colors.accent
-        },
-        border: Border::default(),
-        shadow: Shadow::default(),
-    };
-    if status == button::Status::Disabled {
-        faded(style, DISABLED)
-    } else {
-        style
-    }
+    openaec_ui::widgets::link_button_style(ui_theme::shared_theme(theme), status)
 }
 
 /// An item of the status bar that can be clicked, such as Cancel import.
 pub fn status_button(theme: &Theme, status: button::Status) -> button::Style {
-    let colors = colors(theme);
-    button::Style {
-        background: hovered(status).then_some(Background::Color(colors.status_hover)),
-        text_color: if status == button::Status::Disabled {
-            colors.status_text_label
-        } else {
-            colors.status_text
-        },
-        border: Border::default(),
-        shadow: Shadow::default(),
-    }
+    openaec_ui::widgets::status_button_style(ui_theme::shared_theme(theme), status)
 }
 
 /// A text field: the input colours of the dialogs, square, with the focus
 /// colour as its border while it has the focus, and selected text on the
 /// soft accent.
 pub fn input(theme: &Theme, status: field::Status) -> field::Style {
-    let colors = colors(theme);
-    let style = field::Style {
-        background: Background::Color(colors.dialog_input_bg),
-        border: Border {
-            color: if status == field::Status::Focused {
-                colors.focus
-            } else {
-                colors.dialog_input_border
-            },
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        icon: colors.text_muted,
-        placeholder: colors.text_faint,
-        value: colors.dialog_input_text,
-        selection: colors.accent_soft,
-    };
-    if status == field::Status::Disabled {
-        field::Style {
-            background: style.background.scale_alpha(DISABLED),
-            border: Border {
-                color: style.border.color.scale_alpha(DISABLED),
-                ..style.border
-            },
-            value: style.value.scale_alpha(DISABLED),
-            ..style
-        }
-    } else {
-        style
-    }
+    openaec_ui::widgets::text_input_style(ui_theme::shared_theme(theme), status)
 }
 
 /// A choice list, as the ThemedSelect of the template.
 pub fn select(theme: &Theme, status: choice::Status) -> choice::Style {
-    let colors = colors(theme);
-    choice::Style {
-        text_color: colors.dialog_input_text,
-        placeholder_color: colors.text_faint,
-        handle_color: colors.dialog_input_text.scale_alpha(0.6),
-        background: Background::Color(colors.dialog_input_bg),
-        border: Border {
-            color: match status {
-                choice::Status::Active => colors.dialog_input_border,
-                choice::Status::Hovered => colors.dialog_content_secondary,
-                choice::Status::Opened => colors.focus,
-            },
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-    }
+    openaec_ui::widgets::pick_list_style(ui_theme::shared_theme(theme), status)
 }
 
 /// The open menu of a choice list: the shell under it, the option under the
 /// pointer tinted, with its text in the accent colour.
 pub fn menu(theme: &Theme) -> iced::overlay::menu::Style {
-    let colors = colors(theme);
-    iced::overlay::menu::Style {
-        background: Background::Color(colors.bg),
-        border: Border {
-            color: colors.dialog_input_border,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        text_color: colors.dialog_input_text,
-        selected_text_color: colors.accent,
-        selected_background: Background::Color(colors.ribbon_btn_hover),
-    }
+    openaec_ui::widgets::pick_list_menu_style(ui_theme::shared_theme(theme))
 }
 
 /// A checkbox: filled with the accent colour when it is ticked, as the
 /// native checkbox of the template takes the focus colour.
 pub fn check(theme: &Theme, status: check_box::Status) -> check_box::Style {
-    let colors = colors(theme);
-    let (checked, over, disabled) = match status {
-        check_box::Status::Active { is_checked } => (is_checked, false, false),
-        check_box::Status::Hovered { is_checked } => (is_checked, true, false),
-        check_box::Status::Disabled { is_checked } => (is_checked, false, true),
-    };
-    let (background, border) = if checked {
-        (colors.accent, colors.accent)
-    } else if over {
-        (colors.dialog_input_bg, colors.dialog_content_secondary)
-    } else {
-        (colors.dialog_input_bg, colors.dialog_input_border)
-    };
-    let share = if disabled { DISABLED } else { 1.0 };
-    check_box::Style {
-        background: Background::Color(background.scale_alpha(share)),
-        icon_color: colors.btn_primary_text,
-        border: Border {
-            color: border.scale_alpha(share),
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        text_color: Some(colors.text.scale_alpha(share)),
-    }
+    openaec_ui::widgets::checkbox_style(ui_theme::shared_theme(theme), status)
 }
 
 /// A slider, which the style book does not draw: the rail of its progress
 /// bar, filled in the accent colour up to the value, and the knob of its
 /// switch as a ring in the accent colour.
 pub fn slider_style(theme: &Theme, status: slide::Status) -> slide::Style {
-    let colors = colors(theme);
-    slide::Style {
-        rail: slide::Rail {
-            backgrounds: (
-                Background::Color(colors.accent),
-                Background::Color(colors.border_strong),
-            ),
-            width: 4.0,
-            border: Border::default().rounded(2),
-        },
-        handle: slide::Handle {
-            shape: slide::HandleShape::Circle { radius: 7.0 },
-            background: Background::Color(if status == slide::Status::Dragged {
-                colors.accent
-            } else {
-                colors.bg_lighter
-            }),
-            border_width: 2.0,
-            border_color: if status == slide::Status::Hovered {
-                colors.accent_hover
-            } else {
-                colors.accent
-            },
-        },
-    }
+    openaec_ui::widgets::slider_style(ui_theme::shared_theme(theme), status)
 }
 
 /// A progress bar of 8 pixels: the accent colour on the strong border.
 pub fn progress_style(theme: &Theme) -> progress::Style {
-    let colors = colors(theme);
-    progress::Style {
-        background: Background::Color(colors.border_strong),
-        bar: Background::Color(colors.accent),
-        border: Border::default().rounded(4),
-    }
+    openaec_ui::widgets::progress_style(ui_theme::shared_theme(theme))
 }
 
 /// The line of 2 pixels under a row that says how far it is.
 pub fn progress_line_style(theme: &Theme) -> progress::Style {
-    progress::Style {
-        border: Border::default().rounded(1),
-        ..progress_style(theme)
-    }
+    openaec_ui::widgets::progress_line_style(ui_theme::shared_theme(theme))
 }
 
 /// A scroll bar: no rail, a thumb in the accent colour at a quarter, at
 /// 40 % under the pointer and while it is dragged.
 pub fn scroll(theme: &Theme, status: scrolling::Status) -> scrolling::Style {
-    let colors = colors(theme);
-    let (horizontal, vertical) = match status {
-        scrolling::Status::Active => (false, false),
-        scrolling::Status::Hovered {
-            is_horizontal_scrollbar_hovered,
-            is_vertical_scrollbar_hovered,
-        } => (
-            is_horizontal_scrollbar_hovered,
-            is_vertical_scrollbar_hovered,
-        ),
-        scrolling::Status::Dragged {
-            is_horizontal_scrollbar_dragged,
-            is_vertical_scrollbar_dragged,
-        } => (
-            is_horizontal_scrollbar_dragged,
-            is_vertical_scrollbar_dragged,
-        ),
-    };
-    let rail = |strong: bool| scrolling::Rail {
-        background: None,
-        border: Border::default(),
-        scroller: scrolling::Scroller {
-            color: colors.accent.scale_alpha(if strong { 0.40 } else { 0.25 }),
-            border: Border::default().rounded(3),
-        },
-    };
-    scrolling::Style {
-        container: container::Style::default(),
-        vertical_rail: rail(vertical),
-        horizontal_rail: rail(horizontal),
-        gap: None,
-    }
+    openaec_ui::widgets::scrollable_style(ui_theme::shared_theme(theme), status)
 }
 
 /// The box of a tooltip: the tooltip of the brand, Deep Forge with
 /// Blueprint White, in every theme.
+#[cfg(test)]
 pub fn tip_style(theme: &Theme) -> container::Style {
-    let colors = colors(theme);
-    container::Style::default()
-        .background(colors.tooltip_bg)
-        .color(colors.tooltip_text)
-        .border(Border::default().rounded(4))
-}
-
-/// The size of a button of a dialog or a form in the style book: 20 pixels
-/// beside the label and 5 above and below, at least 75 wide and 27 high,
-/// the label in 11.
-const BUTTON_PADDING: [u16; 2] = [5, 20];
-const BUTTON_MIN_WIDTH: f32 = 75.0;
-const BUTTON_TEXT: f32 = 11.0;
-/// The line of the label: 27 high with the padding.
-const BUTTON_LINE: f32 = 17.0;
-
-/// A button of a dialog or a form with `label` in the middle, in `style`.
-fn dialog_button<'a>(
-    label: impl text::IntoFragment<'a>,
-    style: fn(&Theme, button::Status) -> button::Style,
-) -> button::Button<'a, Message> {
-    button(
-        iced::widget::column![
-            text(label)
-                .size(BUTTON_TEXT)
-                .font(crate::fonts::REGULAR)
-                .line_height(text::LineHeight::Absolute(BUTTON_LINE.into())),
-            iced::widget::Space::with_width(BUTTON_MIN_WIDTH - 2.0 * f32::from(BUTTON_PADDING[1])),
-        ]
-        .align_x(iced::Alignment::Center),
-    )
-    .padding(BUTTON_PADDING)
-    .style(style)
+    openaec_ui::widgets::tooltip_style(ui_theme::shared_theme(theme))
 }
 
 /// The button that goes on, in the size of the style book: Save, Create,
 /// Next, Add.
 pub fn primary_button<'a>(label: impl text::IntoFragment<'a>) -> button::Button<'a, Message> {
-    dialog_button(label, primary)
+    openaec_ui::widgets::dialog_button(label, primary)
 }
 
 /// Every other button of a dialog or a form, in the size of the style
 /// book: Cancel, Back, Reset.
 pub fn secondary_button<'a>(label: impl text::IntoFragment<'a>) -> button::Button<'a, Message> {
-    dialog_button(label, secondary)
+    openaec_ui::widgets::dialog_button(label, secondary)
 }
 
 /// A text field in the style of the style book.
@@ -506,16 +220,7 @@ pub fn scrollable<'a>(
         .style(scroll)
 }
 
-/// The box of a tooltip with its text.
-pub fn tip<'a>(content: impl text::IntoFragment<'a>) -> Element<'a, Message> {
-    container(text(content).size(12))
-        .padding([8, 12])
-        .max_width(340)
-        .style(tip_style)
-        .into()
-}
-
-/// The space between a tooltip and what it explains.
+#[cfg(test)]
 const TIP_GAP: f32 = 8.0;
 
 /// `content` with `tip_text` in a tooltip above it, where the style book
@@ -524,7 +229,12 @@ pub fn tooltip<'a>(
     content: impl Into<Element<'a, Message>>,
     tip_text: impl text::IntoFragment<'a>,
 ) -> tip_widget::Tooltip<'a, Message> {
-    tip_widget::Tooltip::new(content, tip(tip_text), tip_widget::Position::Top).gap(TIP_GAP)
+    openaec_ui::widgets::themed_tooltip(
+        content,
+        tip_text,
+        tip_widget::Position::Top,
+        openaec_ui::Theme::Light,
+    )
 }
 
 /// `content` of the ribbon or the top strip with `tip_text` in a tooltip
@@ -534,7 +244,12 @@ pub fn ribbon_tooltip<'a>(
     content: impl Into<Element<'a, Message>>,
     tip_text: impl text::IntoFragment<'a>,
 ) -> tip_widget::Tooltip<'a, Message> {
-    tip_widget::Tooltip::new(content, tip(tip_text), tip_widget::Position::Bottom).gap(TIP_GAP)
+    openaec_ui::widgets::themed_tooltip(
+        content,
+        tip_text,
+        tip_widget::Position::Bottom,
+        openaec_ui::Theme::Light,
+    )
 }
 
 /// A wide row with `tip_text` in a tooltip above the pointer, for a tip
@@ -544,7 +259,13 @@ pub fn pointer_tooltip<'a>(
     content: impl Into<Element<'a, Message>>,
     tip_text: impl text::IntoFragment<'a>,
 ) -> tip_widget::Tooltip<'a, Message> {
-    tip_widget::Tooltip::new(content, tip(tip_text), tip_widget::Position::FollowCursor)
+    openaec_ui::widgets::themed_tooltip(
+        content,
+        tip_text,
+        tip_widget::Position::FollowCursor,
+        openaec_ui::Theme::Light,
+    )
+    .gap(0.0)
 }
 
 /// `content` with `tint` of the theme laid over it while the pointer is

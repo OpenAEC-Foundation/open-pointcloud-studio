@@ -17,6 +17,63 @@ use crate::{
     VERSION_LABEL,
 };
 
+#[test]
+fn drawing_and_transform_tools_use_shared_domain_icons() {
+    use openaec_ui::icons::DomainIcon;
+    assert_eq!(
+        crate::domain_icon(crate::ToolIcon::Note),
+        Some(DomainIcon::DrawingNote)
+    );
+    assert_eq!(
+        crate::domain_icon(crate::ToolIcon::Dimension),
+        Some(DomainIcon::DrawingDimension)
+    );
+    assert_eq!(
+        crate::domain_icon(crate::ToolIcon::Move),
+        Some(DomainIcon::TransformMove)
+    );
+    assert_eq!(
+        crate::domain_icon(crate::ToolIcon::Line),
+        Some(DomainIcon::DrawingLine)
+    );
+    assert_eq!(
+        crate::domain_icon(crate::ToolIcon::Text),
+        Some(DomainIcon::DrawingText)
+    );
+    assert_eq!(
+        crate::domain_icon(crate::ToolIcon::Leader),
+        Some(DomainIcon::DrawingLeader)
+    );
+    for icon in [
+        DomainIcon::DrawingNote,
+        DomainIcon::DrawingDimension,
+        DomainIcon::TransformMove,
+        DomainIcon::DrawingLine,
+        DomainIcon::DrawingText,
+        DomainIcon::DrawingLeader,
+    ] {
+        assert_ne!(
+            icon.bytes(16),
+            icon.bytes(24),
+            "small form is reviewed separately"
+        );
+    }
+}
+
+#[test]
+fn explorer_commands_use_shared_semantic_icons() {
+    use openaec_ui::icons::Icon;
+    for (tool, expected) in [
+        (crate::ToolIcon::Duplicate, Icon::Duplicate),
+        (crate::ToolIcon::Rename, Icon::Rename),
+        (crate::ToolIcon::ChevronOpen, Icon::DisclosureExpanded),
+        (crate::ToolIcon::ChevronClosed, Icon::DisclosureCollapsed),
+    ] {
+        assert_eq!(crate::canonical_icon(tool), Some(expected));
+        assert!(!expected.bytes().is_empty());
+    }
+}
+
 fn send(studio: &mut Studio, command: ApiCommand) -> Value {
     let (reply, receive) = std::sync::mpsc::channel();
     let _ = studio.handle_api(ApiRequest { command, reply });
@@ -74,6 +131,487 @@ fn status_bar_builds_in_the_model_and_in_the_file_view() {
     let _ = studio.update(Message::ToggleFile);
     let _ = studio.status_bar(studio.status.clone());
     let _ = studio.view();
+}
+
+#[test]
+fn shared_shell_bands_render_at_tauri_template_heights() {
+    use openaec_ui::model::metrics;
+    assert_eq!(
+        (
+            metrics::TITLE,
+            metrics::TABS,
+            metrics::RIBBON,
+            metrics::DOCUMENTS,
+            metrics::STATUS
+        ),
+        (32, 28, 94, 30, 22)
+    );
+    assert_eq!(metrics::PANEL_TOOLBAR, 24);
+    let mut studio = Studio::default();
+    for theme in UiTheme::ALL {
+        studio.ui_theme = theme;
+        let colors = theme.colors();
+        let picture = crate::test_render::render_window(&studio, iced::Size::new(1200.0, 700.0));
+        for (y, expected) in [
+            (16, colors.bg_lighter),
+            (44, colors.bg_lighter),
+            (90, colors.bg),
+            (169, colors.docbar_bg),
+            (690, colors.status_bg),
+        ] {
+            assert!(picture.is(2, y, expected), "{} at y={y}", theme.key());
+        }
+        let panel_top =
+            (metrics::TITLE + metrics::TABS + metrics::RIBBON + metrics::DOCUMENTS) as u32;
+        assert!(
+            picture.is(100, panel_top + 22, colors.bg_lighter),
+            "{} panel title",
+            theme.key()
+        );
+        assert_ne!(
+            picture.rgb(100, panel_top + 23),
+            picture.rgb(100, panel_top + 22),
+            "{} panel divider",
+            theme.key()
+        );
+    }
+}
+
+#[test]
+fn document_band_matches_style_book_edges() {
+    let mut studio = Studio::default();
+    // Tauri DocumentBar.css at dfdcd41: a 30 px band with an amber 15%
+    // top rule and the theme border over its own document background.
+    for (theme, top, bottom) in [
+        (UiTheme::Light, [241, 226, 208], [222, 222, 222]),
+        (UiTheme::Forge, [72, 57, 47], [89, 64, 42]),
+    ] {
+        studio.ui_theme = theme;
+        let picture = crate::test_render::render_window(&studio, iced::Size::new(1200.0, 700.0));
+        let y = (openaec_ui::model::metrics::TITLE
+            + openaec_ui::model::metrics::TABS
+            + openaec_ui::model::metrics::RIBBON) as u32;
+        assert_eq!(picture.rgb(800, y), top, "{} top", theme.key());
+        assert_eq!(
+            picture.rgb(800, y + openaec_ui::model::metrics::DOCUMENTS as u32 - 1),
+            bottom,
+            "{} bottom",
+            theme.key()
+        );
+    }
+}
+
+#[test]
+fn ribbon_group_rules_follow_style_book_geometry() {
+    // Ribbon.css at dfdcd41: a 4 px top inset, full-height right rule,
+    // and a caption rule above the 9 px group label.
+    let mut studio = Studio::default();
+    for theme in [UiTheme::Light, UiTheme::Forge] {
+        studio.ui_theme = theme;
+        let picture = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0));
+        let bg = picture.rgb(135, 60);
+        assert_eq!(picture.rgb(135, 63), bg, "{} top inset", theme.key());
+        assert_ne!(picture.rgb(135, 64), bg, "{} separator start", theme.key());
+        assert_eq!(
+            picture.rgb(135, 64),
+            picture.rgb(135, 153),
+            "{} separator height",
+            theme.key()
+        );
+        assert_ne!(
+            picture.rgb(20, 133),
+            picture.rgb(20, 132),
+            "{} caption rule",
+            theme.key()
+        );
+    }
+}
+
+#[test]
+fn ribbon_tabs_match_the_shared_outline_and_rule_in_both_themes() {
+    let mut studio = Studio::default();
+    for theme in [UiTheme::Light, UiTheme::Forge] {
+        studio.ui_theme = theme;
+        let picture = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0));
+        let tokens = theme.shared().tokens();
+        assert!(
+            picture.is(40, 50, tokens.file_tab_bg),
+            "{} File tab",
+            theme.key()
+        );
+        assert!(
+            picture.is(110, 32, tokens.accent),
+            "{} active top border",
+            theme.key()
+        );
+        assert!(
+            picture.is(110, 59, tokens.bg),
+            "{} active bottom gap",
+            theme.key()
+        );
+        assert!(
+            picture.is(500, 59, tokens.accent),
+            "{} continuous rule",
+            theme.key()
+        );
+        studio.file_open = true;
+        let file = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0));
+        assert!(
+            !file.is(110, 32, tokens.accent),
+            "{} Home inactive in File view",
+            theme.key()
+        );
+        studio.file_open = false;
+    }
+}
+
+#[test]
+fn shared_property_rows_keep_a_28_pixel_rhythm_in_both_themes() {
+    let mut studio = Studio::default();
+    for theme in [UiTheme::Light, UiTheme::Forge] {
+        studio.ui_theme = theme;
+        let picture = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0));
+        let rule = picture.rgb(1100, 283);
+        assert_eq!(picture.rgb(1100, 311), rule, "{} second row", theme.key());
+        assert_eq!(picture.rgb(1100, 339), rule, "{} third row", theme.key());
+        assert_ne!(
+            picture.rgb(1100, 282),
+            rule,
+            "{} one-pixel rule",
+            theme.key()
+        );
+        assert_ne!(
+            picture.rgb(1100, 256),
+            picture.rgb(1100, 232),
+            "{} section boundary",
+            theme.key()
+        );
+    }
+}
+
+#[test]
+fn loaded_geometry_bounds_use_the_shared_property_grid() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bounds.xyz");
+    std::fs::write(&path, "0 0 0\n4 0 0\n4 3 0\n0 3 2\n").unwrap();
+    let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+    let mut studio = Studio::default();
+    let _ = studio.update(Message::Loaded(Ok(cloud)));
+    for theme in [UiTheme::Light, UiTheme::Forge] {
+        studio.ui_theme = theme;
+        let picture = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0));
+        let rule = picture.rgb(1100, 605);
+        assert_eq!(picture.rgb(1100, 633), rule, "{} Y row", theme.key());
+        assert_eq!(picture.rgb(1100, 661), rule, "{} Z row", theme.key());
+        assert_ne!(
+            picture.rgb(1100, 604),
+            rule,
+            "{} one-pixel rule",
+            theme.key()
+        );
+        // The old CAD control drew full borders around each row. The shared
+        // grid has only the horizontal rule, leaving the label column open.
+        assert_eq!(
+            picture.rgb(1070, 590),
+            picture.rgb(1100, 590),
+            "{} no inner box",
+            theme.key()
+        );
+    }
+}
+
+#[test]
+fn display_popup_is_anchored_without_reflowing_the_viewport() {
+    let mut studio = Studio::default();
+    for theme in [UiTheme::Light, UiTheme::Forge] {
+        studio.ui_theme = theme;
+        let closed = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0));
+        studio.view_controls_open = true;
+        let open = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0));
+        assert_ne!(
+            open.rgb(710, 390),
+            closed.rgb(710, 390),
+            "{} popup surface",
+            theme.key()
+        );
+        assert_eq!(
+            open.rgb(690, 390),
+            closed.rgb(690, 390),
+            "{} left viewport",
+            theme.key()
+        );
+        assert_eq!(
+            open.rgb(1018, 390),
+            closed.rgb(1018, 390),
+            "{} right viewport",
+            theme.key()
+        );
+        studio.view_controls_open = false;
+    }
+}
+
+#[test]
+fn display_popup_closes_when_clicking_outside() {
+    use iced::advanced::{layout, widget::Tree, Layout, Shell};
+    use iced::{mouse, Size, Vector};
+
+    crate::test_render::load_fonts();
+    let studio = Studio {
+        view_controls_open: true,
+        ..Studio::default()
+    };
+    let mut element = studio.view();
+    let renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
+        crate::fonts::REGULAR,
+        iced::Pixels(12.0),
+    ));
+    let mut tree = Tree::new(&element);
+    let size = Size::new(1280.0, 760.0);
+    let node =
+        element
+            .as_widget()
+            .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    let mut overlay = element
+        .as_widget_mut()
+        .overlay(&mut tree, Layout::new(&node), &renderer, Vector::ZERO)
+        .expect("open display overlay");
+    let popup_node = overlay.layout(&renderer, size);
+    let mut clipboard = iced::advanced::clipboard::Null;
+    let mut messages = Vec::new();
+    let mut shell = Shell::new(&mut messages);
+    overlay.on_event(
+        iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Layout::new(&popup_node),
+        mouse::Cursor::Available(iced::Point::new(680.0, 390.0)),
+        &renderer,
+        &mut clipboard,
+        &mut shell,
+    );
+    assert!(messages
+        .iter()
+        .any(|message| matches!(message, Message::ToggleViewControls)));
+}
+
+#[test]
+fn shared_backstage_nav_keeps_page_rhythm_and_selected_marker() {
+    let mut studio = Studio {
+        file_open: true,
+        ..Studio::default()
+    };
+    studio.file_page = crate::file_view::FilePage::Extensions;
+    // New, the direct file and export entries and All export options… are
+    // eleven rows of 40 px from y 74; under the rule follow Workspace at 535,
+    // Extensions at 575 and About at 615, all above the footer at this height.
+    for theme in [UiTheme::Light, UiTheme::Forge] {
+        studio.ui_theme = theme;
+        let picture = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 900.0));
+        let accent = theme.colors().accent;
+        assert!(
+            picture.is(1, 595, accent),
+            "{} selected marker",
+            theme.key()
+        );
+        assert!(!picture.is(1, 555, accent), "{} row above", theme.key());
+        assert!(!picture.is(1, 635, accent), "{} row below", theme.key());
+        assert_ne!(
+            picture.rgb(259, 595),
+            picture.rgb(260, 595),
+            "{} 260 px edge",
+            theme.key()
+        );
+    }
+}
+
+#[test]
+#[ignore = "regenerate native review images on demand"]
+fn export_harmonized_shell_previews() {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../design");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut studio = Studio::default();
+    for (theme, name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
+        studio.ui_theme = theme;
+        crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0))
+            .save_png(&folder.join(format!("pointcloud-shell-{name}.png")));
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("review-scan.xyz");
+    std::fs::write(&path, "0 0 0\n4 0 0\n4 3 0\n0 3 2\n").unwrap();
+    let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+    let _ = studio.update(Message::Loaded(Ok(cloud)));
+    for (theme, name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
+        studio.ui_theme = theme;
+        crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0))
+            .save_png(&folder.join(format!("pointcloud-shell-loaded-{name}.png")));
+    }
+    let mut extensions = Studio {
+        file_open: true,
+        ..Studio::default()
+    };
+    extensions.file_page = crate::file_view::FilePage::Extensions;
+    for (theme, name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
+        extensions.ui_theme = theme;
+        crate::test_render::render_window(&extensions, iced::Size::new(1280.0, 760.0))
+            .save_png(&folder.join(format!("pointcloud-extensions-{name}.png")));
+    }
+}
+
+#[test]
+#[ignore = "regenerate the anchored display popup review on demand"]
+fn export_display_popover_review() {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../design");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut studio = Studio {
+        view_controls_open: true,
+        ..Studio::default()
+    };
+    for (theme, name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
+        studio.ui_theme = theme;
+        crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0))
+            .save_png(&folder.join(format!("pointcloud-display-{name}.png")));
+    }
+}
+
+#[test]
+#[ignore = "regenerate File task-page review images on demand"]
+fn export_file_task_pages_review() {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../design");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut studio = Studio {
+        file_open: true,
+        ..Studio::default()
+    };
+    for (page, page_name) in [
+        (crate::file_view::FilePage::New, "new"),
+        (crate::file_view::FilePage::Open, "open"),
+    ] {
+        studio.file_page = page;
+        for (theme, theme_name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
+            studio.ui_theme = theme;
+            crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0))
+                .save_png(&folder.join(format!("pointcloud-file-{page_name}-{theme_name}.png")));
+        }
+    }
+}
+
+#[test]
+#[ignore = "regenerate minimum-size File view on demand"]
+fn export_file_minimum_window_review() {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../design");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut studio = Studio {
+        file_open: true,
+        ..Studio::default()
+    };
+    studio.file_page = crate::file_view::FilePage::Open;
+    for (theme, name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
+        studio.ui_theme = theme;
+        crate::test_render::render_window(&studio, iced::Size::new(720.0, 480.0))
+            .save_png(&folder.join(format!("pointcloud-file-small-{name}.png")));
+    }
+}
+
+#[test]
+fn file_view_keeps_selected_page_and_footer_at_minimum_window() {
+    let mut studio = Studio {
+        file_open: true,
+        ..Studio::default()
+    };
+    // The Open page has no row in the menu, whose direct entries do its
+    // tasks; the local API still shows it. New is the first row.
+    studio.file_page = crate::file_view::FilePage::New;
+    for theme in [UiTheme::Light, UiTheme::Forge] {
+        studio.ui_theme = theme;
+        let picture = crate::test_render::render_window(&studio, iced::Size::new(720.0, 480.0));
+        assert!(
+            picture.is(1, 94, theme.colors().accent),
+            "{} selected New page",
+            theme.key()
+        );
+        assert_ne!(
+            picture.rgb(20, 435),
+            picture.rgb(300, 435),
+            "{} footer visible",
+            theme.key()
+        );
+    }
+}
+
+#[test]
+#[ignore = "regenerate settings dialog review images on demand"]
+fn export_shared_settings_review() {
+    let _language = TestLanguage::hold(Language::English);
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../design");
+    let mut studio = Studio::default();
+    for (theme, name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
+        studio.ui_theme = theme;
+        studio.settings_action(crate::settings_dialog::SettingsAction::Open);
+        studio.settings_action(crate::settings_dialog::SettingsAction::Tab(
+            crate::settings_dialog::SettingsTab::Appearance,
+        ));
+        studio.settings_action(crate::settings_dialog::SettingsAction::ThemeMenu(true));
+        crate::test_render::render_window(&studio, iced::Size::new(1280.0, 800.0))
+            .save_png(&folder.join(format!("pointcloud-settings-{name}.png")));
+        if theme == UiTheme::Forge {
+            studio.settings_action(crate::settings_dialog::SettingsAction::ResetPrompt(true));
+            crate::test_render::render_window(&studio, iced::Size::new(1280.0, 800.0))
+                .save_png(&folder.join("pointcloud-settings-reset-forge.png"));
+        }
+        studio.settings_action(crate::settings_dialog::SettingsAction::Cancel);
+    }
+}
+
+#[test]
+#[ignore = "regenerate the section-box property-grid review on demand"]
+fn export_section_box_property_review() {
+    let _language = TestLanguage::hold(Language::English);
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../design");
+    let mut studio = Studio {
+        section_enabled: true,
+        ..Studio::default()
+    };
+    for (theme, name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
+        studio.ui_theme = theme;
+        crate::test_render::render_window(&studio, iced::Size::new(1280.0, 1000.0))
+            .save_png(&folder.join(format!("pointcloud-section-box-{name}.png")));
+    }
+}
+
+#[test]
+#[ignore = "regenerate shared general-modal review images on demand"]
+fn export_sheet_dialog_review() {
+    let _language = TestLanguage::hold(Language::English);
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../design");
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("review-scan.xyz");
+    std::fs::write(&path, "0 0 0\n4 0 0\n4 3 0\n0 3 2\n").unwrap();
+    let mut studio = Studio::default();
+    let cloud = Arc::new(pointcloud_core::open(&path, 10).unwrap());
+    let _ = studio.update(Message::Loaded(Ok(cloud)));
+    let _ = studio.update_sheet_dialog(crate::sheet_dialog::SheetAction::Open);
+    for (theme, name) in [(UiTheme::Light, "light"), (UiTheme::Forge, "forge")] {
+        studio.ui_theme = theme;
+        crate::test_render::render_window(&studio, iced::Size::new(1280.0, 800.0))
+            .save_png(&folder.join(format!("pointcloud-sheet-dialog-{name}.png")));
+    }
+}
+
+#[test]
+fn open_theme_menu_paints_its_swatch_above_the_form() {
+    let _language = TestLanguage::hold(Language::English);
+    let mut studio = Studio {
+        ui_theme: UiTheme::Light,
+        ..Studio::default()
+    };
+    studio.settings_action(crate::settings_dialog::SettingsAction::Open);
+    studio.settings_action(crate::settings_dialog::SettingsAction::Tab(
+        crate::settings_dialog::SettingsTab::Appearance,
+    ));
+    let closed = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 800.0));
+    studio.settings_action(crate::settings_dialog::SettingsAction::ThemeMenu(true));
+    let open = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 800.0));
+    let accent = iced::Color::from_rgb8(0xD9, 0x77, 0x06);
+    assert!(!closed.is(752, 260, accent));
+    assert!(open.is(752, 260, accent));
 }
 
 #[test]
@@ -292,8 +830,8 @@ fn the_window_is_drawn_in_the_tokens_of_each_theme() {
             theme.key(),
             picture.rgb(500, 750)
         );
-        // The panel at the left follows the theme; the approved ribbon keeps
-        // the same charcoal title strip in every theme.
+        // Panel and title strip both follow the shared theme tokens. Sample
+        // the strip away from its centered accent-coloured title.
         assert!(
             picture.is(100, 700, colors.bg),
             "{}: the panel is {:?}",
@@ -301,10 +839,10 @@ fn the_window_is_drawn_in_the_tokens_of_each_theme() {
             picture.rgb(100, 700)
         );
         assert!(
-            picture.is(700, 14, iced::Color::from_rgb8(54, 54, 62)),
+            picture.is(900, 14, colors.bg_lighter),
             "{}: the strip is {:?}",
             theme.key(),
-            picture.rgb(700, 14)
+            picture.rgb(900, 14)
         );
     }
 }

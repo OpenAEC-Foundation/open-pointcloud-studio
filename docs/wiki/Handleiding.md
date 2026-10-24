@@ -57,7 +57,7 @@ In de projectbrowser kun je een **Weergave opslaan**. Die bewaart camera en zich
 
 ## 7. Export en sneltoetsen
 
-Gebruik **Bestand → Exporteren** om de actieve scan, een selectie of de inhoud van de snedebox uit te voeren. Puntwolkformaten zijn onder andere LAS, LAZ, E57, PLY, XYZ, PTS en CSV. Bij export kun je bijvoorbeeld elk tiende punt laten schrijven. De bronbestanden worden niet overschreven door verbergen, uitdunnen of verplaatsen in de geopende sessie.
+Gebruik **Bestand → Alle exportopties…**, of een van de directe exports in het menu van **Bestand**, om de actieve scan, een selectie of de inhoud van de snedebox uit te voeren. Puntwolkformaten zijn onder andere LAS, LAZ, E57, PLY, XYZ, PTS en CSV. Bij export kun je bijvoorbeeld elk tiende punt laten schrijven. De bronbestanden worden niet overschreven door verbergen, uitdunnen of verplaatsen in de geopende sessie.
 
 | Invoer | Actie |
 | --- | --- |

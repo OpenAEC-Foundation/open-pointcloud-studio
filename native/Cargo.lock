@@ -3016,6 +3016,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "open",
+ "openaec-ui",
  "pdf-writer",
  "pointcloud-core",
  "rayon",
@@ -3031,6 +3032,16 @@ dependencies = [
  "uuid",
  "winresource",
  "x11rb",
+]
+
+[[package]]
+name = "openaec-ui"
+version = "0.1.0"
+dependencies = [
+ "iced",
+ "iced_tiny_skia",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
