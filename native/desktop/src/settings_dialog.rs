@@ -379,6 +379,9 @@ mod tests {
 
     #[test]
     fn reset_confirmation_stays_above_settings_and_cancel_restores_preview() {
+        // Reset sets the language of the whole process to that of the system
+        // until Cancel; other tests must not read their texts meanwhile.
+        let _language = crate::i18n::TestLanguage::hold(Language::English);
         let mut studio = Studio {
             ui_theme: UiTheme::Forge,
             ..Studio::default()
