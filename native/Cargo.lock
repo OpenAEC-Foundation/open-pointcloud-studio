@@ -3292,6 +3292,7 @@ dependencies = [
  "delaunator",
  "e57",
  "earcutr",
+ "image",
  "las",
  "laz",
  "memmap2",

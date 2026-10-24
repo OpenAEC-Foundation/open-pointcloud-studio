@@ -23,5 +23,14 @@ cadcodec = { package = "acadrust", version = "0.5.5", default-features = false }
 
 # Tests write LAZ files whose chunks vary in size, which the writer of las
 # does not make. The version is the one las already brings in.
+# The demo scenes encode their panoramas as JPEG with the image crate that
+# the desktop application already uses.
 [dev-dependencies]
 laz = "0.12"
+image = { version = "0.24", default-features = false, features = ["jpeg"] }
+
+# The demo scenes check their panoramas against their scans in their own
+# tests, which run with the tests of this crate.
+[[example]]
+name = "demo_scenes"
+test = true
