@@ -102,11 +102,15 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> &str {
 /// Run the body of the exported function `name`: clear the message, catch a
 /// panic, and turn the outcome into a status and a message. A success
 /// leaves no message, also when a callback called the library and that
-/// inner call failed.
+/// inner call failed. The first use of the library runs inside the catch as
+/// well, so that nothing of the library unwinds into the caller.
 pub(crate) fn run(name: &str, body: impl FnOnce() -> Result<(), Failure>) -> OpsStatus {
-    crate::first_use();
-    clear();
-    match catch_unwind(AssertUnwindSafe(body)) {
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        crate::first_use();
+        clear();
+        body()
+    }));
+    match outcome {
         Ok(Ok(())) => {
             clear();
             OPS_OK
@@ -129,6 +133,9 @@ pub(crate) fn run(name: &str, body: impl FnOnce() -> Result<(), Failure>) -> Ops
 /// cannot be reported there; it is caught so that it does not cross into
 /// the caller, and the function returns `fallback`.
 pub(crate) fn quietly<T>(fallback: T, body: impl FnOnce() -> T) -> T {
-    crate::first_use();
-    catch_unwind(AssertUnwindSafe(body)).unwrap_or(fallback)
+    catch_unwind(AssertUnwindSafe(|| {
+        crate::first_use();
+        body()
+    }))
+    .unwrap_or(fallback)
 }

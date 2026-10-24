@@ -275,8 +275,8 @@ of this version loads `KERNEL32.dll`, `ntdll.dll`, `bcryptprimitives.dll` and
 `api-ms-win-core-synch-l1-2-0.dll`. Because the runtime is the library's own,
 a string it returns is freed with `ops_string_free`, never with `free`. The
 DLL carries version details (product "Open Pointcloud Studio library", file
-and product version the release); a release signs it with the Authenticode
-signature of the application.
+and product version the release); a release gives it the same code
+signature as the Windows programs of the application.
 
 ### ABI versioning
 

@@ -4,7 +4,9 @@
  * ABI 1.0. See docs/library.md for ownership, errors, threads and versioning.
  *
  * Every function that returns an OpsStatus clears the message of the calling
- * thread first and sets it when it fails; ops_last_error() returns it. Out
+ * thread first and sets it when it fails; ops_last_error() returns it. That
+ * text belongs to the library and stays valid until the next call of the
+ * library on the same thread; it is never freed by the caller. Out
  * pointers are NULL (or 0) after a failure. Clouds and indexes are freed only
  * with their own _free function, strings returned through char** only with
  * ops_string_free. Callbacks run on the calling thread and must not unwind
@@ -111,7 +113,7 @@ typedef struct OpsIndexOptions {    /* 32 bytes in ABI 1.0 on 64-bit systems */
 } OpsIndexOptions;
 
 typedef struct OpsIndexInfo {       /* 32 bytes */
-    uint32_t struct_size;
+    uint32_t struct_size;           /* in: sizeof(OpsIndexInfo) */
     uint32_t depth;
     uint64_t point_count;
     uint64_t node_count;

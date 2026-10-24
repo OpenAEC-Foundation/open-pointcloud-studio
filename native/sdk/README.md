@@ -62,8 +62,10 @@ prints what the grid holds as JSON and then one line, and returns 0.
 
 ## Licence
 
-The library is licensed LGPL-3.0-or-later. A program that uses it is a
-"Combined Work" in the sense of the LGPL: ship this licence and the GPL text
-with it, say that it uses this library, and let its users replace the library
-with another version. Linking the shared library as it comes does the last.
-docs/library.md in the repository explains each duty.
+Copyright OpenAEC Foundation and contributors. The library is licensed
+LGPL-3.0-or-later. A program that uses it is a "Combined Work" in the sense
+of the LGPL: ship this licence and the GPL text with it, say that it uses
+this library, name this copyright among its own if it shows copyright
+notices, and let its users replace the library with another version.
+Linking the shared library as it comes does the last. docs/library.md in the
+repository explains each duty.
