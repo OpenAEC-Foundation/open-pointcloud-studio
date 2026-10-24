@@ -103,7 +103,7 @@ language when there is one. Texts are one line without control characters.
 | `author` | yes | At most 100 characters |
 | `description` | yes | Text of at most 500 characters |
 | `homepage` | no | A web address that starts with `https://` or `http://` |
-| `min_app_version` | yes | The oldest version of the application it works with; an older application refuses to install it |
+| `min_app_version` | yes | The oldest version of the application it works with; an older application refuses to install it. The application is numbered by the year and ISO week of its release and a sequence number, such as `2026.43.0`, so every version from before that numbering, such as `0.9.5`, is older |
 | `command` | yes | How the program starts; see below |
 | `uses` | yes | What it uses; see below |
 | `contributes` | no | Its `ribbon` buttons and `file_view` tiles; see below |
@@ -199,7 +199,7 @@ so that its numbers read the same as those beside them.
 
 ```json
 {
-  "application": {"version": "0.9.1", "language": "nl"},
+  "application": {"version": "2026.43.0", "language": "nl"},
   "active_scan": {
     "index": 0,
     "path": "D:\\scans\\hall.e57",
