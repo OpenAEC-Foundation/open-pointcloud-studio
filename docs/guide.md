@@ -2,7 +2,7 @@
 
 How each part of Open Pointcloud Studio works. The [README](../README.md) has the installation, a first walk through the application and the file formats; this guide goes into each tool.
 
-The interface is in English or Dutch. The guide uses the English names. Its four pictures show the English interface in the theme Light, taken from the development build after version 0.9.5, whose title bar and status bar still read v0.9.5. They show `rooms.e57`, two generated rooms with a scanner station each, from the [demo scene generator](../native/TEST_DATA.md#generated-demo-scenes). The window was 1600 by 1000 pixels for the section drawing and 1600 by 1700 for the three pictures of meshes and faces, so that Properties reaches down to their figures. A new installation starts in the theme Light, see [Settings, language and extensions](#settings-language-and-extensions).
+The interface is in English or Dutch. The guide uses the English names. Its four pictures show the English interface in the theme Light, taken from the development build after version 0.9.5, whose status bar still reads v0.9.5. They show `rooms.e57`, two generated rooms with a scanner station each, from the [demo scene generator](../native/TEST_DATA.md#generated-demo-scenes). The window was 1600 by 1000 pixels for the section drawing and 1600 by 1700 for the three pictures of meshes and faces, so that Properties reaches down to their figures. A new installation starts in the theme Light, see [Settings, language and extensions](#settings-language-and-extensions).
 
 ## Contents
 
@@ -667,7 +667,7 @@ Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, `--text
 
 ## Closed mesh
 
-![The English interface in the theme Light with the closed mesh of two generated rooms in the scene, seen from outside with the points switched off: the ceilings, the walls, the windows and the door openings left open, and Properties with the figures of the mesh under Surface mesh: 19,458 vertices, 34,696 triangles, 4,635 open edges, 9 connected parts, a mean deviation of 1.2 mm, a 95% deviation of 2.8 mm and sides from the stations](images/closed-mesh.jpg)
+![The English interface in the theme Light with the closed mesh of two generated rooms in the scene, seen from outside with the points switched off: the ceilings and the walls, the two windows left open, and gaps in a ceiling and low in the walls where the column and the furniture hid them from the scanner, and Properties with the figures of the mesh under Surface mesh: 19,458 vertices, 34,696 triangles, 4,635 open edges, 9 connected parts, a mean deviation of 1.2 mm, a 95% deviation of 2.8 mm and sides from the stations](images/closed-mesh.jpg)
 
 *The closed mesh of `rooms.e57` that the picture of [Mesh Pointcloud](#mesh-pointcloud) reports, with its figures under Surface mesh in Properties. The scan is switched off in the Project Browser and its mesh, Surface, stays on, so the scene shows the mesh alone.*
 

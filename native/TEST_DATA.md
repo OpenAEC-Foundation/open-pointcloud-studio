@@ -1123,10 +1123,12 @@ with its four scanner positions visible.
 
 ## Generated demo scenes
 
-The pictures in this repository, from the screenshots in `docs/` to the
-stills and the video in `promo/`, are made from three generated files and
-from nothing else: no scan of a real place and no sample of a manufacturer.
-One command writes them, byte for byte the same on every run:
+The pictures that the README, the user guide, the Dutch manual of the wiki
+and the feature video show (`docs/screenshots/`, the pictures the guide
+embeds from `docs/images/`, `docs/wiki/images/` and `promo/`) are made from
+`building.laz` and `rooms.e57` below and from nothing else: no scan of a
+real place and no sample of a manufacturer. One command writes the three
+files, byte for byte the same on every run:
 
 ```text
 cargo run -p pointcloud-core --release --example demo_scenes -- OUTPUT_FOLDER

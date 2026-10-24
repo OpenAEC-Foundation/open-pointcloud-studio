@@ -10,7 +10,7 @@ A desktop application for viewing, measuring, editing and converting laser scans
 
 ![The Open Pointcloud Studio window with the File and Home tabs, the Home ribbon, a generated house of 24.2 million points inside a section box, the tabs 3D model, Ground floor, Section A and Front garden above the scene, the Project Browser and Properties](docs/screenshots/start-ribbon-v095.png)
 
-*A generated scene, `building.laz` from the [demo scene generator](native/TEST_DATA.md#generated-demo-scenes), in the English interface and the theme Light: a section box around the house, and the plan Ground floor, the section Section A and the saved view Front garden as tabs above the scene. It was taken with the development build after 0.9.5, which still reads v0.9.5 in its title bar and status bar. See the [Display panel beneath the view cube](docs/screenshots/view-controls-v095.png) as well, with the points coloured by class.*
+*A generated scene, `building.laz` from the [demo scene generator](native/TEST_DATA.md#generated-demo-scenes), in the English interface and the theme Light: a section box around the house, and the plan Ground floor, the section Section A and the saved view Front garden as tabs above the scene. It was taken with the development build after 0.9.5, which still reads v0.9.5 in the middle of its status bar. See the [Display panel beneath the view cube](docs/screenshots/view-controls-v095.png) as well, with the points coloured by class.*
 
 [![Watch the Open Pointcloud Studio feature video](promo/poster.png)](promo/open-pointcloud-studio-features.mp4)
 

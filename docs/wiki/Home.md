@@ -9,4 +9,4 @@ Open Pointcloud Studio is een native Rust-applicatie voor grote puntenwolken. De
 - [Uitgebreide technische gebruikersgids](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/blob/main/docs/guide.md)
 - [API en MCP](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/blob/main/native/API.md)
 
-De afbeeldingen tonen de Nederlandse interface in het thema Licht met gegenereerde voorbeeldscènes; de ontwikkelversie waarmee ze zijn gemaakt, toont in de titelbalk en de statusbalk nog v0.9.5. Nieuwe functies op een open pull request staan pas in de handleiding nadat ze zijn uitgebracht.
+De afbeeldingen tonen de Nederlandse interface in het thema Licht met gegenereerde voorbeeldscènes; de ontwikkelversie waarmee ze zijn gemaakt, toont midden in de statusbalk nog v0.9.5. Nieuwe functies op een open pull request staan pas in de handleiding nadat ze zijn uitgebracht.
