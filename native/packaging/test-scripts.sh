@@ -204,7 +204,7 @@ if GITHUB_OUTPUT="$signing_output" bash "$packaging_dir/macos/prepare-signing.sh
 else
     wrong "the macOS job does not report its ad hoc signing status"
 fi
-if APPLE_DEVELOPER_IDENTITY='Developer ID Application: test' \
+if APPLE_SIGNING_IDENTITY='Developer ID Application: test' \
     GITHUB_OUTPUT="$signing_output" \
     bash "$packaging_dir/macos/prepare-signing.sh" > /dev/null 2>&1; then
     wrong "the macOS job accepted incomplete Apple credentials"
