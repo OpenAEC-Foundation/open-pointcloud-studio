@@ -693,6 +693,21 @@ fn wait_until_idle_follows_the_status() {
         ["bag3d", "mesh_export"]
     );
     assert!(tools::busy(&json!({"bag3d": null, "mesh_export_pending": false})).is_empty());
+    // So is the writing of a texture atlas, a sheet as PDF or a drawing file.
+    assert_eq!(
+        tools::busy(&json!({
+            "texture_export": {"operation": "texture_mesh", "processed": 1, "total": 3},
+            "sheets": {"export_pending": true},
+            "drawing_annotations": {"export_pending": true},
+        })),
+        ["texture", "sheet_pdf", "drawing_file"]
+    );
+    assert!(tools::busy(&json!({
+        "texture_export": null,
+        "sheets": {"export_pending": false},
+        "drawing_annotations": {"export_pending": false},
+    }))
+    .is_empty());
 }
 
 #[test]
@@ -1744,6 +1759,136 @@ fn every_api_command_has_a_tool_and_every_tool_is_documented() {
     let documented = table_names(include_str!("../../../MCP.md"));
     let listed: Vec<&str> = tools::tools().iter().map(|tool| tool.name).collect();
     assert_eq!(documented, listed, "MCP.md lists the tools in table order");
+}
+
+/// The commands of the API as serde reads them: the variants of
+/// `ApiCommand`, which the error for a command that does not exist lists.
+fn api_variants() -> Vec<String> {
+    let error = serde_json::from_value::<crate::native_api::ApiCommand>(json!({"command": "?"}))
+        .unwrap_err()
+        .to_string();
+    let (_, listed) = error
+        .split_once("expected one of ")
+        .unwrap_or_else(|| panic!("no list of variants in: {error}"));
+    names_in_backticks(listed)
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The texts written between backticks, in their order.
+fn names_in_backticks(text: &str) -> Vec<&str> {
+    text.split('`').skip(1).step_by(2).collect()
+}
+
+#[test]
+fn every_command_of_the_api_has_a_row_and_a_tool() {
+    let mut variants = api_variants();
+    assert!(variants.len() >= 140, "{variants:?}");
+    variants.sort_unstable();
+    let mut rows: Vec<&str> = table_names(include_str!("../../../API.md"));
+    rows.sort_unstable();
+    assert_eq!(rows, variants, "API.md has one row for every command");
+    let mut commands = tools::command_names();
+    commands.sort_unstable();
+    assert_eq!(commands, variants, "every command has one tool");
+}
+
+/// The rows of a table whose first column is a command or a tool: its name
+/// and the text of the second column, the arguments.
+fn argument_columns(document: &str) -> std::collections::HashMap<&str, &str> {
+    document
+        .lines()
+        .filter_map(|line| {
+            let (name, rest) = line.strip_prefix("| `")?.split_once('`')?;
+            let (arguments, _) = rest.strip_prefix(" | ")?.split_once(" | ")?;
+            Some((name, arguments))
+        })
+        .collect()
+}
+
+/// The argument names a row gives: those in backticks, and those of the row
+/// it names with "the choices of" or "the settings of".
+fn documented_arguments<'a>(
+    rows: &std::collections::HashMap<&'a str, &'a str>,
+    name: &str,
+) -> std::collections::BTreeSet<&'a str> {
+    let text = rows[name];
+    let mut names: std::collections::BTreeSet<&str> =
+        names_in_backticks(text).into_iter().collect();
+    for phrase in ["the choices of `", "the settings of `"] {
+        if let Some((_, rest)) = text.split_once(phrase) {
+            let (other, _) = rest.split_once('`').unwrap();
+            names.extend(documented_arguments(rows, other));
+        }
+    }
+    names
+}
+
+#[test]
+fn every_argument_of_a_tool_is_named_in_its_rows() {
+    let api = argument_columns(include_str!("../../../API.md"));
+    let mcp = argument_columns(include_str!("../../../MCP.md"));
+    let mut missing = Vec::new();
+    for tool in tools::tools() {
+        let properties = tool.schema["properties"].as_object().unwrap();
+        let in_mcp = documented_arguments(&mcp, tool.name);
+        for argument in properties.keys() {
+            if !in_mcp.contains(argument.as_str()) {
+                missing.push(format!("MCP.md {}: {argument}", tool.name));
+            }
+        }
+        if !matches!(tool.kind, Kind::Command | Kind::Job | Kind::Screenshot) {
+            continue;
+        }
+        // The command API itself does not wait for a job.
+        let in_api = documented_arguments(&api, tool.name);
+        for argument in properties.keys().filter(|key| *key != "wait_seconds") {
+            if !in_api.contains(argument.as_str()) {
+                missing.push(format!("API.md {}: {argument}", tool.name));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "rows without an argument: {missing:#?}");
+}
+
+#[test]
+fn tool_annotations_say_what_a_tool_changes() {
+    let names: Vec<&str> = tools::tools().iter().map(|tool| tool.name).collect();
+    for listed in [tools::READ_ONLY, tools::DESTRUCTIVE, tools::OPEN_WORLD] {
+        for name in listed {
+            assert!(names.contains(name), "{name} is a tool");
+        }
+    }
+    for tool in tools::tools() {
+        let name = tool.name;
+        if name.starts_with("list_") {
+            assert!(tool.read_only(), "{name} only reads");
+        }
+        let hints = &tool.listing()["annotations"];
+        assert_eq!(hints["readOnlyHint"], tool.read_only(), "{name}");
+        assert_eq!(hints["openWorldHint"], tool.open_world(), "{name}");
+        if tool.read_only() {
+            assert!(!tool.destructive() && !tool.open_world(), "{name}");
+            assert!(hints.get("destructiveHint").is_none(), "{name}");
+            assert!(hints.get("idempotentHint").is_none(), "{name}");
+        } else {
+            assert_eq!(hints["destructiveHint"], tool.destructive(), "{name}");
+            assert_eq!(hints["idempotentHint"], tool.idempotent(), "{name}");
+        }
+    }
+    let hints = |name: &str| tools::find(name).unwrap().listing()["annotations"].clone();
+    assert_eq!(hints("list_tabs")["readOnlyHint"], true);
+    assert_eq!(hints("delete_sheet")["destructiveHint"], true);
+    assert_eq!(hints("export")["destructiveHint"], true);
+    assert_eq!(hints("reset_transform")["destructiveHint"], true);
+    assert_eq!(hints("screenshot")["destructiveHint"], false);
+    assert_eq!(hints("set_point_size")["destructiveHint"], false);
+    assert_eq!(hints("set_point_size")["idempotentHint"], true);
+    assert_eq!(hints("camera")["idempotentHint"], true);
+    assert_eq!(hints("translate")["idempotentHint"], false);
+    assert_eq!(hints("bag3d")["openWorldHint"], true);
+    assert_eq!(hints("open")["openWorldHint"], false);
 }
 
 fn write_discovery(directory: &Path, pid: u32, port: u16, token: &str, started: u64) {

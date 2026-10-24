@@ -522,6 +522,21 @@ fn the_pdf_holds_the_paper_the_drawing_the_picture_and_the_texts() {
         json!({"command": "export_sheet_pdf", "path": "relative.pdf"}),
     );
     assert_eq!(refused["ok"], false);
+    // A wait for an idle window sees the sheet being written, until the
+    // worker reports it written. The snapshot of the saved view waits for
+    // a viewport this test does not draw.
+    let status = send(&mut studio, json!({"command": "status"}));
+    assert_eq!(
+        crate::mcp::busy(&status["result"]),
+        ["snapshots", "sheet_pdf"]
+    );
+    let id = answer["job_id"].as_str().unwrap().to_owned();
+    let _ = studio.update(Message::Layouts(LayoutAction::PdfWritten(
+        Some(id),
+        Ok((path, 10)),
+    )));
+    let status = send(&mut studio, json!({"command": "status"}));
+    assert_eq!(crate::mcp::busy(&status["result"]), ["snapshots"]);
 }
 
 #[test]

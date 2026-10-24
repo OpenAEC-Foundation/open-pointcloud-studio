@@ -16,10 +16,13 @@ pick the newest. A fixed port can be requested with `--api-port PORT [INPUT ...]
 windows this way and offers these commands as tools.
 
 `GET /health` returns `{"status":"ok"}`. `GET /info` returns the process ID,
-port, version, API name and start time. `POST /exec` accepts one JSON command and requires
-the discovery file's token in the `X-OPS-Token` header. A request without a
-valid token receives HTTP 403. The legacy `POST /eval` endpoint returns HTTP
-410 because script evaluation is not part of the native application.
+port, version, API name and start time, `api_revision`, the revision of the
+commands (see [API changes](#api-changes)), and `commands`, the names of the
+commands the window knows in sorted order. `POST /exec` accepts one JSON
+command and requires the discovery file's token in the `X-OPS-Token`
+header. A request without a valid token receives HTTP 403. The legacy
+`POST /eval` endpoint returns HTTP 410 because script evaluation is not part
+of the native application.
 
 For example, after reading `port` and `token` from the discovery file:
 
@@ -28,10 +31,42 @@ curl -H 'Content-Type: application/json' -H 'X-OPS-Token: TOKEN' \
   -d '{"command":"status"}' http://127.0.0.1:PORT/exec
 ```
 
+The window carries out commands one after another, in the order they reach
+it. A command is answered within 10 seconds or gets HTTP 504. A 504 does not
+mean that the command was not carried out: it stays in the window's queue
+and is carried out in its turn. Read `status` before sending a command that
+changes something again, or it may be done twice. Most commands that take
+longer, such as exports, answer at once with a job (see below); `open` of a
+folder or a scan project file answers once that has been read, and
+`install_extension` once the extension has been copied and checked.
+`GET /health` and `GET /info` answer at once, also while commands wait for
+the window.
+
+Fields that a command does not have are ignored: a misspelt optional field
+leaves its setting as it is, without an error. The [MCP server](MCP.md)
+checks the arguments of each tool and refuses fields it does not know.
+
+### Errors
+
+A command that the window refuses gets HTTP 200 with `ok: false` and an
+`error` that says why. Other errors have an HTTP status and carry `error`
+only:
+
+| Status | When |
+| --- | --- |
+| 400 | The body is no command: not JSON, an unknown command (`unknown variant`), or a field missing or of the wrong type |
+| 403 | No token or another token than that of the discovery file or of a run of an extension, or a command that the extension of the run did not declare |
+| 404 | Another path or method |
+| 410 | `POST /eval` |
+| 413 | A body larger than 64 KiB |
+| 503 | The window is closing and takes no more commands |
+| 504 | The window did not answer within 10 seconds; the command may still be carried out |
+
 ## Answers, jobs and imports
 
 Commands use absolute file paths. They return JSON with `ok: true` or
-`ok: false` and an `error`. File opening returns `accepted: true` as soon as
+`ok: false` and an `error`; [Errors](#errors) lists the HTTP errors of the
+server itself. File opening returns `accepted: true` as soon as
 the GUI starts loading; poll `status` for the new layer. `open` answers after
 a folder or scan project file has been read on a worker thread, with the list
 of files it started loading. Exports, section drawings, face detections and
@@ -199,7 +234,11 @@ vertices; an existing mesh must be reconstructed again to receive those
 edits. The atlas does not yet project E57 photo pixels directly onto texels.
 A CAD export such as DWG or DXF
 cannot retain these texture images.
-While the job runs, `job` reports `processed` and `total` triangles.
+While the job runs, `job` reports `processed` and `total` triangles, and so
+does `status.result.texture_export`, with `operation` `texture_mesh` and
+`cancelling`, for an export started with **Texture surface…** in Properties
+as well; it is `null` when none runs. `status.result.mesh_export_pending` is
+true while it runs too.
 `cancel_texture_mesh` requests cancellation; after it completes the job state
 is `cancelled` and no export files are left behind.
 `path` is an absolute destination whose extension chooses the format:
@@ -1191,7 +1230,8 @@ where to save a mesh from the File view or Properties, or from the moment
 
 ## Mesh Pointcloud
 
-The one button of the SURFACE group, **Mesh Pointcloud**, opens a card over
+**Mesh** in the SURFACE group of the ribbon (its tooltip says Mesh
+Pointcloud), or one of the four method buttons beside it, opens a card over
 the window in three steps: **Method**, with the four ways to mesh as cards
 (Closed mesh, Terrain mesh, 3D surface and Flat faces) and what they work on;
 **Options**, the settings of that method with their defaults, explanations
@@ -1207,11 +1247,11 @@ cross and Escape do. With `open: true` the card is shown on the step `step`
 names (`method`, `options` or `run`) with the method `method` names
 (`closed`, `terrain`, `surface` or `faces`); without them it shows the Run
 step of a job of one of the methods that runs, else the step and the method
-it showed last. Opening closes the File view and turns the card of Mesh to
-Plans into its strip. `open: false` takes the card away; a job goes on, and
-the button in the ribbon shows that it runs. A `step` or `method` with
-`open: false`, an unknown step or method, and opening while the Settings
-dialog is open are refused.
+it showed last. Opening closes the File view and turns the card of
+Pointcloud to Drawing into its strip. `open: false` takes the card away; a
+job goes on, and the button in the ribbon shows that it runs. A `step` or
+`method` with `open: false`, an unknown step or method, and opening while the
+Settings dialog is open are refused.
 
 The card covers the model like the File view does: while it is shown the
 keys of the model do nothing, `screenshot` of the scene is refused, a view
@@ -1242,7 +1282,7 @@ overview sample of each layer) and `selected` (the selected points).
 The wizard was called Mesh to Plans while it was built; its commands, the `mesh_to_plans` part of `status` and the format of its project file keep that name, so that scripts and projects made before go on working.
 
 `mesh_to_plans_view` shows the Pointcloud to Drawing wizard or takes it away, as the
-button in the POINTCLOUD TO DRAWING group, its tiles in the File view, **Show in
+**Mesh to Plan** button in the DRAWING group, its tiles in the File view, **Show in
 model**, **Back to wizard** and **Close** do. With `open: true` the wizard is
 shown as its card over the window, on the step `step` names (`prepare`,
 `mesh`, `views`, `walls`, `openings`, `rooms`, `sheet`, `site` or `result`)
@@ -1379,6 +1419,28 @@ Poll `status.result.thin_pending`; after it becomes false, the active cloud's
 the removed points without changing the source file. Photo colours given or
 removed are an edit as well: `undo_delete` takes back the latest edit of
 either kind, at most eight, and `redo_delete` does it again.
+
+## Changes and undo
+
+`undo_delete` takes back the latest edit and `redo_delete` does it again.
+Four commands make such an edit: `delete_selection`, `thin`,
+`colour_from_photos` and `clear_photo_colours`. At most eight edits are
+kept, of all layers together, and a new edit ends what `redo_delete` could
+do again. Earlier photo colours are kept up to about 1 GiB; beyond that a
+colouring lets go of the oldest edits. `remove` of any layer empties this
+history for every layer.
+
+`translate` and `scale` are taken back with `reset_transform`, which puts
+the active layer back at the coordinates of its source; `reset_transform`
+itself is not taken back.
+
+Nothing else is taken back by Undo. A new mesh or a new face detection takes
+the place of what the layer had, and what `clear_faces`,
+`delete_camera_view`, `update_camera_view`, `delete_drawing`,
+`delete_sheet`, `remove_viewport` and `delete_annotation` take away or
+overwrite does not come back. The edits change the scans in the window, not
+their files; an export replaces the file at its destination, whatever file
+that is.
 
 ## Index
 
@@ -1586,6 +1648,16 @@ entered, into the station panorama it stood in then, which is decoded again;
 `walk` and walking on leave the photo where it was. `screenshot` and view
 snapshots wait for the photo as they wait for the points of the camera.
 
+`set_photo_compare` shows the entered photo beside a pane of the 3D model
+with its own orbit, pan, zoom and view cube, and `set_photo_split` divides
+the window between the two. `status.result.photos` has `compare_with_3d`,
+true while that pane is shown beside a photo, and `split_ratio` and
+`split_vertical`, the division. While a photo is shown it also has
+`model_sample`, the points of the visible layers held in memory, which that
+pane draws, and `model_camera`, the camera of the tab of the 3D model that
+the pane shows (`yaw`, `pitch`, `zoom`, `pan` and `walk`, true for the
+walking camera); both are `null` otherwise.
+
 ## Colour from photos
 
 `colour_from_photos` gives the points of a layer the colours its photos see
@@ -1649,11 +1721,11 @@ layer with photo colours.
 
 | Command | JSON fields | Effect |
 | --- | --- | --- |
-| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the sheets (`sheets`: their `count`, the sheet `shown`, the `selected` viewport, the drawing it is `making` and `export_pending`; see [Sheets](#sheets)), the annotation tools of drawings and sheets (`drawing_annotations`; see [Annotations of drawings and sheets](#annotations-of-drawings-and-sheets)), the groups of the Project Browser and what VIEWS lists (`project_browser`), the tabs above the main area (`view_tabs`, as `list_tabs` gives them), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Pointcloud to Drawing wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (`mesh_wizard`: whether it is shown, its step and method, the method whose job runs and what the methods work on; see [Mesh Pointcloud](#mesh-pointcloud)), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), the runs of extensions, a progress reported outside a run and the dialog about an install or an uninstall (`extensions`, see [Extensions](#extensions)), and current status text |
+| `status` | — | Lists clouds (each with `mesh`: `null`, or the `vertices`, `triangles`, `open_edges` and `components` of the mesh the layer holds; for a mesh read from a file the last two count vertices at the same position as one), active imports and decoded counts, selected/deleted counts, the current measurement, edited bounds and transforms, visibility, active layer, camera (`yaw`, `pitch`, `zoom`, `pan`, `view` and `orbit_point`, the point the orbit camera turns about or `null` for the centre of the model) and viewport size, saved views for that layer and the active view with its annotations, theme, `language` (`auto`, `en` or `nl`, as chosen), section box and the fill of its cut (`section_fill`), auto-index and 3D surface settings, the running and waiting octree builds (`index`), index and scale progress, a running mesh, merge or 3D BAG download (`bag3d`), `mesh_export_pending`, the Section drawing tool (`drawing`: its settings, a running job, the last result and whether a preview is shown), the Closed mesh tool (`closed_mesh`: its settings, a running job and the last result), a texture export under way (`texture_export`, see [Mesh export](#mesh-export)), the Detect faces tool (`faces`: its settings, a running job, the last job, `export_pending` and the faces of the active layer in figures; each cloud has `faces`: `null`, or those figures), `detail_pending` while the viewport reads points for its camera (each cloud has `view_sample`, the points of its set for the view, and `focus_sample`, the points read inside the section box that are kept besides them; these are drawn while the box is on and put aside once it is off and the set was read for the view), the Drawing view (`drawing_view`: whether it is shown, the drawing it holds with its layers, and its camera), the sheets (`sheets`: their `count`, the sheet `shown`, the `selected` viewport, the drawing it is `making` and `export_pending`; see [Sheets](#sheets)), the annotation tools of drawings and sheets (`drawing_annotations`; see [Annotations of drawings and sheets](#annotations-of-drawings-and-sheets)), the groups of the Project Browser and what VIEWS lists (`project_browser`), the tabs above the main area (`view_tabs`, as `list_tabs` gives them), a turn started with R and then O (`turning`), whether the File view covers the model (`file_view`), the Pointcloud to Drawing wizard (`mesh_to_plans`: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (`mesh_wizard`: whether it is shown, its step and method, the method whose job runs and what the methods work on; see [Mesh Pointcloud](#mesh-pointcloud)), the photos of the files and the one that is entered (`photos`, see [Photos of a file](#photos-of-a-file)), the Colour from photos tool (`colour_from_photos`: its settings, a running job and the last job; each cloud has `photo_colours`, the points with photo colours), the runs of extensions, a progress reported outside a run and the dialog about an install or an uninstall (`extensions`, see [Extensions](#extensions)), and current status text |
 | `job` | `id` | Reads an export, section drawing, selection, mesh, mesh export, face detection, faces export, colouring from photos, merge, 3D BAG download, `choose_path` dialog or Pointcloud to Drawing task's state and result |
 | `open` | `path` | Opens a point cloud or mesh, every supported file directly inside a folder, or the scans listed by a scan project file (`.rcp`) in the running GUI. Returns `files`, the accepted paths in opening order, with `missing` (listed scans not found) and their names in `missing_names`, `already_open` (scans skipped because they are open or loading), `errors`, and `import_ids` for the full-stream readers; `import_id` is the last of those or null. Fails when nothing can be opened |
 | `cancel_import` | `id` | Cancels a running full-stream import without adding a partial layer |
-| `remove` | `index` | Removes a layer from the project |
+| `remove` | `index` | Removes a layer from the project and empties the undo history of every layer; see [Changes and undo](#changes-and-undo) |
 | `set_active` | `index` | Chooses the active layer |
 | `set_visible` | `index`, `visible` | Shows or hides a point layer |
 | `camera` | `preset` | Chooses `top`, `bottom`, `front`, `back`, `left`, `right` or `isometric` |
@@ -1671,7 +1743,7 @@ layer with photo colours.
 | `enter_photo` | `index`, optional `layer` | Stands where a photo was taken and lays the photo over the points; answers with the `photo` as `list_photos` gives it and the `walk` camera. See [Photos of a file](#photos-of-a-file) |
 | `photo_blend` | `value` | How much of the entered photo covers the points, from 0 (the points only) to 1 (the photo only); it stays for later photos |
 | `set_photo_compare` | `enabled` | Shows the entered E57 photo beside a live 3D model pane with separate orbit, pan, zoom and view-cube controls, or returns to one viewport; picking and measuring stay in the photo pane |
-| `set_photo_split` | `ratio` | Sets the 3D pane's share of the comparison width from 0.25 to 0.75; the same divider can be dragged in the GUI, `status.result.photos.split_ratio` reports it, and the setting survives a restart |
+| `set_photo_split` | `ratio`, optional `vertical` | Sets the 3D pane's share of the comparison width from 0.25 to 0.75, or with `vertical: true` its share of the height, the panes stacked; without `vertical` the layout stays as it is. The same divider can be dragged in the GUI, `status.result.photos.split_ratio` and `split_vertical` report them, and both survive a restart |
 | `next_photo` | — | Enters the next photo along the path of the entered photo; refused at the last photo and while no photo is entered |
 | `previous_photo` | — | Enters the previous photo along the path; refused at the first photo and while no photo is entered |
 | `colour_from_photos` | optional `layer`, `max_distance`, `blend` | Gives the remaining points of a layer in the section box and class filters, or all of them, the colours its photos see them with; returns a job ID. See [Colour from photos](#colour-from-photos) |
@@ -1810,3 +1882,17 @@ The server binds only to loopback, limits request bodies to 64 KiB, and has
 no permissive browser CORS headers. After an unclean shutdown, an old
 discovery file may remain until the next native launch; clients should check
 `/health` and `/info` before using an entry.
+
+## API changes
+
+`api` in the discovery file and in `/info` stays `native-rust-v1` as long as
+every change is additive: commands and fields are added, and none is removed
+or renamed. `api_revision` in `/info` goes up by one with every release that
+adds a command or a field, or changes what a command does. A client that
+needs a command can look for it in `commands`, or compare `api_revision`.
+Revision 11 is the first that is recorded; the revisions before it, the
+commands of the releases from 0.4.0 to 0.9.5, were not.
+
+| Revision | Release | Changes |
+| --- | --- | --- |
+| 11 | The release after 0.9.5 | New commands `texture_mesh`, `cancel_texture_mesh`, `set_photo_compare` and `set_photo_split`. `export_drawing`, `preview_drawing` and `create_drawing` take `straight_lines`, `line_tolerance` and `line_min_length`, and `create_drawing` takes `square`; `status.result.drawing` reports the first three, and the statistics of a complete drawing have `straight_lines`. `status.result` has `texture_export`, and `photos` has `compare_with_3d`, `model_sample`, `model_camera`, `split_ratio` and `split_vertical`; `list_tabs` has tabs of the kind `photo`. `/info` has `api_revision` and `commands`, and answers while commands wait for the window |
