@@ -1,7 +1,9 @@
-//! The command line, the window and the shared operations of
+//! The command line, the window, the cloud API and the shared operations of
 //! `pointcloud_core::ops` make the same files: each mode of the command line
-//! writes what its operation writes, and the window's drawing job writes
-//! what the operation of a section drawing writes.
+//! writes what its operation writes, the window's drawing job writes what
+//! the operation of a section drawing writes, and each tool of the cloud API
+//! writes what its mode of the command line writes. The cloud tools also
+//! take the arguments of the desktop tools with the same names and limits.
 
 use std::ffi::OsString;
 use std::fs;
@@ -11,6 +13,9 @@ use pointcloud_core::ops::{self, CachedIndex, Convert, SectionDrawingOptions};
 use pointcloud_core::{
     Bounds, DrawingFormat, DrawingView, ExportFormat, OrientedBox, SurfaceMeshConfig,
 };
+
+use pointcloud_server::payload::encode_base64;
+use pointcloud_server::tools::{self as cloud, CallLimits, ToolOutput};
 
 use crate::{cli, drawing};
 
@@ -394,4 +399,254 @@ fn the_modes_refuse_as_they_did() {
         panic!("a missing input fails");
     };
     assert!(line.starts_with("Scan positions failed: "), "{line}");
+}
+
+// --- The cloud API beside the command line --------------------------------
+
+/// One call of a tool of the cloud API on `arguments`, as the service makes
+/// it: in its own work folder, which the result lies in.
+fn cloud_call(name: &str, arguments: serde_json::Value) -> (ToolOutput, tempfile::TempDir) {
+    let work = tempfile::tempdir().unwrap();
+    let limits = CallLimits {
+        max_output: u64::MAX,
+    };
+    let output = cloud::call_value(name, &arguments, &limits, &work, &ops::never_stop)
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    (output, work)
+}
+
+/// The `input` of a cloud tool for a file, named as the file is.
+fn cloud_input(path: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "format": path.extension().unwrap().to_str().unwrap(),
+        "data": encode_base64(&fs::read(path).unwrap()),
+        "name": path.file_name().unwrap().to_str().unwrap(),
+    })
+}
+
+/// The file a cloud tool answered with.
+fn cloud_file(output: &ToolOutput) -> PathBuf {
+    output.file.as_ref().expect("a file result").path.clone()
+}
+
+/// A point as the comparison of two E57 files looks at it: where it lies,
+/// its colour and its intensity.
+type Compared = ([f64; 3], Option<[u8; 3]>, Option<u16>);
+
+/// Every point of a file, as the core reads it back.
+fn points_of(path: &Path) -> Vec<Compared> {
+    let mut points = Vec::new();
+    pointcloud_core::visit_points(path, &mut |point| {
+        points.push((point.xyz, point.rgb, point.intensity));
+        Ok(())
+    })
+    .unwrap();
+    points
+}
+
+#[test]
+fn every_cloud_tool_writes_what_its_mode_of_the_command_line_writes() {
+    let inputs = Inputs::new();
+
+    // --export, and convert without a box.
+    for extension in ["ply", "xyz", "laz", "e57"] {
+        let by_cli = inputs.output("cli", &format!("export.{extension}"));
+        cli::export(&arguments(&[&inputs.grid, &by_cli])).unwrap();
+        let (output, _work) = cloud_call(
+            "convert",
+            serde_json::json!({"input": cloud_input(&inputs.grid), "output_format": extension}),
+        );
+        assert_eq!(output.report["points"], 1000);
+        if extension == "e57" {
+            // Every E57 file has identifiers of its own; the points agree.
+            assert_eq!(points_of(&by_cli), points_of(&cloud_file(&output)));
+            assert_eq!(points_of(&by_cli).len(), 1000);
+        } else {
+            same_bytes(&by_cli, &cloud_file(&output));
+        }
+    }
+
+    // --section with a turn, and convert with a turned box.
+    let by_cli = inputs.output("cli", "section.ply");
+    cli::section(&arguments(&[
+        &inputs.grid,
+        &"-1,-1,-1,1.1,2.5,2.5",
+        &by_cli,
+        &"--rotation",
+        &"30",
+    ]))
+    .unwrap();
+    let (output, _work) = cloud_call(
+        "convert",
+        serde_json::json!({
+            "input": cloud_input(&inputs.grid),
+            "output_format": "ply",
+            "box": {"min": [-1.0, -1.0, -1.0], "max": [1.1, 2.5, 2.5], "rotation": 30.0},
+        }),
+    );
+    same_bytes(&by_cli, &cloud_file(&output));
+
+    // --drawing, and section_drawing, as a plan and a front view in DXF and
+    // as a plan in DWG.
+    let front_limits = "-0.5,-0.05,0,4.5,3.5,2.6";
+    let front_box = serde_json::json!({"min": [-0.5, -0.05, 0.0], "max": [4.5, 3.5, 2.6]});
+    let plan_box = serde_json::json!({"min": [-0.5, -0.5, 0.0], "max": [4.5, 3.5, 1.2]});
+    for (view, limits, section, extension) in [
+        ("plan", ROOM_PLAN, &plan_box, "dxf"),
+        ("front", front_limits, &front_box, "dxf"),
+        ("plan", ROOM_PLAN, &plan_box, "dwg"),
+    ] {
+        let by_cli = inputs.output("cli", &format!("{view}.{extension}"));
+        drawing::command_line(&arguments(&[
+            &inputs.room,
+            &limits,
+            &by_cli,
+            &"--view",
+            &view,
+        ]))
+        .unwrap();
+        let (output, _work) = cloud_call(
+            "section_drawing",
+            serde_json::json!({
+                "input": cloud_input(&inputs.room),
+                "box": section,
+                "view": view,
+                "output_format": extension,
+            }),
+        );
+        assert!(output.report["drawn_points"].as_u64().unwrap() > 0);
+        same_bytes(&by_cli, &cloud_file(&output));
+    }
+
+    // --mesh, and terrain_mesh.
+    let by_cli = inputs.output("cli", "terrain.obj");
+    cli::mesh(&arguments(&[&inputs.grid, &by_cli])).unwrap();
+    let (output, _work) = cloud_call(
+        "terrain_mesh",
+        serde_json::json!({"input": cloud_input(&inputs.grid)}),
+    );
+    same_bytes(&by_cli, &cloud_file(&output));
+
+    // --surface with two options, and surface_mesh with the same two.
+    let by_cli = inputs.output("cli", "surface.obj");
+    cli::surface(&arguments(&[
+        &inputs.room,
+        &by_cli,
+        &"--max-vertices",
+        &"2000",
+        &"--edge-factor",
+        &"3",
+    ]))
+    .unwrap();
+    let (output, _work) = cloud_call(
+        "surface_mesh",
+        serde_json::json!({"input": cloud_input(&inputs.room), "max_vertices": 2000, "edge_factor": 3}),
+    );
+    same_bytes(&by_cli, &cloud_file(&output));
+
+    // --scans, and the stations inspect reports.
+    let lines = cli::scans(&arguments(&[&inputs.station])).unwrap().unwrap();
+    let (output, _work) = cloud_call(
+        "inspect",
+        serde_json::json!({"input": cloud_input(&inputs.station)}),
+    );
+    let stations: Vec<pointcloud_core::ScanPose> =
+        serde_json::from_value(output.report["stations"].clone()).unwrap();
+    assert_eq!(stations.len(), 1);
+    assert_eq!(lines, cli::station_lines(&stations));
+}
+
+/// The parts of an argument schema that say what it accepts.
+fn vocabulary(schema: &serde_json::Value) -> Vec<(&'static str, serde_json::Value)> {
+    ["type", "enum", "minimum", "maximum", "exclusiveMinimum"]
+        .into_iter()
+        .filter_map(|key| {
+            let value = schema.get(key)?;
+            // A limit is a number, whether it was written as 3 or as 3.0.
+            let value = match value.as_f64() {
+                Some(number) if value.is_number() => serde_json::json!(number),
+                _ => value.clone(),
+            };
+            Some((key, value))
+        })
+        .collect()
+}
+
+#[test]
+fn the_cloud_tools_take_the_arguments_of_the_desktop_tools() {
+    let desktop = |tool: &str, argument: &str| {
+        let tool = crate::mcp::find_tool(tool).unwrap_or_else(|| panic!("{tool}"));
+        tool.schema["properties"][argument].clone()
+    };
+    let cloud = |tool: &str, path: &[&str]| {
+        let mut schema = cloud::find(tool).unwrap().input_schema();
+        for part in path {
+            schema = schema["properties"][part].clone();
+        }
+        schema
+    };
+    let pairs = [
+        (
+            ("set_section", "rotation"),
+            ("convert", vec!["box", "rotation"]),
+        ),
+        (
+            ("set_section", "rotation"),
+            ("section_drawing", vec!["box", "rotation"]),
+        ),
+        (
+            ("export_drawing", "view"),
+            ("section_drawing", vec!["view"]),
+        ),
+        (
+            ("export_drawing", "thickness"),
+            ("section_drawing", vec!["thickness"]),
+        ),
+        (
+            ("export_drawing", "units"),
+            ("section_drawing", vec!["units"]),
+        ),
+        (
+            ("export_drawing", "fill"),
+            ("section_drawing", vec!["fill"]),
+        ),
+        (
+            ("set_surface_settings", "max_vertices"),
+            ("surface_mesh", vec!["max_vertices"]),
+        ),
+        (
+            ("set_surface_settings", "neighbors"),
+            ("surface_mesh", vec!["neighbors"]),
+        ),
+        (
+            ("set_surface_settings", "edge_factor"),
+            ("surface_mesh", vec!["edge_factor"]),
+        ),
+        (
+            ("set_surface_settings", "mesh_size"),
+            ("surface_mesh", vec!["mesh_size"]),
+        ),
+    ];
+    for ((desktop_tool, argument), (cloud_tool, path)) in pairs {
+        let (desktop, cloud) = (desktop(desktop_tool, argument), cloud(cloud_tool, &path));
+        assert!(cloud.is_object(), "{cloud_tool} {path:?}");
+        assert_eq!(
+            vocabulary(&desktop),
+            vocabulary(&cloud),
+            "{desktop_tool}.{argument} and {cloud_tool}.{}",
+            path.join(".")
+        );
+        assert!(
+            !vocabulary(&desktop).is_empty(),
+            "{desktop_tool}.{argument}"
+        );
+    }
+    // The box of the cloud has the corners of set_section.
+    for corner in ["min", "max"] {
+        let desktop = desktop("set_section", corner);
+        let cloud = cloud("convert", &["box", corner]);
+        for key in ["type", "minItems", "maxItems", "items"] {
+            assert_eq!(desktop[key], cloud[key], "{corner}.{key}");
+        }
+    }
 }
