@@ -32,6 +32,20 @@ fail() {
     exit 1
 }
 
+# The version of the application: `[workspace.package] version` in
+# native/Cargo.toml, the only place where it is written (set-version.sh).
+workspace_version() {
+    awk '
+        { sub(/\r$/, "") }
+        /^\[/ { section = $0 }
+        section ~ /^\[workspace\.package\]/ && $1 == "version" {
+            gsub(/"/, "", $3)
+            print $3
+            exit
+        }
+    ' "$native_dir/Cargo.toml"
+}
+
 . "$packaging_dir/open-cad-studio-source.sh"
 
 # The name of the release file that holds the source of the pinned commit.

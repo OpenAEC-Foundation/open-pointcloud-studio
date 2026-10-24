@@ -2,7 +2,7 @@
 ;
 ; Compile with the version and the folder that holds the application and
 ; its licence texts, for example:
-;   ISCC /DAppVersion=0.8.0 /DSourceDir=..\target\packages\open-pointcloud-studio_0.8.0_windows-x64 windows.iss
+;   ISCC /DAppVersion=2026.43.0 /DSourceDir=..\target\packages\open-pointcloud-studio_2026.43.0_windows-x64 windows.iss
 ;
 ; SourceDir is the folder that native/packaging/build-archive.sh leaves
 ; behind: the application, Open CAD Studio beside it and the licence texts.

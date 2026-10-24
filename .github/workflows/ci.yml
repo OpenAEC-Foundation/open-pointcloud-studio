@@ -11,6 +11,15 @@ on:
   workflow_call:
 
 jobs:
+  # native/Cargo.toml, the entries of native/Cargo.lock and the form of the
+  # version are checked on every commit, not first when a release is made.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the version
+        run: bash native/packaging/set-version.sh check
+
   native:
     strategy:
       fail-fast: false
