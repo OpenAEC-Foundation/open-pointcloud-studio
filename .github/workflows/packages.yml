@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version that native/Cargo.toml must have (empty: whatever it has)'
+        description: 'Version YYYY.W.N that native/Cargo.toml must have (empty: whatever it has)'
         type: string
         required: false
         default: ''
@@ -27,7 +27,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version that native/Cargo.toml must have (empty: whatever it has)'
+        description: 'Version YYYY.W.N that native/Cargo.toml must have (empty: whatever it has)'
         type: string
         required: false
         default: ''

@@ -52,9 +52,9 @@ tested on build machines with software rendering only.
   writes a version into `native/Cargo.toml` and the entries of
   `native/Cargo.lock`, and with `--changelog` the heading of its section in
   `CHANGELOG.md` (`set`), and checks that those agree (`check`), which the
-  CI workflow does for every commit. It numbers only the members of the workspace with
-  `version.workspace = true`: the `ui` crate, a copy of the shared OpenAEC
-  crate, keeps the version of that crate.
+  CI workflow does for every commit. It numbers only the members of the
+  workspace with `version.workspace = true`: the `ui` crate, a copy of the
+  shared OpenAEC crate, keeps the version of that crate.
 - `version.sh` reads the version from `native/Cargo.toml`, the only place it
   is written, checks it with `set-version.sh check` and prints it in the
   forms the packages need.
@@ -209,10 +209,11 @@ ahead.
    commit and look at its screenshots.
 3. Tag `vYYYY.W.N` and push the tag, or start the release workflow by hand;
    without a version it takes the next one of this week, which has to be the
-   version of the commit. The release workflow refuses a tag that differs
-   from the version or has no changelog section, runs the tests on all three
-   systems and the Packages workflow, and only then creates the release with
-   all files.
+   version of the commit. A draft that a failed run left behind counts as a
+   release of that week, so give its tag to run again over it. The release
+   workflow refuses a tag that differs from the version or has no changelog
+   section, runs the tests on all three systems and the Packages workflow,
+   and only then creates the release with all files.
 4. Tell the website work when file names change: its download buttons and
    its release notes read the release.
 

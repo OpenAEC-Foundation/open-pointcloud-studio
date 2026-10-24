@@ -103,7 +103,7 @@ language when there is one. Texts are one line without control characters.
 | `author` | yes | At most 100 characters |
 | `description` | yes | Text of at most 500 characters |
 | `homepage` | no | A web address that starts with `https://` or `http://` |
-| `min_app_version` | yes | The oldest version of the application it works with; an older application refuses to install it. The application is numbered by the year and ISO week of its release and a sequence number, such as `2026.43.0`, so every version from before that numbering, such as `0.9.5`, is older |
+| `min_app_version` | yes | The oldest version of the application it works with; an older application refuses to install it. The releases after `0.9.5` are numbered by the year and ISO week of the release and a sequence number, such as `2026.43.0`, so each of them is newer than every `0.x` version |
 | `command` | yes | How the program starts; see below |
 | `uses` | yes | What it uses; see below |
 | `contributes` | no | Its `ribbon` buttons and `file_view` tiles; see below |

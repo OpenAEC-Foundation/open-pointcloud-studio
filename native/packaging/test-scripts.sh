@@ -389,13 +389,22 @@ else
     sed 's/^/        /' <<< "$output"
 fi
 
+# set_refuses REASON ARGUMENTS... expects set to fail with REASON and to
+# leave the files as they are.
+set_refuses() {
+    local reason=$1 before output
+    shift
+    before=$(snapshot)
+    output=$(versions set "$@" 2>&1) && return 1
+    grep -qF "$reason" <<< "$output" && [[ "$(snapshot)" == "$before" ]]
+}
+
 # A changelog whose section Unreleased says nothing stops set before it
 # writes anything.
-before=$(snapshot)
-if versions set 2026.43.4 --changelog 2026-10-25 > /dev/null 2>&1 || [[ "$(snapshot)" != "$before" ]]; then
-    wrong "set-version.sh set writes a release whose changelog section is empty"
-else
+if set_refuses "has no '- ' item" 2026.43.4 --changelog 2026-10-25; then
     passed "set-version.sh set refuses a release whose changelog section is empty, and writes nothing"
+else
+    wrong "set-version.sh set writes a release whose changelog section is empty"
 fi
 
 # A lock file in which one member still has the old version fails the
@@ -410,6 +419,42 @@ elif grep -qF "version '0.9.5' for pointcloud-core" <<< "$output" \
 else
     wrong "check refuses a Cargo.lock with pointcloud-core on 0.9.5 for another reason:"
     sed 's/^/        /' <<< "$output"
+fi
+
+# Nor is a changelog without the section Unreleased, or with a section for
+# the version already, given a heading.
+workspace_files 2026.43.3 > "$version_repo/native/Cargo.toml"
+lock_file 2026.43.3 > "$version_repo/native/Cargo.lock"
+refused=
+crlf '# Changelog' '' '## 2026.43.3 - 2026-10-24' '' '- Something changed.' > "$version_repo/CHANGELOG.md"
+set_refuses "has no section '## Unreleased'" 2026.43.4 --changelog 2026-10-25 || refused="$refused (no Unreleased)"
+crlf '# Changelog' '' '## Unreleased' '' '- Something new.' '' '## 2026.43.4 - 2026-10-20' '' '- Something changed.' \
+    > "$version_repo/CHANGELOG.md"
+set_refuses "has a section for 2026.43.4 already" 2026.43.4 --changelog 2026-10-25 || refused="$refused (section taken)"
+if [[ -z "$refused" ]]; then
+    passed "set-version.sh set refuses a changelog without Unreleased or with the section already, and writes nothing"
+else
+    wrong "set-version.sh set does not refuse the changelog:$refused"
+fi
+
+# With the line ends of a checkout on Linux or macOS, the files keep theirs.
+workspace_files 2026.43.3 | tr -d '\r' > "$version_repo/native/Cargo.toml"
+lock_file 2026.43.3 | tr -d '\r' > "$version_repo/native/Cargo.lock"
+printf '%s\n' '# Changelog' '' '## Unreleased' '' '- Something new.' '' '## 2026.43.3 - 2026-10-24' \
+    > "$version_repo/CHANGELOG.md"
+changes=
+if output=$(versions set 2026.43.4 --changelog 2026-10-25 2>&1); then
+    cmp -s <(workspace_files 2026.43.4 | tr -d '\r') "$version_repo/native/Cargo.toml" || changes="$changes native/Cargo.toml"
+    cmp -s <(lock_file 2026.43.4 | tr -d '\r') "$version_repo/native/Cargo.lock" || changes="$changes native/Cargo.lock"
+    cmp -s <(printf '%s\n' '# Changelog' '' '## Unreleased' '' '## 2026.43.4 - 2026-10-25' '' '- Something new.' '' \
+        '## 2026.43.3 - 2026-10-24') "$version_repo/CHANGELOG.md" || changes="$changes CHANGELOG.md"
+else
+    changes=" (set failed: $output)"
+fi
+if [[ -z "$changes" ]]; then
+    passed "set-version.sh set writes files with LF line ends as it does those with CRLF"
+else
+    wrong "set-version.sh set did not write the files with LF line ends as expected:$changes"
 fi
 
 # ---- open-cad-studio.pin and build-open-cad-studio.sh --------------------

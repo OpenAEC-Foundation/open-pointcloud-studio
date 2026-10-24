@@ -55,7 +55,7 @@ jobs:
             REQUESTED=$INPUT
           else
             REQUESTED=v$(bash native/packaging/set-version.sh next)
-            echo "No version was given; the next one of this week is $REQUESTED"
+            echo "No version was given; the next one of this week is $REQUESTED. A draft that a failed run left behind counts, so give its tag to run again over it."
           fi
           [[ "$REQUESTED" =~ ^v[1-9][0-9]{3}\.([1-9]|[1-4][0-9]|5[0-3])\.(0|[1-9][0-9]?)$ ]] \
             || { echo "::error::'$REQUESTED' is not a version tag like v2026.43.0 (year, ISO week without a leading zero, sequence from 0)"; exit 1; }
