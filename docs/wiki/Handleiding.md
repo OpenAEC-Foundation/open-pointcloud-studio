@@ -1,10 +1,10 @@
 # Handleiding Open Pointcloud Studio
 
-Deze handleiding beschrijft de native Rust-versie die na [v0.9.5](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v0.9.5) uitkomt, met de gedeelde OpenAEC-vormgeving van titelbalk, tabbladen, panelen, instellingen en het menu **Bestand**. De afbeeldingen tonen nog de v0.9.5-interface. Installeer het pakket voor Windows, macOS of Linux via [Releases](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/latest). De applicatie draait zonder browser of webview.
+Deze handleiding beschrijft de native Rust-versie die na [v0.9.5](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v0.9.5) uitkomt, met de gedeelde OpenAEC-vormgeving van titelbalk, tabbladen, panelen, instellingen en het menu **Bestand**. De afbeeldingen tonen die vormgeving in de Nederlandse interface en het thema Licht, met twee gegenereerde voorbeeldscènes: een huis met tuin (`building.laz`) en twee kamers met elk een scannerstation en een panoramafoto (`rooms.e57`), beschreven in [TEST_DATA](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/blob/main/native/TEST_DATA.md#generated-demo-scenes). De ontwikkelversie waarmee ze zijn gemaakt, toont in de titelbalk en de statusbalk nog v0.9.5. Installeer het pakket voor Windows, macOS of Linux via [Releases](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/latest). De applicatie draait zonder browser of webview.
 
 ## 1. Oriëntatie
 
-![Start-ribbon, projectbrowser, 3D-weergave en eigenschappen](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/screenshots/start-ribbon-v095.png)
+![Het venster met de titelbalk, de tabbladen Bestand en Start, de Start-ribbon, de tabbladen 3D-model, Begane grond, Doorsnede A en Voortuin boven de scène, de projectbrowser met building.laz, een gegenereerd huis met tuin in de 3D-weergave en de eigenschappen van de scan](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/wiki/images/overzicht.png)
 
 Bovenaan staat de titelbalk; rechts daarin staan snelknoppen voor importeren, een scanmap openen, exporteren, ongedaan maken en opnieuw uitvoeren, en **Instellingen**. Daaronder staan de tabbladen **Bestand** en **Start**. De **Start**-ribbon bevat de groepen BESTAND, NAVIGATIE, SELECTIE, SNEDEBOX, OPPERVLAK, TEKENING, METEN, ANNOTATIE, INDEX en EXPORT. Op een smaller venster klappen hele groepen van rechts in tot een knop met een uitklapmenu.
 
@@ -14,7 +14,7 @@ Links staat de **Projectbrowser** met de groepen SCANS, KLASSEN, VIEWS, BLADEN e
 
 De knop **Weergave** onder de **kijkkubus**, rechtsboven in de 3D-weergave, opent de weergaveopties: CAMERA, KLEUR, DETAIL, **Eye-dome** en **Scanposities**. Zo heeft de ribbon maar één hoofdtabblad.
 
-![Weergaveopties onder de kijkkubus](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/screenshots/view-controls-v095.png)
+![Het paneel Weergave onder de kijkkubus, geopend met de rijen CAMERA, KLEUR met Hoogte gekozen, DETAIL met Puntgrootte en Punten in beeld, Eye-dome en Scanposities; het huis en de tuin zijn op hoogte gekleurd, van blauw laag naar rood hoog](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/wiki/images/weergave.png)
 
 ## 2. Scan openen en navigeren
 
@@ -32,19 +32,19 @@ Klik op een punt om het te selecteren of sleep een rechthoek rond een gebied. De
 
 Kies **Afstand** in de groep METEN en klik twee punten in de 3D-weergave; de meting eindigt bij het tweede punt. **Oppervlakte** meet een vlak: klik de hoekpunten en rond af met **Enter** of met een klik op het eerste punt. **Backspace** verwijdert het laatste meetpunt. De resultaten verschijnen onder **Meten** in **Eigenschappen**, waar ook dezelfde twee knoppen staan.
 
-![Puntselectie in de 3D-weergave](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/promo/stills/02-selection.png)
+![Een selectie van 765.312 punten op het dak van het huis, oranje gemarkeerd, en een verticale afstandsmeting van 5,600 m langs de hoek van de voorgevel; onder Meten in de eigenschappen staan de lengte, de horizontale lengte en het hoogteverschil](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/wiki/images/selectie.png)
 
 ## 4. Snedebox en 2D-tekening
 
 Klik **Snedebox** en verschuif de vlakken in de 3D-weergave of vul de XYZ-grenzen in onder **Snedebox** in **Eigenschappen**. De box kan ook worden gedraaid. Zo beperk je het zichtbare gebied en de invoer voor een mesh of tekening. Voor een plattegrond leg je het bovenvlak op de gewenste snijhoogte; voor een verticale doorsnede kies je het betreffende zijvlak.
 
-![Een snedebox rond de scan](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/promo/stills/03-section.png)
+![Een snedebox rond het huis met de handgrepen op de vlakken; buiten de box zijn de rest van de tuin, de bomen en de straat weggesneden, en de box is bewaard als de view Voortuin, die als tabblad open is](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/wiki/images/snedebox.png)
 
 Klik **2D snede** in de groep TEKENING om een **Snedetekening** van de snedebox te maken. Kies het **Aanzicht**, stel de **Plakdikte (m)** in, controleer het **Voorbeeld** en exporteer als **DXF** of **DWG** met **Tekening exporteren…**. Een **Gevulde snede** geeft wanden, kolommen en vloeren als gevulde gebieden weer. **Rechte CAD-lijnen** voegt bovendien gesloten, bewerkbare lijnen langs de snede toe, op een eigen laag, met een instelbare **Lijnafwijking (m)** en **Minimumlijn (m)**. Een voorbeeld van een plattegrond: bovenvlak op 1,10 m, plakdikte 0,10 m; de tekening gebruikt dan de punten tussen 1,00 en 1,10 m. De tekening opent ook als tabblad in de app.
 
 Een plattegrond, aanzicht of doorsnede van het hele model maak je met **2D-plattegrond / aanzicht / doorsnede maken…**, een pictogram op de band van VIEWS in de projectbrowser.
 
-![Een 2D-doorsnede als eigen tabblad](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/promo/stills/07-section-2d.png)
+![De doorsnede Doorsnede A dwars door het huis als eigen tabblad: het profiel van gevels en zadeldak op het maaiveld, met rechte CAD-lijnen in blauw; de eigenschappen tonen de tekeningweergave, de aantekeningen en de lagen van de tekening](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/wiki/images/doorsnede-2d.png)
 
 ## 5. Mesh en oppervlakken
 
@@ -52,7 +52,7 @@ Klik **Mesh** in de groep OPPERVLAK en kies de methode die bij je scan past: **G
 
 Een taak loopt door als je de kaart sluit: de knop **Mesh** blijft dan gemarkeerd en opent de kaart weer op de stap **Uitvoeren**. De strook boven het model toont de stap van een gesloten mesh of een vlakkenherkenning; **Eigenschappen** toont de voortgang van een terreinmesh of 3D-oppervlak. Controleer het resultaat en sla een mesh op met **Mesh exporteren…** als OBJ, PLY, STL, DXF, DWG of IFC. **Oppervlak textureren…** schrijft een mesh met kleuren als OBJ met een MTL-bestand en PNG-textuurpagina's.
 
-![De methoden in de mesh-wizard](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/promo/stills/04-mesher.png)
+![De kaart Puntenwolk meshen op de stap Methode met de vier methoden Gesloten mesh, Terreinmesh, 3D-oppervlak en Vlakken, en daaronder waar het op werkt: de actieve scan rooms.e57, de snedebox en de selectie](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/wiki/images/mesh-methoden.png)
 
 De resolutie, puntdichtheid en ruis bepalen de kwaliteit en rekentijd. **Vlakken** levert herkende geometrie; het is een andere uitkomst dan een doorlopend driehoeksmesh. [De uitgebreide gids](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/blob/main/docs/guide.md#mesh-pointcloud) beschrijft de grenzen van de methoden.
 
@@ -62,7 +62,7 @@ Een E57 kan scannerstations en foto's bevatten. Zet **Scanposities** aan onder *
 
 Een E57-foto opent in een eigen tabblad; de camera van het 3D-model blijft bewaard. Met **Naast 3D tonen** zie je de foto en het model tegelijk. Versleep de scheidingslijn, of kies **Onder elkaar** of **Naast elkaar**. De modelhelft heeft een eigen draaibeweging, pan, zoom en kijkkubus. De indeling blijft na een herstart bewaard. Met **Kleur uit foto's** in **Eigenschappen** kun je punten op basis van de bijbehorende E57-foto's inkleuren; controleer vooraf de **Grootste afstand (m)**.
 
-![Scannerstations en panoramabeeld](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/promo/stills/08-panorama.png)
+![De panoramafoto van scannerstation 2 in een eigen tabblad, Station 2, rechts van het tabblad 3D-model, met Foto 2 van 2, de schuif Foto en de knop Naast 3D tonen rechtsboven; de foto kijkt door de open deur naar de andere kamer, en de eigenschappen tonen onder Scanposities 2 stations en onder Foto's 2 panorama's](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/wiki/images/stations-foto.png)
 
 Typ in de projectbrowser onder VIEWS een naam en kies **View opslaan**. Een view bewaart de camera, de snedebox en de kleurmodus, en opent later in een eigen tabblad. Onder **BLADEN** stel je views en tekeningen samen op een blad, dat je als PDF exporteert. Opgeslagen views met notities kunnen als **BCF** worden geëxporteerd, via **Bestand → Alle exportopties… → Views als BCF…**.
 
