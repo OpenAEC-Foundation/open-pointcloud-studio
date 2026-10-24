@@ -2,7 +2,8 @@
 """Capture the feature promo from a running native Rust desktop build.
 
 Usage: python3 promo/capture.py PID WINDOW_ID
-The instance must have the Matterport lobby E57 open and indexed.
+The instance must have the public 46.6M-point E57 sample open and indexed,
+with the drawings "Lobby plan - fill" and "Lobby section" saved for it.
 """
 
 import json
@@ -113,8 +114,8 @@ def main() -> None:
     command("mesh_wizard", open=False)
 
     for number, slug, name in [
-        (6, "plan", "Matterport lobby - issue 11 fill"),
-        (7, "section-2d", "Matterport lobby - issue 9 section"),
+        (6, "plan", "Lobby plan - fill"),
+        (7, "section-2d", "Lobby section"),
     ]:
         for _ in range(240):
             try:

@@ -5,12 +5,28 @@ What changed in each release of Open Pointcloud Studio, newest first.
 <!--
 The release workflow copies the section of the version being released into
 the release notes and refuses a release without one. A section starts with
-"## X.Y.Z - YYYY-MM-DD" and lists its changes as "- " items in the words of
-someone using the application. The foundation's website shows these items and
-drops those that begin with the name of an operating system or with
-"Download", so begin an item with what changed. New work goes under
-"Unreleased"; the release step gives that section its version and date.
+"## YYYY.W.N - YYYY-MM-DD": the year and ISO week of the release without a
+leading zero and a sequence number from 0, such as 2026.43.0;
+native/packaging/set-version.sh writes the heading. A section lists its
+changes as "- " items in the words of someone using the application. The
+foundation's website shows these items and drops those that begin with the
+name of an operating system or with "Download", so begin an item with what
+changed. New work goes under "Unreleased"; the release step gives that
+section its version and date.
 -->
+
+## Unreleased
+
+- The File menu puts the common tasks one click away again: **Import point cloud**, **Open scan folder**, **Drawing (DXF/DWG)…**, **3D BAG buildings…** and the exports **Export full resolution…**, **Export selected points…**, **Export section box…**, **Export section drawing…** and **Export every Nth point…** start at once. **All export options…** opens the page with every export. **New** stays at the top of the menu, and **Workspace**, **Extensions** and **About** follow under a rule.
+- The window has the shared look of the OpenAEC desktop tools: the title strip with the logo, the name and the quick-access icons, the File and Home tabs on one line, the document tabs, the headers of the Project Browser and Properties, the rows of Properties, the ribbon groups, a thinner status band, the File menu and the Settings dialog. **Reset to Defaults** in Settings now asks to confirm.
+- **Straight CAD lines** in **Create 2D plan / elevation / section…** and in the Section drawing block add closed, editable polylines along the traced cut of a plan or a vertical section, also in a turned section box, on a layer of their own, `OPS-STRAIGHT-LINES`, beside the original outlines and fills. **Line tolerance (m)** (0.01 m) limits how far they may leave the traced outline and **Minimum line (m)** (0.10 m) is the shortest segment they keep where they can; the preview draws them in blue and the result reports their segments and deviation. The local API and the MCP server take `straight_lines`, `line_tolerance` and `line_min_length`.
+- E57 photos open in a tab of their own beside the 3D model, which keeps its own camera; the photo keeps its direction and blend while another tab is shown.
+- **Compare with 3D** in an E57 photo shows the photo beside a 3D pane of the model, with a divider to drag. **Stack panes** puts them one above the other and **Side by side** back beside each other. The 3D pane has its own orbit, pan, zoom and view cube, its caption opens that camera in the tab of the 3D model, and the choice, the layout and the divider are kept for the next session. The local API and the MCP server have `set_photo_compare` and `set_photo_split`.
+- **Texture surface…** under Surface mesh in Properties writes a mesh with colours as an OBJ file with UV coordinates, an MTL file and PNG atlas pages, painted from the colours at its vertices, with a texel size and a largest page size, progress and **Cancel texture**; a cancelled export leaves no files. Colours that E57 photos gave the points are carried into surface meshes made after them. `--texture-mesh` does the same on the command line, and the local API and the MCP server have `texture_mesh` and `cancel_texture_mesh`.
+- A scan without colours of its own that was coloured from its photos can be shown in **RGB**.
+- A Dutch manual with pictures, *Handleiding*, is on the wiki of the project and linked from the README.
+- The web demo of the earlier Classic prototype is no longer published from this repository: there is no supported browser edition, and every release is the native application.
+- The release notes say whether the macOS app and disk image are signed with a Developer ID and notarized, and give the steps for a first start only when they are not.
 
 ## 0.9.5 - 2026-10-13
 
