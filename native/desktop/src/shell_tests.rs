@@ -13,8 +13,8 @@ use crate::native_api::{ApiCommand, ApiRequest};
 use crate::selection::SelectionMask;
 use crate::ui_theme::UiTheme;
 use crate::{
-    app_title, title_for, view_cube, CameraPreset, CloudEntry, Message, ModelKey, Studio, APP_NAME,
-    VERSION_LABEL,
+    app_title, title_for, view_cube, CameraPreset, CloudEntry, Message, ModelKey, Studio, ToolIcon,
+    APP_NAME, VERSION_LABEL,
 };
 
 #[test]
@@ -71,6 +71,261 @@ fn explorer_commands_use_shared_semantic_icons() {
     ] {
         assert_eq!(crate::canonical_icon(tool), Some(expected));
         assert!(!expected.bytes().is_empty());
+    }
+}
+
+/// Every icon of the window. The match below has no arm for the rest, so
+/// an icon added to `ToolIcon` has to be added to this list as well.
+fn every_tool_icon() -> Vec<ToolIcon> {
+    use ToolIcon as I;
+    let icons = [
+        I::Open,
+        I::OpenFolder,
+        I::SelectionExport,
+        I::Export,
+        I::Fit,
+        I::ZoomIn,
+        I::ZoomOut,
+        I::Pan,
+        I::FitSelection,
+        I::Cloud,
+        I::Select,
+        I::WindowSelect,
+        I::DeletePoints,
+        I::SectionBox,
+        I::Pick,
+        I::MeasureDistance,
+        I::MeasureArea,
+        I::Note,
+        I::Line,
+        I::Clear,
+        I::Undo,
+        I::Redo,
+        I::Save,
+        I::Move,
+        I::Scale,
+        I::Decimate,
+        I::Mesh,
+        I::Building,
+        I::Shading,
+        I::Drawing,
+        I::ClosedMesh,
+        I::Faces,
+        I::MeshToPlans,
+        I::MeshPointcloud,
+        I::MeshTerrain,
+        I::MeshSurface,
+        I::Scan,
+        I::Classes,
+        I::Views,
+        I::Model,
+        I::SavedView,
+        I::PlanSheet,
+        I::ElevationSheet,
+        I::SectionSheet,
+        I::DrawingFile,
+        I::Bcf,
+        I::ChevronOpen,
+        I::ChevronClosed,
+        I::Duplicate,
+        I::Rename,
+        I::Update,
+        I::Sheet,
+        I::Locked,
+        I::Unlocked,
+        I::Text,
+        I::Dimension,
+        I::Leader,
+    ];
+    for icon in icons {
+        match icon {
+            I::Open
+            | I::OpenFolder
+            | I::SelectionExport
+            | I::Export
+            | I::Fit
+            | I::ZoomIn
+            | I::ZoomOut
+            | I::Pan
+            | I::FitSelection
+            | I::Cloud
+            | I::Select
+            | I::WindowSelect
+            | I::DeletePoints
+            | I::SectionBox
+            | I::Pick
+            | I::MeasureDistance
+            | I::MeasureArea
+            | I::Note
+            | I::Line
+            | I::Clear
+            | I::Undo
+            | I::Redo
+            | I::Camera(_)
+            | I::Save
+            | I::Move
+            | I::Scale
+            | I::Decimate
+            | I::Mesh
+            | I::Building
+            | I::Shading
+            | I::Drawing
+            | I::ClosedMesh
+            | I::Faces
+            | I::MeshToPlans
+            | I::MeshPointcloud
+            | I::MeshTerrain
+            | I::MeshSurface
+            | I::Scan
+            | I::Classes
+            | I::Views
+            | I::Model
+            | I::SavedView
+            | I::PlanSheet
+            | I::ElevationSheet
+            | I::SectionSheet
+            | I::DrawingFile
+            | I::Bcf
+            | I::ChevronOpen
+            | I::ChevronClosed
+            | I::Duplicate
+            | I::Rename
+            | I::Update
+            | I::Sheet
+            | I::Locked
+            | I::Unlocked
+            | I::Text
+            | I::Dimension
+            | I::Leader => {}
+        }
+    }
+    let cameras = [
+        CameraPreset::Top,
+        CameraPreset::Bottom,
+        CameraPreset::Front,
+        CameraPreset::Back,
+        CameraPreset::Right,
+        CameraPreset::Left,
+        CameraPreset::Isometric,
+    ]
+    .map(I::Camera);
+    icons.into_iter().chain(cameras).collect()
+}
+
+/// The contrast between two colours, as WCAG reckons it.
+fn contrast(one: [u8; 3], other: [u8; 3]) -> f32 {
+    let luminance = |[red, green, blue]: [u8; 3]| {
+        let linear = |channel: u8| {
+            let value = f32::from(channel) / 255.0;
+            if value <= 0.040_45 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    };
+    let (one, other) = (luminance(one), luminance(other));
+    (one.max(other) + 0.05) / (one.min(other) + 0.05)
+}
+
+/// How far every part of an icon has to stand out from the ribbon. The
+/// fixed dark greys of the artwork stand out by 1.75 to 1 at most on the
+/// dark ribbons, each other colour of it by more than 2.5 to 1.
+const ICON_MIN_CONTRAST: f32 = 2.0;
+
+#[test]
+fn every_icon_stands_out_from_the_ribbon_in_the_dark_themes() {
+    use iced::widget::{container, svg};
+
+    const SIZE: f32 = 32.0;
+    let size = iced::Size::new(SIZE, SIZE);
+    for theme in [
+        UiTheme::Forge,
+        UiTheme::OpenAec,
+        UiTheme::Blueprint,
+        UiTheme::Contrast,
+    ] {
+        let colors = theme.colors();
+        let [red, green, blue, _] = colors.bg.into_rgba8();
+        let ribbon = [red, green, blue];
+        let on_ribbon = |icon: iced::Element<'static, Message>| {
+            crate::test_render::render(
+                container(icon)
+                    .center(iced::Fill)
+                    .style(move |_| container::Style::default().background(colors.bg))
+                    .into(),
+                &theme.iced(),
+                size,
+            )
+        };
+        for icon in every_tool_icon() {
+            let drawn = on_ribbon(crate::icon_svg(icon, SIZE));
+            let shared =
+                crate::canonical_icon(icon).is_some() || crate::domain_icon(icon).is_some();
+            let artwork = (!shared).then(|| crate::icon_artwork(icon));
+            let as_filed = |tint: Option<iced::Color>| {
+                on_ribbon(
+                    svg(svg::Handle::from_memory(artwork.expect("artwork")))
+                        .width(SIZE)
+                        .height(SIZE)
+                        .style(move |_, _| svg::Style { color: tint })
+                        .into(),
+                )
+            };
+            // The shared icons are drawn in the text colour as a whole; the
+            // artwork is drawn so as well to find what it covers.
+            let tinted;
+            let silhouette = if shared {
+                &drawn
+            } else {
+                tinted = as_filed(Some(colors.text));
+                &tinted
+            };
+            // The pixels the icon covers fully, which show the colour each
+            // part of it is drawn in.
+            let full: Vec<(u32, u32)> = (0..silhouette.height)
+                .flat_map(|y| (0..silhouette.width).map(move |x| (x, y)))
+                .filter(|&(x, y)| silhouette.is(x, y, colors.text))
+                .collect();
+            assert!(full.len() > 20, "{icon:?} in {}", theme.key());
+            let faint = |picture: &crate::test_render::Picture| {
+                full.iter()
+                    .filter(|&&(x, y)| contrast(picture.rgb(x, y), ribbon) < ICON_MIN_CONTRAST)
+                    .count()
+            };
+            assert_eq!(
+                faint(&drawn),
+                0,
+                "{icon:?} in {}: pixels of {} that hardly stand out",
+                theme.key(),
+                full.len()
+            );
+            let Some(artwork) = artwork else {
+                continue;
+            };
+            // The amber of the artwork stays.
+            let source = std::str::from_utf8(artwork).unwrap();
+            if source.contains("#D97706") {
+                let amber = full.iter().any(|&(x, y)| {
+                    let [r, g, b] = drawn.rgb(x, y);
+                    r.abs_diff(0xD9) <= 8 && g.abs_diff(0x77) <= 8 && b.abs_diff(0x06) <= 8
+                });
+                assert!(amber, "{icon:?} in {} keeps its amber", theme.key());
+            }
+            // The artwork as its file draws it would not do: its dark greys
+            // are lost on the ribbon.
+            if crate::themed_icon::DARK_GREYS
+                .iter()
+                .any(|grey| source.contains(grey))
+            {
+                assert!(
+                    faint(&as_filed(None)) > 0,
+                    "{icon:?} in {} stands out untouched",
+                    theme.key()
+                );
+            }
+        }
     }
 }
 

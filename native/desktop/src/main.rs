@@ -68,6 +68,7 @@ mod status_bar;
 mod survey;
 #[cfg(test)]
 mod test_render;
+mod themed_icon;
 mod ui_style;
 mod ui_theme;
 mod view_cube;
@@ -12596,7 +12597,13 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
             })
             .into();
     }
-    let bytes: &'static [u8] = match icon {
+    themed_icon::themed_icon(icon_artwork(icon), size)
+}
+
+/// The picture of an icon that is not one of the shared set: the artwork of
+/// this application, whose dark greys follow the theme.
+fn icon_artwork(icon: ToolIcon) -> &'static [u8] {
+    match icon {
         ToolIcon::Open
         | ToolIcon::Export
         | ToolIcon::Fit
@@ -12611,7 +12618,7 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         | ToolIcon::Rename
         | ToolIcon::ChevronOpen
         | ToolIcon::ChevronClosed => {
-            unreachable!("canonical icons return above")
+            unreachable!("icon_svg draws the shared icons")
         }
         // The scan-folder and section-box icons are drawn for this app in the
         // same palette.
@@ -12631,8 +12638,8 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         }
         ToolIcon::MeasureArea => include_bytes!("../../assets/opencad-icons/measure_area.svg"),
         // The drawing annotations return from the shared domain-icon branch.
-        ToolIcon::Note => unreachable!("domain icon returns above"),
-        ToolIcon::Line => unreachable!("domain icon returns above"),
+        ToolIcon::Note => unreachable!("icon_svg draws the shared domain icons"),
+        ToolIcon::Line => unreachable!("icon_svg draws the shared domain icons"),
         ToolIcon::Clear => include_bytes!("../../assets/opencad-icons/xclip_remove.svg"),
         ToolIcon::Camera(CameraPreset::Top | CameraPreset::Bottom) => {
             include_bytes!("../../assets/opencad-icons/view_top.svg")
@@ -12646,11 +12653,13 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Camera(CameraPreset::Isometric) => {
             include_bytes!("../../assets/opencad-icons/view_iso.svg")
         }
-        ToolIcon::Move => unreachable!("domain icon returns above"),
+        ToolIcon::Move => unreachable!("icon_svg draws the shared domain icons"),
         ToolIcon::Scale => include_bytes!("../../assets/opencad-icons/scale.svg"),
         ToolIcon::Decimate => include_bytes!("../../assets/opencad-icons/point.svg"),
         ToolIcon::Mesh => include_bytes!("../../assets/opencad-icons/region.svg"),
-        ToolIcon::Building | ToolIcon::Shading => unreachable!("domain icons return above"),
+        ToolIcon::Building | ToolIcon::Shading => {
+            unreachable!("icon_svg draws the shared domain icons")
+        }
         // The section drawing icon is drawn for this app in the same palette.
         ToolIcon::Drawing => include_bytes!("../../assets/opencad-icons/section_drawing.svg"),
         // So is the closed mesh icon.
@@ -12685,23 +12694,10 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Locked => include_bytes!("../../assets/opencad-icons/browser_locked.svg"),
         ToolIcon::Unlocked => include_bytes!("../../assets/opencad-icons/browser_unlocked.svg"),
         // The remaining drawing annotations are drawn like those of the views.
-        ToolIcon::Text => unreachable!("domain icon returns above"),
-        ToolIcon::Dimension => unreachable!("domain icon returns above"),
-        ToolIcon::Leader => unreachable!("domain icon returns above"),
-    };
-    svg(svg::Handle::from_memory(bytes))
-        .width(size)
-        .height(size)
-        .style(|theme, _| {
-            let colors = ui_theme::colors(theme);
-            svg::Style {
-                // Older multicolour OpenCAD assets contain fixed dark strokes.
-                // Tint their complete silhouette on dark shells until each
-                // semantic icon has a reviewed, theme-aware vector.
-                color: (colors.bg != openaec_ui::tokens::LIGHT.bg).then_some(colors.text),
-            }
-        })
-        .into()
+        ToolIcon::Text => unreachable!("icon_svg draws the shared domain icons"),
+        ToolIcon::Dimension => unreachable!("icon_svg draws the shared domain icons"),
+        ToolIcon::Leader => unreachable!("icon_svg draws the shared domain icons"),
+    }
 }
 
 fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
