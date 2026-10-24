@@ -101,16 +101,16 @@ EOF
 chmod +x "$work/bin/gh"
 : > "$work/notes.md"
 
-# draft_call HAS_DRAFT PRERELEASE prints the one call that writes the release.
+# draft_call HAS_DRAFT prints the one call that writes the release.
 draft_call() {
     : > "$work/gh.log"
     PATH="$work/bin:$PATH" GH_LOG="$work/gh.log" GH_HAS_DRAFT=$1 \
         GITHUB_REPOSITORY=example/repository GITHUB_SHA=0123abc \
-        bash "$packaging_dir/draft-release.sh" v9.9.9 "$work/notes.md" "$2" >/dev/null || true
+        bash "$packaging_dir/draft-release.sh" v9.9.9 "$work/notes.md" >/dev/null || true
     grep -v '^release view ' "$work/gh.log" || true
 }
 
-call=$(draft_call false false)
+call=$(draft_call false)
 if [[ "$call" == "release create v9.9.9 "*"--target 0123abc"* && "$call" == *--draft* && "$call" != *--prerelease* ]]; then
     passed "a new draft is created at the commit of the run"
 else
@@ -119,18 +119,11 @@ fi
 
 # Publishing a draft puts the tag where the draft points, so a draft from an
 # earlier run has to be moved to the commit these packages were built from.
-call=$(draft_call true false)
+call=$(draft_call true)
 if [[ "$call" == "release edit v9.9.9 "*"--target 0123abc"* ]]; then
     passed "a draft from an earlier run is moved to the commit of the run"
 else
     wrong "a draft from an earlier run keeps its old commit: gh $call"
-fi
-
-call=$(draft_call false true)
-if [[ "$call" == *--prerelease* ]]; then
-    passed "a pre-release is marked as one"
-else
-    wrong "a pre-release is not marked as one: gh $call"
 fi
 
 # ---- prune-release-assets.sh ---------------------------------------------

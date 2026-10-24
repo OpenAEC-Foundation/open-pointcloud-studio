@@ -1,5 +1,5 @@
 Package: open-pointcloud-studio
-Version: @DEBVERSION@
+Version: @VERSION@
 Architecture: @ARCH@
 Maintainer: OpenAEC Foundation <info@open-aec.com>
 Section: science

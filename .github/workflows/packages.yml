@@ -66,8 +66,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       number: ${{ steps.version.outputs.number }}
-      numeric: ${{ steps.version.outputs.numeric }}
-      deb: ${{ steps.version.outputs.deb }}
       date: ${{ steps.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
@@ -270,7 +268,6 @@ jobs:
       signed: ${{ steps.signature.outputs.signed }}
     env:
       NUMBER: ${{ needs.prepare.outputs.number }}
-      NUMERIC: ${{ needs.prepare.outputs.numeric }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -332,7 +329,7 @@ jobs:
           if (-not (Test-Path $compiler)) {
             choco install innosetup --no-progress -y
           }
-          & $compiler "/DAppVersion=$env:NUMBER" "/DAppNumericVersion=$env:NUMERIC" `
+          & $compiler "/DAppVersion=$env:NUMBER" `
             "/DSourceDir=..\target\packages\open-pointcloud-studio_$($env:NUMBER)_windows-x64" `
             native\installer\windows.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -445,7 +442,6 @@ jobs:
     timeout-minutes: 60
     env:
       NUMBER: ${{ needs.prepare.outputs.number }}
-      DEB_VERSION: ${{ needs.prepare.outputs.deb }}
       DATE: ${{ needs.prepare.outputs.date }}
     steps:
       - uses: actions/checkout@v4
@@ -479,7 +475,7 @@ jobs:
         run: |
           bash native/packaging/linux/build-deb.sh native/target/release/open-pointcloud-studio \
             native/target/open-cad-studio/package/OpenCADStudio \
-            native/target/icons "$NUMBER" "$DEB_VERSION" "$DATE" native/target/packages
+            native/target/icons "$NUMBER" "$DATE" native/target/packages
       - name: Build the AppImage
         run: |
           bash native/packaging/linux/build-appimage.sh native/target/release/open-pointcloud-studio \
@@ -503,7 +499,6 @@ jobs:
       signed: ${{ steps.signing.outputs.macos_signed }}
     env:
       NUMBER: ${{ needs.prepare.outputs.number }}
-      NUMERIC: ${{ needs.prepare.outputs.numeric }}
       # The oldest macOS both halves of the binary start on.
       MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
@@ -588,7 +583,7 @@ jobs:
         run: |
           bash native/packaging/macos/build-app.sh native/target/universal/open-pointcloud-studio \
             native/target/universal/OpenCADStudio \
-            native/target/icons/AppIcon.iconset "$NUMBER" "$NUMERIC" native/target/packages
+            native/target/icons/AppIcon.iconset "$NUMBER" native/target/packages
       - uses: actions/upload-artifact@v4
         with:
           name: package-macos

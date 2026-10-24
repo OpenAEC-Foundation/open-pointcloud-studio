@@ -179,7 +179,7 @@ bash native/packaging/archive-open-cad-studio-source.sh /tmp/packages
 bash native/packaging/make-icons.sh /tmp/icons            # needs rsvg-convert
 bash native/packaging/linux/build-deb.sh native/target/release/open-pointcloud-studio \
     native/target/open-cad-studio/release/OpenCADStudio \
-    /tmp/icons 2026.43.0 2026.43.0 2026-10-24 /tmp/packages   # needs dpkg-deb, desktop-file-validate
+    /tmp/icons 2026.43.0 2026-10-24 /tmp/packages         # needs dpkg-deb, desktop-file-validate
 python3 native/packaging/gui-smoke.py native/target/release/open-pointcloud-studio
 ```
 

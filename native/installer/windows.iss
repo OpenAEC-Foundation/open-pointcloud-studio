@@ -6,8 +6,8 @@
 ;
 ; SourceDir is the folder that native/packaging/build-archive.sh leaves
 ; behind: the application, Open CAD Studio beside it and the licence texts.
-; A pre-release such as 0.8.0-rc1 also needs /DAppNumericVersion=0.8.0,
-; because the version details of the installer file take numbers only.
+; AppVersion is YYYY.W.N, three numbers, which the version details of the
+; installer file take as they are.
 
 #ifndef AppVersion
   #error AppVersion is not set
@@ -17,9 +17,6 @@
 #endif
 #ifndef OutputDir
   #define OutputDir "..\target\installer"
-#endif
-#ifndef AppNumericVersion
-  #define AppNumericVersion AppVersion
 #endif
 
 #define AppName "Open Pointcloud Studio"
@@ -59,7 +56,7 @@ SolidCompression=yes
 WizardStyle=modern
 ChangesAssociations=yes
 CloseApplications=yes
-VersionInfoVersion={#AppNumericVersion}
+VersionInfoVersion={#AppVersion}
 VersionInfoProductName={#AppName}
 
 [Languages]

@@ -39,7 +39,6 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       number: ${{ steps.version.outputs.number }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
       - name: Check the version against the tag
@@ -148,9 +147,7 @@ jobs:
         run: bash native/packaging/release-notes.sh "$NUMBER" > notes.md
       # A draft left by an earlier run is taken over and moved to this commit.
       - name: Create the draft release
-        env:
-          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
-        run: bash native/packaging/draft-release.sh "$TAG" notes.md "$PRERELEASE"
+        run: bash native/packaging/draft-release.sh "$TAG" notes.md
       - name: Upload the packages
         working-directory: assets
         run: |

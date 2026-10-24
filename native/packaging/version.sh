@@ -12,13 +12,11 @@
 # also refuses a native/Cargo.lock in which a member of the workspace has
 # another version.
 #
-#   number      2026.43.0            what the binary prints, and the file names
-#   tag         v2026.43.0
-#   numeric     1.2.3                without a pre-release suffix, for version
-#                                    fields that take numbers only
-#   deb         1.2.3 or 1.2.3~rc1   sorts a pre-release before its release
-#   prerelease  true or false
-#   date        YYYY-MM-DD (UTC)     the day of this build
+#   number  2026.43.0         what the binary prints, the file names and
+#                             the version fields of every package, which
+#                             take three numbers
+#   tag     v2026.43.0
+#   date    YYYY-MM-DD (UTC)  the day of this build
 set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -29,18 +27,6 @@ expected=${1:-}
 bash "$packaging_dir/set-version.sh" check ${expected:+"$expected"} >&2
 number=$(workspace_version)
 
-numeric=${number%%-*}
-if [[ "$number" == "$numeric" ]]; then
-    deb=$number
-    prerelease=false
-else
-    deb="$numeric~${number#*-}"
-    prerelease=true
-fi
-
 echo "number=$number"
 echo "tag=v$number"
-echo "numeric=$numeric"
-echo "deb=$deb"
-echo "prerelease=$prerelease"
 echo "date=$(date -u +%Y-%m-%d)"
