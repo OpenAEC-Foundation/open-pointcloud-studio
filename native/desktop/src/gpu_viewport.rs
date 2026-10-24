@@ -183,6 +183,7 @@ struct SceneKey {
     bounds: Option<Bounds>,
     color_mode: ColorMode,
     budget: usize,
+    resident_points: bool,
     filters: [bool; 4],
     class_visibility: ClassVisibility,
 }
@@ -191,6 +192,7 @@ struct CloudKey {
     source: Arc<PointCloud>,
     transform: CloudTransform,
     detail: Option<Arc<[IndexedPoint]>>,
+    compare: Option<Arc<[IndexedPoint]>>,
     /// The points read inside the section box besides `detail`.
     focus: Option<Arc<[IndexedPoint]>>,
     deleted: Option<Arc<DeletionMask>>,
@@ -221,6 +223,7 @@ impl SceneKey {
                     source: Arc::clone(&entry.cloud),
                     transform: entry.transform,
                     detail: entry.detail_points.clone(),
+                    compare: entry.compare_points.clone(),
                     focus: entry.focus_points.clone(),
                     deleted: entry.deleted.clone(),
                     colours: entry.colours.clone(),
@@ -233,6 +236,7 @@ impl SceneKey {
             bounds,
             color_mode: view.color_mode,
             budget: view.budget,
+            resident_points: view.resident_points,
             filters: [
                 view.filter_ground,
                 view.filter_vegetation,
@@ -246,19 +250,34 @@ impl SceneKey {
     fn matches(&self, view: PointViewport<'_>, bounds: Option<Bounds>) -> bool {
         self.budget == view.budget
             && self.matches_where(view, bounds, |key, entry| {
-                key.points_match(entry) && key.focus_matches(entry) && key.meshes_match(entry)
+                let points_match = if view.resident_points {
+                    key.drawn_alike(entry) && same_arc(&key.compare, &entry.compare_points)
+                } else {
+                    key.points_match(entry)
+                };
+                points_match
+                    && (view.resident_points || key.focus_matches(entry))
+                    && key.meshes_match(entry)
             })
     }
 
     /// Whether the points drawn for the view would be the same.
     fn points_match(&self, view: PointViewport<'_>, bounds: Option<Bounds>) -> bool {
         self.budget == view.budget
-            && self.matches_where(view, bounds, |key, entry| key.points_match(entry))
+            && self.matches_where(view, bounds, |key, entry| {
+                if view.resident_points {
+                    key.drawn_alike(entry) && same_arc(&key.compare, &entry.compare_points)
+                } else {
+                    key.points_match(entry)
+                }
+            })
     }
 
     /// Whether the points read inside the section box would be the same.
     fn focus_match(&self, view: PointViewport<'_>, bounds: Option<Bounds>) -> bool {
-        self.matches_where(view, bounds, |key, entry| key.focus_matches(entry))
+        self.matches_where(view, bounds, |key, entry| {
+            view.resident_points || key.focus_matches(entry)
+        })
     }
 
     /// The settings that every point depends on, and `cloud` for each layer.
@@ -269,6 +288,7 @@ impl SceneKey {
         cloud: impl Fn(&CloudKey, &CloudEntry) -> bool,
     ) -> bool {
         self.bounds == bounds
+            && self.resident_points == view.resident_points
             && self.color_mode == view.color_mode
             && self.filters
                 == [
@@ -429,12 +449,19 @@ impl<'a> GpuViewport<'a> {
     fn build_points(&self, overall_bounds: Option<Bounds>) -> Vec<GpuPoint> {
         let mut points = Vec::new();
         if let Some(overall_bounds) = overall_bounds {
+            let resident = self.overlay.resident_points;
             let sampled: usize = self
                 .overlay
                 .clouds
                 .iter()
                 .filter(|entry| entry.visible)
-                .map(CloudEntry::view_len)
+                .map(|entry| {
+                    if resident {
+                        entry.resident_len()
+                    } else {
+                        entry.view_len()
+                    }
+                })
                 .sum();
             let stride = sampled.div_ceil(self.overlay.budget.max(1)).max(1);
             points.reserve(sampled.div_ceil(stride));
@@ -447,9 +474,12 @@ impl<'a> GpuViewport<'a> {
                     .iter()
                     .filter(|entry| entry.visible)
                     .flat_map(|entry| {
-                        entry
-                            .view_records()
-                            .filter(move |record| entry.record_visible(*record))
+                        let records = if resident {
+                            entry.resident_records()
+                        } else {
+                            entry.view_records()
+                        };
+                        records.filter(move |record| entry.record_visible(*record))
                     })
                     .step_by(stride),
             );
@@ -471,6 +501,9 @@ impl<'a> GpuViewport<'a> {
     /// budget of what the box shows.
     fn build_focus_points(&self, overall_bounds: Option<Bounds>) -> Vec<GpuPoint> {
         let mut points = Vec::new();
+        if self.overlay.resident_points {
+            return points;
+        }
         if let Some(overall_bounds) = overall_bounds {
             let shown = || self.overlay.clouds.iter().filter(|entry| entry.visible);
             points.reserve(shown().map(CloudEntry::focus_len).sum());
@@ -922,6 +955,7 @@ impl shader::Program<Message> for GpuViewport<'_> {
             .and_then(|shown| crate::photo_overlay::frame(&shown));
         CloudPrimitive {
             geometry,
+            compare_model: self.overlay.resident_points,
             focus_drawn: self.overlay.focus_drawn,
             caps,
             camera,
@@ -1083,6 +1117,9 @@ struct PanoramaFrame {
 #[derive(Debug)]
 pub struct CloudPrimitive {
     geometry: Arc<RenderGeometry>,
+    /// The comparison pane needs its own uploads and camera until both
+    /// primitives have rendered; the photo pane prepares in the same frame.
+    compare_model: bool,
     /// Whether the points read inside the section box are drawn; they stay
     /// on the device while they are put aside.
     focus_drawn: bool,
@@ -1302,6 +1339,11 @@ struct GpuState {
     color_view: Option<wgpu::TextureView>,
     depth_size: (u32, u32),
     photo_overlay: crate::photo_overlay::PhotoOverlay,
+}
+
+struct GpuStates {
+    main: GpuState,
+    comparison: Option<GpuState>,
 }
 
 impl GpuState {
@@ -1768,10 +1810,22 @@ impl Primitive for CloudPrimitive {
         bounds: &Rectangle,
         viewport: &shader::Viewport,
     ) {
-        if !storage.has::<GpuState>() {
-            storage.store(GpuState::new(device, format));
+        if !storage.has::<GpuStates>() {
+            storage.store(GpuStates {
+                main: GpuState::new(device, format),
+                comparison: None,
+            });
         }
-        let state = storage.get_mut::<GpuState>().expect("pointcloud GPU state");
+        let states = storage
+            .get_mut::<GpuStates>()
+            .expect("pointcloud GPU states");
+        let state = if self.compare_model {
+            states
+                .comparison
+                .get_or_insert_with(|| GpuState::new(device, format))
+        } else {
+            &mut states.main
+        };
         // Each set of points is sent only when it changed: a change of the
         // section box sends none, and detail read inside the box sends only
         // that detail.
@@ -1821,7 +1875,15 @@ impl Primitive for CloudPrimitive {
         target: &wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,
     ) {
-        let state = storage.get::<GpuState>().expect("pointcloud GPU state");
+        let states = storage.get::<GpuStates>().expect("pointcloud GPU states");
+        let state = if self.compare_model {
+            states
+                .comparison
+                .as_ref()
+                .expect("comparison GPU state prepared")
+        } else {
+            &states.main
+        };
         if clip_bounds.width == 0 || clip_bounds.height == 0 {
             return;
         }
@@ -2355,6 +2417,7 @@ mod tests {
             picked: false,
             index_building: false,
             detail_points: None,
+            compare_points: None,
             focus_points: None,
         });
         let state = RefCell::new(RenderCache::default());
@@ -2639,6 +2702,76 @@ mod section_box_tests {
             .partition(|record| record.point.xyz[..2] == [5.0, 5.0]);
         assert_eq!((column.len(), grid.len()), (10, 1_000));
         (column, grid)
+    }
+
+    #[test]
+    fn comparison_camera_keeps_indexed_model_points_when_photo_detail_changes() {
+        let (mut studio, _directory) = studio_with_grid();
+        let model: Arc<[IndexedPoint]> =
+            Arc::from(studio.clouds[0].view_records().collect::<Vec<_>>());
+        let first = model[0];
+        // Indexed E57 layers may only retain a header in `cloud.points`.
+        Arc::make_mut(&mut studio.clouds[0].cloud).points.clear();
+        Arc::make_mut(&mut studio.clouds[0].cloud)
+            .point_ordinals
+            .clear();
+        studio.clouds[0].detail_points = Some(Arc::clone(&model));
+        studio.remember_model_for_photo();
+        assert!(Arc::ptr_eq(
+            studio.clouds[0].compare_points.as_ref().unwrap(),
+            &model
+        ));
+        // Returning from a photo schedules model detail after a debounce.
+        // A quick re-entry must keep the previous model sample meanwhile.
+        studio.revision += 1;
+        studio.clouds[0].detail_points = Some(Arc::from(vec![first]));
+        studio.remember_model_for_photo();
+        assert!(Arc::ptr_eq(
+            studio.clouds[0].compare_points.as_ref().unwrap(),
+            &model
+        ));
+        let bounds = combined_bounds(&studio.clouds);
+        assert_eq!(
+            GpuViewport {
+                overlay: studio.point_viewport()
+            }
+            .build_points(bounds)
+            .len(),
+            1
+        );
+
+        let mut compare = studio.point_viewport();
+        compare.resident_points = true;
+        let rectangle = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(450.0, 650.0));
+        let cache = RefCell::new(RenderCache::default());
+        let compared = shader::Program::draw(
+            &GpuViewport { overlay: compare },
+            &cache,
+            mouse::Cursor::Unavailable,
+            rectangle,
+        );
+        assert!(compared.compare_model);
+        let key = SceneKey::capture(compare, bounds);
+        assert_eq!(
+            GpuViewport { overlay: compare }.build_points(bounds).len(),
+            1_010
+        );
+        studio.clouds[0].detail_points = Some(Arc::from(vec![]));
+        let mut compare = studio.point_viewport();
+        compare.resident_points = true;
+        assert!(key.points_match(compare, bounds));
+        assert_eq!(
+            GpuViewport { overlay: compare }.build_points(bounds).len(),
+            1_010
+        );
+        studio.take_view_sets(vec![(0, vec![first])]);
+        let mut compare = studio.point_viewport();
+        compare.resident_points = true;
+        assert!(!key.points_match(compare, bounds));
+        assert_eq!(
+            GpuViewport { overlay: compare }.build_points(bounds).len(),
+            1
+        );
     }
 
     /// The points of the scan that lie inside the section box, all of them

@@ -56,6 +56,12 @@ pub(crate) struct Preferences {
     /// The tab that was active; a value that is no text reads as none.
     #[serde(deserialize_with = "text_or_none")]
     pub view_tab: Option<String>,
+    /// Whether a photo opens beside the 3D model.
+    pub photo_compare: bool,
+    /// Share of the comparison width occupied by the 3D model.
+    pub photo_split_ratio: f32,
+    /// Stack the model over the photo instead of placing them side by side.
+    pub photo_split_vertical: bool,
 }
 
 /// A text, or none when the value is no text.
@@ -107,6 +113,9 @@ impl Default for Preferences {
             browser_collapsed: Vec::new(),
             view_tabs: Vec::new(),
             view_tab: None,
+            photo_compare: false,
+            photo_split_ratio: 0.5,
+            photo_split_vertical: false,
         }
     }
 }
@@ -125,6 +134,9 @@ impl Preferences {
         }
         if !crate::section_fill::valid_thickness(self.cap_max_thickness) {
             self.cap_max_thickness = defaults.cap_max_thickness;
+        }
+        if !self.photo_split_ratio.is_finite() || !(0.25..=0.75).contains(&self.photo_split_ratio) {
+            self.photo_split_ratio = defaults.photo_split_ratio;
         }
         self.recent_mesh_to_plans
             .truncate(crate::mesh_to_plans::MAX_RECENT_PROJECTS);
@@ -277,6 +289,9 @@ mod tests {
             browser_collapsed: vec!["scans".into(), "views.plans".into()],
             view_tabs: vec!["view:a1".into(), "drawing:b2".into()],
             view_tab: Some("drawing:b2".into()),
+            photo_compare: true,
+            photo_split_ratio: 0.65,
+            photo_split_vertical: true,
             ..Preferences::default()
         };
         save_to(&path, &settings).unwrap();
@@ -294,6 +309,11 @@ mod tests {
         assert!(!repaired.auto_index);
         assert_eq!(repaired.cap_max_thickness, 0.5);
         assert!(repaired.fill_cut);
+        fs::write(&path, r#"{"photo_compare":true,"photo_split_ratio":0.9}"#).unwrap();
+        let repaired = load_from(&path);
+        assert!(repaired.photo_compare);
+        assert_eq!(repaired.photo_split_ratio, 0.5);
+        assert!(!repaired.photo_split_vertical);
 
         let high_budget = Preferences {
             budget: MAX_POINT_BUDGET,

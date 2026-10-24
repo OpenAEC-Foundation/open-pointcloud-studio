@@ -27,7 +27,7 @@ use crate::i18n::tr;
 use crate::project_browser::{ViewKind, ViewRow};
 use crate::station_photos::WalkView;
 use crate::ui_style;
-use crate::{icon_svg, ui_theme, ColorMode, Message, Studio, ToolIcon};
+use crate::{icon_svg, ui_theme, ColorMode, Message, PointViewport, Studio, ToolIcon};
 
 /// A tab, by what it shows.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -275,6 +275,14 @@ pub(crate) struct ModelLook {
     color_mode: ColorMode,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CompareAction {
+    Orbit(f32, f32, iced::Size),
+    Pan(f32, f32),
+    Zoom(f32, [f32; 2], iced::Size),
+    Cube(crate::view_cube::CubeTarget),
+}
+
 /// Camera and blending kept when a photo tab is temporarily hidden.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PhotoTabLook {
@@ -300,7 +308,7 @@ pub struct ViewTabs {
     pending: Option<TabId>,
     /// The 3D tab whose camera the scene has: the 3D model, or the saved
     /// view shown last.
-    owner: TabId,
+    pub(crate) owner: TabId,
     /// The camera, the section box and the colour mode of the 3D model, as
     /// they were when the scene was last its own.
     model: Option<ModelLook>,
@@ -429,6 +437,77 @@ fn strip_id() -> scrollable::Id {
 }
 
 impl Studio {
+    pub(crate) fn update_compare_model(&mut self, action: CompareAction) {
+        let Some(look) = self.tabs.model.as_mut() else {
+            return;
+        };
+        match action {
+            CompareAction::Orbit(dx, dy, size) => {
+                let yaw = (look.yaw + dx * 0.01 + std::f32::consts::PI)
+                    .rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                let pitch = (look.pitch + dy * 0.01).clamp(-1.56, 1.56);
+                if let (Some(point), Some(scene)) =
+                    (look.orbit_point, crate::combined_bounds(&self.clouds))
+                {
+                    let from = crate::orbit_point::OrbitCamera {
+                        yaw: look.yaw,
+                        pitch: look.pitch,
+                        zoom: look.zoom,
+                        pan: look.pan,
+                    };
+                    if let Some(turned) =
+                        crate::orbit_point::turn_about(scene, from, yaw, pitch, point, size)
+                    {
+                        look.zoom = turned.zoom;
+                        look.pan = turned.pan;
+                    }
+                }
+                look.yaw = yaw;
+                look.pitch = pitch;
+                look.label = crate::i18n::key("CUSTOM");
+            }
+            CompareAction::Pan(dx, dy) => {
+                look.pan[0] += dx;
+                look.pan[1] += dy;
+            }
+            CompareAction::Zoom(delta, pointer, size) => {
+                let previous = look.zoom;
+                look.zoom = (look.zoom * (-delta * 0.14).exp()).clamp(0.000_001, 10_000.0);
+                let magnification = previous / look.zoom;
+                for (axis, value) in pointer.into_iter().enumerate() {
+                    let center = if axis == 0 { size.width } else { size.height } * 0.5;
+                    look.pan[axis] =
+                        (value - center) * (1.0 - magnification) + look.pan[axis] * magnification;
+                }
+            }
+            CompareAction::Cube(target) => {
+                let (yaw, pitch, label) = match target {
+                    crate::view_cube::CubeTarget::Face(preset) => preset.orientation(),
+                    crate::view_cube::CubeTarget::Edge(edge) => {
+                        let (yaw, pitch) = crate::view_cube::view_from(edge);
+                        (yaw, pitch, crate::i18n::key("ISO EDGE"))
+                    }
+                    crate::view_cube::CubeTarget::Corner(corner) => {
+                        let (yaw, pitch) = crate::view_cube::view_from(corner);
+                        (yaw, pitch, crate::i18n::key("ISO CORNER"))
+                    }
+                    crate::view_cube::CubeTarget::Home => {
+                        let (yaw, pitch, label) = crate::CameraPreset::Isometric.orientation();
+                        look.zoom = 1.0;
+                        look.pan = [0.0; 2];
+                        look.orbit_point = None;
+                        (yaw, pitch, label)
+                    }
+                };
+                look.yaw = yaw;
+                look.pitch = pitch;
+                look.label = label;
+            }
+        }
+        self.revision += 1;
+    }
+
     pub(crate) fn update_tabs(&mut self, action: TabAction) -> Task<Message> {
         match action {
             TabAction::Show(tab) => match self.show_tab(&tab) {
@@ -696,10 +775,13 @@ impl Studio {
         let photo = self.leave_photo();
         self.drawing_view.shown = false;
         self.file_open = false;
-        let task = match self.tabs.model.filter(|_| self.tabs.owner != TabId::Model) {
-            Some(look) => self.put_back_model_look(look),
-            None => Task::none(),
-        };
+        let task =
+            match self.tabs.model.filter(|_| {
+                self.tabs.owner != TabId::Model || self.tabs.shown != Some(TabId::Model)
+            }) {
+                Some(look) => self.put_back_model_look(look),
+                None => Task::none(),
+            };
         self.deactivate_view();
         self.tabs.owner = TabId::Model;
         self.status = "3D model".into();
@@ -767,6 +849,49 @@ impl Studio {
             section_rotation: self.section_rotation,
             color_mode: self.color_mode,
         }
+    }
+
+    /// Capture the exact model camera before a photo replaces the viewport.
+    pub(crate) fn remember_model_for_photo(&mut self) {
+        if self.photos.view.is_none() {
+            if self.tabs.owner == TabId::Model {
+                self.tabs.model = Some(self.model_look());
+            }
+            let model_detail_ready = self.detail_loaded();
+            for entry in &mut self.clouds {
+                if model_detail_ready || entry.compare_points.is_none() {
+                    entry.compare_points = entry.detail_points.clone();
+                }
+            }
+        }
+    }
+
+    /// A copy of the model camera for the pane beside an entered photo.
+    /// Navigation changes this saved look; edits and picks stay in the photo.
+    pub(crate) fn compare_model_viewport<'a>(
+        &'a self,
+        mut view: PointViewport<'a>,
+    ) -> Option<PointViewport<'a>> {
+        let look = self.tabs.model?;
+        view.yaw = look.yaw;
+        view.pitch = look.pitch;
+        view.zoom = look.zoom;
+        view.pan = look.pan;
+        view.orbit_point = look.orbit_point;
+        view.walk = look.walk;
+        view.walk_station = None;
+        view.panorama_photos = None;
+        view.color_mode = look.color_mode;
+        view.photo_visible = false;
+        view.read_only = true;
+        view.resident_points = true;
+        view.focus_drawn = false;
+        view.box_select = false;
+        view.pick_mode = false;
+        view.pan_tool = false;
+        view.drag_rectangle = None;
+        view.context_menu = None;
+        Some(view)
     }
 
     /// Give the 3D model back what it showed: its camera, also standing at
