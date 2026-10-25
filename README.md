@@ -45,10 +45,12 @@ The files are on the [releases page](https://github.com/OpenAEC-Foundation/open-
 | | `open-pointcloud-studio_VERSION_amd64.AppImage` | One file that runs on any distribution |
 | | `open-pointcloud-studio_VERSION_linux-amd64.tar.gz` | The bare binaries and the licence texts |
 | Linux 64-bit ARM (experimental) | `open-pointcloud-studio_VERSION_arm64.deb`, `_arm64.AppImage`, `_linux-arm64.tar.gz` | The same three kinds of file as for x86-64. Experimental: built and tested only on build machines with software rendering, not yet on real ARM boards or laptops |
+| For programs of your own: Windows x64, macOS 11 and later, Linux x86-64 and 64-bit ARM | `open-pointcloud-studio-sdk_VERSION_windows-x64-dll.zip`, `_macos-universal-dylib.tar.gz`, `_linux-amd64-so.tar.gz`, `_linux-arm64-so.tar.gz` | The point-cloud core as a C library, with its header, an example and the notices of the crates it is built from; see [C library](#c-library) |
+| Every system | `SHA256SUMS` | The checksums of all the files above in one list; see [Checking a download](#checking-a-download) |
 
 Every package also carries [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio), the open-source CAD application, which shows exported DXF and DWG drawings; it does not have to be installed separately. The release page also holds `open-cad-studio-source_SHORT.tar.gz`, the source it was built from, and `open-cad-studio-vendor_SHORT.tar.gz`, the crates it was built with from git repositories.
 
-Every file has a `.sha256` file beside it; see [Checking a download](#checking-a-download).
+Every file has a `.sha256` file beside it, except `SHA256SUMS` itself and OpenPGP signatures; see [Checking a download](#checking-a-download). Once a release is public, its page also gets `open-pointcloud-studio_VERSION_verification.md`: the record of the checks that the release workflow ran on the published files, with its `.sha256`. The cloud API is not a file of the release page but a container image; see [Cloud API](#cloud-api).
 
 ### Windows
 
@@ -107,11 +109,19 @@ Get-Content open-pointcloud-studio_2026.43.0_x64-setup.exe.sha256
 
 On Linux and macOS the command answers `OK`. On Windows, compare the two outputs: the hash must be the same, apart from upper and lower case.
 
-The Linux packages also carry a build attestation, kept by GitHub. With the [GitHub CLI](https://cli.github.com/), signed in with `gh auth login`, this checks that the release workflow of this repository attested the file and that it has not been changed since; the output names the tag the workflow ran for:
+`SHA256SUMS` holds the checksums of all files of the release. In a folder with the files you downloaded beside it, this checks each of them and skips the others:
+
+```bash
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+The Linux packages and the Linux archives of the C library also carry a build attestation, kept by GitHub. With the [GitHub CLI](https://cli.github.com/), signed in with `gh auth login`, this checks that the release workflow of this repository attested the file and that it has not been changed since; the output names the tag the workflow ran for:
 
 ```bash
 gh attestation verify FILE --repo OpenAEC-Foundation/open-pointcloud-studio   --signer-workflow OpenAEC-Foundation/open-pointcloud-studio/.github/workflows/release.yml
 ```
+
+OpenPGP signatures of `SHA256SUMS` and of the AppImages follow once the organisation has its key; until then the release notes name none. [docs/ecosystem.md](docs/ecosystem.md#signing-per-file) lists the signature of every file and the command that checks it.
 
 ### Starting
 
@@ -410,6 +420,44 @@ The commands open and close scans, set the camera, the section box and the displ
 
 `command` is the full path of the executable, with every part written out: most clients fill in neither `%LOCALAPPDATA%` nor `~`, and JSON needs every backslash doubled. [Starting](#starting) names the paths, and [native/MCP.md](native/MCP.md#starting-it-from-a-client) says more about starting the server from a client and lists every tool.
 
+### Cloud API
+
+`open-pointcloud-studio-api` is the service of the point-cloud core for programs and servers, without a window. A request carries a point-cloud file, and the service runs one of five tools on it: `inspect` reports what the file holds, `convert` writes it as LAS, LAZ, E57, PLY, XYZ, PTS or CSV (also only the points in a box, turned or not), `section_drawing` draws a section as DXF or DWG, and `terrain_mesh` and `surface_mesh` make OBJ meshes. They are the operations of the command line, run by the same code. REST and MCP (`POST /mcp`) answer on one port, with bearer keys, the same JSON errors on every route and an OpenAPI document at `/v1/openapi.json`; nothing is kept between calls. It is licensed under LGPL-3.0-or-later, as the core.
+
+A release publishes it as a container image for Linux x86-64, `ghcr.io/openaec-foundation/open-pointcloud-studio-api:VERSION`; the release notes give its digest and how to check its attestation:
+
+```bash
+gh attestation verify oci://ghcr.io/openaec-foundation/open-pointcloud-studio-api@sha256:DIGEST --repo OpenAEC-Foundation/open-pointcloud-studio
+```
+
+To try it on your own computer, without keys and on the loopback address only:
+
+```bash
+cd native
+OPENAEC_API_TOEGANG=open cargo run -p open-pointcloud-studio-api -- --http 127.0.0.1:8080
+```
+
+[docs/cloud-api.md](docs/cloud-api.md) describes the routes, the tools and their arguments, the keys, the limits, the errors and the container; `bash deploy/cloud-api/smoke.sh URL KEY --version VERSION` tests a running service. The deployment definition in [`deploy/aws`](deploy/aws/README.md) is prepared and not deployed yet.
+
+### C library
+
+The point-cloud core is also a library for programs of your own. From C, C++ or any language that calls C, it is `ops_pointcloud`: 15 functions, declared in `ops_pointcloud.h` with ABI version 1.0, that open, inspect, read, crop, export and index point clouds. Each release carries it in four archives, for Windows x64, for macOS and for Linux on x86-64 and on 64-bit ARM (see [Download and install](#download-and-install)), each with the header, an example and the notices. From the unpacked folder on Linux or macOS:
+
+```bash
+cc -std=c11 -Wall -Iinclude examples/inspect.c -Llib -lops_pointcloud -Wl,-rpath,"$PWD/lib" -o inspect
+./inspect .
+```
+
+From Rust, the crate `pointcloud-core` is used by the git tag of a release, through the module `pointcloud_core::ops`:
+
+```toml
+pointcloud-core = { git = "https://github.com/OpenAEC-Foundation/open-pointcloud-studio", tag = "vYYYY.W.N", default-features = false }
+```
+
+The library is licensed under LGPL-3.0-or-later. [docs/library.md](docs/library.md) gives the boundary, the compatibility rule, the rules of the C interface for buffers, errors and threads, and what the licence asks of a program that uses it.
+
+[docs/ecosystem.md](docs/ecosystem.md) records what is delivered for each system, from the packages to the library and the service, and how each part is verified.
+
 ## Build from source
 
 You need the stable [Rust toolchain](https://rustup.rs). On Debian and Ubuntu, also install the development packages the window library links:
@@ -443,13 +491,18 @@ It writes `native/target/open-cad-studio/release/OpenCADStudio`, where a develop
 
 | Path | What it holds |
 | --- | --- |
-| `native/core` | The point-cloud library: readers and writers, the index on disk and the reads from it, export, meshing, 2D drawings, face detection and the 3D BAG client |
+| `native/core` | The point-cloud library: readers and writers, the index on disk and the reads from it, export, meshing, 2D drawings, face detection and the 3D BAG client, and `ops`, the whole-file operations that the command line, the cloud API and the C library share |
 | `native/desktop` | The desktop application: window, 3D view, selection and the other tools, command API and MCP server |
+| `native/server` | The cloud API, `open-pointcloud-studio-api`: REST and MCP over HTTP |
+| `native/sdk` | The C library `ops_pointcloud`: its header, its example and the scripts that pack its archives |
+| `native/examples` | A Rust program with a workspace of its own that uses the core as another repository would |
 | `native/ui` | `openaec-ui`, the shared interface crate of OpenAEC desktop tools, copied from the OpenAEC Style Repo: title strip, ribbon and document tabs, panels, the property grid, the Settings dialog, the File menu and the status band |
 | `native/assets` | Fonts, icons and the Dutch interface texts |
 | `native/extensions/examples` | An example extension, in PowerShell and Python |
 | `native/installer`, `native/packaging` | The Windows installer script and the packaging of all systems |
-| `docs` | The user guide and its images, the source of the Dutch manual of the wiki (`docs/wiki`), and the guide for authors of extensions |
+| `deploy` | The container image of the cloud API with its smoke test (`deploy/cloud-api`), and its prepared deployment definition (`deploy/aws`) |
+| `docs` | The user guide and its images, the source of the Dutch manual of the wiki (`docs/wiki`), the guide for authors of extensions, and the references of the cloud API and the C library |
+| `docs/ecosystem.md` | The record of what is delivered for each system and how each part is verified |
 | `promo` | The feature video, its poster and stills, and the scripts that capture and render them |
 | `screenshots` | Pictures taken while the first native versions were developed; none of them shows the current interface |
 | `classic` | An earlier application, kept for reference and no longer developed |
@@ -457,6 +510,7 @@ It writes `native/target/open-cad-studio/release/OpenCADStudio`, where a develop
 ## Licences
 
 - The point-cloud library `native/core` is licensed under LGPL-3.0-or-later; see [LICENSE.md](LICENSE.md).
+- The cloud API `native/server` and the C library `native/sdk` are licensed under LGPL-3.0-or-later, as the core. The image of the cloud API and the archives of the C library carry `THIRD-PARTY-NOTICES.txt` with the crates they are built from, `LICENSE-LGPL-3.0.md` and `LICENSE-GPL-3.0.txt`.
 - The desktop application `native/desktop` is licensed under GPL-3.0-only; see [native/desktop/LICENSE-GPL-3.0](native/desktop/LICENSE-GPL-3.0). Its ribbon and properties rows are adapted from [OpenCADStudio](https://github.com/HakanSeven12/OpenCADStudio), which is GPL-3.0, and it uses that project's SVG icons.
 - The shared interface crate `native/ui` (`openaec-ui`) is licensed under LGPL-3.0-only; its fonts keep the SIL Open Font License 1.1, one icon the Apache License 2.0 and the vectors from the OpenAEC style book CC BY-SA 4.0, which its `Cargo.toml` states as `LGPL-3.0-only AND CC-BY-SA-4.0 AND OFL-1.1 AND Apache-2.0`; see [native/ui/NOTICE.md](native/ui/NOTICE.md).
 - Open CAD Studio, which every package carries, is licensed under GPL-3.0 by its authors. Its source is not part of this repository: [native/packaging/open-cad-studio.pin](native/packaging/open-cad-studio.pin) names the commit of its repository that the packages are built from, and every release carries the source of that commit as `open-cad-studio-source_SHORT.tar.gz` and the crates it takes from git repositories, some of them under the MPL-2.0 or the LGPL-2.1-or-later, as `open-cad-studio-vendor_SHORT.tar.gz`. The packages carry its licence text as `OpenCADStudio-LICENSE.txt` and a notice with the commit as `OpenCADStudio-NOTICE.txt`.

@@ -11,6 +11,9 @@ The server speaks JSON-RPC 2.0 with one message per line. Standard output
 carries nothing but those messages; diagnostics go to standard error. The
 process keeps its console streams and opens no window itself.
 
+The cloud API has an MCP server of its own, over HTTP and without a window;
+see [The cloud API over HTTP](#the-cloud-api-over-http).
+
 ## Starting it from a client
 
 A client starts the server as a child process. Most clients take a JSON
@@ -337,6 +340,72 @@ the place of what the layer had, and what `clear_faces`,
 overwrite does not come back. The edits change the scans in the window, not
 their files; an export replaces the file at its destination, whatever file
 that is.
+
+## The cloud API over HTTP
+
+The cloud API, `open-pointcloud-studio-api`
+([docs/cloud-api.md](../docs/cloud-api.md)), serves MCP at `POST /mcp`, on
+the same port as its REST routes. It differs from the server above:
+
+- **Transport.** Streamable HTTP: one JSON-RPC message per request,
+  answered as JSON. A notification gets 202, a batch is refused, and
+  `GET /mcp` gets 405. The protocol versions are `2025-11-25`, `2025-06-18`
+  and `2025-03-26`.
+- **No state and no window.** The service keeps no session and nothing
+  between calls. A call carries its file in base64 in `input`, and a result
+  file comes back as an embedded resource of the tool result.
+- **Keys.** Every request needs `Authorization: Bearer <key>`; the service
+  holds the SHA-256 of each key in `OPENAEC_API_SLEUTELS`. Without a valid
+  key it answers 401 `TOEGANG_GEWEIGERD`, and a request with an `Origin` it
+  does not list gets 403 `HERKOMST_GEWEIGERD`.
+- **Five tools**, all read-only and not open-world: `inspect`, `convert`,
+  `section_drawing`, `terrain_mesh` and `surface_mesh`. They take no path,
+  and nothing they do stays on the server, so there is nothing to undo.
+  Their names differ from the tools above on purpose: those act on the
+  active layer, the section box and the filters of a window and write to a
+  path.
+
+A client that speaks Streamable HTTP is configured with the address and the
+key:
+
+```json
+{"type": "http", "url": "https://HOST/mcp", "headers": {"Authorization": "Bearer <key>"}}
+```
+
+[MCP client](../docs/cloud-api.md#mcp-client) in docs/cloud-api.md says how
+the service answers, and [Limits](../docs/cloud-api.md#limits) how large a
+file may be.
+
+## Checking a server from outside
+
+`packaging/mcp-client-check.py` checks either server as an MCP client
+outside the project does, with the reference Python SDK of the protocol,
+pinned with hashes in `packaging/mcp-client-requirements.txt`. From the root
+of the repository:
+
+```bash
+python3 -m venv /tmp/mcp
+/tmp/mcp/bin/pip install --require-hashes -r native/packaging/mcp-client-requirements.txt
+/tmp/mcp/bin/python -I native/packaging/mcp-client-check.py --stdio /usr/bin/open-pointcloud-studio --version VERSION
+/tmp/mcp/bin/python -I native/packaging/mcp-client-check.py --http http://127.0.0.1:8080/mcp --key KEY --version VERSION
+```
+
+`--stdio` starts the server of an installed application with configuration
+and cache folders of its own. The server starts a window, so it needs a
+display; a virtual one will do. It checks the handshake, that the server
+offers tools and no resources, the count of the tools and the annotations of
+`status`, `thin` and `bag3d`, that every input schema refuses unknown
+arguments, `thin` 50 with `undo_delete`, `redo_delete` and `undo_delete`
+again on a grid of 1000 points, a tool error for a missing file, and the
+token of the command API. `--http` checks the refusal without the key, the
+five read-only tools, `inspect`, `convert` to LAZ as an embedded resource,
+and the refusal of a path.
+
+Each writes a record in Markdown, and exits with 1 when a check fails. The
+Packages workflow runs `--stdio` against the installed `.deb` on Linux, in
+the job `verify-linux`, and the Container workflow runs `--http` against the
+image. [docs/ecosystem.md](../docs/ecosystem.md#mcp-verification-record)
+holds the results.
 
 ## Example session
 
