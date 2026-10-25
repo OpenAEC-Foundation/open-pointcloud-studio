@@ -1,0 +1,9 @@
+# What the image of the cloud API is built from: the Rust workspace in
+# native/ and the licence at the top. Build outputs and the review images
+# stay out, so that the context is small and a local build of the
+# application does not end up in it.
+*
+!native
+!LICENSE.md
+native/**/target
+native/design
