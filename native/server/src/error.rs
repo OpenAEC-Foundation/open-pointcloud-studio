@@ -2,6 +2,7 @@
 //! melding, remedie}` of the shared contract, with its HTTP status, and the
 //! scrubbing of the service's own folders out of every `melding`.
 
+use std::fmt::{self, Display, Write as _};
 use std::path::{Path, PathBuf};
 
 use axum::http::{header, HeaderValue, StatusCode};
@@ -28,6 +29,44 @@ pub const CODES: [(u16, &str); 14] = [
     (503, "WERK_VASTGELOPEN"),
     (504, "TIJDSLIMIET"),
 ];
+
+/// The most characters of a parse error that a `melding` quotes.
+pub const QUOTED_CHARS: usize = 300;
+
+/// `error` as text of at most `QUOTED_CHARS` characters. A JSON reader
+/// quotes a string of the wrong type in full, and that string can be a whole
+/// upload: it is cut, so that the answer stays small.
+pub fn short(error: &dyn Display) -> String {
+    struct Cut {
+        text: String,
+        left: usize,
+        cut: bool,
+    }
+    impl fmt::Write for Cut {
+        fn write_str(&mut self, part: &str) -> fmt::Result {
+            for character in part.chars() {
+                if self.left == 0 {
+                    self.cut = true;
+                    return Err(fmt::Error);
+                }
+                self.text.push(character);
+                self.left -= 1;
+            }
+            Ok(())
+        }
+    }
+    let mut cut = Cut {
+        text: String::new(),
+        left: QUOTED_CHARS,
+        cut: false,
+    };
+    // An error only says that the text was cut.
+    let _ = write!(cut, "{error}");
+    if cut.cut {
+        cut.text.push_str("...");
+    }
+    cut.text
+}
 
 /// An error as the service answers it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,6 +372,17 @@ mod tests {
             windows.text("C:\\Temp\\call-1\\input.ply: gone"),
             "input.ply: gone"
         );
+    }
+
+    #[test]
+    fn a_quoted_error_is_cut() {
+        assert_eq!(short(&"a short reason"), "a short reason");
+        let long = format!("invalid type: string \"{}\"", "é".repeat(10_000));
+        let quoted = short(&long);
+        assert_eq!(quoted.chars().count(), QUOTED_CHARS + 3);
+        assert!(quoted.starts_with("invalid type: string \"é") && quoted.ends_with("..."));
+        let exact = "x".repeat(QUOTED_CHARS);
+        assert_eq!(short(&exact), exact);
     }
 
     #[test]

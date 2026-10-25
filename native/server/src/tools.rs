@@ -22,7 +22,7 @@ use serde_json::value::RawValue;
 use serde_json::{json, Map, Value};
 use tempfile::TempDir;
 
-use crate::error::ApiError;
+use crate::error::{short, ApiError};
 use crate::payload;
 
 /// What a call may produce.
@@ -450,8 +450,12 @@ struct SurfaceMeshArguments<'a> {
 
 /// The typed arguments of a call, borrowing `data` from the request.
 fn parse<'a, T: Deserialize<'a>>(arguments: &'a RawValue) -> Result<T, ApiError> {
-    serde_json::from_str(arguments.get())
-        .map_err(|error| ApiError::argument(format!("The arguments do not fit the tool: {error}")))
+    serde_json::from_str(arguments.get()).map_err(|error| {
+        ApiError::argument(format!(
+            "The arguments do not fit the tool: {}",
+            short(&error)
+        ))
+    })
 }
 
 impl BoxArgument {

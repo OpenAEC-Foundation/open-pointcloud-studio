@@ -15,7 +15,7 @@ use std::fmt;
 
 use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
 
-use crate::error::ApiError;
+use crate::error::{short, ApiError};
 use crate::tools::{self, Tool};
 
 /// Arguments that point at a file on the server: refused in every call.
@@ -64,7 +64,10 @@ pub fn top_level_keys(body: &[u8]) -> Result<Vec<String>, ApiError> {
     serde_json::from_slice::<Keys>(body)
         .map(|keys| keys.0)
         .map_err(|error| {
-            ApiError::argument(format!("The arguments must be one JSON object: {error}"))
+            ApiError::argument(format!(
+                "The arguments must be one JSON object: {}",
+                short(&error)
+            ))
         })
 }
 

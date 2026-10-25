@@ -7,8 +7,9 @@
 //! never wait. A call then waits for one of the places to compute, and runs
 //! on a blocking thread that keeps its place until it returns. At the time
 //! limit the call is answered with 504 and its `keep_going` answers
-//! `Cancelled` from then on; work that still runs a grace period after that
-//! turns the health route to 503, so that the orchestrator replaces the task.
+//! `Cancelled` from then on, as it does when the client goes away first;
+//! work that still runs a grace period after its time limit turns the
+//! health route to 503, so that the orchestrator replaces the task.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -58,11 +59,57 @@ impl Drop for Ended {
     }
 }
 
-/// A call answered with 504 whose work may still run.
+/// A call answered with 504, or whose client went away, and whose work may
+/// still run.
 #[derive(Debug)]
 struct Cancelled {
     state: Arc<CallState>,
     stuck_at: Instant,
+}
+
+/// Cancels the work of a call when its answer is no longer awaited: at the
+/// time limit, and when the request is dropped before that because its
+/// client went away. Work that does not stop then counts as stuck a grace
+/// period after its time limit, whichever way it was cancelled.
+struct Watch<'a> {
+    limits: &'a Limits,
+    state: Option<Arc<CallState>>,
+    deadline: Instant,
+}
+
+impl Watch<'_> {
+    /// The work answered: nothing to cancel.
+    fn answered(&mut self) {
+        self.state = None;
+    }
+
+    fn cancel(&mut self) {
+        let Some(state) = self.state.take() else {
+            return;
+        };
+        state.cancelled.store(true, Ordering::Release);
+        if !state.ended.load(Ordering::Acquire) {
+            self.limits
+                .cancelled
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(Cancelled {
+                    state,
+                    stuck_at: self.deadline.max(Instant::now()) + self.limits.grace,
+                });
+        }
+    }
+}
+
+impl Drop for Watch<'_> {
+    fn drop(&mut self) {
+        if self.state.is_some() {
+            // The request is gone without its log line; this one says why
+            // its work stops.
+            tracing::info!("call cancelled: the client went away before the answer");
+        }
+        self.cancel();
+    }
 }
 
 #[derive(Debug)]
@@ -108,7 +155,8 @@ impl Limits {
     /// Run `work` on a blocking thread once a place to compute is free:
     /// 503 when none is free within the wait, 504 at the time limit (the
     /// work is then cancelled and keeps its place until it returns), 500
-    /// when it panics.
+    /// when it panics. When the request is dropped first, because its
+    /// client went away, the work is cancelled as at the time limit.
     pub async fn run<T, F>(&self, work: F) -> Result<T, ApiError>
     where
         T: Send + 'static,
@@ -121,6 +169,11 @@ impl Limits {
             _ => return Err(ApiError::busy()),
         };
         let state = Arc::new(CallState::default());
+        let mut watch = Watch {
+            limits: self,
+            state: Some(Arc::clone(&state)),
+            deadline: Instant::now() + self.time_limit,
+        };
         let shared = Arc::clone(&state);
         let task = tokio::task::spawn_blocking(move || {
             let _place = place;
@@ -135,17 +188,16 @@ impl Limits {
             work(&keep_going)
         });
         match tokio::time::timeout(self.time_limit, task).await {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(_)) => Err(ApiError::internal("The work stopped unexpectedly.")),
+            Ok(Ok(value)) => {
+                watch.answered();
+                Ok(value)
+            }
+            Ok(Err(_)) => {
+                watch.answered();
+                Err(ApiError::internal("The work stopped unexpectedly."))
+            }
             Err(_) => {
-                state.cancelled.store(true, Ordering::Release);
-                self.cancelled
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(Cancelled {
-                        state,
-                        stuck_at: Instant::now() + self.grace,
-                    });
+                watch.cancel();
                 Err(ApiError::timeout(self.time_limit.as_secs()))
             }
         }

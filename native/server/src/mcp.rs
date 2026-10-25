@@ -16,8 +16,8 @@ use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
 
-use crate::error::ApiError;
-use crate::http::{run_tool, AppState, ToolName};
+use crate::error::{short, ApiError};
+use crate::http::{read_body, run_tool, AppState, ToolName};
 use crate::limits::Place;
 use crate::{payload, policy, tools};
 
@@ -132,29 +132,72 @@ fn instructions(state: &AppState) -> String {
     )
 }
 
-/// Answer one message of `POST /mcp`.
+/// What one message asks for, once its body has been read.
+enum Next {
+    /// The whole answer: a protocol error, a notification, the handshake, a
+    /// list, a ping, or a call that the policy refused.
+    Answer(Response),
+    /// A `tools/call` that the policy lets through, with its arguments as
+    /// they lie in the body.
+    Call {
+        id: Value,
+        name: String,
+        arguments: Bytes,
+    },
+}
+
+/// Answer one message of `POST /mcp`. Its body is read on a blocking thread
+/// when it is large; only a call that passes the policy goes on to the
+/// limits and the work.
 pub async fn handle(
     state: Arc<AppState>,
     headers: &HeaderMap,
     body: Bytes,
     place: Place,
 ) -> Response {
+    let structured = structured(headers);
+    let reader = Arc::clone(&state);
+    let next = match read_body(&body, move |body| read(&reader, body, structured)).await {
+        Ok(next) => next,
+        Err(error) => return error.into_response(),
+    };
+    match next {
+        Next::Answer(response) => response,
+        Next::Call {
+            id,
+            name,
+            arguments,
+        } => {
+            let mut response = call(&state, &id, &name, arguments, structured, place).await;
+            response.extensions_mut().insert(ToolName(name));
+            response
+        }
+    }
+}
+
+/// Read one message: the answer when it needs no work, else the call.
+fn read(state: &AppState, body: &Bytes, structured: bool) -> Next {
     let null = Value::Null;
     if body.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'[') {
         let error =
             ApiError::argument("Batches are not supported: send one JSON-RPC message per request.");
-        return rpc_error(StatusCode::BAD_REQUEST, &null, INVALID_REQUEST, &error);
+        return Next::Answer(rpc_error(
+            StatusCode::BAD_REQUEST,
+            &null,
+            INVALID_REQUEST,
+            &error,
+        ));
     }
-    let envelope: Envelope<'_> = match serde_json::from_slice(&body) {
+    let envelope: Envelope<'_> = match serde_json::from_slice(body) {
         Ok(envelope) => envelope,
         Err(error) => {
-            return if serde_json::from_slice::<IgnoredAny>(&body).is_err() {
-                let error = ApiError::unreadable(format!("Parse error: {error}"));
+            return Next::Answer(if serde_json::from_slice::<IgnoredAny>(body).is_err() {
+                let error = ApiError::unreadable(format!("Parse error: {}", short(&error)));
                 rpc_error(StatusCode::BAD_REQUEST, &null, PARSE_ERROR, &error)
             } else {
-                let error = ApiError::argument(format!("Invalid Request: {error}"));
+                let error = ApiError::argument(format!("Invalid Request: {}", short(&error)));
                 rpc_error(StatusCode::BAD_REQUEST, &null, INVALID_REQUEST, &error)
-            };
+            });
         }
     };
     let id = envelope.id.clone().unwrap_or(Value::Null);
@@ -164,15 +207,19 @@ pub async fn handle(
             let error = ApiError::argument(
                 "Invalid Request: a JSON-RPC 2.0 message needs \"jsonrpc\": \"2.0\" and a method.",
             );
-            return rpc_error(StatusCode::BAD_REQUEST, &id, INVALID_REQUEST, &error);
+            return Next::Answer(rpc_error(
+                StatusCode::BAD_REQUEST,
+                &id,
+                INVALID_REQUEST,
+                &error,
+            ));
         }
     };
     // A notification is taken without an answer, whatever it says.
     if envelope.id.is_none() {
-        return StatusCode::ACCEPTED.into_response();
+        return Next::Answer(StatusCode::ACCEPTED.into_response());
     }
-    let structured = structured(headers);
-    match method.as_str() {
+    Next::Answer(match method.as_str() {
         "initialize" => {
             let requested = envelope
                 .params
@@ -184,7 +231,7 @@ pub async fn handle(
                     "protocolVersion": negotiate(requested.as_deref()),
                     "capabilities": {"tools": {"listChanged": false}},
                     "serverInfo": {"name": crate::NAME, "version": crate::VERSION},
-                    "instructions": instructions(&state),
+                    "instructions": instructions(state),
                 }),
             )
         }
@@ -196,7 +243,7 @@ pub async fn handle(
                 .and_then(|params| serde_json::from_str::<CallParams<'_>>(params.get()).ok())
             else {
                 let error = ApiError::argument("tools/call needs params with the name of a tool.");
-                return rpc_error(StatusCode::OK, &id, INVALID_PARAMS, &error);
+                return Next::Answer(rpc_error(StatusCode::OK, &id, INVALID_PARAMS, &error));
             };
             let name = params.name.clone();
             let arguments = match params.arguments {
@@ -208,9 +255,18 @@ pub async fn handle(
                 None => Bytes::from_static(b"{}"),
             };
             drop(envelope);
-            let mut response = call(&state, &id, &name, arguments, structured, place).await;
-            response.extensions_mut().insert(ToolName(name));
-            response
+            let checked =
+                policy::top_level_keys(&arguments).and_then(|keys| policy::check(&name, &keys));
+            if let Err(error) = checked {
+                let mut response = tool_error(&id, &error, structured);
+                response.extensions_mut().insert(ToolName(name));
+                return Next::Answer(response);
+            }
+            return Next::Call {
+                id,
+                name,
+                arguments,
+            };
         }
         other => {
             let shown: String = other.chars().take(64).collect();
@@ -222,12 +278,12 @@ pub async fn handle(
             );
             rpc_error(StatusCode::OK, &id, METHOD_NOT_FOUND, &error)
         }
-    }
+    })
 }
 
-/// `tools/call`: the policy, then the same work as the REST route, within
-/// the same limits. A refusal of the limits is an HTTP error, as on the
-/// REST route; a failure of the tool is a result with `isError`.
+/// `tools/call` that passed the policy: the same work as the REST route,
+/// within the same limits. A refusal of the limits is an HTTP error, as on
+/// the REST route; a failure of the tool is a result with `isError`.
 async fn call(
     state: &Arc<AppState>,
     id: &Value,
@@ -236,10 +292,6 @@ async fn call(
     structured: bool,
     place: Place,
 ) -> Response {
-    let checked = policy::top_level_keys(&arguments).and_then(|keys| policy::check(name, &keys));
-    if let Err(error) = checked {
-        return tool_error(id, &error, structured);
-    }
     let worker = Arc::clone(state);
     let (tool, answer_id) = (name.to_owned(), id.clone());
     let place = place.take();

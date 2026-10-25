@@ -588,6 +588,106 @@ async fn work_that_ignores_the_cancel_turns_health_to_stuck_until_it_ends() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_that_goes_away_cancels_the_work() {
+    let service = Service::new();
+    let mut config = service.config(&[("OPENAEC_API_GELIJKTIJDIG", "1")]);
+    config.time_limit = Duration::from_secs(60);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&cancelled);
+    let state = Arc::new(AppState::with_seam(
+        config,
+        seam(move |_, _, _, _, keep_going| {
+            // Bounded, so that a failing test ends rather than waits for
+            // this thread.
+            let give_up = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < give_up {
+                if keep_going().is_err() {
+                    seen.store(true, Ordering::Release);
+                    return Err(ApiError::internal("cancelled"));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(ApiError::internal("never cancelled"))
+        }),
+    ));
+    let router = router_with(Arc::clone(&state));
+    let large = json!({"input": input("xyz", &field(5000))});
+    let room = state.limits.waiting_room.available_permits();
+    // The client stops waiting long before the time limit, which drops the
+    // request.
+    let request = send(&router, post("/v1/tools/inspect", &large));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), request)
+            .await
+            .is_err(),
+        "no answer yet"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !cancelled.load(Ordering::Acquire)
+        || state.limits.running.available_permits() == 0
+        || state.limits.waiting_room.available_permits() < room
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the work saw the cancel and gave its places back"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!state.limits.stuck());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !service.clean() {
+        assert!(Instant::now() < deadline, "the work folder is removed");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_of_a_client_that_went_away_is_stuck_only_after_its_time_limit() {
+    let service = Service::new();
+    let mut config = service.config(&[]);
+    config.time_limit = Duration::from_millis(600);
+    config.grace = Duration::from_millis(100);
+    let release = Arc::new(AtomicBool::new(false));
+    let held = Arc::clone(&release);
+    let state = Arc::new(AppState::with_seam(
+        config,
+        seam(move |_, _, _, _, _| {
+            // Bounded, so that a failing test ends rather than waits for
+            // this thread.
+            let give_up = Instant::now() + Duration::from_secs(10);
+            while !held.load(Ordering::Acquire) && Instant::now() < give_up {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(ApiError::internal("stopped"))
+        }),
+    ));
+    let router = router_with(Arc::clone(&state));
+    let started = Instant::now();
+    let small = json!({"input": input("xyz", &field(10))});
+    let request = send(&router, post("/v1/tools/inspect", &small));
+    assert!(tokio::time::timeout(Duration::from_millis(50), request)
+        .await
+        .is_err());
+    // Cancelled, and still running, but within its own time limit.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    if started.elapsed() < Duration::from_millis(650) {
+        let (status, _, _) = send(&router, get("/v1/health")).await;
+        assert_eq!(status, StatusCode::OK, "within the time limit of the work");
+    }
+    // A grace period after that, it is stuck.
+    tokio::time::sleep(Duration::from_millis(900).saturating_sub(started.elapsed())).await;
+    let (status, headers, body) = send(&router, get("/v1/health")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_triple(status, &headers, &body, "WERK_VASTGELOPEN");
+    release.store(true, Ordering::Release);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while send(&router, get("/v1/health")).await.0 != StatusCode::OK {
+        assert!(Instant::now() < deadline, "health comes back");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 // --- Policy --------------------------------------------------------------
 
 #[tokio::test]
@@ -723,6 +823,92 @@ async fn the_policy_refuses_what_the_cloud_does_not_allow() {
         assert_eq!(status, expected, "{tool} {arguments}: {body}");
         assert_triple(status, &headers, &body, code);
     }
+    assert!(service.clean());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn large_bodies_are_refused_as_small_ones_with_short_messages() {
+    let service = Service::new();
+    let router = router_with(service.open());
+    // Bodies above 64 KiB are read on a blocking thread before the queue.
+    let large = input("xyz", &field(5000));
+    let long = "A".repeat(200_000);
+    let rest = [
+        (
+            "unknown",
+            json!({"input": large}),
+            StatusCode::NOT_FOUND,
+            "TOOL_ONBEKEND",
+        ),
+        (
+            "inspect",
+            json!({"input": large, "path": "/etc/passwd"}),
+            StatusCode::BAD_REQUEST,
+            "ARGUMENT_ONGELDIG",
+        ),
+        // A reader of JSON quotes a string of the wrong type in full.
+        (
+            "inspect",
+            json!({"input": long}),
+            StatusCode::BAD_REQUEST,
+            "ARGUMENT_ONGELDIG",
+        ),
+        (
+            "inspect",
+            json!(long),
+            StatusCode::BAD_REQUEST,
+            "ARGUMENT_ONGELDIG",
+        ),
+    ];
+    for (tool, arguments, expected, code) in rest {
+        let (status, headers, body) =
+            send(&router, post(&format!("/v1/tools/{tool}"), &arguments)).await;
+        assert_eq!(status, expected, "{tool}: {}", body["melding"]);
+        assert_triple(status, &headers, &body, code);
+        let melding = body["melding"].as_str().unwrap();
+        assert!(melding.chars().count() < 500, "{melding}");
+    }
+    let call = |id: u64, arguments: Value| {
+        post(
+            "/mcp",
+            &rpc(
+                json!(id),
+                "tools/call",
+                json!({"name": "inspect", "arguments": arguments}),
+            ),
+        )
+    };
+    for (id, arguments) in [
+        (1, json!({"input": large, "path": "/etc/passwd"})),
+        (2, json!({"input": long})),
+    ] {
+        let (status, _, body) = send(&router, call(id, arguments)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["id"], id);
+        assert_eq!(body["result"]["isError"], true);
+        let triple = &body["result"]["structuredContent"];
+        assert_eq!(triple["error_code"], "ARGUMENT_ONGELDIG");
+        assert!(triple["melding"].as_str().unwrap().chars().count() < 500);
+    }
+    let broken = format!(
+        "{{\"jsonrpc\": \"2.0\", \"id\": 3, \"method\": {}}}",
+        json!(long)
+    );
+    let (status, _, body) = send(
+        &router,
+        Request::post("/mcp").body(Body::from(broken)).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["error"]["code"], -32601);
+    // A large call that passes the policy is answered as a small one.
+    let (status, _, body) = send(&router, call(4, json!({"input": large}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"]["isError"], false, "{body}");
+    assert_eq!(
+        body["result"]["structuredContent"]["report"]["points"],
+        5000
+    );
     assert!(service.clean());
 }
 

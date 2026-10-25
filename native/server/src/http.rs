@@ -26,8 +26,8 @@ use tempfile::TempDir;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::config::{Access, Config};
-use crate::error::{ApiError, Scrub};
-use crate::limits::{Limits, Place};
+use crate::error::{short, ApiError, Scrub};
+use crate::limits::{Limits, Place, SMALL_REQUEST};
 use crate::tools::{CallLimits, ToolOutput};
 use crate::{mcp, openapi, payload, policy, tools};
 
@@ -87,6 +87,22 @@ fn json_body(status: StatusCode, body: Vec<u8>) -> Response {
         .into_response()
 }
 
+/// What `read` finds in `body`: at once for a small body, else on a
+/// blocking thread, so that a pass over a large body does not hold up a
+/// thread that answers other requests.
+pub(crate) async fn read_body<T: Send + 'static>(
+    body: &Bytes,
+    read: impl FnOnce(&Bytes) -> T + Send + 'static,
+) -> Result<T, ApiError> {
+    if body.len() as u64 <= SMALL_REQUEST {
+        return Ok(read(body));
+    }
+    let body = body.clone();
+    tokio::task::spawn_blocking(move || read(&body))
+        .await
+        .map_err(|_| ApiError::internal("The service failed while it read the request."))
+}
+
 /// A body that could not be read, as the triple.
 fn body_error(state: &AppState, rejection: BytesRejection) -> Response {
     if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
@@ -115,7 +131,10 @@ pub(crate) fn run_tool(
     let scrub = Scrub::new(&[work.path(), &state.config.work_dir, &temp]);
     let result = (|| {
         let arguments: &RawValue = serde_json::from_slice(arguments).map_err(|error| {
-            ApiError::argument(format!("The arguments must be one JSON object: {error}"))
+            ApiError::argument(format!(
+                "The arguments must be one JSON object: {}",
+                short(&error)
+            ))
         })?;
         let output = (state.seam)(name, arguments, &state.call_limits(), &work, keep_going)?;
         answer(&output)
@@ -178,8 +197,14 @@ async fn call_tool_named(
         Ok(body) => body,
         Err(rejection) => return body_error(state, rejection),
     };
-    let checked = policy::top_level_keys(&body).and_then(|keys| policy::check(name, &keys));
-    if let Err(error) = checked {
+    let tool = name.to_owned();
+    let checked = read_body(&body, move |body| {
+        policy::top_level_keys(body)
+            .and_then(|keys| policy::check(&tool, &keys))
+            .map(drop)
+    })
+    .await;
+    if let Err(error) = checked.and_then(|checked| checked) {
         return error.into_response();
     }
     let worker = Arc::clone(state);
