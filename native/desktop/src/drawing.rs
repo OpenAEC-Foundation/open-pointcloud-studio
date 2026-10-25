@@ -18,12 +18,16 @@ use std::time::{Duration, Instant};
 use iced::widget::canvas::{self, Frame};
 use iced::widget::{button, column, container, row, text};
 use iced::{Color, Element, Fill, Point as UiPoint, Size, Task};
+use pointcloud_core::ops::{self, hint_empty_slab};
+// The tests compare the reason of a slab without points.
+#[cfg(test)]
+use pointcloud_core::ops::{empty_slab_hint, EMPTY_SLAB};
 use pointcloud_core::region_source::{RegionFilter, RegionSource};
 use pointcloud_core::{
     Bounds, CutPreview, Drawing2d, DrawingFormat, DrawingOrigin, DrawingProgress, DrawingRequest,
-    DrawingSource, DrawingStage, DrawingStats, DrawingUnits, DrawingVersion, DrawingView,
-    IndexConfig, KeptSlab, LoadError, OctreeIndex, OrientedBox, Point, PointColor, PointLayers,
-    WallDirection, DEFAULT_MIN_WALL_THICKNESS,
+    DrawingSource, DrawingStage, DrawingStats, DrawingUnits, DrawingVersion, DrawingView, KeptSlab,
+    LoadError, OrientedBox, Point, PointColor, PointLayers, WallDirection,
+    DEFAULT_MIN_WALL_THICKNESS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -34,7 +38,7 @@ use crate::i18n::{key, tr, tr_args};
 use crate::job_scene::{JobLayer, JobScene};
 use crate::open_progress::{Line, Phase};
 use crate::saved_drawings::SavedDrawing;
-use crate::selection::{ClassFilter, ClassVisibility, Projection};
+use crate::selection::{ClassFilter, Projection};
 use crate::ui_style;
 // The tests delete points of a layer.
 #[cfg(test)]
@@ -603,28 +607,60 @@ fn run(
         .map_err(|error| hint_empty_slab(error, input.request.view))
 }
 
-/// The reason of a slab without points says which face of the box the cut
-/// plane is, and what to do about it: with a box drawn around a whole
-/// building, the face that a vertical view cuts at often lies outside it.
-fn hint_empty_slab(error: LoadError, view: DrawingView) -> LoadError {
-    match error {
-        LoadError::InvalidData(reason) if reason == EMPTY_SLAB => {
-            LoadError::InvalidData(format!("{EMPTY_SLAB}: {}", empty_slab_hint(view)))
-        }
-        other => other,
+/// The window's drawing job for one scan file, as the command line ran it
+/// before it called `ops::section_drawing_file`: one layer where the file
+/// lies, every point and class taken, written to `destination`. The tests
+/// hold the two to the same file.
+#[cfg(test)]
+pub(crate) fn window_job_of_file(
+    cloud: pointcloud_core::PointCloud,
+    index: Option<pointcloud_core::OctreeIndex>,
+    section: OrientedBox,
+    request: DrawingRequest,
+    destination: &Path,
+    format: DrawingFormat,
+) -> Result<DrawingStats, LoadError> {
+    let input = JobInput {
+        scene: Scene::new(
+            section,
+            ClassFilter {
+                ground: true,
+                vegetation: true,
+                buildings: true,
+                other: true,
+                classes: crate::selection::ClassVisibility::default(),
+                section: None,
+            },
+            vec![JobLayer::of_file(cloud, index)],
+        ),
+        request,
+        target: Target::Export(destination.to_path_buf(), format),
+        kept: None,
+    };
+    match run(&input, &mut |_| Ok(()))? {
+        Done::Exported { stats, .. } => Ok(stats),
+        Done::Preview(..) => Err(LoadError::InvalidData("nothing was written".into())),
     }
 }
 
-/// The reason the core gives for a slab without points.
-const EMPTY_SLAB: &str = "the slab holds no points";
+/// What the Section drawing block asks the core for when only its view is
+/// chosen: the tests hold it to the defaults of the shared operation.
+#[cfg(test)]
+pub(crate) fn block_request_for_view(view: DrawingView) -> Result<DrawingRequest, String> {
+    let mut settings = DrawingSettings::default();
+    settings.set_view(view);
+    settings.request()
+}
 
-fn empty_slab_hint(view: DrawingView) -> &'static str {
-    match view {
-        DrawingView::Plan => "the cut plane is the top face of the section box; move it down into the walls or make the slab thicker",
-        DrawingView::Front => "the cut plane is the front face of the section box (Y min); move that face onto the building or make the slab thicker",
-        DrawingView::Back => "the cut plane is the back face of the section box (Y max); move that face onto the building or make the slab thicker",
-        DrawingView::Left => "the cut plane is the left face of the section box (X min); move that face onto the building or make the slab thicker",
-        DrawingView::Right => "the cut plane is the right face of the section box (X max); move that face onto the building or make the slab thicker",
+/// The choices of the command line as the options of the shared operation.
+/// `settings.request()` has checked them already, so the thickness is a
+/// number.
+fn drawing_options(settings: &DrawingSettings) -> ops::SectionDrawingOptions {
+    ops::SectionDrawingOptions {
+        view: settings.view,
+        thickness: metres(&settings.thickness),
+        units: Some(settings.units),
+        fill: Some(settings.fill),
     }
 }
 
@@ -2621,14 +2657,8 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
     // opened: opening a file that is not LAS or LAZ is a full pass over it,
     // and the core opens its temporary file beside the output only when the
     // slab has been read. The box is put to the test of the core itself.
-    let slab = pointcloud_core::slab_from_section(
-        section,
-        request.view,
-        request.thickness,
-        request.origin,
-    )
-    .map_err(|error| (2, capitalised(plain_reason(&error.to_string()))))?
-    .thickness;
+    pointcloud_core::slab_from_section(section, request.view, request.thickness, request.origin)
+        .map_err(|error| (2, capitalised(plain_reason(&error.to_string()))))?;
     // A bare file name has an empty parent, which is the current folder.
     let folder = destination
         .parent()
@@ -2637,45 +2667,41 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
         return Err(wrong("The folder of the output path does not exist"));
     }
 
-    let failed = |error: LoadError| {
+    // The points of the file are drawn on a layer named after it, as the
+    // window names the layer of a scan.
+    let layer = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("scan");
+    // An index that `--index` or the window left in the cache saves reading
+    // the whole file; without one the file is read in full.
+    let drawn = ops::section_drawing_file(
+        &source,
+        layer,
+        &destination,
+        section,
+        &drawing_options(&settings),
+        ops::CachedIndex::IfPresent,
+        &ops::never_stop,
+    )
+    .map_err(|error| {
         (
             1,
             format!("Drawing failed: {}", plain_reason(&error.to_string())),
         )
-    };
-    let cloud = crate::open_for_export(&source).map_err(failed)?;
-    // An index that `--index` or the window left in the cache saves reading
-    // the whole file; without one the file is read in full.
-    let index = OctreeIndex::open_cached_if_present(&cloud, IndexConfig::default())
-        .ok()
-        .flatten();
-    let input = JobInput {
-        scene: Scene::new(
-            section,
-            ClassFilter {
-                ground: true,
-                vegetation: true,
-                buildings: true,
-                other: true,
-                classes: ClassVisibility::default(),
-                section: None,
-            },
-            vec![JobLayer::of_file(cloud, index)],
+    })?;
+    Ok(format!(
+        "Drawing written as {format}, view {}: {}; {} -> {}",
+        drawn.request.view.key(),
+        summary(
+            &drawn.stats,
+            &drawn.request,
+            drawn.slab_thickness,
+            &|count| count.to_string()
         ),
-        request,
-        target: Target::Export(destination.clone(), format),
-        kept: None,
-    };
-    match run(&input, &mut |_| Ok(())).map_err(failed)? {
-        Done::Exported { stats, .. } => Ok(format!(
-            "Drawing written as {format}, view {}: {}; {} -> {}",
-            request.view.key(),
-            summary(&stats, &request, slab, &|count| count.to_string()),
-            size_text(stats.bytes),
-            destination.display()
-        )),
-        Done::Preview(..) => Err((1, "Drawing failed: nothing was written".into())),
-    }
+        size_text(drawn.stats.bytes),
+        destination.display()
+    ))
 }
 
 #[cfg(test)]

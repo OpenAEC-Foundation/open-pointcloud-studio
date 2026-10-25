@@ -24,6 +24,9 @@ use serde_json::{json, Value};
 pub(crate) use tools::busy;
 // The commands an extension may declare it calls.
 pub(crate) use tools::command_names;
+// The tests hold the arguments of the cloud API to those of these tools.
+#[cfg(test)]
+pub(crate) use tools::find as find_tool;
 use tools::{CallError, Link, Outcome};
 
 /// Protocol versions this server speaks, newest first.

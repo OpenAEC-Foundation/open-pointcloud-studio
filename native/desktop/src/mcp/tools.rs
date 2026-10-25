@@ -592,8 +592,8 @@ fn table() -> Vec<Tool> {
             required("enabled", boolean("Whether large clouds are indexed automatically")),
         ]),
         tool("set_surface_settings", Command, "Sets the settings of the 3D surface, the options of that method in Mesh Pointcloud, which mesh with the mode surface uses. A field that is left out keeps its value; the fields are checked together with the others, and when one is refused none changes. Answers with the settings.", vec![
-            optional("max_vertices", integer_in("Most vertices, from 3 to 1000000. The options start at 50000", 3, 1_000_000)),
-            optional("neighbors", integer_in("Neighbours per vertex, from 3 to 32. The options start at 12", 3, 32)),
+            optional("max_vertices", integer_in("Most vertices, from 3 to 1000000. The options start at 50000", *pointcloud_core::SURFACE_MESH_VERTICES.start() as u64, *pointcloud_core::SURFACE_MESH_VERTICES.end() as u64)),
+            optional("neighbors", integer_in("Neighbours per vertex, from 3 to 32. The options start at 12", *pointcloud_core::SURFACE_MESH_NEIGHBORS.start() as u64, *pointcloud_core::SURFACE_MESH_NEIGHBORS.end() as u64)),
             optional("edge_factor", positive("Longest edge relative to the typical point spacing. The options start at 4")),
             optional("mesh_size", number_from("Width of a voxel in the units of the scan within which one point is kept before the vertices are thinned, so that no two vertices lie much closer together, from 0. The options start at 0, which leaves the spacing to max_vertices", 0.0)),
         ]),

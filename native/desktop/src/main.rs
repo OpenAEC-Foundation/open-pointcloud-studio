@@ -13,9 +13,12 @@ mod bag_panel;
 mod bcf;
 mod cad_viewer;
 mod camera_views;
+mod cli;
 mod cli_help;
 mod closed_mesh;
 mod cloud_centroid;
+#[cfg(test)]
+mod cloud_parity;
 mod cloud_transform;
 mod drawing;
 mod drawing_crop;
@@ -171,36 +174,16 @@ const BAG3D_PLY_COMMENTS: &[&str] = &[
     "EPSG:7415 RD New + NAP",
 ];
 
+/// The format the extension of an export destination names; `.ply` is
+/// binary.
 fn export_format_for_path(path: &Path) -> Option<ExportFormat> {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("ply") => Some(ExportFormat::PlyBinary),
-        Some("xyz") => Some(ExportFormat::Xyz),
-        Some("pts") => Some(ExportFormat::Pts),
-        Some("csv") => Some(ExportFormat::Csv),
-        Some("las") => Some(ExportFormat::Las),
-        Some("laz") => Some(ExportFormat::Laz),
-        Some("e57") => Some(ExportFormat::E57),
-        _ => None,
-    }
+    pointcloud_core::ops::export_format_for_path(path)
 }
 
+/// A scan file opened to be read in full: a LAS or LAZ file from its
+/// header, any other format with one pass over it.
 fn open_for_export(source: &Path) -> Result<PointCloud, pointcloud_core::LoadError> {
-    let is_las = source
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
-        });
-    if is_las {
-        pointcloud_core::open_las_header(source)
-    } else {
-        pointcloud_core::open(source, 1)
-    }
+    pointcloud_core::ops::open_source(source, &pointcloud_core::ops::never_stop)
 }
 
 /// Save every photo of a scan file in its stored encoding and report where
@@ -661,24 +644,13 @@ fn main() -> iced::Result {
         };
         match index {
             Ok(index) => {
-                let mut nodes = 0u64;
-                let mut leaves = 0u64;
-                let mut deepest = 0u8;
-                let mut pending = vec![&index.root];
-                while let Some(node) = pending.pop() {
-                    nodes += 1;
-                    deepest = deepest.max(node.depth);
-                    if node.is_leaf() {
-                        leaves += 1;
-                    }
-                    pending.extend(&node.children);
-                }
+                let summary = pointcloud_core::ops::index_summary(&index);
                 println!(
                     "Index ready: {} points, {} nodes ({} leaves, depth {}) in {:.1}s",
-                    index.root.total_points,
-                    nodes,
-                    leaves,
-                    deepest,
+                    summary.points,
+                    summary.nodes,
+                    summary.leaves,
+                    summary.depth,
                     started.elapsed().as_secs_f64()
                 );
                 return Ok(());
@@ -690,34 +662,11 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--scans")) {
-        let (Some(source), None) = (args.next(), args.next()) else {
-            eprintln!("Usage: open-pointcloud-studio --scans INPUT");
-            std::process::exit(2);
-        };
-        match open_for_export(&PathBuf::from(source)) {
-            Ok(cloud) => {
-                println!("{} scan position(s)", cloud.scan_poses.len());
-                for pose in cloud.scan_poses {
-                    println!(
-                        "{}: {:.6}, {:.6}, {:.6}",
-                        pose.label, pose.position[0], pose.position[1], pose.position[2]
-                    );
-                    if let Some(axes) = pose.axes {
-                        for (label, axis) in ["X", "Y", "Z"].into_iter().zip(axes) {
-                            println!(
-                                "  {label}: {:+.6}, {:+.6}, {:+.6}",
-                                axis[0], axis[1], axis[2]
-                            );
-                        }
-                    }
-                }
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("Scan positions failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        cli::finish(
+            cli::scans(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --scans INPUT",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--list-scans")) {
         let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
@@ -880,91 +829,18 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--export")) {
-        let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
-        else {
-            eprintln!("Usage: open-pointcloud-studio --export INPUT OUTPUT");
-            std::process::exit(2);
-        };
-        let source = PathBuf::from(source);
-        let destination = PathBuf::from(destination);
-        let Some(format) = export_format_for_path(&destination) else {
-            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz, .e57");
-            std::process::exit(2);
-        };
-        match open_for_export(&source)
-            .and_then(|cloud| pointcloud_core::export_full(&cloud, &destination, format))
-        {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                eprintln!("Export failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        cli::finish(
+            cli::export(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --export INPUT OUTPUT",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--section")) {
-        let usage = || {
-            eprintln!(
-                "Usage: open-pointcloud-studio --section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]"
-            );
-            std::process::exit(2);
-        };
-        let (Some(source), Some(limits), Some(destination)) =
-            (args.next(), args.next(), args.next())
-        else {
-            usage()
-        };
-        let rotation = match (args.next(), args.next(), args.next()) {
-            (None, _, _) => 0.0,
-            (Some(flag), Some(value), None) if flag == "--rotation" => {
-                match value.to_str().and_then(parse_rotation) {
-                    Some(rotation) => rotation,
-                    None => {
-                        eprintln!("--rotation must be a number of degrees");
-                        std::process::exit(2);
-                    }
-                }
-            }
-            _ => usage(),
-        };
-        let source = PathBuf::from(source);
-        let destination = PathBuf::from(destination);
-        let Some(format) = export_format_for_path(&destination) else {
-            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz, .e57");
-            std::process::exit(2);
-        };
-        let Some(values) = limits.to_str().and_then(|value| {
-            value
-                .split(',')
-                .map(str::parse::<f64>)
-                .collect::<Result<Vec<_>, _>>()
-                .ok()
-        }) else {
-            eprintln!("Section limits must be six comma-separated numbers");
-            std::process::exit(2);
-        };
-        if values.len() != 6 {
-            eprintln!("Section limits must be six comma-separated numbers");
-            std::process::exit(2);
-        }
-        let section = OrientedBox::new(
-            Bounds {
-                min: [values[0], values[1], values[2]],
-                max: [values[3], values[4], values[5]],
-            },
-            rotation,
+        cli::finish(
+            cli::section(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]",
         );
-        match open_for_export(&source).and_then(|cloud| {
-            pointcloud_core::export_section(&cloud, &destination, format, section)
-        }) {
-            Ok(count) => {
-                println!("Exported {count} points to {}", destination.display());
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("Section export failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--drawing")) {
         let arguments: Vec<_> = args.collect();
@@ -1058,122 +934,18 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--mesh")) {
-        let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
-        else {
-            eprintln!("Usage: open-pointcloud-studio --mesh INPUT OUTPUT.obj");
-            std::process::exit(2);
-        };
-        let source = PathBuf::from(source);
-        let destination = PathBuf::from(destination);
-        let is_las = source
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
-            });
-        let cloud = if is_las {
-            pointcloud_core::open_las_header(&source)
-        } else {
-            pointcloud_core::open(&source, 1)
-        };
-        match cloud.and_then(|cloud| {
-            pointcloud_core::mesh_terrain_obj(
-                &cloud,
-                &destination,
-                pointcloud_core::MeshConfig::default(),
-            )
-        }) {
-            Ok(stats) => {
-                println!(
-                    "Mesh ready: {} source points, {} vertices, {} triangles -> {}",
-                    stats.source_points,
-                    stats.vertices,
-                    stats.triangles,
-                    destination.display()
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("Meshing failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        cli::finish(
+            cli::mesh(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --mesh INPUT OUTPUT.obj",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--surface")) {
-        let usage = "Usage: open-pointcloud-studio --surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]";
-        let (Some(source), Some(destination)) = (args.next(), args.next()) else {
-            eprintln!("{usage}");
-            std::process::exit(2);
-        };
-        let mut config = pointcloud_core::SurfaceMeshConfig::default();
-        while let Some(option) = args.next() {
-            let Some(value) = args.next() else {
-                eprintln!("{usage}");
-                std::process::exit(2);
-            };
-            let value = value.to_string_lossy();
-            match option.to_str() {
-                Some("--max-vertices") => {
-                    config.max_vertices = value.parse().unwrap_or_else(|_| {
-                        eprintln!("invalid --max-vertices: {value}");
-                        std::process::exit(2)
-                    });
-                }
-                Some("--neighbors") => {
-                    config.neighbors = value.parse().unwrap_or_else(|_| {
-                        eprintln!("invalid --neighbors: {value}");
-                        std::process::exit(2)
-                    });
-                }
-                Some("--edge-factor") => {
-                    config.max_edge_factor = value.parse().unwrap_or_else(|_| {
-                        eprintln!("invalid --edge-factor: {value}");
-                        std::process::exit(2)
-                    });
-                }
-                Some("--mesh-size") => {
-                    config.mesh_size = value.parse().unwrap_or_else(|_| {
-                        eprintln!("invalid --mesh-size: {value}");
-                        std::process::exit(2)
-                    });
-                }
-                _ => {
-                    eprintln!("{usage}");
-                    std::process::exit(2);
-                }
-            }
-        }
-        let source = PathBuf::from(source);
-        let destination = PathBuf::from(destination);
-        let is_las = source
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
-            });
-        let cloud = if is_las {
-            pointcloud_core::open_las_header(&source)
-        } else {
-            pointcloud_core::open(&source, 1)
-        };
-        match cloud
-            .and_then(|cloud| pointcloud_core::mesh_surface_obj(&cloud, &destination, config))
-        {
-            Ok(stats) => {
-                println!(
-                    "3D surface ready: {} source points, {} vertices, {} triangles -> {}",
-                    stats.source_points,
-                    stats.vertices,
-                    stats.triangles,
-                    destination.display()
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("3D surface failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        cli::finish(
+            cli::surface(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--bag3d")) {
         let (Some(bbox), Some(lod), Some(destination), None) =

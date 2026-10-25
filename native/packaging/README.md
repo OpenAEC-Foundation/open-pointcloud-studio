@@ -20,7 +20,12 @@ it. `YYYY.W.N` is the version, such as `2026.43.0` (see
 | `open-pointcloud-studio_YYYY.W.N_amd64.deb`, `_arm64.deb` | Debian, Ubuntu and their relatives |
 | `open-pointcloud-studio_YYYY.W.N_amd64.AppImage`, `_arm64.AppImage` | any Linux distribution with a C library of version 2.35 or newer and the C++ runtime of GCC 12 or newer |
 | `open-pointcloud-studio_YYYY.W.N_linux-amd64.tar.gz`, `_linux-arm64.tar.gz` | Linux: the binaries of the application and of Open CAD Studio, and the licence texts |
+| `open-pointcloud-studio-sdk_YYYY.W.N_windows-x64-dll.zip`, `_macos-universal-dylib.tar.gz`, `_linux-amd64-so.tar.gz`, `_linux-arm64-so.tar.gz` | the point-cloud core as a C library, with its header and example ([`../sdk`](../sdk), [`../../docs/library.md`](../../docs/library.md)) |
 | `open-cad-studio-source_SHORT.tar.gz` | the source of the Open CAD Studio that every package carries: every file of the pinned commit, `SHORT` being its first eight characters |
+| `open-cad-studio-vendor_SHORT.tar.gz` | the crates that commit takes from git repositories, vendored |
+| `SHA256SUMS` | the checksums of all the files above in one list; it has no `.sha256` of its own |
+| `SHA256SUMS.asc`, `open-pointcloud-studio_YYYY.W.N_amd64.AppImage.asc`, `_arm64.AppImage.asc` | OpenPGP signatures, once the organisation has its key (see [Signatures](#signatures)) |
+| `open-pointcloud-studio_YYYY.W.N_verification.md` | added after the release is public: the record of the checks of the published files ([Verification record](#verification-record)) |
 
 Every package carries Open CAD Studio, the CAD program that shows exported
 drawings: `OpenCADStudio` or `OpenCADStudio.exe` beside the application in
@@ -45,6 +50,11 @@ source archive ends in none of these endings, so no button offers it.
 
 The 64-bit ARM packages for Linux are experimental: they are built and
 tested on build machines with software rendering only.
+
+The image of the cloud API is not a file of the release page: it is
+`ghcr.io/openaec-foundation/open-pointcloud-studio-api:YYYY.W.N` in the
+registry of the organisation, and the notes give its digest
+([The image of the cloud API](#the-image-of-the-cloud-api)).
 
 ## Files
 
@@ -131,6 +141,16 @@ tested on build machines with software rendering only.
   `expected-assets.sh` does not list, so that a file of an earlier run whose
   name has changed since, such as a source archive of Open CAD Studio for a
   commit pinned before, is not published.
+- `signature-assets.sh` names the files of a release besides those of
+  `expected-assets.sh`: `SHA256SUMS`, and the OpenPGP signatures when they
+  are kept. `sign-linux.sh` writes those signatures with the organisation's
+  key, and signs nothing while the key is not configured.
+- `mcp-client-check.py` checks an MCP server from the outside with the
+  reference Python SDK of the protocol, pinned with hashes in
+  `mcp-client-requirements.txt`: `--stdio` the server of the installed
+  application (the `verify-linux` job, under a virtual display), `--http`
+  the route `/mcp` of the cloud API (the Container workflow). Each writes a
+  record to the summary of its job.
 - `test-scripts.sh` tests these scripts with stand-ins for the programs they
   call, and fetches from a small repository of its own in place of that of
   Open CAD Studio; it needs nothing installed besides git and runs first in
@@ -229,10 +249,71 @@ and crates that `OpenCADStudio-NOTICE.txt.in` has to list for the new
 commit, and the crates under a copyleft licence that `NOTICE.txt` has to
 name, and writes nothing until both do.
 
-The release workflow gives every Linux package a build attestation
-(`actions/attest`) before it creates the release; the release notes and the
-README say how to check one with `gh attestation verify` and
-`--signer-workflow`, which a bare `--repo` would not check.
+The release workflow gives every Linux package and every Linux archive of
+the C library a build attestation (`actions/attest`) before it creates the
+release; the release notes and the README say how to check one with `gh
+attestation verify` and `--signer-workflow`, which a bare `--repo` would
+not check.
+
+Besides the Packages workflow, the release workflow runs the SDK workflow
+(`sdk.yml`, the four archives of the C library) and the Container workflow
+(`container.yml`, the image of the cloud API, smoke-tested and kept as the
+artifact `api-image`); a release is published only when all of them pass. A
+draft run (*Leave the release as a draft*) does everything but push the
+image and publish; it is the dry run of a release.
+
+### Signatures
+
+`SHA256SUMS` is published with every release: `sha256sum --ignore-missing -c
+SHA256SUMS` checks every file downloaded beside it.
+
+The Windows application, Open CAD Studio, the installer and the DLL of the C
+library are signed when the secrets of the organisation's code-signing
+account are configured; the step *Report the signatures* says what each
+file carries, with its signer, issuer, thumbprint and timestamp, and the
+release notes repeat it.
+On a release run, the publish job refuses a release whose application is
+signed while its library is not, on Windows or macOS; a draft run only
+warns.
+
+The Windows programs and the DLL are built with the static C runtime
+(`-C target-feature=+crt-static`, set for the build steps only, so that it
+reaches neither other builds under `native/` nor the cache of Open CAD
+Studio unseen), and the step *Check the runtime dependencies* fails on a DLL
+that a clean Windows does not have.
+
+OpenPGP signatures of `SHA256SUMS` and of the two AppImages follow once the
+organisation has its key. `sign-linux.sh` reads the secret signing subkey
+from the secret `OPENAEC_GPG_PRIVATE_KEY`, its passphrase from
+`OPENAEC_GPG_PASSPHRASE` and the fingerprint from the variable
+`OPENAEC_GPG_FINGERPRINT`, refuses a key with another fingerprint, and
+verifies each signature it writes. While any of them is missing it signs
+nothing and the notes name no signature.
+
+### The image of the cloud API
+
+The Container workflow builds the image from
+[`../../deploy/cloud-api/Dockerfile`](../../deploy/cloud-api/Dockerfile) on
+every change to the service, checks it and never pushes it. In a tag run
+the release workflow pushes the image of its run to
+`ghcr.io/openaec-foundation/open-pointcloud-studio-api` by its digest and
+without a tag, once every check has passed, and attests it; the notes give
+the digest and how to verify the attestation. Only after the release is
+public does the image get the version as its tag. A version whose image
+exists already is refused.
+
+### Verification record
+
+After a tag run, the job *Verify the published release* downloads the
+published files and the image, as a user would, on Windows, on macOS with
+each processor and on Linux, and runs the checks a user can run: the
+signatures with `Get-AuthenticodeSignature`, `codesign`, `spctl` and
+`stapler`, the runtime dependencies, the application in a clean Windows
+container and the packages in clean Linux containers, `sha256sum -c
+SHA256SUMS`, `gh attestation verify` of the Linux files and of the image,
+and `gpg --verify` once signed. The record of it, with the identities of the
+signers, is attached to the release as
+`open-pointcloud-studio_YYYY.W.N_verification.md`, with its `.sha256`.
 
 Windows files are signed when the Azure Trusted Signing secrets are configured.
 The macOS workflow can sign both universal executables and the app with a

@@ -9,6 +9,7 @@ use std::time::SystemTime;
 
 use snapshots::Snapshots;
 
+#[cfg(feature = "bag3d")]
 mod bag3d;
 pub mod cad3d;
 mod closed_mesh;
@@ -29,6 +30,7 @@ mod mesh_write;
 mod mesher;
 mod obj_mesh;
 mod octree;
+pub mod ops;
 mod oriented_box;
 mod pcd;
 pub mod photo_colour;
@@ -49,6 +51,7 @@ mod test_shapes;
 mod turns;
 mod window_reader;
 
+#[cfg(feature = "bag3d")]
 pub use bag3d::{
     fetch_bag3d_obj, fetch_bag3d_obj_with, BagBounds, BagLod, BagProgress, BagStats,
     BAG3D_USER_AGENT,
@@ -101,7 +104,10 @@ pub use obj_mesh::{
     read_obj_mesh, write_obj_mesh, MeshGeometry, MAX_TRIANGLES as MAX_MESH_TRIANGLES,
     MAX_VERTICES as MAX_MESH_VERTICES,
 };
-pub use octree::{IndexConfig, IndexProgress, IndexStage, IndexedNode, IndexedPoint, OctreeIndex};
+pub use octree::{
+    disk_caches, set_disk_caches, IndexConfig, IndexProgress, IndexStage, IndexedNode,
+    IndexedPoint, OctreeIndex,
+};
 pub use oriented_box::{bounds_corners, normalized_degrees, OrientedBox};
 pub use ply_mesh::read_ply_mesh;
 pub use scan_image::{
@@ -115,7 +121,7 @@ pub use section_caps::{
 pub use surface_mesh::{
     mesh_surface_obj, mesh_surface_obj_from, mesh_surface_obj_where,
     mesh_surface_obj_where_progress, mesh_surface_obj_where_progress_colours, SurfaceMeshConfig,
-    SurfacePoints,
+    SurfacePoints, SURFACE_MESH_NEIGHBORS, SURFACE_MESH_VERTICES,
 };
 pub use turns::SourceTurn;
 
