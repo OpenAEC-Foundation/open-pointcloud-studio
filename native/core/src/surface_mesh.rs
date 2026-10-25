@@ -8,6 +8,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufWriter, Write};
+use std::ops::RangeInclusive;
 use std::path::Path;
 
 use rayon::prelude::*;
@@ -17,6 +18,11 @@ use crate::local_fit::{cross, difference, dot, symmetric_eigen3, unit};
 use crate::mesher::{MeshProgress, MeshStage, MeshStats};
 use crate::photo_colour::PointColours;
 use crate::{IndexConfig, OctreeIndex};
+
+/// The vertices a 3D surface may be asked for.
+pub const SURFACE_MESH_VERTICES: RangeInclusive<usize> = 3..=1_000_000;
+/// The neighbours per vertex a 3D surface may be asked for.
+pub const SURFACE_MESH_NEIGHBORS: RangeInclusive<usize> = 3..=32;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SurfaceMeshConfig {
@@ -40,12 +46,12 @@ impl Default for SurfaceMeshConfig {
 
 impl SurfaceMeshConfig {
     pub fn validate(self) -> Result<(), LoadError> {
-        if !(3..=1_000_000).contains(&self.max_vertices) {
+        if !SURFACE_MESH_VERTICES.contains(&self.max_vertices) {
             return Err(LoadError::InvalidData(
                 "3D surface vertices must be 3..=1,000,000".into(),
             ));
         }
-        if !(3..=32).contains(&self.neighbors) {
+        if !SURFACE_MESH_NEIGHBORS.contains(&self.neighbors) {
             return Err(LoadError::InvalidData(
                 "3D surface neighbors must be 3..=32".into(),
             ));
