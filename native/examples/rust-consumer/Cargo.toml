@@ -1,0 +1,21 @@
+# A program outside the workspace that uses the point-cloud core the way
+# docs/library.md describes: through pointcloud_core::ops, without the bag3d
+# feature. It has a workspace of its own, as a consumer in another repository
+# has, and no lock file in the repository.
+[package]
+name = "rust-consumer"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-3.0-or-later"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Another repository names the tag of a release instead of the path:
+# pointcloud-core = { git = "https://github.com/OpenAEC-Foundation/open-pointcloud-studio", tag = "vYYYY.W.N", default-features = false }
+pointcloud-core = { path = "../../core", default-features = false }
+
+# The core reads and writes large files; its debug build is slow without this.
+[profile.dev.package.pointcloud-core]
+opt-level = 2
