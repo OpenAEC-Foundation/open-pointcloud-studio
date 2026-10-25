@@ -197,6 +197,159 @@ else
     wrong "the release notes misreport Developer ID signing"
 fi
 
+# The image of the cloud API: a tag run pushes it before the notes and gives
+# its digest, a draft run has none and says it comes with the release.
+digest=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+image_notes=$(API_IMAGE_DIGEST=$digest bash "$packaging_dir/release-notes.sh" "$number")
+verify_image="gh attestation verify oci://ghcr.io/openaec-foundation/open-pointcloud-studio-api@$digest --repo OpenAEC-Foundation/open-pointcloud-studio"
+if [[ "$(grep -cF -- "$verify_image" <<< "$image_notes")" -eq 2 ]] \
+    && grep -qF "ghcr.io/openaec-foundation/open-pointcloud-studio-api:$number" <<< "$image_notes" \
+    && ! grep -qF 'published with the release' <<< "$image_notes"; then
+    passed "the notes of a tag run give the digest of the image and how to verify its attestation, in both languages"
+else
+    wrong "the notes of a tag run do not give the digest of the image and its attestation command in both languages"
+fi
+if grep -qF 'It is published with the release' <<< "$notes" && grep -qF 'met de release gepubliceerd' <<< "$notes" \
+    && ! grep -qF 'oci://' <<< "$notes"; then
+    passed "the notes of a draft run say that the image is published with the release"
+else
+    wrong "the notes of a draft run name a digest or do not say that the image comes with the release"
+fi
+if ! API_IMAGE_DIGEST=sha256:123 bash "$packaging_dir/release-notes.sh" "$number" > /dev/null 2>&1; then
+    passed "release-notes.sh refuses a digest that is not sha256 and 64 hex digits"
+else
+    wrong "release-notes.sh writes notes with a malformed digest"
+fi
+
+# SHA256SUMS is always there; the OpenPGP signatures only with the key.
+if [[ "$(grep -cF 'sha256sum --ignore-missing -c SHA256SUMS' <<< "$notes")" -eq 2 ]] \
+    && ! grep -qF 'gpg --verify' <<< "$notes"; then
+    passed "the notes say how to check SHA256SUMS in both languages, and name no signature without the key"
+else
+    wrong "the notes do not say how to check SHA256SUMS in both languages, or name a signature without the key"
+fi
+fingerprint=0123456789ABCDEF0123456789ABCDEF01234567
+gpg_notes=$(LINUX_GPG_SIGNED=true LINUX_GPG_FINGERPRINT="0123 4567 89ab cdef 0123 4567 89ab cdef 0123 4567" \
+    bash "$packaging_dir/release-notes.sh" "$number")
+if [[ "$(grep -cF 'gpg --verify SHA256SUMS.asc SHA256SUMS' <<< "$gpg_notes")" -eq 2 ]] \
+    && [[ "$(grep -cF "gpg --keyserver hkps://keys.openpgp.org --recv-keys $fingerprint" <<< "$gpg_notes")" -eq 2 ]] \
+    && grep -qF "gpg --verify FILE.AppImage.asc FILE.AppImage" <<< "$gpg_notes"; then
+    passed "the notes of a signed release give the fingerprint and how to verify the signatures, in both languages"
+else
+    wrong "the notes of a signed release do not give the fingerprint and the gpg commands in both languages"
+fi
+if ! LINUX_GPG_SIGNED=true bash "$packaging_dir/release-notes.sh" "$number" > /dev/null 2>&1; then
+    passed "release-notes.sh refuses signed notes without the fingerprint of the key"
+else
+    wrong "release-notes.sh writes signed notes without a fingerprint"
+fi
+
+# The signatures of the C library, as sdk.yml reports them.
+sdk_notes=$(SDK_WINDOWS_SIGNED=true SDK_MACOS_SIGNED=true bash "$packaging_dir/release-notes.sh" "$number")
+if grep -qF 'The C library for Windows carries a valid code signature; the one for macOS is signed with a developer certificate and notarized.' <<< "$sdk_notes" \
+    && grep -qF 'De C-bibliotheek voor Windows heeft een geldige code-handtekening; die voor macOS is met een ontwikkelaarscertificaat' <<< "$sdk_notes" \
+    && grep -qF 'The C library for Windows is not code-signed in this release; the one for macOS is signed ad hoc and not notarized.' <<< "$notes" \
+    && grep -qF 'De C-bibliotheek voor Windows is in deze release niet ondertekend; die voor macOS is alleen ad hoc' <<< "$notes"; then
+    passed "the notes say whether the C libraries are signed, as the build reports them"
+else
+    wrong "the notes misreport the signatures of the C libraries"
+fi
+
+# ---- signature-assets.sh and prune-release-assets.sh with signatures -----
+
+if [[ "$(bash "$packaging_dir/signature-assets.sh" 9.9.9)" == SHA256SUMS ]] \
+    && [[ "$(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9)" == "SHA256SUMS"$'\n'"SHA256SUMS.asc"$'\n'"${BINARY_NAME}_9.9.9_amd64.AppImage.asc"$'\n'"${BINARY_NAME}_9.9.9_arm64.AppImage.asc" ]]; then
+    passed "signature-assets.sh lists SHA256SUMS always, and the OpenPGP signatures when they are kept"
+else
+    wrong "signature-assets.sh lists '$(echo $(bash "$packaging_dir/signature-assets.sh" 9.9.9))' and '$(echo $(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9))'"
+fi
+
+# A draft with the files of this release, SHA256SUMS and the signatures of
+# an earlier run that signed: prune_signed KEEP prints what it removes.
+prune_signed() {
+    : > "$work/gh.log"
+    PATH="$work/bin:$PATH" GH_LOG="$work/gh.log" GH_IS_DRAFT=true GITHUB_REPOSITORY=example/repository \
+        KEEP_SIGNATURES=$1 \
+        GH_ASSETS="$(bash "$packaging_dir/expected-assets.sh" 9.9.9 | sed 'p; s/$/.sha256/')
+$(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9)" \
+        bash "$packaging_dir/prune-release-assets.sh" v9.9.9 9.9.9 > /dev/null 2>&1 || true
+    sed -n 's/^release delete-asset v9.9.9 \([^ ]*\) .*--yes$/\1/p' "$work/gh.log"
+}
+removed_kept=$(prune_signed true)
+removed_unsigned=$(prune_signed false)
+if [[ -z "$removed_kept" ]] \
+    && [[ "$removed_unsigned" == "SHA256SUMS.asc"$'\n'"${BINARY_NAME}_9.9.9_amd64.AppImage.asc"$'\n'"${BINARY_NAME}_9.9.9_arm64.AppImage.asc" ]]; then
+    passed "the draft keeps SHA256SUMS always and the signatures only while the release is signed"
+else
+    wrong "prune-release-assets.sh removed '$(echo $removed_kept)' from a signed draft and '$(echo $removed_unsigned)' from an unsigned one"
+fi
+
+# ---- sign-linux.sh -----------------------------------------------------------
+
+signed_assets=$work/signed-assets
+mkdir -p "$signed_assets"
+echo "checksums" > "$signed_assets/SHA256SUMS"
+for arch in amd64 arm64; do
+    echo "an AppImage" > "$signed_assets/${BINARY_NAME}_9.9.9_$arch.AppImage"
+done
+signing_output="$work/gpg-output"
+: > "$signing_output"
+if output=$(env -u OPENAEC_GPG_PRIVATE_KEY -u OPENAEC_GPG_PASSPHRASE -u OPENAEC_GPG_FINGERPRINT \
+        GITHUB_OUTPUT="$signing_output" bash "$packaging_dir/sign-linux.sh" "$signed_assets" 9.9.9 2>&1) \
+    && grep -qxF 'gpg_signed=false' "$signing_output" && grep -qF 'not configured' <<< "$output" \
+    && ! ls "$signed_assets"/*.asc > /dev/null 2>&1; then
+    passed "sign-linux.sh without the key signs nothing, says so and reports gpg_signed=false"
+else
+    wrong "sign-linux.sh without the key does not end quietly with gpg_signed=false:"
+    sed 's/^/        /' <<< "$output"
+fi
+
+# A throwaway key in a GnuPG home of its own, with a short path for the
+# socket of the agent.
+if command -v gpg > /dev/null 2>&1; then
+    gnupg=$work/gnupg
+    mkdir -p "$gnupg"
+    chmod 700 "$gnupg"
+    test_gpg() { gpg --homedir "$gnupg" --batch --no-tty --pinentry-mode loopback --passphrase test-passphrase "$@"; }
+    if test_gpg --quick-generate-key "Test signer <test@example.org>" ed25519 sign never > /dev/null 2>&1; then
+        test_fingerprint=$(test_gpg --with-colons --list-secret-keys 2> /dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+        test_key=$(test_gpg --armor --export-secret-keys "$test_fingerprint" 2> /dev/null)
+        : > "$signing_output"
+        if output=$(OPENAEC_GPG_PRIVATE_KEY=$test_key OPENAEC_GPG_PASSPHRASE=test-passphrase \
+                OPENAEC_GPG_FINGERPRINT=$test_fingerprint GITHUB_OUTPUT="$signing_output" \
+                bash "$packaging_dir/sign-linux.sh" "$signed_assets" 9.9.9 2>&1) \
+            && grep -qxF 'gpg_signed=true' "$signing_output" \
+            && test_gpg --verify "$signed_assets/SHA256SUMS.asc" "$signed_assets/SHA256SUMS" > /dev/null 2>&1 \
+            && test_gpg --verify "$signed_assets/${BINARY_NAME}_9.9.9_amd64.AppImage.asc" \
+                "$signed_assets/${BINARY_NAME}_9.9.9_amd64.AppImage" > /dev/null 2>&1 \
+            && test_gpg --verify "$signed_assets/${BINARY_NAME}_9.9.9_arm64.AppImage.asc" \
+                "$signed_assets/${BINARY_NAME}_9.9.9_arm64.AppImage" > /dev/null 2>&1 \
+            && grep -q 'BEGIN PGP SIGNATURE' "$signed_assets/SHA256SUMS.asc"; then
+            passed "sign-linux.sh signs SHA256SUMS and both AppImages with the key, armoured and verified"
+        else
+            wrong "sign-linux.sh does not sign SHA256SUMS and the AppImages with a throwaway key:"
+            sed 's/^/        /' <<< "$output"
+        fi
+        rm -f "$signed_assets"/*.asc
+        if output=$(OPENAEC_GPG_PRIVATE_KEY=$test_key OPENAEC_GPG_PASSPHRASE=test-passphrase \
+                OPENAEC_GPG_FINGERPRINT=0123456789ABCDEF0123456789ABCDEF01234567 GITHUB_OUTPUT="$signing_output" \
+                bash "$packaging_dir/sign-linux.sh" "$signed_assets" 9.9.9 2>&1); then
+            wrong "sign-linux.sh signs with a key whose fingerprint is not the one asked for"
+        elif grep -qF 'is not the one of OPENAEC_GPG_FINGERPRINT' <<< "$output" \
+            && ! ls "$signed_assets"/*.asc > /dev/null 2>&1; then
+            passed "sign-linux.sh refuses a key with another fingerprint and signs nothing"
+        else
+            wrong "sign-linux.sh refuses a key with another fingerprint for another reason, or signs:"
+            sed 's/^/        /' <<< "$output"
+        fi
+    else
+        echo "notice: gpg cannot make a key here; the signing tests of sign-linux.sh are skipped"
+    fi
+    gpgconf --homedir "$gnupg" --kill all > /dev/null 2>&1 || true
+else
+    echo "notice: gpg is not installed; the signing tests of sign-linux.sh are skipped"
+fi
+
 signing_output="$work/macos-signing-output"
 if GITHUB_OUTPUT="$signing_output" bash "$packaging_dir/macos/prepare-signing.sh" > /dev/null \
     && grep -qFx 'macos_signed=false' "$signing_output"; then

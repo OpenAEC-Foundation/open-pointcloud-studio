@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Removes from the draft of a release every file that a complete release of
 # that version does not hold: what expected-assets.sh lists, each with its
-# .sha256, stays.
+# .sha256, stays, and so do the files that signature-assets.sh lists:
+# SHA256SUMS, and with KEEP_SIGNATURES=true the OpenPGP signatures.
 #
 #   prune-release-assets.sh TAG NUMBER
 #
@@ -21,7 +22,7 @@ set -euo pipefail
 tag=$1
 number=$2
 
-expected=$(bash "$packaging_dir/expected-assets.sh" "$number")
+expected=$(bash "$packaging_dir/expected-assets.sh" "$number"; bash "$packaging_dir/signature-assets.sh" "$number")
 draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
 [[ "$draft" == "true" ]] || fail "release $tag is published; nothing is removed from it"
 assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
