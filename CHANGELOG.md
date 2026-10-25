@@ -17,6 +17,8 @@ section its version and date.
 
 ## Unreleased
 
+## 2026.43.0 - 2026-10-24
+
 - The File menu puts the common tasks one click away again: **Import point cloud**, **Open scan folder**, **Drawing (DXF/DWG)…**, **3D BAG buildings…** and the exports **Export full resolution…**, **Export selected points…**, **Export section box…**, **Export section drawing…** and **Export every Nth point…** start at once. **All export options…** opens the page with every export. **New** stays at the top of the menu, and **Workspace**, **Extensions** and **About** follow under a rule.
 - The window has the shared look of the OpenAEC desktop tools: the title strip with the logo, the name and the quick-access icons, the File and Home tabs on one line, the document tabs, the headers of the Project Browser and Properties, the rows of Properties, the ribbon groups, a thinner status band, the File menu and the Settings dialog. **Reset to Defaults** in Settings now asks to confirm.
 - **Straight CAD lines** in **Create 2D plan / elevation / section…** and in the Section drawing block add closed, editable polylines along the traced cut of a plan or a vertical section, also in a turned section box, on a layer of their own, `OPS-STRAIGHT-LINES`, beside the original outlines and fills. **Line tolerance (m)** (0.01 m) limits how far they may leave the traced outline and **Minimum line (m)** (0.10 m) is the shortest segment they keep where they can; the preview draws them in blue and the result reports their segments and deviation. The local API and the MCP server take `straight_lines`, `line_tolerance` and `line_min_length`.

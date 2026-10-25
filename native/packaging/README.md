@@ -237,12 +237,14 @@ README say how to check one with `gh attestation verify` and
 Windows files are signed when the Azure Trusted Signing secrets are configured.
 The macOS workflow can sign both universal executables and the app with a
 Developer ID Application certificate, notarize the app and disk image with
-Apple's `notarytool`, and staple both tickets. Configure all six GitHub secrets
-`APPLE_DEVELOPER_ID_P12_BASE64`, `APPLE_DEVELOPER_ID_P12_PASSWORD`,
-`APPLE_DEVELOPER_IDENTITY` (the full Developer ID Application identity),
-`APPLE_NOTARY_KEY_BASE64` (the App Store Connect `.p8` key),
-`APPLE_NOTARY_KEY_ID`, and `APPLE_NOTARY_ISSUER_ID`. The certificate and key are
-decoded into the temporary macOS runner only; a partial set fails the job.
+Apple's `notarytool`, and staple both tickets. It uses the six secrets that the
+OpenAEC organisation shares with its app repositories, under the names every
+OpenAEC app uses: `APPLE_CERTIFICATE` (the Developer ID Application `.p12` in
+base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` (the full
+Developer ID Application identity), `APPLE_API_KEY_CONTENT` (the App Store
+Connect `.p8` key, as its text or in base64), `APPLE_API_KEY` (its key ID) and
+`APPLE_API_ISSUER` (its issuer ID). The certificate and key are decoded into the
+temporary macOS runner only; a partial set fails the job.
 With no Apple secrets the workflow retains the ad hoc signature and the
 release notes state that notarization was not performed. The signed path must
 pass a real release run before its claim can be verified; local Linux script

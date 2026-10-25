@@ -545,15 +545,17 @@ jobs:
           chmod 755 target/universal/OpenCADStudio
           codesign --force --sign - --timestamp=none target/universal/OpenCADStudio
           codesign --verify --strict target/universal/OpenCADStudio
+      # The Apple secrets are those of the OpenAEC organisation, under the names
+      # every OpenAEC app uses.
       - name: Prepare optional Developer ID signing and notarization
         id: signing
         env:
-          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
-          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
-          APPLE_DEVELOPER_IDENTITY: ${{ secrets.APPLE_DEVELOPER_IDENTITY }}
-          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
-          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: bash native/packaging/macos/prepare-signing.sh
       - name: Sign the universal binaries for the command-line archive
         if: env.MACOS_SIGN_IDENTITY != ''
@@ -738,9 +740,19 @@ jobs:
       - name: Verify Apple notarization when enabled
         if: needs.macos.outputs.signed == 'true'
         run: |
-          xcrun stapler validate "packages/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
-          xcrun stapler validate "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
-          spctl --assess --type execute --verbose \
+          # These checks ask Apple's ticket service, whose connection a build
+          # machine now and then loses: each check is tried five times.
+          retry() {
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              [[ "$attempt" -lt 5 ]] || return 1
+              echo "attempt $attempt failed, trying again in 30 s: $*"
+              sleep 30
+            done
+          }
+          retry xcrun stapler validate "packages/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
+          retry xcrun stapler validate "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
+          retry spctl --assess --type execute --verbose \
             "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
       - name: Smoke-test the application on the image
         run: |

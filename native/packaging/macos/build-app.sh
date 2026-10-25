@@ -50,6 +50,21 @@ plutil -lint "$app/Contents/Info.plist"
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
 copy_licences "$app/Contents/Resources" "$number"
 
+# Apple's notary and ticket services are reached over the network, which now
+# and then drops a connection on a build machine: such a step is tried up to
+# five times, 30 seconds apart, before the build fails.
+with_retries() {
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if "$@"; then
+            return 0
+        fi
+        [[ "$attempt" -lt 5 ]] || return 1
+        echo "build-app.sh: attempt $attempt failed, trying again in 30 s: $*" >&2
+        sleep 30
+    done
+}
+
 # Sign nested code before the bundle that seals it. Notarization also requires
 # the hardened runtime and a secure timestamp for both executables.
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
@@ -63,13 +78,13 @@ if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
     codesign --verify --strict --deep --verbose=2 "$app"
     zip="$out_dir/notarization.zip"
     ditto -c -k --keepParent "$app" "$zip"
-    xcrun notarytool submit "$zip" --key "$MACOS_NOTARY_KEY" \
+    with_retries xcrun notarytool submit "$zip" --key "$MACOS_NOTARY_KEY" \
         --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" \
         --wait --output-format json > "$out_dir/notary-app.json"
     python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "Accepted"' \
         "$out_dir/notary-app.json" || fail "Apple rejected the application; see notary-app.json"
-    xcrun stapler staple "$app"
-    xcrun stapler validate "$app"
+    with_retries xcrun stapler staple "$app"
+    with_retries xcrun stapler validate "$app"
     rm -f "$zip" "$out_dir/notary-app.json"
 else
     codesign --force --sign - --timestamp=none "$app/Contents/MacOS/$CAD_BINARY_NAME"
@@ -103,13 +118,13 @@ for attempt in 1 2 3; do
 done
 hdiutil verify "$image"
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
-    xcrun notarytool submit "$image" --key "$MACOS_NOTARY_KEY" \
+    with_retries xcrun notarytool submit "$image" --key "$MACOS_NOTARY_KEY" \
         --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" \
         --wait --output-format json > "$out_dir/notary-dmg.json"
     python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "Accepted"' \
         "$out_dir/notary-dmg.json" || fail "Apple rejected the disk image; see notary-dmg.json"
-    xcrun stapler staple "$image"
-    xcrun stapler validate "$image"
+    with_retries xcrun stapler staple "$image"
+    with_retries xcrun stapler validate "$image"
     rm -f "$out_dir/notary-dmg.json"
 fi
 write_sha256 "$image"
