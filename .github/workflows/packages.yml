@@ -191,6 +191,11 @@ jobs:
     env:
       # The oldest macOS the application starts on.
       MACOSX_DEPLOYMENT_TARGET: '11.0'
+      # The static C runtime on Windows, as for the application: the program
+      # then needs no runtime that a clean Windows lacks. The variable is set
+      # here rather than in a .cargo/config.toml, which would reach every
+      # build under native/, and it is part of the key of the cache below.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -199,6 +204,8 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Describe the build machine
         id: machine
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           case "$RUNNER_OS" in
             # The newest MSVC toolset, which the build takes, from the folder
@@ -209,6 +216,9 @@ jobs:
             *) compiler=$(c++ --version | sed -n 1p) ;;
           esac
           description="image $ImageOS, compiler ${compiler:-unknown}, macOS target $MACOSX_DEPLOYMENT_TARGET"
+          if [[ "$TARGET" == x86_64-pc-windows-msvc ]]; then
+            description="$description, rustflags $CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS"
+          fi
           echo "$description"
           echo "key=$(printf '%s' "$description" | git hash-object --stdin | cut -c1-16)" >> "$GITHUB_OUTPUT"
       - name: Look for this build in the cache
@@ -271,8 +281,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # The static C runtime: the program then needs no runtime that a
+      # clean Windows lacks. Set for this step only, rather than in a
+      # .cargo/config.toml, which would also reach the build of Open CAD
+      # Studio under native/target unseen by the key of its cache.
       - name: Build the application
         working-directory: native
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --release --locked -p open-pointcloud-studio-native
       - name: Smoke-test the built application
         run: bash native/packaging/smoke-test.sh native/target/release/open-pointcloud-studio.exe "$NUMBER"
@@ -280,6 +296,42 @@ jobs:
         with:
           name: open-cad-studio-windows-x64
           path: native/target/open-cad-studio/package
+      # vc.bat runs a command in the environment of the Windows C compiler
+      # for x64, which dumpbin needs.
+      - name: Find the tools of the Windows C compiler
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $install = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $install) { throw 'no C compiler for x64 found' }
+          $helper = "$env:RUNNER_TEMP\vc.bat"
+          @('@echo off', "call `"$install\VC\Auxiliary\Build\vcvars64.bat`" >nul || exit /b 1", '%*') | Set-Content -Encoding ascii $helper
+          "VC=$helper" >> $env:GITHUB_ENV
+      # A DLL that a clean Windows has: an API set, or one in System32 that
+      # is not one of the C and C++ runtimes Windows does not ship, which
+      # this build machine has but a user's machine may not.
+      - name: Check the runtime dependencies
+        shell: pwsh
+        run: |
+          $system32 = Join-Path $env:SystemRoot 'System32'
+          $failed = $false
+          "### Windows: runtime dependencies" >> $env:GITHUB_STEP_SUMMARY
+          foreach ($program in 'native\target\release\open-pointcloud-studio.exe', 'native\target\open-cad-studio\package\OpenCADStudio.exe') {
+            $output = & $env:VC dumpbin /nologo /dependents $program
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed on $program" }
+            $dependencies = $output | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
+            if (-not $dependencies) { throw "dumpbin listed no dependencies of $program" }
+            $foreign = $dependencies | Where-Object {
+              -not ($_ -match '^(api|ext)-ms-' -or ((Test-Path (Join-Path $system32 $_)) -and $_ -notmatch '^(vcruntime|msvcp|vccorlib|concrt|vcomp|msvcr|ucrtbased)'))
+            }
+            Write-Host "$(Split-Path $program -Leaf): $($dependencies -join ', ')"
+            "- ``$(Split-Path $program -Leaf)``: $($dependencies -join ', ')" >> $env:GITHUB_STEP_SUMMARY
+            if ($foreign) {
+              Write-Host "::error::$program needs $($foreign -join ', '), which a clean Windows does not have"
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
       # An unsigned binary still works; signing only spares users a warning.
       - name: Sign the application
         continue-on-error: true
@@ -362,11 +414,23 @@ jobs:
             "native\target\installer\open-pointcloud-studio_$($env:NUMBER)_x64-setup.exe"
           )
           $signed = $true
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName | Select-Object -Last 1
+          $lines = @('### Windows: Authenticode', '',
+            '| File | Status | Signer | Issuer | Thumbprint | Timestamp by | Timestamp |',
+            '| --- | --- | --- | --- | --- | --- | --- |')
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature $file
             Write-Host ("{0}: {1} {2}" -f $file, $signature.Status, $signature.SignerCertificate.Subject)
             if ($signature.Status -ne 'Valid') { $signed = $false }
+            $time = ''
+            if ($signature.Status -eq 'Valid' -and $signtool) {
+              $verify = & $signtool.FullName verify /pa /v $file 2>&1
+              $time = "$($verify | Where-Object { $_ -match 'The signature is timestamped:' } | Select-Object -First 1)".Trim()
+            }
+            $lines += "| $(Split-Path $file -Leaf) | $($signature.Status) | $($signature.SignerCertificate.Subject) | $($signature.SignerCertificate.Issuer) | $($signature.SignerCertificate.Thumbprint) | $($signature.TimeStamperCertificate.Subject) | $time |"
           }
+          $lines | ForEach-Object { $_ >> $env:GITHUB_STEP_SUMMARY }
           "signed=$($signed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
       - name: Collect the installer
         run: |
@@ -586,6 +650,36 @@ jobs:
           bash native/packaging/macos/build-app.sh native/target/universal/open-pointcloud-studio \
             native/target/universal/OpenCADStudio \
             native/target/icons/AppIcon.iconset "$NUMBER" native/target/packages
+      # What the files carry, for the summary of the run; signed, also how
+      # the system assesses them and whether their tickets are stapled.
+      - name: Report the signatures
+        env:
+          SIGNED: ${{ steps.signing.outputs.macos_signed }}
+        run: |
+          app="native/target/packages/Open Pointcloud Studio.app"
+          dmg="native/target/packages/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
+          # shown COMMAND...: the command, its exit code and its output.
+          shown() {
+            local output code
+            output=$("$@" 2>&1) && code=0 || code=$?
+            { echo "\`$*\` (exit $code)"; echo; echo '```'; echo "$output"; echo '```'; echo; } >> "$GITHUB_STEP_SUMMARY"
+            echo "$output"
+            return "$code"
+          }
+          { echo "### macOS: signatures"; echo; } >> "$GITHUB_STEP_SUMMARY"
+          for file in "$app" "$app/Contents/MacOS/open-pointcloud-studio" "$app/Contents/MacOS/OpenCADStudio" \
+              native/target/universal/open-pointcloud-studio native/target/universal/OpenCADStudio "$dmg"; do
+            shown codesign -dvv --verbose=4 "$file" || true
+          done
+          # Report only: verify-macos holds the copies a user gets to these.
+          if [[ "$SIGNED" == true ]]; then
+            shown spctl --assess --type execute -vv "$app" || true
+            shown spctl -a -t open --context context:primary-signature -v "$dmg" || true
+            shown xcrun stapler validate "$dmg" || true
+            shown xcrun stapler validate "$app" || true
+          else
+            echo "Signed ad hoc: the assessment of the system refuses the app, and there is no ticket to staple." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: package-macos
@@ -626,7 +720,7 @@ jobs:
           sudo apt-get update
           # The MIME database first, so that installing the package triggers it.
           sudo apt-get install -y shared-mime-info libglib2.0-bin desktop-file-utils appstream \
-            xvfb mesa-vulkan-drivers libegl1 libgl1-mesa-dri fuse3
+            xvfb mesa-vulkan-drivers libegl1 libgl1-mesa-dri fuse3 python3-venv
       - name: Install the .deb
         run: sudo apt-get install -y "./packages/open-pointcloud-studio_${NUMBER}_${ARCH}.deb"
       - name: Smoke-test the installed application
@@ -657,6 +751,17 @@ jobs:
           mkdir -p screenshots
           xvfb-run -a -s '-screen 0 1440x900x24' python3 native/packaging/gui-smoke.py \
             /usr/bin/open-pointcloud-studio --version "$NUMBER" --screenshot "screenshots/deb-$ARCH.png"
+      # The installed server as an MCP client outside the project sees it,
+      # with the reference Python SDK of the protocol; its record goes to
+      # the summary.
+      - name: Install the MCP client
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mcp"
+          "$RUNNER_TEMP/mcp/bin/pip" install --require-hashes -r native/packaging/mcp-client-requirements.txt
+      - name: External MCP client
+        run: |
+          xvfb-run -a -s '-screen 0 1440x900x24' "$RUNNER_TEMP/mcp/bin/python" -I native/packaging/mcp-client-check.py \
+            --stdio /usr/bin/open-pointcloud-studio --version "$NUMBER"
       - name: Remove the .deb
         run: |
           sudo apt-get remove -y open-pointcloud-studio
@@ -740,10 +845,18 @@ jobs:
       - name: Verify Apple notarization when enabled
         if: needs.macos.outputs.signed == 'true'
         run: |
-          xcrun stapler validate "packages/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
-          xcrun stapler validate "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
-          spctl --assess --type execute --verbose \
-            "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
+          {
+            echo "### macOS ${{ matrix.half }}: notarization"
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            xcrun stapler validate "packages/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
+            xcrun stapler validate "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
+            spctl --assess --type execute --verbose \
+              "$RUNNER_TEMP/ops-image/Open Pointcloud Studio.app"
+          } 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
       - name: Smoke-test the application on the image
         run: |
           bash native/packaging/smoke-test.sh \
