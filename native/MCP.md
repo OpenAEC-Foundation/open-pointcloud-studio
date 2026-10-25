@@ -393,19 +393,20 @@ python3 -m venv /tmp/mcp
 `--stdio` starts the server of an installed application with configuration
 and cache folders of its own. The server starts a window, so it needs a
 display; a virtual one will do. It checks the handshake, that the server
-offers tools and no resources, the count of the tools and the annotations of
-`status`, `thin` and `bag3d`, that every input schema refuses unknown
-arguments, `thin` 50 with `undo_delete`, `redo_delete` and `undo_delete`
-again on a grid of 1000 points, a tool error for a missing file, and the
-token of the command API. `--http` checks the refusal without the key, the
-five read-only tools, `inspect`, `convert` to LAZ as an embedded resource,
-and the refusal of a path.
+offers tools and no resources, the annotations of `status`, `thin` and
+`bag3d`, that every input schema refuses unknown arguments, `thin` 50 with
+`undo_delete`, `redo_delete` and `undo_delete` again on a grid of 1000
+points, a tool error for a missing file, and the token of the command API,
+and it records the count of the tools. `--http` checks the refusal without
+the key, the refusal of a foreign `Origin`, the five read-only tools,
+`inspect`, `convert` to LAZ as an embedded resource, and the refusal of a
+path.
 
 Each writes a record in Markdown, and exits with 1 when a check fails. The
 Packages workflow runs `--stdio` against the installed `.deb` on Linux, in
 the job `verify-linux`, and the Container workflow runs `--http` against the
 image. [docs/ecosystem.md](../docs/ecosystem.md#mcp-verification-record)
-holds the results.
+records what has run.
 
 ## Example session
 

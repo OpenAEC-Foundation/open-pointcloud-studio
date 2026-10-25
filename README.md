@@ -109,7 +109,7 @@ Get-Content open-pointcloud-studio_2026.43.0_x64-setup.exe.sha256
 
 On Linux and macOS the command answers `OK`. On Windows, compare the two outputs: the hash must be the same, apart from upper and lower case.
 
-`SHA256SUMS` holds the checksums of all files of the release. In a folder with the files you downloaded beside it, this checks each of them and skips the others:
+`SHA256SUMS` holds the checksums of all packages and archives of the release. In a folder with the files you downloaded beside it, this checks each of them and skips the others:
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
@@ -496,6 +496,7 @@ It writes `native/target/open-cad-studio/release/OpenCADStudio`, where a develop
 | `native/server` | The cloud API, `open-pointcloud-studio-api`: REST and MCP over HTTP |
 | `native/sdk` | The C library `ops_pointcloud`: its header, its example and the scripts that pack its archives |
 | `native/examples` | A Rust program with a workspace of its own that uses the core as another repository would |
+| `native/tools` | `third-party-notices.py`, which writes the notices of the crates that the image of the cloud API and the archives of the C library carry |
 | `native/ui` | `openaec-ui`, the shared interface crate of OpenAEC desktop tools, copied from the OpenAEC Style Repo: title strip, ribbon and document tabs, panels, the property grid, the Settings dialog, the File menu and the status band |
 | `native/assets` | Fonts, icons and the Dutch interface texts |
 | `native/extensions/examples` | An example extension, in PowerShell and Python |
