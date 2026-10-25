@@ -2,9 +2,17 @@ name: Build and Release Native Rust App
 
 # A release is published only when everything before it succeeded: the tag
 # equals the version in native/Cargo.toml, CHANGELOG.md has a section for it,
-# the tests pass on all three systems, and every package was built, installed
-# and started. Nothing is created on the release page until then, so a failed
+# the tests pass on all three systems, every package was built, installed and
+# started, and so were the C library on every system and the image of the
+# cloud API. Nothing is created on the release page until then, so a failed
 # run leaves no draft with half the files.
+#
+# The image goes to the registry in a tag run only: by its digest and without
+# a tag, before the notes, which name the digest, and with the version as its
+# tag once the release is public. A draft run (draft_only) pushes nothing.
+# After a tag run, verify-release downloads the published files and checks
+# them with the commands a user runs; the record of that is attached to the
+# release as open-pointcloud-studio_VERSION_verification.md.
 
 on:
   push:
@@ -86,8 +94,95 @@ jobs:
     # The Windows signing steps read their keys from the secrets.
     secrets: inherit
 
+  sdk:
+    needs: prepare
+    uses: ./.github/workflows/sdk.yml
+    with:
+      version: ${{ needs.prepare.outputs.number }}
+    # The signing steps of the DLL and the macOS library read their keys
+    # from the secrets.
+    secrets: inherit
+
+  # Builds, checks and smoke-tests the image and keeps it as the artifact
+  # api-image; it pushes nothing.
+  container:
+    needs: prepare
+    uses: ./.github/workflows/container.yml
+    with:
+      version: ${{ needs.prepare.outputs.number }}
+
+  # The only job that pushes an image, and only in a tag run, once every
+  # check has passed: by its digest, without a tag, so that nothing pulls it
+  # by version before the release is public. The notes name the digest.
+  image:
+    needs: [prepare, checks, packages, sdk, container]
+    if: ${{ !inputs.draft_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      # For the build attestation of the image, stored with the repository
+      # and in the registry beside the image.
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      IMAGE: ghcr.io/openaec-foundation/open-pointcloud-studio-api
+      CRANE_VERSION: v0.22.1
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: api-image
+          path: ${{ runner.temp }}/image
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      # go install checks the module against the checksum database of Go, so
+      # what is built is the published source of that version.
+      - name: Install crane
+        run: |
+          go install "github.com/google/go-containerregistry/cmd/crane@$CRANE_VERSION"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Sign in to the registry
+        env:
+          TOKEN: ${{ github.token }}
+        run: crane auth login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$TOKEN"
+      - name: Refuse a version that has an image already
+        run: |
+          if crane digest "$IMAGE:$NUMBER" > /dev/null 2>&1; then
+            echo "::error::$IMAGE:$NUMBER exists already; an image is never pushed twice under one version"
+            exit 1
+          fi
+      - name: Push the image by its digest
+        id: push
+        run: |
+          gunzip -c "$RUNNER_TEMP/image/api-image.tar.gz" > "$RUNNER_TEMP/api-image.tar"
+          digest=$(crane digest --tarball "$RUNNER_TEMP/api-image.tar")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for the image: $digest"; exit 1; }
+          pushed=$(crane push "$RUNNER_TEMP/api-image.tar" "$IMAGE@$digest")
+          [[ "$pushed" == "$IMAGE@$digest" ]] || { echo "::error::crane pushed $pushed, not $IMAGE@$digest"; exit 1; }
+          [[ "$(crane digest "$IMAGE@$digest")" == "$digest" ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Pushed \`$IMAGE@$digest\`; it gets the tag $NUMBER once the release is public." >> "$GITHUB_STEP_SUMMARY"
+      - name: Attest the image
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
   publish:
-    needs: [prepare, checks, packages]
+    needs: [prepare, checks, packages, sdk, container, image]
+    # In a draft run the image job is skipped; everything else has to pass.
+    if: >-
+      ${{ !cancelled()
+          && needs.checks.result == 'success' && needs.packages.result == 'success'
+          && needs.sdk.result == 'success' && needs.container.result == 'success'
+          && (needs.image.result == 'success' || (inputs.draft_only && needs.image.result == 'skipped')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -95,17 +190,23 @@ jobs:
       # them with, and the right to store them with the repository.
       id-token: write
       attestations: write
+      # For the version tag of the image, after the release is public.
+      packages: write
+    outputs:
+      gpg_signed: ${{ steps.gpg.outputs.gpg_signed }}
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.prepare.outputs.tag }}
       NUMBER: ${{ needs.prepare.outputs.number }}
+      IMAGE: ghcr.io/openaec-foundation/open-pointcloud-studio-api
+      CRANE_VERSION: v0.22.1
     steps:
       - uses: actions/checkout@v4
-      # The packages of every system, and package-open-cad-studio-source: the
-      # source of the Open CAD Studio they carry, which is GPL-3.0, and of the
-      # crates it takes from git repositories, some under the MPL-2.0 or the
-      # LGPL; both go on the release page with them (expected-assets.sh lists
-      # them last).
+      # The packages of every system, the archives of the C library
+      # (package-sdk-*), and package-open-cad-studio-source: the source of
+      # the Open CAD Studio they carry, which is GPL-3.0, and of the crates it
+      # takes from git repositories, some under the MPL-2.0 or the LGPL; both
+      # go on the release page with them (expected-assets.sh lists them last).
       - uses: actions/download-artifact@v4
         with:
           pattern: package-*
@@ -126,13 +227,70 @@ jobs:
           [[ "$missing" -eq 0 ]]
           for sum in *.sha256; do sha256sum -c "$sum"; done
           ls -l
-      # Every Linux package gets a build attestation, signed through Sigstore
-      # and kept by GitHub. `gh attestation verify FILE --repo OWNER/REPO
-      # --signer-workflow OWNER/REPO/.github/workflows/release.yml` then
-      # checks that this workflow attested the file and that it has not
-      # changed since; its output names the tag or branch the run was for.
-      # It comes before anything is put on the release page, so a failure
-      # leaves nothing behind.
+      # A release whose application is signed never ships a library that is
+      # not; a draft run only warns, so that it can be looked at.
+      - name: Check that the libraries are signed as the applications are
+        env:
+          WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}
+          MACOS_SIGNED: ${{ needs.packages.outputs.macos_signed }}
+          SDK_WINDOWS_SIGNED: ${{ needs.sdk.outputs.windows_signed }}
+          SDK_MACOS_SIGNED: ${{ needs.sdk.outputs.macos_signed }}
+          DRAFT_ONLY: ${{ inputs.draft_only }}
+        run: |
+          {
+            echo "### Signing gate"
+            echo
+            echo "| Files | Signed |"
+            echo "| --- | --- |"
+            echo "| Windows application and installer | ${WINDOWS_SIGNED:-false} |"
+            echo "| ops_pointcloud.dll | ${SDK_WINDOWS_SIGNED:-false} |"
+            echo "| macOS application and disk image | ${MACOS_SIGNED:-false} |"
+            echo "| libops_pointcloud.dylib | ${SDK_MACOS_SIGNED:-false} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          problems=()
+          if [[ "$WINDOWS_SIGNED" == true && "$SDK_WINDOWS_SIGNED" != true ]]; then
+            problems+=("the Windows application is signed, ops_pointcloud.dll is not")
+          fi
+          if [[ "$MACOS_SIGNED" == true && "$SDK_MACOS_SIGNED" != true ]]; then
+            problems+=("the macOS application is signed and notarized, libops_pointcloud.dylib is not")
+          fi
+          for problem in "${problems[@]}"; do
+            if [[ "$DRAFT_ONLY" == true ]]; then
+              echo "::warning::$problem"
+            else
+              echo "::error::$problem"
+            fi
+          done
+          [[ ${#problems[@]} -eq 0 || "$DRAFT_ONLY" == true ]]
+      - name: Write SHA256SUMS
+        working-directory: assets
+        run: |
+          mapfile -t names < <(bash ../native/packaging/expected-assets.sh "$NUMBER")
+          sha256sum "${names[@]}" > SHA256SUMS
+          { echo "### SHA256SUMS"; echo; echo '```'; cat SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # Off until the organisation's OpenPGP key exists: without the two
+      # secrets and the variable, sign-linux.sh signs nothing and says so.
+      - name: Sign SHA256SUMS and the AppImages
+        id: gpg
+        env:
+          OPENAEC_GPG_PRIVATE_KEY: ${{ secrets.OPENAEC_GPG_PRIVATE_KEY }}
+          OPENAEC_GPG_PASSPHRASE: ${{ secrets.OPENAEC_GPG_PASSPHRASE }}
+          OPENAEC_GPG_FINGERPRINT: ${{ vars.OPENAEC_GPG_FINGERPRINT }}
+        run: |
+          bash native/packaging/sign-linux.sh assets "$NUMBER"
+          if grep -qxF gpg_signed=true "$GITHUB_OUTPUT"; then
+            echo "OpenPGP: SHA256SUMS and the AppImages are signed by \`$OPENAEC_GPG_FINGERPRINT\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "OpenPGP: not signed; the key of the organisation is not configured." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # Every Linux package and Linux archive of the C library gets a build
+      # attestation, signed through Sigstore and kept by GitHub. `gh
+      # attestation verify FILE --repo OWNER/REPO --signer-workflow
+      # OWNER/REPO/.github/workflows/release.yml` then checks that this
+      # workflow attested the file and that it has not changed since; its
+      # output names the tag or branch the run was for. It comes before
+      # anything is put on the release page, so a failure leaves nothing
+      # behind.
       - name: Attest the Linux packages
         uses: actions/attest@v4
         with:
@@ -144,21 +302,415 @@ jobs:
         env:
           WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}
           MACOS_SIGNED: ${{ needs.packages.outputs.macos_signed }}
-        run: bash native/packaging/release-notes.sh "$NUMBER" > notes.md
+          SDK_WINDOWS_SIGNED: ${{ needs.sdk.outputs.windows_signed }}
+          SDK_MACOS_SIGNED: ${{ needs.sdk.outputs.macos_signed }}
+          # Empty in a draft run, whose notes say the image comes with the release.
+          API_IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+          LINUX_GPG_SIGNED: ${{ steps.gpg.outputs.gpg_signed }}
+          LINUX_GPG_FINGERPRINT: ${{ vars.OPENAEC_GPG_FINGERPRINT }}
+        run: |
+          bash native/packaging/release-notes.sh "$NUMBER" > notes.md
+          {
+            echo "### Attestations and image"
+            echo
+            echo "- Build attestations: $(ls assets/*.deb assets/*.AppImage assets/*_linux-*.tar.gz | wc -l) Linux files"
+            echo "- Image: ${API_IMAGE_DIGEST:-none in a draft run}"
+          } >> "$GITHUB_STEP_SUMMARY"
       # A draft left by an earlier run is taken over and moved to this commit.
       - name: Create the draft release
         run: bash native/packaging/draft-release.sh "$TAG" notes.md
       - name: Upload the packages
         working-directory: assets
+        env:
+          KEEP_SIGNATURES: ${{ steps.gpg.outputs.gpg_signed }}
         run: |
           for name in $(bash ../native/packaging/expected-assets.sh "$NUMBER"); do
             gh release upload "$TAG" "$name" "$name.sha256" --clobber --repo "$GITHUB_REPOSITORY"
           done
+          mapfile -t signatures < <(bash ../native/packaging/signature-assets.sh "$NUMBER")
+          gh release upload "$TAG" "${signatures[@]}" --clobber --repo "$GITHUB_REPOSITORY"
       # A draft taken over from an earlier run keeps what that run uploaded,
       # such as the source archives of Open CAD Studio for a commit pinned
-      # before; whatever this release does not hold goes.
+      # before, or signatures when this run signs nothing; whatever this
+      # release does not hold goes.
       - name: Remove the files of an earlier run from the draft
+        env:
+          KEEP_SIGNATURES: ${{ steps.gpg.outputs.gpg_signed }}
         run: bash native/packaging/prune-release-assets.sh "$TAG" "$NUMBER"
       - name: Publish the release
         if: ${{ !inputs.draft_only }}
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+      # Only now can the image be pulled by its version. A run that failed
+      # before this step leaves at most an image without a tag.
+      - uses: actions/setup-go@v5
+        if: ${{ !inputs.draft_only }}
+        with:
+          go-version: stable
+          cache: false
+      - name: Tag the image with the version
+        if: ${{ !inputs.draft_only }}
+        env:
+          DIGEST: ${{ needs.image.outputs.digest }}
+          TOKEN: ${{ github.token }}
+        run: |
+          go install "github.com/google/go-containerregistry/cmd/crane@$CRANE_VERSION"
+          crane="$(go env GOPATH)/bin/crane"
+          "$crane" auth login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$TOKEN"
+          "$crane" tag "$IMAGE@$DIGEST" "$NUMBER"
+          [[ "$("$crane" digest "$IMAGE:$NUMBER")" == "$DIGEST" ]]
+          echo "Tagged \`$IMAGE:$NUMBER\` = \`$DIGEST\`." >> "$GITHUB_STEP_SUMMARY"
+
+  # The published release as a user gets it: the files from the release page
+  # and the image from the registry, checked with the commands of the
+  # signing table in docs/ecosystem.md, each on a system of its own. Every
+  # part writes its piece of the record; verification-record joins them.
+  verify-release:
+    name: Verify the published release (${{ matrix.name }})
+    needs: [prepare, packages, sdk, publish, image]
+    if: ${{ !inputs.draft_only }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            runner: windows-2025
+          - name: macos-arm64
+            runner: macos-15
+          - name: macos-x86_64
+            runner: macos-15-intel
+          - name: linux
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      IMAGE: ghcr.io/openaec-foundation/open-pointcloud-studio-api
+      DIGEST: ${{ needs.image.outputs.digest }}
+      WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}
+      MACOS_SIGNED: ${{ needs.packages.outputs.macos_signed }}
+      SDK_WINDOWS_SIGNED: ${{ needs.sdk.outputs.windows_signed }}
+      SDK_MACOS_SIGNED: ${{ needs.sdk.outputs.macos_signed }}
+      LINUX_GPG_SIGNED: ${{ needs.publish.outputs.gpg_signed }}
+      LINUX_GPG_FINGERPRINT: ${{ vars.OPENAEC_GPG_FINGERPRINT }}
+      PART: ${{ matrix.name }}
+    steps:
+      - name: Start the record
+        run: |
+          mkdir -p "$RUNNER_TEMP/verification"
+          {
+            echo "## $PART"
+            echo
+            echo "Runner image ${ImageOS:-unknown} ${ImageVersion:-}, $(uname -sm)."
+            echo
+          } > "$RUNNER_TEMP/verification/$PART.md"
+          : > "$RUNNER_TEMP/verification/identities-$PART.txt"
+
+      # ---- Windows ----------------------------------------------------------
+      - name: Download the Windows files
+        if: matrix.name == 'windows'
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release \
+            --pattern "*_windows-x64.zip" --pattern "*_windows-x64-dll.zip" --pattern "*_x64-setup.exe" --pattern SHA256SUMS
+          cd release
+          grep -E '(_windows-x64\.zip|_windows-x64-dll\.zip|_x64-setup\.exe)$' SHA256SUMS | sha256sum -c - \
+            | tee -a "$RUNNER_TEMP/verification/$PART.md"
+      - name: Find the tools of the Windows C compiler
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $install = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $install) { throw 'no C compiler for x64 found' }
+          $helper = "$env:RUNNER_TEMP\vc.bat"
+          @('@echo off', "call `"$install\VC\Auxiliary\Build\vcvars64.bat`" >nul || exit /b 1", '%*') | Set-Content -Encoding ascii $helper
+          "VC=$helper" >> $env:GITHUB_ENV
+      - name: Verify the published release
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $record = "$env:RUNNER_TEMP\verification\$env:PART.md"
+          $identities = "$env:RUNNER_TEMP\verification\identities-$env:PART.txt"
+          $failures = @()
+          $unpacked = "$env:RUNNER_TEMP\unpacked"
+          Expand-Archive "release\open-pointcloud-studio_$($env:NUMBER)_windows-x64.zip" $unpacked
+          Expand-Archive "release\open-pointcloud-studio-sdk_$($env:NUMBER)_windows-x64-dll.zip" $unpacked
+          $app = "$unpacked\open-pointcloud-studio_$($env:NUMBER)_windows-x64"
+          $files = [ordered]@{
+            'open-pointcloud-studio.exe' = @("$app\open-pointcloud-studio.exe", $env:WINDOWS_SIGNED)
+            'OpenCADStudio.exe' = @("$app\OpenCADStudio.exe", $env:WINDOWS_SIGNED)
+            'the installer' = @("release\open-pointcloud-studio_$($env:NUMBER)_x64-setup.exe", $env:WINDOWS_SIGNED)
+            'ops_pointcloud.dll' = @("$unpacked\open-pointcloud-studio-sdk_$($env:NUMBER)_windows-x64-dll\bin\ops_pointcloud.dll", $env:SDK_WINDOWS_SIGNED)
+          }
+          $lines = @('### Authenticode', '', '| File | Status | Signer | Thumbprint | Timestamp by |', '| --- | --- | --- | --- | --- |')
+          foreach ($name in $files.Keys) {
+            $path, $expected = $files[$name]
+            $signature = Get-AuthenticodeSignature $path
+            $signature | Format-List * | Out-String | Write-Host
+            $lines += "| $name | $($signature.Status) | $($signature.SignerCertificate.Subject) | $($signature.SignerCertificate.Thumbprint) | $($signature.TimeStamperCertificate.Subject) |"
+            if ($expected -eq 'true') {
+              if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) { $failures += "$name is not validly signed with a timestamp" }
+              "Authenticode of $name`: $($signature.SignerCertificate.Subject), thumbprint $($signature.SignerCertificate.Thumbprint)" | Add-Content $identities
+            } elseif ($signature.Status -ne 'NotSigned') {
+              $failures += "$name is $($signature.Status), and the release says it is not signed"
+            }
+          }
+          # The rule of the Packages workflow: a DLL is of the system when it
+          # is an API set, or lies in System32 and is not one of the C and
+          # C++ runtimes that Windows does not ship.
+          $system32 = Join-Path $env:SystemRoot 'System32'
+          $lines += @('', '### Runtime dependencies', '')
+          foreach ($name in 'open-pointcloud-studio.exe', 'OpenCADStudio.exe', 'ops_pointcloud.dll') {
+            $output = & $env:VC dumpbin /nologo /dependents $files[$name][0]
+            $dependencies = $output | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
+            $foreign = $dependencies | Where-Object {
+              -not ($_ -match '^(api|ext)-ms-' -or ((Test-Path (Join-Path $system32 $_)) -and $_ -notmatch '^(vcruntime|msvcp|vccorlib|concrt|vcomp|msvcr|ucrtbased)'))
+            }
+            $lines += "- $name`: $($dependencies -join ', ')"
+            if ($foreign) { $failures += "$name needs $($foreign -join ', '), which a clean Windows lacks" }
+          }
+          # A Windows container with nothing installed: the application
+          # starts there, reports its version and converts a file.
+          $lines += @('', '### Clean Windows container', '')
+          $data = "$env:RUNNER_TEMP\data"
+          New-Item -ItemType Directory -Force $data | Out-Null
+          $ply = @('ply', 'format ascii 1.0', 'element vertex 8', 'property float x', 'property float y', 'property float z', 'end_header')
+          foreach ($x in 0, 1) { foreach ($y in 0, 1) { foreach ($z in 0, 1) { $ply += "$x $y $z" } } }
+          $ply | Set-Content -Encoding ascii "$data\grid.ply"
+          $base = 'mcr.microsoft.com/windows/servercore:ltsc2025'
+          docker version
+          if ($LASTEXITCODE -ne 0) {
+            $lines += 'No container engine on this runner; not checked.'
+            Write-Host "::warning::no container engine on this runner; the clean Windows container was not checked"
+          } else {
+            docker pull $base
+            $version = docker run --rm -v "${app}:C:\app" -v "${data}:C:\data" $base C:\app\open-pointcloud-studio.exe --version
+            $exported = docker run --rm -v "${app}:C:\app" -v "${data}:C:\data" $base C:\app\open-pointcloud-studio.exe --export C:\data\grid.ply C:\data\grid.las
+            $lines += "- $base, nothing installed: ``--version`` gave ``$version``; ``--export`` gave ``$exported``"
+            if ("$version".Trim() -ne "open-pointcloud-studio $($env:NUMBER)") { $failures += "--version in a clean container gave '$version'" }
+            if (-not (Test-Path "$data\grid.las") -or (Get-Item "$data\grid.las").Length -eq 0) { $failures += '--export in a clean container wrote no file' }
+          }
+          $lines | Add-Content $record
+          if ($failures) {
+            @('', '**Failed:**') + ($failures | ForEach-Object { "- $_" }) | Add-Content $record
+            $failures | ForEach-Object { Write-Host "::error::$_" }
+            exit 1
+          }
+          # Not the exit code of the last command, which may be a refused
+          # docker version on a runner without containers.
+          exit 0
+
+      # ---- macOS ------------------------------------------------------------
+      - name: Download the macOS files
+        if: startsWith(matrix.name, 'macos')
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release \
+            --pattern "*_macos-universal.dmg" --pattern "*_macos-universal.tar.gz" \
+            --pattern "*_macos-universal-dylib.tar.gz" --pattern SHA256SUMS
+          cd release
+          grep -E '_macos-universal(\.dmg|\.tar\.gz|-dylib\.tar\.gz)$' SHA256SUMS | shasum -a 256 -c - \
+            | tee -a "$RUNNER_TEMP/verification/$PART.md"
+      - name: Verify the published release
+        if: startsWith(matrix.name, 'macos')
+        run: |
+          record="$RUNNER_TEMP/verification/$PART.md"
+          identities="$RUNNER_TEMP/verification/identities-$PART.txt"
+          failures=()
+          # shown COMMAND...: runs it, and puts it with its output and exit
+          # code into the record.
+          shown() {
+            local output code
+            output=$("$@" 2>&1) && code=0 || code=$?
+            { echo "\`$*\` (exit $code)"; echo; echo '```'; echo "$output"; echo '```'; echo; } >> "$record"
+            echo "$output"
+            return "$code"
+          }
+          dmg="release/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
+          # Marked as a browser marks a download, so that the system assesses
+          # it as it would assess a download.
+          xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");verify-release;$(uuidgen)" "$dmg"
+          { echo "### Assessment and notarization"; echo; } >> "$record"
+          accepted=true
+          shown spctl -a -t open --context context:primary-signature -v "$dmg" > /dev/null || accepted=false
+          shown xcrun stapler validate "$dmg" > /dev/null || accepted=false
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/image" "$dmg" > /dev/null
+          app="$RUNNER_TEMP/image/Open Pointcloud Studio.app"
+          shown spctl --assess --type execute -vv "$app" > /dev/null || accepted=false
+          if [[ "$MACOS_SIGNED" == true && "$accepted" != true ]]; then
+            failures+=("the release says the app is notarized, and spctl or the ticket does not agree")
+          fi
+          { echo "### Signatures"; echo; } >> "$record"
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          tar -xzf "release/open-pointcloud-studio_${NUMBER}_macos-universal.tar.gz" -C "$RUNNER_TEMP/unpacked"
+          tar -xzf "release/open-pointcloud-studio-sdk_${NUMBER}_macos-universal-dylib.tar.gz" -C "$RUNNER_TEMP/unpacked"
+          sdk="$RUNNER_TEMP/unpacked/open-pointcloud-studio-sdk_${NUMBER}_macos-universal-dylib"
+          for file in "$app" "$app/Contents/MacOS/open-pointcloud-studio" "$app/Contents/MacOS/OpenCADStudio" \
+              "$RUNNER_TEMP/unpacked/open-pointcloud-studio_${NUMBER}_macos-universal/open-pointcloud-studio" \
+              "$sdk/lib/libops_pointcloud.dylib"; do
+            details=$(shown codesign -dvv --verbose=4 "$file") || failures+=("codesign cannot read the signature of $file")
+            expected=$MACOS_SIGNED
+            [[ "$file" != *.dylib ]] || expected=$SDK_MACOS_SIGNED
+            if [[ "$expected" == true ]]; then
+              grep -q '^Authority=Developer ID Application' <<< "$details" \
+                || failures+=("$(basename "$file") is not signed with the developer certificate")
+              echo "Team ID of the signature of $(basename "$file"): $(sed -n 's/^TeamIdentifier=//p' <<< "$details")" >> "$identities"
+            fi
+          done
+          hdiutil detach "$RUNNER_TEMP/image" > /dev/null
+          { echo "### The C library on $(uname -m)"; echo; } >> "$record"
+          cc -std=c11 -Wall -Wextra -Werror -I"$sdk/include" "$sdk/examples/inspect.c" \
+            -L"$sdk/lib" -lops_pointcloud -Wl,-rpath,"$sdk/lib" -o "$RUNNER_TEMP/inspect"
+          mkdir -p "$RUNNER_TEMP/run"
+          shown "$RUNNER_TEMP/inspect" "$RUNNER_TEMP/run" > /dev/null || failures+=("the example of the C library failed")
+          if [[ ${#failures[@]} -gt 0 ]]; then
+            { echo "**Failed:**"; printf -- '- %s\n' "${failures[@]}"; } >> "$record"
+            printf '::error::%s\n' "${failures[@]}"
+            exit 1
+          fi
+
+      # ---- Linux and the image ----------------------------------------------
+      - name: Download every file of the release
+        if: matrix.name == 'linux'
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release
+          ls -l release
+      - name: Verify the published release
+        if: matrix.name == 'linux'
+        run: |
+          record="$RUNNER_TEMP/verification/$PART.md"
+          identities="$RUNNER_TEMP/verification/identities-$PART.txt"
+          failures=()
+          cd release
+          { echo "### Checksums"; echo; echo '```'; } >> "$record"
+          sha256sum -c SHA256SUMS >> "$record" 2>&1 || failures+=("sha256sum -c SHA256SUMS failed")
+          echo '```' >> "$record"
+          for sum in *.sha256; do
+            sha256sum -c "$sum" > /dev/null || failures+=("$sum does not match its file")
+          done
+          { echo; echo "### Build attestations"; echo; echo "| File | Signer workflow |"; echo "| --- | --- |"; } >> "$record"
+          for file in *.deb *.AppImage *_linux-*.tar.gz; do
+            if answer=$(gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --format json); then
+              signer=$(jq -r '.[0].verificationResult.signature.certificate.buildSignerURI' <<< "$answer")
+              echo "| $file | $signer |" >> "$record"
+              echo "Sigstore signer of the Linux files: $signer" >> "$identities"
+            else
+              echo "| $file | not verified |" >> "$record"
+              failures+=("the attestation of $file does not verify")
+            fi
+          done
+          echo >> "$record"
+          if [[ "$LINUX_GPG_SIGNED" == true ]]; then
+            { echo "### OpenPGP"; echo; } >> "$record"
+            gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$LINUX_GPG_FINGERPRINT" \
+              || failures+=("the key $LINUX_GPG_FINGERPRINT cannot be fetched from keys.openpgp.org")
+            for file in SHA256SUMS *.AppImage; do
+              if output=$(gpg --batch --verify "$file.asc" "$file" 2>&1); then
+                echo "- $file: $(grep -m1 'Good signature' <<< "$output")" >> "$record"
+              else
+                failures+=("gpg --verify $file.asc $file failed")
+              fi
+            done
+            echo "OpenPGP fingerprint: $LINUX_GPG_FINGERPRINT" >> "$identities"
+          else
+            echo "OpenPGP: no key is configured, so the release carries no OpenPGP signatures." >> "$record"
+          fi
+          cd ..
+          { echo; echo "### The image"; echo; } >> "$record"
+          docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN" > /dev/null
+          if gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" > /dev/null; then
+            echo "- \`gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY\`: verified" >> "$record"
+          else
+            failures+=("the attestation of $IMAGE@$DIGEST does not verify")
+          fi
+          docker pull --quiet "$IMAGE:$NUMBER" > /dev/null
+          pulled=$(docker image inspect --format '{{join .RepoDigests " "}}' "$IMAGE:$NUMBER")
+          echo "- \`docker pull $IMAGE:$NUMBER\`: $pulled" >> "$record"
+          [[ " $pulled " == *" $IMAGE@$DIGEST "* ]] || failures+=("$IMAGE:$NUMBER is not $DIGEST")
+          started=$(docker run --rm "$IMAGE:$NUMBER" --version)
+          echo "- \`docker run --rm $IMAGE:$NUMBER --version\`: $started" >> "$record"
+          [[ "$started" == "open-pointcloud-studio-api $NUMBER" ]] || failures+=("the image says '$started'")
+          echo "Image digest: $DIGEST" >> "$identities"
+          { echo; echo "### Clean containers"; echo; } >> "$record"
+          deb=$(docker run --rm -v "$PWD/release:/release:ro" ubuntu:24.04 bash -c \
+            "apt-get update -qq > /dev/null && apt-get install -y -qq /release/open-pointcloud-studio_${NUMBER}_amd64.deb > /dev/null 2>&1 && open-pointcloud-studio --version") \
+            || failures+=("the .deb does not install and start in a clean ubuntu:24.04")
+          echo "- ubuntu:24.04, \`apt-get install ./open-pointcloud-studio_${NUMBER}_amd64.deb\`, then \`--version\`: $deb" >> "$record"
+          [[ "$deb" == "open-pointcloud-studio $NUMBER" ]] || failures+=("the installed .deb says '$deb'")
+          appimage=$(docker run --rm -v "$PWD/release:/release:ro" ubuntu:22.04 bash -c \
+            "cp /release/open-pointcloud-studio_${NUMBER}_amd64.AppImage /tmp/app && chmod +x /tmp/app && /tmp/app --appimage-extract-and-run --version") \
+            || failures+=("the AppImage does not start in a clean ubuntu:22.04")
+          echo "- ubuntu:22.04, the AppImage with \`--appimage-extract-and-run --version\`: $appimage" >> "$record"
+          [[ "$appimage" == "open-pointcloud-studio $NUMBER" ]] || failures+=("the AppImage says '$appimage'")
+          if [[ ${#failures[@]} -gt 0 ]]; then
+            { echo; echo "**Failed:**"; printf -- '- %s\n' "${failures[@]}"; } >> "$record"
+            printf '::error::%s\n' "${failures[@]}"
+            exit 1
+          fi
+
+      - name: Show the part of the record
+        if: always()
+        run: cat "$RUNNER_TEMP/verification/$PART.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-${{ matrix.name }}
+          path: ${{ runner.temp }}/verification
+          if-no-files-found: error
+
+  # Joins the parts into open-pointcloud-studio_VERSION_verification.md and
+  # attaches it with its .sha256 to the published release, also when a part
+  # failed: the record then says which, and this job fails as well.
+  verification-record:
+    name: Attach the verification record
+    needs: [prepare, verify-release]
+    if: ${{ !cancelled() && !inputs.draft_only && needs.verify-release.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      RESULT: ${{ needs.verify-release.result }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: verification-*
+          path: parts
+          merge-multiple: true
+      - name: Write and attach the verification record
+        run: |
+          record="open-pointcloud-studio_${NUMBER}_verification.md"
+          {
+            echo "# Verification of Open Pointcloud Studio $TAG"
+            echo
+            echo "The published files of $TAG, downloaded from the release page, and the image from the registry, checked with the commands a user runs."
+            echo
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Result: $RESULT"
+            echo "- Written: $(date -u +%Y-%m-%dT%H:%MZ)"
+            echo
+            for part in windows macos-arm64 macos-x86_64 linux; do
+              if [[ -f "parts/$part.md" ]]; then
+                cat "parts/$part.md"
+              else
+                printf '## %s\n\nNo record: the job did not get as far as writing one.\n' "$part"
+              fi
+              echo
+            done
+            echo "## Identities"
+            echo
+            cat parts/identities-*.txt 2> /dev/null | sort -u | sed 's/^/- /'
+            echo
+          } > "$record"
+          sha256sum "$record" > "$record.sha256"
+          cat "$record" >> "$GITHUB_STEP_SUMMARY"
+          gh release upload "$TAG" "$record" "$record.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+          [[ "$RESULT" == success ]]
