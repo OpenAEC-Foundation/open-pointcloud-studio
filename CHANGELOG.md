@@ -17,6 +17,8 @@ section its version and date.
 
 ## Unreleased
 
+- The window has one bar at the top on Windows and macOS: the title strip of the application, with buttons to minimize, maximize or restore and close the window, instead of the system title bar above it. Dragging the strip moves the window, a double click maximizes or restores it, and on Windows the edges still resize it and snapping still works.
+
 ## 2026.44.0 - 2026-10-26
 
 - The File menu puts the common tasks one click away again: **Import point cloud**, **Open scan folder**, **Drawing (DXF/DWG)…**, **3D BAG buildings…** and the exports **Export full resolution…**, **Export selected points…**, **Export section box…**, **Export section drawing…** and **Export every Nth point…** start at once. **All export options…** opens the page with every export. **New** stays at the top of the menu, and **Workspace**, **Extensions** and **About** follow under a rule.

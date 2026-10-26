@@ -1067,5 +1067,8 @@
   "Texture progress": "Textuurvoortgang",
   "triangles": "driehoeken",
   "Texel (m)": "Texel (m)",
-  "Atlas (px)": "Atlas (px)"
+  "Atlas (px)": "Atlas (px)",
+  "Minimize": "Minimaliseren",
+  "Maximize": "Maximaliseren",
+  "Restore": "Vorig formaat"
 }
