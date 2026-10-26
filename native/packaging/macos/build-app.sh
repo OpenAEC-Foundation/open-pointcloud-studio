@@ -118,6 +118,12 @@ for attempt in 1 2 3; do
 done
 hdiutil verify "$image"
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+    # The disk image carries a signature of its own as well, so that
+    # Gatekeeper's check of a downloaded image (spctl -t open) accepts it and
+    # not only the application inside.
+    codesign --force --sign "$MACOS_SIGN_IDENTITY" \
+        --keychain "$MACOS_SIGN_KEYCHAIN" --timestamp "$image"
+    codesign --verify --verbose=2 "$image"
     with_retries xcrun notarytool submit "$image" --key "$MACOS_NOTARY_KEY" \
         --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" \
         --wait --output-format json > "$out_dir/notary-dmg.json"
