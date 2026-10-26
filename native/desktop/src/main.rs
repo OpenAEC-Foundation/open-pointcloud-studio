@@ -13,9 +13,12 @@ mod bag_panel;
 mod bcf;
 mod cad_viewer;
 mod camera_views;
+mod cli;
 mod cli_help;
 mod closed_mesh;
 mod cloud_centroid;
+#[cfg(test)]
+mod cloud_parity;
 mod cloud_transform;
 mod drawing;
 mod drawing_crop;
@@ -68,6 +71,7 @@ mod status_bar;
 mod survey;
 #[cfg(test)]
 mod test_render;
+mod themed_icon;
 mod ui_style;
 mod ui_theme;
 mod view_cube;
@@ -170,36 +174,16 @@ const BAG3D_PLY_COMMENTS: &[&str] = &[
     "EPSG:7415 RD New + NAP",
 ];
 
+/// The format the extension of an export destination names; `.ply` is
+/// binary.
 fn export_format_for_path(path: &Path) -> Option<ExportFormat> {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("ply") => Some(ExportFormat::PlyBinary),
-        Some("xyz") => Some(ExportFormat::Xyz),
-        Some("pts") => Some(ExportFormat::Pts),
-        Some("csv") => Some(ExportFormat::Csv),
-        Some("las") => Some(ExportFormat::Las),
-        Some("laz") => Some(ExportFormat::Laz),
-        Some("e57") => Some(ExportFormat::E57),
-        _ => None,
-    }
+    pointcloud_core::ops::export_format_for_path(path)
 }
 
+/// A scan file opened to be read in full: a LAS or LAZ file from its
+/// header, any other format with one pass over it.
 fn open_for_export(source: &Path) -> Result<PointCloud, pointcloud_core::LoadError> {
-    let is_las = source
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
-        });
-    if is_las {
-        pointcloud_core::open_las_header(source)
-    } else {
-        pointcloud_core::open(source, 1)
-    }
+    pointcloud_core::ops::open_source(source, &pointcloud_core::ops::never_stop)
 }
 
 /// Save every photo of a scan file in its stored encoding and report where
@@ -660,24 +644,13 @@ fn main() -> iced::Result {
         };
         match index {
             Ok(index) => {
-                let mut nodes = 0u64;
-                let mut leaves = 0u64;
-                let mut deepest = 0u8;
-                let mut pending = vec![&index.root];
-                while let Some(node) = pending.pop() {
-                    nodes += 1;
-                    deepest = deepest.max(node.depth);
-                    if node.is_leaf() {
-                        leaves += 1;
-                    }
-                    pending.extend(&node.children);
-                }
+                let summary = pointcloud_core::ops::index_summary(&index);
                 println!(
                     "Index ready: {} points, {} nodes ({} leaves, depth {}) in {:.1}s",
-                    index.root.total_points,
-                    nodes,
-                    leaves,
-                    deepest,
+                    summary.points,
+                    summary.nodes,
+                    summary.leaves,
+                    summary.depth,
                     started.elapsed().as_secs_f64()
                 );
                 return Ok(());
@@ -689,34 +662,11 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--scans")) {
-        let (Some(source), None) = (args.next(), args.next()) else {
-            eprintln!("Usage: open-pointcloud-studio --scans INPUT");
-            std::process::exit(2);
-        };
-        match open_for_export(&PathBuf::from(source)) {
-            Ok(cloud) => {
-                println!("{} scan position(s)", cloud.scan_poses.len());
-                for pose in cloud.scan_poses {
-                    println!(
-                        "{}: {:.6}, {:.6}, {:.6}",
-                        pose.label, pose.position[0], pose.position[1], pose.position[2]
-                    );
-                    if let Some(axes) = pose.axes {
-                        for (label, axis) in ["X", "Y", "Z"].into_iter().zip(axes) {
-                            println!(
-                                "  {label}: {:+.6}, {:+.6}, {:+.6}",
-                                axis[0], axis[1], axis[2]
-                            );
-                        }
-                    }
-                }
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("Scan positions failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        cli::finish(
+            cli::scans(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --scans INPUT",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--list-scans")) {
         let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
@@ -758,6 +708,67 @@ fn main() -> iced::Result {
             }
             Err(error) => {
                 eprintln!("Photos failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if first.as_deref() == Some(OsStr::new("--texture-mesh")) {
+        let (Some(source), Some(destination)) = (args.next(), args.next()) else {
+            eprintln!("Usage: open-pointcloud-studio --texture-mesh INPUT_MESH OUTPUT.obj [--texel-size METRES] [--max-resolution PIXELS]");
+            std::process::exit(2);
+        };
+        let mut options = pointcloud_core::AtlasOptions::default();
+        let mut remaining = args;
+        while let Some(flag) = remaining.next() {
+            let Some(value) = remaining.next() else {
+                eprintln!("Texture option needs a value: {}", flag.to_string_lossy());
+                std::process::exit(2);
+            };
+            match flag.to_str() {
+                Some("--texel-size") => {
+                    options.texel_size = value.to_string_lossy().parse().unwrap_or_else(|_| {
+                        eprintln!("--texel-size needs a positive number of metres");
+                        std::process::exit(2);
+                    });
+                }
+                Some("--max-resolution") => {
+                    options.max_resolution = value.to_string_lossy().parse().unwrap_or_else(|_| {
+                        eprintln!("--max-resolution needs a number from 256 to 4096");
+                        std::process::exit(2);
+                    });
+                }
+                _ => {
+                    eprintln!("Unknown texture option: {}", flag.to_string_lossy());
+                    std::process::exit(2);
+                }
+            }
+        }
+        let result = pointcloud_core::read_mesh_geometry(Path::new(&source))
+            .and_then(|mesh| {
+                mesh.ok_or_else(|| {
+                    pointcloud_core::LoadError::InvalidData("input has no mesh faces".into())
+                })
+            })
+            .and_then(|mesh| {
+                pointcloud_core::write_colored_obj_atlas(
+                    &mesh,
+                    Path::new(&destination),
+                    options,
+                    &|| false,
+                    &mut |done, total| {
+                        if done % 65_536 == 0 || done == total {
+                            eprintln!("Texture atlas: {done}/{total} triangles");
+                        }
+                    },
+                )
+            });
+        match result {
+            Ok(report) => {
+                println!("Textured OBJ ready: {} triangles, {} atlas page(s), {} triangles resolution-limited", report.triangles, report.pages, report.resolution_limited);
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Texture mesh failed: {error}");
                 std::process::exit(1);
             }
         }
@@ -818,91 +829,18 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--export")) {
-        let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
-        else {
-            eprintln!("Usage: open-pointcloud-studio --export INPUT OUTPUT");
-            std::process::exit(2);
-        };
-        let source = PathBuf::from(source);
-        let destination = PathBuf::from(destination);
-        let Some(format) = export_format_for_path(&destination) else {
-            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz, .e57");
-            std::process::exit(2);
-        };
-        match open_for_export(&source)
-            .and_then(|cloud| pointcloud_core::export_full(&cloud, &destination, format))
-        {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                eprintln!("Export failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        cli::finish(
+            cli::export(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --export INPUT OUTPUT",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--section")) {
-        let usage = || {
-            eprintln!(
-                "Usage: open-pointcloud-studio --section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]"
-            );
-            std::process::exit(2);
-        };
-        let (Some(source), Some(limits), Some(destination)) =
-            (args.next(), args.next(), args.next())
-        else {
-            usage()
-        };
-        let rotation = match (args.next(), args.next(), args.next()) {
-            (None, _, _) => 0.0,
-            (Some(flag), Some(value), None) if flag == "--rotation" => {
-                match value.to_str().and_then(parse_rotation) {
-                    Some(rotation) => rotation,
-                    None => {
-                        eprintln!("--rotation must be a number of degrees");
-                        std::process::exit(2);
-                    }
-                }
-            }
-            _ => usage(),
-        };
-        let source = PathBuf::from(source);
-        let destination = PathBuf::from(destination);
-        let Some(format) = export_format_for_path(&destination) else {
-            eprintln!("Supported export extensions: .ply, .xyz, .pts, .csv, .las, .laz, .e57");
-            std::process::exit(2);
-        };
-        let Some(values) = limits.to_str().and_then(|value| {
-            value
-                .split(',')
-                .map(str::parse::<f64>)
-                .collect::<Result<Vec<_>, _>>()
-                .ok()
-        }) else {
-            eprintln!("Section limits must be six comma-separated numbers");
-            std::process::exit(2);
-        };
-        if values.len() != 6 {
-            eprintln!("Section limits must be six comma-separated numbers");
-            std::process::exit(2);
-        }
-        let section = OrientedBox::new(
-            Bounds {
-                min: [values[0], values[1], values[2]],
-                max: [values[3], values[4], values[5]],
-            },
-            rotation,
+        cli::finish(
+            cli::section(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]",
         );
-        match open_for_export(&source).and_then(|cloud| {
-            pointcloud_core::export_section(&cloud, &destination, format, section)
-        }) {
-            Ok(count) => {
-                println!("Exported {count} points to {}", destination.display());
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("Section export failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--drawing")) {
         let arguments: Vec<_> = args.collect();
@@ -996,122 +934,18 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--mesh")) {
-        let (Some(source), Some(destination), None) = (args.next(), args.next(), args.next())
-        else {
-            eprintln!("Usage: open-pointcloud-studio --mesh INPUT OUTPUT.obj");
-            std::process::exit(2);
-        };
-        let source = PathBuf::from(source);
-        let destination = PathBuf::from(destination);
-        let is_las = source
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
-            });
-        let cloud = if is_las {
-            pointcloud_core::open_las_header(&source)
-        } else {
-            pointcloud_core::open(&source, 1)
-        };
-        match cloud.and_then(|cloud| {
-            pointcloud_core::mesh_terrain_obj(
-                &cloud,
-                &destination,
-                pointcloud_core::MeshConfig::default(),
-            )
-        }) {
-            Ok(stats) => {
-                println!(
-                    "Mesh ready: {} source points, {} vertices, {} triangles -> {}",
-                    stats.source_points,
-                    stats.vertices,
-                    stats.triangles,
-                    destination.display()
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("Meshing failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        cli::finish(
+            cli::mesh(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --mesh INPUT OUTPUT.obj",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--surface")) {
-        let usage = "Usage: open-pointcloud-studio --surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]";
-        let (Some(source), Some(destination)) = (args.next(), args.next()) else {
-            eprintln!("{usage}");
-            std::process::exit(2);
-        };
-        let mut config = pointcloud_core::SurfaceMeshConfig::default();
-        while let Some(option) = args.next() {
-            let Some(value) = args.next() else {
-                eprintln!("{usage}");
-                std::process::exit(2);
-            };
-            let value = value.to_string_lossy();
-            match option.to_str() {
-                Some("--max-vertices") => {
-                    config.max_vertices = value.parse().unwrap_or_else(|_| {
-                        eprintln!("invalid --max-vertices: {value}");
-                        std::process::exit(2)
-                    });
-                }
-                Some("--neighbors") => {
-                    config.neighbors = value.parse().unwrap_or_else(|_| {
-                        eprintln!("invalid --neighbors: {value}");
-                        std::process::exit(2)
-                    });
-                }
-                Some("--edge-factor") => {
-                    config.max_edge_factor = value.parse().unwrap_or_else(|_| {
-                        eprintln!("invalid --edge-factor: {value}");
-                        std::process::exit(2)
-                    });
-                }
-                Some("--mesh-size") => {
-                    config.mesh_size = value.parse().unwrap_or_else(|_| {
-                        eprintln!("invalid --mesh-size: {value}");
-                        std::process::exit(2)
-                    });
-                }
-                _ => {
-                    eprintln!("{usage}");
-                    std::process::exit(2);
-                }
-            }
-        }
-        let source = PathBuf::from(source);
-        let destination = PathBuf::from(destination);
-        let is_las = source
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
-            });
-        let cloud = if is_las {
-            pointcloud_core::open_las_header(&source)
-        } else {
-            pointcloud_core::open(&source, 1)
-        };
-        match cloud
-            .and_then(|cloud| pointcloud_core::mesh_surface_obj(&cloud, &destination, config))
-        {
-            Ok(stats) => {
-                println!(
-                    "3D surface ready: {} source points, {} vertices, {} triangles -> {}",
-                    stats.source_points,
-                    stats.vertices,
-                    stats.triangles,
-                    destination.display()
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("3D surface failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        cli::finish(
+            cli::surface(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--bag3d")) {
         let (Some(bbox), Some(lod), Some(destination), None) =
@@ -1440,6 +1274,7 @@ struct MeshStart {
     surface_config: SurfaceMeshConfig,
     cloud: Arc<PointCloud>,
     deleted: Option<Arc<DeletionMask>>,
+    colours: Option<Arc<PointColours>>,
     filter: ClassFilter,
     transform: CloudTransform,
     path: PathBuf,
@@ -1909,6 +1744,16 @@ enum Message {
     CancelMesh,
     ExportMesh,
     MeshExportPathChosen(mesh_export::MeshExportRequest, Option<PathBuf>),
+    TextureMesh,
+    TextureTexelSize(String),
+    TextureMaxResolution(String),
+    TexturePoll,
+    CancelTextureExport,
+    TexturePathChosen(mesh_export::MeshExportRequest, Option<PathBuf>),
+    TextureExported(
+        Option<String>,
+        Result<mesh_export::TextureExportDone, String>,
+    ),
     /// A mesh file was written or could not be, with the job of the local
     /// API that asked for it.
     MeshExported(Option<String>, Result<mesh_export::MeshExportDone, String>),
@@ -2013,6 +1858,11 @@ enum Message {
     PanoramaReady(PathBuf, usize, Result<Arc<PhotoSet>, String>),
     /// The photos of a file that are not those of its stations.
     Photos(file_photos::PhotoAction),
+    TogglePhotoCompare,
+    PhotoSplitRatio(f32),
+    TogglePhotoSplitAxis,
+    PhotoSplitFinished,
+    CompareModel(view_tabs::CompareAction),
     Budget(u32),
     FilterClass(u8, bool),
     SetSectionEnabled(bool),
@@ -2180,6 +2030,9 @@ struct Studio {
     /// The photos of the open files that are not those of their stations,
     /// and the one that is entered.
     photos: file_photos::PhotoTool,
+    photo_compare: bool,
+    photo_split_ratio: f32,
+    photo_split_vertical: bool,
     /// Movement keys held down, indexed by `WalkKey`, and the faster pace.
     walk_keys: [bool; 6],
     walk_fast: bool,
@@ -2199,6 +2052,9 @@ struct Studio {
     section_enabled: bool,
     section_export_pending: bool,
     mesh_export_pending: bool,
+    texture_export: Option<Arc<mesh_export::TextureExportControl>>,
+    texture_texel_size: String,
+    texture_max_resolution: String,
     mesh_dialog_pending: bool,
     mesh_job: Option<MeshJob>,
     merge_job: Option<MergeJob>,
@@ -2386,6 +2242,8 @@ struct CloudEntry {
     auto_index_queued: bool,
     index_building: bool,
     detail_points: Option<Arc<[IndexedPoint]>>,
+    /// Last model detail, retained while a photo or the next model view loads.
+    compare_points: Option<Arc<[IndexedPoint]>>,
     /// Points read inside the section box that `detail_points` does not
     /// hold, drawn beside them; see `section_detail`.
     focus_points: Option<Arc<[IndexedPoint]>>,
@@ -2681,6 +2539,37 @@ impl CloudEntry {
             .map_or(self.cloud.points.len(), |points| points.len())
     }
 
+    fn resident_len(&self) -> usize {
+        self.compare_points.as_ref().map_or_else(
+            || self.cloud.points.len().min(self.cloud.point_ordinals.len()),
+            |points| points.len(),
+        )
+    }
+
+    fn resident_records(&self) -> Box<dyn Iterator<Item = IndexedPoint> + '_> {
+        let transform = self.transform;
+        let records: Box<dyn Iterator<Item = IndexedPoint> + '_> = if let Some(points) =
+            &self.compare_points
+        {
+            Box::new(
+                points
+                    .iter()
+                    .copied()
+                    .map(move |point| transform.record(point)),
+            )
+        } else {
+            Box::new(
+                self.cloud
+                    .points
+                    .iter()
+                    .copied()
+                    .zip(self.cloud.point_ordinals.iter().copied())
+                    .map(move |(point, ordinal)| transform.record(IndexedPoint { point, ordinal })),
+            )
+        };
+        self.painted(records)
+    }
+
     fn view_records(&self) -> Box<dyn Iterator<Item = IndexedPoint> + '_> {
         let transform = self.transform;
         let records: Box<dyn Iterator<Item = IndexedPoint> + '_> = if let Some(detail) =
@@ -2834,6 +2723,9 @@ impl Default for Studio {
             walk_station: None,
             panorama_photos: None,
             photos: file_photos::PhotoTool::default(),
+            photo_compare: settings.photo_compare,
+            photo_split_ratio: settings.photo_split_ratio,
+            photo_split_vertical: settings.photo_split_vertical,
             walk_keys: [false; 6],
             walk_fast: false,
             walk_tick: None,
@@ -2851,6 +2743,9 @@ impl Default for Studio {
             section_enabled: false,
             section_export_pending: false,
             mesh_export_pending: false,
+            texture_export: None,
+            texture_texel_size: "0.02".into(),
+            texture_max_resolution: "4096".into(),
             mesh_dialog_pending: false,
             mesh_job: None,
             merge_job: None,
@@ -2955,7 +2850,13 @@ impl Studio {
             return true;
         }
         match mode {
-            ColorMode::Rgb => visible.clone().any(|entry| entry.cloud.has_rgb),
+            ColorMode::Rgb => visible.clone().any(|entry| {
+                entry.cloud.has_rgb
+                    || entry
+                        .colours
+                        .as_ref()
+                        .is_some_and(|colours| !colours.is_empty())
+            }),
             ColorMode::Elevation => true,
             ColorMode::Intensity => visible.clone().any(|entry| entry.cloud.has_intensity),
             ColorMode::Classification => visible.any(|entry| entry.cloud.has_classification),
@@ -2982,7 +2883,7 @@ impl Studio {
         } else if self.window_size.is_some_and(|size| size.width >= 1500.0) {
             300.0
         } else {
-            270.0
+            openaec_ui::model::metrics::PANEL_DEFAULT as f32
         }
     }
 
@@ -3010,6 +2911,9 @@ impl Studio {
             browser_collapsed: self.browser.collapsed().to_vec(),
             view_tabs: self.tabs.kept().0.clone(),
             view_tab: self.tabs.kept().1.clone(),
+            photo_compare: self.photo_compare,
+            photo_split_ratio: self.photo_split_ratio,
+            photo_split_vertical: self.photo_split_vertical,
         }
     }
 
@@ -3136,6 +3040,7 @@ impl Studio {
             picked: false,
             index_building: false,
             detail_points: None,
+            compare_points: None,
             focus_points: None,
         });
         self.import_headers.insert(id, Arc::clone(&header));
@@ -3552,6 +3457,7 @@ impl Studio {
 
     fn leave_walk(&mut self) -> bool {
         self.panorama_photos = None;
+        self.remember_photo_tab();
         self.photos.close();
         self.walk_station = None;
         self.walk_keys = [false; 6];
@@ -3962,6 +3868,7 @@ impl Studio {
                 answer.0["result"]["bag3d"] =
                     json!(self.bag_job.as_ref().map(bag_panel::BagJob::progress_value));
                 answer.0["result"]["mesh_export_pending"] = Value::Bool(self.mesh_export_pending);
+                answer.0["result"]["texture_export"] = self.texture_export_value();
                 answer.0["result"]["file_view"] = self.file_view_value();
                 answer.0["result"]["cad_viewer"] = self.cad_viewer.value();
                 answer.0["result"]["drawing"] = self.drawing.value();
@@ -4216,6 +4123,39 @@ impl Studio {
             | ApiCommand::PhotoBlend { .. }
             | ApiCommand::NextPhoto
             | ApiCommand::PreviousPhoto) => self.api_photos(command),
+            ApiCommand::SetPhotoCompare { enabled } => {
+                if enabled && self.shown_photo().is_none() {
+                    (
+                        json!({"ok": false, "error": "enter an E57 photo first"}),
+                        Task::none(),
+                    )
+                } else {
+                    self.photo_compare = enabled;
+                    self.revision += 1;
+                    (
+                        json!({"ok": true, "enabled": enabled}),
+                        self.queue_preferences_save(),
+                    )
+                }
+            }
+            ApiCommand::SetPhotoSplit { ratio, vertical } => {
+                if !ratio.is_finite() || !(0.25..=0.75).contains(&ratio) {
+                    (
+                        json!({"ok": false, "error": "split ratio must be from 0.25 to 0.75"}),
+                        Task::none(),
+                    )
+                } else {
+                    self.photo_split_ratio = ratio;
+                    if let Some(vertical) = vertical {
+                        self.photo_split_vertical = vertical;
+                    }
+                    self.revision += 1;
+                    (
+                        json!({"ok": true, "ratio": ratio, "vertical": self.photo_split_vertical}),
+                        self.queue_preferences_save(),
+                    )
+                }
+            }
             ApiCommand::ZoomAll => {
                 let task = self.update(Message::ResetCamera);
                 (json!({"ok": true, "camera": self.camera_value()}), task)
@@ -4913,6 +4853,7 @@ impl Studio {
                     } else if let Some(entry) = active {
                         let cloud = Arc::clone(&entry.cloud);
                         let deleted = entry.deleted.as_ref().map(Arc::clone);
+                        let colours = entry.colours.as_ref().map(Arc::clone);
                         let transform = entry.transform;
                         let id = self.record_api_job(json!({
                             "state": "running", "operation": "mesh", "mode": mode.label(), "path": path
@@ -4922,6 +4863,7 @@ impl Studio {
                             surface_config: config,
                             cloud,
                             deleted,
+                            colours,
                             filter: self.mesh_filter(),
                             transform,
                             path: path.clone(),
@@ -4961,6 +4903,12 @@ impl Studio {
                 }
             }
             ApiCommand::ExportMesh { path } => self.api_export_mesh(path),
+            ApiCommand::TextureMesh {
+                path,
+                texel_size,
+                max_resolution,
+            } => self.api_texture_mesh(path, texel_size, max_resolution),
+            ApiCommand::CancelTextureMesh => (self.cancel_texture_export(), Task::none()),
             ApiCommand::SetFaceSettings { options } => {
                 (self.api_set_face_settings(&options), Task::none())
             }
@@ -5396,6 +5344,7 @@ impl Studio {
         self.cancel_faces();
         self.cancel_mesh_to_plans();
         self.cancel_photo_colours();
+        self.cancel_texture_export();
         if let Some(job) = &self.merge_job {
             job.control.cancelled.store(true, Ordering::Relaxed);
         }
@@ -5558,6 +5507,7 @@ impl Studio {
             surface_config,
             cloud,
             deleted,
+            colours,
             filter,
             transform,
             path,
@@ -5589,15 +5539,24 @@ impl Studio {
                             },
                             |progress| control.report(progress),
                         ),
-                        MeshMode::Surface => pointcloud_core::mesh_surface_obj_where_progress(
-                            &cloud,
-                            &path,
-                            surface_config,
-                            |ordinal, point| {
-                                mesh_accepts(ordinal, point, deleted.as_deref(), filter, transform)
-                            },
-                            |progress| control.report(progress),
-                        ),
+                        MeshMode::Surface => {
+                            pointcloud_core::mesh_surface_obj_where_progress_colours(
+                                &cloud,
+                                &path,
+                                surface_config,
+                                colours.as_deref(),
+                                |ordinal, point| {
+                                    mesh_accepts(
+                                        ordinal,
+                                        point,
+                                        deleted.as_deref(),
+                                        filter,
+                                        transform,
+                                    )
+                                },
+                                |progress| control.report(progress),
+                            )
+                        }
                     };
                     result
                         .and_then(|stats| {
@@ -5708,6 +5667,7 @@ impl Studio {
                         picked: false,
                         index_building: false,
                         detail_points: None,
+                        compare_points: None,
                         focus_points: None,
                     });
                     self.revision += 1;
@@ -6784,6 +6744,7 @@ impl Studio {
                         picked: false,
                         index_building: false,
                         detail_points: None,
+                        compare_points: None,
                         focus_points: None,
                     });
                     self.revision += 1;
@@ -7057,11 +7018,11 @@ impl Studio {
                     self.status = "A mesh task is already running".into();
                     return Task::none();
                 }
-                let Some(transform) = self
+                let Some((transform, colours)) = self
                     .clouds
                     .iter()
                     .find(|entry| Arc::ptr_eq(&entry.cloud, &cloud))
-                    .map(|entry| entry.transform)
+                    .map(|entry| (entry.transform, entry.colours.as_ref().map(Arc::clone)))
                 else {
                     self.status = "Mesh source is no longer open".into();
                     return Task::none();
@@ -7071,6 +7032,7 @@ impl Studio {
                     surface_config: config,
                     cloud,
                     deleted,
+                    colours,
                     filter: self.mesh_filter(),
                     transform,
                     path,
@@ -7158,6 +7120,19 @@ impl Studio {
             Message::ExportMesh => return self.export_mesh(),
             Message::MeshExportPathChosen(request, path) => {
                 return self.mesh_export_path_chosen(request, path);
+            }
+            Message::TextureMesh => return self.export_texture_mesh(),
+            Message::TextureTexelSize(value) => self.texture_texel_size = value,
+            Message::TextureMaxResolution(value) => self.texture_max_resolution = value,
+            Message::TexturePoll => return self.texture_poll(),
+            Message::CancelTextureExport => {
+                self.cancel_texture_export();
+            }
+            Message::TexturePathChosen(request, path) => {
+                return self.texture_path_chosen(request, path);
+            }
+            Message::TextureExported(api_job_id, result) => {
+                self.texture_exported(api_job_id, result);
             }
             Message::MeshExported(api_job_id, result) => self.mesh_exported(api_job_id, result),
             Message::ToggleBagPanel => return self.set_bag_panel(!self.bag_panel),
@@ -8934,6 +8909,22 @@ impl Studio {
             Message::Browser(action) => return self.update_browser(action),
             Message::Tabs(action) => return self.update_tabs(action),
             Message::Photos(action) => return self.update_photos(action),
+            Message::TogglePhotoCompare => {
+                self.photo_compare = !self.photo_compare;
+                self.revision += 1;
+                return self.queue_preferences_save();
+            }
+            Message::PhotoSplitRatio(ratio) => {
+                self.photo_split_ratio = ratio.clamp(0.25, 0.75);
+                self.revision += 1;
+            }
+            Message::TogglePhotoSplitAxis => {
+                self.photo_split_vertical = !self.photo_split_vertical;
+                self.revision += 1;
+                return self.queue_preferences_save();
+            }
+            Message::PhotoSplitFinished => return self.queue_preferences_save(),
+            Message::CompareModel(action) => self.update_compare_model(action),
             Message::Sheet(action) => return self.update_sheet_dialog(action),
             Message::ShowContextMenu(point) => self.context_menu = Some(point),
             Message::DismissContextMenu => self.context_menu = None,
@@ -8981,7 +8972,7 @@ impl Studio {
                     return Task::none();
                 }
                 if self.settings.is_some() {
-                    self.settings_action(settings_dialog::SettingsAction::Cancel);
+                    self.settings_action(settings_dialog::SettingsAction::Escape);
                     return Task::none();
                 }
                 if self.extension_host.dialog.is_some() {
@@ -9956,7 +9947,11 @@ impl Studio {
         for (index, points) in details {
             count += points.len();
             if let Some(entry) = self.clouds.get_mut(index) {
-                entry.detail_points = Some(points.into());
+                let points: Arc<[IndexedPoint]> = Arc::from(points);
+                if self.photos.view.is_none() && self.tabs.owner == view_tabs::TabId::Model {
+                    entry.compare_points = Some(Arc::clone(&points));
+                }
+                entry.detail_points = Some(points);
             }
         }
         count
@@ -10074,22 +10069,28 @@ impl Studio {
         }
     }
 
-    fn ribbon(&self) -> Element<'_, Message> {
+    fn ribbon_sections(
+        &self,
+    ) -> (
+        Element<'_, Message>,
+        Element<'_, Message>,
+        Option<Element<'_, Message>>,
+    ) {
         let active_tab = self.ribbon_tab;
         let compact = self.window_size.is_some_and(|size| size.width < 930.0);
-        let file_button = button(
+        let file_button = openaec_ui::widgets::ribbon_tab(
             row![
-                text(i18n::tr("File")).size(16).font(fonts::MEDIUM),
-                text("⌄").size(15),
+                text(i18n::tr("File")).size(12).font(fonts::SEMIBOLD),
+                text("⌄").size(12),
             ]
-            .spacing(12)
-            .align_y(iced::Alignment::Center),
-        )
-        .on_press(Message::ToggleFile)
-        .style(|theme, status| opencad_ribbon::tab_style(theme, self.file_open, status))
-        .width(if compact { 100 } else { 139 })
-        .height(44)
-        .padding([4, if compact { 9 } else { 19 }]);
+            .spacing(6)
+            .align_y(iced::Alignment::Center)
+            .into(),
+            Message::ToggleFile,
+            if compact { 70.0 } else { 80.0 },
+            openaec_ui::widgets::RibbonTabKind::File,
+            self.ui_theme.shared(),
+        );
         let tab_buttons: Vec<Element<'_, Message>> = RibbonTab::CORE
             .into_iter()
             .map(|tab| {
@@ -10098,35 +10099,41 @@ impl Studio {
                     Message::RibbonTabSelected(tab),
                     !self.file_open && active_tab == tab,
                     compact,
+                    self.ui_theme.shared(),
                 )
             })
             .collect();
         let tabs = row(tab_buttons).spacing(1).width(iced::Length::Shrink);
         let quick_access: Element<'_, Message> = row![
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::OpenFolder, 24.0),
+                title_icon(TitleIcon::OpenFolder, 16.0),
                 "Import point cloud",
                 Some(Message::Open),
+                self.ui_theme.shared(),
             ),
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::OpenRecent, 24.0),
+                title_icon(TitleIcon::OpenRecent, 16.0),
                 "Open scan folder",
                 Some(Message::OpenFolder),
+                self.ui_theme.shared(),
             ),
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::Save, 24.0),
+                title_icon(TitleIcon::Save, 16.0),
                 "Export active point cloud",
                 self.active.map(|_| Message::Export),
+                self.ui_theme.shared(),
             ),
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::Undo, 24.0),
+                title_icon(TitleIcon::Undo, 16.0),
                 "Undo",
                 (!self.undo_deletions.is_empty()).then_some(Message::UndoDelete),
+                self.ui_theme.shared(),
             ),
             opencad_ribbon::quick_access_btn(
-                title_icon(TitleIcon::Redo, 24.0),
+                title_icon(TitleIcon::Redo, 16.0),
                 "Redo",
                 (!self.redo_deletions.is_empty()).then_some(Message::RedoDelete),
+                self.ui_theme.shared(),
             ),
         ]
         .spacing(0)
@@ -10136,58 +10143,52 @@ impl Studio {
         } else {
             quick_access
         };
-        let settings_content: Element<'_, Message> = if compact {
-            title_icon(TitleIcon::Settings, 22.0)
-        } else {
-            row![
-                title_icon(TitleIcon::Settings, 22.0),
-                text(i18n::tr("Settings")).size(13)
-            ]
-            .spacing(7)
-            .align_y(iced::Alignment::Center)
-            .into()
-        };
-        let settings_button = button(settings_content)
-            .on_press(Message::Settings(settings_dialog::SettingsAction::Open))
-            .style(|theme, status| opencad_ribbon::tab_style(theme, false, status))
-            .width(if compact { 42 } else { 132 })
-            .height(42)
-            .padding([3, 8]);
+        let settings_button = opencad_ribbon::quick_access_btn(
+            title_icon(TitleIcon::Settings, 16.0),
+            "Settings",
+            Some(Message::Settings(settings_dialog::SettingsAction::Open)),
+            self.ui_theme.shared(),
+        );
         let logo = svg(svg::Handle::from_memory(
             include_bytes!("../../assets/icons/logo.svg").as_slice(),
         ))
-        .width(24)
-        .height(24);
-        let divider = || {
-            container(text(""))
-                .width(1)
-                .height(25)
-                .style(|_| container::Style::default().background(Color::from_rgb8(105, 105, 112)))
-        };
-        let top_strip = container(
+        .width(18)
+        .height(18);
+        let title_strip = container(
             row![
                 container(logo)
-                    .width(if compact { 34 } else { 50 })
-                    .align_x(iced::Alignment::Center),
-                file_button,
-                divider(),
-                iced::widget::Space::with_width(if compact { 7 } else { 19 }),
-                tabs,
-                iced::widget::horizontal_space(),
-                quick_access,
-                divider(),
-                settings_button
+                    .width(iced::Length::FillPortion(1))
+                    .align_x(iced::Alignment::Start),
+                container(
+                    text("Open Pointcloud Studio")
+                        .font(fonts::MEDIUM)
+                        .size(12)
+                        .color(self.ui_theme.colors().accent),
+                )
+                .width(iced::Length::FillPortion(1))
+                .center_x(Fill),
+                container(row![quick_access, settings_button].spacing(0))
+                    .width(iced::Length::FillPortion(1))
+                    .align_x(iced::Alignment::End),
             ]
             .width(Fill)
             .align_y(iced::Alignment::Center)
             .spacing(0)
-            .padding([0, 2]),
+            .padding([0, 8]),
         )
         .width(Fill)
-        .height(48)
-        .style(|_| container::Style::default().background(Color::from_rgb8(54, 54, 62)));
+        .height(openaec_ui::model::metrics::TITLE)
+        .style(|theme| {
+            container::Style::default()
+                .background(ui_theme::colors(theme).bg_lighter)
+                .color(ui_theme::colors(theme).text)
+        });
+        let tab_strip = openaec_ui::widgets::ribbon_tab_strip(
+            row![file_button, tabs].spacing(2).into(),
+            self.ui_theme.shared(),
+        );
         if self.file_open {
-            return container(top_strip).width(Fill).style(ribbon_style).into();
+            return (title_strip.into(), tab_strip, None);
         }
 
         let open = self.ribbon_panel_open;
@@ -10197,22 +10198,19 @@ impl Studio {
                 .padding([0, 4])
                 .width(Fill)
                 .height(opencad_ribbon::TOOL_BAR_H)
+                .style(ribbon_style)
                 .into();
-        container(
-            column![
-                top_strip,
-                container(text(""))
-                    .width(Fill)
-                    .height(1)
-                    .style(|theme| container::Style::default()
-                        .background(ui_theme::colors(theme).border_subtle)),
-                tool_strip,
-            ]
-            .spacing(0),
-        )
-        .width(Fill)
-        .style(ribbon_style)
-        .into()
+        (title_strip.into(), tab_strip, Some(tool_strip))
+    }
+
+    #[cfg(test)]
+    fn ribbon(&self) -> Element<'_, Message> {
+        let (title, tabs, tools) = self.ribbon_sections();
+        let mut bands = column![title, tabs].spacing(0);
+        if let Some(tools) = tools {
+            bands = bands.push(tools);
+        }
+        bands.width(Fill).into()
     }
 
     /// The view-cube dropdown replaces the former View ribbon.
@@ -10376,13 +10374,13 @@ impl Studio {
                 id,
                 title,
                 icon_svg(icon, 22.0),
-                opencad_ribbon::render_reference_group(title, width, tools),
+                opencad_ribbon::render_reference_group(self.ui_theme.shared(), title, width, tools),
                 open == Some(id),
             )
         };
         let big = |icon, caption, tooltip, message, on, enabled, width| {
             reference_action(
-                icon_svg(icon, 47.0),
+                icon_svg(icon, 36.0),
                 caption,
                 tooltip,
                 message,
@@ -10697,7 +10695,7 @@ impl Studio {
                 58.0
             ),
             reference_icon_action(
-                icon_svg(ToolIcon::Fit, 23.0),
+                icon_svg(ToolIcon::Update, 23.0),
                 "Refresh LOD",
                 Message::RefreshLod,
                 indexed
@@ -10842,6 +10840,9 @@ impl Studio {
             shift: self.modifiers.shift(),
             pointer: &self.viewport_pointer,
             photos: &self.photos,
+            photo_visible: true,
+            read_only: false,
+            resident_points: false,
             clean: self.views.capturing(),
         }
     }
@@ -10975,24 +10976,38 @@ impl Studio {
 
     fn window_view(&self) -> Element<'_, Message> {
         if self.file_open {
-            return self.with_dialogs(
-                column![
-                    self.ribbon(),
-                    self.file_view(),
-                    self.status_bar(self.status.clone()),
-                ]
-                .height(Fill)
-                .into(),
-            );
+            let (titlebar, tabs, ribbon) = self.ribbon_sections();
+            return self.with_dialogs(openaec_ui::frame::frame(openaec_ui::frame::FrameSlots {
+                titlebar,
+                tabs,
+                ribbon,
+                documents: None,
+                content: self.file_view(),
+                status: self.status_bar(self.status.clone()),
+            }));
         }
         let sheet_canvas = self.layout_canvas();
         let model_visible = sheet_canvas.is_none() && !self.drawing_view.shown;
+        let compare_model = (self.photo_compare
+            && sheet_canvas.is_none()
+            && !self.drawing_view.shown
+            && self.shown_photo().is_some())
+        .then(|| self.compare_model_viewport(self.point_viewport()))
+        .flatten();
+        let photo_compare = compare_model.is_some();
         let canvas = if let Some(sheet) = sheet_canvas {
             stack![sheet].width(Fill).height(Fill)
         } else if self.drawing_view.shown {
             stack![self.drawing_sheet()].width(Fill).height(Fill)
         } else {
-            let point_view = self.point_viewport();
+            let mut point_view = self.point_viewport();
+            if photo_compare {
+                if self.photo_split_vertical {
+                    point_view.viewport_size.height *= 1.0 - self.photo_split_ratio;
+                } else {
+                    point_view.viewport_size.width *= 1.0 - self.photo_split_ratio;
+                }
+            }
             stack![
                 gpu_viewport::GpuViewport {
                     overlay: point_view
@@ -11005,7 +11020,11 @@ impl Studio {
             .width(Fill)
             .height(Fill)
         };
-        let canvas = if self.walk.is_some() && !self.drawing_view.shown && !self.views.capturing() {
+        let canvas = if self.walk.is_some()
+            && !photo_compare
+            && !self.drawing_view.shown
+            && !self.views.capturing()
+        {
             canvas.push(
                 container(
                     button(text(i18n::tr("Back to 3D view (Esc)")).size(12))
@@ -11074,19 +11093,15 @@ impl Studio {
             .width(102)
             .height(26)
             .padding([3, 10]);
-            let controls = if self.view_controls_open {
-                Some(self.view_controls_panel())
-            } else {
-                None
-            };
-            let mut items = column![
-                iced::widget::Space::with_height(151),
-                container(toggle).width(315).align_x(iced::Alignment::End)
-            ]
-            .spacing(2);
-            if let Some(controls) = controls {
-                items = items.push(controls);
-            }
+            let anchor = container(toggle).width(315).align_x(iced::Alignment::End);
+            let controls = openaec_ui::widgets::popover_aligned(
+                anchor.into(),
+                self.view_controls_panel(),
+                self.view_controls_open,
+                Message::ToggleViewControls,
+                true,
+            );
+            let items = column![iced::widget::Space::with_height(151), controls,].spacing(2);
             canvas.push(
                 container(items)
                     .width(Fill)
@@ -11109,9 +11124,7 @@ impl Studio {
             display_name(&entry.cloud.path)
         });
         let mut properties = column![
-            container(text(i18n::tr("Properties")).size(12).font(fonts::SEMIBOLD))
-                .padding([5, 8])
-                .width(Fill),
+            openaec_ui::widgets::panel_header(i18n::tr("Properties"), self.ui_theme.shared()),
             container(text(filename).size(11))
                 .padding([5, 8])
                 .width(Fill)
@@ -11183,6 +11196,39 @@ impl Studio {
                     container(
                         ui_style::secondary_button(i18n::tr("Cancel mesh"))
                             .on_press(Message::CancelMesh),
+                    )
+                    .padding([5, 8]),
+                );
+        }
+        if let Some(control) = &self.texture_export {
+            let processed = control.processed.load(Ordering::Relaxed);
+            properties = properties
+                .push(opencad_properties::section_header("Texture progress"))
+                .push(
+                    container(
+                        text(format!(
+                            "{processed} / {} {}",
+                            control.total,
+                            i18n::tr("triangles")
+                        ))
+                        .size(11),
+                    )
+                    .padding([6, 8]),
+                )
+                .push(
+                    container(ui_style::progress_bar(
+                        0.0..=1.0,
+                        processed as f32 / control.total.max(1) as f32,
+                    ))
+                    .padding([2, 8])
+                    .width(Fill),
+                )
+                .push(
+                    container(
+                        ui_style::secondary_button(i18n::tr("Cancel texture")).on_press_maybe(
+                            (!control.cancelled.load(Ordering::Relaxed))
+                                .then_some(Message::CancelTextureExport),
+                        ),
                     )
                     .padding([5, 8]),
                 );
@@ -11422,48 +11468,28 @@ impl Studio {
             properties = properties.push(opencad_properties::section_header("Section box"));
             for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
                 properties = properties
-                    .push(
-                        container(
-                            row![
-                                text(format!(
-                                    "{label} min {:.0}%",
-                                    self.section_min_percent[axis]
-                                ))
-                                .size(10)
-                                .width(78),
-                                ui_style::slider(
-                                    0.0..=100.0,
-                                    self.section_min_percent[axis] as f32,
-                                    move |value| { Message::SectionMin(axis, value) }
-                                )
-                                .width(156),
-                            ]
-                            .spacing(6)
-                            .align_y(iced::Alignment::Center),
+                    .push(openaec_ui::widgets::property_grid_control_with(
+                        format!("{label} min {:.0}%", self.section_min_percent[axis]),
+                        ui_style::slider(
+                            0.0..=100.0,
+                            self.section_min_percent[axis] as f32,
+                            move |value| Message::SectionMin(axis, value),
                         )
-                        .padding([2, 8]),
-                    )
-                    .push(
-                        container(
-                            row![
-                                text(format!(
-                                    "{label} max {:.0}%",
-                                    self.section_max_percent[axis]
-                                ))
-                                .size(10)
-                                .width(78),
-                                ui_style::slider(
-                                    0.0..=100.0,
-                                    self.section_max_percent[axis] as f32,
-                                    move |value| { Message::SectionMax(axis, value) }
-                                )
-                                .width(156),
-                            ]
-                            .spacing(6)
-                            .align_y(iced::Alignment::Center),
+                        .width(Fill)
+                        .into(),
+                        ui_theme::shared_theme,
+                    ))
+                    .push(openaec_ui::widgets::property_grid_control_with(
+                        format!("{label} max {:.0}%", self.section_max_percent[axis]),
+                        ui_style::slider(
+                            0.0..=100.0,
+                            self.section_max_percent[axis] as f32,
+                            move |value| Message::SectionMax(axis, value),
                         )
-                        .padding([2, 8]),
-                    );
+                        .width(Fill)
+                        .into(),
+                        ui_theme::shared_theme,
+                    ));
             }
             properties = properties.push(
                 container(text(i18n::tr("XYZ limits · model coordinates")).size(10))
@@ -11571,8 +11597,10 @@ impl Studio {
                                 Message::EyeDomeStrength,
                             )
                             .step(0.1_f32)
-                            .width(155),
-                            text(format!("{:.1}", self.eye_dome_strength)).size(11),
+                            .width(130),
+                            text(format!("{:.1}", self.eye_dome_strength))
+                                .size(11)
+                                .width(28),
                         ]
                         .spacing(5)
                         .align_y(iced::Alignment::Center),
@@ -11586,9 +11614,8 @@ impl Studio {
             properties.into()
         };
 
-        // The tabs of the 3D model and of the views and drawings opened from
-        // VIEWS, with what the main area shows at their right.
-        let mut viewport = column![self.tab_strip()].height(Fill).width(Fill);
+        // View-specific progress and the scene stay within the central area.
+        let mut viewport = column![].height(Fill).width(Fill);
         if let Some(progress) = self.progress_strip() {
             viewport = viewport.push(progress);
         }
@@ -11597,7 +11624,74 @@ impl Studio {
         if let Some(strip) = self.mesh_to_plans_strip() {
             viewport = viewport.push(strip);
         }
-        viewport = viewport.push(container(canvas).width(Fill).height(Fill));
+        if let Some(mut model_view) = compare_model {
+            if self.photo_split_vertical {
+                model_view.viewport_size.height *= self.photo_split_ratio;
+            } else {
+                model_view.viewport_size.width *= self.photo_split_ratio;
+            }
+            let model_canvas = stack![
+                gpu_viewport::GpuViewport {
+                    overlay: model_view
+                }
+                .widget()
+                .width(Fill)
+                .height(Fill),
+                Canvas::new(model_view).width(Fill).height(Fill),
+            ]
+            .width(Fill)
+            .height(Fill);
+            let photo_name = self
+                .shown_photo()
+                .and_then(|shown| shown.photo.name.as_deref())
+                .map(str::to_owned)
+                .unwrap_or_else(|| i18n::tr("Photo").to_owned());
+            // Each pane carries the caption of a shared panel.
+            let theme = self.ui_theme.shared();
+            let model_weight = (self.photo_split_ratio * 1000.0).round() as u16;
+            let model = column![model_pane_caption(theme), model_canvas];
+            let photo = column![openaec_ui::widgets::panel_header(photo_name, theme), canvas];
+            let panes: Element<'_, Message> = if self.photo_split_vertical {
+                column![
+                    model
+                        .width(Fill)
+                        .height(iced::Length::FillPortion(model_weight)),
+                    photo
+                        .width(Fill)
+                        .height(iced::Length::FillPortion(1000 - model_weight)),
+                ]
+                .width(Fill)
+                .height(Fill)
+                .into()
+            } else {
+                row![
+                    model
+                        .width(iced::Length::FillPortion(model_weight))
+                        .height(Fill),
+                    photo
+                        .width(iced::Length::FillPortion(1000 - model_weight))
+                        .height(Fill),
+                ]
+                .width(Fill)
+                .height(Fill)
+                .into()
+            };
+            viewport = viewport.push(
+                stack![
+                    panes,
+                    Canvas::new(CompareDivider {
+                        ratio: self.photo_split_ratio,
+                        vertical: self.photo_split_vertical,
+                    })
+                    .width(Fill)
+                    .height(Fill),
+                ]
+                .width(Fill)
+                .height(Fill),
+            );
+        } else {
+            viewport = viewport.push(container(canvas).width(Fill).height(Fill));
+        }
         if self
             .clouds
             .iter()
@@ -11632,13 +11726,15 @@ impl Studio {
         ]
         .height(Fill);
         let mesh_status = self.mesh_job.as_ref().map(MeshJob::progress_text);
-        let window = column![
-            self.ribbon(),
-            content,
-            self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
-        ]
-        .height(Fill);
-        self.with_dialogs(window.into())
+        let (titlebar, tabs, ribbon) = self.ribbon_sections();
+        self.with_dialogs(openaec_ui::frame::frame(openaec_ui::frame::FrameSlots {
+            titlebar,
+            tabs,
+            ribbon,
+            documents: Some(self.tab_strip()),
+            content: content.into(),
+            status: self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
+        }))
     }
 
     /// The window with the card of the Pointcloud to Drawing wizard or of Mesh
@@ -11728,26 +11824,27 @@ fn ribbon_title_tab(
     message: Message,
     active: bool,
     compact: bool,
+    theme: openaec_ui::Theme,
 ) -> Element<'static, Message> {
     let width = match (compact, label) {
-        (true, "Display") => 100.0,
-        (true, "Extensions") => 120.0,
-        (true, _) => 72.0,
-        (false, "Display") => 118.0,
-        (false, "Extensions") => 145.0,
-        (false, _) => 92.0,
+        (true, "Display") => 82.0,
+        (true, "Extensions") => 100.0,
+        (true, _) => 62.0,
+        (false, "Display") => 94.0,
+        (false, "Extensions") => 118.0,
+        (false, _) => 76.0,
     };
     let label: Element<'static, Message> = if label == "Extensions" {
         row![
-            title_icon(TitleIcon::Extensions, 23.0),
-            text(i18n::tr(label)).size(16).font(fonts::MEDIUM),
+            title_icon(TitleIcon::Extensions, 16.0),
+            text(i18n::tr(label)).size(12).font(fonts::MEDIUM),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center)
         .into()
     } else {
         text(i18n::tr(label))
-            .size(16)
+            .size(12)
             .font(if active {
                 fonts::SEMIBOLD
             } else {
@@ -11757,27 +11854,13 @@ fn ribbon_title_tab(
             .align_x(iced::Alignment::Center)
             .into()
     };
-    column![
-        iced::widget::Space::with_height(7),
-        button(container(label).width(Fill).center_x(Fill))
-            .on_press(message)
-            .style(move |theme, status| opencad_ribbon::tab_style(theme, active, status))
-            .width(Fill)
-            .height(37)
-            .padding([5, 6]),
-        container(iced::widget::Space::with_height(4))
-            .width(Fill)
-            .style(move |theme| {
-                container::Style::default().background(if active {
-                    ui_theme::colors(theme).accent
-                } else {
-                    Color::TRANSPARENT
-                })
-            }),
-    ]
-    .spacing(0)
-    .width(iced::Length::Fixed(width))
-    .into()
+    openaec_ui::widgets::ribbon_tab(
+        label,
+        message,
+        width,
+        openaec_ui::widgets::RibbonTabKind::Regular { active },
+        theme,
+    )
 }
 
 enum ReferenceActionSize {
@@ -11794,11 +11877,11 @@ fn reference_action(
     size: ReferenceActionSize,
 ) -> Element<'static, Message> {
     let ReferenceActionSize::Large(width) = size;
-    let icon_size = 51.0;
+    let icon_size = 36.0;
     let face = column![
         container(icon)
             .width(Fill)
-            .height(icon_size + 7.0)
+            .height(icon_size + 4.0)
             .center(Fill),
         text(i18n::tr(caption))
             .size(11)
@@ -11812,7 +11895,7 @@ fn reference_action(
             .on_press_maybe(enabled.then_some(message))
             .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
             .width(width)
-            .height(78.0)
+            .height(60.0)
             .padding([2, 1]),
         i18n::tr(tooltip),
     )
@@ -11839,8 +11922,8 @@ fn reference_icon_action_state(
         button(container(icon).width(Fill).height(Fill).center(Fill))
             .on_press_maybe(enabled.then_some(message))
             .style(move |theme, status| ui_style::ribbon_button(theme, active, status))
-            .width(42)
-            .height(36)
+            .width(34)
+            .height(32)
             .padding(1),
         i18n::tr(tooltip),
     )
@@ -11883,151 +11966,22 @@ enum TitleIcon {
 }
 
 fn title_icon(kind: TitleIcon, size: f32) -> Element<'static, Message> {
-    Canvas::new(TitleGlyph(kind))
+    use openaec_ui::icons::Icon;
+    let canonical = match kind {
+        TitleIcon::Extensions => Icon::Extensions,
+        TitleIcon::Settings => Icon::Settings,
+        TitleIcon::OpenFolder | TitleIcon::OpenRecent => Icon::Open,
+        TitleIcon::Save => Icon::Save,
+        TitleIcon::Undo => Icon::Undo,
+        TitleIcon::Redo => Icon::Redo,
+    };
+    svg(svg::Handle::from_memory(canonical.bytes()))
         .width(size)
         .height(size)
+        .style(|theme, _| svg::Style {
+            color: Some(ui_theme::colors(theme).accent),
+        })
         .into()
-}
-
-struct TitleGlyph(TitleIcon);
-
-impl canvas::Program<Message> for TitleGlyph {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        frame.scale(bounds.width.min(bounds.height) / 24.0);
-        let white = Color::from_rgb8(250, 250, 249);
-        let amber = Color::from_rgb8(217, 119, 6);
-        let stroke = canvas::Stroke::default().with_color(white).with_width(1.8);
-        let accent = canvas::Stroke::default().with_color(amber).with_width(1.8);
-        let line = |points: &[[f32; 2]]| {
-            canvas::Path::new(|path| {
-                path.move_to(UiPoint::new(points[0][0], points[0][1]));
-                for point in &points[1..] {
-                    path.line_to(UiPoint::new(point[0], point[1]));
-                }
-            })
-        };
-        match self.0 {
-            TitleIcon::Extensions => {
-                frame.stroke(
-                    &line(&[
-                        [3.0, 5.0],
-                        [8.0, 5.0],
-                        [8.0, 3.0],
-                        [10.0, 2.0],
-                        [12.0, 3.0],
-                        [12.0, 5.0],
-                        [18.0, 5.0],
-                        [18.0, 10.0],
-                    ]),
-                    stroke,
-                );
-                frame.stroke(&canvas::Path::circle(UiPoint::new(19.0, 12.0), 2.0), stroke);
-                frame.stroke(
-                    &line(&[
-                        [18.0, 14.0],
-                        [18.0, 19.0],
-                        [13.0, 19.0],
-                        [13.0, 17.0],
-                        [11.0, 16.0],
-                        [9.0, 17.0],
-                        [9.0, 19.0],
-                        [3.0, 19.0],
-                        [3.0, 13.0],
-                        [5.0, 13.0],
-                        [6.0, 11.0],
-                        [5.0, 9.0],
-                        [3.0, 9.0],
-                        [3.0, 5.0],
-                    ]),
-                    stroke,
-                );
-            }
-            TitleIcon::Settings => {
-                frame.stroke(&canvas::Path::circle(UiPoint::new(12.0, 12.0), 7.0), stroke);
-                frame.stroke(&canvas::Path::circle(UiPoint::new(12.0, 12.0), 2.5), stroke);
-                for points in [
-                    [[12.0, 2.0], [12.0, 5.0]],
-                    [[12.0, 19.0], [12.0, 22.0]],
-                    [[2.0, 12.0], [5.0, 12.0]],
-                    [[19.0, 12.0], [22.0, 12.0]],
-                    [[5.0, 5.0], [7.0, 7.0]],
-                    [[17.0, 17.0], [19.0, 19.0]],
-                    [[5.0, 19.0], [7.0, 17.0]],
-                    [[17.0, 7.0], [19.0, 5.0]],
-                ] {
-                    frame.stroke(&line(&points), stroke);
-                }
-            }
-            TitleIcon::OpenFolder | TitleIcon::OpenRecent => {
-                frame.stroke(
-                    &line(&[
-                        [2.0, 7.0],
-                        [2.0, 5.0],
-                        [9.0, 5.0],
-                        [11.0, 7.0],
-                        [21.0, 7.0],
-                        [21.0, 18.0],
-                        [3.0, 18.0],
-                        [2.0, 7.0],
-                    ]),
-                    stroke,
-                );
-                frame.stroke(&line(&[[3.0, 11.0], [21.0, 11.0]]), stroke);
-                if matches!(self.0, TitleIcon::OpenRecent) {
-                    frame.stroke(&line(&[[13.0, 14.0], [18.0, 14.0]]), accent);
-                }
-            }
-            TitleIcon::Save => {
-                frame.stroke(
-                    &line(&[
-                        [4.0, 3.0],
-                        [18.0, 3.0],
-                        [21.0, 6.0],
-                        [21.0, 21.0],
-                        [3.0, 21.0],
-                        [3.0, 3.0],
-                    ]),
-                    stroke,
-                );
-                frame.stroke(
-                    &line(&[[7.0, 3.0], [7.0, 10.0], [17.0, 10.0], [17.0, 3.0]]),
-                    stroke,
-                );
-                frame.stroke(
-                    &line(&[[7.0, 21.0], [7.0, 14.0], [17.0, 14.0], [17.0, 21.0]]),
-                    stroke,
-                );
-            }
-            TitleIcon::Undo | TitleIcon::Redo => {
-                let mirror = matches!(self.0, TitleIcon::Redo);
-                let x = |value: f32| if mirror { 24.0 - value } else { value };
-                frame.stroke(
-                    &line(&[[x(8.0), 8.0], [x(4.0), 12.0], [x(8.0), 16.0]]),
-                    stroke,
-                );
-                frame.stroke(
-                    &line(&[
-                        [x(4.0), 12.0],
-                        [x(15.0), 12.0],
-                        [x(19.0), 15.0],
-                        [x(19.0), 19.0],
-                    ]),
-                    stroke,
-                );
-            }
-        }
-        vec![frame.into_geometry()]
-    }
 }
 
 fn icon_tool_button_when(
@@ -12053,12 +12007,13 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::Export
         | Message::ExportSelection
         | Message::ExportSection
-        | Message::ExportMesh => ToolIcon::Export,
+        | Message::ExportMesh
+        | Message::TextureMesh => ToolIcon::Export,
         Message::Decimate | Message::Thin => ToolIcon::Decimate,
         Message::MeshRequest(_) => ToolIcon::Mesh,
         Message::ToggleBagPanel => ToolIcon::Building,
         Message::BuildIndex => ToolIcon::Cloud,
-        Message::LoadDetail | Message::RefreshLod => ToolIcon::Fit,
+        Message::LoadDetail | Message::RefreshLod => ToolIcon::Update,
         Message::RemoveSelection | Message::DeleteSelection => ToolIcon::Clear,
         Message::CancelSelection
         | Message::CancelScale
@@ -12096,6 +12051,21 @@ fn tool_icon(message: &Message) -> ToolIcon {
         Message::FitSectionToSelection => ToolIcon::Select,
         _ => ToolIcon::Cloud,
     }
+}
+
+/// The caption of the pane of the 3D model beside a photo. A click on it
+/// shows the tab of the model, and it lights up under the pointer as a
+/// button of the ribbon does; like every button of the window it keeps the
+/// arrow.
+fn model_pane_caption(theme: openaec_ui::Theme) -> Element<'static, Message> {
+    iced::widget::mouse_area(ui_style::hover_tint_filled(
+        openaec_ui::widgets::panel_header(i18n::tr("3D model"), theme),
+        |colors| colors.ribbon_btn_hover,
+    ))
+    .on_press(Message::Tabs(view_tabs::TabAction::Show(
+        view_tabs::TabId::Model,
+    )))
+    .into()
 }
 
 fn ribbon_style(theme: &Theme) -> container::Style {
@@ -12348,22 +12318,92 @@ enum ToolIcon {
     Leader,
 }
 
-// SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
+/// Commands whose meaning has been reviewed against the shared icon set.
+fn canonical_icon(icon: ToolIcon) -> Option<openaec_ui::icons::Icon> {
+    use openaec_ui::icons::Icon;
+    match icon {
+        ToolIcon::Open => Some(Icon::Open),
+        ToolIcon::Export => Some(Icon::Export),
+        ToolIcon::Fit => Some(Icon::Fit),
+        ToolIcon::FitSelection => Some(Icon::FitSelection),
+        ToolIcon::ZoomIn => Some(Icon::ZoomIn),
+        ToolIcon::ZoomOut => Some(Icon::ZoomOut),
+        ToolIcon::Pan => Some(Icon::Pan),
+        ToolIcon::Undo => Some(Icon::Undo),
+        ToolIcon::Redo => Some(Icon::Redo),
+        ToolIcon::Save => Some(Icon::Save),
+        ToolIcon::Duplicate => Some(Icon::Duplicate),
+        ToolIcon::Rename => Some(Icon::Rename),
+        ToolIcon::ChevronOpen => Some(Icon::DisclosureExpanded),
+        ToolIcon::ChevronClosed => Some(Icon::DisclosureCollapsed),
+        _ => None,
+    }
+}
+
+fn domain_icon(icon: ToolIcon) -> Option<openaec_ui::icons::DomainIcon> {
+    use openaec_ui::icons::DomainIcon;
+    match icon {
+        ToolIcon::Building => Some(DomainIcon::PointcloudBagPanel),
+        ToolIcon::Shading => Some(DomainIcon::PointcloudEyeDome),
+        ToolIcon::Dimension => Some(DomainIcon::DrawingDimension),
+        ToolIcon::Note => Some(DomainIcon::DrawingNote),
+        ToolIcon::Move => Some(DomainIcon::TransformMove),
+        ToolIcon::Line => Some(DomainIcon::DrawingLine),
+        ToolIcon::Text => Some(DomainIcon::DrawingText),
+        ToolIcon::Leader => Some(DomainIcon::DrawingLeader),
+        _ => None,
+    }
+}
+
+// Remaining SVG artwork is copied from OpenCADStudio/assets/icons at commit 1fec34d.
 fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
-    let bytes: &'static [u8] = match icon {
-        ToolIcon::Open => include_bytes!("../../assets/opencad-icons/folder_open.svg"),
+    if let Some(shared) = canonical_icon(icon) {
+        return svg(svg::Handle::from_memory(shared.bytes()))
+            .width(size)
+            .height(size)
+            .style(|theme, _| svg::Style {
+                color: Some(ui_theme::colors(theme).text),
+            })
+            .into();
+    }
+    if let Some(shared) = domain_icon(icon) {
+        return svg(svg::Handle::from_memory(shared.bytes(size.round() as u16)))
+            .width(size)
+            .height(size)
+            .style(|theme, _| svg::Style {
+                color: Some(ui_theme::colors(theme).text),
+            })
+            .into();
+    }
+    themed_icon::themed_icon(icon_artwork(icon), size)
+}
+
+/// The picture of an icon that is not one of the shared set: the artwork of
+/// this application, whose dark greys follow the theme.
+fn icon_artwork(icon: ToolIcon) -> &'static [u8] {
+    match icon {
+        ToolIcon::Open
+        | ToolIcon::Export
+        | ToolIcon::Fit
+        | ToolIcon::FitSelection
+        | ToolIcon::ZoomIn
+        | ToolIcon::ZoomOut
+        | ToolIcon::Pan
+        | ToolIcon::Undo
+        | ToolIcon::Redo
+        | ToolIcon::Save
+        | ToolIcon::Duplicate
+        | ToolIcon::Rename
+        | ToolIcon::ChevronOpen
+        | ToolIcon::ChevronClosed => {
+            unreachable!("icon_svg draws the shared icons")
+        }
         // The scan-folder and section-box icons are drawn for this app in the
         // same palette.
         ToolIcon::OpenFolder => include_bytes!("../../assets/opencad-icons/folder_scans.svg"),
         ToolIcon::SelectionExport => {
             include_bytes!("../../assets/opencad-icons/selection_export.svg")
         }
-        ToolIcon::Export => include_bytes!("../../assets/opencad-icons/file_export.svg"),
-        ToolIcon::Fit => include_bytes!("../../assets/opencad-icons/zoom_ext.svg"),
-        ToolIcon::ZoomIn => include_bytes!("../../assets/opencad-icons/zoom_in.svg"),
-        ToolIcon::ZoomOut => include_bytes!("../../assets/opencad-icons/zoom_out.svg"),
-        ToolIcon::Pan => include_bytes!("../../assets/opencad-icons/pan.svg"),
-        ToolIcon::FitSelection => include_bytes!("../../assets/opencad-icons/fit_selection.svg"),
         ToolIcon::Cloud => include_bytes!("../../assets/opencad-icons/revcloud.svg"),
         ToolIcon::Select => include_bytes!("../../assets/opencad-icons/ribbon_target.svg"),
         ToolIcon::WindowSelect => include_bytes!("../../assets/opencad-icons/select_objects.svg"),
@@ -12375,12 +12415,10 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
             include_bytes!("../../assets/opencad-icons/measure_distance.svg")
         }
         ToolIcon::MeasureArea => include_bytes!("../../assets/opencad-icons/measure_area.svg"),
-        // So are the two annotation icons.
-        ToolIcon::Note => include_bytes!("../../assets/opencad-icons/annotation_note.svg"),
-        ToolIcon::Line => include_bytes!("../../assets/opencad-icons/annotation_line.svg"),
+        // The drawing annotations return from the shared domain-icon branch.
+        ToolIcon::Note => unreachable!("icon_svg draws the shared domain icons"),
+        ToolIcon::Line => unreachable!("icon_svg draws the shared domain icons"),
         ToolIcon::Clear => include_bytes!("../../assets/opencad-icons/xclip_remove.svg"),
-        ToolIcon::Undo => include_bytes!("../../assets/opencad-icons/undo.svg"),
-        ToolIcon::Redo => include_bytes!("../../assets/opencad-icons/redo.svg"),
         ToolIcon::Camera(CameraPreset::Top | CameraPreset::Bottom) => {
             include_bytes!("../../assets/opencad-icons/view_top.svg")
         }
@@ -12393,13 +12431,13 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::Camera(CameraPreset::Isometric) => {
             include_bytes!("../../assets/opencad-icons/view_iso.svg")
         }
-        ToolIcon::Save => include_bytes!("../../assets/opencad-icons/save.svg"),
-        ToolIcon::Move => include_bytes!("../../assets/opencad-icons/move.svg"),
+        ToolIcon::Move => unreachable!("icon_svg draws the shared domain icons"),
         ToolIcon::Scale => include_bytes!("../../assets/opencad-icons/scale.svg"),
         ToolIcon::Decimate => include_bytes!("../../assets/opencad-icons/point.svg"),
         ToolIcon::Mesh => include_bytes!("../../assets/opencad-icons/region.svg"),
-        ToolIcon::Building => include_bytes!("../../assets/opencad-icons/solid.svg"),
-        ToolIcon::Shading => include_bytes!("../../assets/opencad-icons/sphere.svg"),
+        ToolIcon::Building | ToolIcon::Shading => {
+            unreachable!("icon_svg draws the shared domain icons")
+        }
         // The section drawing icon is drawn for this app in the same palette.
         ToolIcon::Drawing => include_bytes!("../../assets/opencad-icons/section_drawing.svg"),
         // So is the closed mesh icon.
@@ -12429,25 +12467,15 @@ fn icon_svg(icon: ToolIcon, size: f32) -> Element<'static, Message> {
         ToolIcon::SectionSheet => include_bytes!("../../assets/opencad-icons/browser_section.svg"),
         ToolIcon::DrawingFile => include_bytes!("../../assets/opencad-icons/browser_file.svg"),
         ToolIcon::Bcf => include_bytes!("../../assets/opencad-icons/browser_bcf.svg"),
-        ToolIcon::ChevronOpen => include_bytes!("../../assets/opencad-icons/chevron_open.svg"),
-        ToolIcon::ChevronClosed => include_bytes!("../../assets/opencad-icons/chevron_closed.svg"),
-        ToolIcon::Duplicate => include_bytes!("../../assets/opencad-icons/browser_duplicate.svg"),
-        ToolIcon::Rename => include_bytes!("../../assets/opencad-icons/browser_rename.svg"),
         ToolIcon::Update => include_bytes!("../../assets/opencad-icons/browser_update.svg"),
         ToolIcon::Sheet => include_bytes!("../../assets/opencad-icons/browser_sheet.svg"),
         ToolIcon::Locked => include_bytes!("../../assets/opencad-icons/browser_locked.svg"),
         ToolIcon::Unlocked => include_bytes!("../../assets/opencad-icons/browser_unlocked.svg"),
-        // The annotations of drawings are drawn like those of the views.
-        ToolIcon::Text => include_bytes!("../../assets/opencad-icons/annotation_text.svg"),
-        ToolIcon::Dimension => {
-            include_bytes!("../../assets/opencad-icons/annotation_dimension.svg")
-        }
-        ToolIcon::Leader => include_bytes!("../../assets/opencad-icons/annotation_leader.svg"),
-    };
-    svg(svg::Handle::from_memory(bytes))
-        .width(size)
-        .height(size)
-        .into()
+        // The remaining drawing annotations are drawn like those of the views.
+        ToolIcon::Text => unreachable!("icon_svg draws the shared domain icons"),
+        ToolIcon::Dimension => unreachable!("icon_svg draws the shared domain icons"),
+        ToolIcon::Leader => unreachable!("icon_svg draws the shared domain icons"),
+    }
 }
 
 fn combined_bounds(clouds: &[CloudEntry]) -> Option<Bounds> {
@@ -12899,6 +12927,11 @@ struct PointViewport<'a> {
     pointer: &'a std::cell::Cell<Option<[f32; 2]>>,
     /// The photos of the files that are not those of their stations.
     photos: &'a file_photos::PhotoTool,
+    photo_visible: bool,
+    read_only: bool,
+    /// Use the bounded resident sample when this camera differs from the
+    /// camera whose octree detail is currently loaded.
+    resident_points: bool,
     /// A snapshot of the view is being taken: only the scene is drawn,
     /// without the controls of the viewport.
     clean: bool,
@@ -13431,6 +13464,240 @@ fn hover_ring(frame: &mut Frame, center: UiPoint, radius: f32) {
     );
 }
 
+struct CompareDivider {
+    ratio: f32,
+    vertical: bool,
+}
+
+impl canvas::Program<Message> for CompareDivider {
+    type State = bool;
+
+    fn update(
+        &self,
+        dragging: &mut Self::State,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> (event::Status, Option<Message>) {
+        match event {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let near = cursor.position_in(bounds).is_some_and(|point| {
+                    let distance = if self.vertical {
+                        point.y - bounds.height * self.ratio
+                    } else {
+                        point.x - bounds.width * self.ratio
+                    };
+                    distance.abs() <= 8.0
+                });
+                *dragging = near;
+                (
+                    if near {
+                        event::Status::Captured
+                    } else {
+                        event::Status::Ignored
+                    },
+                    None,
+                )
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                if *dragging =>
+            {
+                *dragging = false;
+                (event::Status::Captured, Some(Message::PhotoSplitFinished))
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) if *dragging => {
+                let Some(position) = cursor.position_from(bounds.position()) else {
+                    return (event::Status::Captured, None);
+                };
+                let ratio = if self.vertical {
+                    position.y / bounds.height
+                } else {
+                    position.x / bounds.width
+                }
+                .clamp(0.25, 0.75);
+                (
+                    event::Status::Captured,
+                    Some(Message::PhotoSplitRatio(ratio)),
+                )
+            }
+            _ => (event::Status::Ignored, None),
+        }
+    }
+
+    /// The line in the border colour of the theme, and in the accent colour
+    /// and twice as wide while it is dragged, as the shared splitter has it.
+    /// It lies over the scene and the photo, so its colours are made opaque
+    /// as they look on the window background.
+    fn draw(
+        &self,
+        dragging: &Self::State,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let colors = ui_theme::colors(theme);
+        let on_background = |color: Color| Color {
+            r: color.r * color.a + colors.bg.r * (1.0 - color.a),
+            g: color.g * color.a + colors.bg.g * (1.0 - color.a),
+            b: color.b * color.a + colors.bg.b * (1.0 - color.a),
+            a: 1.0,
+        };
+        let (line_color, line_width, grip_color) = if *dragging {
+            (
+                on_background(colors.accent),
+                2.0,
+                on_background(colors.accent),
+            )
+        } else {
+            (
+                on_background(colors.border),
+                1.0,
+                on_background(colors.text_muted),
+            )
+        };
+        let mut frame = Frame::new(renderer, bounds.size());
+        let line = if self.vertical {
+            let y = bounds.height * self.ratio;
+            canvas::Path::line(UiPoint::new(0.0, y), UiPoint::new(bounds.width, y))
+        } else {
+            let x = bounds.width * self.ratio;
+            canvas::Path::line(UiPoint::new(x, 0.0), UiPoint::new(x, bounds.height))
+        };
+        frame.stroke(
+            &line,
+            canvas::Stroke::default()
+                .with_color(line_color)
+                .with_width(line_width),
+        );
+        let handle = if self.vertical {
+            let y = bounds.height * self.ratio;
+            canvas::Path::line(
+                UiPoint::new(bounds.width * 0.5 - 18.0, y),
+                UiPoint::new(bounds.width * 0.5 + 18.0, y),
+            )
+        } else {
+            let x = bounds.width * self.ratio;
+            canvas::Path::line(
+                UiPoint::new(x, bounds.height * 0.5 - 18.0),
+                UiPoint::new(x, bounds.height * 0.5 + 18.0),
+            )
+        };
+        frame.stroke(
+            &handle,
+            canvas::Stroke::default()
+                .with_color(grip_color)
+                .with_width(3.0),
+        );
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        dragging: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if *dragging
+            || cursor.position_in(bounds).is_some_and(|point| {
+                if self.vertical {
+                    (point.y - bounds.height * self.ratio).abs() <= 8.0
+                } else {
+                    (point.x - bounds.width * self.ratio).abs() <= 8.0
+                }
+            })
+        {
+            if self.vertical {
+                mouse::Interaction::ResizingVertically
+            } else {
+                mouse::Interaction::ResizingHorizontally
+            }
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+}
+
+impl PointViewport<'_> {
+    fn update_compare(
+        &self,
+        state: &mut ViewportState,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> (event::Status, Option<Message>) {
+        use view_tabs::CompareAction;
+        let message = |action| Some(Message::CompareModel(action));
+        match event {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(button)) if cursor.is_over(bounds) => {
+                let position = cursor.position_in(bounds).expect("cursor is over pane");
+                if button == mouse::Button::Left {
+                    if let Some(target) = view_cube::hit(position, bounds, self.yaw, self.pitch) {
+                        state.drag = None;
+                        return (
+                            event::Status::Captured,
+                            message(CompareAction::Cube(target)),
+                        );
+                    }
+                }
+                let mode = match button {
+                    mouse::Button::Left => DragMode::Orbit,
+                    mouse::Button::Right | mouse::Button::Middle => DragMode::Pan,
+                    _ => return (event::Status::Ignored, None),
+                };
+                state.drag = Some(DragState {
+                    start: position,
+                    position,
+                    mode,
+                });
+                (event::Status::Captured, None)
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(
+                mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle,
+            )) => {
+                state.drag = None;
+                (event::Status::Captured, None)
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                let Some(drag) = state.drag.as_mut() else {
+                    return (event::Status::Ignored, None);
+                };
+                let Some(position) = cursor.position_from(bounds.position()) else {
+                    return (event::Status::Captured, None);
+                };
+                let (dx, dy) = (position.x - drag.position.x, position.y - drag.position.y);
+                drag.position = position;
+                let action = match drag.mode {
+                    DragMode::Orbit => CompareAction::Orbit(-dx, dy, bounds.size()),
+                    DragMode::Pan => CompareAction::Pan(dx, dy),
+                    _ => return (event::Status::Captured, None),
+                };
+                (event::Status::Captured, message(action))
+            }
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta })
+                if cursor.is_over(bounds) =>
+            {
+                let amount = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 40.0,
+                };
+                let position = cursor
+                    .position_in(bounds)
+                    .unwrap_or(UiPoint::new(bounds.width * 0.5, bounds.height * 0.5));
+                (
+                    event::Status::Captured,
+                    message(CompareAction::Zoom(
+                        amount,
+                        [position.x, position.y],
+                        bounds.size(),
+                    )),
+                )
+            }
+            _ => (event::Status::Ignored, None),
+        }
+    }
+}
+
 impl canvas::Program<Message> for PointViewport<'_> {
     type State = ViewportState;
 
@@ -13441,6 +13708,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (event::Status, Option<Message>) {
+        if self.read_only {
+            return self.update_compare(state, event, bounds, cursor);
+        }
         if let canvas::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) = event {
             state.modifiers = modifiers;
             return (event::Status::Ignored, None);

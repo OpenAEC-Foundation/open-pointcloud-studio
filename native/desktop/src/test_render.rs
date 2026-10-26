@@ -7,7 +7,7 @@ use std::sync::Once;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer;
 use iced::advanced::widget::Tree;
-use iced::{mouse, Color, Element, Rectangle, Size, Theme};
+use iced::{mouse, Color, Element, Rectangle, Size, Theme, Vector};
 
 use crate::{Message, Studio};
 
@@ -21,6 +21,19 @@ pub(crate) struct Picture {
 }
 
 impl Picture {
+    /// Save a software-rendered review image without launching a desktop window.
+    pub(crate) fn save_png(&self, path: &std::path::Path) {
+        let size = tiny_skia::IntSize::from_wh(self.width, self.height).expect("valid image size");
+        let mut rgba = self.bytes.clone();
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2); // iced_tiny_skia gives BGRA; PNG encoding expects RGBA.
+        }
+        tiny_skia::Pixmap::from_vec(rgba, size)
+            .expect("valid software-rendered pixels")
+            .save_png(path)
+            .expect("write review image");
+    }
+
     /// The colour of the pixel at `x`, `y`, as red, green and blue.
     pub(crate) fn rgb(&self, x: u32, y: u32) -> [u8; 3] {
         assert!(x < self.width && y < self.height, "({x}, {y}) lies outside");
@@ -69,6 +82,19 @@ pub(crate) fn render_under(
     size: Size,
     cursor: mouse::Cursor,
 ) -> Picture {
+    render_after(element, theme, size, cursor, &[]).0
+}
+
+/// As `render_under`, after `events` have reached the element with the
+/// pointer at `cursor`, such as a turn of the wheel that scrolls a list;
+/// with the messages those events sent.
+pub(crate) fn render_after(
+    mut element: Element<'_, Message>,
+    theme: &Theme,
+    size: Size,
+    cursor: mouse::Cursor,
+    events: &[iced::Event],
+) -> (Picture, Vec<Message>) {
     load_fonts();
     let mut renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
         crate::fonts::REGULAR,
@@ -79,6 +105,20 @@ pub(crate) fn render_under(
         element
             .as_widget()
             .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    let mut messages = Vec::new();
+    for event in events {
+        let mut shell = iced::advanced::Shell::new(&mut messages);
+        let _ = element.as_widget_mut().on_event(
+            &mut tree,
+            event.clone(),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut iced::advanced::clipboard::Null,
+            &mut shell,
+            &Rectangle::with_size(size),
+        );
+    }
     element.as_widget().draw(
         &tree,
         &mut renderer,
@@ -90,6 +130,22 @@ pub(crate) fn render_under(
         cursor,
         &Rectangle::with_size(size),
     );
+    if let Some(mut overlay) =
+        element
+            .as_widget_mut()
+            .overlay(&mut tree, Layout::new(&node), &renderer, Vector::ZERO)
+    {
+        let popup_node = overlay.layout(&renderer, size);
+        overlay.draw(
+            &mut renderer,
+            theme,
+            &renderer::Style {
+                text_color: theme.palette().text,
+            },
+            Layout::new(&popup_node),
+            cursor,
+        );
+    }
     let iced::Renderer::Secondary(mut software) = renderer else {
         unreachable!("the software renderer was made above");
     };
@@ -106,11 +162,14 @@ pub(crate) fn render_under(
         CLEAR,
         &[],
     );
-    Picture {
-        width,
-        height,
-        bytes,
-    }
+    (
+        Picture {
+            width,
+            height,
+            bytes,
+        },
+        messages,
+    )
 }
 
 /// The whole window of `studio` in `size`, in its theme.

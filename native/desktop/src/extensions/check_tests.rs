@@ -148,8 +148,8 @@ fn manifests_that_do_not_fit_are_refused_with_the_field_and_the_reason() {
         ),
         (|m| m["version"] = json!("one"), "version must be a version"),
         (
-            |m| m["min_app_version"] = json!("99.0"),
-            "needs Open Pointcloud Studio 99.0 or newer",
+            |m| m["min_app_version"] = json!("9999.0"),
+            "needs Open Pointcloud Studio 9999.0 or newer",
         ),
         (
             |m| m["homepage"] = json!("ftp://example.org"),

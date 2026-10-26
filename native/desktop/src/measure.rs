@@ -235,7 +235,7 @@ impl Measurement {
                 format!("Point {count} picked; click the next point")
             }
             MeasureMode::Distance => format!(
-                "Length {} over {count} points; Enter finishes",
+                "Length {}; the next click starts a new distance",
                 format_length(self.length())
             ),
             MeasureMode::Area if count < 3 => {
@@ -586,10 +586,10 @@ impl Studio {
                     self.pick_mode = false;
                     self.pan_tool = false;
                     self.drag_rectangle = None;
-                    self.status = format!(
-                        "{} measuring active; click points, Enter finishes, Backspace removes the last point, Escape cancels",
-                        mode.label()
-                    );
+                    self.status = match mode {
+                        MeasureMode::Distance => "Distance measuring active; click two points, Backspace removes the last point, Escape cancels".to_string(),
+                        MeasureMode::Area => "Area measuring active; click points, Enter or a click on the first point finishes, Backspace removes the last point, Escape cancels".to_string(),
+                    };
                 }
             }
             MeasureAction::Click(pointer, size) => {

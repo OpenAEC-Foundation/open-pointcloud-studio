@@ -1443,6 +1443,55 @@ fn write_ply_header(
     Ok(())
 }
 
+/// The bytes the header of a PLY export of `cloud` takes, with the longest
+/// point count it can name. `ops::bytes_per_point` adds it to its bound.
+pub(crate) fn ply_header_bytes(cloud: &PointCloud, format: ExportFormat) -> u64 {
+    let mut header = Vec::new();
+    // Writing into memory cannot fail.
+    let _ = write_ply_header(&mut header, cloud, format, "00000000000000000000");
+    header.len() as u64
+}
+
+/// The bytes `write_ply_binary` writes for one point of `cloud`.
+pub(crate) fn ply_binary_point_bytes(cloud: &PointCloud) -> u64 {
+    24 + 3 * u64::from(cloud.has_rgb)
+        + 2 * u64::from(cloud.has_intensity)
+        + u64::from(cloud.has_classification)
+}
+
+/// The length of one point record of a LAS or LAZ export of `cloud`, before
+/// compression: that of the source header for a LAS or LAZ source, which
+/// the export keeps, and else the point format `export_las_map_count` takes.
+pub(crate) fn las_point_bytes(cloud: &PointCloud) -> u64 {
+    let source_is_las = cloud
+        .path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
+        });
+    if source_is_las {
+        if let Ok(reader) = las::Reader::from_path(&cloud.path) {
+            return u64::from(reader.header().point_format().len());
+        }
+    }
+    let extended = cloud.total_points > u64::from(u32::MAX);
+    las::point::Format::new(match (extended, cloud.has_rgb) {
+        (false, false) => 0,
+        (false, true) => 2,
+        (true, false) => 6,
+        (true, true) => 7,
+    })
+    .map_or(36, |format| u64::from(format.len()))
+}
+
+/// The bytes of the fields of one point of an E57 export of `cloud` from a
+/// source that is not E57, as `export_e57_map_count` lays them out:
+/// coordinates as doubles, colours of one byte, an intensity of two.
+pub(crate) fn e57_point_bytes(cloud: &PointCloud) -> u64 {
+    24 + 3 * u64::from(cloud.has_rgb) + 2 * u64::from(cloud.has_intensity)
+}
+
 fn write_ply_ascii(
     writer: &mut impl Write,
     point: Point,

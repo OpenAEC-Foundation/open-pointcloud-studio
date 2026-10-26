@@ -2666,6 +2666,15 @@ mod tests {
             json!({"command": "export_drawing_file", "path": "plan.dxf"}),
         );
         assert_eq!(refused["ok"], false);
+        // A wait for an idle window sees the file being written, until the
+        // worker reports it written.
+        let status = send(&mut studio, json!({"command": "status"}));
+        assert_eq!(crate::mcp::busy(&status["result"]), ["drawing_file"]);
+        let id = job["job_id"].as_str().unwrap().to_owned();
+        let written = Ok((directory.path().join("plan.dwg"), 10));
+        let _ = studio.update(Message::Notes(NoteAction::Exported(Some(id), written)));
+        let status = send(&mut studio, json!({"command": "status"}));
+        assert!(crate::mcp::busy(&status["result"]).is_empty());
     }
 
     #[test]

@@ -5,7 +5,7 @@
 #
 #   smoke-test.sh BINARY NUMBER
 #
-# NUMBER is the version the binary has to report (1.2.3). Checked are the
+# NUMBER is the version the binary has to report (2026.43.0). Checked are the
 # version in the answer of the MCP server, --version and --help, --list-scans,
 # an export chain PLY -> LAZ -> E57 -> XYZ that must keep all 1000 points, and
 # an octree index of the LAZ file.

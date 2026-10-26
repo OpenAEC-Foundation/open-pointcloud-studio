@@ -20,6 +20,7 @@ but the Python standard library. Settings and caches go to a temporary folder.
 """
 
 import argparse
+import http.client
 import json
 import os
 import shutil
@@ -198,6 +199,28 @@ def end_process(pid):
         pass
 
 
+def api_command(folder, pid, command):
+    """Send one typed command to the same window's authenticated local API."""
+    instance = os.path.join(folder, "config", "open-pointcloud-studio-native", "instances", f"instance-{pid}.json")
+    with open(instance, encoding="utf-8") as source:
+        discovery = json.load(source)
+    connection = http.client.HTTPConnection("127.0.0.1", discovery["port"], timeout=10)
+    try:
+        connection.request(
+            "POST",
+            "/exec",
+            body=json.dumps(command),
+            headers={"Content-Type": "application/json", "X-OPS-Token": discovery["token"]},
+        )
+        response = connection.getresponse()
+        result = json.loads(response.read())
+        if response.status != 200 or not result.get("ok"):
+            raise Failure(f"local API {command['command']} failed: {result}")
+        return result
+    finally:
+        connection.close()
+
+
 def run(options, folder):
     grid = os.path.join(folder, "grid.ply")
     write_grid(grid)
@@ -271,6 +294,19 @@ def run(options, folder):
 
         server.tool("screenshot", path=screenshot, max_edge=1024)
         check_screenshot(screenshot)
+
+        tabs = server.tool("list_tabs")
+        if tabs["active"] != 0 or tabs["tabs"][0]["kind"] != "model":
+            raise Failure(f"the MCP server does not show the model tab: {tabs}")
+        opened = server.tool("file_view", open=True, page="workspace")["file_view"]
+        if opened != {"open": True, "page": "workspace"}:
+            raise Failure(f"the MCP server did not open the File view: {opened}")
+        closed = api_command(folder, window, {"command": "file_view", "open": False})["file_view"]
+        if closed != {"open": False, "page": None}:
+            raise Failure(f"the local API did not close the File view: {closed}")
+        api_tabs = api_command(folder, window, {"command": "list_tabs"})
+        if api_tabs["tabs"][0]["kind"] != "model":
+            raise Failure(f"the local API does not show the model tab: {api_tabs}")
 
         listed = server.tool("list_instances")["instances"]
         ours = [instance for instance in listed if instance["pid"] == window]

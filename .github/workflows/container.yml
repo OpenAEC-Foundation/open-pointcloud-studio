@@ -1,0 +1,221 @@
+name: Container
+
+# Builds the image of the cloud API (deploy/cloud-api/Dockerfile), checks
+# its user, labels and health check and that it refuses to start without
+# access control, and starts it as the deployment does: a read-only root
+# file system, /work as the only folder it writes to, and a key. The smoke
+# test and an external MCP client then run against it, and its log and its
+# notices are checked. Nothing is pushed: started by the release workflow
+# with a version, the image is kept as the artifact api-image, which that
+# workflow pushes by its digest in a tag run only.
+#
+# The job aws-template lints the AWS deployment definition in deploy/aws. No
+# AWS credentials exist in this workflow, and nothing is deployed.
+
+on:
+  pull_request:
+    paths:
+      - 'native/server/**'
+      - 'deploy/**'
+      - 'native/Cargo.lock'
+      - 'native/tools/third-party-notices.py'
+      - 'native/packaging/mcp-client-*'
+      - '.github/workflows/container.yml'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version YYYY.W.N that native/Cargo.toml must have; given, the image is kept as the artifact api-image'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      IMAGE: open-pointcloud-studio-api:ci
+      # The body limit the container runs with, small enough for the smoke
+      # test to send a body above it.
+      LIMIT_MIB: '8'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the version
+        id: version
+        env:
+          EXPECTED: ${{ inputs.version }}
+        run: bash native/packaging/version.sh "$EXPECTED" | tee -a "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      # The layers are kept in the cache of GitHub Actions. The action hands
+      # the cache its token, which a plain docker command does not see.
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/cloud-api/Dockerfile
+          build-args: |
+            VERSION=${{ steps.version.outputs.number }}
+            REVISION=${{ github.sha }}
+          tags: ${{ env.IMAGE }}
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Check the user, labels and health check of the image
+        env:
+          NUMBER: ${{ steps.version.outputs.number }}
+        run: |
+          docker image inspect "$IMAGE" --format '{{json .Config}}' > "$RUNNER_TEMP/config.json"
+          python3 -I deploy/cloud-api/check-image.py config "$RUNNER_TEMP/config.json" "$NUMBER" "$GITHUB_SHA" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      # Each setting that would leave the service open stops the start with
+      # exit code 2 and a line that names the variable.
+      - name: Check that the service refuses to start open
+        run: |
+          failed=0
+          # refused WHAT VARIABLE DOCKER_OPTIONS...
+          refused() {
+            local what=$1 variable=$2 output code
+            shift 2
+            output=$(timeout 60 docker run --rm "$@" "$IMAGE" 2>&1) && code=0 || code=$?
+            echo "$what: exit $code: $output"
+            if [[ "$code" -eq 2 ]] && grep -qF "$variable" <<< "$output"; then
+              echo "| $what | exit 2, names $variable |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::$what: expected exit code 2 and a line naming $variable"
+              failed=1
+            fi
+          }
+          { echo "### Refusals at start"; echo; echo "| Setting | Result |"; echo "| --- | --- |"; } >> "$GITHUB_STEP_SUMMARY"
+          refused "no keys and not open" OPENAEC_API_SLEUTELS
+          refused "open and keys" OPENAEC_API_TOEGANG \
+            -e OPENAEC_API_TOEGANG=open -e "OPENAEC_API_SLEUTELS=$(printf %s example | sha256sum | cut -d' ' -f1)"
+          refused "open in a managed runtime" ECS_CONTAINER_METADATA_URI_V4 \
+            -e OPENAEC_API_TOEGANG=open -e ECS_CONTAINER_METADATA_URI_V4=http://x
+          [[ "$failed" -eq 0 ]]
+      # As the deployment runs it: nothing but /work can be written, and the
+      # service has to make /work/tmp itself, where the core writes scratch
+      # files. The memory limit is read from the control group.
+      - name: Start the container
+        run: |
+          key=$(openssl rand -hex 32)
+          echo "::add-mask::$key"
+          echo "API_KEY=$key" >> "$GITHUB_ENV"
+          docker run -d --name api --read-only --tmpfs /work:uid=10001,gid=10001 --memory 4g \
+            -e "OPENAEC_API_SLEUTELS=$(printf %s "$key" | sha256sum | cut -d' ' -f1)" \
+            -e "OPENAEC_API_MAX_LICHAAM_MIB=$LIMIT_MIB" \
+            -p 127.0.0.1:8080:8080 "$IMAGE"
+      - name: Wait until the container is healthy
+        run: |
+          for second in $(seq 1 60); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' api)
+            if [[ "$state" == healthy ]]; then
+              echo "healthy after $second s"
+              exit 0
+            fi
+            [[ "$(docker inspect --format '{{.State.Running}}' api)" == true ]] || break
+            sleep 1
+          done
+          echo "::error::the container did not become healthy within 60 s (state: $state)"
+          docker logs api
+          exit 1
+      - name: Smoke-test the container
+        env:
+          NUMBER: ${{ steps.version.outputs.number }}
+        run: bash deploy/cloud-api/smoke.sh http://127.0.0.1:8080 "$API_KEY" --version "$NUMBER" --limit-mib "$LIMIT_MIB"
+      - name: Install the MCP client
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mcp"
+          "$RUNNER_TEMP/mcp/bin/pip" install --require-hashes -r native/packaging/mcp-client-requirements.txt
+      - name: External MCP client
+        env:
+          NUMBER: ${{ steps.version.outputs.number }}
+        run: |
+          "$RUNNER_TEMP/mcp/bin/python" -I native/packaging/mcp-client-check.py \
+            --http http://127.0.0.1:8080/mcp --key "$API_KEY" --version "$NUMBER"
+      - name: Check that the work folder is empty again
+        run: |
+          left=$(docker exec api find /work -mindepth 1 -not -path /work/tmp)
+          left_tmp=$(docker exec api find /work/tmp -mindepth 1)
+          if [[ -n "$left$left_tmp" ]]; then
+            echo "::error::files are left in /work: $left $left_tmp"
+            exit 1
+          fi
+          echo "/work holds only the empty folder tmp" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Check the log of the container
+        run: |
+          docker logs api > "$RUNNER_TEMP/api.log" 2>&1
+          python3 -I deploy/cloud-api/make-test-files.py "$RUNNER_TEMP/test-files"
+          python3 -I deploy/cloud-api/check-image.py log "$RUNNER_TEMP/api.log" "$RUNNER_TEMP/test-files" "$API_KEY" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Check the notices in the image
+        run: |
+          docker create --name notices "$IMAGE" > /dev/null
+          docker cp notices:/usr/share/doc/open-pointcloud-studio-api "$RUNNER_TEMP/doc"
+          docker rm notices > /dev/null
+          ls -l "$RUNNER_TEMP/doc"
+          test -s "$RUNNER_TEMP/doc/LICENSE-LGPL-3.0.md"
+          test -s "$RUNNER_TEMP/doc/LICENSE-GPL-3.0.txt"
+          python3 -I deploy/cloud-api/check-image.py notices "$RUNNER_TEMP/doc/THIRD-PARTY-NOTICES.txt" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Stop the container
+        if: always()
+        run: |
+          docker logs api > "$RUNNER_TEMP/api.log" 2>&1 || true
+          docker rm --force api || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: api-log
+          path: ${{ runner.temp }}/api.log
+          retention-days: 7
+          if-no-files-found: ignore
+      # Not package-*: the release does not put the image on its page. It
+      # pushes it to the registry by its digest instead.
+      - name: Keep the image for the release
+        if: inputs.version != ''
+        run: docker save "$IMAGE" | gzip > "$RUNNER_TEMP/api-image.tar.gz"
+      - uses: actions/upload-artifact@v4
+        if: inputs.version != ''
+        with:
+          name: api-image
+          path: ${{ runner.temp }}/api-image.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  aws-template:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cfn-lint
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cfn"
+          "$RUNNER_TEMP/cfn/bin/pip" install --require-hashes -r deploy/aws/cfn-lint-requirements.txt
+      - name: Lint the CloudFormation template
+        run: |
+          "$RUNNER_TEMP/cfn/bin/cfn-lint" --version
+          "$RUNNER_TEMP/cfn/bin/cfn-lint" deploy/aws/cloud-api.yaml
+          echo "cfn-lint $("$RUNNER_TEMP/cfn/bin/cfn-lint" --version | sed 's/^cfn-lint //'): deploy/aws/cloud-api.yaml has no findings" \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Check that the template never starts the service open
+        run: |
+          if grep -n OPENAEC_API_TOEGANG deploy/aws/cloud-api.yaml; then
+            echo "::error::deploy/aws/cloud-api.yaml names OPENAEC_API_TOEGANG; the deployment takes keys only"
+            exit 1
+          fi
+      - name: Test the deploy script with a stand-in for the AWS command line
+        run: bash deploy/aws/test-deploy.sh

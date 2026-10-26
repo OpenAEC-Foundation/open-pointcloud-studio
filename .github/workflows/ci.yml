@@ -11,6 +11,15 @@ on:
   workflow_call:
 
 jobs:
+  # native/Cargo.toml, the entries of native/Cargo.lock and the form of the
+  # version are checked on every commit, not first when a release is made.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the version
+        run: bash native/packaging/set-version.sh check
+
   native:
     strategy:
       fail-fast: false
@@ -43,6 +52,11 @@ jobs:
         run: cargo test --workspace --locked
       - name: Check Rust code
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The cloud API and the C library take the core without its bag3d
+      # feature; the workspace build above always has it on.
+      - name: Check the core without default features
+        if: matrix.platform == 'ubuntu-22.04'
+        run: cargo clippy -p pointcloud-core --no-default-features --all-targets --locked -- -D warnings
       - name: Build native desktop application
         run: cargo build --release --locked -p open-pointcloud-studio-native
       - uses: actions/upload-artifact@v4

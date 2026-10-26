@@ -14,11 +14,12 @@
 //! a preview, an export or an opened file lasts for the session, as its row
 //! does.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use iced::widget::scrollable::{self, AbsoluteOffset, Direction, Scrollbar};
-use iced::widget::{button, container, mouse_area, row, text};
-use iced::{Background, Border, Color, Element, Fill, Padding, Task, Theme};
+use iced::widget::{button, mouse_area, row, text};
+use iced::{Element, Fill, Padding, Task};
 use pointcloud_core::Bounds;
 use serde_json::{json, Value};
 
@@ -26,7 +27,7 @@ use crate::i18n::tr;
 use crate::project_browser::{ViewKind, ViewRow};
 use crate::station_photos::WalkView;
 use crate::ui_style;
-use crate::{icon_svg, ui_theme, ColorMode, Message, Studio, ToolIcon};
+use crate::{icon_svg, ColorMode, Message, PointViewport, Studio, ToolIcon};
 
 /// A tab, by what it shows.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -43,6 +44,8 @@ pub enum TabId {
     File(Option<PathBuf>),
     /// A sheet of SHEETS, by its identifier.
     Layout(String),
+    /// The current photo of an open scan, kept for this session.
+    Photo(PathBuf),
 }
 
 /// How the preferences name the 3D model, and how they start the name of a
@@ -64,7 +67,7 @@ impl TabId {
             Self::View(guid) => Some(format!("{VIEW_KEY}{guid}")),
             Self::Drawing(guid) => Some(format!("{DRAWING_KEY}{guid}")),
             Self::Layout(guid) => Some(format!("{LAYOUT_KEY}{guid}")),
-            Self::File(_) => None,
+            Self::File(_) | Self::Photo(_) => None,
         }
     }
 
@@ -92,6 +95,7 @@ impl TabId {
             Self::Drawing(_) => "drawing",
             Self::File(_) => "file",
             Self::Layout(_) => "sheet",
+            Self::Photo(_) => "photo",
         }
     }
 
@@ -109,7 +113,7 @@ impl TabId {
     /// the drawing of this tab.
     fn look_key(&self) -> Option<String> {
         match self {
-            Self::Model | Self::View(_) | Self::Layout(_) => None,
+            Self::Model | Self::View(_) | Self::Layout(_) | Self::Photo(_) => None,
             Self::Drawing(guid) => Some(crate::drawing_view::sheet_look_key(guid)),
             Self::File(path) => Some(crate::drawing_view::file_look_key(path.as_deref())),
         }
@@ -131,7 +135,7 @@ const CLOSE_WIDTH: f32 = 22.0;
 const MIN_CHARS: usize = 8;
 const MAX_CHARS: usize = 32;
 /// The height of a tab, without the accent line over the active one.
-const TAB_HEIGHT: f32 = 26.0;
+const TAB_HEIGHT: f32 = 24.0;
 
 /// How wide a tab is with a name of so many characters.
 pub fn tab_width(chars: usize, closable: bool) -> f32 {
@@ -271,6 +275,24 @@ pub(crate) struct ModelLook {
     color_mode: ColorMode,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CompareAction {
+    Orbit(f32, f32, iced::Size),
+    Pan(f32, f32),
+    Zoom(f32, [f32; 2], iced::Size),
+    Cube(crate::view_cube::CubeTarget),
+}
+
+/// Camera and blending kept when a photo tab is temporarily hidden.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PhotoTabLook {
+    pub index: usize,
+    pub walk: WalkView,
+    pub pinned: bool,
+    pub zoom: f32,
+    pub blend: f32,
+}
+
 /// The open tabs and what they keep.
 #[derive(Debug)]
 pub struct ViewTabs {
@@ -286,10 +308,13 @@ pub struct ViewTabs {
     pending: Option<TabId>,
     /// The 3D tab whose camera the scene has: the 3D model, or the saved
     /// view shown last.
-    owner: TabId,
+    pub(crate) owner: TabId,
     /// The camera, the section box and the colour mode of the 3D model, as
     /// they were when the scene was last its own.
     model: Option<ModelLook>,
+    /// The last photo visited on each scan whose photo tab is open.
+    pub(crate) photo_indexes: HashMap<PathBuf, usize>,
+    pub(crate) photo_looks: HashMap<PathBuf, PhotoTabLook>,
     /// The open tabs and the active one as the preferences last got them.
     kept: (Vec<String>, Option<String>),
     /// A tab opened or closed, or the one kept as active let go, since the
@@ -312,6 +337,8 @@ impl ViewTabs {
             pending: None,
             owner: TabId::Model,
             model: None,
+            photo_indexes: HashMap::new(),
+            photo_looks: HashMap::new(),
             kept: (Vec::new(), None),
             changed: false,
         };
@@ -410,6 +437,77 @@ fn strip_id() -> scrollable::Id {
 }
 
 impl Studio {
+    pub(crate) fn update_compare_model(&mut self, action: CompareAction) {
+        let Some(look) = self.tabs.model.as_mut() else {
+            return;
+        };
+        match action {
+            CompareAction::Orbit(dx, dy, size) => {
+                let yaw = (look.yaw + dx * 0.01 + std::f32::consts::PI)
+                    .rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                let pitch = (look.pitch + dy * 0.01).clamp(-1.56, 1.56);
+                if let (Some(point), Some(scene)) =
+                    (look.orbit_point, crate::combined_bounds(&self.clouds))
+                {
+                    let from = crate::orbit_point::OrbitCamera {
+                        yaw: look.yaw,
+                        pitch: look.pitch,
+                        zoom: look.zoom,
+                        pan: look.pan,
+                    };
+                    if let Some(turned) =
+                        crate::orbit_point::turn_about(scene, from, yaw, pitch, point, size)
+                    {
+                        look.zoom = turned.zoom;
+                        look.pan = turned.pan;
+                    }
+                }
+                look.yaw = yaw;
+                look.pitch = pitch;
+                look.label = crate::i18n::key("CUSTOM");
+            }
+            CompareAction::Pan(dx, dy) => {
+                look.pan[0] += dx;
+                look.pan[1] += dy;
+            }
+            CompareAction::Zoom(delta, pointer, size) => {
+                let previous = look.zoom;
+                look.zoom = (look.zoom * (-delta * 0.14).exp()).clamp(0.000_001, 10_000.0);
+                let magnification = previous / look.zoom;
+                for (axis, value) in pointer.into_iter().enumerate() {
+                    let center = if axis == 0 { size.width } else { size.height } * 0.5;
+                    look.pan[axis] =
+                        (value - center) * (1.0 - magnification) + look.pan[axis] * magnification;
+                }
+            }
+            CompareAction::Cube(target) => {
+                let (yaw, pitch, label) = match target {
+                    crate::view_cube::CubeTarget::Face(preset) => preset.orientation(),
+                    crate::view_cube::CubeTarget::Edge(edge) => {
+                        let (yaw, pitch) = crate::view_cube::view_from(edge);
+                        (yaw, pitch, crate::i18n::key("ISO EDGE"))
+                    }
+                    crate::view_cube::CubeTarget::Corner(corner) => {
+                        let (yaw, pitch) = crate::view_cube::view_from(corner);
+                        (yaw, pitch, crate::i18n::key("ISO CORNER"))
+                    }
+                    crate::view_cube::CubeTarget::Home => {
+                        let (yaw, pitch, label) = crate::CameraPreset::Isometric.orientation();
+                        look.zoom = 1.0;
+                        look.pan = [0.0; 2];
+                        look.orbit_point = None;
+                        (yaw, pitch, label)
+                    }
+                };
+                look.yaw = yaw;
+                look.pitch = pitch;
+                look.label = label;
+            }
+        }
+        self.revision += 1;
+    }
+
     pub(crate) fn update_tabs(&mut self, action: TabAction) -> Task<Message> {
         match action {
             TabAction::Show(tab) => match self.show_tab(&tab) {
@@ -449,6 +547,11 @@ impl Studio {
         if let Some(guid) = self.drawing_view.shown_layout() {
             return Some(TabId::Layout(guid.to_owned()));
         }
+        if !self.drawing_view.shown {
+            if let Some(view) = &self.photos.view {
+                return Some(TabId::Photo(view.source.clone()));
+            }
+        }
         Some(match self.shown_row()? {
             ViewRow::Model => TabId::Model,
             ViewRow::Saved(guid) => TabId::View(guid),
@@ -486,6 +589,13 @@ impl Studio {
                 .any(|drawing| drawing.guid == *guid),
             TabId::File(path) => self.sheet_place(path.as_deref()).is_some(),
             TabId::Layout(guid) => self.layouts.layout(guid).is_some(),
+            TabId::Photo(source) => {
+                self.photos
+                    .files
+                    .get(source)
+                    .is_some_and(|photos| !photos.photos.is_empty())
+                    && self.clouds.iter().any(|entry| entry.cloud.path == *source)
+            }
         }
     }
 
@@ -501,6 +611,13 @@ impl Studio {
             TabId::Drawing(guid) => drawings.iter().any(|drawing| drawing.guid == *guid),
             TabId::File(path) => self.sheet_place(path.as_deref()).is_some(),
             TabId::Layout(guid) => self.layouts.layout(guid).is_some(),
+            TabId::Photo(source) => {
+                self.photos
+                    .files
+                    .get(source)
+                    .is_some_and(|photos| !photos.photos.is_empty())
+                    && self.clouds.iter().any(|entry| entry.cloud.path == *source)
+            }
         };
         std::iter::once(TabId::Model)
             .chain(self.tabs.open().iter().filter(listed).cloned())
@@ -532,6 +649,19 @@ impl Studio {
                 .layouts
                 .layout(guid)
                 .map_or_else(String::new, crate::layouts::Layout::caption),
+            TabId::Photo(source) => self
+                .photos
+                .files
+                .get(source)
+                .and_then(|photos| {
+                    self.tabs.photo_indexes.get(source).and_then(|index| {
+                        photos
+                            .photos
+                            .get(*index)
+                            .map(|photo| crate::file_photos::photo_label(photo, *index))
+                    })
+                })
+                .unwrap_or_else(|| crate::display_name(source).to_owned()),
         }
     }
 
@@ -554,7 +684,7 @@ impl Studio {
                 .iter()
                 .find(|drawing| drawing.guid == *guid)
                 .map_or(ViewKind::Plans, |drawing| ViewKind::of(drawing.kind)),
-            TabId::File(_) | TabId::Layout(_) => ViewKind::Files,
+            TabId::File(_) | TabId::Layout(_) | TabId::Photo(_) => ViewKind::Files,
         }
     }
 
@@ -563,6 +693,7 @@ impl Studio {
             TabId::Model => ToolIcon::Model,
             TabId::View(_) => ToolIcon::SavedView,
             TabId::Layout(_) => ToolIcon::Sheet,
+            TabId::Photo(_) => ToolIcon::SavedView,
             _ => self.tab_kind(tab).icon(),
         }
     }
@@ -574,7 +705,12 @@ impl Studio {
     pub(crate) fn show_tab(&mut self, tab: &TabId) -> Result<Task<Message>, String> {
         // A tab chosen by hand wins over the one kept as active.
         self.tabs.drop_pending();
-        match tab {
+        let leaving_photo = if !matches!(tab, TabId::Photo(_)) {
+            self.leave_photo()
+        } else {
+            None
+        };
+        let next = match tab {
             TabId::Model => Ok(self.show_model_tab()),
             TabId::View(guid) => {
                 let listed = self.listed_views().iter().any(|view| view.guid == *guid);
@@ -594,7 +730,7 @@ impl Studio {
                     self.drawing_view.shown = false;
                     self.file_open = false;
                     self.status = format!("View {}", self.views.list[index].name);
-                    return Ok(Task::none());
+                    return Ok(leaving_photo.unwrap_or_else(Task::none));
                 }
                 Ok(self.update_views(crate::views::ViewAction::Restore(guid.clone())))
             }
@@ -609,7 +745,26 @@ impl Studio {
                     .update_drawing_view(crate::drawing_view::DrawingViewAction::ShowSheet(place)))
             }
             TabId::Layout(guid) => self.show_layout(guid),
-        }
+            TabId::Photo(source) => {
+                if self
+                    .photos
+                    .view
+                    .as_ref()
+                    .is_some_and(|view| view.source == *source)
+                {
+                    return Ok(Task::none());
+                }
+                let index = *self
+                    .tabs
+                    .photo_indexes
+                    .get(source)
+                    .ok_or_else(|| "That photo tab has no selected photo".to_owned())?;
+                self.enter_photo(source, index).map_err(|error| error.shown)
+            }
+        }?;
+        Ok(Task::batch(
+            leaving_photo.into_iter().chain(std::iter::once(next)),
+        ))
     }
 
     /// Show the 3D model: the scene, with the camera, the section box and
@@ -617,16 +772,20 @@ impl Studio {
     /// active view lets go, so that the row of the 3D model is highlighted.
     pub(crate) fn show_model_tab(&mut self) -> Task<Message> {
         self.tabs.drop_pending();
+        let photo = self.leave_photo();
         self.drawing_view.shown = false;
         self.file_open = false;
-        let task = match self.tabs.model.filter(|_| self.tabs.owner != TabId::Model) {
-            Some(look) => self.put_back_model_look(look),
-            None => Task::none(),
-        };
+        let task =
+            match self.tabs.model.filter(|_| {
+                self.tabs.owner != TabId::Model || self.tabs.shown != Some(TabId::Model)
+            }) {
+                Some(look) => self.put_back_model_look(look),
+                None => Task::none(),
+            };
         self.deactivate_view();
         self.tabs.owner = TabId::Model;
         self.status = "3D model".into();
-        task
+        Task::batch(photo.into_iter().chain(std::iter::once(task)))
     }
 
     /// Close a tab, which never deletes its view or drawing. When it was
@@ -642,6 +801,9 @@ impl Studio {
         let shown = self.shown_tab();
         if !self.tabs.remove(tab) {
             return Task::none();
+        }
+        if let TabId::Photo(source) = tab {
+            self.tabs.photo_indexes.remove(source);
         }
         if let Some(key) = tab.look_key() {
             self.drawing_view.forget_look(&key);
@@ -664,6 +826,9 @@ impl Studio {
                 }
             });
         }
+        if let TabId::Photo(source) = tab {
+            self.tabs.photo_looks.remove(source);
+        }
         Task::batch(tasks)
     }
 
@@ -684,6 +849,49 @@ impl Studio {
             section_rotation: self.section_rotation,
             color_mode: self.color_mode,
         }
+    }
+
+    /// Capture the exact model camera before a photo replaces the viewport.
+    pub(crate) fn remember_model_for_photo(&mut self) {
+        if self.photos.view.is_none() {
+            if self.tabs.owner == TabId::Model {
+                self.tabs.model = Some(self.model_look());
+            }
+            let model_detail_ready = self.detail_loaded();
+            for entry in &mut self.clouds {
+                if model_detail_ready || entry.compare_points.is_none() {
+                    entry.compare_points = entry.detail_points.clone();
+                }
+            }
+        }
+    }
+
+    /// A copy of the model camera for the pane beside an entered photo.
+    /// Navigation changes this saved look; edits and picks stay in the photo.
+    pub(crate) fn compare_model_viewport<'a>(
+        &'a self,
+        mut view: PointViewport<'a>,
+    ) -> Option<PointViewport<'a>> {
+        let look = self.tabs.model?;
+        view.yaw = look.yaw;
+        view.pitch = look.pitch;
+        view.zoom = look.zoom;
+        view.pan = look.pan;
+        view.orbit_point = look.orbit_point;
+        view.walk = look.walk;
+        view.walk_station = None;
+        view.panorama_photos = None;
+        view.color_mode = look.color_mode;
+        view.photo_visible = false;
+        view.read_only = true;
+        view.resident_points = true;
+        view.focus_drawn = false;
+        view.box_select = false;
+        view.pick_mode = false;
+        view.pan_tool = false;
+        view.drag_rectangle = None;
+        view.context_menu = None;
+        Some(view)
     }
 
     /// Give the 3D model back what it showed: its camera, also standing at
@@ -723,6 +931,13 @@ impl Studio {
     /// get the tabs when they changed. Answers the work this needs, if any.
     pub(crate) fn settle_tabs(&mut self) -> Option<Task<Message>> {
         let mut tasks = Vec::new();
+        // A drawing opened from the Project Browser also leaves a photo,
+        // although it does not go through `show_tab`.
+        if self.drawing_view.shown {
+            if let Some(task) = self.leave_photo() {
+                tasks.push(task);
+            }
+        }
         // A saved view that had the scene and was deleted gives the scene
         // back to the 3D model, as closing its tab does, before the 3D model
         // takes what the scene shows as its own.
@@ -746,6 +961,10 @@ impl Studio {
             .collect();
         for tab in gone {
             self.tabs.remove(&tab);
+            if let TabId::Photo(source) = &tab {
+                self.tabs.photo_indexes.remove(source);
+                self.tabs.photo_looks.remove(source);
+            }
             if let Some(key) = tab.look_key() {
                 self.drawing_view.forget_look(&key);
             }
@@ -785,7 +1004,7 @@ impl Studio {
         if let Some(tab) = shown.filter(TabId::is_3d) {
             self.tabs.owner = tab;
         }
-        if self.tabs.owner == TabId::Model {
+        if self.tabs.owner == TabId::Model && !matches!(self.tabs.shown, Some(TabId::Photo(_))) {
             self.tabs.model = Some(self.model_look());
         }
         moved
@@ -814,17 +1033,17 @@ impl Studio {
         }))
     }
 
-    /// The width the strip has for its tabs: that of the
-    /// window between the Project Browser and Properties, else as the main
-    /// area was last drawn.
+    /// The document strip spans the window above all three content regions.
     fn strip_width(&self) -> f32 {
         if let Some(window) = self.window_size {
-            return window.width - crate::project_browser::WIDTH - self.properties_width();
+            return window.width;
         }
         self.drawing_view
             .canvas_bounds()
             .filter(|_| self.drawing_view.shown)
             .map_or_else(|| self.drawn_viewport().width, |bounds| bounds.width)
+            + crate::project_browser::WIDTH
+            + self.properties_width()
     }
 
     /// How the strip lays out: the tabs it lists with their names and
@@ -867,7 +1086,7 @@ impl Studio {
         ))
     }
 
-    /// The strip of tabs above the main area.
+    /// The shared 30 px document strip above the explorer, canvas and properties.
     pub(crate) fn tab_strip(&self) -> Element<'_, Message> {
         let shown = self.shown_tab();
         let StripLayout {
@@ -876,10 +1095,9 @@ impl Studio {
             fitted,
             ..
         } = self.strip_layout();
-        let surface = active_surface(self.ui_theme, self.drawing_view.shown);
-        let mut tabs = row![].spacing(2).align_y(iced::Alignment::End);
+        let mut tabs = row![].spacing(1).align_y(iced::Alignment::End);
         for ((tab, (full, _)), short) in listed.iter().zip(names).zip(fitted) {
-            let active = (shown.as_ref() == Some(tab)).then_some(surface);
+            let active = shown.as_ref() == Some(tab);
             tabs = tabs.push(self.tab_button(tab.clone(), full, short, active));
         }
         // The bar under the tabs stays 3 pixels, so that it does not cover
@@ -891,28 +1109,17 @@ impl Studio {
             .id(strip_id())
             .width(Fill);
         let line = row![strip].align_y(iced::Alignment::End);
-        container(line)
-            .padding(Padding {
-                top: 4.0,
-                left: 6.0,
-                ..Padding::ZERO
-            })
-            .width(Fill)
-            .style(|theme| {
-                container::Style::default().background(ui_theme::colors(theme).docbar_bg)
-            })
-            .into()
+        openaec_ui::frame::document_bar(self.ui_theme.shared(), line.into())
     }
 
-    /// One tab: the icon of its kind, its name and its ×, with its full name
-    /// and kind in a tooltip. The active one has the colour and the ink of
-    /// what is shown under it, under a line of the accent.
+    /// One tab: its icon, name and ×. The shared Style Book style owns the
+    /// 24 px body while Pointcloud keeps its identity and navigation actions.
     fn tab_button(
         &self,
         tab: TabId,
         full: String,
         short: String,
-        active: Option<(Color, Color)>,
+        active: bool,
     ) -> Element<'_, Message> {
         let closable = tab.closable();
         let mut content = row![
@@ -927,54 +1134,45 @@ impl Studio {
             content = content.push(padlock);
         }
         if closable {
+            let theme = self.ui_theme.shared();
             content = content.push(
                 button(text("×").size(12))
                     .on_press(Message::Tabs(TabAction::Close(tab.clone())))
-                    .style(move |theme, status| close_style(theme, active, status))
+                    .style(move |_, status| {
+                        openaec_ui::widgets::document_close_style(theme, active, status)
+                    })
                     .padding([0, 4]),
             );
         }
+        let theme = self.ui_theme.shared();
         let body = button(content)
             .on_press(Message::Tabs(TabAction::Show(tab.clone())))
-            .style(move |theme, status| tab_style(theme, active, status))
+            .style(move |_, status| openaec_ui::widgets::document_tab_style(theme, active, status))
             .height(TAB_HEIGHT)
             .padding(Padding {
-                top: 4.0,
-                bottom: 4.0,
-                left: 8.0,
-                right: if closable { 3.0 } else { 8.0 },
-            });
-        let framed = container(body)
-            .padding(Padding {
-                top: 2.0,
-                ..Padding::ZERO
-            })
-            .style(move |theme| {
-                let colors = ui_theme::colors(theme);
-                container::Style::default()
-                    .background(if active.is_some() {
-                        colors.accent
-                    } else {
-                        Color::TRANSPARENT
-                    })
-                    .border(Border {
-                        radius: iced::border::Radius::default().top(4),
-                        ..Border::default()
-                    })
+                top: 0.0,
+                bottom: 0.0,
+                left: 10.0,
+                right: 4.0,
             });
         let kind = match &tab {
             TabId::Layout(_) => tr("Sheets"),
+            TabId::Photo(_) => tr("Photo"),
             _ => tr(self.tab_kind(&tab).label()),
         };
         let tip = format!("{full}\n{kind}");
         let element: Element<'_, Message> = if closable {
-            mouse_area(framed)
+            mouse_area(body)
                 .on_middle_press(Message::Tabs(TabAction::Close(tab)))
                 .into()
         } else {
-            framed.into()
+            body.into()
         };
-        ui_style::tooltip(element, tip).into()
+        ui_style::tooltip(
+            openaec_ui::widgets::document_tab_bottom_gap(theme, element),
+            tip,
+        )
+        .into()
     }
 
     /// What `status.result.view_tabs` reports: the tabs the strip shows, in
@@ -999,6 +1197,10 @@ impl Studio {
                         entry["guid"] = json!(guid)
                     }
                     TabId::File(path) => entry["path"] = json!(path),
+                    TabId::Photo(path) => {
+                        entry["path"] = json!(path);
+                        entry["photo_index"] = json!(self.tabs.photo_indexes.get(path));
+                    }
                     TabId::Model => {}
                 }
                 entry
@@ -1118,86 +1320,8 @@ impl Studio {
     }
 }
 
-/// What the active tab lies on, as its colour and its ink: the sheet of a
-/// drawing (`drawing`), else the scene.
-fn active_surface(theme: ui_theme::UiTheme, drawing: bool) -> (Color, Color) {
-    if drawing {
-        (
-            crate::drawing_view::paper(theme),
-            Color::from_rgb8(28, 25, 23),
-        )
-    } else {
-        let dom = theme.colors().dom;
-        (dom.scene, dom.scene_text)
-    }
-}
-
 fn refused(error: String) -> (Value, Task<Message>) {
     (json!({"ok": false, "error": error}), Task::none())
-}
-
-/// A tab: the active one in the colour and the ink of what is shown under
-/// it, the others quiet until the pointer is over them.
-fn tab_style(
-    theme: &Theme,
-    active: Option<(Color, Color)>,
-    status: button::Status,
-) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    let (background, text_color) = if let Some(surface) = active {
-        surface
-    } else if hovered {
-        (colors.hover, colors.text)
-    } else {
-        (Color::TRANSPARENT, colors.text_muted)
-    };
-    button::Style {
-        background: Some(Background::Color(background)),
-        text_color,
-        border: Border {
-            radius: if active.is_some() {
-                0.0.into()
-            } else {
-                iced::border::Radius::default().top(3)
-            },
-            ..Border::default()
-        },
-        ..button::Style::default()
-    }
-}
-
-/// The × of a tab: on the active one in the ink of what is shown under it,
-/// a little quieter until the pointer is over it, so that it reads as well
-/// on the sheet of a drawing as on the scene; on the others in the quiet
-/// colour of the strip.
-fn close_style(
-    theme: &Theme,
-    active: Option<(Color, Color)>,
-    status: button::Status,
-) -> button::Style {
-    let colors = ui_theme::colors(theme);
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    let (quiet, hover, ink) = match active {
-        Some((surface, ink)) => (mixed(ink, surface, 0.7), Color { a: 0.12, ..ink }, ink),
-        None => (colors.text_muted, colors.ribbon_btn_hover, colors.text),
-    };
-    button::Style {
-        background: hovered.then_some(Background::Color(hover)),
-        text_color: if hovered { ink } else { quiet },
-        border: Border::default().rounded(3.0),
-        ..button::Style::default()
-    }
-}
-
-/// `share` of `ink` laid over `surface`.
-fn mixed(ink: Color, surface: Color, share: f32) -> Color {
-    let mix = |a: f32, b: f32| a * share + b * (1.0 - share);
-    Color::from_rgb(
-        mix(ink.r, surface.r),
-        mix(ink.g, surface.g),
-        mix(ink.b, surface.b),
-    )
 }
 
 #[cfg(test)]

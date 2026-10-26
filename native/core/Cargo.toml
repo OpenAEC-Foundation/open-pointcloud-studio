@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# bag3d fetches buildings from the 3D BAG service, and is the only part of the
+# core that needs an HTTP and TLS stack. The cloud API and the C library turn
+# it off, so that they hold neither.
+[features]
+default = ["bag3d"]
+bag3d = ["dep:reqwest"]
+
 [dependencies]
 las = { version = "0.9.11", features = ["laz-parallel"] }
 e57 = { version = "0.11.13", features = ["crc32c"] }
@@ -15,12 +22,22 @@ delaunator = "1"
 earcutr = "0.5"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
 rayon = "1.12"
+png = "0.17"
 # DXF and DWG reader and writer behind the drawing export; MPL-2.0, see NOTICE.
 cadcodec = { package = "acadrust", version = "0.5.5", default-features = false }
 
 # Tests write LAZ files whose chunks vary in size, which the writer of las
 # does not make. The version is the one las already brings in.
+# The demo scenes encode their panoramas as JPEG with the image crate that
+# the desktop application already uses.
 [dev-dependencies]
 laz = "0.12"
+image = { version = "0.24", default-features = false, features = ["jpeg"] }
+
+# The demo scenes check their panoramas against their scans in their own
+# tests, which run with the tests of this crate.
+[[example]]
+name = "demo_scenes"
+test = true

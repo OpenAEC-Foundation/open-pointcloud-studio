@@ -1,4 +1,4 @@
-//! The status bar along the bottom of the window: 32
+//! The status bar along the bottom of the window: 22
 //! pixels on the dark status colour, with what is going on and the totals
 //! at the left, the name and the version of the application in the middle
 //! and what the main area shows and the application's resident RAM at the
@@ -21,8 +21,8 @@ use crate::view_tabs::shortened;
 use crate::{app_title, fonts, format_count, format_zoom_level, ui_style, ui_theme};
 use crate::{CloudEntry, Message, Studio};
 
-/// The height of the bar, its line along the top included.
-pub(crate) const HEIGHT: f32 = 32.0;
+#[cfg(test)]
+const HEIGHT: f32 = openaec_ui::model::metrics::STATUS as f32;
 
 /// The most characters the name of a drawing or a sheet takes at the right.
 const SHOWN_CHARS: usize = 40;
@@ -291,23 +291,7 @@ impl Studio {
                     .push(separator());
             }
             compact_bar = compact_bar.push(item(&colors, tr("RAM:"), self.memory_usage.label()));
-            return iced::widget::column![
-                container(Space::new(Fill, 1)).style(|theme| {
-                    container::Style::default().background(ui_theme::colors(theme).status_border)
-                }),
-                container(compact_bar)
-                    .padding([0, 8])
-                    .width(Fill)
-                    .height(Length::Fixed(HEIGHT - 1.0))
-                    .style(|theme| {
-                        let colors = ui_theme::colors(theme);
-                        container::Style::default()
-                            .background(colors.status_bg)
-                            .color(colors.status_text)
-                    }),
-            ]
-            .height(Length::Fixed(HEIGHT))
-            .into();
+            return openaec_ui::frame::status_bar(self.ui_theme.shared(), compact_bar.into(), 8);
         }
         // The message comes first and gives way to the totals after it: a
         // long one is cut off at its right instead of wrapping or pushing
@@ -387,23 +371,7 @@ impl Studio {
         .spacing(12)
         .height(Fill)
         .align_y(Alignment::Center);
-        iced::widget::column![
-            container(Space::new(Fill, 1)).style(|theme| {
-                container::Style::default().background(ui_theme::colors(theme).status_border)
-            }),
-            container(bar)
-                .padding([0, 12])
-                .width(Fill)
-                .height(Length::Fixed(HEIGHT - 1.0))
-                .style(|theme| {
-                    let colors = ui_theme::colors(theme);
-                    container::Style::default()
-                        .background(colors.status_bg)
-                        .color(colors.status_text)
-                }),
-        ]
-        .height(Length::Fixed(HEIGHT))
-        .into()
+        openaec_ui::frame::status_bar(self.ui_theme.shared(), bar.into(), 12)
     }
 }
 
@@ -529,14 +497,14 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_is_32_pixels_of_the_status_colour_under_its_line() {
+    fn the_bar_matches_the_shared_height_under_its_border() {
         let mut studio = Studio::default();
         for theme in UiTheme::ALL {
             studio.ui_theme = theme;
             let colors = theme.colors();
             // At the left edge, in the padding of the bar.
             let (rows, above) = bar_rows(&studio, 4);
-            assert_eq!(rows, 31, "{}", theme.key());
+            assert_eq!(rows, (HEIGHT - 1.0) as u32, "{}", theme.key());
             let [r, g, b, _] = colors.status_border.into_rgba8();
             assert_eq!(above, [r, g, b], "{}", theme.key());
         }

@@ -127,13 +127,14 @@ fn next_looks_ready_only_when_it_is() {
         ready.background,
         Some(iced::Background::Color(colors.accent))
     );
-    // While it waits it is drawn at half its strength, as the style book
-    // draws a button that cannot be pressed.
+    // While it waits it is a quiet button with the faint text, without the
+    // accent colour of a button that can be pressed.
     assert_eq!(
         waiting.background,
-        Some(iced::Background::Color(colors.accent.scale_alpha(0.5)))
+        Some(iced::Background::Color(colors.btn_secondary_bg))
     );
-    assert_eq!(waiting.text_color, ready.text_color.scale_alpha(0.5));
+    assert_eq!(waiting.text_color, colors.text_faint);
+    assert_ne!(waiting.text_color, ready.text_color);
 }
 
 #[test]

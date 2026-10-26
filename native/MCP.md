@@ -11,6 +11,9 @@ The server speaks JSON-RPC 2.0 with one message per line. Standard output
 carries nothing but those messages; diagnostics go to standard error. The
 process keeps its console streams and opens no window itself.
 
+The cloud API has an MCP server of its own, over HTTP and without a window;
+see [The cloud API over HTTP](#the-cloud-api-over-http).
+
 ## Starting it from a client
 
 A client starts the server as a child process. Most clients take a JSON
@@ -59,8 +62,22 @@ call gets no answer. Unknown methods get error -32601, malformed messages
 except when `2025-11-25` was agreed: then they are a tool result with
 `isError: true`, so the caller can correct them. A whole number written with a
 fraction, such as `6.0`, counts as an integer. A command that the window
-refuses, or a window that does not answer, is a tool result with
-`isError: true` and the reason as text.
+refuses is a tool result with `isError: true` whose text is the window's
+JSON answer with `error`; a window that cannot be reached or does not answer
+gives `isError: true` with the reason as plain text.
+
+A command that the window does not answer within 10 seconds gets HTTP 504
+from the command API, and the tool result says so. That does not mean the
+command was not carried out: it waits in the window's queue and is carried
+out in its turn. Call `status` before calling a tool that changes something
+again, or it may be done twice.
+
+Tool calls are carried out one after another, in the order they arrive; a
+call that waits (`wait_seconds`, `wait_for_job`, `wait_until_idle`) delays
+the calls after it until it ends or is cancelled. Prefer short waits and
+repeat them, within the client's own request timeout. Batches are carried
+out in the same way, and `initialize`, `ping` and `tools/list` are answered
+at once.
 
 Closing the server's standard input ends the session: a running wait stops,
 calls still queued are dropped without an answer, and the server exits.
@@ -73,6 +90,9 @@ reads those files from the same configuration directory as the window
 (`XDG_CONFIG_HOME` is honoured, so a client that sets it for both finds its
 own windows only). A file counts when its process still runs and its port
 answers `GET /info` as that process; other files are skipped and left alone.
+The server waits up to 12 seconds for that answer, so that a window of an
+older version, which answered one request at a time, is not taken for a
+closed one while it carries out a slow command.
 
 The first tool call that needs a window uses the most recently started live
 one. When none runs, the server starts the application itself with
@@ -88,7 +108,10 @@ starts the unpacked executable instead.
 starts a new window, optionally opening files, and chooses it. A window that
 was picked automatically and has since closed is replaced by the next choice;
 a window chosen with `select_instance` or `start_instance` stays chosen, and
-calls report an error when it is gone.
+calls report an error when it is gone. When the window in use runs another
+version than the server, the server says so on standard error: the window
+refuses a tool whose command it does not know, with HTTP 400 and
+`unknown variant`. `GET /info` lists the commands a window knows.
 
 ## Tools
 
@@ -99,14 +122,30 @@ command of the same name with the same arguments, and return the window's
 JSON answer as text (and as `structuredContent` from protocol version
 `2025-06-18`).
 
+The annotations of each tool in `tools/list` say what it does to its
+surroundings. `readOnlyHint` is true for the tools that only read: `status`,
+`job`, `context`, the `list_` tools and the waits. Of the others,
+`destructiveHint` is true for those that may take away or overwrite work or
+files (see [Changes and undo](#changes-and-undo)): removing a layer,
+deleting or thinning points, resetting the transform of a layer, giving or
+taking away photo colours, a new mesh or face detection, clearing faces,
+overwriting or deleting views, deleting drawings, sheets, viewports and
+annotations, the exports and downloads that replace a file at their path,
+and installing, running and stopping extensions. `texture_mesh` writes new
+files only, and `screenshot` is not counted, although with `path` it
+replaces a file there. `idempotentHint` is true for
+`camera` and the `set_` and `show_` tools. `openWorldHint` is true for
+`bag3d`, which downloads over the internet, and for `run_extension` and
+`open_in_cad_viewer`, which start other programs.
+
 Exports, section drawings and their previews, selections, picks, meshes, mesh
 exports, face detections, faces exports, colourings from photos, merges,
 3D BAG downloads and the dialogs of `choose_path` answer at once with a `job_id`.
 They accept `wait_seconds` to wait for the job before answering, and
 `wait_for_job` waits for a job by its ID; a job that failed makes the result
 an error. `wait_until_idle` waits until imports, octree builds, background
-edits, meshing (a closed mesh included), mesh export, a face detection, a
-faces export, a section drawing or its preview, a drawing file being read, steps of Pointcloud to Drawing, a colouring from photos, merging, a 3D BAG download,
+edits, meshing (a closed mesh included), mesh export, texture export, a face detection, a
+faces export, a section drawing or its preview, a drawing file being read, a sheet being written as PDF, a drawing being written as DXF or DWG, steps of Pointcloud to Drawing, a colouring from photos, merging, a 3D BAG download,
 point loading for the camera, the fill of the cut of a mesh by the section
 box, the listing and decoding of photos and view snapshots have finished; call it after
 `open`, before `screenshot` when the camera changed, and before `export_bcf`.
@@ -129,7 +168,7 @@ follows when that view is restored.
 | `screenshot` | optional `path` (`.png`), `max_edge` (16–8192, default 1920), `window` | Image of the 3D viewport, or of the drawing while the Drawing view is shown, or with `window` of the whole window |
 | `open` | `path` | Opens a file, every supported file in a folder, or a scan project file |
 | `cancel_import` | `id` | Cancels a full-stream import |
-| `remove` | `index` | Removes a layer |
+| `remove` | `index` | Removes a layer, and empties the undo history of every layer |
 | `set_active` | `index` | Chooses the active layer |
 | `set_visible` | `index`, `visible` | Shows or hides a layer |
 | `camera` | `preset` | `top`, `bottom`, `front`, `back`, `left`, `right` or `isometric` |
@@ -146,6 +185,8 @@ follows when that view is restored.
 | `list_photos` | optional `layer` | The photos of a layer apart from its station photos (panoramas and photos along a path): index, kind, size, position, viewing direction; and the file's coordinate system |
 | `enter_photo` | `index`, optional `layer` | Stands where a photo was taken and lays it over the points |
 | `photo_blend` | `value` (0–1) | How much of the photo covers the points: 0 the points only, 1 the photo only |
+| `set_photo_compare` | `enabled` | Shows the entered photo beside a live 3D pane with its own camera controls; measuring and picking remain active in the photo pane |
+| `set_photo_split` | `ratio`, optional `vertical` | Sets the 3D pane's share of the width or height from 0.25 to 0.75; `vertical: true` stacks the panes, and the GUI divider can also be dragged |
 | `next_photo` | — | The next photo along the path, as Page Down |
 | `previous_photo` | — | The previous photo along the path, as Page Up |
 | `colour_from_photos` | optional `layer`, `max_distance` (0.5–500 m, default 20), `blend` (default true) and `wait_seconds` | Gives the points of a layer the colours its photos see them with, the photos of its file and of its stations: the remaining points in the section box and class filters, or all; a photo colours a point that no point of the layer hides from it, within `max_distance`, the nearest first or, with `blend`, weighted to the nearest; job. The colours take the place of those of the file in the viewport and in exports, as an edit `undo_delete` takes back; Undo keeps at most 1 GiB of earlier photo colours and lets go of the oldest edits beyond that. The job reports the points, those coloured and the share no photo sees, the photos in reach and used, the times, and against the colours the points had the mean and median difference per channel |
@@ -200,6 +241,8 @@ follows when that view is restored.
 | `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers`, as for `mesh` | Sets the options of a closed mesh in Mesh Pointcloud; refused as a whole when one value is |
 | `cancel_mesh` | — | Cancels the mesh job |
 | `export_mesh` | `path` (`.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc`), optional `wait_seconds` | Saves the mesh of the active layer in the format of the extension; job |
+| `texture_mesh` | new absolute `.obj` `path`, optional `texel_size` (metres), `max_resolution` (256–4096 pixels), `wait_seconds` | Writes the active mesh's stored vertex colours to UV atlas PNG pages with an OBJ and MTL; job. Colours applied to points from E57 photos transfer to newly reconstructed surface meshes. Original E57 photo pixels are not projected directly onto texels |
+| `cancel_texture_mesh` | — | Cancels the running texture export and removes its staged files |
 | `set_face_settings` | optional `distance_tolerance` (0.001–0.5 m), `angle_tolerance` (1–45 degrees), `min_area` (0.01–10000 m²), `cylinders`, `layers` (`active` or `visible`), `color` (`face` or `deviation`) | Sets the options of the faces in Mesh Pointcloud and the colouring of the faces that are shown; refused as a whole when one value is |
 | `detect_faces` | the settings of `set_face_settings`, all optional, and `wait_seconds` | Finds the flat faces (floors, ceilings, walls, sloped planes) and the round columns and pipes of the active layer, or of every visible layer that reaches the section box, inside the section box, and keeps them with the active layer beside its mesh; job. The job reports the faces per type, the edges, the voxel used and the points on a face. Settings left out keep what the options have |
 | `cancel_detect_faces` | — | Cancels the running face detection |
@@ -211,7 +254,7 @@ follows when that view is restored.
 | `export_section` | `path`, optional `wait_seconds` | Exports the section box; job |
 | `export_selection` | `path`, optional `wait_seconds` | Exports the selected points; job |
 | `export_minus_selection` | `path`, optional `wait_seconds` | Exports all but the selected points; job |
-| `export_drawing` | `path` (`.dxf` or `.dwg`), optional `view` (`plan`, `front`, `back`, `left` or `right`), `thickness` (0.005–5 m), `units` (`mm` or `m`), `origin` (`model` or `box`), `fill`, `square`, `grid` (at least 0.005 m), `max_wall_thickness` (above 0, at most 2 m), `color` (`layer` or `rgb`), `point_layers` (`scan` or `class`), `max_points` (1–400,000), `version` (`r2004`, `r2010`, `r2013` or `r2018`), `wait_seconds` | Draws the slab behind one face of the section box as a 2D drawing in DXF or DWG; job. Choices left out keep what the Section drawing block has |
+| `export_drawing` | `path` (`.dxf` or `.dwg`), optional `view` (`plan`, `front`, `back`, `left` or `right`), `thickness` (0.005–5 m), `units` (`mm` or `m`), `origin` (`model` or `box`), `fill`, `square`, `straight_lines` (editable straight polylines on `OPS-STRAIGHT-LINES` beside the cut outlines), `line_tolerance` (0–1 m, default 0.01), `line_min_length` (0–10 m, default 0.10), `grid` (at least 0.005 m), `max_wall_thickness` (above 0, at most 2 m), `color` (`layer` or `rgb`), `point_layers` (`scan` or `class`), `max_points` (1–400,000), `version` (`r2004`, `r2010`, `r2013` or `r2018`), `wait_seconds` | Draws the slab behind one face of the section box as a 2D drawing in DXF or DWG; job. Choices left out keep what the Section drawing block has |
 | `preview_drawing` | the choices of `export_drawing` without `path`, optional `wait_seconds` | Traces the filled cut of that slab and lays it over the points in the viewport; job |
 | `clear_drawing_preview` | — | Takes the preview of the filled cut off the viewport |
 | `drawing_view` | `show` | Shows the Drawing view in place of the 3D scene, or the 3D scene again |
@@ -219,7 +262,7 @@ follows when that view is restored.
 | `open_drawing` | `path` (`.dxf` or `.dwg`), optional `wait_seconds` | Reads a DXF or DWG file into the Drawing view and shows it; job |
 | `drawing_zoom_extents` | — | Fits the whole drawing in the Drawing view |
 | `set_drawing_layer` | `layer` (name or `*`), `visible` | Shows or hides a layer of the drawing in the Drawing view |
-| `create_drawing` | `kind` (`plan`, `elevation` or `section`), optional `basis` (`model`, `section_box` or the name of a saved view with a section box), `side` (`front`, `back`, `left` or `right`), `height`, `position`, `thickness` (0.005–5 m), `sample_percent` (the points used, 0.1–100; 10 by default), `name`, `wait_seconds` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; job |
+| `create_drawing` | `kind` (`plan`, `elevation` or `section`), optional `basis` (`model`, `section_box` or the name of a saved view with a section box), `side` (`front`, `back`, `left` or `right`), `height`, `position`, `thickness` (0.005–5 m), `sample_percent` (the points used, 0.1–100; 10 by default), `name`, `straight_lines`, `line_tolerance`, `line_min_length` (as for `export_drawing`), `square` (default true), `wait_seconds` | Makes a plan, an elevation or a section as Create 2D plan / elevation / section does, shows it and keeps how it was made; job |
 | `list_drawings` | — | The drawings of `create_drawing` made from an open scan with how each was made, and the previews, exports and files of this session |
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`; one not made in this session yet is made again from its scans, with a job to wait for. `3D model` shows the 3D model |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` |
@@ -241,12 +284,12 @@ follows when that view is restored.
 | `place_view` | optional `sheet`, `name`, optional `kind`, `at`, `scale` | Places a saved 3D view or a drawing on a sheet; a drawing at 1:100 unless given |
 | `update_viewport` | optional `sheet`, `viewport`, optional `at`, `size`, `scale`, `title` | Moves a viewport, sets the scale of a drawing, the size of a 3D view or the title |
 | `remove_viewport` | optional `sheet`, `viewport` | Takes a viewport off a sheet |
-| `export_sheet_pdf` | optional `sheet`, `path` (`.pdf`) | Writes a sheet as a PDF of the size of its paper; a job |
+| `export_sheet_pdf` | optional `sheet`, `path` (`.pdf`), optional `wait_seconds` | Writes a sheet as a PDF of the size of its paper; a job |
 | `lock_view` | optional `name`, `kind` (`view`, `drawing` or `viewport`), `sheet`, `viewport` | Locks a saved 3D view, a drawing or a viewport on a sheet |
 | `unlock_view` | optional `name`, `kind`, `sheet`, `viewport` | Unlocks it again |
 | `annotate_drawing` | optional `name`, `kind` (`text`, `dimension`, `leader` or `line`), optional `at`, `from`, `to`, `offset`, `text`, `height`, `snap` | Places a text, a dimension, a leader or a line on a drawing; points snap to its lines |
 | `annotate_sheet` | optional `sheet`, `kind` (`text` or `line`), optional `at`, `from`, `to`, `text`, `height` | Places a text or a line on the paper of a sheet |
-| `export_drawing_file` | optional `name`, `path` (`.dxf` or `.dwg`) | Writes a drawing with its annotations as DXF or DWG, with real dimensions; a job |
+| `export_drawing_file` | optional `name`, `path` (`.dxf` or `.dwg`), optional `wait_seconds` | Writes a drawing with its annotations as DXF or DWG, with real dimensions; a job |
 | `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, read-only in the Open CAD Studio that comes with the application, else in the program chosen in Settings or an installed Open CAD Studio; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
 | `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |
@@ -275,6 +318,95 @@ follows when that view is restored.
 arguments with types, ranges, enumerations and units. The tools are listed in
 one table in [`desktop/src/mcp/tools.rs`](desktop/src/mcp/tools.rs); a new
 API command needs one entry there and one line here.
+
+## Changes and undo
+
+`undo_delete` takes back the latest edit and `redo_delete` does it again.
+Four tools make such an edit: `delete_selection`, `thin`,
+`colour_from_photos` and `clear_photo_colours`. At most eight edits are
+kept, of all layers together, and a new edit ends what `redo_delete` could
+do again. Earlier photo colours are kept up to about 1 GiB; beyond that a
+colouring lets go of the oldest edits. `remove` of any layer empties this
+history for every layer.
+
+`translate` and `scale` are taken back with `reset_transform`, which puts
+the active layer back at the coordinates of its source; `reset_transform`
+itself is not taken back.
+
+Nothing else is taken back by Undo. A new mesh or a new face detection takes
+the place of what the layer had, and what `clear_faces`,
+`delete_camera_view`, `update_camera_view`, `delete_drawing`,
+`delete_sheet`, `remove_viewport` and `delete_annotation` take away or
+overwrite does not come back. The edits change the scans in the window, not
+their files; an export replaces the file at its destination, whatever file
+that is.
+
+## The cloud API over HTTP
+
+The cloud API, `open-pointcloud-studio-api`
+([docs/cloud-api.md](../docs/cloud-api.md)), serves MCP at `POST /mcp`, on
+the same port as its REST routes. It differs from the server above:
+
+- **Transport.** Streamable HTTP: one JSON-RPC message per request,
+  answered as JSON. A notification gets 202, a batch is refused, and
+  `GET /mcp` gets 405. The protocol versions are `2025-11-25`, `2025-06-18`
+  and `2025-03-26`.
+- **No state and no window.** The service keeps no session and nothing
+  between calls. A call carries its file in base64 in `input`, and a result
+  file comes back as an embedded resource of the tool result.
+- **Keys.** Every request needs `Authorization: Bearer <key>`; the service
+  holds the SHA-256 of each key in `OPENAEC_API_SLEUTELS`. Without a valid
+  key it answers 401 `TOEGANG_GEWEIGERD`, and a request with an `Origin` it
+  does not list gets 403 `HERKOMST_GEWEIGERD`.
+- **Five tools**, all read-only and not open-world: `inspect`, `convert`,
+  `section_drawing`, `terrain_mesh` and `surface_mesh`. They take no path,
+  and nothing they do stays on the server, so there is nothing to undo.
+  Their names differ from the tools above on purpose: those act on the
+  active layer, the section box and the filters of a window and write to a
+  path.
+
+A client that speaks Streamable HTTP is configured with the address and the
+key:
+
+```json
+{"type": "http", "url": "https://HOST/mcp", "headers": {"Authorization": "Bearer <key>"}}
+```
+
+[MCP client](../docs/cloud-api.md#mcp-client) in docs/cloud-api.md says how
+the service answers, and [Limits](../docs/cloud-api.md#limits) how large a
+file may be.
+
+## Checking a server from outside
+
+`packaging/mcp-client-check.py` checks either server as an MCP client
+outside the project does, with the reference Python SDK of the protocol,
+pinned with hashes in `packaging/mcp-client-requirements.txt`. From the root
+of the repository:
+
+```bash
+python3 -m venv /tmp/mcp
+/tmp/mcp/bin/pip install --require-hashes -r native/packaging/mcp-client-requirements.txt
+/tmp/mcp/bin/python -I native/packaging/mcp-client-check.py --stdio /usr/bin/open-pointcloud-studio --version VERSION
+/tmp/mcp/bin/python -I native/packaging/mcp-client-check.py --http http://127.0.0.1:8080/mcp --key KEY --version VERSION
+```
+
+`--stdio` starts the server of an installed application with configuration
+and cache folders of its own. The server starts a window, so it needs a
+display; a virtual one will do. It checks the handshake, that the server
+offers tools and no resources, the annotations of `status`, `thin` and
+`bag3d`, that every input schema refuses unknown arguments, `thin` 50 with
+`undo_delete`, `redo_delete` and `undo_delete` again on a grid of 1000
+points, a tool error for a missing file, and the token of the command API,
+and it records the count of the tools. `--http` checks the refusal without
+the key, the refusal of a foreign `Origin`, the five read-only tools,
+`inspect`, `convert` to LAZ as an embedded resource, and the refusal of a
+path.
+
+Each writes a record in Markdown, and exits with 1 when a check fails. The
+Packages workflow runs `--stdio` against the installed `.deb` on Linux, in
+the job `verify-linux`, and the Container workflow runs `--http` against the
+image. [docs/ecosystem.md](../docs/ecosystem.md#mcp-verification-record)
+records what has run.
 
 ## Example session
 

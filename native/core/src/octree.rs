@@ -427,6 +427,12 @@ impl OctreeIndex {
                 "source changed since loading".into(),
             ));
         }
+        // Without disk caches the index is built as `build_with_progress`
+        // builds it, in `scratch_dir` or the system temp folder, and is gone
+        // when it is dropped.
+        if !disk_caches() {
+            return Self::build_with_progress(cloud, config, progress);
+        }
         let fingerprint = cache_fingerprint(cloud, &config)?;
         let cache_root = config.scratch_dir.clone().unwrap_or_else(cache_root);
         fs::create_dir_all(&cache_root)?;
@@ -551,18 +557,26 @@ impl OctreeIndex {
             ));
         }
         let stamp = SourceStamp::read(path)?;
-        let fingerprint = cache_fingerprint_for(path, stamp, &config)?;
-        let cache_root = config.scratch_dir.clone().unwrap_or_else(cache_root);
-        fs::create_dir_all(&cache_root)?;
-        let cache_path = cache_directory(&cache_root, &fingerprint);
-        if cache_path.exists() {
-            // The cloud and the tree kept from before need no turn.
-            drop(turn);
-            let cloud = super::open(path, sample_limit)?;
-            preview(&cloud)?;
-            let index = Self::build_cached_with_progress(&cloud, config, progress)?;
-            return Ok((cloud, index));
-        }
+        // Without disk caches nothing is looked up or kept: the tree is built
+        // in `scratch_dir` or the system temp folder and is gone when it is
+        // dropped.
+        let cache = if disk_caches() {
+            let fingerprint = cache_fingerprint_for(path, stamp, &config)?;
+            let cache_root = config.scratch_dir.clone().unwrap_or_else(cache_root);
+            fs::create_dir_all(&cache_root)?;
+            let cache_path = cache_directory(&cache_root, &fingerprint);
+            if cache_path.exists() {
+                // The cloud and the tree kept from before need no turn.
+                drop(turn);
+                let cloud = super::open(path, sample_limit)?;
+                preview(&cloud)?;
+                let index = Self::build_cached_with_progress(&cloud, config, progress)?;
+                return Ok((cloud, index));
+            }
+            Some((fingerprint, cache_root, cache_path))
+        } else {
+            None
+        };
 
         // A preview kept from an earlier open is shown before the source pass.
         let previewed = match open_preview_cache(path, sample_limit) {
@@ -595,9 +609,13 @@ impl OctreeIndex {
                 snapshots.start_clock();
             }
         }
-        let storage = tempfile::Builder::new()
-            .prefix("open-pointcloud-index-")
-            .tempdir_in(&cache_root)?;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("open-pointcloud-index-");
+        let storage = match (&cache, &config.scratch_dir) {
+            (Some((_, cache_root, _)), _) => builder.tempdir_in(cache_root)?,
+            (None, Some(scratch)) => builder.tempdir_in(scratch)?,
+            (None, None) => builder.tempdir()?,
+        };
         let root_path = storage.path().join("r.bin");
         let mut collector = Collector::new(if dense {
             Snapshots::sample_limit(sample_limit)
@@ -683,6 +701,15 @@ impl OctreeIndex {
             &mut context,
         )?;
         progress(IndexProgress::ready(cloud.total_points, ready_leaves))?;
+        let Some((fingerprint, _, cache_path)) = cache else {
+            return Ok((
+                cloud,
+                Self {
+                    root,
+                    storage: IndexStorage::Temporary(storage),
+                },
+            ));
+        };
         fs::write(storage.path().join("source.meta"), &fingerprint)?;
         write_cached_cloud_header(storage.path(), &cloud, None)?;
         let temporary_path = storage.keep();
@@ -708,6 +735,9 @@ impl OctreeIndex {
         cloud: &PointCloud,
         config: IndexConfig,
     ) -> Result<Option<Self>, LoadError> {
+        if !disk_caches() {
+            return Ok(None);
+        }
         let stamp = cloud
             .source_stamp
             .ok_or_else(|| LoadError::InvalidData("source identity is unavailable".into()))?;
@@ -1176,6 +1206,9 @@ pub(crate) fn open_cached_preview(
     sample_limit: usize,
     config: IndexConfig,
 ) -> Result<Option<PointCloud>, LoadError> {
+    if !disk_caches() {
+        return Ok(None);
+    }
     let stamp = SourceStamp::read(path)?;
     let fingerprint = cache_fingerprint_for(path, stamp, &config)?;
     let root = config.scratch_dir.unwrap_or_else(cache_root);
@@ -1315,9 +1348,10 @@ fn preview_cache_directory(root: &Path, fingerprint: &[u8]) -> PathBuf {
 /// Keep the checked preview of a large source so that reopening it unchanged
 /// does not decode its points again. Failing to write only costs that time.
 pub(crate) fn write_preview_cache(cloud: &PointCloud) {
-    if cloud
-        .source_stamp
-        .is_some_and(|stamp| stamp.length >= PREVIEW_CACHE_MIN_BYTES)
+    if disk_caches()
+        && cloud
+            .source_stamp
+            .is_some_and(|stamp| stamp.length >= PREVIEW_CACHE_MIN_BYTES)
     {
         let _ = write_preview_cache_in(&cache_root(), cloud);
     }
@@ -1381,7 +1415,7 @@ pub(crate) fn open_preview_cache(
     path: &Path,
     sample_limit: usize,
 ) -> Result<Option<PointCloud>, LoadError> {
-    if SourceStamp::read(path)?.length < PREVIEW_CACHE_MIN_BYTES {
+    if !disk_caches() || SourceStamp::read(path)?.length < PREVIEW_CACHE_MIN_BYTES {
         return Ok(None);
     }
     open_preview_cache_in(&cache_root(), path, sample_limit)
@@ -1533,6 +1567,24 @@ fn write_cached_cloud_header(
         .persist(directory.join("cloud.json"))
         .map_err(|error| error.error)?;
     Ok(())
+}
+
+/// Whether index and preview caches are read and written under the cache
+/// folder, for the whole process.
+static DISK_CACHES: AtomicBool = AtomicBool::new(true);
+
+/// Whether index and preview caches are read and written under the cache
+/// folder. On by default; a service or a library turns them off. Off, an
+/// index is built in temporary storage and nothing under the cache folder is
+/// looked at.
+pub fn set_disk_caches(enabled: bool) {
+    DISK_CACHES.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether index and preview caches are read and written under the cache
+/// folder, as `set_disk_caches` last left it.
+pub fn disk_caches() -> bool {
+    DISK_CACHES.load(Ordering::Relaxed)
 }
 
 /// Where disk indexes are kept: `XDG_CACHE_HOME` when set, otherwise the

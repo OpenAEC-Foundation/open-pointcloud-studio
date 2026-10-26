@@ -9,6 +9,7 @@ use std::time::SystemTime;
 
 use snapshots::Snapshots;
 
+#[cfg(feature = "bag3d")]
 mod bag3d;
 pub mod cad3d;
 mod closed_mesh;
@@ -24,10 +25,12 @@ mod mesh_formats;
 mod mesh_points;
 mod mesh_quality;
 mod mesh_simplify;
+mod mesh_texture;
 mod mesh_write;
 mod mesher;
 mod obj_mesh;
 mod octree;
+pub mod ops;
 mod oriented_box;
 mod pcd;
 pub mod photo_colour;
@@ -48,6 +51,7 @@ mod test_shapes;
 mod turns;
 mod window_reader;
 
+#[cfg(feature = "bag3d")]
 pub use bag3d::{
     fetch_bag3d_obj, fetch_bag3d_obj_with, BagBounds, BagLod, BagProgress, BagStats,
     BAG3D_USER_AGENT,
@@ -61,19 +65,20 @@ pub use drawing::{
     class_point_layer, collect_slab, collect_slab_kept, dimension_axes, dimension_shape,
     dimension_step, dimension_value, drawing_info_text, export_section_drawing, layer_name,
     leader_shape, preview_cut_regions, preview_section_drawing, preview_section_drawing_kept,
-    read_drawing, section_drawing, slab_from_section, source_point_layer, trace_cut_regions,
-    wall_direction, write_drawing, write_drawing_progress, CutGrid, CutOutline, CutPreview,
-    CutRegion, DimensionShape, Drawing2d, DrawingEntity, DrawingFormat, DrawingFrame, DrawingLayer,
-    DrawingOrigin, DrawingProgress, DrawingRequest, DrawingSource, DrawingStage, DrawingStats,
-    DrawingUnits, DrawingVersion, DrawingView, KeptSlab, LeaderShape, OutlineOptions, PointColor,
-    PointLayers, PreviewRegion, ReadDrawing, Slab, SlabCut, SlabOptions, SlabPoint, WallDirection,
-    CUT_MIN_POINTS_PER_CELL, DEFAULT_CUT_GRID, DEFAULT_DRAWING_POINTS, DEFAULT_MAX_WALL_THICKNESS,
-    DEFAULT_MIN_WALL_LENGTH, DEFAULT_MIN_WALL_THICKNESS, DEFAULT_POINT_SPACING,
-    DEFAULT_SLAB_THICKNESS, DEFAULT_TEXT_HEIGHT, KEPT_POINT_BYTES, LAYER_CUT_FILL,
-    LAYER_CUT_OUTLINE, LAYER_DIMENSIONS, LAYER_FRAME, LAYER_INFO, LAYER_LEADERS, LAYER_LINES,
-    LAYER_POINTS, LAYER_RGB_CONTRAST, LAYER_RGB_CUT_FILL, LAYER_RGB_FRAME, LAYER_TEXT,
-    MAX_CUT_GRID_CELLS, MAX_DRAWING_POINTS, MAX_SLAB_THICKNESS, MAX_WALL_THICKNESS, MIN_CUT_GRID,
-    MIN_CUT_HOLE_AREA, MIN_DRAWING_SAMPLE_PERCENT, MIN_SLAB_THICKNESS, SQUARE_TOLERANCE,
+    read_drawing, section_drawing, slab_from_section, source_point_layer, straighten_cut_regions,
+    trace_cut_regions, wall_direction, write_drawing, write_drawing_progress, CutGrid, CutOutline,
+    CutPreview, CutRegion, DimensionShape, Drawing2d, DrawingEntity, DrawingFormat, DrawingFrame,
+    DrawingLayer, DrawingOrigin, DrawingProgress, DrawingRequest, DrawingSource, DrawingStage,
+    DrawingStats, DrawingUnits, DrawingVersion, DrawingView, KeptSlab, LeaderShape, OutlineOptions,
+    PointColor, PointLayers, PreviewRegion, ReadDrawing, Slab, SlabCut, SlabOptions, SlabPoint,
+    StraightLineOptions, StraightLineStats, StraightLines, WallDirection, CUT_MIN_POINTS_PER_CELL,
+    DEFAULT_CUT_GRID, DEFAULT_DRAWING_POINTS, DEFAULT_MAX_WALL_THICKNESS, DEFAULT_MIN_WALL_LENGTH,
+    DEFAULT_MIN_WALL_THICKNESS, DEFAULT_POINT_SPACING, DEFAULT_SLAB_THICKNESS, DEFAULT_TEXT_HEIGHT,
+    KEPT_POINT_BYTES, LAYER_CUT_FILL, LAYER_CUT_OUTLINE, LAYER_DIMENSIONS, LAYER_FRAME, LAYER_INFO,
+    LAYER_LEADERS, LAYER_LINES, LAYER_POINTS, LAYER_RGB_CONTRAST, LAYER_RGB_CUT_FILL,
+    LAYER_RGB_FRAME, LAYER_STRAIGHT_LINES, LAYER_TEXT, MAX_CUT_GRID_CELLS, MAX_DRAWING_POINTS,
+    MAX_SLAB_THICKNESS, MAX_WALL_THICKNESS, MIN_CUT_GRID, MIN_CUT_HOLE_AREA,
+    MIN_DRAWING_SAMPLE_PERCENT, MIN_SLAB_THICKNESS, SQUARE_TOLERANCE,
 };
 pub use dxf::read_mesh as read_dxf_mesh;
 pub use export::{
@@ -89,6 +94,7 @@ pub use mesh_quality::{
     MeshTopology,
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
+pub use mesh_texture::{write_colored_obj_atlas, AtlasOptions, AtlasReport};
 pub use mesh_write::{read_stl_origin, write_mesh, MeshFormat, MeshWriteReport};
 pub use mesher::{
     mesh_terrain_obj, mesh_terrain_obj_where, mesh_terrain_obj_where_progress, MeshConfig,
@@ -98,7 +104,10 @@ pub use obj_mesh::{
     read_obj_mesh, write_obj_mesh, MeshGeometry, MAX_TRIANGLES as MAX_MESH_TRIANGLES,
     MAX_VERTICES as MAX_MESH_VERTICES,
 };
-pub use octree::{IndexConfig, IndexProgress, IndexStage, IndexedNode, IndexedPoint, OctreeIndex};
+pub use octree::{
+    disk_caches, set_disk_caches, IndexConfig, IndexProgress, IndexStage, IndexedNode,
+    IndexedPoint, OctreeIndex,
+};
 pub use oriented_box::{bounds_corners, normalized_degrees, OrientedBox};
 pub use ply_mesh::read_ply_mesh;
 pub use scan_image::{
@@ -111,7 +120,8 @@ pub use section_caps::{
 };
 pub use surface_mesh::{
     mesh_surface_obj, mesh_surface_obj_from, mesh_surface_obj_where,
-    mesh_surface_obj_where_progress, SurfaceMeshConfig, SurfacePoints,
+    mesh_surface_obj_where_progress, mesh_surface_obj_where_progress_colours, SurfaceMeshConfig,
+    SurfacePoints, SURFACE_MESH_NEIGHBORS, SURFACE_MESH_VERTICES,
 };
 pub use turns::SourceTurn;
 

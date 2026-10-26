@@ -1121,6 +1121,55 @@ The rebuilt dev GUI also reopened the public 160,838-point
 [pye57 test scan](../screenshots/native-current-e57-neutral-rgb.png) in RGB mode
 with its four scanner positions visible.
 
+## Generated demo scenes
+
+The pictures that the README, the user guide, the Dutch manual of the wiki
+and the feature video show (`docs/screenshots/`, the pictures the guide
+embeds from `docs/images/`, `docs/wiki/images/` and `promo/`) are made from
+`building.laz` and `rooms.e57` below and from nothing else: no scan of a
+real place and no sample of a manufacturer. One command writes the three
+files, byte for byte the same on every run:
+
+```text
+cargo run -p pointcloud-core --release --example demo_scenes -- OUTPUT_FOLDER
+```
+
+It takes about a minute on eight threads; `--threads N` uses another
+number and `--only building` or `--only rooms` writes one scene.
+
+| File | Points | Size |
+| --- | --- | --- |
+| `building.laz` | 24.2 million | 162 MB |
+| `rooms.e57` | 6.5 million | 102 MB |
+| `rooms.las` | 6.5 million | 234 MB |
+
+- `building.laz` is a two-storey brick house of 11 × 8.5 m with a pitched
+  roof, solar panels, a chimney, windows and a front door, on a plot that
+  slopes gently up from a street. A sidewalk, a paved path, a terrace, a
+  hedge, board fences, five trees, shrubs, a shed and a street light
+  surround it. It is LAS 1.4 with point format 7, in millimetres in a local
+  grid (X 1000 to 1064, Y 2000 to 2050, ground at about 10 m). Colours are
+  those of the materials under a low sun, with shadows; intensity follows
+  the material. Points are classed as ground (2), low, medium and high
+  vegetation (3 to 5) and building (6); fences and the street light are
+  unclassified (1).
+- `rooms.e57` holds two rooms of 5.4 × 4.2 m and 4.2 × 4.2 m, 2.7 m high,
+  joined by a doorway, with two windows, a round column, a table with four
+  chairs and a tall cabinet. It has two scans, "Station 1" and "Station 2",
+  one from the middle of each room, with their poses, rows and columns,
+  colour and intensity. Each station has an equirectangular panorama of
+  4096 × 2048 pixels, rendered from the same geometry and colours as the
+  points, so the panoramas open as photo tabs and Colour from photos
+  matches them to the points (a median difference of 2 of 255 per channel).
+- `rooms.las` holds the same points without the photos, with the station
+  number as point source ID.
+
+The example's tests, which run with those of the workspace, check that a
+pixel of each panorama shows what the scan measured in that direction and
+that the application reads both stations and their panoramas back. Views,
+drawings and layers made from these files for pictures get neutral names,
+such as Ground floor, Plan or Section A.
+
 ## Checking the 3D BAG and map services before a release
 
 The tests of the building client and of the map are offline: they serve

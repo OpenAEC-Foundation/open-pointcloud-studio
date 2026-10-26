@@ -1,0 +1,28 @@
+[package]
+name = "pointcloud-sdk"
+version.workspace = true
+edition.workspace = true
+# LGPL-3.0-or-later, as the core it wraps.
+license.workspace = true
+description = "The C library of the point-cloud core of Open Pointcloud Studio"
+build = "build.rs"
+
+# The static archive is built only by the SDK workflow, with
+# cargo rustc --crate-type staticlib.
+[lib]
+name = "ops_pointcloud"
+crate-type = ["cdylib", "rlib"]
+
+# The core without its bag3d feature, so that the library holds no HTTP
+# client and no TLS stack.
+[dependencies]
+pointcloud-core = { path = "../core", default-features = false }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+# The version resource of the Windows DLL. The version is the one the
+# desktop application already brings in.
+[build-dependencies]
+winresource = "0.1"

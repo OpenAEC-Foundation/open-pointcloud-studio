@@ -1,0 +1,4 @@
+# The scripts and the Dockerfile here are read by bash, python and the
+# container build on Linux, also from a checkout made on Windows: keep their
+# line ends as they are.
+* text=auto eol=lf

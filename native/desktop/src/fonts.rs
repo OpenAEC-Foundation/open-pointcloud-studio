@@ -4,41 +4,30 @@
 //! own, since iced picks a weight from the files it has and applies no axis
 //! of a variable font.
 
-use iced::font::{Family, Weight};
 use iced::Font;
 
 /// The font files the window brings along.
 pub const FILES: [&[u8]; 4] = [
-    include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
-    include_bytes!("../../assets/fonts/Inter-Medium.ttf"),
-    include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"),
-    include_bytes!("../../assets/fonts/SpaceGrotesk-Medium.ttf"),
+    openaec_ui::fonts::FILES[0],
+    openaec_ui::fonts::FILES[1],
+    openaec_ui::fonts::FILES[2],
+    openaec_ui::fonts::FILES[3],
 ];
 
 /// Text of the interface: rows, labels, buttons, tooltips, the label of a
 /// ribbon button.
-pub const REGULAR: Font = Font::with_name("Inter");
+pub const REGULAR: Font = openaec_ui::fonts::BODY;
 
 /// Tabs of the ribbon and of Settings, the captions of ribbon groups, the
 /// label of an active ribbon button, the value of a status bar item.
-pub const MEDIUM: Font = Font {
-    weight: Weight::Medium,
-    ..REGULAR
-};
+pub const MEDIUM: Font = openaec_ui::fonts::MEDIUM;
 
 /// Panel and section heads, dialog titles, the File button, card titles,
 /// counts.
-pub const SEMIBOLD: Font = Font {
-    weight: Weight::Semibold,
-    ..REGULAR
-};
+pub const SEMIBOLD: Font = openaec_ui::fonts::STRONG;
 
 /// Headings: the title of a page of the File view, the empty scene.
-pub const HEADING: Font = Font {
-    family: Family::Name("Space Grotesk"),
-    weight: Weight::Medium,
-    ..Font::DEFAULT
-};
+pub const HEADING: Font = openaec_ui::fonts::HEADING;
 
 /// How wide `content` is on one line in `font` at `size` pixels, as a
 /// canvas draws it.

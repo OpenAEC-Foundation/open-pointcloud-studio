@@ -8,18 +8,24 @@ run on a developer machine.
 ## What a release holds
 
 `expected-assets.sh NUMBER` prints the list; each file has a `.sha256` beside
-it.
+it. `YYYY.W.N` is the version, such as `2026.43.0` (see
+[Releasing](#releasing)).
 
 | File | For |
 | --- | --- |
-| `open-pointcloud-studio_X.Y.Z_x64-setup.exe` | Windows 10 and 11: installer, built from [`../installer/windows.iss`](../installer/windows.iss) |
-| `open-pointcloud-studio_X.Y.Z_windows-x64.zip` | Windows: the application, Open CAD Studio and the licence texts |
-| `open-pointcloud-studio_X.Y.Z_macos-universal.dmg` | macOS 11 and later, arm64 and x86-64 in one application bundle |
-| `open-pointcloud-studio_X.Y.Z_macos-universal.tar.gz` | macOS: the universal binaries of the application and of Open CAD Studio, and the licence texts |
-| `open-pointcloud-studio_X.Y.Z_amd64.deb`, `_arm64.deb` | Debian, Ubuntu and their relatives |
-| `open-pointcloud-studio_X.Y.Z_amd64.AppImage`, `_arm64.AppImage` | any Linux distribution with a C library of version 2.35 or newer and the C++ runtime of GCC 12 or newer |
-| `open-pointcloud-studio_X.Y.Z_linux-amd64.tar.gz`, `_linux-arm64.tar.gz` | Linux: the binaries of the application and of Open CAD Studio, and the licence texts |
+| `open-pointcloud-studio_YYYY.W.N_x64-setup.exe` | Windows 10 and 11: installer, built from [`../installer/windows.iss`](../installer/windows.iss) |
+| `open-pointcloud-studio_YYYY.W.N_windows-x64.zip` | Windows: the application, Open CAD Studio and the licence texts |
+| `open-pointcloud-studio_YYYY.W.N_macos-universal.dmg` | macOS 11 and later, arm64 and x86-64 in one application bundle |
+| `open-pointcloud-studio_YYYY.W.N_macos-universal.tar.gz` | macOS: the universal binaries of the application and of Open CAD Studio, and the licence texts |
+| `open-pointcloud-studio_YYYY.W.N_amd64.deb`, `_arm64.deb` | Debian, Ubuntu and their relatives |
+| `open-pointcloud-studio_YYYY.W.N_amd64.AppImage`, `_arm64.AppImage` | any Linux distribution with a C library of version 2.35 or newer and the C++ runtime of GCC 12 or newer |
+| `open-pointcloud-studio_YYYY.W.N_linux-amd64.tar.gz`, `_linux-arm64.tar.gz` | Linux: the binaries of the application and of Open CAD Studio, and the licence texts |
+| `open-pointcloud-studio-sdk_YYYY.W.N_windows-x64-dll.zip`, `_macos-universal-dylib.tar.gz`, `_linux-amd64-so.tar.gz`, `_linux-arm64-so.tar.gz` | the point-cloud core as a C library, with its header and example ([`../sdk`](../sdk), [`../../docs/library.md`](../../docs/library.md)) |
 | `open-cad-studio-source_SHORT.tar.gz` | the source of the Open CAD Studio that every package carries: every file of the pinned commit, `SHORT` being its first eight characters |
+| `open-cad-studio-vendor_SHORT.tar.gz` | the crates that commit takes from git repositories, vendored |
+| `SHA256SUMS` | the checksums of all the files above in one list; it has no `.sha256` of its own |
+| `SHA256SUMS.asc`, `open-pointcloud-studio_YYYY.W.N_amd64.AppImage.asc`, `_arm64.AppImage.asc` | OpenPGP signatures, once the organisation has its key (see [Signatures](#signatures)) |
+| `open-pointcloud-studio_YYYY.W.N_verification.md` | added after the release is public: the record of the checks of the published files ([Verification record](#verification-record)) |
 
 Every package carries Open CAD Studio, the CAD program that shows exported
 drawings: `OpenCADStudio` or `OpenCADStudio.exe` beside the application in
@@ -45,10 +51,23 @@ source archive ends in none of these endings, so no button offers it.
 The 64-bit ARM packages for Linux are experimental: they are built and
 tested on build machines with software rendering only.
 
+The image of the cloud API is not a file of the release page: it is
+`ghcr.io/openaec-foundation/open-pointcloud-studio-api:YYYY.W.N` in the
+registry of the organisation, and the notes give its digest
+([The image of the cloud API](#the-image-of-the-cloud-api)).
+
 ## Files
 
+- `set-version.sh` works out the version of the next release (`next`),
+  writes a version into `native/Cargo.toml` and the entries of
+  `native/Cargo.lock`, and with `--changelog` the heading of its section in
+  `CHANGELOG.md` (`set`), and checks that those agree (`check`), which the
+  CI workflow does for every commit. It numbers only the members of the
+  workspace with `version.workspace = true`: the `ui` crate, a copy of the
+  shared OpenAEC crate, keeps the version of that crate.
 - `version.sh` reads the version from `native/Cargo.toml`, the only place it
-  is written, and prints it in the forms the packages need.
+  is written, checks it with `set-version.sh check` and prints it in the
+  forms the packages need.
 - `make-icons.sh` draws the tile icon from `../assets/icons/logo.svg` and
   renders the sizes for Linux and macOS.
 - `build-open-cad-studio.sh` fetches the commit that `open-cad-studio.pin`
@@ -122,6 +141,16 @@ tested on build machines with software rendering only.
   `expected-assets.sh` does not list, so that a file of an earlier run whose
   name has changed since, such as a source archive of Open CAD Studio for a
   commit pinned before, is not published.
+- `signature-assets.sh` names the files of a release besides those of
+  `expected-assets.sh`: `SHA256SUMS`, and the OpenPGP signatures when they
+  are kept. `sign-linux.sh` writes those signatures with the organisation's
+  key, and signs nothing while the key is not configured.
+- `mcp-client-check.py` checks an MCP server from the outside with the
+  reference Python SDK of the protocol, pinned with hashes in
+  `mcp-client-requirements.txt`: `--stdio` the server of the installed
+  application (the `verify-linux` job, under a virtual display), `--http`
+  the route `/mcp` of the cloud API (the Container workflow). Each writes a
+  record to the summary of its job.
 - `test-scripts.sh` tests these scripts with stand-ins for the programs they
   call, and fetches from a small repository of its own in place of that of
   Open CAD Studio; it needs nothing installed besides git and runs first in
@@ -132,7 +161,7 @@ tested on build machines with software rendering only.
 
 The packages rely on five things in the desktop crate:
 
-- `--version` prints `open-pointcloud-studio X.Y.Z` and `--help` prints the
+- `--version` prints `open-pointcloud-studio YYYY.W.N` and `--help` prints the
   command-line modes, naming at least `--export` and `--mcp`; both exit with
   success without opening a window. `smoke-test.sh` checks them.
 - On Linux the window announces the application id
@@ -163,29 +192,49 @@ On a developer machine, with a built binary:
 
 ```bash
 bash native/packaging/test-scripts.sh                      # needs no binary
-bash native/packaging/smoke-test.sh native/target/release/open-pointcloud-studio 0.8.0
+bash native/packaging/smoke-test.sh native/target/release/open-pointcloud-studio 2026.43.0
 bash native/packaging/build-open-cad-studio.sh -j 4        # native/target/open-cad-studio/release
 bash native/packaging/build-open-cad-studio.sh --target x86_64-pc-windows-msvc   # for a Windows package
 bash native/packaging/archive-open-cad-studio-source.sh /tmp/packages
 bash native/packaging/make-icons.sh /tmp/icons            # needs rsvg-convert
 bash native/packaging/linux/build-deb.sh native/target/release/open-pointcloud-studio \
     native/target/open-cad-studio/release/OpenCADStudio \
-    /tmp/icons 0.8.0 0.8.0 2026-10-10 /tmp/packages       # needs dpkg-deb, desktop-file-validate
+    /tmp/icons 2026.43.0 2026-10-24 /tmp/packages         # needs dpkg-deb, desktop-file-validate
 python3 native/packaging/gui-smoke.py native/target/release/open-pointcloud-studio
 ```
 
 ## Releasing
 
-1. Set the version in `native/Cargo.toml` (`[workspace.package] version`) and
-   run `cargo check` in `native/` so that `Cargo.lock` follows.
-2. In `CHANGELOG.md`, give the *Unreleased* section its heading
-   `## X.Y.Z - YYYY-MM-DD` and start a new empty *Unreleased* above it.
-3. Run the **Packages** workflow on that commit and look at its screenshots.
-4. Commit, tag `vX.Y.Z` and push the tag. The release workflow refuses a tag
-   that differs from the version or has no changelog section, runs the tests
-   on all three systems and the Packages workflow, and only then creates the
-   release with all files.
-5. Tell the website work when file names change: its download buttons and
+A version is `YYYY.W.N`: the ISO week-year and the ISO week of the release,
+the week without a leading zero, and a sequence number from 0 within that
+week, such as `2026.43.0`. A second release in that week is `2026.43.1`, the
+first of the week after `2026.44.0`. The commit of a release sets its
+version, so `main` has the version of the last release and never a week
+ahead.
+
+1. On the day of the release, run
+
+   ```bash
+   bash native/packaging/set-version.sh set next --changelog "$(date -u +%F)"
+   ```
+
+   It takes the week of that day in UTC and one more than the highest
+   sequence number of that week among the tags and the releases on GitHub,
+   drafts included, so `gh` has to be signed in (`--offline` counts the
+   local tags only). It writes the version into `native/Cargo.toml` and
+   `native/Cargo.lock`, and gives the *Unreleased* section of `CHANGELOG.md`
+   its heading `## YYYY.W.N - YYYY-MM-DD` with a new empty *Unreleased*
+   above it; it writes nothing while that section has no item.
+2. Commit as `Release vYYYY.W.N`, run the **Packages** workflow on that
+   commit and look at its screenshots.
+3. Tag `vYYYY.W.N` and push the tag, or start the release workflow by hand;
+   without a version it takes the next one of this week, which has to be the
+   version of the commit. A draft that a failed run left behind counts as a
+   release of that week, so give its tag to run again over it. The release
+   workflow refuses a tag that differs from the version or has no changelog
+   section, runs the tests on all three systems and the Packages workflow,
+   and only then creates the release with all files.
+4. Tell the website work when file names change: its download buttons and
    its release notes read the release.
 
 To move to another commit of Open CAD Studio, write its URL, full hash, tree
@@ -200,11 +249,84 @@ and crates that `OpenCADStudio-NOTICE.txt.in` has to list for the new
 commit, and the crates under a copyleft licence that `NOTICE.txt` has to
 name, and writes nothing until both do.
 
-The release workflow gives every Linux package a build attestation
-(`actions/attest`) before it creates the release; the release notes and the
-README say how to check one with `gh attestation verify` and
-`--signer-workflow`, which a bare `--repo` would not check.
+The release workflow gives every Linux package and every Linux archive of
+the C library a build attestation (`actions/attest`) before it creates the
+release; the release notes and the README say how to check one with `gh
+attestation verify` and `--signer-workflow`, which a bare `--repo` would
+not check.
 
-Not done here, and said in the release notes: the macOS bundle is signed ad
-hoc and not notarised, so the first start has to be allowed by hand, and the
-Windows files are signed only when the signing service is configured.
+Besides the Packages workflow, the release workflow runs the SDK workflow
+(`sdk.yml`, the four archives of the C library) and the Container workflow
+(`container.yml`, the image of the cloud API, smoke-tested and kept as the
+artifact `api-image`); a release is published only when all of them pass. A
+draft run (*Leave the release as a draft*) does everything but push the
+image and publish; it is the dry run of a release.
+
+### Signatures
+
+`SHA256SUMS` is published with every release: `sha256sum --ignore-missing -c
+SHA256SUMS` checks every file downloaded beside it.
+
+The Windows application, Open CAD Studio, the installer and the DLL of the C
+library are signed when the secrets of the organisation's code-signing
+account are configured; the step *Report the signatures* says what each
+file carries, with its signer, issuer, thumbprint and timestamp, and the
+release notes repeat it.
+On a release run, the publish job refuses a release whose application is
+signed while its library is not, on Windows or macOS; a draft run only
+warns.
+
+The Windows programs and the DLL are built with the static C runtime
+(`-C target-feature=+crt-static`, set for the build steps only, so that it
+reaches neither other builds under `native/` nor the cache of Open CAD
+Studio unseen), and the step *Check the runtime dependencies* fails on a DLL
+that a clean Windows does not have.
+
+OpenPGP signatures of `SHA256SUMS` and of the two AppImages follow once the
+organisation has its key. `sign-linux.sh` reads the secret signing subkey
+from the secret `OPENAEC_GPG_PRIVATE_KEY`, its passphrase from
+`OPENAEC_GPG_PASSPHRASE` and the fingerprint from the variable
+`OPENAEC_GPG_FINGERPRINT`, refuses a key with another fingerprint, and
+verifies each signature it writes. While any of them is missing it signs
+nothing and the notes name no signature.
+
+### The image of the cloud API
+
+The Container workflow builds the image from
+[`../../deploy/cloud-api/Dockerfile`](../../deploy/cloud-api/Dockerfile) on
+every change to the service, checks it and never pushes it. In a tag run
+the release workflow pushes the image of its run to
+`ghcr.io/openaec-foundation/open-pointcloud-studio-api` by its digest and
+without a tag, once every check has passed, and attests it; the notes give
+the digest and how to verify the attestation. Only after the release is
+public does the image get the version as its tag. A version whose image
+exists already is refused.
+
+### Verification record
+
+After a tag run, the job *Verify the published release* downloads the
+published files and the image, as a user would, on Windows, on macOS with
+each processor and on Linux, and runs the checks a user can run: the
+signatures with `Get-AuthenticodeSignature`, `codesign`, `spctl` and
+`stapler`, the runtime dependencies, the application in a clean Windows
+container and the packages in clean Linux containers, `sha256sum -c
+SHA256SUMS`, `gh attestation verify` of the Linux files and of the image,
+and `gpg --verify` once signed. The record of it, with the identities of the
+signers, is attached to the release as
+`open-pointcloud-studio_YYYY.W.N_verification.md`, with its `.sha256`.
+
+Windows files are signed when the Azure Trusted Signing secrets are configured.
+The macOS workflow can sign both universal executables and the app with a
+Developer ID Application certificate, notarize the app and disk image with
+Apple's `notarytool`, and staple both tickets. It uses the six secrets that the
+OpenAEC organisation shares with its app repositories, under the names every
+OpenAEC app uses: `APPLE_CERTIFICATE` (the Developer ID Application `.p12` in
+base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` (the full
+Developer ID Application identity), `APPLE_API_KEY_CONTENT` (the App Store
+Connect `.p8` key, as its text or in base64), `APPLE_API_KEY` (its key ID) and
+`APPLE_API_ISSUER` (its issuer ID). The certificate and key are decoded into the
+temporary macOS runner only; a partial set fails the job.
+With no Apple secrets the workflow retains the ad hoc signature and the
+release notes state that notarization was not performed. The signed path must
+pass a real release run before its claim can be verified; local Linux script
+tests cannot exercise Apple's signing and notary service.

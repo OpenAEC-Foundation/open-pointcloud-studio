@@ -50,41 +50,111 @@ pub struct Tool {
     pub schema: Value,
 }
 
+/// The tools that only read the state of the window.
+pub const READ_ONLY: &[&str] = &[
+    "status",
+    "job",
+    "list_camera_views",
+    "list_drawings",
+    "list_sheets",
+    "list_faces",
+    "list_photos",
+    "list_extensions",
+    "list_tabs",
+    "context",
+    "list_instances",
+    "wait_for_job",
+    "wait_until_idle",
+];
+
+/// The tools that may take away or overwrite work: layers, points, the
+/// transform of a layer, views, drawings, sheets, viewports, annotations,
+/// meshes, faces or photo colours, or a file at the destination they are
+/// given; and those that install, start or stop the program of an
+/// extension. Changes of settings, the camera and what is shown are not
+/// counted, nor is the image screenshot writes when it is given a path.
+pub const DESTRUCTIVE: &[&str] = &[
+    "remove",
+    "delete_selection",
+    "thin",
+    "reset_transform",
+    "colour_from_photos",
+    "clear_photo_colours",
+    "update_camera_view",
+    "delete_camera_view",
+    "delete_annotation",
+    "export_bcf",
+    "mesh",
+    "export_mesh",
+    "detect_faces",
+    "export_faces",
+    "clear_faces",
+    "export",
+    "export_section",
+    "export_selection",
+    "export_minus_selection",
+    "export_drawing",
+    "delete_drawing",
+    "delete_sheet",
+    "remove_viewport",
+    "export_sheet_pdf",
+    "export_drawing_file",
+    "merge_visible",
+    "bag3d",
+    "install_extension",
+    "run_extension",
+    "stop_extension",
+];
+
+/// The tools that reach beyond the window and its files: the 3D BAG
+/// download over the internet, and the programs of extensions and of the
+/// CAD viewer.
+pub const OPEN_WORLD: &[&str] = &["bag3d", "run_extension", "open_in_cad_viewer"];
+
 impl Tool {
     /// Whether the tool only reads the state of the window.
     pub fn read_only(&self) -> bool {
-        matches!(
-            self.name,
-            "status"
-                | "job"
-                | "list_camera_views"
-                | "list_drawings"
-                | "list_sheets"
-                | "list_faces"
-                | "list_photos"
-                | "list_extensions"
-                | "context"
-                | "list_instances"
-                | "wait_for_job"
-                | "wait_until_idle"
-        )
+        READ_ONLY.contains(&self.name)
     }
 
-    /// The tool as `tools/list` describes it.
+    /// Whether the tool may take away or overwrite work; see `DESTRUCTIVE`.
+    pub fn destructive(&self) -> bool {
+        DESTRUCTIVE.contains(&self.name)
+    }
+
+    /// Whether calling the tool again with the same arguments changes
+    /// nothing more: the tools that set a value or show something.
+    pub fn idempotent(&self) -> bool {
+        self.name.starts_with("set_") || self.name.starts_with("show_") || self.name == "camera"
+    }
+
+    /// Whether the tool reaches beyond the window and its files.
+    pub fn open_world(&self) -> bool {
+        OPEN_WORLD.contains(&self.name)
+    }
+
+    /// The tool as `tools/list` describes it. The destructive and idempotent
+    /// hints are given only for tools that change something, as the
+    /// protocol reads them only then.
     pub fn listing(&self) -> Value {
         let mut title = self.name.replace('_', " ");
         if let Some(first) = title.get(..1) {
             title = first.to_ascii_uppercase() + &title[1..];
+        }
+        let mut annotations = json!({
+            "readOnlyHint": self.read_only(),
+            "openWorldHint": self.open_world(),
+        });
+        if !self.read_only() {
+            annotations["destructiveHint"] = Value::Bool(self.destructive());
+            annotations["idempotentHint"] = Value::Bool(self.idempotent());
         }
         json!({
             "name": self.name,
             "title": title,
             "description": self.description,
             "inputSchema": self.schema,
-            "annotations": {
-                "readOnlyHint": self.read_only(),
-                "openWorldHint": false,
-            },
+            "annotations": annotations,
         })
     }
 }
@@ -236,6 +306,9 @@ fn drawing_choices() -> Vec<Argument> {
         optional("units", choice("Unit of the drawing: mm (the block starts with it) or m. Scene units are taken as metres", &pointcloud_core::DrawingUnits::ALL.map(pointcloud_core::DrawingUnits::key))),
         optional("origin", choice("Zero of the drawing: model keeps model X and Y in a plan and model Z as height in a vertical view; box puts the lower left corner of the view at zero, which keeps the numbers small for survey coordinates", &pointcloud_core::DrawingOrigin::ALL.map(pointcloud_core::DrawingOrigin::key))),
         optional("fill", boolean("Whether the material the cut plane goes through is drawn as filled regions with outlines")),
+        optional("straight_lines", boolean("Add editable straight CAD polylines on OPS-STRAIGHT-LINES, retaining the cut outlines and any fills")),
+        optional("line_tolerance", number_in("Maximum deviation from the cut contours in metres; default 0.01", 0.0, 1.0)),
+        optional("line_min_length", number_in("Preferred minimum segment length in metres; shorter edges remain when needed to preserve gaps or tolerance; default 0.10", 0.0, 10.0)),
         optional("square", boolean("Whether edges of the filled cut are turned onto the main direction where that moves neither end more than 30 mm")),
         optional("grid", number_from("Cell of the grid the filled cut is traced from, in metres, at least 0.005; the block starts at 0.02", pointcloud_core::MIN_CUT_GRID)),
         optional("max_wall_thickness", positive_up_to("Two scanned faces at most this far apart are filled as one wall, in metres, above 0 and at most 2; gaps up to this width are closed. The block starts at 0.50", pointcloud_core::MAX_WALL_THICKNESS)),
@@ -303,7 +376,7 @@ const RD_BOX: &str = "The area [xmin, ymin, xmax, ymax] in RD New coordinates (E
 fn table() -> Vec<Tool> {
     use Kind::*;
     vec![
-        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), the Detect faces tool (faces: its settings, a running job, the last job, export_pending and result, the faces of the active layer in figures; clouds[].faces has those figures per layer, or null), the photos of the files and the one that is entered (photos), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view), the Pointcloud to Drawing wizard (mesh_to_plans: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (mesh_wizard: whether it is shown, its step and method, the method whose job runs and what the methods work on), the runs of extensions with their progress and the dialog about an install (extensions) and the status line.", vec![]),
+        tool("status", Command, "Reports the state of the window: the open layers (index, path, point counts, bounds, visibility, transform, stations), running imports and tasks with their progress, the active layer, the orbit camera (yaw and pitch in radians, zoom, pan in pixels), the viewport size in pixels, the walking camera, the section box, the Section drawing tool (drawing: its settings, a running job, the last result, whether a preview is shown), the Closed mesh tool (closed_mesh: its settings, a running job, the last result), a texture export under way (texture_export), the Detect faces tool (faces: its settings, a running job, the last job, export_pending and result, the faces of the active layer in figures; clouds[].faces has those figures per layer, or null), the photos of the files and the one that is entered (photos), selection and measurement, saved views and annotations, display settings, whether the File view covers the model (file_view), the Pointcloud to Drawing wizard (mesh_to_plans: whether it is shown as card or strip, its step and the status of every step), the card of Mesh Pointcloud (mesh_wizard: whether it is shown, its step and method, the method whose job runs and what the methods work on), the runs of extensions with their progress and the dialog about an install (extensions) and the status line.", vec![]),
         tool("job", Command, "Reads a background job by the job_id that an export, export_drawing, preview_drawing, select_world, pick_screen, mesh, export_mesh, detect_faces, export_faces, colour_from_photos, merge_visible, bag3d or choose_path returned, or that status.result.mesh_to_plans.job names: its state is running (with progress where known), complete (with its result), failed (with an error) or cancelled. The newest 32 jobs stay readable.", vec![
             required("id", text("The job_id", 1, 64)),
         ]),
@@ -311,7 +384,7 @@ fn table() -> Vec<Tool> {
             required("id", text("The job_id", 1, 64)),
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
-        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, face detection, faces export, section drawing or its preview, a drawing file being read, steps of Pointcloud to Drawing, colouring points from photos, merging, 3D BAG download, station photos, the photos of a file being listed or decoded, view snapshots, the fill of the cut of a mesh by the section box or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
+        tool("wait_until_idle", WaitUntilIdle, "Waits until the window has no work under way: no imports, octree builds, selections, thinning, scaling, meshing, mesh export, texture export, face detection, faces export, section drawing or its preview, a drawing file being read, a sheet being written as PDF, a drawing being written as DXF or DWG, steps of Pointcloud to Drawing, colouring points from photos, merging, 3D BAG download, station photos, the photos of a file being listed or decoded, view snapshots, the fill of the cut of a mesh by the section box or point loading for the camera. Call it after open, after changing the camera before a screenshot, and before export_bcf. Answers with idle: false and what is still busy when the time is up.", vec![
             optional("timeout_seconds", number_in("Longest wait in seconds, default 60", 0.0, WAIT_LIMIT)),
         ]),
         tool("screenshot", Screenshot, "Captures the 3D viewport (the scene without ribbon and panels) as a PNG image and returns it, after waiting up to 4 seconds for the points of the current camera to load and the fill of the cut of a mesh to be made; while the Drawing view is shown it captures the drawing instead, and the answer says which in view (model or drawing). The text part gives the width and height in pixels. Fails while the window is minimised, and while the File view, Settings, the card of the Pointcloud to Drawing wizard or the card of Mesh Pointcloud covers the viewport; file_view with open false returns to the model, mesh_to_plans_view with minimized true leaves the wizard as a strip that is not captured, and mesh_wizard with open false takes the card away.", vec![
@@ -353,8 +426,8 @@ fn table() -> Vec<Tool> {
             required("pointer", pixel("Viewport pixel [x, y] from the top-left corner")),
         ]),
         tool("zoom_all", Command, "Fits the complete model in the viewport at the default isometric direction, like the F key.", vec![]),
-        tool("fit_scan_poses", Command, "Frames the visible scan positions together with the point cloud, as Stations passen under the view cube does; switches scan positions on. Requires visible stations.", vec![]),
-        tool("set_scan_poses_visible", Command, "Shows or hides the scan position markers in the 3D viewport, as Scanposities under the view cube does.", vec![
+        tool("fit_scan_poses", Command, "Frames the visible scan positions together with the point cloud, as Frame stations under the view cube does; switches scan positions on. Requires visible stations.", vec![]),
+        tool("set_scan_poses_visible", Command, "Shows or hides the scan position markers in the 3D viewport, as Scan positions under the view cube does.", vec![
             required("visible", boolean("Whether scan position markers are shown")),
         ]),
         tool("open_panorama", Command, "Stands in a scanner station of a layer and shows the photos taken there (E57 scans with station images); status.result.walk reports the view.", vec![
@@ -381,6 +454,13 @@ fn table() -> Vec<Tool> {
         ]),
         tool("photo_blend", Command, "Sets how much of the entered photo covers the points, as the Photo slider does: 0 shows the points only, 1 the photo only. It stays for later photos.", vec![
             required("value", number_in("From 0 to 1", 0.0, 1.0)),
+        ]),
+        tool("set_photo_compare", Command, "Shows the active E57 photo beside a live 3D model pane with its own camera controls, or returns to one viewport. Measuring and picking remain active in the photo pane. Requires an entered photo when enabled.", vec![
+            required("enabled", boolean("true for side-by-side comparison")),
+        ]),
+        tool("set_photo_split", Command, "Sets the model pane's share of the width or height while comparing an E57 photo with 3D. Set vertical true to stack the model above the photo, or false to place them side by side. Omit vertical to retain the current orientation. The divider can also be dragged in the GUI.", vec![
+            required("ratio", number_in("From 0.25 to 0.75", 0.25, 0.75)),
+            optional("vertical", boolean("true to stack model above photo; false for side by side")),
         ]),
         tool("next_photo", Command, "Enters the next photo along the path of the entered photo, as Page Down does; fails at the last photo.", vec![]),
         tool("previous_photo", Command, "Enters the previous photo along the path of the entered photo, as Page Up does; fails at the first photo.", vec![]),
@@ -512,8 +592,8 @@ fn table() -> Vec<Tool> {
             required("enabled", boolean("Whether large clouds are indexed automatically")),
         ]),
         tool("set_surface_settings", Command, "Sets the settings of the 3D surface, the options of that method in Mesh Pointcloud, which mesh with the mode surface uses. A field that is left out keeps its value; the fields are checked together with the others, and when one is refused none changes. Answers with the settings.", vec![
-            optional("max_vertices", integer_in("Most vertices, from 3 to 1000000. The options start at 50000", 3, 1_000_000)),
-            optional("neighbors", integer_in("Neighbours per vertex, from 3 to 32. The options start at 12", 3, 32)),
+            optional("max_vertices", integer_in("Most vertices, from 3 to 1000000. The options start at 50000", *pointcloud_core::SURFACE_MESH_VERTICES.start() as u64, *pointcloud_core::SURFACE_MESH_VERTICES.end() as u64)),
+            optional("neighbors", integer_in("Neighbours per vertex, from 3 to 32. The options start at 12", *pointcloud_core::SURFACE_MESH_NEIGHBORS.start() as u64, *pointcloud_core::SURFACE_MESH_NEIGHBORS.end() as u64)),
             optional("edge_factor", positive("Longest edge relative to the typical point spacing. The options start at 4")),
             optional("mesh_size", number_from("Width of a voxel in the units of the scan within which one point is kept before the vertices are thinned, so that no two vertices lie much closer together, from 0. The options start at 0, which leaves the spacing to max_vertices", 0.0)),
         ]),
@@ -530,6 +610,12 @@ fn table() -> Vec<Tool> {
         tool("export_mesh", Job, "Saves the mesh the active layer holds (a terrain mesh, a 3D surface, a closed mesh, an opened mesh file or downloaded 3D BAG buildings; status.result.clouds[].mesh is null for a layer without one) as OBJ, PLY, STL, DXF, DWG or IFC, moved and scaled as in the scene. Answers with a job_id; the complete job reports the format, vertices and triangles. An STL file holds 32-bit floats: a mesh farther than 2,048 m from zero on an axis is written relative to a whole-metre origin, which the job reports as origin and the file header names; other programs show such a file near zero.", vec![
             required("path", path(MESH_FILE)),
         ]),
+        tool("texture_mesh", Job, "Writes the active mesh's stored vertex colours to a new OBJ with UV coordinates, an MTL and bounded PNG atlas pages. Set texel_size in metres and max_resolution from 256 to 4096 pixels. Colours applied to points from E57 photos are carried into newly reconstructed surface meshes; reconstruct an older mesh first to include those edits. The atlas does not project E57 photo pixels directly onto texels. The completed job reports pages and triangles whose chart hit the resolution limit.", vec![
+            required("path", path("Absolute new .obj destination")),
+            optional("texel_size", number_in("Target metres per texture pixel; default 0.02", 0.0001, 100.0)),
+            optional("max_resolution", integer_in("Maximum atlas page width and height; 256 to 4096, default 4096", 256, 4096)),
+        ]),
+        tool("cancel_texture_mesh", Command, "Cancels the running texture atlas export. No OBJ, MTL or atlas page is published when cancellation completes.", vec![]),
         tool("set_face_settings", Command, "Sets the settings of a face detection, the options of the method faces in Mesh Pointcloud, which detect_faces and the Run button of the card use, and the colouring of the faces that are shown. The fields given are checked together: when one is refused, none changes. Answers with the settings as status.result.faces.settings reports them.", face_settings()),
         tool("detect_faces", Job, "Finds the flat faces (floors, ceilings, walls and sloped planes) and the round columns and pipes in the remaining points inside the section box and class filters, of the active layer or of every visible one, and keeps them with the active layer as a layer of its own beside its mesh; faces that layer had are replaced. Put the section box around one room or a few: a region too large for 1,500,000 working voxels of 30 mm is searched with larger voxels, and narrow faces and faces close together are lost. Answers with a job_id; the running job reports its stage (stations, loading, reading, segmenting, measuring, outlining, meshing), the complete job the faces per type (floors, ceilings, walls, sloped, cylinders), the edges, the voxel used and whether it was coarse, the points read and on a face, and the seconds. The faces follow a later translate or scale of the layer; they are marked stale (status.result.clouds[].faces.stale: points, index, scan or moved) when points of a layer that took part are deleted, restored or thinned, when the index such a layer was read through is replaced, when one is removed, or when one of several layers that took part is translated or scaled.", face_settings()),
         tool("cancel_detect_faces", Command, "Cancels the running face detection; the step under way ends first, and faces the layer had are left as they were.", vec![]),
@@ -560,12 +646,12 @@ fn table() -> Vec<Tool> {
             arguments.extend(drawing_choices());
             arguments
         }),
-        tool("preview_drawing", Job, "Traces the filled cut of the section box as export_drawing would draw it and lays it over the points in the viewport, on the cut plane; nothing is written. The cut is traced whatever fill says. Answers with a job_id; the complete job reports the regions. status.result.drawing.preview_shown tells whether it is on screen: it goes away when the section box, the visible layers, a layer transform, the deleted points, the classes shown or the view, slab thickness, squaring, grid or wall thickness change.", drawing_choices()),
+        tool("preview_drawing", Job, "Traces the filled cut of the section box as export_drawing would draw it and lays it over the points in the viewport, on the cut plane; when straight_lines is on, blue editable-line contours appear over the measured contours. Nothing is written. The cut is traced whatever fill says. Answers with a job_id; the complete job reports the regions and straight-line statistics. status.result.drawing.preview_shown tells whether it is on screen: it goes away when the section box, the visible layers, a layer transform, the deleted points, the classes shown or the view, slab thickness, squaring, grid or wall thickness change.", drawing_choices()),
         tool("clear_drawing_preview", Command, "Takes the preview of the filled cut off the viewport.", vec![]),
         tool("drawing_view", Command, "Shows the Drawing view in the main area in place of the 3D scene, or the 3D scene again. The view shows the drawing that preview_drawing or export_drawing made last, or the file open_drawing read. Answers with drawing_view as status.result.drawing_view reports it: shown, the source, units, counts, layers with their visibility, extents and the camera. A screenshot while it is shown captures the drawing.", vec![
             required("show", boolean("true to show the drawing, false to return to the 3D scene")),
         ]),
-        tool("set_section_drawing_panel", Command, "Shows or hides the Section drawing controls in Properties, as 2D snede in the Start ribbon does. Opening requires an enabled section box.", vec![
+        tool("set_section_drawing_panel", Command, "Shows or hides the Section drawing controls in Properties, as 2D section in the DRAWING group of the ribbon does. Opening requires an enabled section box.", vec![
             required("open", boolean("Whether to show the Section drawing controls")),
         ]),
         tool("open_drawing", Job, "Reads a DXF or DWG file into the Drawing view and shows it: points, lines, polylines with their arcs, circles, arcs, ellipses, solid fills with holes, 2D solids, texts and block references. Other entities are counted by type in skipped, 3D content such as meshes in skipped_3d; neither is shown. A file without units is read as millimetres. Answers with a job_id; the complete job reports the units, layers, points, polylines, fills, texts, inserts and what was skipped.", vec![
@@ -577,6 +663,10 @@ fn table() -> Vec<Tool> {
             required("visible", boolean("Whether the layer is shown")),
         ]),
         tool("create_drawing", Job, "Makes a plan, an elevation or a section as Create 2D plan / elevation / section in the Project Browser does, from every visible layer with the other settings of the Section drawing block, and shows it in the Drawing view. It is listed under VIEWS, and how it was made (the box, the face, the slab, the settings and the scans) is kept, so that show_drawing makes it again in a later session. Answers with a job_id; the complete job reports its name, guid and kind and the regions of the filled cut.", vec![
+            optional("straight_lines", boolean("Add editable straight CAD polylines alongside the original contours")),
+            optional("line_tolerance", number_in("Maximum deviation from the original contours in metres; default 0.01", 0.0, 1.0)),
+            optional("line_min_length", number_in("Preferred minimum segment length in metres; preserve shorter edges needed for openings and tolerance; default 0.10", 0.0, 10.0)),
+            optional("square", boolean("Square the traced cut to its dominant direction within 30 mm; default true")),
             required("kind", choice("What to make", &crate::sheet_dialog::SheetKind::ALL.map(crate::sheet_dialog::SheetKind::key))),
             optional("basis", text("model for the whole 3D model (the default), section_box for the section box while it is on, or the name of a saved view of the active scan with a section box", 1, 64)),
             optional("side", choice("The side an elevation or a section looks at: front looks along +Y, back along -Y, left along +X and right along -X", &["front", "back", "left", "right"])),
@@ -597,7 +687,7 @@ fn table() -> Vec<Tool> {
             required("group", text("The group", 1, 4096)),
             required("open", boolean("true to open the group, false to collapse it")),
         ]),
-        tool("list_tabs", Command, "Lists the tabs above the main area in their order: the 3D model first, which never closes, then every view and drawing opened from VIEWS of the Project Browser (saved 3D views, plans, elevations, sections, previews, exports and opened DXF and DWG files) and every sheet opened from SHEETS, in the order they were opened. Each has index, name (3D model for the 3D model in every language), kind (model, view, drawing, file or sheet), guid or path, active, closable and locked (a locked view or drawing); active is the index of the active tab, the one of what the window shows. A view of a scan that is not the active one, or a drawing of scans that are not open, stays open but is listed again only with its scan. status.result.view_tabs reports the same.", vec![]),
+        tool("list_tabs", Command, "Lists the tabs above the main area in their order: the 3D model first, which never closes, then saved views, drawings, sheets and the current E57 photo tab in the order they were opened. Each has index, name (3D model for the 3D model in every language), kind (model, view, drawing, file, sheet or photo), guid or path, active, closable and locked (a locked view or drawing); active is the index of the active tab. A view of a scan that is not the active one, or a drawing of scans that are not open, stays open but is listed again only with its scan. status.result.view_tabs reports the same.", vec![]),
         at_least_one(tool("show_tab", Command, "Shows an open tab as a click on it does, by its index or its name (any case) as list_tabs gives them. The 3D model gets back its own camera, section box and colour mode; a saved view that the scene still has is shown as it was left, else as it was saved; a drawing comes back zoomed as it was left. A drawing that is not made in this session yet is made from how it was made, and the answer then has accepted and a job_id. Refused while Settings, the dialog of Create 2D or the card of the Pointcloud to Drawing wizard is open. Answers with the tabs as list_tabs gives them and shown, the name of the tab.", vec![
             optional("name", text("Name of the tab as list_tabs gives it, any case", 1, 255)),
             optional("index", ordinal("Place of the tab as list_tabs gives it; 0 is the 3D model")),
@@ -746,7 +836,7 @@ fn table() -> Vec<Tool> {
             required("open", boolean("true to show the File view, false to return to the model")),
             optional("page", choice("Page to show, only with open true; without it the view opens on workspace, or keeps the page it shows", &crate::file_view::FilePage::ids())),
         ]),
-        tool("mesh_wizard", Command, "Shows the card of Mesh Pointcloud, the wizard behind the one button of the SURFACE group, or takes it away; a job of the wizard goes on when it is taken away. Its three steps: method, with four choices (closed: a closed solid of a room or a building; terrain: a 2.5D ground surface; surface: an open surface that follows the points; faces: the planar faces of walls, floors and roofs and round columns and pipes) and what they work on (the active scan, the visible scans, the section box and the selection, with about how many points); options, the settings of that method with their defaults and a recommended preset (set_closed_mesh_settings, set_surface_settings and set_face_settings set the same values); and run, the progress of its job with cancel, or its result in figures with Show in model, Export and Back to options. The jobs themselves start with mesh and detect_faces, or with the Run button of the card. With open true the card opens on the run step of a job that runs, unless step or method say otherwise; it closes the File view, turns the card of Pointcloud to Drawing into its strip, and is refused while the Settings dialog is open. The card covers the model: a screenshot of the scene is refused while it is shown, and one with window true captures the card. Answers with mesh_wizard as status.result.mesh_wizard reports it: open, step, method, running (the method whose job runs, or null), run_ready and run_reason (why the method shown cannot start, in the language in use), recommended (whether its options are the recommended ones), run_state (idle, choosing, running, done, cancelled or failed), result_scan (the scan that holds the result of the method shown, which Show in model and Export of the run step act on, or null) and scope.", vec![
+        tool("mesh_wizard", Command, "Shows the card of Mesh Pointcloud, the wizard behind Mesh and the four method buttons of the SURFACE group, or takes it away; a job of the wizard goes on when it is taken away. Its three steps: method, with four choices (closed: a closed solid of a room or a building; terrain: a 2.5D ground surface; surface: an open surface that follows the points; faces: the planar faces of walls, floors and roofs and round columns and pipes) and what they work on (the active scan, the visible scans, the section box and the selection, with about how many points); options, the settings of that method with their defaults and a recommended preset (set_closed_mesh_settings, set_surface_settings and set_face_settings set the same values); and run, the progress of its job with cancel, or its result in figures with Show in model, Export and Back to options. The jobs themselves start with mesh and detect_faces, or with the Run button of the card. With open true the card opens on the run step of a job that runs, unless step or method say otherwise; it closes the File view, turns the card of Pointcloud to Drawing into its strip, and is refused while the Settings dialog is open. The card covers the model: a screenshot of the scene is refused while it is shown, and one with window true captures the card. Answers with mesh_wizard as status.result.mesh_wizard reports it: open, step, method, running (the method whose job runs, or null), run_ready and run_reason (why the method shown cannot start, in the language in use), recommended (whether its options are the recommended ones), run_state (idle, choosing, running, done, cancelled or failed), result_scan (the scan that holds the result of the method shown, which Show in model and Export of the run step act on, or null) and scope.", vec![
             required("open", boolean("true to show the card, false to take it away")),
             optional("step", choice("Step to show, only with open true; without it the card shows the step it showed last, or the run step of a job that runs", &crate::mesh_wizard::WizardStep::ids())),
             optional("method", choice("Method to show, only with open true; it keeps its own options", &crate::mesh_wizard::MeshMethod::ids())),
@@ -1066,6 +1156,15 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
     }
     if result["colour_from_photos"]["job"].is_object() {
         busy.push("colour_from_photos");
+    }
+    if result["texture_export"].is_object() {
+        busy.push("texture");
+    }
+    if result["sheets"]["export_pending"] == true {
+        busy.push("sheet_pdf");
+    }
+    if result["drawing_annotations"]["export_pending"] == true {
+        busy.push("drawing_file");
     }
     busy
 }

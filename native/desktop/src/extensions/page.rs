@@ -167,9 +167,14 @@ impl Studio {
             );
         }
         let mut top = column![
-            text(tr(FilePage::Extensions.label()))
-                .size(22)
-                .font(fonts::HEADING),
+            row![
+                openaec_ui::icons::Icon::Extensions.view(22, colors.accent),
+                text(tr(FilePage::Extensions.label()))
+                    .size(22)
+                    .font(fonts::HEADING),
+            ]
+            .spacing(9)
+            .align_y(iced::Alignment::Center),
             text(tr(
                 "Features you can switch off, and programs that add buttons and work through the local API of the application."
             ))

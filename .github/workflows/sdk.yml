@@ -1,0 +1,482 @@
+name: SDK
+
+# Builds the C library of the point-cloud core (native/sdk) for every system
+# the release offers it for, checks what each library exports, links and
+# loads, packs it into the archive the release carries, and builds and runs
+# the C example against the unpacked archive: on Linux also linked
+# statically, on Windows with the Windows C compiler, on macOS on both
+# processor types. Nothing is published; the archives are kept as artifacts
+# of the run. The release workflow calls this workflow with the version and
+# publishes them; with a version the Windows DLL and the macOS library are
+# also signed, when the organisation's secrets are there.
+#
+# The library's own tests (native/sdk/tests) run in the CI workflow with the
+# rest of the workspace; they are not run again here.
+
+on:
+  pull_request:
+    paths:
+      - 'native/sdk/**'
+      - 'native/examples/**'
+      - 'native/tools/**'
+      - 'native/Cargo.lock'
+      - '.github/workflows/sdk.yml'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version YYYY.W.N that native/Cargo.toml must have; given, the libraries are signed (empty: whatever it has, unsigned)'
+        type: string
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version YYYY.W.N that native/Cargo.toml must have; given, the libraries are signed'
+        type: string
+        required: false
+        default: ''
+    outputs:
+      windows_signed:
+        description: 'true when ops_pointcloud.dll carries a valid Authenticode signature'
+        value: ${{ jobs.windows.outputs.signed }}
+      macos_signed:
+        description: 'true when libops_pointcloud.dylib is Developer ID signed and notarized'
+        value: ${{ jobs.macos.outputs.signed }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.version.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the version
+        id: version
+        env:
+          EXPECTED: ${{ inputs.version }}
+        run: bash native/packaging/version.sh "$EXPECTED" | tee -a "$GITHUB_OUTPUT"
+
+  linux:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest hosted system sets the oldest C library the library
+          # runs with; check-binary.sh holds the build to it.
+          - runner: ubuntu-22.04
+            arch: amd64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the shared library
+        working-directory: native
+        run: cargo build --release --locked -p pointcloud-sdk
+      # Built and linked below, not shipped in this version.
+      - name: Build the static archive
+        working-directory: native
+        run: |
+          cargo rustc --release --locked -p pointcloud-sdk --lib --crate-type staticlib \
+            -- --print native-static-libs 2>&1 | tee "$RUNNER_TEMP/staticlib.log"
+          test -f target/release/libops_pointcloud.a
+      - name: Check the name the library is linked by
+        run: |
+          readelf -d native/target/release/libops_pointcloud.so | tee "$RUNNER_TEMP/dynamic.txt"
+          grep -F 'Library soname: [libops_pointcloud.so.1]' "$RUNNER_TEMP/dynamic.txt"
+      - name: Check the exported functions
+        run: bash native/sdk/packaging/check-exports.sh native/target/release/libops_pointcloud.so | tee "$RUNNER_TEMP/exports.txt"
+      - name: Check what the library needs from the system
+        run: bash native/packaging/linux/check-binary.sh native/target/release/libops_pointcloud.so | tee "$RUNNER_TEMP/system.txt"
+      # The notices are written without the network: the build has
+      # downloaded every crate they may name.
+      - name: Pack the archive with the notices of its crates
+        run: bash native/sdk/packaging/build-sdk-archive.sh native/target/release "$NUMBER" "linux-$ARCH-so" native/target/sdk
+      - name: Unpack the archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/sdk"
+          tar -xzf "native/target/sdk/open-pointcloud-studio-sdk_${NUMBER}_linux-${ARCH}-so.tar.gz" -C "$RUNNER_TEMP/sdk"
+          echo "SDK=$RUNNER_TEMP/sdk/open-pointcloud-studio-sdk_${NUMBER}_linux-${ARCH}-so" >> "$GITHUB_ENV"
+      - name: Build and run the example against the unpacked archive
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -I"$SDK/include" "$SDK/examples/inspect.c" \
+            -L"$SDK/lib" -lops_pointcloud -Wl,-rpath,"$SDK/lib" -o "$RUNNER_TEMP/inspect"
+          readelf -d "$RUNNER_TEMP/inspect" | grep -F 'Shared library: [libops_pointcloud.so.1]'
+          mkdir -p "$RUNNER_TEMP/run-shared"
+          "$RUNNER_TEMP/inspect" "$RUNNER_TEMP/run-shared" | tee "$RUNNER_TEMP/example.txt"
+      - name: Link the example statically and run it
+        run: |
+          # The log holds the colour codes of the compiler's output; they are not part of the list.
+          libraries=$(sed -e 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/staticlib.log" | sed -n 's/.*native-static-libs: //p' | tail -n 1)
+          [[ -n "$libraries" ]] || { echo "::error::rustc printed no native-static-libs"; exit 1; }
+          cc -std=c11 -Wall -Wextra -Werror -DOPS_STATIC -Inative/sdk/include native/sdk/examples/inspect.c \
+            native/target/release/libops_pointcloud.a $libraries -o "$RUNNER_TEMP/inspect-static"
+          if readelf -d "$RUNNER_TEMP/inspect-static" | grep -F libops_pointcloud; then
+            echo "::error::the statically linked example still loads the shared library"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/run-static"
+          "$RUNNER_TEMP/inspect-static" "$RUNNER_TEMP/run-static"
+      - name: Test the SDK packaging scripts
+        if: matrix.arch == 'amd64'
+        run: bash native/sdk/packaging/test-sdk-packaging.sh
+      # As a program in another repository uses the core: a workspace of its
+      # own and no lock file, so Cargo resolves the newest compatible crates.
+      - name: Build and run the Rust consumer
+        if: matrix.arch == 'amd64'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/native/target
+        run: cargo run --manifest-path native/examples/rust-consumer/Cargo.toml -- "$RUNNER_TEMP"
+      # The git form of the dependency that docs/library.md gives, at the
+      # commit of this run, which is on the default branch of the repository.
+      - name: Build the Rust consumer from the repository by its git address
+        if: matrix.arch == 'amd64' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/native/target
+          REPOSITORY: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          consumer="$RUNNER_TEMP/rust-consumer"
+          rm -rf "$consumer"
+          cp -r native/examples/rust-consumer "$consumer"
+          rm -f "$consumer/Cargo.lock"
+          path_form='pointcloud-core = { path = "../../core", default-features = false }'
+          git_form="pointcloud-core = { git = \"$REPOSITORY\", rev = \"$GITHUB_SHA\", default-features = false }"
+          grep -qxF "$path_form" native/examples/rust-consumer/Cargo.toml
+          awk -v from="$path_form" -v to="$git_form" '$0 == from { $0 = to } { print }' \
+            native/examples/rust-consumer/Cargo.toml > "$consumer/Cargo.toml"
+          grep -xF "$git_form" "$consumer/Cargo.toml"
+          cargo run --manifest-path "$consumer/Cargo.toml" -- "$RUNNER_TEMP"
+      - name: Write the summary
+        if: always()
+        run: |
+          {
+            echo "### C library, Linux $ARCH"
+            echo '```'
+            grep -F 'soname' "$RUNNER_TEMP/dynamic.txt" || true
+            cat "$RUNNER_TEMP/exports.txt" "$RUNNER_TEMP/system.txt" 2>/dev/null || true
+            tail -n 1 "$RUNNER_TEMP/example.txt" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-sdk-linux-${{ matrix.arch }}
+          path: |
+            native/target/sdk/*.tar.gz
+            native/target/sdk/*.tar.gz.sha256
+          if-no-files-found: error
+
+  windows:
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 45
+    outputs:
+      signed: ${{ steps.signature.outputs.signed || 'false' }}
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      RELEASE: native/target/x86_64-pc-windows-msvc/release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      # The static C runtime: the DLL then needs no runtime that a clean
+      # Windows lacks. Every string it hands out is freed by its own
+      # ops_string_free, so the runtime is never shared with the caller.
+      - name: Build the DLL with the static C runtime
+        working-directory: native
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --locked -p pointcloud-sdk --target x86_64-pc-windows-msvc
+      # vc.bat runs a command in the environment of the Windows C compiler
+      # for x64, which dumpbin and cl need.
+      - name: Find the tools of the Windows C compiler
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $install = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $install) { throw 'no C compiler for x64 found' }
+          $helper = "$env:RUNNER_TEMP\vc.bat"
+          @(
+            '@echo off',
+            "call `"$install\VC\Auxiliary\Build\vcvars64.bat`" >nul || exit /b 1",
+            '%*'
+          ) | Set-Content -Encoding ascii $helper
+          "VC=$helper" >> $env:GITHUB_ENV
+          $dumpbin = & $helper where dumpbin | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin not found' }
+          "DUMPBIN_DIR=$(Split-Path $dumpbin)" >> $env:GITHUB_ENV
+      # The system set is final as recorded in docs/library.md; a DLL
+      # outside it would have to travel with the library.
+      - name: Check the runtime dependencies
+        shell: pwsh
+        run: |
+          $output = & $env:VC dumpbin /nologo /dependents "$env:RELEASE\ops_pointcloud.dll"
+          if ($LASTEXITCODE -ne 0) { throw 'dumpbin failed' }
+          $dependencies = $output | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
+          if (-not $dependencies) { throw 'dumpbin listed no dependencies' }
+          $system = '^(kernel32|ntdll|bcrypt|bcryptprimitives|ucrtbase|ws2_32|advapi32|userenv|ole32|shell32|secur32|crypt32|ncrypt|user32|api-ms-win-.*)\.dll$'
+          $foreign = $dependencies | Where-Object { $_ -notmatch $system }
+          "### C library, Windows x64: runtime dependencies" >> $env:GITHUB_STEP_SUMMARY
+          $dependencies | ForEach-Object { "- ``$_``" } >> $env:GITHUB_STEP_SUMMARY
+          $dependencies
+          if ($foreign) { throw "ops_pointcloud.dll needs DLLs outside the system set: $($foreign -join ', ')" }
+      - name: Check the exported functions
+        run: |
+          PATH="$(cygpath -u "$DUMPBIN_DIR"):$PATH" \
+            bash native/sdk/packaging/check-exports.sh "$RELEASE/ops_pointcloud.dll" | tee "$RUNNER_TEMP/exports.txt"
+          { echo "### C library, Windows x64: exports"; echo '```'; cat "$RUNNER_TEMP/exports.txt"; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Check the version details of the DLL
+        shell: pwsh
+        run: |
+          $info = (Get-Item "$env:RELEASE\ops_pointcloud.dll").VersionInfo
+          $info | Format-List FileVersion, ProductVersion, ProductName, FileDescription, CompanyName, LegalCopyright, OriginalFilename
+          if ($info.FileVersion -ne $env:NUMBER -or $info.ProductVersion -ne $env:NUMBER) {
+            throw "the DLL says version $($info.FileVersion), not $env:NUMBER"
+          }
+          "Version details: FileVersion $($info.FileVersion), ProductName $($info.ProductName)" >> $env:GITHUB_STEP_SUMMARY
+      - name: Pack the archive with the notices of its crates
+        run: bash native/sdk/packaging/build-sdk-archive.sh "$RELEASE" "$NUMBER" windows-x64-dll native/target/sdk
+      - name: Build and run the example against the unpacked archive
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force "$env:RUNNER_TEMP\sdk" -ErrorAction SilentlyContinue
+          Expand-Archive "native\target\sdk\open-pointcloud-studio-sdk_$($env:NUMBER)_windows-x64-dll.zip" "$env:RUNNER_TEMP\sdk"
+          $sdk = "$env:RUNNER_TEMP\sdk\open-pointcloud-studio-sdk_$($env:NUMBER)_windows-x64-dll"
+          $build = "$env:RUNNER_TEMP\example"
+          New-Item -ItemType Directory -Force $build | Out-Null
+          Push-Location $build
+          & $env:VC cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS "/I$sdk\include" `
+            "$sdk\examples\inspect.c" "$sdk\lib\ops_pointcloud.dll.lib"
+          if ($LASTEXITCODE -ne 0) { throw 'the example did not compile' }
+          Pop-Location
+          Copy-Item "$sdk\bin\ops_pointcloud.dll" $build
+          & "$build\inspect.exe" $build
+          if ($LASTEXITCODE -ne 0) { throw "the example ended with code $LASTEXITCODE" }
+      # An unsigned library still works; signing only spares users a warning.
+      - name: Sign the DLL
+        if: inputs.version != ''
+        continue-on-error: true
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}/native/target/x86_64-pc-windows-msvc/release
+          files-folder-filter: dll
+          files-folder-depth: 1
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      # The signing step may fail without failing the job, so its green tick
+      # says nothing. This step says what the DLL really carries, and the
+      # release notes and the signing gate of the release go by it.
+      - name: Report the signatures
+        id: signature
+        if: inputs.version != ''
+        shell: pwsh
+        run: |
+          $dll = "$env:RELEASE\ops_pointcloud.dll"
+          $signature = Get-AuthenticodeSignature $dll
+          $signed = $signature.Status -eq 'Valid'
+          $lines = @(
+            "### C library, Windows x64: Authenticode",
+            "- status: $($signature.Status)",
+            "- signer: $($signature.SignerCertificate.Subject)",
+            "- thumbprint: $($signature.SignerCertificate.Thumbprint)",
+            "- timestamp signer: $($signature.TimeStamperCertificate.Subject)"
+          )
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName | Select-Object -Last 1
+          if ($signed -and $signtool) {
+            $verify = & $signtool.FullName verify /pa /v $dll 2>&1
+            $time = $verify | Where-Object { $_ -match 'The signature is timestamped:' } | Select-Object -First 1
+            $lines += "- timestamp: $("$time".Trim())"
+          }
+          $lines | ForEach-Object { $_; $_ >> $env:GITHUB_STEP_SUMMARY }
+          "signed=$($signed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+      - name: Pack the signed DLL again
+        if: inputs.version != ''
+        run: bash native/sdk/packaging/build-sdk-archive.sh "$RELEASE" "$NUMBER" windows-x64-dll native/target/sdk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-sdk-windows
+          path: |
+            native/target/sdk/*.zip
+            native/target/sdk/*.zip.sha256
+          if-no-files-found: error
+
+  macos:
+    needs: prepare
+    runs-on: macos-15
+    timeout-minutes: 60
+    outputs:
+      signed: ${{ steps.notarization.outputs.signed || 'false' }}
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+      # The oldest macOS both halves of the library load on.
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      DYLIB: native/target/universal-sdk/libops_pointcloud.dylib
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Build the library for both processor types
+        working-directory: native
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked -p pointcloud-sdk --target "$target"
+          done
+      - name: Join them into one universal library
+        run: |
+          mkdir -p "$(dirname "$DYLIB")"
+          lipo -create -output "$DYLIB" \
+            native/target/aarch64-apple-darwin/release/libops_pointcloud.dylib \
+            native/target/x86_64-apple-darwin/release/libops_pointcloud.dylib
+          archs=$(lipo -archs "$DYLIB")
+          echo "$archs"
+          [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
+      - name: Check the name the library is linked by and its oldest macOS
+        run: |
+          otool -D "$DYLIB" | tee "$RUNNER_TEMP/install-name.txt"
+          grep -qxF '@rpath/libops_pointcloud.dylib' "$RUNNER_TEMP/install-name.txt"
+          for arch in arm64 x86_64; do
+            minos=$(vtool -arch "$arch" -show-build "$DYLIB" | awk '$1 == "minos" { print $2 }')
+            echo "$arch: minos $minos" | tee -a "$RUNNER_TEMP/minos.txt"
+            [[ "$minos" == 11.0 ]] || { echo "::error::the $arch half needs macOS $minos, not 11.0"; exit 1; }
+          done
+      # The Apple secrets are those of the OpenAEC organisation, under the
+      # names every OpenAEC app uses; without them the library is signed ad
+      # hoc. Only a release run asks for them.
+      - name: Prepare optional Developer ID signing and notarization
+        id: signing
+        if: inputs.version != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: bash native/packaging/macos/prepare-signing.sh
+      # A library cannot be stapled; the notary service keeps its ticket,
+      # which the system fetches when the library is first loaded. The
+      # record of the notary service is the evidence.
+      - name: Sign and notarize the library
+        id: notarization
+        run: |
+          if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+            codesign --force --sign "$MACOS_SIGN_IDENTITY" --keychain "$MACOS_SIGN_KEYCHAIN" \
+              --options runtime --timestamp "$DYLIB"
+            zip="$RUNNER_TEMP/libops_pointcloud.zip"
+            ditto -c -k --keepParent "$DYLIB" "$zip"
+            submitted=
+            for attempt in 1 2 3; do
+              if xcrun notarytool submit "$zip" --key "$MACOS_NOTARY_KEY" --key-id "$MACOS_NOTARY_KEY_ID" \
+                  --issuer "$MACOS_NOTARY_ISSUER_ID" --wait --output-format json > "$RUNNER_TEMP/notary.json"; then
+                submitted=yes
+                break
+              fi
+              echo "notarytool submit failed (attempt $attempt), trying again in 20 s"
+              sleep 20
+            done
+            [[ -n "$submitted" ]] || { echo "::error::the notary service could not be reached"; exit 1; }
+            cat "$RUNNER_TEMP/notary.json"
+            id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$RUNNER_TEMP/notary.json")
+            status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$RUNNER_TEMP/notary.json")
+            xcrun notarytool info "$id" --key "$MACOS_NOTARY_KEY" --key-id "$MACOS_NOTARY_KEY_ID" \
+              --issuer "$MACOS_NOTARY_ISSUER_ID" | tee "$RUNNER_TEMP/notary-info.txt"
+            [[ "$status" == Accepted ]] || { echo "::error::the notary service answered $status"; exit 1; }
+            {
+              echo "### C library, macOS: Developer ID and notarization"
+              echo '```'
+              cat "$RUNNER_TEMP/notary-info.txt"
+              codesign -dvv "$DYLIB" 2>&1
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            # Report only: the verdict of the assessment for a library
+            # differs between macOS versions.
+            spctl --assess --type open --context context:primary-signature -v "$DYLIB" 2>&1 \
+              | tee -a "$GITHUB_STEP_SUMMARY" || true
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            codesign --force --sign - --timestamp=none "$DYLIB"
+            { echo "### C library, macOS"; echo "Signed ad hoc."; } >> "$GITHUB_STEP_SUMMARY"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+          codesign --verify --strict --verbose=2 "$DYLIB"
+      - name: Check the exported functions
+        run: |
+          bash native/sdk/packaging/check-exports.sh "$DYLIB" | tee "$RUNNER_TEMP/exports.txt"
+          {
+            echo "### C library, macOS: exports, install name and oldest macOS"
+            echo '```'
+            cat "$RUNNER_TEMP/exports.txt" "$RUNNER_TEMP/install-name.txt" "$RUNNER_TEMP/minos.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Pack the archive with the notices of its crates
+        run: bash native/sdk/packaging/build-sdk-archive.sh "$(dirname "$DYLIB")" "$NUMBER" macos-universal-dylib native/target/sdk
+      - name: Build and run the example against the unpacked archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/sdk"
+          tar -xzf "native/target/sdk/open-pointcloud-studio-sdk_${NUMBER}_macos-universal-dylib.tar.gz" -C "$RUNNER_TEMP/sdk"
+          sdk="$RUNNER_TEMP/sdk/open-pointcloud-studio-sdk_${NUMBER}_macos-universal-dylib"
+          cc -std=c11 -Wall -Wextra -Werror -I"$sdk/include" "$sdk/examples/inspect.c" \
+            -L"$sdk/lib" -lops_pointcloud -Wl,-rpath,"$sdk/lib" -o "$RUNNER_TEMP/inspect"
+          test "$(uname -m)" = arm64
+          mkdir -p "$RUNNER_TEMP/run"
+          "$RUNNER_TEMP/inspect" "$RUNNER_TEMP/run"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-sdk-macos
+          path: |
+            native/target/sdk/*.tar.gz
+            native/target/sdk/*.tar.gz.sha256
+          if-no-files-found: error
+
+  # The x86-64 half on a machine of its own kind.
+  macos-x86_64:
+    needs: [prepare, macos]
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    env:
+      NUMBER: ${{ needs.prepare.outputs.number }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-sdk-macos
+          path: packages
+      - name: Check the checksum
+        working-directory: packages
+        run: shasum -a 256 -c ./*.sha256
+      - name: Build and run the example on the x86-64 half
+        run: |
+          test "$(uname -m)" = x86_64
+          mkdir -p "$RUNNER_TEMP/sdk"
+          tar -xzf "packages/open-pointcloud-studio-sdk_${NUMBER}_macos-universal-dylib.tar.gz" -C "$RUNNER_TEMP/sdk"
+          sdk="$RUNNER_TEMP/sdk/open-pointcloud-studio-sdk_${NUMBER}_macos-universal-dylib"
+          codesign --verify --strict --verbose=2 "$sdk/lib/libops_pointcloud.dylib"
+          cc -std=c11 -Wall -Wextra -Werror -I"$sdk/include" "$sdk/examples/inspect.c" \
+            -L"$sdk/lib" -lops_pointcloud -Wl,-rpath,"$sdk/lib" -o "$RUNNER_TEMP/inspect"
+          mkdir -p "$RUNNER_TEMP/run"
+          "$RUNNER_TEMP/inspect" "$RUNNER_TEMP/run"

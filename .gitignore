@@ -51,3 +51,6 @@ website-screenshots/
 PROMPTS.md
 promo/.work/
 promo/__pycache__/
+
+# The example consumer of the core resolves its own dependencies
+native/examples/rust-consumer/Cargo.lock

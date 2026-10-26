@@ -17,6 +17,24 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 const MAX_BODY_BYTES: u64 = 64 * 1024;
 
+/// The name of the contract, in the discovery file and in `/info`. It stays
+/// while every change is additive: commands and fields are added, none is
+/// taken away or renamed.
+pub const API_NAME: &str = "native-rust-v1";
+
+/// Raised by one with every release that adds a command or a field, or
+/// changes what a command does; API.md lists the revisions under API
+/// changes.
+pub const API_REVISION: u64 = 11;
+
+/// How many `/exec` requests wait for the window at once. `/health` and
+/// `/info` are answered by the thread that takes the requests, so they do
+/// not wait behind a command.
+const EXEC_WORKERS: usize = 4;
+
+/// How long a request waits for the window to answer its command.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum ApiCommand {
@@ -91,6 +109,14 @@ pub enum ApiCommand {
     PhotoBlend {
         /// 0 shows the points only, 1 the photo only.
         value: f32,
+    },
+    SetPhotoCompare {
+        enabled: bool,
+    },
+    SetPhotoSplit {
+        ratio: f32,
+        #[serde(default)]
+        vertical: Option<bool>,
     },
     NextPhoto,
     PreviousPhoto,
@@ -267,6 +293,14 @@ pub enum ApiCommand {
         /// chooses the format.
         path: PathBuf,
     },
+    TextureMesh {
+        path: PathBuf,
+        #[serde(default)]
+        texel_size: Option<f64>,
+        #[serde(default)]
+        max_resolution: Option<u32>,
+    },
+    CancelTextureMesh,
     SetFaceSettings {
         #[serde(flatten)]
         options: crate::faces::FaceOptions,
@@ -658,6 +692,10 @@ fn applied() -> bool {
 pub struct CreateDrawingOptions {
     /// `plan`, `elevation` or `section`.
     pub kind: String,
+    pub straight_lines: Option<bool>,
+    pub line_tolerance: Option<f64>,
+    pub line_min_length: Option<f64>,
+    pub square: Option<bool>,
     /// `model`, `section_box` or the name of a saved view of the active scan
     /// with a section box.
     #[serde(default)]
@@ -842,7 +880,7 @@ fn write_discovery(port: u16, token: &str, started: u64) -> Result<PathBuf, Stri
             "pid": std::process::id(),
             "port": port,
             "token": token,
-            "api": "native-rust-v1",
+            "api": API_NAME,
             "started": started,
         }),
     )
@@ -864,27 +902,39 @@ fn respond(request: Request, status: u16, body: Value) {
     let _ = request.respond(response);
 }
 
-fn handle_request(
-    mut request: Request,
+/// What `GET /info` answers: which window this is, and the commands it
+/// knows.
+fn info(port: u16, started: u64) -> Value {
+    let mut commands = crate::mcp::command_names();
+    commands.sort_unstable();
+    json!({
+        "pid": std::process::id(),
+        "port": port,
+        "version": env!("CARGO_PKG_VERSION"),
+        "api": API_NAME,
+        "api_revision": API_REVISION,
+        "commands": commands,
+        "started": started,
+    })
+}
+
+/// An `/exec` request with a valid token, and what that token may send:
+/// `None` for the token of the discovery file.
+type Accepted = (Request, Option<Grant>);
+
+/// Answer a request on the thread that takes them, or pass an `/exec`
+/// request with a valid token on to the threads that wait for the window.
+fn route(
+    request: Request,
     port: u16,
     started: u64,
     token: &str,
     grants: &Grants,
-    sender: &UnboundedSender<Delivery>,
+    exec: &mpsc::Sender<Accepted>,
 ) {
     match (request.method(), request.url()) {
         (&Method::Get, "/health") => respond(request, 200, json!({"status": "ok"})),
-        (&Method::Get, "/info") => respond(
-            request,
-            200,
-            json!({
-                "pid": std::process::id(),
-                "port": port,
-                "version": env!("CARGO_PKG_VERSION"),
-                "api": "native-rust-v1",
-                "started": started,
-            }),
-        ),
+        (&Method::Get, "/info") => respond(request, 200, info(port, started)),
         (&Method::Post, "/eval") => respond(
             request,
             410,
@@ -907,55 +957,65 @@ fn handle_request(
                 respond(request, 403, json!({"error": "invalid API token"}));
                 return;
             };
-            let mut body = Vec::new();
-            let read = request
-                .as_reader()
-                .take(MAX_BODY_BYTES + 1)
-                .read_to_end(&mut body);
-            if let Err(error) = read {
-                respond(request, 400, json!({"error": error.to_string()}));
-                return;
-            }
-            if body.len() as u64 > MAX_BODY_BYTES {
-                respond(request, 413, json!({"error": "request body is too large"}));
-                return;
-            }
-            if let Some(grant) = &grant {
-                let name = serde_json::from_slice::<Value>(&body)
-                    .ok()
-                    .and_then(|value| value["command"].as_str().map(str::to_owned))
-                    .unwrap_or_default();
-                if !grant.allows(&name) {
-                    let error = format!(
-                        "extension {} does not declare the command {name} in uses.commands of its extension.json",
-                        grant.extension
-                    );
-                    respond(request, 403, json!({ "error": error }));
-                    return;
-                }
-            }
-            let command = match serde_json::from_slice::<ApiCommand>(&body) {
-                Ok(command) => command,
-                Err(error) => {
-                    respond(request, 400, json!({"error": error.to_string()}));
-                    return;
-                }
-            };
-            let (reply, receiver) = mpsc::channel();
-            let delivery = Delivery {
-                request: ApiRequest { command, reply },
-                caller: grant.map(|grant| grant.extension),
-            };
-            if sender.send(delivery).is_err() {
+            if let Err(mpsc::SendError((request, _))) = exec.send((request, grant)) {
                 respond(request, 503, json!({"error": "native GUI is unavailable"}));
-                return;
-            }
-            match receiver.recv_timeout(Duration::from_secs(10)) {
-                Ok(body) => respond(request, 200, body),
-                Err(_) => respond(request, 504, json!({"error": "native GUI did not respond"})),
             }
         }
         _ => respond(request, 404, json!({"error": "unknown endpoint"})),
+    }
+}
+
+/// Read the command of an accepted `/exec` request, hand it to the window
+/// and answer with the window's answer, or with HTTP 504 when that does not
+/// come in time. The command is carried out then all the same: it is in the
+/// queue of the window, which carries out commands one after another.
+fn execute(mut request: Request, grant: Option<Grant>, sender: &UnboundedSender<Delivery>) {
+    let mut body = Vec::new();
+    let read = request
+        .as_reader()
+        .take(MAX_BODY_BYTES + 1)
+        .read_to_end(&mut body);
+    if let Err(error) = read {
+        respond(request, 400, json!({"error": error.to_string()}));
+        return;
+    }
+    if body.len() as u64 > MAX_BODY_BYTES {
+        respond(request, 413, json!({"error": "request body is too large"}));
+        return;
+    }
+    if let Some(grant) = &grant {
+        let name = serde_json::from_slice::<Value>(&body)
+            .ok()
+            .and_then(|value| value["command"].as_str().map(str::to_owned))
+            .unwrap_or_default();
+        if !grant.allows(&name) {
+            let error = format!(
+                "extension {} does not declare the command {name} in uses.commands of its extension.json",
+                grant.extension
+            );
+            respond(request, 403, json!({ "error": error }));
+            return;
+        }
+    }
+    let command = match serde_json::from_slice::<ApiCommand>(&body) {
+        Ok(command) => command,
+        Err(error) => {
+            respond(request, 400, json!({"error": error.to_string()}));
+            return;
+        }
+    };
+    let (reply, receiver) = mpsc::channel();
+    let delivery = Delivery {
+        request: ApiRequest { command, reply },
+        caller: grant.map(|grant| grant.extension),
+    };
+    if sender.send(delivery).is_err() {
+        respond(request, 503, json!({"error": "native GUI is unavailable"}));
+        return;
+    }
+    match receiver.recv_timeout(ANSWER_TIMEOUT) {
+        Ok(body) => respond(request, 200, body),
+        Err(_) => respond(request, 504, json!({"error": "native GUI did not respond"})),
     }
 }
 
@@ -983,9 +1043,26 @@ pub fn start(
     let (sender, receiver) = unbounded_channel();
     let grants = Grants::default();
     let served = grants.clone();
+    let (exec, accepted) = mpsc::channel::<Accepted>();
+    let accepted = Arc::new(Mutex::new(accepted));
+    for _ in 0..EXEC_WORKERS {
+        let accepted = Arc::clone(&accepted);
+        let sender = sender.clone();
+        thread::spawn(move || loop {
+            // The queue is locked only while this thread waits for a request.
+            let next = {
+                let queue = accepted.lock().unwrap_or_else(PoisonError::into_inner);
+                queue.recv()
+            };
+            match next {
+                Ok((request, grant)) => execute(request, grant, &sender),
+                Err(_) => break,
+            }
+        });
+    }
     thread::spawn(move || {
         for request in server.incoming_requests() {
-            handle_request(request, port, started, &token, &served, &sender);
+            route(request, port, started, &token, &served, &exec);
         }
     });
     Ok((
@@ -1054,6 +1131,21 @@ mod tests {
             .is_some_and(|started| started > 0));
         assert_eq!(info["started"], discovery["started"]);
         assert_eq!(info["pid"], discovery["pid"]);
+        assert_eq!(info["api"], API_NAME);
+        assert_eq!(discovery["api"], API_NAME);
+        assert_eq!(info["api_revision"], API_REVISION);
+        // The commands the window knows, by name in sorted order.
+        let commands: Vec<&str> = info["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect();
+        assert!(commands.windows(2).all(|pair| pair[0] < pair[1]));
+        let mut known = crate::mcp::command_names();
+        known.sort_unstable();
+        assert_eq!(commands, known);
+        assert!(commands.contains(&"status") && commands.contains(&"screenshot"));
         let token = discovery["token"].as_str().unwrap().to_owned();
         let send = thread::spawn(move || {
             client
@@ -1107,6 +1199,79 @@ mod tests {
                 Err(error) => panic!("no API request arrived: {error}"),
             }
         }
+    }
+
+    #[test]
+    fn api_md_lists_the_revision_of_the_api() {
+        let document = include_str!("../../API.md");
+        let (_, changes) = document.split_once("\n## API changes").unwrap();
+        let revisions: Vec<u64> = changes
+            .lines()
+            .filter_map(|line| line.strip_prefix("| ")?.split_once(" |")?.0.parse().ok())
+            .collect();
+        assert_eq!(
+            revisions.first(),
+            Some(&API_REVISION),
+            "the newest comes first"
+        );
+        assert!(revisions.windows(2).all(|pair| pair[0] > pair[1]));
+        assert!(changes.contains(&format!("`{API_NAME}`")));
+    }
+
+    #[test]
+    fn health_and_info_answer_while_commands_wait_for_the_window() {
+        let _turn = one_server_at_a_time();
+        let (mut receiver, handle) = start(Some(0)).unwrap();
+        let url = format!("http://127.0.0.1:{}", handle.port);
+        let discovery: Value =
+            serde_json::from_slice(&fs::read(&handle.discovery_path).unwrap()).unwrap();
+        let token = discovery["token"].as_str().unwrap().to_owned();
+        let exec = |body: Value| {
+            let url = format!("{url}/exec");
+            let token = token.clone();
+            thread::spawn(move || {
+                let response = reqwest::blocking::Client::new()
+                    .post(url)
+                    .header("X-OPS-Token", token)
+                    .body(body.to_string())
+                    .send()
+                    .unwrap();
+                serde_json::from_str::<Value>(&response.text().unwrap()).unwrap()
+            })
+        };
+        // A command the window does not answer yet, as a screenshot that
+        // waits for the points of its camera.
+        let first = exec(json!({"command": "screenshot"}));
+        let held = delivered(&mut receiver);
+        // Shorter than the 10 seconds after which the held command would be
+        // answered with 504, which would free a single waiting thread.
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .build()
+            .unwrap();
+        for path in ["/health", "/info"] {
+            let response = client.get(format!("{url}{path}")).send().unwrap();
+            assert_eq!(response.status(), 200, "{path}");
+        }
+        // A second command reaches the window while the first waits, and
+        // each request gets the answer to its own command.
+        let second = exec(json!({"command": "status"}));
+        let next = delivered(&mut receiver);
+        assert!(matches!(
+            held.request.command,
+            ApiCommand::Screenshot { .. }
+        ));
+        assert!(matches!(next.request.command, ApiCommand::Status));
+        next.request
+            .reply
+            .send(json!({"ok": true, "answer": "status"}))
+            .unwrap();
+        assert_eq!(second.join().unwrap()["answer"], "status");
+        held.request
+            .reply
+            .send(json!({"ok": true, "answer": "screenshot"}))
+            .unwrap();
+        assert_eq!(first.join().unwrap()["answer"], "screenshot");
     }
 
     #[test]

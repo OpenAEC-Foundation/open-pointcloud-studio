@@ -82,6 +82,8 @@ fi
 
 # Writes down what it is asked; GH_HAS_DRAFT says whether the release exists.
 # Asked for fields, it answers with GH_IS_DRAFT and the names in GH_ASSETS.
+# Asked for the list of releases, it prints the tags in GH_RELEASES, or
+# fails when GH_FAIL is set.
 cat > "$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
@@ -91,21 +93,24 @@ if [[ "$1 $2" == "release view" ]]; then
         *"--json assets"*) printf '%s\n' ${GH_ASSETS:-} ;;
         *) [[ "$GH_HAS_DRAFT" == "true" ]] ;;
     esac
+elif [[ "$1" == api ]]; then
+    [[ -z "${GH_FAIL:-}" ]] || exit 1
+    printf '%s\n' ${GH_RELEASES:-}
 fi
 EOF
 chmod +x "$work/bin/gh"
 : > "$work/notes.md"
 
-# draft_call HAS_DRAFT PRERELEASE prints the one call that writes the release.
+# draft_call HAS_DRAFT prints the one call that writes the release.
 draft_call() {
     : > "$work/gh.log"
     PATH="$work/bin:$PATH" GH_LOG="$work/gh.log" GH_HAS_DRAFT=$1 \
         GITHUB_REPOSITORY=example/repository GITHUB_SHA=0123abc \
-        bash "$packaging_dir/draft-release.sh" v9.9.9 "$work/notes.md" "$2" >/dev/null || true
+        bash "$packaging_dir/draft-release.sh" v9.9.9 "$work/notes.md" >/dev/null || true
     grep -v '^release view ' "$work/gh.log" || true
 }
 
-call=$(draft_call false false)
+call=$(draft_call false)
 if [[ "$call" == "release create v9.9.9 "*"--target 0123abc"* && "$call" == *--draft* && "$call" != *--prerelease* ]]; then
     passed "a new draft is created at the commit of the run"
 else
@@ -114,18 +119,11 @@ fi
 
 # Publishing a draft puts the tag where the draft points, so a draft from an
 # earlier run has to be moved to the commit these packages were built from.
-call=$(draft_call true false)
+call=$(draft_call true)
 if [[ "$call" == "release edit v9.9.9 "*"--target 0123abc"* ]]; then
     passed "a draft from an earlier run is moved to the commit of the run"
 else
     wrong "a draft from an earlier run keeps its old commit: gh $call"
-fi
-
-call=$(draft_call false true)
-if [[ "$call" == *--prerelease* ]]; then
-    passed "a pre-release is marked as one"
-else
-    wrong "a pre-release is not marked as one: gh $call"
 fi
 
 # ---- prune-release-assets.sh ---------------------------------------------
@@ -188,6 +186,428 @@ if [[ -z "$missing" ]]; then
     passed "the release notes name every file of the release"
 else
     wrong "the release notes do not name:$missing"
+fi
+
+signed_notes=$(WINDOWS_SIGNED=true MACOS_SIGNED=true bash "$packaging_dir/release-notes.sh" "$number")
+if grep -qF 'Developer ID signed, notarized by Apple and stapled' <<< "$signed_notes" \
+    && ! grep -qF 'The application is not signed with a paid developer certificate' <<< "$signed_notes" \
+    && grep -qF 'notarized by Apple' <<< "$signed_notes"; then
+    passed "the release notes describe notarized macOS packages only when the build reports them"
+else
+    wrong "the release notes misreport Developer ID signing"
+fi
+
+# The image of the cloud API: a tag run pushes it before the notes and gives
+# its digest, a draft run has none and says it comes with the release.
+digest=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+image_notes=$(API_IMAGE_DIGEST=$digest bash "$packaging_dir/release-notes.sh" "$number")
+verify_image="gh attestation verify oci://ghcr.io/openaec-foundation/open-pointcloud-studio-api@$digest --repo OpenAEC-Foundation/open-pointcloud-studio"
+if [[ "$(grep -cF -- "$verify_image" <<< "$image_notes")" -eq 2 ]] \
+    && grep -qF "ghcr.io/openaec-foundation/open-pointcloud-studio-api:$number" <<< "$image_notes" \
+    && ! grep -qF 'published with the release' <<< "$image_notes"; then
+    passed "the notes of a tag run give the digest of the image and how to verify its attestation, in both languages"
+else
+    wrong "the notes of a tag run do not give the digest of the image and its attestation command in both languages"
+fi
+if grep -qF 'It is published with the release' <<< "$notes" && grep -qF 'met de release gepubliceerd' <<< "$notes" \
+    && ! grep -qF 'oci://' <<< "$notes"; then
+    passed "the notes of a draft run say that the image is published with the release"
+else
+    wrong "the notes of a draft run name a digest or do not say that the image comes with the release"
+fi
+if ! API_IMAGE_DIGEST=sha256:123 bash "$packaging_dir/release-notes.sh" "$number" > /dev/null 2>&1; then
+    passed "release-notes.sh refuses a digest that is not sha256 and 64 hex digits"
+else
+    wrong "release-notes.sh writes notes with a malformed digest"
+fi
+
+# SHA256SUMS is always there; the OpenPGP signatures only with the key.
+if [[ "$(grep -cF 'sha256sum --ignore-missing -c SHA256SUMS' <<< "$notes")" -eq 2 ]] \
+    && ! grep -qF 'gpg --verify' <<< "$notes"; then
+    passed "the notes say how to check SHA256SUMS in both languages, and name no signature without the key"
+else
+    wrong "the notes do not say how to check SHA256SUMS in both languages, or name a signature without the key"
+fi
+fingerprint=0123456789ABCDEF0123456789ABCDEF01234567
+gpg_notes=$(LINUX_GPG_SIGNED=true LINUX_GPG_FINGERPRINT="0123 4567 89ab cdef 0123 4567 89ab cdef 0123 4567" \
+    bash "$packaging_dir/release-notes.sh" "$number")
+if [[ "$(grep -cF 'gpg --verify SHA256SUMS.asc SHA256SUMS' <<< "$gpg_notes")" -eq 2 ]] \
+    && [[ "$(grep -cF "gpg --keyserver hkps://keys.openpgp.org --recv-keys $fingerprint" <<< "$gpg_notes")" -eq 2 ]] \
+    && grep -qF "gpg --verify FILE.AppImage.asc FILE.AppImage" <<< "$gpg_notes"; then
+    passed "the notes of a signed release give the fingerprint and how to verify the signatures, in both languages"
+else
+    wrong "the notes of a signed release do not give the fingerprint and the gpg commands in both languages"
+fi
+if ! LINUX_GPG_SIGNED=true bash "$packaging_dir/release-notes.sh" "$number" > /dev/null 2>&1; then
+    passed "release-notes.sh refuses signed notes without the fingerprint of the key"
+else
+    wrong "release-notes.sh writes signed notes without a fingerprint"
+fi
+
+# The signatures of the C library, as sdk.yml reports them.
+sdk_notes=$(SDK_WINDOWS_SIGNED=true SDK_MACOS_SIGNED=true bash "$packaging_dir/release-notes.sh" "$number")
+if grep -qF 'The C library for Windows carries a valid code signature; the one for macOS is signed with a developer certificate and notarized.' <<< "$sdk_notes" \
+    && grep -qF 'De C-bibliotheek voor Windows heeft een geldige code-handtekening; die voor macOS is met een ontwikkelaarscertificaat' <<< "$sdk_notes" \
+    && grep -qF 'The C library for Windows is not code-signed in this release; the one for macOS is signed ad hoc and not notarized.' <<< "$notes" \
+    && grep -qF 'De C-bibliotheek voor Windows is in deze release niet ondertekend; die voor macOS is alleen ad hoc' <<< "$notes"; then
+    passed "the notes say whether the C libraries are signed, as the build reports them"
+else
+    wrong "the notes misreport the signatures of the C libraries"
+fi
+
+# ---- signature-assets.sh and prune-release-assets.sh with signatures -----
+
+if [[ "$(bash "$packaging_dir/signature-assets.sh" 9.9.9)" == SHA256SUMS ]] \
+    && [[ "$(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9)" == "SHA256SUMS"$'\n'"SHA256SUMS.asc"$'\n'"${BINARY_NAME}_9.9.9_amd64.AppImage.asc"$'\n'"${BINARY_NAME}_9.9.9_arm64.AppImage.asc" ]]; then
+    passed "signature-assets.sh lists SHA256SUMS always, and the OpenPGP signatures when they are kept"
+else
+    wrong "signature-assets.sh lists '$(echo $(bash "$packaging_dir/signature-assets.sh" 9.9.9))' and '$(echo $(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9))'"
+fi
+
+# A draft with the files of this release, SHA256SUMS and the signatures of
+# an earlier run that signed: prune_signed KEEP prints what it removes.
+prune_signed() {
+    : > "$work/gh.log"
+    PATH="$work/bin:$PATH" GH_LOG="$work/gh.log" GH_IS_DRAFT=true GITHUB_REPOSITORY=example/repository \
+        KEEP_SIGNATURES=$1 \
+        GH_ASSETS="$(bash "$packaging_dir/expected-assets.sh" 9.9.9 | sed 'p; s/$/.sha256/')
+$(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9)" \
+        bash "$packaging_dir/prune-release-assets.sh" v9.9.9 9.9.9 > /dev/null 2>&1 || true
+    sed -n 's/^release delete-asset v9.9.9 \([^ ]*\) .*--yes$/\1/p' "$work/gh.log"
+}
+removed_kept=$(prune_signed true)
+removed_unsigned=$(prune_signed false)
+if [[ -z "$removed_kept" ]] \
+    && [[ "$removed_unsigned" == "SHA256SUMS.asc"$'\n'"${BINARY_NAME}_9.9.9_amd64.AppImage.asc"$'\n'"${BINARY_NAME}_9.9.9_arm64.AppImage.asc" ]]; then
+    passed "the draft keeps SHA256SUMS always and the signatures only while the release is signed"
+else
+    wrong "prune-release-assets.sh removed '$(echo $removed_kept)' from a signed draft and '$(echo $removed_unsigned)' from an unsigned one"
+fi
+
+# ---- sign-linux.sh -----------------------------------------------------------
+
+signed_assets=$work/signed-assets
+mkdir -p "$signed_assets"
+echo "checksums" > "$signed_assets/SHA256SUMS"
+for arch in amd64 arm64; do
+    echo "an AppImage" > "$signed_assets/${BINARY_NAME}_9.9.9_$arch.AppImage"
+done
+signing_output="$work/gpg-output"
+: > "$signing_output"
+if output=$(env -u OPENAEC_GPG_PRIVATE_KEY -u OPENAEC_GPG_PASSPHRASE -u OPENAEC_GPG_FINGERPRINT \
+        GITHUB_OUTPUT="$signing_output" bash "$packaging_dir/sign-linux.sh" "$signed_assets" 9.9.9 2>&1) \
+    && grep -qxF 'gpg_signed=false' "$signing_output" && grep -qF 'not configured' <<< "$output" \
+    && ! ls "$signed_assets"/*.asc > /dev/null 2>&1; then
+    passed "sign-linux.sh without the key signs nothing, says so and reports gpg_signed=false"
+else
+    wrong "sign-linux.sh without the key does not end quietly with gpg_signed=false:"
+    sed 's/^/        /' <<< "$output"
+fi
+
+# A throwaway key in a GnuPG home of its own, with a short path for the
+# socket of the agent.
+if command -v gpg > /dev/null 2>&1; then
+    gnupg=$work/gnupg
+    mkdir -p "$gnupg"
+    chmod 700 "$gnupg"
+    test_gpg() { gpg --homedir "$gnupg" --batch --no-tty --pinentry-mode loopback --passphrase test-passphrase "$@"; }
+    if test_gpg --quick-generate-key "Test signer <test@example.org>" ed25519 sign never > /dev/null 2>&1; then
+        test_fingerprint=$(test_gpg --with-colons --list-secret-keys 2> /dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+        test_key=$(test_gpg --armor --export-secret-keys "$test_fingerprint" 2> /dev/null)
+        : > "$signing_output"
+        if output=$(OPENAEC_GPG_PRIVATE_KEY=$test_key OPENAEC_GPG_PASSPHRASE=test-passphrase \
+                OPENAEC_GPG_FINGERPRINT=$test_fingerprint GITHUB_OUTPUT="$signing_output" \
+                bash "$packaging_dir/sign-linux.sh" "$signed_assets" 9.9.9 2>&1) \
+            && grep -qxF 'gpg_signed=true' "$signing_output" \
+            && test_gpg --verify "$signed_assets/SHA256SUMS.asc" "$signed_assets/SHA256SUMS" > /dev/null 2>&1 \
+            && test_gpg --verify "$signed_assets/${BINARY_NAME}_9.9.9_amd64.AppImage.asc" \
+                "$signed_assets/${BINARY_NAME}_9.9.9_amd64.AppImage" > /dev/null 2>&1 \
+            && test_gpg --verify "$signed_assets/${BINARY_NAME}_9.9.9_arm64.AppImage.asc" \
+                "$signed_assets/${BINARY_NAME}_9.9.9_arm64.AppImage" > /dev/null 2>&1 \
+            && grep -q 'BEGIN PGP SIGNATURE' "$signed_assets/SHA256SUMS.asc"; then
+            passed "sign-linux.sh signs SHA256SUMS and both AppImages with the key, armoured and verified"
+        else
+            wrong "sign-linux.sh does not sign SHA256SUMS and the AppImages with a throwaway key:"
+            sed 's/^/        /' <<< "$output"
+        fi
+        rm -f "$signed_assets"/*.asc
+        if output=$(OPENAEC_GPG_PRIVATE_KEY=$test_key OPENAEC_GPG_PASSPHRASE=test-passphrase \
+                OPENAEC_GPG_FINGERPRINT=0123456789ABCDEF0123456789ABCDEF01234567 GITHUB_OUTPUT="$signing_output" \
+                bash "$packaging_dir/sign-linux.sh" "$signed_assets" 9.9.9 2>&1); then
+            wrong "sign-linux.sh signs with a key whose fingerprint is not the one asked for"
+        elif grep -qF 'is not the one of OPENAEC_GPG_FINGERPRINT' <<< "$output" \
+            && ! ls "$signed_assets"/*.asc > /dev/null 2>&1; then
+            passed "sign-linux.sh refuses a key with another fingerprint and signs nothing"
+        else
+            wrong "sign-linux.sh refuses a key with another fingerprint for another reason, or signs:"
+            sed 's/^/        /' <<< "$output"
+        fi
+    else
+        echo "notice: gpg cannot make a key here; the signing tests of sign-linux.sh are skipped"
+    fi
+    gpgconf --homedir "$gnupg" --kill all > /dev/null 2>&1 || true
+else
+    echo "notice: gpg is not installed; the signing tests of sign-linux.sh are skipped"
+fi
+
+signing_output="$work/macos-signing-output"
+if GITHUB_OUTPUT="$signing_output" bash "$packaging_dir/macos/prepare-signing.sh" > /dev/null \
+    && grep -qFx 'macos_signed=false' "$signing_output"; then
+    passed "the macOS job reports ad hoc signing without Apple credentials"
+else
+    wrong "the macOS job does not report its ad hoc signing status"
+fi
+if APPLE_SIGNING_IDENTITY='Developer ID Application: test' \
+    GITHUB_OUTPUT="$signing_output" \
+    bash "$packaging_dir/macos/prepare-signing.sh" > /dev/null 2>&1; then
+    wrong "the macOS job accepted incomplete Apple credentials"
+else
+    passed "the macOS job refuses a partial Apple credential set"
+fi
+
+# ---- set-version.sh and version.sh ---------------------------------------
+
+# A repository of its own with these scripts, a workspace like that of
+# native/ with the line ends of a checkout on Windows, and an origin to push
+# tags to. The member ui has a version of its own, and las is a crate from
+# crates.io that has the version of the workspace by chance.
+version_repo=$work/version-repo
+mkdir -p "$version_repo/native/core" "$version_repo/native/desktop" "$version_repo/native/ui"
+cp -R "$packaging_dir" "$version_repo/native/packaging"
+crlf() { printf '%s\r\n' "$@"; }
+# workspace_files NUMBER writes native/Cargo.toml with NUMBER, and
+# lock_file NUMBER native/Cargo.lock with NUMBER for core and desktop.
+workspace_files() {
+    crlf '[workspace]' 'members = ["core", "desktop", "ui"]' 'resolver = "2"' '' \
+        '[workspace.package]' "version = \"$1\"" 'edition = "2021"' '' \
+        '[workspace.metadata.example]' 'version = "1.0.0"'
+}
+lock_file() {
+    crlf '# This file is automatically @generated by Cargo.' 'version = 4' '' \
+        '[[package]]' 'name = "las"' 'version = "0.9.5"' \
+        'source = "registry+https://github.com/rust-lang/crates.io-index"' '' \
+        '[[package]]' 'name = "open-pointcloud-studio-native"' "version = \"$1\"" \
+        'dependencies = [' ' "las",' ' "pointcloud-core",' ']' '' \
+        '[[package]]' 'name = "openaec-ui"' 'version = "0.1.0"' '' \
+        '[[package]]' 'name = "pointcloud-core"' "version = \"$1\""
+}
+workspace_files 0.9.5 > "$version_repo/native/Cargo.toml"
+lock_file 0.9.5 > "$version_repo/native/Cargo.lock"
+crlf '[package]' 'name = "pointcloud-core"' 'version.workspace = true' > "$version_repo/native/core/Cargo.toml"
+crlf '[package]' 'name = "open-pointcloud-studio-native"' 'version.workspace = true' '' \
+    '[dependencies]' 'pointcloud-core = { path = "../core" }' > "$version_repo/native/desktop/Cargo.toml"
+crlf '[package]' 'name = "openaec-ui"' 'version = "0.1.0"' > "$version_repo/native/ui/Cargo.toml"
+crlf '# Changelog' '' '<!-- A section starts with "## YYYY.W.N - YYYY-MM-DD". -->' '' \
+    '## Unreleased' '' '- Something changed.' '' '## 0.9.5 - 2026-10-13' '' '- Something before.' \
+    > "$version_repo/CHANGELOG.md"
+git -C "$version_repo" init -q
+git -C "$version_repo" config core.autocrlf false
+git -C "$version_repo" add -A
+git -C "$version_repo" -c user.name=test -c user.email=test@example.org commit -q -m "a workspace"
+git init -q --bare "$work/version-origin.git"
+git -C "$version_repo" remote add origin "$work/version-origin.git"
+
+# versions ARGUMENTS... runs set-version.sh of that repository; GH_RELEASES
+# holds the releases on GitHub, drafts included.
+versions() {
+    env PATH="$work/bin:$PATH" GH_LOG="$work/gh.log" GITHUB_REPOSITORY=example/repository \
+        GH_RELEASES="${GH_RELEASES:-}" GH_FAIL="${GH_FAIL:-}" \
+        bash "$version_repo/native/packaging/set-version.sh" "$@"
+}
+# expect_next WHAT ANSWER ARGUMENTS... expects next to print ANSWER.
+expect_next() {
+    local what=$1 answer=$2 output
+    shift 2
+    if output=$(versions next "$@" 2>&1) && [[ "$output" == "$answer" ]]; then
+        passed "set-version.sh next gives $answer $what"
+    else
+        wrong "set-version.sh next gives '$output' instead of $answer $what"
+    fi
+}
+
+expect_next "on a Saturday of week 43 without tags" 2026.43.0 --date 2026-10-24
+# The week-year of the ISO week, not the year of the calendar: the first days
+# of a year can be in the last week of the year before, and the last days in
+# the first week of the next.
+expect_next "on 1 January 2027, in week 53 of 2026" 2026.53.0 --date 2027-01-01 --offline
+expect_next "on 29 December 2025, in week 1 of 2026" 2026.1.0 --date 2025-12-29 --offline
+expect_next "on 4 January 2027, in week 1 of 2027" 2027.1.0 --date 2027-01-04 --offline
+expect_next "on 5 January 2026, without a leading zero" 2026.2.0 --date 2026-01-05 --offline
+expect_next "for today in UTC" "$(date -u +%G).$((10#$(date -u +%V))).0" --offline
+
+# The highest N of the week counts, wherever it is, and a gap is not filled:
+# a tag here, an annotated tag only on origin, a draft only on GitHub.
+git -C "$version_repo" tag v2026.43.0
+git -C "$version_repo" tag v2026.4.7
+git -C "$version_repo" tag v0.9.5
+git -C "$version_repo" -c user.name=test -c user.email=test@example.org -c tag.gpgSign=false \
+    tag -a -m "a release" v2026.43.2
+git -C "$version_repo" push -q origin v2026.43.2
+git -C "$version_repo" tag -d v2026.43.2 > /dev/null
+expect_next "with v2026.43.0 here and v2026.43.2 on origin" 2026.43.3 --date 2026-10-24
+expect_next "with --offline, which counts v2026.43.0 here only" 2026.43.1 --date 2026-10-24 --offline
+expect_next "in week 4, with v2026.4.7 here" 2026.4.8 --date 2026-01-19 --offline
+GH_RELEASES="v2026.44.0 v0.9.5" expect_next "with a draft v2026.44.0" 2026.44.1 --date 2026-10-26
+if GH_FAIL=1 versions next --date 2026-10-24 > /dev/null 2>&1; then
+    wrong "set-version.sh next gives a number when the releases on GitHub cannot be listed"
+else
+    passed "set-version.sh next refuses to guess when the releases on GitHub cannot be listed"
+fi
+if versions next --date 2026-02-30 --offline > /dev/null 2>&1; then
+    wrong "set-version.sh next takes 2026-02-30 for a date"
+else
+    passed "set-version.sh next refuses a day that does not exist"
+fi
+
+# Until the first release numbered by week, the workspace has 0.9.5, which
+# check accepts as long as no version is asked for.
+if output=$(versions check 2>&1) && grep -qxF 'native/Cargo.lock pointcloud-core: 0.9.5' <<< "$output" \
+    && output=$(bash "$version_repo/native/packaging/version.sh" 2> /dev/null) \
+    && grep -qxF 'number=0.9.5' <<< "$output"; then
+    passed "check and version.sh accept 0.9.5, the last version numbered the old way"
+else
+    wrong "check or version.sh refuses the workspace on 0.9.5:"
+    sed 's/^/        /' <<< "$output"
+fi
+accepted=
+for number in 0.9.6 2026.03.0 2026.0.0 2026.54.0 2026.43.100 2026.43.01 0999.1.0 2026.43.0-rc1 2026.43; do
+    workspace_files "$number" > "$version_repo/native/Cargo.toml"
+    lock_file "$number" > "$version_repo/native/Cargo.lock"
+    if versions check > /dev/null 2>&1; then
+        accepted="$accepted $number"
+    fi
+done
+for number in 0.9.5 v0.9.6 2026.03.0 v2026.43.0-rc1; do
+    output=$(versions check "$number" 2>&1) || true
+    grep -qF "'$number' is not YYYY.W.N" <<< "$output" || accepted="$accepted (asked for) $number"
+done
+for number in 2026.1.0 2026.53.99; do
+    workspace_files "$number" > "$version_repo/native/Cargo.toml"
+    lock_file "$number" > "$version_repo/native/Cargo.lock"
+    versions check "v$number" > /dev/null 2>&1 || accepted="$accepted (refused) $number"
+done
+if [[ -z "$accepted" ]]; then
+    passed "check accepts YYYY.W.N alone, with a week from 1 to 53 and N from 0 to 99"
+else
+    wrong "check does not hold versions to YYYY.W.N:$accepted"
+fi
+workspace_files 0.9.5 > "$version_repo/native/Cargo.toml"
+lock_file 0.9.5 > "$version_repo/native/Cargo.lock"
+
+# set writes nothing when it refuses.
+snapshot() { cat "$version_repo/native/Cargo.toml" "$version_repo/native/Cargo.lock" "$version_repo/CHANGELOG.md" | cksum; }
+before=$(snapshot)
+refused=
+versions set 2026.03.0 > /dev/null 2>&1 && refused="$refused 2026.03.0"
+output=$(versions set 2026.43.0 2>&1) || true
+grep -qF 'not above v2026.43.0' <<< "$output" || refused="$refused 2026.43.0"
+versions set 2026.42.5 > /dev/null 2>&1 && refused="$refused 2026.42.5"
+if [[ -z "$refused" && "$(snapshot)" == "$before" ]]; then
+    passed "set-version.sh set refuses a version that is not YYYY.W.N or not above the highest tag, and writes nothing"
+else
+    wrong "set-version.sh set does not refuse:$refused, or writes the files"
+fi
+
+# set next writes the version that next gives into native/Cargo.toml and the
+# entries of the members that take it in native/Cargo.lock, and names the
+# section of the changelog; nothing else changes, line ends included.
+if output=$(versions set next --date 2026-10-24 --changelog 2026-10-24 2>&1); then
+    changes=
+    cmp -s <(workspace_files 2026.43.3) "$version_repo/native/Cargo.toml" || changes="$changes native/Cargo.toml"
+    cmp -s <(lock_file 2026.43.3) "$version_repo/native/Cargo.lock" || changes="$changes native/Cargo.lock"
+    cmp -s <(crlf '# Changelog' '' '<!-- A section starts with "## YYYY.W.N - YYYY-MM-DD". -->' '' \
+        '## Unreleased' '' '## 2026.43.3 - 2026-10-24' '' '- Something changed.' '' \
+        '## 0.9.5 - 2026-10-13' '' '- Something before.') "$version_repo/CHANGELOG.md" \
+        || changes="$changes CHANGELOG.md"
+    if [[ -z "$changes" ]]; then
+        passed "set-version.sh set next writes 2026.43.3 for the workspace, its two members and the changelog"
+    else
+        wrong "set-version.sh set next did not write as expected:$changes"
+    fi
+    if bash "$version_repo/native/packaging/release-notes.sh" --check 2026.43.3 > /dev/null 2>&1; then
+        passed "the release notes are cut from the section that set-version.sh named"
+    else
+        wrong "release-notes.sh finds no section for 2026.43.3 after set-version.sh"
+    fi
+else
+    wrong "set-version.sh set next failed:"
+    sed 's/^/        /' <<< "$output"
+fi
+if output=$(bash "$version_repo/native/packaging/version.sh" v2026.43.3 2> /dev/null) \
+    && grep -qxF 'number=2026.43.3' <<< "$output" && grep -qxF 'tag=v2026.43.3' <<< "$output" \
+    && ! bash "$version_repo/native/packaging/version.sh" v2026.43.4 > /dev/null 2>&1; then
+    passed "version.sh accepts the tag of the version set and refuses another"
+else
+    wrong "version.sh does not hold the tag to the version set:"
+    sed 's/^/        /' <<< "$output"
+fi
+
+# set_refuses REASON ARGUMENTS... expects set to fail with REASON and to
+# leave the files as they are.
+set_refuses() {
+    local reason=$1 before output
+    shift
+    before=$(snapshot)
+    output=$(versions set "$@" 2>&1) && return 1
+    grep -qF "$reason" <<< "$output" && [[ "$(snapshot)" == "$before" ]]
+}
+
+# A changelog whose section Unreleased says nothing stops set before it
+# writes anything.
+if set_refuses "has no '- ' item" 2026.43.4 --changelog 2026-10-25; then
+    passed "set-version.sh set refuses a release whose changelog section is empty, and writes nothing"
+else
+    wrong "set-version.sh set writes a release whose changelog section is empty"
+fi
+
+# A lock file in which one member still has the old version fails the
+# check, as cargo --locked would.
+awk '/^name = "pointcloud-core"/ { core = 1 } core && /^version/ { sub(/2026\.43\.3/, "0.9.5"); core = 0 } { print }' \
+    <(lock_file 2026.43.3) > "$version_repo/native/Cargo.lock"
+if output=$(versions check 2>&1); then
+    wrong "check accepts a Cargo.lock with pointcloud-core on 0.9.5"
+elif grep -qF "version '0.9.5' for pointcloud-core" <<< "$output" \
+    && ! bash "$version_repo/native/packaging/version.sh" > /dev/null 2>&1; then
+    passed "check and version.sh refuse a Cargo.lock in which a member has another version"
+else
+    wrong "check refuses a Cargo.lock with pointcloud-core on 0.9.5 for another reason:"
+    sed 's/^/        /' <<< "$output"
+fi
+
+# Nor is a changelog without the section Unreleased, or with a section for
+# the version already, given a heading.
+workspace_files 2026.43.3 > "$version_repo/native/Cargo.toml"
+lock_file 2026.43.3 > "$version_repo/native/Cargo.lock"
+refused=
+crlf '# Changelog' '' '## 2026.43.3 - 2026-10-24' '' '- Something changed.' > "$version_repo/CHANGELOG.md"
+set_refuses "has no section '## Unreleased'" 2026.43.4 --changelog 2026-10-25 || refused="$refused (no Unreleased)"
+crlf '# Changelog' '' '## Unreleased' '' '- Something new.' '' '## 2026.43.4 - 2026-10-20' '' '- Something changed.' \
+    > "$version_repo/CHANGELOG.md"
+set_refuses "has a section for 2026.43.4 already" 2026.43.4 --changelog 2026-10-25 || refused="$refused (section taken)"
+if [[ -z "$refused" ]]; then
+    passed "set-version.sh set refuses a changelog without Unreleased or with the section already, and writes nothing"
+else
+    wrong "set-version.sh set does not refuse the changelog:$refused"
+fi
+
+# With the line ends of a checkout on Linux or macOS, the files keep theirs.
+workspace_files 2026.43.3 | tr -d '\r' > "$version_repo/native/Cargo.toml"
+lock_file 2026.43.3 | tr -d '\r' > "$version_repo/native/Cargo.lock"
+printf '%s\n' '# Changelog' '' '## Unreleased' '' '- Something new.' '' '## 2026.43.3 - 2026-10-24' \
+    > "$version_repo/CHANGELOG.md"
+changes=
+if output=$(versions set 2026.43.4 --changelog 2026-10-25 2>&1); then
+    cmp -s <(workspace_files 2026.43.4 | tr -d '\r') "$version_repo/native/Cargo.toml" || changes="$changes native/Cargo.toml"
+    cmp -s <(lock_file 2026.43.4 | tr -d '\r') "$version_repo/native/Cargo.lock" || changes="$changes native/Cargo.lock"
+    cmp -s <(printf '%s\n' '# Changelog' '' '## Unreleased' '' '## 2026.43.4 - 2026-10-25' '' '- Something new.' '' \
+        '## 2026.43.3 - 2026-10-24') "$version_repo/CHANGELOG.md" || changes="$changes CHANGELOG.md"
+else
+    changes=" (set failed: $output)"
+fi
+if [[ -z "$changes" ]]; then
+    passed "set-version.sh set writes files with LF line ends as it does those with CRLF"
+else
+    wrong "set-version.sh set did not write the files with LF line ends as expected:$changes"
 fi
 
 # ---- open-cad-studio.pin and build-open-cad-studio.sh --------------------

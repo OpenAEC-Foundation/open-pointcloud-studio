@@ -12,6 +12,7 @@ mod outline;
 mod read;
 mod section;
 mod slab;
+mod straight;
 mod write;
 
 use std::fmt;
@@ -37,6 +38,10 @@ pub use section::{
 pub use slab::{
     collect_slab, slab_from_section, CutGrid, Slab, SlabCut, SlabOptions, SlabPoint,
     MAX_CUT_GRID_CELLS,
+};
+pub use straight::{
+    straighten_cut_regions, StraightLineOptions, StraightLineStats, StraightLines,
+    LAYER_STRAIGHT_LINES,
 };
 pub(crate) use write::{codec_error, codec_version, frame_active_view, layer_color};
 pub use write::{write_drawing, write_drawing_progress};
@@ -379,6 +384,8 @@ pub struct DrawingRequest {
     pub max_wall_thickness: f64,
     pub min_wall_thickness: f64,
     pub square: bool,
+    /// Additional editable line layer; measured contours and fills stay.
+    pub straight_lines: Option<StraightLineOptions>,
     pub units: DrawingUnits,
     pub origin: DrawingOrigin,
     /// The points are thinned to one per cell of this size.
@@ -408,6 +415,7 @@ impl DrawingRequest {
             max_wall_thickness: DEFAULT_MAX_WALL_THICKNESS,
             min_wall_thickness: DEFAULT_MIN_WALL_THICKNESS,
             square: true,
+            straight_lines: None,
             units: DrawingUnits::default(),
             origin: DrawingOrigin::default(),
             point_spacing: DEFAULT_POINT_SPACING,
@@ -422,13 +430,16 @@ impl DrawingRequest {
     /// Refuses a request that cannot give a drawing, before any point is read.
     pub fn validate(&self) -> Result<(), LoadError> {
         let invalid = |reason: &str| Err(LoadError::InvalidData(reason.into()));
-        if !self.points && !self.fill {
+        if !self.points && !self.fill && self.straight_lines.is_none() {
             return invalid("a drawing needs points, a filled cut or both");
         }
         if let Some(thickness) = self.thickness {
             if !(MIN_SLAB_THICKNESS..=MAX_SLAB_THICKNESS).contains(&thickness) {
                 return invalid("slab thickness must be between 0.005 and 5 m");
             }
+        }
+        if let Some(options) = self.straight_lines {
+            options.validate()?;
         }
         let positive = |value: f64| value.is_finite() && value > 0.0;
         if !positive(self.point_spacing) {
@@ -495,6 +506,7 @@ pub struct DrawingStats {
     pub grid_cell: Option<f64>,
     pub direction_degrees: Option<f64>,
     pub bytes: u64,
+    pub straight_lines: Option<StraightLineStats>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
