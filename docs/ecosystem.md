@@ -2,7 +2,7 @@
 
 This is the record of issue [#33](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33): what Open Pointcloud Studio delivers for each system, the library and the service it offers besides the desktop application, how its MCP servers, its interface, its signatures and its cloud deployment stand, and for each requirement of the issue which check proves it and what is still open.
 
-It was written on 25 October 2026 for the build 2026.43.0, which is not released yet. The newest published release is 0.9.5.
+It was written on 25 October 2026 for the release 2026.44.0, which is not published yet; the evidence of 24 and 25 October was gathered on the same code under the number 2026.43.0, the number of the week it was built in. The newest published release is 0.9.5.
 
 ## Contents
 
@@ -32,18 +32,18 @@ The evidence of record comes from the published tag run of a release: its jobs, 
 
 ## Capability matrix
 
-All releases so far are stable; there is no prerelease channel. "2026.43.0" in the table is the build this record was written for. The first release with the new parts takes the number of the week it is made in ([Releasing](../native/packaging/README.md#releasing)), so the "Since" column of those parts is filled in from the first tag run.
+All releases so far are stable; there is no prerelease channel. "2026.44.0" in the table is the release this record was written for. The first release with the new parts takes the number of the week it is made in ([Releasing](../native/packaging/README.md#releasing)), so the "Since" column of those parts is filled in from the first tag run.
 
 | Delivered as | System or runtime | Processors | Status | Version | Since | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Installer `_x64-setup.exe` and zip `_windows-x64.zip` | Windows 10 and 11 | x64 | stable | 0.9.5 published, 2026.43.0 not released yet | installer 0.6.0, these names 0.8.0 | Packages `windows`; Release `verify-release` (windows) |
+| Installer `_x64-setup.exe` and zip `_windows-x64.zip` | Windows 10 and 11 | x64 | stable | 0.9.5 published, 2026.44.0 not released yet | installer 0.6.0, these names 0.8.0 | Packages `windows`; Release `verify-release` (windows) |
 | Disk image `.dmg` and archive `_macos-universal.tar.gz` | macOS 11 and later | arm64 and x86-64 in one file | stable | as above | 0.8.0 | Packages `macos`, `verify-macos`; Release `verify-release` (macos-arm64, macos-x86_64) |
 | `.deb`, AppImage and `_linux-amd64.tar.gz` | Linux with a C library of version 2.35 or newer, the C++ runtime of GCC 12 or newer, X11 or Wayland | amd64 | stable | as above | 0.8.0 | Packages `verify-linux`; Release `verify-release` (linux) |
 | `_arm64.deb`, `_arm64.AppImage` and `_linux-arm64.tar.gz` | as above | arm64 | experimental: built and tested on build machines with software rendering only | as above | 0.8.0 | Packages `verify-linux` (arm64) |
 | Command-line modes (`--export`, `--section`, `--drawing` and the others) | in every desktop package, without a window | as the package | stable | as above | 0.4.0 | `cli_help.rs`; `smoke-test.sh` in the Packages workflow |
 | Local command API | a running window, on 127.0.0.1 with a token; `native-rust-v1` | as the package | stable; changes are additive, and a release that adds a command or a field raises the revision | revision 11 in 2026.43.0 | 0.4.0 | `native_api.rs` and `mcp/tests.rs` hold [API.md](../native/API.md) to the code |
 | MCP over standard input and output (`--mcp`) | in every desktop package | as the package | stable | as above | 0.7.0 | Packages `verify-linux`, step *External MCP client* |
-| C library `ops_pointcloud`, ABI 1.0: `ops_pointcloud.dll` | Windows 10 and 11 | x64 | new; ABI 1.x is stable | 2026.43.0, not released | first release with this work | SDK `windows` |
+| C library `ops_pointcloud`, ABI 1.0: `ops_pointcloud.dll` | Windows 10 and 11 | x64 | new; ABI 1.x is stable | 2026.44.0, not released | first release with this work | SDK `windows` |
 | `libops_pointcloud.dylib` | macOS 11 and later | arm64 and x86-64 in one file | new | as above | as above | SDK `macos`, `macos-x86_64`; Release `verify-release` (macos-arm64, macos-x86_64) |
 | `libops_pointcloud.so.1` | Linux with a C library of version 2.35 or newer | amd64, arm64 | new | as above | as above | SDK `linux` |
 | Rust crate `pointcloud-core`, entry point `pointcloud_core::ops` | by the git tag `vYYYY.W.N`; tested on Linux, Windows and macOS | any the core builds for | new; no semantic versioning beyond the one-release notice of [Compatibility](library.md#compatibility) | as above | as above | CI `native`; SDK `linux` (amd64), step *Build and run the Rust consumer* |
@@ -352,7 +352,7 @@ Every requirement is open. "Now" is what exists and what ran; "CI" is what will 
 Before a release:
 
 - The draft run of the release workflow on this branch: every job green, no image pushed, the notes saying the image comes with the release, the four archives of the C library and `SHA256SUMS` on the draft, and none of the archive names matching a download button of the foundation's website (checked locally against the expected list on 25 October 2026; to repeat on the real list of the draft).
-- The version: 25 October 2026 is the last day of ISO week 43; a tag from 26 October on belongs to week 44, so the release then needs `set-version.sh set next` and its section in CHANGELOG.md.
+- The version: the release is numbered 2026.44.0, after ISO week 44, which began on 26 October 2026.
 - The owner: the signing secrets confirmed, the static C runtime of the Windows programs confirmed (or, if Open CAD Studio does not build with it, the runtime libraries carried beside the programs instead), the creation of packages by the workflows allowed for the organisation, and the go for the tag run.
 
 After the tag run: the identities in [Signing per file](#signing-per-file), the results in [Clean machines](#clean-machines), the package of the image made public, the client checks, and the deployment.

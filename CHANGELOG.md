@@ -17,7 +17,7 @@ section its version and date.
 
 ## Unreleased
 
-## 2026.43.0 - 2026-10-24
+## 2026.44.0 - 2026-10-26
 
 - The File menu puts the common tasks one click away again: **Import point cloud**, **Open scan folder**, **Drawing (DXF/DWG)…**, **3D BAG buildings…** and the exports **Export full resolution…**, **Export selected points…**, **Export section box…**, **Export section drawing…** and **Export every Nth point…** start at once. **All export options…** opens the page with every export. **New** stays at the top of the menu, and **Workspace**, **Extensions** and **About** follow under a rule.
 - The window has the shared look of the OpenAEC desktop tools: the title strip with the logo, the name and the quick-access icons, the File and Home tabs on one line, the document tabs, the headers of the Project Browser and Properties, the rows of Properties, the ribbon groups, a thinner status band, the File menu and the Settings dialog. **Reset to Defaults** in Settings now asks to confirm.

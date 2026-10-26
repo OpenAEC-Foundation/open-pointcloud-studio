@@ -122,7 +122,8 @@ jobs:
           "$RUNNER_TEMP/inspect" "$RUNNER_TEMP/run-shared" | tee "$RUNNER_TEMP/example.txt"
       - name: Link the example statically and run it
         run: |
-          libraries=$(sed -n 's/.*native-static-libs: //p' "$RUNNER_TEMP/staticlib.log" | tail -n 1)
+          # The log holds the colour codes of the compiler's output; they are not part of the list.
+          libraries=$(sed -e 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/staticlib.log" | sed -n 's/.*native-static-libs: //p' | tail -n 1)
           [[ -n "$libraries" ]] || { echo "::error::rustc printed no native-static-libs"; exit 1; }
           cc -std=c11 -Wall -Wextra -Werror -DOPS_STATIC -Inative/sdk/include native/sdk/examples/inspect.c \
             native/target/release/libops_pointcloud.a $libraries -o "$RUNNER_TEMP/inspect-static"
