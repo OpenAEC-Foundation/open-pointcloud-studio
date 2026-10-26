@@ -1156,6 +1156,14 @@ fn main() -> iced::Result {
                 application_id: APPLICATION_ID.into(),
                 ..Default::default()
             },
+            #[cfg(windows)]
+            platform_specific: iced::window::settings::PlatformSpecific {
+                undecorated_shadow: true,
+                ..Default::default()
+            },
+            // The title strip of the application is the only bar at the top
+            // and carries the window buttons (`native_chrome`).
+            decorations: !native_chrome::FRAMELESS,
             // Closing arrives as `Message::Exit`, like Exit in the File view.
             exit_on_close_request: false,
             ..iced::window::Settings::default()
@@ -1649,6 +1657,13 @@ enum Message {
     /// The window opened or got another size: the ribbon measures its
     /// overflow again.
     WindowResized(Size),
+    /// A press on the empty part of the title strip: it moves the window, and
+    /// a second press soon after maximizes or restores it.
+    TitleBarPressed,
+    WindowMinimize,
+    WindowToggleMaximize,
+    /// Whether the window is maximized now, for the icon of its button.
+    WindowMaximized(bool),
     Theme(UiTheme),
     PersistSettings(u64),
     Open,
@@ -2094,6 +2109,10 @@ struct Studio {
     viewport_size: Size,
     /// The size of the window, once it opened.
     window_size: Option<Size>,
+    /// Whether the window is maximized, as the system last reported it.
+    window_maximized: bool,
+    /// When the title strip was last pressed, to tell a double click.
+    title_pressed: Option<Instant>,
     ribbon_panel_open: Option<&'static str>,
     view_controls_open: bool,
     ribbon_tab: RibbonTab,
@@ -2773,6 +2792,8 @@ impl Default for Studio {
             sheet_dialog: None,
             viewport_size: Size::new(915.0, 743.0),
             window_size: None,
+            window_maximized: false,
+            title_pressed: None,
             ribbon_panel_open: None,
             view_controls_open: false,
             ribbon_tab: RibbonTab::Start,
@@ -6050,11 +6071,13 @@ impl Studio {
     fn sync_window_chrome(&self) -> bool {
         let colors = self.ui_theme.colors();
         let bytes = |color: Color| [color.r, color.g, color.b].map(|c| (c * 255.0).round() as u8);
-        native_chrome::apply(
+        let resizable = !native_chrome::FRAMELESS || native_chrome::install_resize_border();
+        let applied = native_chrome::apply(
             self.ui_theme != UiTheme::Light,
             bytes(colors.bg_lighter),
             bytes(colors.text),
-        )
+        );
+        resizable && applied
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -6323,6 +6346,8 @@ impl Studio {
             Message::WindowResized(size) => {
                 let previous = self.window_size.replace(size);
                 self.ribbon_panel_open = None;
+                // Maximizing, restoring and snapping all arrive as a new size.
+                let maximized = window_maximized_task();
                 if let Some(previous) = previous {
                     let viewport = Size::new(
                         (self.viewport_size.width + size.width - previous.width).max(1.0),
@@ -6330,9 +6355,31 @@ impl Studio {
                     );
                     self.resize_viewport(viewport);
                     self.revision += 1;
-                    return self.schedule_detail();
+                    return Task::batch([self.schedule_detail(), maximized]);
                 }
+                return maximized;
             }
+            Message::TitleBarPressed => {
+                let now = Instant::now();
+                let double = self
+                    .title_pressed
+                    .is_some_and(|earlier| now.duration_since(earlier) <= DOUBLE_CLICK);
+                if double {
+                    self.title_pressed = None;
+                    return self.update(Message::WindowToggleMaximize);
+                }
+                self.title_pressed = Some(now);
+                return iced::window::get_latest().and_then(iced::window::drag);
+            }
+            Message::WindowMinimize => {
+                return iced::window::get_latest().and_then(|id| iced::window::minimize(id, true));
+            }
+            Message::WindowToggleMaximize => {
+                return iced::window::get_latest()
+                    .and_then(iced::window::toggle_maximize)
+                    .chain(window_maximized_task());
+            }
+            Message::WindowMaximized(maximized) => self.window_maximized = maximized,
             Message::Theme(theme) => {
                 self.ui_theme = theme;
                 theme.save();
@@ -10154,22 +10201,86 @@ impl Studio {
         ))
         .width(18)
         .height(18);
+        let theme = self.ui_theme.shared();
+        let window_buttons: Element<'_, Message> = if native_chrome::FRAMELESS {
+            let maximize = if self.window_maximized {
+                opencad_ribbon::quick_access_btn(
+                    window_icon(openaec_ui::icons::Icon::Restore),
+                    "Restore",
+                    Some(Message::WindowToggleMaximize),
+                    theme,
+                )
+            } else {
+                opencad_ribbon::quick_access_btn(
+                    window_icon(openaec_ui::icons::Icon::Maximize),
+                    "Maximize",
+                    Some(Message::WindowToggleMaximize),
+                    theme,
+                )
+            };
+            row![
+                iced::widget::Space::with_width(6),
+                opencad_ribbon::quick_access_btn(
+                    window_icon(openaec_ui::icons::Icon::Minimize),
+                    "Minimize",
+                    Some(Message::WindowMinimize),
+                    theme,
+                ),
+                maximize,
+                opencad_ribbon::quick_access_btn(
+                    window_icon(openaec_ui::icons::Icon::Close),
+                    "Close",
+                    Some(Message::Exit),
+                    theme,
+                ),
+            ]
+            .spacing(0)
+            .into()
+        } else {
+            iced::widget::Space::with_width(0).into()
+        };
+        // Without a system frame, the empty parts of the strip are the place
+        // to take the window by; its buttons keep their own presses.
+        fn drag_area<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+            if native_chrome::FRAMELESS {
+                iced::widget::mouse_area(content)
+                    .on_press(Message::TitleBarPressed)
+                    .into()
+            } else {
+                content
+            }
+        }
         let title_strip = container(
             row![
-                container(logo)
+                drag_area(
+                    container(logo)
+                        .width(iced::Length::FillPortion(1))
+                        .height(Fill)
+                        .align_x(iced::Alignment::Start)
+                        .align_y(iced::Alignment::Center)
+                        .into()
+                ),
+                drag_area(
+                    container(
+                        text("Open Pointcloud Studio")
+                            .font(fonts::MEDIUM)
+                            .size(12)
+                            .color(self.ui_theme.colors().accent),
+                    )
                     .width(iced::Length::FillPortion(1))
-                    .align_x(iced::Alignment::Start),
-                container(
-                    text("Open Pointcloud Studio")
-                        .font(fonts::MEDIUM)
-                        .size(12)
-                        .color(self.ui_theme.colors().accent),
-                )
-                .width(iced::Length::FillPortion(1))
-                .center_x(Fill),
-                container(row![quick_access, settings_button].spacing(0))
-                    .width(iced::Length::FillPortion(1))
-                    .align_x(iced::Alignment::End),
+                    .height(Fill)
+                    .center_x(Fill)
+                    .align_y(iced::Alignment::Center)
+                    .into()
+                ),
+                drag_area(
+                    container(row![quick_access, settings_button, window_buttons].spacing(0))
+                        .width(iced::Length::FillPortion(1))
+                        .height(Fill)
+                        .align_x(iced::Alignment::End)
+                        .align_y(iced::Alignment::Center)
+                        .into()
+                ),
             ]
             .width(Fill)
             .align_y(iced::Alignment::Center)
@@ -11963,6 +12074,29 @@ enum TitleIcon {
     Save,
     Undo,
     Redo,
+}
+
+/// The longest time between two presses on the title strip that still counts
+/// as a double click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
+
+/// Ask the system whether the window is maximized now.
+fn window_maximized_task() -> Task<Message> {
+    iced::window::get_latest()
+        .and_then(iced::window::get_maximized)
+        .map(Message::WindowMaximized)
+}
+
+/// An icon of a window button: in the colour of the text, as the shared
+/// title strip draws them.
+fn window_icon(icon: openaec_ui::icons::Icon) -> Element<'static, Message> {
+    svg(svg::Handle::from_memory(icon.bytes()))
+        .width(16)
+        .height(16)
+        .style(|theme, _| svg::Style {
+            color: Some(ui_theme::colors(theme).text),
+        })
+        .into()
 }
 
 fn title_icon(kind: TitleIcon, size: f32) -> Element<'static, Message> {
