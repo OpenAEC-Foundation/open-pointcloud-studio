@@ -482,7 +482,10 @@ jobs:
           $ply = @('ply', 'format ascii 1.0', 'element vertex 8', 'property float x', 'property float y', 'property float z', 'end_header')
           foreach ($x in 0, 1) { foreach ($y in 0, 1) { foreach ($z in 0, 1) { $ply += "$x $y $z" } } }
           $ply | Set-Content -Encoding ascii "$data\grid.ply"
-          $base = 'mcr.microsoft.com/windows/servercore:ltsc2025'
+          # The full Windows Server image: Server Core lacks parts that every
+          # Windows 10 and 11 desktop has and the application imports, such
+          # as d3dcompiler_47.dll, so the program could not even start there.
+          $base = 'mcr.microsoft.com/windows/server:ltsc2025'
           # A runner without the docker command, or with one but no engine
           # behind it, records that instead of failing on the command.
           $engine = $false
