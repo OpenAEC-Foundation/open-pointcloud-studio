@@ -3,7 +3,7 @@ members = ["core", "desktop", "ui", "server", "sdk"]
 resolver = "2"
 
 [workspace.package]
-version = "2026.44.0"
+version = "2026.44.1"
 edition = "2021"
 license = "LGPL-3.0-or-later"
 

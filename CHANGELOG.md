@@ -17,6 +17,9 @@ section its version and date.
 
 ## Unreleased
 
+## 2026.44.1 - 2026-10-26
+
+- The macOS disk image carries a Developer ID signature of its own as well as the app inside it, so macOS also accepts the downloaded image itself.
 - The window has one bar at the top on Windows and macOS: the title strip of the application, with buttons to minimize, maximize or restore and close the window, instead of the system title bar above it. Dragging the strip moves the window, a double click maximizes or restores it, and on Windows the edges still resize it and snapping still works.
 
 ## 2026.44.0 - 2026-10-26
