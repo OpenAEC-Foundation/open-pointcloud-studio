@@ -2,7 +2,9 @@
 # Prints, one per line, the files a release carries besides those that
 # expected-assets.sh lists: SHA256SUMS always, and with KEEP_SIGNATURES=true
 # the OpenPGP signatures that sign-linux.sh writes, SHA256SUMS.asc and an
-# .asc for each AppImage. They have no .sha256 of their own.
+# .asc for each AppImage, and with KEEP_UPDATER_SIGNATURES=true the .sig that
+# sign-updates.sh writes beside the Windows setup and each AppImage for the
+# OpenAEC Installer. They have no .sha256 of their own.
 #
 #   signature-assets.sh NUMBER
 #
@@ -18,4 +20,7 @@ echo SHA256SUMS
 if [[ "${KEEP_SIGNATURES:-false}" == true ]]; then
     echo SHA256SUMS.asc
     bash "$packaging_dir/expected-assets.sh" "$number" | sed -n 's/\.AppImage$/.AppImage.asc/p'
+fi
+if [[ "${KEEP_UPDATER_SIGNATURES:-false}" == true ]]; then
+    bash "$packaging_dir/expected-assets.sh" "$number" | grep -E '(_x64-setup\.exe|\.AppImage)$' | sed 's/$/.sig/'
 fi

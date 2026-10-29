@@ -194,6 +194,7 @@ jobs:
       packages: write
     outputs:
       gpg_signed: ${{ steps.gpg.outputs.gpg_signed }}
+      updater_signed: ${{ steps.updater.outputs.updater_signed }}
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.prepare.outputs.tag }}
@@ -283,6 +284,20 @@ jobs:
           else
             echo "OpenPGP: not signed; the key of the organisation is not configured." >> "$GITHUB_STEP_SUMMARY"
           fi
+      # The signature the OpenAEC Installer checks before a silent update, on
+      # the files as they are published: after Authenticode and OpenPGP.
+      - name: Sign the installers for the OpenAEC Installer
+        id: updater
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          bash native/packaging/sign-updates.sh assets "$NUMBER"
+          if grep -qxF updater_signed=true "$GITHUB_OUTPUT"; then
+            echo "Updater: the Windows setup and the AppImages carry a .sig for the OpenAEC Installer." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Updater: not signed; the updater key is not configured." >> "$GITHUB_STEP_SUMMARY"
+          fi
       # Every Linux package and Linux archive of the C library gets a build
       # attestation, signed through Sigstore and kept by GitHub. `gh
       # attestation verify FILE --repo OWNER/REPO --signer-workflow
@@ -323,6 +338,7 @@ jobs:
         working-directory: assets
         env:
           KEEP_SIGNATURES: ${{ steps.gpg.outputs.gpg_signed }}
+          KEEP_UPDATER_SIGNATURES: ${{ steps.updater.outputs.updater_signed }}
         run: |
           for name in $(bash ../native/packaging/expected-assets.sh "$NUMBER"); do
             gh release upload "$TAG" "$name" "$name.sha256" --clobber --repo "$GITHUB_REPOSITORY"
@@ -336,6 +352,7 @@ jobs:
       - name: Remove the files of an earlier run from the draft
         env:
           KEEP_SIGNATURES: ${{ steps.gpg.outputs.gpg_signed }}
+          KEEP_UPDATER_SIGNATURES: ${{ steps.updater.outputs.updater_signed }}
         run: bash native/packaging/prune-release-assets.sh "$TAG" "$NUMBER"
       - name: Publish the release
         if: ${{ !inputs.draft_only }}
@@ -737,3 +754,44 @@ jobs:
           cat "$record" >> "$GITHUB_STEP_SUMMARY"
           gh release upload "$TAG" "$record" "$record.sha256" --clobber --repo "$GITHUB_REPOSITORY"
           [[ "$RESULT" == success ]]
+
+  # The latest.json the OpenAEC Installer reads, made with the release kit of
+  # the installer once the release is public (OpenAEC-Foundation/OpenAEC-Blueprint#33).
+  # It checks every .sig against UPDATER_PUBKEY and the tag against the
+  # version in native/Cargo.toml, and is attached last: until then no
+  # installer offers the update. A release published by this workflow starts
+  # no other workflow, so this is a job here and not a workflow of its own.
+  updater-manifest:
+    needs: [prepare, publish]
+    if: ${{ !cancelled() && !inputs.draft_only && needs.publish.result == 'success' && needs.publish.outputs.updater_signed == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the release kit
+        uses: actions/checkout@v4
+        with:
+          repository: OpenAEC-Foundation/openaec-installer
+          ref: main
+          path: .release-kit
+          sparse-checkout: release-kit
+      - name: Only a published release
+        run: |
+          state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')
+          [ "$state" = "false false" ] || { echo "::error::$TAG is a draft or pre-release; no latest.json"; exit 1; }
+      - name: Make latest.json (checks every signature)
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir updates \
+            --pattern '*_x64-setup.exe' --pattern '*_x64-setup.exe.sig' \
+            --pattern '*.AppImage' --pattern '*.AppImage.sig'
+          node .release-kit/release-kit/latest-json.mjs \
+            --repo "$GITHUB_REPOSITORY" --tag "$TAG" --dir updates \
+            --pubkey "${{ vars.UPDATER_PUBKEY }}" --version-file native/Cargo.toml \
+            --notes "See https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            --out latest.json
+      - name: Attach latest.json last
+        run: gh release upload "$TAG" latest.json --repo "$GITHUB_REPOSITORY" --clobber
