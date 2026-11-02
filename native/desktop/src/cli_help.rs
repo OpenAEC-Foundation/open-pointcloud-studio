@@ -68,6 +68,12 @@ pub const MODES: &[Mode] = &[
         description: key("Fits a rigid registration from corresponding scan points and prints the transform and residuals as JSON."),
     },
     Mode {
+        flag: "--apply-registration",
+        short: None,
+        arguments: "INPUT MATRIX.json OUTPUT.e57",
+        description: key("Applies a saved registration matrix to a scan, retaining its stations and photos in E57."),
+    },
+    Mode {
         flag: "--photos",
         short: None,
         arguments: "INPUT OUTPUT_DIRECTORY",
@@ -96,8 +102,8 @@ pub const MODES: &[Mode] = &[
     Mode {
         flag: "--merge",
         short: None,
-        arguments: "OUTPUT.laz INPUT1.las INPUT2.laz [...]",
-        description: key("Merges LAS and LAZ scans into one file."),
+        arguments: "OUTPUT.e57|.las|.laz INPUT1 INPUT2 [...]",
+        description: key("Merges mixed scan formats into E57, LAS or LAZ."),
     },
     Mode {
         flag: "--mesh",

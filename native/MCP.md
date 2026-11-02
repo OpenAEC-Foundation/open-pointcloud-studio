@@ -184,6 +184,17 @@ follows when that view is restored.
 | `close_panorama` | — | Returns to the orbit view; after `enter_photo`, to the camera before the first photo, into the station panorama it stood in then |
 | `list_photos` | optional `layer` | The photos of a layer apart from its station photos (panoramas and photos along a path): index, kind, size, position, viewing direction; and the file's coordinate system |
 | `enter_photo` | `index`, optional `layer` | Stands where a photo was taken and lays it over the points |
+| `add_panorama` | `path`, `position`, optional `layer`, `name`, `heading`, `pitch`, `roll` | Adds a persistent, undoable 2:1 JPG/PNG panorama; source XYZ and angles in degrees |
+| `edit_photo` | `index`, `position`, optional `layer`, `name`, `heading`, `pitch`, `roll` | Edits a photo camera and name; Undo restores it |
+| `delete_photo` | `index`, optional `layer` | Removes a photo; Undo restores it |
+| `registration_setup` | `fixed`, `moving` | Chooses two different scan layers and clears point pairs |
+| `registration_pair` | `fixed`, `moving` | Adds a corresponding scene XYZ pair |
+| `registration_fit` | — | Fits a rigid transform and reports residuals |
+| `registration_refine` | optional `wait_seconds` | Point-to-plane ICP on the overlap; RMS, p95 and a deviation preview; job |
+| `registration_export` | `path`, optional `merge`, `keep_stations_photos`, `wait_seconds` | Writes the registered full-resolution E57 scan or scene and companion matrix; job |
+| `registration_set_matrix` | `transform` | Loads a saved rigid registration |
+| `registration_matrix` | — | Reads the transform, pairs, residuals and job state |
+| `cancel_registration` | — | Cancels registration or registered export |
 | `photo_blend` | `value` (0–1) | How much of the photo covers the points: 0 the points only, 1 the photo only |
 | `set_photo_compare` | `enabled` | Shows the entered photo beside a live 3D pane with its own camera controls; measuring and picking remain active in the photo pane |
 | `set_photo_split` | `ratio`, optional `vertical` | Sets the 3D pane's share of the width or height from 0.25 to 0.75; `vertical: true` stacks the panes, and the GUI divider can also be dragged |
@@ -292,7 +303,8 @@ follows when that view is restored.
 | `export_drawing_file` | optional `name`, `path` (`.dxf` or `.dwg`), optional `wait_seconds` | Writes a drawing with its annotations as DXF or DWG, with real dimensions; a job |
 | `open_in_cad_viewer` | optional `path` (`.dxf` or `.dwg`) | Opens a DXF or DWG file, by default the last one exported, read-only in the Open CAD Studio that comes with the application, else in the program chosen in Settings or an installed Open CAD Studio; without a viewer in the system program |
 | `cancel_drawing` | — | Cancels the running section drawing or preview |
-| `merge_visible` | `path` (`.las` or `.laz`), optional `wait_seconds` | Merges the visible LAS/LAZ layers; job |
+| `export_recap` | `path`, optional `wait_seconds` | Writes E57 with images and ReCap import instructions; job |
+| `merge_visible` | `path` (`.e57`, `.las` or `.laz`), optional `keep_stations_photos`, `wait_seconds` | Merges visible mixed-format layers; job |
 | `cancel_merge` | — | Cancels the merge |
 | `bag3d` | `bbox` (`[xmin, ymin, xmax, ymax]` in RD New, at most 2 by 2 km), `lod` (`1.2`, `1.3` or `2.2`), `path` (`.obj`), optional `wait_seconds` | Downloads the 3D BAG buildings of an area and opens them as a layer; job |
 | `cancel_bag3d` | — | Cancels the 3D BAG download |
@@ -424,3 +436,16 @@ server (shortened).
 > {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"screenshot","arguments":{"max_edge":1024}}}
 < {"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"image","data":"iVBORw0KGgo...","mimeType":"image/png"},{"type":"text","text":"{\"width\":1024,...}"}],"isError":false,...}}
 ```
+
+## Photo editing, registration and ReCap
+
+The revision-12 tools `add_panorama`, `edit_photo` and `delete_photo` use the
+same persistent, undoable photo editor as the GUI. `registration_setup`,
+`registration_pair` and `registration_fit` create the initial alignment;
+`registration_refine` runs point-to-plane ICP, and `registration_export`
+writes the full registered scan or scene. Both long operations accept
+`wait_seconds` or can be followed with `wait_for_job`. `registration_matrix`
+reads the transform and report; `registration_set_matrix` reuses a saved
+transform and `cancel_registration` cancels work. `export_recap` prepares an
+E57 and ReCap import instructions. See [API revision 12](API.md#photo-editing-and-scan-registration-revision-12)
+for fields and units.

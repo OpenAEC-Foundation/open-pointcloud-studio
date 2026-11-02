@@ -100,13 +100,11 @@ mesh is not measured for these two modes; the mode `closed` measures it, see
 [Closed mesh](#closed-mesh).
 A mesh holds at most 4,000,000 vertices and 8,000,000 triangles, from a job
 and from a file alike.
-`merge_visible` joins all visible LAS/LAZ layers into one `.las` or `.laz` file
-in a background task. It preserves original point attributes and applies each
-layer's current deletions and affine transform. Sources must have matching LAS
-version, point layout, coordinate grid and metadata; incompatible CRS metadata
-is rejected instead of silently choosing one. Poll its job or
-`status.result.merge` for processed and written point counts. `cancel_merge`
-stops the task and leaves an existing destination unchanged.
+`merge_visible` streams visible mixed-format scans into E57, LAS or LAZ.
+E57 retains stations and photos by default; `keep_stations_photos: false`
+writes only world-space points. Compatible LAS/LAZ layouts keep their original
+records; other layouts normalise common attributes to LAS 1.4. Poll its job
+or `status.result.merge`; `cancel_merge` leaves existing output unchanged.
 
 ## Closed mesh
 
@@ -1807,7 +1805,7 @@ layer with photo colours.
 | `select_face` | optional `id` | Highlights the face with that number in the viewport and in the list of Properties and returns it; without `id` or with `null` takes the highlight off |
 | `export_faces` | `path` | Saves the faces of the active layer in scene coordinates to an absolute `.json`, `.obj`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
 | `clear_faces` | — | Removes the faces of the active layer; `cleared` is false when it had none |
-| `merge_visible` | `path` | Merges the visible LAS/LAZ layers to an absolute `.las` or `.laz` path; returns a job ID |
+| `merge_visible` | `path`, optional `keep_stations_photos` | Merges visible scans to E57, LAS or LAZ; returns a job ID |
 | `cancel_merge` | — | Requests cancellation of the running merge task |
 | `bag3d` | `bbox`, `lod`, `path` | Downloads the 3D BAG buildings inside an RD New box `[xmin, ymin, xmax, ymax]` of at most 2 by 2 km at level of detail `1.2`, `1.3` or `2.2` to an absolute `.obj` path in an existing folder and opens them as a layer; returns a job ID |
 | `cancel_bag3d` | — | Requests cancellation of the running 3D BAG download |
@@ -1895,4 +1893,27 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
+| 12 | 2026.45.0 | Photo editing (`add_panorama`, `edit_photo`, `delete_photo`), scan registration (`registration_setup`, `registration_pair`, `registration_fit`, `registration_refine`, `registration_export`, `registration_matrix`, `registration_set_matrix`, `cancel_registration`), ReCap preparation (`export_recap`), and mixed-format `merge_visible` with optional `keep_stations_photos`. Status includes `registration` and `registration_pending`. |
 | 11 | 2026.44.0 | New commands `texture_mesh`, `cancel_texture_mesh`, `set_photo_compare` and `set_photo_split`. `export_drawing`, `preview_drawing` and `create_drawing` take `straight_lines`, `line_tolerance` and `line_min_length`, and `create_drawing` takes `square`; `status.result.drawing` reports the first three, and the statistics of a complete drawing have `straight_lines`. `status.result` has `texture_export`, and `photos` has `compare_with_3d`, `model_sample`, `model_camera`, `split_ratio` and `split_vertical`; `list_tabs` has tabs of the kind `photo`. `/info` has `api_revision` and `commands`, and answers while commands wait for the window |
+
+## Photo editing and scan registration (revision 12)
+
+| Command | Fields | Result |
+| --- | --- | --- |
+| `add_panorama` | `path`, `position`, optional `layer`, `name`, `heading`, `pitch`, `roll` | Adds a 2:1 JPG/PNG panorama; position is source XYZ, angles degrees, heading clockwise from north. Persistent and undoable. |
+| `edit_photo` | `index`, `position`, optional `layer`, `name`, `heading`, `pitch`, `roll` | Edits camera and name; omitted angles default to zero. |
+| `delete_photo` | `index`, optional `layer` | Removes a photo; Undo restores it. |
+| `registration_setup` | `fixed`, `moving` | Chooses two different layers and clears pairs. |
+| `registration_pair` | `fixed`, `moving` | Adds corresponding scene XYZ positions. |
+| `registration_fit` | — | Fits at least three non-collinear pairs; matrix and residuals. |
+| `registration_refine` | — | Point-to-plane ICP on bounded samples, restricted by the section box; job ID, RMS/p95 and deviation preview. |
+| `registration_export` | `path`, optional `merge`, `keep_stations_photos` | Applies the fit to the full moving source; `merge` includes reference. E57 and companion matrix; job ID. |
+| `registration_matrix` | — | Matrix, pairs, report and running state. |
+| `registration_set_matrix` | `transform` | Loads `{rotation: [[...],[...],[...]], translation: [x,y,z], scale: 1}`; validates a rigid positive-scale transform. |
+| `cancel_registration` | — | Stops registration/export. |
+| `export_recap` | `path` ending in `.e57` | Exports the active scan and writes a `.ReCap.txt` companion with import steps; job ID. |
+
+Photo modifications live in an atomic sidecar beside the source and are
+included by E57 export. Added images must stay at their referenced paths until
+export embeds them. Matrix coefficients and residuals use source/scene units,
+normally metres. Registration does not perform CRS reprojection.

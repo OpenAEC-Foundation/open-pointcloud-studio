@@ -77,6 +77,20 @@ pub fn export_full(
     destination: impl AsRef<Path>,
     format: ExportFormat,
 ) -> Result<(), LoadError> {
+    if format == ExportFormat::E57
+        && crate::is_e57(&cloud.path)
+        && !crate::photo_edits::PhotoEdits::load(&cloud.path)?.is_empty()
+    {
+        return export_e57_filtered_count(
+            cloud,
+            destination.as_ref(),
+            Some(cloud.total_points),
+            1.0,
+            [0.0; 3],
+            &mut |_, _| true,
+        )
+        .map(|_| ());
+    }
     let source_extension = cloud
         .path
         .extension()
@@ -244,6 +258,18 @@ pub fn export_section_where(
             &mut |ordinal, point| section.contains(point.xyz) && include(ordinal, point),
         );
     }
+    if format == ExportFormat::E57 {
+        return export_e57_map_with_images(
+            cloud,
+            destination,
+            None,
+            1.0,
+            [0.0; 3],
+            |ordinal, point| {
+                (section.contains(point.xyz) && include(ordinal, &point)).then_some(point)
+            },
+        );
+    }
     export_map_count(cloud, destination, format, None, |ordinal, point| {
         (section.contains(point.xyz) && include(ordinal, &point)).then_some(point)
     })
@@ -268,6 +294,17 @@ pub fn export_where(
             &mut include,
         )?;
         return Ok(());
+    }
+    if format == ExportFormat::E57 {
+        return export_e57_map_with_images(
+            cloud,
+            destination,
+            Some(expected_count),
+            1.0,
+            [0.0; 3],
+            |ordinal, point| include(ordinal, &point).then_some(point),
+        )
+        .map(|_| ());
     }
     export_map(
         cloud,
@@ -658,21 +695,14 @@ fn export_e57_map_count(
     use e57::{E57Writer, Record, RecordDataType, RecordName, RecordValue};
 
     if image_transform.is_none()
-        && cloud
-            .path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"))
-        && !super::e57_points::open_reader(&cloud.path)?
-            .images()
-            .is_empty()
+        && (!crate::photo_edits::PhotoEdits::load(&cloud.path)?.is_empty()
+            || (crate::is_e57(&cloud.path)
+                && !super::e57_points::open_reader(&cloud.path)?
+                    .images()
+                    .is_empty()))
     {
-        return Err(LoadError::InvalidData(
-            "this E57 edit cannot preserve photo camera poses; use a positive uniform scale and translation"
-                .into(),
-        ));
+        return Err(LoadError::InvalidData("this E57 edit cannot preserve photo camera poses; use a positive uniform scale and translation".into()));
     }
-
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -704,7 +734,7 @@ fn export_e57_map_count(
     let file_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
     let scan_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
     let mut writer = E57Writer::new(temporary.reopen()?, &file_guid)?;
-    if image_transform.is_some() {
+    if image_transform.is_some() && crate::is_e57(&cloud.path) {
         let reader = super::e57_points::open_reader(&cloud.path)?;
         writer.set_creation(reader.creation());
         writer.set_coordinate_metadata(reader.coordinate_metadata().map(str::to_owned));
@@ -761,7 +791,7 @@ fn export_e57_map_count(
         }
         scan.finalize()?;
     }
-    if let Some((scale, translation)) = image_transform {
+    if let Some((scale, translation)) = image_transform.filter(|_| crate::is_e57(&cloud.path)) {
         let mut reader = super::e57_points::open_reader(&cloud.path)?;
         let scan_guids = reader
             .pointclouds()
@@ -772,7 +802,17 @@ fn export_e57_map_count(
                     .map(|guid| (guid.clone(), scan_guid.clone()))
             })
             .collect();
-        copy_e57_images(&mut reader, &mut writer, &scan_guids, scale, translation)?;
+        copy_e57_images_scene(
+            &mut reader,
+            &mut writer,
+            &scan_guids,
+            crate::scene_transform::SceneTransform {
+                scale,
+                translation,
+                ..Default::default()
+            },
+            &crate::photo_edits::PhotoEdits::load(&cloud.path)?,
+        )?;
         writer.finalize_customized_xml(|xml| {
             Ok(xml
                 .replace("<readius ", "<radius ")
@@ -780,6 +820,17 @@ fn export_e57_map_count(
                 .replace("</readius>", "</radius>"))
         })?;
     } else {
+        let (scale, translation) = image_transform.unwrap_or((1.0, [0.0; 3]));
+        crate::photo_edits::write_added(
+            &mut writer,
+            &crate::photo_edits::PhotoEdits::load(&cloud.path)?,
+            crate::scene_transform::SceneTransform {
+                scale,
+                translation,
+                ..Default::default()
+            },
+            Some(&scan_guid),
+        )?;
         writer.finalize()?;
     }
     if SourceStamp::read(&cloud.path)? != expected_stamp {
@@ -952,7 +1003,17 @@ fn export_e57_filtered_count(
             )));
         }
     }
-    copy_e57_images(&mut reader, &mut writer, &scan_guids, scale, translation)?;
+    copy_e57_images_scene(
+        &mut reader,
+        &mut writer,
+        &scan_guids,
+        crate::scene_transform::SceneTransform {
+            scale,
+            translation,
+            ..Default::default()
+        },
+        &crate::photo_edits::PhotoEdits::load(&cloud.path)?,
+    )?;
     // e57 0.11.13 writes the cylindrical radius element as "readius".
     writer.finalize_customized_xml(|xml| {
         Ok(xml
@@ -975,12 +1036,12 @@ fn export_e57_filtered_count(
 /// blobs are streamed through temporary files so even large panoramas do not
 /// have to fit in memory. Image poses follow the same uniform affine edit as
 /// scanner poses, and their associations use the new scan GUIDs.
-fn copy_e57_images<T: std::io::Read + Seek>(
+pub(crate) fn copy_e57_images_scene<T: std::io::Read + Seek>(
     source: &mut e57::E57Reader<T>,
     target: &mut e57::E57Writer<fs::File>,
     scan_guids: &HashMap<String, String>,
-    scale: f64,
-    translation: [f64; 3],
+    transform: crate::scene_transform::SceneTransform,
+    edits: &crate::photo_edits::PhotoEdits,
 ) -> Result<(), LoadError> {
     use e57::{Blob, Projection};
     use std::io::Read;
@@ -1007,10 +1068,23 @@ fn copy_e57_images<T: std::io::Read + Seek>(
         mask.map(|blob| blob_file(source, blob)).transpose()
     }
 
-    for image in source.images() {
-        let guid = image
-            .guid
-            .unwrap_or_else(|| format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase()));
+    for mut image in source.images() {
+        let offset = image
+            .projection
+            .as_ref()
+            .map(|projection| match projection {
+                Projection::Pinhole(photo) => photo.blob.data.offset,
+                Projection::Spherical(photo) => photo.blob.data.offset,
+                Projection::Cylindrical(photo) => photo.blob.data.offset,
+            });
+        if let Some(change) = offset.and_then(|offset| edits.changes.get(&offset)) {
+            let Some(photo) = change else {
+                continue;
+            };
+            image.name = photo.name.clone();
+            image.transform = Some(crate::photo_edits::photo_pose(photo));
+        }
+        let guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
         let mut target_image = target.add_image(&guid)?;
         if let Some(name) = image.name {
             target_image.set_name(&name);
@@ -1021,10 +1095,8 @@ fn copy_e57_images<T: std::io::Read + Seek>(
         if let Some(guid) = image.pointcloud_guid {
             target_image.set_pointcloud_guid(scan_guids.get(&guid).unwrap_or(&guid));
         }
-        if let Some(mut pose) = image.transform {
-            pose.translation.x = pose.translation.x * scale + translation[0];
-            pose.translation.y = pose.translation.y * scale + translation[1];
-            pose.translation.z = pose.translation.z * scale + translation[2];
+        if let Some(pose) = image.transform {
+            let pose = transform.pose(Some(pose));
             if ![pose.translation.x, pose.translation.y, pose.translation.z]
                 .into_iter()
                 .all(f64::is_finite)
@@ -1091,6 +1163,12 @@ fn copy_e57_images<T: std::io::Read + Seek>(
         }
         target_image.finalize()?;
     }
+    crate::photo_edits::write_added(
+        target,
+        edits,
+        transform,
+        scan_guids.values().min().map(String::as_str),
+    )?;
     Ok(())
 }
 

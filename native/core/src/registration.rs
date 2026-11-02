@@ -2,6 +2,8 @@
 //! The result maps moving coordinates into the fixed scan's coordinate frame.
 
 use crate::LoadError;
+mod icp;
+pub use icp::{refine_point_to_plane, IcpOptions, IcpResult};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RigidRegistration {
@@ -86,6 +88,12 @@ pub fn register_correspondences(
             "scan registration points are coincident or collinear".into(),
         ));
     }
+    let target_fit = crate::local_fit::Moments::from_points(pairs.iter().map(|(_, p)| *p)).plane();
+    if target_fit.is_none_or(|fit| fit.eigenvalues[1] <= fit.eigenvalues[2] * 1e-12) {
+        return Err(LoadError::InvalidData(
+            "reference registration points are coincident or collinear".into(),
+        ));
+    }
     for (a, b) in &centered {
         for row in 0..3 {
             for col in 0..3 {
@@ -94,6 +102,11 @@ pub fn register_correspondences(
         }
     }
     let [sxx, sxy, sxz] = h[0];
+    if h.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(LoadError::InvalidData(
+            "registration coordinates exceed numerical range".into(),
+        ));
+    }
     let [syx, syy, syz] = h[1];
     let [szx, szy, szz] = h[2];
     let mut k = [
@@ -103,8 +116,8 @@ pub fn register_correspondences(
         [sxy - syx, szx + sxz, syz + szy, -sxx - syy + szz],
     ];
     let mut eigenvectors = [[0.0; 4]; 4];
-    for i in 0..4 {
-        eigenvectors[i][i] = 1.0;
+    for (i, row) in eigenvectors.iter_mut().enumerate() {
+        row[i] = 1.0;
     }
     // Symmetric Jacobi diagonalisation avoids power iteration's ambiguity
     // when the leading eigenvalue has a negative counterpart of equal size.

@@ -34,6 +34,7 @@ pub mod ops;
 mod oriented_box;
 mod pcd;
 pub mod photo_colour;
+pub mod photo_edits;
 pub mod plans;
 mod ply;
 mod ply_mesh;
@@ -41,6 +42,8 @@ mod ptx;
 pub mod region_source;
 pub mod registration;
 mod scan_image;
+pub mod scene_export;
+pub mod scene_transform;
 mod section_caps;
 mod snapshots;
 pub mod stable_hash;
@@ -797,14 +800,28 @@ pub fn scan_stations(path: impl AsRef<Path>) -> Result<(Vec<ScanPose>, Vec<ScanI
 pub fn file_photos(path: impl AsRef<Path>) -> Result<FilePhotos, LoadError> {
     let path = path.as_ref();
     if !is_e57(path) {
-        return Ok(FilePhotos::default());
+        return Ok(photo_edits::PhotoEdits::load(path)?.apply(FilePhotos::default()));
     }
-    e57_points::file_photos(path)
+    Ok(photo_edits::PhotoEdits::load(path)?.apply(e57_points::file_photos(path)?))
 }
 
 /// Read the encoded bytes (JPEG or PNG) of one photo `file_photos` listed.
 pub fn read_file_photo(path: impl AsRef<Path>, photo: &FilePhoto) -> Result<Vec<u8>, LoadError> {
     let path = path.as_ref();
+    if photo.offset >= photo_edits::EXTERNAL_PHOTO {
+        let edits = photo_edits::PhotoEdits::load(path)?;
+        let external = edits
+            .added
+            .get(&photo.offset)
+            .ok_or_else(|| LoadError::InvalidData("external panorama is missing".into()))?;
+        external.validate()?;
+        if fs::metadata(&external.path)?.len() > 256 * 1024 * 1024 {
+            return Err(LoadError::InvalidData(
+                "panorama image exceeds 256 MiB".into(),
+            ));
+        }
+        return Ok(fs::read(&external.path)?);
+    }
     if !is_e57(path) {
         return Err(LoadError::InvalidData(
             "this format stores no photos".into(),

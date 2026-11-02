@@ -152,14 +152,40 @@ The only scan of an E57 file, when it has neither a scanner sweep (a row and col
 
 `open-pointcloud-studio --scans INPUT` prints the positions and orientations.
 
-To calculate a coarse alignment from measured corresponding points in two
-scans, put at least three non-collinear pairs in a JSON array, for example
-`[{"moving":[0,0,0],"fixed":[10,0,0]},{"moving":[1,0,0],"fixed":[11,0,0]},{"moving":[0,1,0],"fixed":[10,1,0]}]`, and run
-`open-pointcloud-studio --register-points PAIRS.json`. It prints a rotation
-matrix, translation, RMS and 95th-percentile errors, and each pair's residual. The coordinates must use the
-same units. This is the numerical starting point for scan registration; the
-window does not yet collect point pairs, refine with ICP or apply this matrix
-to a merged export.
+## Aligning scans
+
+Open **Scan registration → Align scans…** in Properties. Make the reference
+scan active and press **Use active as reference**, then make the other scan
+active and press **Use active as moving**. Pick a point in each scan and add
+it with **Add picked reference** and **Add picked moving**. Repeat for at
+least three well-spread, non-collinear point pairs, in matching order.
+**Fit point pairs** calculates a rigid rotation and translation and reports
+each pair's residual, RMS and 95th-percentile error. Manual X/Y/Z translation
+and rotation about Z can provide an initial alignment instead.
+
+**Refine overlap (ICP)** fits overlapping surfaces with point-to-plane ICP,
+using at most 50,000 preview points per scan. Enable the section box to limit
+the overlap to a useful area. The default maximum correspondence distance is
+0.5 m, with up to 40 iterations and a trimmed fit to reduce outlier influence.
+The result reports RMS and p95 in metres (the status line shows millimetres)
+and opens a bounded deviation preview: green close to the reference, red at
+or beyond p95 and grey outside the matched overlap. This preview is a sample,
+not the export resolution. Cancel stops the fit without changing source files.
+
+**Export registered scan…** applies the matrix to every remaining point of
+the moving source. **Export registered scene…** also includes the reference.
+Both write E57, optionally retaining stations and photos, and open the
+result. A companion registration JSON records the source transform.
+**Save registration matrix…** saves a reusable transform and the fit report;
+the matrix is shown in the panel. The command
+`open-pointcloud-studio --apply-registration INPUT MATRIX.json OUTPUT.e57`
+reapplies a saved transform without opening a window.
+
+`open-pointcloud-studio --register-points PAIRS.json` calculates the coarse
+fit from a JSON array such as
+`[{"moving":[0,0,0],"fixed":[10,0,0]},{"moving":[1,0,0],"fixed":[11,0,0]},{"moving":[0,1,0],"fixed":[10,1,0]}]`.
+All coordinates must use the same units and coordinate system; registration
+is rigid alignment, not a cartographic reprojection.
 
 ## Station photos and walking
 
@@ -172,6 +198,25 @@ Click a ball, or **Photo** beside a station in the list under **Scan positions**
 Walking starts from the current orbit view, or from inside a station. Walking out of a station leaves its photo and continues through the point cloud with the station behind you; walking into another ball enters its photo. Escape, **Back to 3D view**, Zoom all or a camera direction returns to the orbit view. The selection tools are not available while walking.
 
 `open-pointcloud-studio --photos INPUT OUTPUT_DIRECTORY` saves the stored photos of every station, and then the other photos of the file, and prints where each one looks.
+
+## Editing and adding panoramas
+
+In Properties choose **Photo editing → Manage photos…**. **Add panorama…**
+accepts a full 2:1 equirectangular JPG or PNG. Set its name, source X/Y/Z,
+heading clockwise from north, pitch and roll. To position it from the model,
+pick one point in the active scan and press **Place above picked point**;
+**Camera height (m)** sets the height above it. **Apply photo edit** keeps the
+camera, then the photo can be entered from the scan's photo list and compared
+with the points using the existing overlay.
+
+Select a listed photo to move, turn or rename it. **Delete photo** removes it
+from the scene and subsequent E57 exports. The title-strip Undo and Redo
+restore these edits. Changes persist in `<source>.ops-photos.json` beside the
+source, which also references added image files. Keep those files together
+until exporting E57; the exported E57 embeds the image bytes. If the source
+file is replaced, its old edits are refused rather than applied to different
+images. E57 exports include these changes, including filtered and section
+exports and exports after Colour from photos.
 
 ## Panoramas and photos along a path
 
@@ -337,12 +382,12 @@ Every export reads the source again from start to end, so points that are not on
 
 What an export keeps depends on the formats:
 
-- **Same format, nothing edited**: an unedited LAS, LAZ or E57 cloud exported in full to its own format is a byte-for-byte copy.
+- **Same format, nothing edited**: an unedited LAS, LAZ or E57 cloud exported in full to its own format is a byte-for-byte copy. E57 with a photo-edit sidecar is rewritten to embed the edited photos.
 - **LAS and LAZ to LAS or LAZ**: the original point records are written, with their point format, GPS time, return data, 16-bit colours, projection records and coordinate grid. Edits change only the fields they concern.
-- **E57 to E57, filtered**: each source scan keeps its scanner pose, its name, its record types and values, and its custom fields. **Move** and a **Scale** with one positive factor for all three axes keep the scans when every scan has a pose.
+- **E57 to E57, filtered**: each source scan keeps its scanner pose, its name, its record types and values, its custom fields and its camera images with their poses. **Move** and a **Scale** with one positive factor for all three axes keep the scans when every scan has a pose.
 - **Everything else**: position, 8-bit colour, intensity and class are written. A new E57 file made this way holds one scan in model coordinates; this writer has no class field for E57 and writes zero where a point has no colour or intensity.
 
-**Merge visible LAS/LAZ scans…** joins the visible LAS and LAZ layers into one `.las` or `.laz` file in the background, with their deletions and their moves and scales applied and the original point attributes kept. The Export page and Properties show the progress and a **Cancel merge** button; a cancelled merge leaves an existing file as it was. Sources with a different point layout, coordinate grid or coordinate system are refused before anything is written.
+**Merge visible scans…** streams visible E57, LAS/LAZ, PLY, PTX and other supported point-cloud layers into one E57, LAS or LAZ file, with deletions and positive uniform live transforms applied. E57 keeps the separate scans, raw E57 attributes, poses and images when **Keep stations and photos in E57** is checked; unchecked it writes world-space points. Compatible LAS/LAZ inputs keep their full original records. Other LAS/LAZ merges normalise to LAS 1.4 and retain coordinates, colour, intensity and classification; source-specific extra fields and camera images need E57 instead. The Export page and Properties show progress and **Cancel merge**; cancellation leaves an existing destination untouched. Registration does not reproject coordinate reference systems.
 
 The command line does the same without a window: `--export`, `--section` and `--merge`; see the [README](../README.md#command-line).
 
