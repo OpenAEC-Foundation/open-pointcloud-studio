@@ -100,6 +100,42 @@ mod tests {
         );
         assert_eq!(invalid["ok"], false);
     }
+
+    #[test]
+    fn cancellation_keeps_the_original_job_and_running_inputs_cannot_change() {
+        let mut studio = Studio::default();
+        let id = studio.record_api_job(serde_json::json!({"state":"running"}));
+        studio.registration.busy = true;
+        studio.registration.api_job = Some(id.clone());
+        for command in [
+            serde_json::json!({"command":"registration_pair","fixed":[1,2,3],"moving":[4,5,6]}),
+            serde_json::json!({"command":"registration_setup","fixed":0,"moving":1}),
+            serde_json::json!({"command":"registration_set_matrix","transform":{"rotation":[[1,0,0],[0,1,0],[0,0,1]],"translation":[10,20,30],"scale":1}}),
+        ] {
+            let result = send(&mut studio, command);
+            assert_eq!(result["ok"], false, "{result}");
+            assert_eq!(result["error"], "registration is running");
+        }
+        assert!(studio.registration.fixed_points.is_empty());
+        assert_eq!(studio.registration.transform.translation, [0.; 3]);
+        let status = send(
+            &mut studio,
+            serde_json::json!({"command":"registration_matrix"}),
+        );
+        assert_eq!(status["ok"], true);
+        let cancelled = send(
+            &mut studio,
+            serde_json::json!({"command":"cancel_registration"}),
+        );
+        assert_eq!(cancelled["ok"], true);
+        assert!(cancelled["job_id"].is_null());
+        assert_eq!(studio.registration.api_job.as_deref(), Some(id.as_str()));
+        assert_eq!(studio.api_jobs.len(), 1);
+        assert!(studio.registration.cancel.load(Ordering::Relaxed));
+        let _ = studio.registration_action(Action::Refined(Err("Operation cancelled".into())));
+        assert_eq!(studio.api_jobs[&id]["state"], "cancelled");
+        assert!(!studio.registration.busy);
+    }
 }
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -166,6 +202,18 @@ impl Studio {
         command: crate::native_api::ApiCommand,
     ) -> (serde_json::Value, Task<Message>) {
         use crate::native_api::ApiCommand;
+        if self.registration.busy
+            && !matches!(
+                &command,
+                ApiCommand::CancelRegistration | ApiCommand::RegistrationMatrix
+            )
+        {
+            return (
+                serde_json::json!({"ok":false,"error":"registration is running"}),
+                Task::none(),
+            );
+        }
+        let was_busy = self.registration.busy;
         let action = match command {
             ApiCommand::RegistrationSetup { fixed, moving } => {
                 if fixed == moving || fixed >= self.clouds.len() || moving >= self.clouds.len() {
@@ -198,6 +246,7 @@ impl Studio {
                 self.registration.fixed_points.push(fixed);
                 self.registration.moving_points.push(moving);
                 self.registration.has_alignment = false;
+                self.registration.report = None;
                 return (
                     serde_json::json!({"ok":true,"registration":self.registration_value()}),
                     Task::none(),
@@ -209,6 +258,7 @@ impl Studio {
                     Ok(transform) => {
                         self.registration.transform = transform;
                         self.registration.has_alignment = true;
+                        self.registration.report = None;
                         self.remember_registration_sources();
                     }
                     Err(error) => {
@@ -262,7 +312,7 @@ impl Studio {
         if let Some(error) = &self.registration.error {
             return (serde_json::json!({"ok":false,"error":error}), task);
         }
-        let job = if self.registration.busy {
+        let job = if self.registration.busy && !was_busy {
             let id = self
                 .record_api_job(serde_json::json!({"state":"running","operation":"registration"}));
             self.registration.api_job = Some(id.clone());
@@ -401,6 +451,7 @@ impl Studio {
                 });
                 if let Some(point) = result {
                     self.registration.has_alignment = false;
+                    self.registration.report = None;
                     if fixed {
                         self.registration.fixed_points.push(point);
                     } else {
@@ -782,13 +833,8 @@ impl Studio {
                 Action::SetMoving,
             ))
             .push(text(name(self.registration.moving)).size(11))
-            .push(
-                row![
-                    control(i18n::key("Add picked reference"), Action::PickFixed),
-                    control(i18n::key("Add picked moving"), Action::PickMoving)
-                ]
-                .spacing(3),
-            );
+            .push(control(i18n::key("Add picked reference"), Action::PickFixed).width(Fill))
+            .push(control(i18n::key("Add picked moving"), Action::PickMoving).width(Fill));
         let count = self
             .registration
             .fixed_points
@@ -813,13 +859,9 @@ impl Studio {
                 .size(10),
             );
         }
-        panel = panel.push(
-            row![
-                control(i18n::key("Fit point pairs"), Action::Coarse),
-                control(i18n::key("Clear pairs"), Action::ClearPairs)
-            ]
-            .spacing(3),
-        );
+        panel = panel
+            .push(control(i18n::key("Fit point pairs"), Action::Coarse).width(Fill))
+            .push(control(i18n::key("Clear pairs"), Action::ClearPairs).width(Fill));
         for (i, label) in [
             i18n::key("Move X"),
             i18n::key("Move Y"),

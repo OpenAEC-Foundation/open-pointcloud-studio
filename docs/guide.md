@@ -167,7 +167,8 @@ and rotation about Z can provide an initial alignment instead.
 using at most 50,000 preview points per scan. Enable the section box to limit
 the overlap to a useful area. The default maximum correspondence distance is
 0.5 m, with up to 40 iterations and a trimmed fit to reduce outlier influence.
-The result reports RMS and p95 in metres (the status line shows millimetres)
+The Properties panel and status line report RMS and p95 in millimetres
+(the API returns metres)
 and opens a bounded deviation preview: green close to the reference, red at
 or beyond p95 and grey outside the matched overlap. This preview is a sample,
 not the export resolution. Cancel stops the fit without changing source files.
@@ -186,6 +187,8 @@ fit from a JSON array such as
 `[{"moving":[0,0,0],"fixed":[10,0,0]},{"moving":[1,0,0],"fixed":[11,0,0]},{"moving":[0,1,0],"fixed":[10,1,0]}]`.
 All coordinates must use the same units and coordinate system; registration
 is rigid alignment, not a cartographic reprojection.
+
+![Scan registration and the deviation preview](screenshots/registration-2026-45-0.png)
 
 ## Station photos and walking
 
@@ -209,6 +212,9 @@ pick one point in the active scan and press **Place above picked point**;
 camera, then the photo can be entered from the scan's photo list and compared
 with the points using the existing overlay.
 
+The editor lists standalone panoramas and route photos; the separate pinhole
+faces of a scanner station remain part of the station viewer. Original
+station images are retained on E57 export.
 Select a listed photo to move, turn or rename it. **Delete photo** removes it
 from the scene and subsequent E57 exports. The title-strip Undo and Redo
 restore these edits. Changes persist in `<source>.ops-photos.json` beside the
@@ -217,6 +223,11 @@ until exporting E57; the exported E57 embeds the image bytes. If the source
 file is replaced, its old edits are refused rather than applied to different
 images. E57 exports include these changes, including filtered and section
 exports and exports after Colour from photos.
+
+![Photo editing and camera placement](screenshots/photo-editor-2026-45-0.png)
+
+The [2026.45.0 validation record](validation/2026.45.0.md) describes the
+GUI, API, MCP and independent-file checks and their coverage limits.
 
 ## Panoramas and photos along a path
 

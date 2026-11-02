@@ -492,6 +492,7 @@ impl Studio {
                 .style(ui_style::tool)
         };
         if let Some(source) = &self.photo_editor.source {
+            panel = panel.push(text(crate::display_name(source)).size(11));
             panel = panel.push(
                 row![
                     control(i18n::key("Add panorama…"), Action::Add),
@@ -539,13 +540,9 @@ impl Studio {
                 panel = panel
                     .push(text(path.file_name().unwrap_or_default().to_string_lossy()).size(10));
             }
-            panel = panel.push(
-                row![
-                    control(i18n::key("Apply photo edit"), Action::Apply),
-                    control(i18n::key("Delete photo"), Action::Delete)
-                ]
-                .spacing(4),
-            );
+            panel = panel
+                .push(control(i18n::key("Apply photo edit"), Action::Apply).width(Fill))
+                .push(control(i18n::key("Delete photo"), Action::Delete).width(Fill));
             if let Some(error) = &self.photo_editor.error {
                 panel = panel.push(text(error).size(11));
             }
