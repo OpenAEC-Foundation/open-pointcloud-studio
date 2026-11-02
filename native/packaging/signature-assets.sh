@@ -17,5 +17,6 @@ number=${1:?usage: signature-assets.sh NUMBER}
 echo SHA256SUMS
 if [[ "${KEEP_SIGNATURES:-false}" == true ]]; then
     echo SHA256SUMS.asc
+    echo open-pointcloud-studio-signing-key.asc
     bash "$packaging_dir/expected-assets.sh" "$number" | sed -n 's/\.AppImage$/.AppImage.asc/p'
 fi

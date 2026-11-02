@@ -25,6 +25,7 @@ section its version and date.
 - Merge visible scans and the command-line merge accept mixed input formats and write E57, LAS or LAZ. E57 can retain stations and images or write only points; mixed LAS/LAZ layouts normalise common attributes to LAS 1.4 while compatible LAS records keep their original attributes.
 - Prepare for Autodesk ReCap exports an E57 with its images and import instructions. ReCap creates its RCP/RCS files after import; direct RCP/RCS writing still requires Autodesk SDK access and licensing arrangements.
 - The native API and MCP add photo editing, scan registration and ReCap preparation commands at API revision 12. The command line can apply a saved registration matrix with `--apply-registration`.
+- Signed Linux releases include the public signing key. Verification checks its fingerprint and signatures offline, without depending on a keyserver.
 
 ## 2026.44.1 - 2026-10-26
 

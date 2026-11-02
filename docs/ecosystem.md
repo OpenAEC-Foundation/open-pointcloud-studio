@@ -239,6 +239,23 @@ Evidence:
 - CI: the release run (Packages, SDK) and the tag run (`publish`, `image`, `verify-release`, `verification-record`).
 - Owner: confirm that the Windows signing secrets and the six `APPLE_*` secrets are set for the organisation. For the OpenPGP signatures ([style book #10](https://github.com/OpenAEC-Foundation/OpenAEC-style-book/issues/10)): an organisation key with an ed25519 signing subkey and the primary key kept offline; the secrets `OPENAEC_GPG_PRIVATE_KEY` (the armoured secret subkey) and `OPENAEC_GPG_PASSPHRASE` and the variable `OPENAEC_GPG_FINGERPRINT` of the organisation; the public key on keys.openpgp.org and on the website; and who holds the primary key, where its offline copy is kept and when it expires. Until then `sign-linux.sh` signs nothing and the notes name no signature.
 
+### Public signing key from 2026.45.0
+
+When Linux signing is configured, the release carries
+`open-pointcloud-studio-signing-key.asc`. Inspect it with
+`gpg --show-keys --with-fingerprint open-pointcloud-studio-signing-key.asc`
+and compare the fingerprint in the release notes before importing it with
+`gpg --import open-pointcloud-studio-signing-key.asc`. Then verify
+`SHA256SUMS.asc` and the AppImage signatures as above. The public key is also
+covered by `SHA256SUMS`; it contains no secret key material.
+
+The verification workflow uses an empty keyring and requires the configured
+fingerprint to match both the bundled public key and the validated signature.
+It needs no keyserver. This addresses the 2026.44.1 verification failure,
+where fetching the configured key from keys.openpgp.org returned no data.
+Package-script tests cover a fresh keyring, a wrong fingerprint, a modified
+AppImage and an exported secret signing subkey with its primary key offline.
+
 ## Deployment on AWS
 
 Status: **prepared, not deployed.** The definition is [deploy/aws](../deploy/aws/README.md): a CloudFormation template, `cloud-api.yaml`, and `deploy.sh`, which makes a change set to look at and executes it only with `--execute`.
