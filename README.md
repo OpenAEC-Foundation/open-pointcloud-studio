@@ -29,7 +29,7 @@ A desktop application for viewing, measuring, editing and converting laser scans
 - [Licences](#licences)
 - [Contributing](#contributing)
 
-The [user guide](docs/guide.md) describes every tool in detail; an [illustrated Dutch wiki manual](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/wiki/Handleiding) covers the main workflows ([source](docs/wiki/Handleiding.md)). [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
+The [user guide](docs/guide.md) describes every tool in detail; an [illustrated Dutch wiki manual](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/wiki/Handleiding) covers the main workflows ([source](docs/wiki/Handleiding.md)). [CHANGELOG.md](CHANGELOG.md) lists what changed in each release. The [competitor review and proposed priorities](docs/research/competitor-review-2026-11-02.md) records the November 2026 research and suggested follow-up work.
 
 ## Download and install
 
