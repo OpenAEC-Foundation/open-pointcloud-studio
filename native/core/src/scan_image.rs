@@ -9,7 +9,7 @@
 //! no points. They are `FilePhoto`s.
 
 /// Encoding of a stored station photo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ScanImageFormat {
     Jpeg,
     Png,
@@ -130,7 +130,7 @@ impl PhotoKind {
 /// How a photo maps the directions around its camera to its pixels. Pixel
 /// coordinates count columns to the right and rows down from the top-left
 /// pixel, with integer values at pixel centres, as for `ScanImage`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PhotoProjection {
     /// The E57 pinhole convention of `ScanImage`: +X is image right, +Y is
     /// image up and the camera looks along -Z. Focal length and principal
@@ -159,7 +159,7 @@ pub enum PhotoProjection {
 /// A photo of a file with its own pose that is not one of the pinhole
 /// photos of a scanner station: a panorama, or a photo taken along a path by
 /// a camera that measured no points.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FilePhoto {
     /// The name the file gives the photo.
     pub name: Option<String>,

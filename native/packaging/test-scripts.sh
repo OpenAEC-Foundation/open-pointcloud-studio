@@ -232,7 +232,9 @@ fingerprint=0123456789ABCDEF0123456789ABCDEF01234567
 gpg_notes=$(LINUX_GPG_SIGNED=true LINUX_GPG_FINGERPRINT="0123 4567 89ab cdef 0123 4567 89ab cdef 0123 4567" \
     bash "$packaging_dir/release-notes.sh" "$number")
 if [[ "$(grep -cF 'gpg --verify SHA256SUMS.asc SHA256SUMS' <<< "$gpg_notes")" -eq 2 ]] \
-    && [[ "$(grep -cF "gpg --keyserver hkps://keys.openpgp.org --recv-keys $fingerprint" <<< "$gpg_notes")" -eq 2 ]] \
+    && [[ "$(grep -cF 'gpg --import open-pointcloud-studio-signing-key.asc' <<< "$gpg_notes")" -eq 2 ]] \
+    && [[ "$(grep -cF 'gpg --show-keys --with-fingerprint open-pointcloud-studio-signing-key.asc' <<< "$gpg_notes")" -eq 2 ]] \
+    && grep -qF "$fingerprint" <<< "$gpg_notes" \
     && grep -qF "gpg --verify FILE.AppImage.asc FILE.AppImage" <<< "$gpg_notes"; then
     passed "the notes of a signed release give the fingerprint and how to verify the signatures, in both languages"
 else
@@ -258,7 +260,7 @@ fi
 # ---- signature-assets.sh and prune-release-assets.sh with signatures -----
 
 if [[ "$(bash "$packaging_dir/signature-assets.sh" 9.9.9)" == SHA256SUMS ]] \
-    && [[ "$(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9)" == "SHA256SUMS"$'\n'"SHA256SUMS.asc"$'\n'"${BINARY_NAME}_9.9.9_amd64.AppImage.asc"$'\n'"${BINARY_NAME}_9.9.9_arm64.AppImage.asc" ]]; then
+    && [[ "$(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9)" == "SHA256SUMS"$'\n'"SHA256SUMS.asc"$'\n'"open-pointcloud-studio-signing-key.asc"$'\n'"${BINARY_NAME}_9.9.9_amd64.AppImage.asc"$'\n'"${BINARY_NAME}_9.9.9_arm64.AppImage.asc" ]]; then
     passed "signature-assets.sh lists SHA256SUMS always, and the OpenPGP signatures when they are kept"
 else
     wrong "signature-assets.sh lists '$(echo $(bash "$packaging_dir/signature-assets.sh" 9.9.9))' and '$(echo $(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9))'"
@@ -278,7 +280,7 @@ $(KEEP_SIGNATURES=true bash "$packaging_dir/signature-assets.sh" 9.9.9)" \
 removed_kept=$(prune_signed true)
 removed_unsigned=$(prune_signed false)
 if [[ -z "$removed_kept" ]] \
-    && [[ "$removed_unsigned" == "SHA256SUMS.asc"$'\n'"${BINARY_NAME}_9.9.9_amd64.AppImage.asc"$'\n'"${BINARY_NAME}_9.9.9_arm64.AppImage.asc" ]]; then
+    && [[ "$removed_unsigned" == "SHA256SUMS.asc"$'\n'"open-pointcloud-studio-signing-key.asc"$'\n'"${BINARY_NAME}_9.9.9_amd64.AppImage.asc"$'\n'"${BINARY_NAME}_9.9.9_arm64.AppImage.asc" ]]; then
     passed "the draft keeps SHA256SUMS always and the signatures only while the release is signed"
 else
     wrong "prune-release-assets.sh removed '$(echo $removed_kept)' from a signed draft and '$(echo $removed_unsigned)' from an unsigned one"
@@ -324,11 +326,44 @@ if command -v gpg > /dev/null 2>&1; then
                 "$signed_assets/${BINARY_NAME}_9.9.9_amd64.AppImage" > /dev/null 2>&1 \
             && test_gpg --verify "$signed_assets/${BINARY_NAME}_9.9.9_arm64.AppImage.asc" \
                 "$signed_assets/${BINARY_NAME}_9.9.9_arm64.AppImage" > /dev/null 2>&1 \
-            && grep -q 'BEGIN PGP SIGNATURE' "$signed_assets/SHA256SUMS.asc"; then
+            && grep -q 'BEGIN PGP SIGNATURE' "$signed_assets/SHA256SUMS.asc" \
+            && grep -q 'BEGIN PGP PUBLIC KEY BLOCK' "$signed_assets/open-pointcloud-studio-signing-key.asc" \
+            && grep -qF 'open-pointcloud-studio-signing-key.asc' "$signed_assets/SHA256SUMS"; then
             passed "sign-linux.sh signs SHA256SUMS and both AppImages with the key, armoured and verified"
         else
             wrong "sign-linux.sh does not sign SHA256SUMS and the AppImages with a throwaway key:"
             sed 's/^/        /' <<< "$output"
+        fi
+        if output=$(bash "$packaging_dir/verify-linux-signatures.sh" "$signed_assets" 9.9.9 "$test_fingerprint" 2>&1); then
+            passed "release signatures verify offline in an empty keyring with the pinned public key"
+        else
+            wrong "offline release signature verification failed: $output"
+        fi
+        if bash "$packaging_dir/verify-linux-signatures.sh" "$signed_assets" 9.9.9 0123456789ABCDEF0123456789ABCDEF01234567 > /dev/null 2>&1; then
+            wrong "offline verifier accepts the wrong public-key fingerprint"
+        else
+            passed "offline verifier refuses a public key with the wrong fingerprint"
+        fi
+        printf 'tampered\n' >> "$signed_assets/${BINARY_NAME}_9.9.9_amd64.AppImage"
+        if bash "$packaging_dir/verify-linux-signatures.sh" "$signed_assets" 9.9.9 "$test_fingerprint" > /dev/null 2>&1; then
+            wrong "offline verifier accepts a modified AppImage"
+        else
+            passed "offline verifier refuses an AppImage modified after signing"
+        fi
+        if test_gpg --quick-add-key "$test_fingerprint" ed25519 sign never > /dev/null 2>&1; then
+            subkey_only=$(test_gpg --armor --export-secret-subkeys "$test_fingerprint" 2> /dev/null)
+            subkey_fingerprint=$(test_gpg --with-colons --list-secret-keys 2> /dev/null | awk -F: '$1 == "fpr" {value=$10} END {print value}')
+            if OPENAEC_GPG_PRIVATE_KEY=$subkey_only OPENAEC_GPG_PASSPHRASE=test-passphrase \
+                    OPENAEC_GPG_FINGERPRINT=$test_fingerprint GITHUB_OUTPUT="$signing_output" \
+                    bash "$packaging_dir/sign-linux.sh" "$signed_assets" 9.9.9 > /dev/null 2>&1 \
+                && bash "$packaging_dir/verify-linux-signatures.sh" "$signed_assets" 9.9.9 "$test_fingerprint" > /dev/null 2>&1 \
+                && bash "$packaging_dir/verify-linux-signatures.sh" "$signed_assets" 9.9.9 "$subkey_fingerprint" > /dev/null 2>&1; then
+                passed "a secret signing-subkey export verifies offline with either pinned fingerprint"
+            else
+                wrong "signing with only a secret subkey or verifying its public export failed"
+            fi
+        else
+            wrong "could not create the signing subkey for offline verification"
         fi
         rm -f "$signed_assets"/*.asc
         if output=$(OPENAEC_GPG_PRIVATE_KEY=$test_key OPENAEC_GPG_PASSPHRASE=test-passphrase \

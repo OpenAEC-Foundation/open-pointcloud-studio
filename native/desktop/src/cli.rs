@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use pointcloud_core::ops::{self, Convert};
 use pointcloud_core::{Bounds, OrientedBox, SurfaceMeshConfig};
+use serde::Deserialize;
 
 /// What a mode of the command line answers.
 pub(crate) type Outcome = Result<Option<String>, (i32, String)>;
@@ -189,6 +190,155 @@ pub(crate) fn scans(arguments: &[OsString]) -> Outcome {
     let cloud = ops::open_source(Path::new(source), &ops::never_stop)
         .map_err(|error| (1, format!("Scan positions failed: {error}")))?;
     Ok(Some(station_lines(&ops::inspect(&cloud).stations)))
+}
+
+/// `--register-points PAIRS.json`: fit a rigid transform from measured
+/// moving/fixed point pairs, reporting the rotation, translation and errors.
+/// The source format is an array of {"moving":[x,y,z],"fixed":[x,y,z]}.
+pub(crate) fn register_points(arguments: &[OsString]) -> Outcome {
+    #[derive(Deserialize)]
+    struct Pair {
+        moving: [f64; 3],
+        fixed: [f64; 3],
+    }
+    let [source] = arguments else {
+        return Err(usage());
+    };
+    let bytes = std::fs::read(source)
+        .map_err(|error| (1, format!("Registration pairs could not be read: {error}")))?;
+    let pairs: Vec<Pair> = serde_json::from_slice(&bytes)
+        .map_err(|error| (2, format!("Invalid registration pairs: {error}")))?;
+    let pairs: Vec<_> = pairs
+        .into_iter()
+        .map(|pair| (pair.moving, pair.fixed))
+        .collect();
+    let result = pointcloud_core::registration::register_correspondences(&pairs)
+        .map_err(|error| (1, format!("Registration failed: {error}")))?;
+    serde_json::to_string_pretty(&result)
+        .map(Some)
+        .map_err(|error| (1, format!("Registration report failed: {error}")))
+}
+
+/// Reapply a saved rigid registration to a full scan, retaining its E57
+/// stations and images. A report's nested `transform` is accepted too.
+pub(crate) fn apply_registration(arguments: &[OsString]) -> Outcome {
+    let [source, matrix, destination] = arguments else {
+        return Err(usage());
+    };
+    let destination = PathBuf::from(destination);
+    if !destination
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("e57"))
+    {
+        return Err(wrong("Registration output must end in .e57"));
+    }
+    let result = (|| -> Result<u64, String> {
+        let bytes = std::fs::read(matrix).map_err(|e| e.to_string())?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let transform: pointcloud_core::scene_transform::SceneTransform =
+            serde_json::from_value(value.get("transform").cloned().unwrap_or(value))
+                .map_err(|e| e.to_string())?;
+        transform.validate().map_err(|e| e.to_string())?;
+        let cloud =
+            ops::open_source(Path::new(source), &ops::never_stop).map_err(|e| e.to_string())?;
+        pointcloud_core::scene_export::write_e57_scene(
+            &[pointcloud_core::scene_export::SceneSource {
+                cloud: &cloud,
+                transform,
+            }],
+            &destination,
+            true,
+            &mut |_, _, _| true,
+            &mut |_, _| Ok(()),
+        )
+        .map_err(|e| e.to_string())
+    })();
+    result
+        .map(|count| {
+            Some(format!(
+                "Registered {count} points into {}",
+                destination.display()
+            ))
+        })
+        .map_err(|e| (1, format!("Registration export failed: {e}")))
+}
+
+pub(crate) fn merge(arguments: &[OsString]) -> Outcome {
+    let [destination, inputs @ ..] = arguments else {
+        return Err(usage());
+    };
+    if inputs.len() < 2 {
+        return Err(usage());
+    }
+    let destination = PathBuf::from(destination);
+    let Some(
+        format @ (pointcloud_core::ExportFormat::E57
+        | pointcloud_core::ExportFormat::Las
+        | pointcloud_core::ExportFormat::Laz),
+    ) = ops::export_format_for_path(&destination)
+    else {
+        return Err(wrong("Merge output must end in .e57, .las or .laz"));
+    };
+    let result = (|| -> Result<u64, pointcloud_core::LoadError> {
+        let clouds: Vec<_> = inputs
+            .iter()
+            .map(|p| ops::open_source(Path::new(p), &ops::never_stop))
+            .collect::<Result<_, _>>()?;
+        if format != pointcloud_core::ExportFormat::E57
+            && clouds.iter().all(|c| {
+                c.path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("las") || e.eq_ignore_ascii_case("laz"))
+            })
+        {
+            let refs: Vec<_> = clouds.iter().collect();
+            match pointcloud_core::merge_las_map_count(
+                &refs,
+                &destination,
+                format,
+                None,
+                &mut |_, _, p| Some(p),
+                &mut |_, _, _| Ok(()),
+            ) {
+                Ok(count) => return Ok(count),
+                Err(pointcloud_core::LoadError::InvalidData(message))
+                    if message.contains("incompatible point formats") => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let scene: Vec<_> = clouds
+            .iter()
+            .map(|cloud| pointcloud_core::scene_export::SceneSource {
+                cloud,
+                transform: Default::default(),
+            })
+            .collect();
+        if format == pointcloud_core::ExportFormat::E57 {
+            pointcloud_core::scene_export::write_e57_scene(
+                &scene,
+                &destination,
+                true,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(()),
+            )
+        } else {
+            pointcloud_core::scene_export::write_las_scene(
+                &scene,
+                &destination,
+                format == pointcloud_core::ExportFormat::Laz,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(()),
+            )
+        }
+    })();
+    result
+        .map(|count| {
+            Some(format!(
+                "Merged {count} points into {}",
+                destination.display()
+            ))
+        })
+        .map_err(|e| (1, format!("Merge failed: {e}")))
 }
 
 /// The lines `--scans` prints for these stations.

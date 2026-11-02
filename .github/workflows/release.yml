@@ -400,6 +400,8 @@ jobs:
       LINUX_GPG_FINGERPRINT: ${{ vars.OPENAEC_GPG_FINGERPRINT }}
       PART: ${{ matrix.name }}
     steps:
+      - uses: actions/checkout@v4
+        if: matrix.name == 'linux'
       - name: Start the record
         run: |
           mkdir -p "$RUNNER_TEMP/verification"
@@ -616,15 +618,12 @@ jobs:
           echo >> "$record"
           if [[ "$LINUX_GPG_SIGNED" == true ]]; then
             { echo "### OpenPGP"; echo; } >> "$record"
-            gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$LINUX_GPG_FINGERPRINT" \
-              || failures+=("the key $LINUX_GPG_FINGERPRINT cannot be fetched from keys.openpgp.org")
-            for file in SHA256SUMS *.AppImage; do
-              if output=$(gpg --batch --verify "$file.asc" "$file" 2>&1); then
-                echo "- $file: $(grep -m1 'Good signature' <<< "$output")" >> "$record"
-              else
-                failures+=("gpg --verify $file.asc $file failed")
-              fi
-            done
+            if output=$(bash ../native/packaging/verify-linux-signatures.sh . "$NUMBER" "$LINUX_GPG_FINGERPRINT" 2>&1); then
+              printf '%s\n' "$output" >> "$record"
+            else
+              printf '%s\n' "$output" >> "$record"
+              failures+=("OpenPGP signatures or the pinned public key do not verify")
+            fi
             echo "OpenPGP fingerprint: $LINUX_GPG_FINGERPRINT" >> "$identities"
           else
             echo "OpenPGP: no key is configured, so the release carries no OpenPGP signatures." >> "$record"

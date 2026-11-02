@@ -17,6 +17,16 @@ section its version and date.
 
 ## Unreleased
 
+## 2026.45.0 - 2026-11-02
+
+- E57 exports now retain station photos, spherical and cylindrical panoramas, masks, camera poses and scan associations after filtering, section export and colouring points from photos. Edits that cannot preserve camera poses fail explicitly instead of silently dropping the images.
+- Photo editing in Properties adds 2:1 JPG or PNG panoramas at a chosen point and camera height, and moves, turns, renames or deletes existing photos. Undo and Redo restore edits; a sidecar keeps them between sessions and E57 export embeds the image data.
+- Scan registration fits corresponding point pairs or a manual translation and vertical rotation, then refines overlapping surfaces with bounded point-to-plane ICP. It reports residuals, RMS and p95, shows a deviation-coloured preview, exports full-resolution registered E57 scans or scenes, and saves reusable transformation matrices.
+- Merge visible scans and the command-line merge accept mixed input formats and write E57, LAS or LAZ. E57 can retain stations and images or write only points; mixed LAS/LAZ layouts normalise common attributes to LAS 1.4 while compatible LAS records keep their original attributes.
+- Prepare for Autodesk ReCap exports an E57 with its images and import instructions. ReCap creates its RCP/RCS files after import; direct RCP/RCS writing still requires Autodesk SDK access and licensing arrangements.
+- The native API and MCP add photo editing, scan registration and ReCap preparation commands at API revision 12. The command line can apply a saved registration matrix with `--apply-registration`.
+- Signed Linux releases include the public signing key. Verification checks its fingerprint and signatures offline, without depending on a keyserver.
+
 ## 2026.44.1 - 2026-10-26
 
 - The macOS disk image carries a Developer ID signature of its own as well as the app inside it, so macOS also accepts the downloaded image itself.

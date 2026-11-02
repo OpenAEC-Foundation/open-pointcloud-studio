@@ -100,6 +100,7 @@ pub enum FileAction {
     OpenDrawing,
     Activate(usize),
     ExportFull,
+    ExportRecap,
     ExportSelection,
     ExportWithoutSelection,
     ExportSection,
@@ -135,6 +136,7 @@ impl Studio {
             }
             FileAction::Activate(index) => Message::Select(index),
             FileAction::ExportFull => Message::Export,
+            FileAction::ExportRecap => Message::ExportRecap,
             FileAction::ExportSelection => Message::ExportSelection,
             FileAction::ExportWithoutSelection => Message::RemoveSelection,
             FileAction::ExportSection => Message::ExportSection,
@@ -488,6 +490,12 @@ impl Studio {
                     active,
                 ),
                 self.file_tile(
+                    key("Prepare for Autodesk ReCap…"),
+                    key("E57 with camera images and ReCap import instructions"),
+                    FileAction::ExportRecap,
+                    active,
+                ),
+                self.file_tile(
                     key("Selected points…"),
                     key("Only the selected points; needs a selection"),
                     FileAction::ExportSelection,
@@ -544,14 +552,23 @@ impl Studio {
             )]),
             self.group_caption(key("MERGE")),
             Self::tiles([self.file_tile(
-                key("Merge visible LAS/LAZ scans…"),
-                key("One LAZ file from every visible LAS or LAZ scan"),
+                key("Merge visible scans…"),
+                key("One E57, LAS or LAZ file from the visible scans"),
                 FileAction::MergeVisible,
                 self.merge_job.is_none()
                     && !self.merge_dialog_pending
                     && self.visible_merge_sources().is_ok(),
             )]),
         ]
+        .push(
+            ui_style::checkbox(
+                tr("Keep stations and photos in E57"),
+                self.merge_keep_photos,
+            )
+            .on_toggle(Message::MergeKeepPhotos)
+            .size(14)
+            .text_size(12),
+        )
         .push_maybe(self.extension_group(EntryPage::Export))
         .width(Fill);
         if let Some(job) = &self.merge_job {

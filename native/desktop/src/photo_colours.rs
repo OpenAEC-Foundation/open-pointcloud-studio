@@ -939,6 +939,7 @@ impl Studio {
         let before = std::mem::replace(&mut entry.colours, colours);
         let identity = Arc::clone(&entry.load_identity);
         self.push_edit(EditBatch {
+            photos: Vec::new(),
             members: Vec::new(),
             colours: vec![(identity, before)],
         });

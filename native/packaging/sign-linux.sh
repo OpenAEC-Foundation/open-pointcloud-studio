@@ -53,28 +53,37 @@ expected=$(tr -d ' ' <<< "$OPENAEC_GPG_FINGERPRINT" | tr 'a-f' 'A-F')
     || fail "OPENAEC_GPG_FINGERPRINT is not the fingerprint of a key (40 or 64 hex digits)"
 
 # A short home folder: the agent puts its socket there.
-home=$(mktemp -d "${TMPDIR:-/tmp}/gpg.XXXXXX")
+signing_home=$(mktemp -d "${TMPDIR:-/tmp}/gpg.XXXXXX")
 cleanup() {
-    gpgconf --homedir "$home" --kill all > /dev/null 2>&1 || true
-    rm -rf "$home"
+    gpgconf --homedir "$signing_home" --kill all > /dev/null 2>&1 || true
+    rm -rf "$signing_home"
 }
 trap cleanup EXIT
-chmod 700 "$home"
-printf '%s' "$OPENAEC_GPG_PASSPHRASE" > "$home/passphrase"
+chmod 700 "$signing_home"
+printf '%s' "$OPENAEC_GPG_PASSPHRASE" > "$signing_home/passphrase"
 gpg_() {
-    gpg --homedir "$home" --batch --no-tty --pinentry-mode loopback --passphrase-file "$home/passphrase" "$@"
+    gpg --homedir "$signing_home" --batch --no-tty --pinentry-mode loopback --passphrase-file "$signing_home/passphrase" "$@"
 }
 
-printf '%s\n' "$OPENAEC_GPG_PRIVATE_KEY" | gpg_ --import 2> "$home/import.log" \
-    || { cat "$home/import.log" >&2; fail "the key could not be imported"; }
+printf '%s\n' "$OPENAEC_GPG_PRIVATE_KEY" | gpg_ --import 2> "$signing_home/import.log" \
+    || { cat "$signing_home/import.log" >&2; fail "the key could not be imported"; }
 imported=$(gpg_ --list-secret-keys --with-colons --fingerprint | awk -F: '$1 == "fpr" { print $10 }')
 grep -qxF "$expected" <<< "$imported" \
     || fail "the key is not the one of OPENAEC_GPG_FINGERPRINT ($expected); it has $(echo $imported)"
 
+# Distribute only the public part. Verifiers pin its fingerprint, so an
+# unpublished or unavailable keyserver cannot prevent offline verification.
+public_key=open-pointcloud-studio-signing-key.asc
+gpg_ --armor --export "$expected" > "$assets/$public_key"
+[[ -s "$assets/$public_key" ]] || fail "the public signing key could not be exported"
+awk -v key="$public_key" '$2 != key' "$assets/SHA256SUMS" > "$signing_home/checksums"
+(cd "$assets" && sha256sum "$public_key") >> "$signing_home/checksums"
+cp "$signing_home/checksums" "$assets/SHA256SUMS"
+
 for file in "${files[@]}"; do
     rm -f "$assets/$file.asc"
     gpg_ --local-user "$expected" --armor --detach-sign --output "$assets/$file.asc" "$assets/$file"
-    status=$(gpg --homedir "$home" --batch --no-tty --status-fd 1 --verify "$assets/$file.asc" "$assets/$file" 2> /dev/null || true)
+    status=$(gpg --homedir "$signing_home" --batch --no-tty --status-fd 1 --verify "$assets/$file.asc" "$assets/$file" 2> /dev/null || true)
     grep -E "^\[GNUPG:\] VALIDSIG " <<< "$status" | grep -qF "$expected" \
         || fail "the signature $file.asc does not verify as one of $expected"
     echo "signed $file: $file.asc"

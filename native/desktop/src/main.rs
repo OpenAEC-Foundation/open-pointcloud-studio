@@ -52,11 +52,14 @@ mod opencad_properties;
 mod opencad_ribbon;
 mod orbit_point;
 mod photo_colours;
+mod photo_editor;
 mod photo_overlay;
 mod preferences;
 mod progressive;
 mod project_browser;
 mod project_open;
+mod recap;
+mod registration_tool;
 mod saved_drawings;
 mod screenshot;
 mod section_detail;
@@ -292,9 +295,27 @@ fn export_edited_where(
     expected_count: u64,
     mut include: impl FnMut(u64, &Point) -> bool,
 ) -> Result<(), pointcloud_core::LoadError> {
-    // Photo colours are written point by point; an E57 is then written as
-    // one scan of coordinates, colours and intensity.
     if let Some(colours) = colours {
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
+        {
+            pointcloud_core::export_e57_map_with_images(
+                &painted(cloud),
+                destination,
+                Some(expected_count),
+                transform.scale[0],
+                transform.offset,
+                |ordinal, point| {
+                    include(ordinal, &point)
+                        .then(|| painted_point(point, ordinal, transform, colours))
+                },
+            )?;
+            return Ok(());
+        }
         return pointcloud_core::export_map(
             &painted(cloud),
             destination,
@@ -325,6 +346,20 @@ fn export_edited_where(
             .is_some()
         {
             return Ok(());
+        }
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform.scale.iter().all(|v| *v == transform.scale[0])
+        {
+            return pointcloud_core::export_e57_map_with_images(
+                cloud,
+                destination,
+                Some(expected_count),
+                transform.scale[0],
+                transform.offset,
+                |ordinal, point| include(ordinal, &point).then(|| transform.point(point)),
+            )
+            .map(|_| ());
         }
         pointcloud_core::export_map(
             cloud,
@@ -357,6 +392,28 @@ fn export_edited_section(
     deleted: Option<&DeletionMask>,
 ) -> Result<u64, pointcloud_core::LoadError> {
     if let Some(colours) = colours {
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
+        {
+            return pointcloud_core::export_e57_map_with_images(
+                &painted(cloud),
+                destination,
+                None,
+                transform.scale[0],
+                transform.offset,
+                |ordinal, point| {
+                    if deleted.is_some_and(|mask| mask.contains(ordinal)) {
+                        return None;
+                    }
+                    let point = painted_point(point, ordinal, transform, colours);
+                    section.contains(point.xyz).then_some(point)
+                },
+            );
+        }
         return pointcloud_core::export_map_auto_count(
             &painted(cloud),
             destination,
@@ -396,6 +453,19 @@ fn export_edited_section(
             if let Some(count) = translated {
                 return Ok(count);
             }
+            return pointcloud_core::export_e57_map_with_images(
+                cloud,
+                destination,
+                None,
+                transform.scale[0],
+                transform.offset,
+                |ordinal, point| {
+                    let mapped = transform.point(point);
+                    (deleted.is_none_or(|mask| !mask.contains(ordinal))
+                        && section.contains(mapped.xyz))
+                    .then_some(mapped)
+                },
+            );
         }
         pointcloud_core::export_map_auto_count(cloud, destination, format, |ordinal, point| {
             if deleted.is_some_and(|mask| mask.contains(ordinal)) {
@@ -668,6 +738,13 @@ fn main() -> iced::Result {
         );
         return Ok(());
     }
+    if first.as_deref() == Some(OsStr::new("--register-points")) {
+        cli::finish(
+            cli::register_points(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --register-points PAIRS.json",
+        );
+        return Ok(());
+    }
     if first.as_deref() == Some(OsStr::new("--list-scans")) {
         let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
         if paths.is_empty() {
@@ -774,59 +851,18 @@ fn main() -> iced::Result {
         }
     }
     if first.as_deref() == Some(OsStr::new("--merge")) {
-        let Some(destination) = args.next() else {
-            eprintln!(
-                "Usage: open-pointcloud-studio --merge OUTPUT.laz INPUT1.las INPUT2.laz [...]"
-            );
-            std::process::exit(2);
-        };
-        let destination = PathBuf::from(destination);
-        let sources: Vec<PathBuf> = args.map(PathBuf::from).collect();
-        if sources.len() < 2 {
-            eprintln!("Merge needs at least two LAS/LAZ inputs");
-            std::process::exit(2);
-        }
-        let Some(format @ (ExportFormat::Las | ExportFormat::Laz)) =
-            export_format_for_path(&destination)
-        else {
-            eprintln!("Merge destination must end in .las or .laz");
-            std::process::exit(2);
-        };
-        let result = sources
-            .iter()
-            .map(pointcloud_core::open_las_header)
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|clouds| {
-                let references: Vec<_> = clouds.iter().collect();
-                let mut last_report = 0;
-                pointcloud_core::merge_las_map_count(
-                    &references,
-                    &destination,
-                    format,
-                    None,
-                    &mut |_, _, point| Some(point),
-                    &mut |processed, total, written| {
-                        if processed.saturating_sub(last_report) >= 5_000_000 || processed == total
-                        {
-                            eprintln!(
-                                "Merged {processed} / {total} source points; wrote {written}"
-                            );
-                            last_report = processed;
-                        }
-                        Ok(())
-                    },
-                )
-            });
-        match result {
-            Ok(count) => {
-                println!("Merged {count} points into {}", destination.display());
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("Merge failed: {error}");
-                std::process::exit(1);
-            }
-        }
+        cli::finish(
+            cli::merge(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --merge OUTPUT.e57|.las|.laz INPUT1 INPUT2 [...]",
+        );
+        return Ok(());
+    }
+    if first.as_deref() == Some(OsStr::new("--apply-registration")) {
+        cli::finish(
+            cli::apply_registration(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --apply-registration INPUT MATRIX.json OUTPUT.e57",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--export")) {
         cli::finish(
@@ -1348,6 +1384,59 @@ struct MergeSource {
     transform: CloudTransform,
 }
 
+fn merge_normalised(
+    sources: &[MergeSource],
+    path: &Path,
+    format: ExportFormat,
+    keep_photos: bool,
+    control: &MergeControl,
+) -> Result<u64, pointcloud_core::LoadError> {
+    let mut scene = Vec::with_capacity(sources.len());
+    for source in sources {
+        let scale = source.transform.scale[0];
+        if scale <= 0. || source.transform.scale.iter().any(|v| *v != scale) {
+            return Err(pointcloud_core::LoadError::InvalidData(
+                "mixed-format merge needs a positive uniform scale".into(),
+            ));
+        }
+        scene.push(pointcloud_core::scene_export::SceneSource {
+            cloud: &source.cloud,
+            transform: pointcloud_core::scene_transform::SceneTransform {
+                scale,
+                translation: source.transform.offset,
+                ..Default::default()
+            },
+        });
+    }
+    let mut include = |index: usize, ordinal, _: &Point| {
+        sources[index]
+            .deleted
+            .as_ref()
+            .is_none_or(|m| !m.contains(ordinal))
+    };
+    let mut progress = |processed, total| {
+        let _ = total;
+        control.report(processed, processed)
+    };
+    if format == ExportFormat::E57 {
+        pointcloud_core::scene_export::write_e57_scene(
+            &scene,
+            path,
+            keep_photos,
+            &mut include,
+            &mut progress,
+        )
+    } else {
+        pointcloud_core::scene_export::write_las_scene(
+            &scene,
+            path,
+            format == ExportFormat::Laz,
+            &mut include,
+            &mut progress,
+        )
+    }
+}
+
 struct MergeControl {
     cancelled: AtomicBool,
     processed: AtomicU64,
@@ -1469,6 +1558,7 @@ enum ContextAction {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ApiExportMode {
     Full,
+    Recap,
     Section,
     Selected,
     WithoutSelection,
@@ -1633,6 +1723,7 @@ enum Message {
     ApiScreenshot(screenshot::Step),
     ApiExported(String, bool, Result<(PathBuf, u64), String>),
     MergeVisible,
+    MergeKeepPhotos(bool),
     MergePathChosen(Option<PathBuf>),
     MergePoll,
     CancelMerge,
@@ -1828,6 +1919,8 @@ enum Message {
     /// show in between (`false`) or what it comes to at its end (`true`).
     DetailMerged(u64, bool, Result<MergedSets, String>),
     ExportFormat(ExportFormat),
+    ExportRecap,
+    RecapPathChosen(Option<PathBuf>),
     Exported(Result<PathBuf, String>),
     SaveCompleted(Option<Result<PathBuf, String>>),
     Select(usize),
@@ -1873,6 +1966,8 @@ enum Message {
     PanoramaReady(PathBuf, usize, Result<Arc<PhotoSet>, String>),
     /// The photos of a file that are not those of its stations.
     Photos(file_photos::PhotoAction),
+    PhotoEdit(photo_editor::Action),
+    Registration(registration_tool::Action),
     TogglePhotoCompare,
     PhotoSplitRatio(f32),
     TogglePhotoSplitAxis,
@@ -2045,6 +2140,8 @@ struct Studio {
     /// The photos of the open files that are not those of their stations,
     /// and the one that is entered.
     photos: file_photos::PhotoTool,
+    photo_editor: photo_editor::PhotoEditor,
+    registration: registration_tool::RegistrationTool,
     photo_compare: bool,
     photo_split_ratio: f32,
     photo_split_vertical: bool,
@@ -2073,6 +2170,7 @@ struct Studio {
     mesh_dialog_pending: bool,
     mesh_job: Option<MeshJob>,
     merge_job: Option<MergeJob>,
+    merge_keep_photos: bool,
     merge_dialog_pending: bool,
     selection_bounds_pending: bool,
     /// The reference the percentages of the section box are taken of, in
@@ -2534,6 +2632,7 @@ struct EditBatch {
     /// ones it had before Undo while it waits for Redo. Undo and Redo swap
     /// them with what the layer has.
     colours: Vec<(Arc<PointCloud>, Option<Arc<PointColours>>)>,
+    photos: Vec<(PathBuf, pointcloud_core::photo_edits::PhotoEdits)>,
 }
 
 impl CloudEntry {
@@ -2742,6 +2841,8 @@ impl Default for Studio {
             walk_station: None,
             panorama_photos: None,
             photos: file_photos::PhotoTool::default(),
+            photo_editor: photo_editor::PhotoEditor::default(),
+            registration: registration_tool::RegistrationTool::default(),
             photo_compare: settings.photo_compare,
             photo_split_ratio: settings.photo_split_ratio,
             photo_split_vertical: settings.photo_split_vertical,
@@ -2768,6 +2869,7 @@ impl Default for Studio {
             mesh_dialog_pending: false,
             mesh_job: None,
             merge_job: None,
+            merge_keep_photos: true,
             merge_dialog_pending: false,
             selection_bounds_pending: false,
             section_reference_bounds: None,
@@ -2990,6 +3092,20 @@ impl Studio {
                 named = Some(display_name(&entry.cloud.path).to_owned());
             }
         }
+        for (source, previous) in &mut batch.photos {
+            if let Ok(current) = pointcloud_core::photo_edits::PhotoEdits::load(source) {
+                match previous.save(source).and_then(|_| {
+                    self.reload_photo_edits(source)
+                        .map_err(pointcloud_core::LoadError::InvalidData)
+                }) {
+                    Ok(()) => {
+                        *previous = current;
+                        named = Some(display_name(source).to_owned());
+                    }
+                    Err(error) => self.status = format!("Photo undo failed: {error}"),
+                }
+            }
+        }
         named
     }
 
@@ -3201,6 +3317,7 @@ impl Studio {
             .position(|entry| entry.matches_source(header))
         {
             self.clouds.remove(index);
+            self.close_photo_editor_if_source_closed();
             self.drop_kept_of_closed_scans();
             self.leave_walk();
             self.rebuild_photo_atlas();
@@ -3704,6 +3821,7 @@ impl Studio {
             }
             self.clouds.remove(index);
         }
+        self.close_photo_editor_if_source_closed();
         self.drop_kept_of_closed_scans();
         self.leave_walk();
         self.rebuild_photo_atlas();
@@ -3869,6 +3987,8 @@ impl Studio {
                         },
                         "mesh": self.mesh_job.as_ref().map(MeshJob::progress_value),
                         "merge": self.merge_job.as_ref().map(MergeJob::progress_value),
+                        "registration": self.registration_value(),
+                        "registration_pending": self.registration.busy,
                         "index_progress": self.first_index_progress_value(),
                         "scale": self.scale_job.as_ref().map(|job| json!({
                             "source_index": job.cloud_index,
@@ -4139,6 +4259,17 @@ impl Studio {
                 let task = self.update(Message::LeaveWalk);
                 (json!({"ok": true, "closed": was_open}), task)
             }
+            command @ (ApiCommand::AddPanorama { .. }
+            | ApiCommand::EditPhoto { .. }
+            | ApiCommand::DeletePhoto { .. }) => self.api_photo_edit(command),
+            command @ (ApiCommand::RegistrationSetup { .. }
+            | ApiCommand::RegistrationPair { .. }
+            | ApiCommand::RegistrationFit
+            | ApiCommand::RegistrationRefine
+            | ApiCommand::RegistrationExport { .. }
+            | ApiCommand::RegistrationMatrix
+            | ApiCommand::RegistrationSetMatrix { .. }
+            | ApiCommand::CancelRegistration) => self.api_registration(command),
             command @ (ApiCommand::ListPhotos { .. }
             | ApiCommand::EnterPhoto { .. }
             | ApiCommand::PhotoBlend { .. }
@@ -4947,6 +5078,7 @@ impl Studio {
             ApiCommand::ExportFaces { path } => self.api_export_faces(path),
             ApiCommand::ClearFaces => (self.api_clear_faces(), Task::none()),
             ApiCommand::Export { path } => self.api_export(path, ApiExportMode::Full),
+            ApiCommand::ExportRecap { path } => self.api_export(path, ApiExportMode::Recap),
             ApiCommand::ExportSection { path } => self.api_export(path, ApiExportMode::Section),
             ApiCommand::ExportSelection { path } => self.api_export(path, ApiExportMode::Selected),
             ApiCommand::ExportMinusSelection { path } => {
@@ -5035,15 +5167,19 @@ impl Studio {
                     .unwrap_or_else(|error| json!({"ok": false, "error": error})),
                 Task::none(),
             ),
-            ApiCommand::MergeVisible { path } => {
+            ApiCommand::MergeVisible {
+                path,
+                keep_stations_photos,
+            } => {
+                self.merge_keep_photos = keep_stations_photos.unwrap_or(true);
                 if !path.is_absolute()
                     || !matches!(
                         export_format_for_path(&path),
-                        Some(ExportFormat::Las | ExportFormat::Laz)
+                        Some(ExportFormat::Las | ExportFormat::Laz | ExportFormat::E57)
                     )
                 {
                     (
-                        json!({"ok": false, "error": "merge requires an absolute .las or .laz destination"}),
+                        json!({"ok": false, "error": "merge requires an absolute .e57, .las or .laz destination"}),
                         Task::none(),
                     )
                 } else if self.merge_job.is_some() || self.merge_dialog_pending {
@@ -5164,6 +5300,12 @@ impl Studio {
                 Task::none(),
             );
         };
+        if mode == ApiExportMode::Recap && format != ExportFormat::E57 {
+            return (
+                json!({"ok": false, "error": "ReCap preparation requires an .e57 destination"}),
+                Task::none(),
+            );
+        }
         let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) else {
             return (
                 json!({"ok": false, "error": "no active cloud"}),
@@ -5296,6 +5438,12 @@ impl Studio {
                                     },
                                 )
                             };
+                        let result = result.and_then(|()| {
+                            if mode == ApiExportMode::Recap {
+                                recap::instructions(&path)?;
+                            }
+                            Ok(())
+                        });
                         result
                             .map(|()| (path, expected_count))
                             .map_err(|error| error.to_string())
@@ -5336,19 +5484,7 @@ impl Studio {
             })
             .collect();
         if sources.len() < 2 {
-            return Err("show at least two LAS/LAZ scans before merging".into());
-        }
-        if sources.iter().any(|source| {
-            !source
-                .cloud
-                .path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
-                })
-        }) {
-            return Err("all visible layers must be LAS or LAZ scans".into());
+            return Err("show at least two scans before merging".into());
         }
         Ok(sources)
     }
@@ -5358,6 +5494,7 @@ impl Studio {
     /// its window until a download, a merge, a mesh or an import has ended.
     /// Each of them leaves an existing destination as it was.
     fn stop_background_work(&mut self) {
+        self.registration.cancel.store(true, Ordering::Relaxed);
         self.end_extension_runs();
         self.cancel_bag();
         self.cancel_drawing();
@@ -5383,6 +5520,7 @@ impl Studio {
         sources: Vec<MergeSource>,
         api_job_id: Option<String>,
     ) -> Task<Message> {
+        let keep_photos = self.merge_keep_photos;
         let total = sources.iter().map(|source| source.cloud.total_points).sum();
         let expected = sources
             .iter()
@@ -5410,23 +5548,48 @@ impl Studio {
                         sources.iter().map(|source| source.cloud.as_ref()).collect();
                     let format =
                         export_format_for_path(&path).expect("validated LAS/LAZ destination");
-                    pointcloud_core::merge_las_map_count(
-                        &clouds,
-                        &path,
-                        format,
-                        Some(expected),
-                        &mut |source_index, ordinal, point| {
-                            let source = &sources[source_index];
-                            source
-                                .deleted
-                                .as_ref()
-                                .is_none_or(|mask| !mask.contains(ordinal))
-                                .then(|| source.transform.point(point))
-                        },
-                        &mut |processed, _, written| control.report(processed, written),
-                    )
-                    .map(|count| (path, count))
-                    .map_err(|error| error.to_string())
+                    let mut map = |source_index: usize, ordinal, point: Point| {
+                        let source = &sources[source_index];
+                        source
+                            .deleted
+                            .as_ref()
+                            .is_none_or(|mask| !mask.contains(ordinal))
+                            .then(|| source.transform.point(point))
+                    };
+                    let legacy = if format != ExportFormat::E57
+                        && sources.iter().all(|s| {
+                            s.cloud
+                                .path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .is_some_and(|e| {
+                                    e.eq_ignore_ascii_case("las") || e.eq_ignore_ascii_case("laz")
+                                })
+                        }) {
+                        Some(pointcloud_core::merge_las_map_count(
+                            &clouds,
+                            &path,
+                            format,
+                            Some(expected),
+                            &mut map,
+                            &mut |processed, _, written| control.report(processed, written),
+                        ))
+                    } else {
+                        None
+                    };
+                    let result = match legacy {
+                        Some(Ok(count)) => Ok(count),
+                        Some(Err(pointcloud_core::LoadError::InvalidData(message)))
+                            if message.contains("incompatible point formats") =>
+                        {
+                            merge_normalised(&sources, &path, format, keep_photos, &control)
+                        }
+                        Some(Err(error)) => Err(error),
+                        None => merge_normalised(&sources, &path, format, keep_photos, &control),
+                    };
+                    result
+                        .map(|count| (path, count))
+                        .map_err(|error| error.to_string())
                 })
                 .await
                 .map_err(|error| error.to_string())
@@ -6161,6 +6324,7 @@ impl Studio {
                     *entry = job;
                 }
             }
+            Message::MergeKeepPhotos(keep) => self.merge_keep_photos = keep,
             Message::MergeVisible => {
                 if self.merge_job.is_some() || self.merge_dialog_pending {
                     return Task::none();
@@ -6174,9 +6338,10 @@ impl Studio {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
+                            .add_filter("E57 scene with stations and photos", &["e57"])
                             .add_filter("LAZ point cloud", &["laz"])
                             .add_filter("LAS point cloud", &["las"])
-                            .set_file_name("merged-scans.laz")
+                            .set_file_name("merged-scans.e57")
                             .save_file()
                             .await
                             .map(|selection| selection.path().to_path_buf())
@@ -6192,9 +6357,9 @@ impl Studio {
                 };
                 if !matches!(
                     export_format_for_path(&path),
-                    Some(ExportFormat::Las | ExportFormat::Laz)
+                    Some(ExportFormat::Las | ExportFormat::Laz | ExportFormat::E57)
                 ) {
-                    self.status = "Choose a .las or .laz destination".into();
+                    self.status = "Choose an .e57, .las or .laz destination".into();
                     return Task::none();
                 }
                 match self.visible_merge_sources() {
@@ -6860,6 +7025,24 @@ impl Studio {
                     }
                 }
             }
+            Message::ExportRecap => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .add_filter("E57 for Autodesk ReCap", &["e57"])
+                            .set_file_name("recap-transfer.e57")
+                            .save_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::RecapPathChosen,
+                )
+            }
+            Message::RecapPathChosen(Some(path)) => {
+                let (_, task) = self.api_export(path, ApiExportMode::Recap);
+                return task;
+            }
+            Message::RecapPathChosen(None) => {}
             Message::Export => {
                 if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
                     let format = self.export_format;
@@ -7464,6 +7647,7 @@ impl Studio {
                 self.undo_deletions.push(EditBatch {
                     members,
                     colours: Vec::new(),
+                    photos: Vec::new(),
                 });
                 if self.undo_deletions.len() > 8 {
                     self.undo_deletions.remove(0);
@@ -7638,6 +7822,7 @@ impl Studio {
                 self.undo_deletions.push(EditBatch {
                     members: vec![(source, mask)],
                     colours: Vec::new(),
+                    photos: Vec::new(),
                 });
                 if self.undo_deletions.len() > 8 {
                     self.undo_deletions.remove(0);
@@ -8956,6 +9141,8 @@ impl Studio {
             Message::Browser(action) => return self.update_browser(action),
             Message::Tabs(action) => return self.update_tabs(action),
             Message::Photos(action) => return self.update_photos(action),
+            Message::PhotoEdit(action) => return self.photo_editor_action(action),
+            Message::Registration(action) => return self.registration_action(action),
             Message::TogglePhotoCompare => {
                 self.photo_compare = !self.photo_compare;
                 self.revision += 1;
@@ -11555,6 +11742,11 @@ impl Studio {
                     }
                 }
             }
+        }
+        if active_cloud.is_some() {
+            properties = properties
+                .push(self.photo_editor_properties())
+                .push(self.registration_properties());
         }
         if let Some(section) = active_cloud.and_then(|entry| self.photo_properties(entry)) {
             properties = properties.push(section);

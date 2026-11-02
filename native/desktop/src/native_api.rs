@@ -25,7 +25,7 @@ pub const API_NAME: &str = "native-rust-v1";
 /// Raised by one with every release that adds a command or a field, or
 /// changes what a command does; API.md lists the revisions under API
 /// changes.
-pub const API_REVISION: u64 = 11;
+pub const API_REVISION: u64 = 12;
 
 /// How many `/exec` requests wait for the window at once. `/health` and
 /// `/info` are answered by the thread that takes the requests, so they do
@@ -120,6 +120,47 @@ pub enum ApiCommand {
     },
     NextPhoto,
     PreviousPhoto,
+    AddPanorama {
+        path: PathBuf,
+        #[serde(default)]
+        layer: Option<usize>,
+        #[serde(flatten)]
+        camera: crate::photo_editor::Camera,
+    },
+    EditPhoto {
+        index: usize,
+        #[serde(default)]
+        layer: Option<usize>,
+        #[serde(flatten)]
+        camera: crate::photo_editor::Camera,
+    },
+    DeletePhoto {
+        index: usize,
+        #[serde(default)]
+        layer: Option<usize>,
+    },
+    RegistrationSetup {
+        fixed: usize,
+        moving: usize,
+    },
+    RegistrationPair {
+        fixed: [f64; 3],
+        moving: [f64; 3],
+    },
+    RegistrationFit,
+    RegistrationRefine,
+    RegistrationExport {
+        path: PathBuf,
+        #[serde(default)]
+        merge: bool,
+        #[serde(default)]
+        keep_stations_photos: Option<bool>,
+    },
+    RegistrationMatrix,
+    RegistrationSetMatrix {
+        transform: pointcloud_core::scene_transform::SceneTransform,
+    },
+    CancelRegistration,
     ZoomAll,
     FitScanPoses,
     SetScanPosesVisible {
@@ -346,6 +387,9 @@ pub enum ApiCommand {
     Export {
         path: PathBuf,
     },
+    ExportRecap {
+        path: PathBuf,
+    },
     ExportSection {
         path: PathBuf,
     },
@@ -535,6 +579,8 @@ pub enum ApiCommand {
     },
     MergeVisible {
         path: PathBuf,
+        #[serde(default)]
+        keep_stations_photos: Option<bool>,
     },
     CancelMerge,
     Bag3d {

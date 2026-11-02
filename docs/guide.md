@@ -75,7 +75,7 @@ A scan project is usually a folder with one scan file per station, often with a 
 
 The status line reports how many scans are being opened and how many listed scans were not found, with the names of the first three, so it is clear which scans to put beside the project file. A folder and its project file together add every scan once.
 
-A project file opens the scans it lists that exist beside it as E57, LAS, LAZ, PLY, PCD, PTX, PTS or text. The indexed scan copy (`.rcs`) that a project keeps of each scan, beside the project file or in its `<project name> Support` folder, is a closed format without a public specification and is not read. When a project has only those copies, the application says so instead of reporting missing scans: export the scans as E57, LAS or LAZ files named after the scans and put them beside the project file.
+A project file opens the scans it lists that exist beside it as E57, LAS, LAZ, PLY, PCD, PTX, PTS or text. The indexed scan copy (`.rcs`) that a project keeps of each scan, beside the project file or in its `<project name> Support` folder, is a closed format without a public specification and is not read. When a project has only those copies, the application says so instead of reporting missing scans: export the scans as E57, LAS or LAZ files named after the scans and put them beside the project file. For the reverse route into Autodesk ReCap, including what happens to E57 panoramas, see [ReCap interoperability](recap-interoperability.md).
 
 Folders and project files are read in the background, which keeps the window responsive on a network share. `open-pointcloud-studio --list-scans PATH [PATH ...]` prints the files that would be opened, one per line, without opening a window.
 
@@ -152,6 +152,44 @@ The only scan of an E57 file, when it has neither a scanner sweep (a row and col
 
 `open-pointcloud-studio --scans INPUT` prints the positions and orientations.
 
+## Aligning scans
+
+Open **Scan registration → Align scans…** in Properties. Make the reference
+scan active and press **Use active as reference**, then make the other scan
+active and press **Use active as moving**. Pick a point in each scan and add
+it with **Add picked reference** and **Add picked moving**. Repeat for at
+least three well-spread, non-collinear point pairs, in matching order.
+**Fit point pairs** calculates a rigid rotation and translation and reports
+each pair's residual, RMS and 95th-percentile error. Manual X/Y/Z translation
+and rotation about Z can provide an initial alignment instead.
+
+**Refine overlap (ICP)** fits overlapping surfaces with point-to-plane ICP,
+using at most 50,000 preview points per scan. Enable the section box to limit
+the overlap to a useful area. The default maximum correspondence distance is
+0.5 m, with up to 40 iterations and a trimmed fit to reduce outlier influence.
+The Properties panel and status line report RMS and p95 in millimetres
+(the API returns metres)
+and opens a bounded deviation preview: green close to the reference, red at
+or beyond p95 and grey outside the matched overlap. This preview is a sample,
+not the export resolution. Cancel stops the fit without changing source files.
+
+**Export registered scan…** applies the matrix to every remaining point of
+the moving source. **Export registered scene…** also includes the reference.
+Both write E57, optionally retaining stations and photos, and open the
+result. A companion registration JSON records the source transform.
+**Save registration matrix…** saves a reusable transform and the fit report;
+the matrix is shown in the panel. The command
+`open-pointcloud-studio --apply-registration INPUT MATRIX.json OUTPUT.e57`
+reapplies a saved transform without opening a window.
+
+`open-pointcloud-studio --register-points PAIRS.json` calculates the coarse
+fit from a JSON array such as
+`[{"moving":[0,0,0],"fixed":[10,0,0]},{"moving":[1,0,0],"fixed":[11,0,0]},{"moving":[0,1,0],"fixed":[10,1,0]}]`.
+All coordinates must use the same units and coordinate system; registration
+is rigid alignment, not a cartographic reprojection.
+
+![Scan registration and the deviation preview](screenshots/registration-2026-45-0.png)
+
 ## Station photos and walking
 
 E57 scans often carry the photos taken at each station as pinhole images, for example six cube faces of 90 degrees. They are listed from the file metadata when a scan opens; nothing is decoded until it is shown. Every station with photos is drawn as a ball that shows its surroundings, and stays visible through walls and roofs like the station markers.
@@ -163,6 +201,33 @@ Click a ball, or **Photo** beside a station in the list under **Scan positions**
 Walking starts from the current orbit view, or from inside a station. Walking out of a station leaves its photo and continues through the point cloud with the station behind you; walking into another ball enters its photo. Escape, **Back to 3D view**, Zoom all or a camera direction returns to the orbit view. The selection tools are not available while walking.
 
 `open-pointcloud-studio --photos INPUT OUTPUT_DIRECTORY` saves the stored photos of every station, and then the other photos of the file, and prints where each one looks.
+
+## Editing and adding panoramas
+
+In Properties choose **Photo editing → Manage photos…**. **Add panorama…**
+accepts a full 2:1 equirectangular JPG or PNG. Set its name, source X/Y/Z,
+heading clockwise from north, pitch and roll. To position it from the model,
+pick one point in the active scan and press **Place above picked point**;
+**Camera height (m)** sets the height above it. **Apply photo edit** keeps the
+camera, then the photo can be entered from the scan's photo list and compared
+with the points using the existing overlay.
+
+The editor lists standalone panoramas and route photos; the separate pinhole
+faces of a scanner station remain part of the station viewer. Original
+station images are retained on E57 export.
+Select a listed photo to move, turn or rename it. **Delete photo** removes it
+from the scene and subsequent E57 exports. The title-strip Undo and Redo
+restore these edits. Changes persist in `<source>.ops-photos.json` beside the
+source, which also references added image files. Keep those files together
+until exporting E57; the exported E57 embeds the image bytes. If the source
+file is replaced, its old edits are refused rather than applied to different
+images. E57 exports include these changes, including filtered and section
+exports and exports after Colour from photos.
+
+![Photo editing and camera placement](screenshots/photo-editor-2026-45-0.png)
+
+The [2026.45.0 validation record](validation/2026.45.0.md) describes the
+GUI, API, MCP and independent-file checks and their coverage limits.
 
 ## Panoramas and photos along a path
 
@@ -190,7 +255,7 @@ A scan with photos, panoramas and photos along a path as well as the photos of i
 
 A photo only colours a point that it sees: for every photo the scan itself is laid out as seen from where the photo was taken, about a fifth of a degree per pixel, and a point that lies more than a few centimetres behind what is nearest in that direction is hidden from it. Points that no photo sees keep the colour they had. For a large scan the points are read from its index at a detail that follows their distance to each photo; a scan without an index of more than 5,000,000 points needs its index first (INDEX > **Build index**). A large region is coloured in parts of at most 8,000,000 points.
 
-When the job is done the scene shows the colours, in **RGB**. They take the place of the colours of the file for this scan until it is closed: **Undo** takes them back and **Redo** gives them again, and **Remove photo colours** takes them away, which can be undone as well. A later colouring is laid over the colours of an earlier one. Undo keeps at most about 1 GB of earlier photo colours, which for a scan of a hundred million points is about three colourings; beyond that a new colouring lets go of the oldest edits, and the status bar says how many. Closing the window stops a colouring that is under way. The file itself is not changed; an export writes the points with their photo colours. An E57 is then written as one scan of coordinates, colours and intensity, and points that no photo saw are written black when the file had no colours.
+When the job is done the scene shows the colours, in **RGB**. They take the place of the colours of the file for this scan until it is closed: **Undo** takes them back and **Redo** gives them again, and **Remove photo colours** takes them away, which can be undone as well. A later colouring is laid over the colours of an earlier one. Undo keeps at most about 1 GB of earlier photo colours, which for a scan of a hundred million points is about three colourings; beyond that a new colouring lets go of the oldest edits, and the status bar says how many. Closing the window stops a colouring that is under way. The file itself is not changed; an export writes the points with their photo colours. An E57 is then written as one scan of coordinates, colours and intensity, with the source photos and their camera poses retained when the transform is a positive uniform scale and translation. Points that no photo saw are written black when the file had no colours.
 
 The block then reports the points coloured and the share that no photo sees. When the points had colours, it also gives the mean and the median difference per channel (red, green and blue, from 0 to 255) between the photo colours and the colours they had. The colours a file stores are often made from the same photos with an exposure and a processing of their own, so a difference of a few tens remains even where the photos sit exactly right.
 
@@ -328,12 +393,12 @@ Every export reads the source again from start to end, so points that are not on
 
 What an export keeps depends on the formats:
 
-- **Same format, nothing edited**: an unedited LAS, LAZ or E57 cloud exported in full to its own format is a byte-for-byte copy.
+- **Same format, nothing edited**: an unedited LAS, LAZ or E57 cloud exported in full to its own format is a byte-for-byte copy. E57 with a photo-edit sidecar is rewritten to embed the edited photos.
 - **LAS and LAZ to LAS or LAZ**: the original point records are written, with their point format, GPS time, return data, 16-bit colours, projection records and coordinate grid. Edits change only the fields they concern.
-- **E57 to E57, filtered**: each source scan keeps its scanner pose, its name, its record types and values, and its custom fields. **Move** and a **Scale** with one positive factor for all three axes keep the scans when every scan has a pose.
+- **E57 to E57, filtered**: each source scan keeps its scanner pose, its name, its record types and values, its custom fields and its camera images with their poses. **Move** and a **Scale** with one positive factor for all three axes keep the scans when every scan has a pose.
 - **Everything else**: position, 8-bit colour, intensity and class are written. A new E57 file made this way holds one scan in model coordinates; this writer has no class field for E57 and writes zero where a point has no colour or intensity.
 
-**Merge visible LAS/LAZ scans…** joins the visible LAS and LAZ layers into one `.las` or `.laz` file in the background, with their deletions and their moves and scales applied and the original point attributes kept. The Export page and Properties show the progress and a **Cancel merge** button; a cancelled merge leaves an existing file as it was. Sources with a different point layout, coordinate grid or coordinate system are refused before anything is written.
+**Merge visible scans…** streams visible E57, LAS/LAZ, PLY, PTX and other supported point-cloud layers into one E57, LAS or LAZ file, with deletions and positive uniform live transforms applied. E57 keeps the separate scans, raw E57 attributes, poses and images when **Keep stations and photos in E57** is checked; unchecked it writes world-space points. Compatible LAS/LAZ inputs keep their full original records. Other LAS/LAZ merges normalise to LAS 1.4 and retain coordinates, colour, intensity and classification; source-specific extra fields and camera images need E57 instead. The Export page and Properties show progress and **Cancel merge**; cancellation leaves an existing destination untouched. Registration does not reproject coordinate reference systems.
 
 The command line does the same without a window: `--export`, `--section` and `--merge`; see the [README](../README.md#command-line).
 
