@@ -119,6 +119,49 @@ mod tests {
             std::fs::read(panorama).unwrap()
         );
     }
+
+    #[test]
+    fn closing_the_edited_scan_clears_its_photo_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut studio = Studio::default();
+        let source = dir.path().join("edited.xyz");
+        for path in [&source, &dir.path().join("other.xyz")] {
+            std::fs::write(path, "0 0 0\n2 0 0\n0 2 0\n").unwrap();
+            let _ = studio.update(Message::Loaded(Ok(Arc::new(
+                pointcloud_core::open(path, 100).unwrap(),
+            ))));
+        }
+        studio.active = Some(0);
+        let _ = studio.photo_editor_action(Action::Open);
+        let _ = studio.photo_editor_action(Action::Field(0, "Unsaved camera".into()));
+        let _ = studio.remove_clouds(vec![1]);
+        assert_eq!(studio.photo_editor.source.as_ref(), Some(&source));
+        assert_eq!(studio.photo_editor.fields[0], "Unsaved camera");
+
+        let _ = studio.remove_clouds(vec![0]);
+        assert!(studio.photo_editor.source.is_none());
+        assert!(studio.photo_editor.external.is_none());
+        assert!(studio.photo_editor.offset.is_none());
+        assert!(studio.photo_editor.fields.iter().all(String::is_empty));
+        let _ = studio.photo_editor_action(Action::Apply);
+        assert!(pointcloud_core::file_photos(&source)
+            .unwrap()
+            .photos
+            .is_empty());
+    }
+
+    #[test]
+    fn a_removed_import_header_also_closes_its_photo_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("import.xyz");
+        std::fs::write(&source, "0 0 0\n2 0 0\n0 2 0\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 100).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&cloud))));
+        let _ = studio.photo_editor_action(Action::Open);
+        studio.remove_header_layer(&cloud);
+        assert!(studio.photo_editor.source.is_none());
+    }
 }
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -158,6 +201,17 @@ fn axes(heading: f64, pitch: f64, roll: f64) -> [[f64; 3]; 3] {
 }
 
 impl Studio {
+    pub(crate) fn close_photo_editor_if_source_closed(&mut self) {
+        if self
+            .photo_editor
+            .source
+            .as_ref()
+            .is_some_and(|source| !self.clouds.iter().any(|entry| entry.cloud.path == *source))
+        {
+            self.photo_editor = PhotoEditor::default();
+        }
+    }
+
     pub(crate) fn api_photo_edit(
         &mut self,
         command: crate::native_api::ApiCommand,

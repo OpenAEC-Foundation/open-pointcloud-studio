@@ -3317,6 +3317,7 @@ impl Studio {
             .position(|entry| entry.matches_source(header))
         {
             self.clouds.remove(index);
+            self.close_photo_editor_if_source_closed();
             self.drop_kept_of_closed_scans();
             self.leave_walk();
             self.rebuild_photo_atlas();
@@ -3820,6 +3821,7 @@ impl Studio {
             }
             self.clouds.remove(index);
         }
+        self.close_photo_editor_if_source_closed();
         self.drop_kept_of_closed_scans();
         self.leave_walk();
         self.rebuild_photo_atlas();
