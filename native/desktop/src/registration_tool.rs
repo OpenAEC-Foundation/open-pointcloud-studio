@@ -136,6 +136,34 @@ mod tests {
         assert_eq!(studio.api_jobs[&id]["state"], "cancelled");
         assert!(!studio.registration.busy);
     }
+
+    #[test]
+    fn registration_roles_follow_their_sources_when_layers_close() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut studio = Studio::default();
+        for name in ["other.xyz", "fixed.xyz", "moving.xyz"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "0 0 0\n1 0 0\n0 1 0\n0 0 1\n").unwrap();
+            let _ = studio.update(Message::Loaded(Ok(Arc::new(
+                pointcloud_core::open(path, 100).unwrap(),
+            ))));
+        }
+        let _ = send(
+            &mut studio,
+            serde_json::json!({"command":"registration_setup","fixed":1,"moving":2}),
+        );
+        let _ = studio.remove_clouds(vec![0]);
+        assert_eq!(studio.registration.fixed, Some(0));
+        assert_eq!(studio.registration.moving, Some(1));
+        assert_eq!(studio.registration_value()["moving"], 1);
+        let fixed = Arc::clone(&studio.clouds[0].cloud);
+        studio.remove_header_layer(&fixed);
+        assert_eq!(studio.registration.fixed, None);
+        assert_eq!(studio.registration.moving, Some(0));
+        assert!(studio.registration_value()["fixed"].is_null());
+        let _ = studio.remove_clouds(vec![0]);
+        assert_eq!(studio.registration.moving, None);
+    }
 }
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -160,6 +188,22 @@ pub enum Action {
 }
 
 impl Studio {
+    pub(crate) fn sync_registration_sources(&mut self) {
+        for i in 0..2 {
+            if let Some(path) = &self.registration.source_paths[i] {
+                let index = self
+                    .clouds
+                    .iter()
+                    .position(|entry| entry.cloud.path == *path);
+                if i == 0 {
+                    self.registration.fixed = index;
+                } else {
+                    self.registration.moving = index;
+                }
+            }
+        }
+    }
+
     fn remember_registration_sources(&mut self) {
         self.registration.snapshots = self
             .registration
@@ -375,19 +419,7 @@ impl Studio {
             self.status = "Registration is running; cancel it before changing the inputs".into();
             return Task::none();
         }
-        for i in 0..2 {
-            if let Some(path) = &self.registration.source_paths[i] {
-                let index = self
-                    .clouds
-                    .iter()
-                    .position(|entry| entry.cloud.path == *path);
-                if i == 0 {
-                    self.registration.fixed = index;
-                } else {
-                    self.registration.moving = index;
-                }
-            }
-        }
+        self.sync_registration_sources();
         match action {
             Action::Open => {
                 self.registration.open = true;
