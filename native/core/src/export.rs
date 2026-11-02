@@ -657,6 +657,22 @@ fn export_e57_map_count(
 ) -> Result<u64, LoadError> {
     use e57::{E57Writer, Record, RecordDataType, RecordName, RecordValue};
 
+    if image_transform.is_none()
+        && cloud
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"))
+        && !super::e57_points::open_reader(&cloud.path)?
+            .images()
+            .is_empty()
+    {
+        return Err(LoadError::InvalidData(
+            "this E57 edit cannot preserve photo camera poses; use a positive uniform scale and translation"
+                .into(),
+        ));
+    }
+
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -2205,6 +2221,14 @@ mod tests {
             open(&coloured, 4).unwrap().points[0].rgb,
             Some([20, 40, 60])
         );
+        let unsupported = dir.path().join("unsupported-photo-edit.e57");
+        assert!(
+            export_map(&cloud, &unsupported, ExportFormat::E57, 4, |_, point| {
+                Some(point)
+            })
+            .is_err()
+        );
+        assert!(!unsupported.exists());
     }
 
     #[test]
