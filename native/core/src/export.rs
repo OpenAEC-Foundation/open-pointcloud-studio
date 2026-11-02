@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -405,6 +406,42 @@ pub fn export_map_auto_count(
     export_map_count(cloud, destination, format, None, map)
 }
 
+/// Export mapped E57 points and retain source Images2D. Use this only when
+/// mapped coordinates have the supplied positive uniform scale and offset;
+/// arbitrary mappings cannot be represented by E57 camera poses.
+pub fn export_e57_map_with_images(
+    cloud: &PointCloud,
+    destination: impl AsRef<Path>,
+    expected_count: Option<u64>,
+    scale: f64,
+    translation: [f64; 3],
+    map: impl FnMut(u64, Point) -> Option<Point>,
+) -> Result<u64, LoadError> {
+    if !scale.is_finite() || scale <= 0.0 || translation.iter().any(|v| !v.is_finite()) {
+        return Err(LoadError::InvalidData("invalid E57 photo transform".into()));
+    }
+    let destination = destination.as_ref();
+    if destination == cloud.path
+        || fs::canonicalize(destination).ok() == fs::canonicalize(&cloud.path).ok()
+    {
+        return Err(LoadError::InvalidData(
+            "source and destination must differ".into(),
+        ));
+    }
+    let expected_stamp = cloud
+        .source_stamp
+        .ok_or_else(|| LoadError::InvalidData("source identity is unavailable".into()))?;
+    cloud.validate_source()?;
+    export_e57_map_count(
+        cloud,
+        destination,
+        expected_count,
+        expected_stamp,
+        map,
+        Some((scale, translation)),
+    )
+}
+
 fn export_map_count(
     cloud: &PointCloud,
     destination: impl AsRef<Path>,
@@ -456,7 +493,14 @@ fn export_map_count_inner(
         );
     }
     if format == ExportFormat::E57 {
-        return export_e57_map_count(cloud, destination, expected_count, expected_stamp, map);
+        return export_e57_map_count(
+            cloud,
+            destination,
+            expected_count,
+            expected_stamp,
+            map,
+            None,
+        );
     }
     let parent = destination
         .parent()
@@ -609,6 +653,7 @@ fn export_e57_map_count(
     expected_count: Option<u64>,
     expected_stamp: SourceStamp,
     mut map: impl FnMut(u64, Point) -> Option<Point>,
+    image_transform: Option<(f64, [f64; 3])>,
 ) -> Result<u64, LoadError> {
     use e57::{E57Writer, Record, RecordDataType, RecordName, RecordValue};
 
@@ -643,6 +688,14 @@ fn export_e57_map_count(
     let file_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
     let scan_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
     let mut writer = E57Writer::new(temporary.reopen()?, &file_guid)?;
+    if image_transform.is_some() {
+        let reader = super::e57_points::open_reader(&cloud.path)?;
+        writer.set_creation(reader.creation());
+        writer.set_coordinate_metadata(reader.coordinate_metadata().map(str::to_owned));
+        for extension in reader.extensions() {
+            writer.register_extension(extension)?;
+        }
+    }
     let mut source_count = 0u64;
     let mut written_count = 0u64;
     {
@@ -692,7 +745,27 @@ fn export_e57_map_count(
         }
         scan.finalize()?;
     }
-    writer.finalize()?;
+    if let Some((scale, translation)) = image_transform {
+        let mut reader = super::e57_points::open_reader(&cloud.path)?;
+        let scan_guids = reader
+            .pointclouds()
+            .iter()
+            .filter_map(|scan| {
+                scan.guid
+                    .as_ref()
+                    .map(|guid| (guid.clone(), scan_guid.clone()))
+            })
+            .collect();
+        copy_e57_images(&mut reader, &mut writer, &scan_guids, scale, translation)?;
+        writer.finalize_customized_xml(|xml| {
+            Ok(xml
+                .replace("<readius ", "<radius ")
+                .replace("<readius>", "<radius>")
+                .replace("</readius>", "</radius>"))
+        })?;
+    } else {
+        writer.finalize()?;
+    }
     if SourceStamp::read(&cloud.path)? != expected_stamp {
         return Err(LoadError::InvalidData(
             "source changed during export".into(),
@@ -743,6 +816,7 @@ fn export_e57_filtered_count(
     }
     let mut source_count = 0u64;
     let mut written_count = 0u64;
+    let mut scan_guids = HashMap::new();
     for source_scan in reader.pointclouds() {
         let mut prototype = source_scan.prototype.clone();
         if scale != 1.0 {
@@ -762,6 +836,9 @@ fn export_e57_filtered_count(
             }
         }
         let scan_guid = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
+        if let Some(source_guid) = &source_scan.guid {
+            scan_guids.insert(source_guid.clone(), scan_guid.clone());
+        }
         let mut output_scan = writer.add_pointcloud(&scan_guid, prototype)?;
         output_scan.set_name(source_scan.name.clone());
         output_scan.set_description(source_scan.description.clone());
@@ -859,7 +936,14 @@ fn export_e57_filtered_count(
             )));
         }
     }
-    writer.finalize()?;
+    copy_e57_images(&mut reader, &mut writer, &scan_guids, scale, translation)?;
+    // e57 0.11.13 writes the cylindrical radius element as "readius".
+    writer.finalize_customized_xml(|xml| {
+        Ok(xml
+            .replace("<readius ", "<radius ")
+            .replace("<readius>", "<radius>")
+            .replace("</readius>", "</radius>"))
+    })?;
     if SourceStamp::read(&cloud.path)? != expected_stamp {
         return Err(LoadError::InvalidData(
             "source changed during export".into(),
@@ -869,6 +953,129 @@ fn export_e57_filtered_count(
         .persist(destination)
         .map_err(|error| LoadError::Io(error.error))?;
     Ok(written_count)
+}
+
+/// Carry every Images2D entry into a scan-preserving E57 export. The source
+/// blobs are streamed through temporary files so even large panoramas do not
+/// have to fit in memory. Image poses follow the same uniform affine edit as
+/// scanner poses, and their associations use the new scan GUIDs.
+fn copy_e57_images<T: std::io::Read + Seek>(
+    source: &mut e57::E57Reader<T>,
+    target: &mut e57::E57Writer<fs::File>,
+    scan_guids: &HashMap<String, String>,
+    scale: f64,
+    translation: [f64; 3],
+) -> Result<(), LoadError> {
+    use e57::{Blob, Projection};
+    use std::io::Read;
+
+    fn blob_file<T: Read + Seek>(
+        source: &mut e57::E57Reader<T>,
+        blob: &Blob,
+    ) -> Result<fs::File, LoadError> {
+        let mut file = tempfile::tempfile()?;
+        let copied = source.blob(blob, &mut file)?;
+        if copied != blob.length {
+            return Err(LoadError::InvalidData(
+                "E57 image blob was truncated".into(),
+            ));
+        }
+        file.seek(SeekFrom::Start(0))?;
+        Ok(file)
+    }
+
+    fn mask_file<T: Read + Seek>(
+        source: &mut e57::E57Reader<T>,
+        mask: Option<&Blob>,
+    ) -> Result<Option<fs::File>, LoadError> {
+        mask.map(|blob| blob_file(source, blob)).transpose()
+    }
+
+    for image in source.images() {
+        let guid = image
+            .guid
+            .unwrap_or_else(|| format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase()));
+        let mut target_image = target.add_image(&guid)?;
+        if let Some(name) = image.name {
+            target_image.set_name(&name);
+        }
+        if let Some(description) = image.description {
+            target_image.set_description(&description);
+        }
+        if let Some(guid) = image.pointcloud_guid {
+            target_image.set_pointcloud_guid(scan_guids.get(&guid).unwrap_or(&guid));
+        }
+        if let Some(mut pose) = image.transform {
+            pose.translation.x = pose.translation.x * scale + translation[0];
+            pose.translation.y = pose.translation.y * scale + translation[1];
+            pose.translation.z = pose.translation.z * scale + translation[2];
+            if ![pose.translation.x, pose.translation.y, pose.translation.z]
+                .into_iter()
+                .all(f64::is_finite)
+            {
+                return Err(LoadError::InvalidData("non-finite E57 image pose".into()));
+            }
+            target_image.set_transform(pose);
+        }
+        if let Some(acquisition) = image.acquisition {
+            target_image.set_acquisition(acquisition);
+        }
+        if let Some(vendor) = image.sensor_vendor {
+            target_image.set_sensor_vendor(&vendor);
+        }
+        if let Some(model) = image.sensor_model {
+            target_image.set_sensor_model(&model);
+        }
+        if let Some(serial) = image.sensor_serial {
+            target_image.set_sensor_serial(&serial);
+        }
+        if let Some(visual) = image.visual_reference {
+            let mut data = blob_file(source, &visual.blob.data)?;
+            let mut mask = mask_file(source, visual.mask.as_ref())?;
+            target_image.add_visual_reference(
+                visual.blob.format,
+                &mut data,
+                visual.properties,
+                mask.as_mut().map(|file| file as &mut dyn Read),
+            )?;
+        }
+        if let Some(projection) = image.projection {
+            match projection {
+                Projection::Pinhole(photo) => {
+                    let mut data = blob_file(source, &photo.blob.data)?;
+                    let mut mask = mask_file(source, photo.mask.as_ref())?;
+                    target_image.add_pinhole(
+                        photo.blob.format,
+                        &mut data,
+                        photo.properties,
+                        mask.as_mut().map(|file| file as &mut dyn Read),
+                    )?;
+                }
+                Projection::Spherical(photo) => {
+                    let mut data = blob_file(source, &photo.blob.data)?;
+                    let mut mask = mask_file(source, photo.mask.as_ref())?;
+                    target_image.add_spherical(
+                        photo.blob.format,
+                        &mut data,
+                        photo.properties,
+                        mask.as_mut().map(|file| file as &mut dyn Read),
+                    )?;
+                }
+                Projection::Cylindrical(photo) => {
+                    let mut data = blob_file(source, &photo.blob.data)?;
+                    let mut mask = mask_file(source, photo.mask.as_ref())?;
+                    target_image.add_cylindrical(
+                        photo.blob.format,
+                        &mut data,
+                        photo.properties,
+                        mask.as_mut().map(|file| file as &mut dyn Read),
+                    )?;
+                }
+            }
+        }
+        target_image.finalize()?;
+    }
+    Ok(())
 }
 
 fn update_las_record(
@@ -1597,7 +1804,8 @@ mod tests {
     #[test]
     fn filtered_e57_keeps_scan_poses_names_and_per_scan_attributes() {
         use e57::{
-            E57Reader, E57Writer, Quaternion, Record, RecordDataType, RecordName, RecordValue,
+            CylindricalImageProperties, E57Reader, E57Writer, ImageFormat, PinholeImageProperties,
+            Quaternion, Record, RecordDataType, RecordName, RecordValue, SphericalImageProperties,
             Transform, Translation,
         };
 
@@ -1700,7 +1908,105 @@ mod tests {
             }
             scan.finalize().unwrap();
         }
-        writer.finalize().unwrap();
+        let image_bytes = b"scanner image bytes";
+        {
+            let mut image = writer
+                .add_image("{00000000-0000-4000-8000-000000000004}")
+                .unwrap();
+            image.set_name("East photo");
+            image.set_pointcloud_guid("{00000000-0000-4000-8000-000000000002}");
+            image.set_transform(Transform {
+                rotation: Quaternion::default(),
+                translation: Translation {
+                    x: 100.0,
+                    y: 200.0,
+                    z: 10.0,
+                },
+            });
+            image
+                .add_pinhole(
+                    ImageFormat::Jpeg,
+                    &mut image_bytes.as_slice(),
+                    PinholeImageProperties {
+                        width: 32,
+                        height: 16,
+                        focal_length: 0.02,
+                        pixel_width: 0.001,
+                        pixel_height: 0.001,
+                        principal_x: 15.5,
+                        principal_y: 7.5,
+                    },
+                    None,
+                )
+                .unwrap();
+            image.finalize().unwrap();
+        }
+        {
+            let mut image = writer
+                .add_image("{00000000-0000-4000-8000-000000000005}")
+                .unwrap();
+            image.set_name("North panorama");
+            image.set_pointcloud_guid("{00000000-0000-4000-8000-000000000003}");
+            image.set_transform(Transform {
+                rotation: Quaternion::default(),
+                translation: Translation {
+                    x: 200.0,
+                    y: 300.0,
+                    z: 20.0,
+                },
+            });
+            image
+                .add_spherical(
+                    ImageFormat::Jpeg,
+                    &mut image_bytes.as_slice(),
+                    SphericalImageProperties {
+                        width: 32,
+                        height: 16,
+                        pixel_width: std::f64::consts::TAU / 32.0,
+                        pixel_height: std::f64::consts::PI / 16.0,
+                    },
+                    None,
+                )
+                .unwrap();
+            image.finalize().unwrap();
+        }
+        {
+            let mut image = writer
+                .add_image("{00000000-0000-4000-8000-000000000006}")
+                .unwrap();
+            image.set_transform(Transform {
+                rotation: Quaternion::default(),
+                translation: Translation {
+                    x: 200.0,
+                    y: 300.0,
+                    z: 20.0,
+                },
+            });
+            image
+                .add_cylindrical(
+                    ImageFormat::Jpeg,
+                    &mut image_bytes.as_slice(),
+                    CylindricalImageProperties {
+                        width: 32,
+                        height: 16,
+                        pixel_width: std::f64::consts::TAU / 32.0,
+                        pixel_height: 0.01,
+                        radius: 1.0,
+                        principal_y: 8.0,
+                    },
+                    None,
+                )
+                .unwrap();
+            image.finalize().unwrap();
+        }
+        writer
+            .finalize_customized_xml(|xml| {
+                Ok(xml
+                    .replace("<readius ", "<radius ")
+                    .replace("<readius>", "<radius>")
+                    .replace("</readius>", "</radius>"))
+            })
+            .unwrap();
 
         let cloud = open(&source, 4).unwrap();
         assert_eq!(cloud.total_points, 4);
@@ -1711,6 +2017,28 @@ mod tests {
         .unwrap();
         let reopened = open(&destination, 4).unwrap();
         assert_eq!(reopened.total_points, 2);
+        let mut exported_images = E57Reader::from_file(&destination).unwrap();
+        let image_headers = exported_images.images();
+        assert_eq!(image_headers.len(), 3);
+        let exported_scans = exported_images.pointclouds();
+        assert_eq!(
+            image_headers[0].pointcloud_guid.as_ref(),
+            exported_scans[0].guid.as_ref()
+        );
+        assert_eq!(
+            image_headers[1].pointcloud_guid.as_ref(),
+            exported_scans[1].guid.as_ref()
+        );
+        for image in &image_headers {
+            let blob = match image.projection.as_ref().unwrap() {
+                e57::Projection::Pinhole(photo) => &photo.blob.data,
+                e57::Projection::Spherical(photo) => &photo.blob.data,
+                e57::Projection::Cylindrical(photo) => &photo.blob.data,
+            };
+            let mut bytes = Vec::new();
+            exported_images.blob(blob, &mut bytes).unwrap();
+            assert_eq!(bytes, image_bytes);
+        }
         assert_eq!(reopened.scan_poses.len(), 2);
         assert_eq!(reopened.scan_poses[0].label, "East station");
         assert_eq!(reopened.scan_poses[1].label, "North station");
@@ -1850,6 +2178,33 @@ mod tests {
             .is_err()
         );
         assert_eq!(fs::read(&existing).unwrap(), b"leave this untouched");
+
+        let coloured = dir.path().join("coloured.e57");
+        assert_eq!(
+            export_e57_map_with_images(
+                &cloud,
+                &coloured,
+                Some(4),
+                1.0,
+                [0.0; 3],
+                |_, mut point| {
+                    point.rgb = Some([20, 40, 60]);
+                    Some(point)
+                },
+            )
+            .unwrap(),
+            4
+        );
+        let coloured_reader = E57Reader::from_file(&coloured).unwrap();
+        assert_eq!(coloured_reader.images().len(), 3);
+        let merged_scan_guid = coloured_reader.pointclouds()[0].guid.clone();
+        assert!(coloured_reader.images()[..2]
+            .iter()
+            .all(|image| image.pointcloud_guid == merged_scan_guid));
+        assert_eq!(
+            open(&coloured, 4).unwrap().points[0].rgb,
+            Some([20, 40, 60])
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use pointcloud_core::ops::{self, Convert};
 use pointcloud_core::{Bounds, OrientedBox, SurfaceMeshConfig};
+use serde::Deserialize;
 
 /// What a mode of the command line answers.
 pub(crate) type Outcome = Result<Option<String>, (i32, String)>;
@@ -189,6 +190,33 @@ pub(crate) fn scans(arguments: &[OsString]) -> Outcome {
     let cloud = ops::open_source(Path::new(source), &ops::never_stop)
         .map_err(|error| (1, format!("Scan positions failed: {error}")))?;
     Ok(Some(station_lines(&ops::inspect(&cloud).stations)))
+}
+
+/// `--register-points PAIRS.json`: fit a rigid transform from measured
+/// moving/fixed point pairs, reporting the rotation, translation and errors.
+/// The source format is an array of {"moving":[x,y,z],"fixed":[x,y,z]}.
+pub(crate) fn register_points(arguments: &[OsString]) -> Outcome {
+    #[derive(Deserialize)]
+    struct Pair {
+        moving: [f64; 3],
+        fixed: [f64; 3],
+    }
+    let [source] = arguments else {
+        return Err(usage());
+    };
+    let bytes = std::fs::read(source)
+        .map_err(|error| (1, format!("Registration pairs could not be read: {error}")))?;
+    let pairs: Vec<Pair> = serde_json::from_slice(&bytes)
+        .map_err(|error| (2, format!("Invalid registration pairs: {error}")))?;
+    let pairs: Vec<_> = pairs
+        .into_iter()
+        .map(|pair| (pair.moving, pair.fixed))
+        .collect();
+    let result = pointcloud_core::registration::register_correspondences(&pairs)
+        .map_err(|error| (1, format!("Registration failed: {error}")))?;
+    serde_json::to_string_pretty(&result)
+        .map(Some)
+        .map_err(|error| (1, format!("Registration report failed: {error}")))
 }
 
 /// The lines `--scans` prints for these stations.

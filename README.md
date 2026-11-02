@@ -363,6 +363,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--list-scans PATH [PATH ...]` | Prints the scan files found in files, folders and scan project files |
 | `--index INPUT` | Builds the index of a scan and keeps it for later |
 | `--scans INPUT` | Prints the scanner positions stored in a scan |
+| `--register-points PAIRS.json` | Fits a rigid transform from corresponding scan points and prints its rotation, translation and residual errors as JSON |
 | `--photos INPUT OUTPUT_DIRECTORY` | Saves the photos of a scan as image files |
 | `--export INPUT OUTPUT` | Converts a scan; the extension of `OUTPUT` chooses the format (`.ply`, `.xyz`, `.pts`, `.csv`, `.las`, `.laz`, `.e57`) |
 | `--section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]` | Exports the points of a scan that lie inside a box; with `--rotation` the box is turned that many degrees counter-clockwise about the vertical through its centre |

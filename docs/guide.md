@@ -75,7 +75,7 @@ A scan project is usually a folder with one scan file per station, often with a 
 
 The status line reports how many scans are being opened and how many listed scans were not found, with the names of the first three, so it is clear which scans to put beside the project file. A folder and its project file together add every scan once.
 
-A project file opens the scans it lists that exist beside it as E57, LAS, LAZ, PLY, PCD, PTX, PTS or text. The indexed scan copy (`.rcs`) that a project keeps of each scan, beside the project file or in its `<project name> Support` folder, is a closed format without a public specification and is not read. When a project has only those copies, the application says so instead of reporting missing scans: export the scans as E57, LAS or LAZ files named after the scans and put them beside the project file.
+A project file opens the scans it lists that exist beside it as E57, LAS, LAZ, PLY, PCD, PTX, PTS or text. The indexed scan copy (`.rcs`) that a project keeps of each scan, beside the project file or in its `<project name> Support` folder, is a closed format without a public specification and is not read. When a project has only those copies, the application says so instead of reporting missing scans: export the scans as E57, LAS or LAZ files named after the scans and put them beside the project file. For the reverse route into Autodesk ReCap, including what happens to E57 panoramas, see [ReCap interoperability](recap-interoperability.md).
 
 Folders and project files are read in the background, which keeps the window responsive on a network share. `open-pointcloud-studio --list-scans PATH [PATH ...]` prints the files that would be opened, one per line, without opening a window.
 
@@ -152,6 +152,15 @@ The only scan of an E57 file, when it has neither a scanner sweep (a row and col
 
 `open-pointcloud-studio --scans INPUT` prints the positions and orientations.
 
+To calculate a coarse alignment from measured corresponding points in two
+scans, put at least three non-collinear pairs in a JSON array, for example
+`[{"moving":[0,0,0],"fixed":[10,0,0]},{"moving":[1,0,0],"fixed":[11,0,0]},{"moving":[0,1,0],"fixed":[10,1,0]}]`, and run
+`open-pointcloud-studio --register-points PAIRS.json`. It prints a rotation
+matrix, translation, RMS and 95th-percentile errors, and each pair's residual. The coordinates must use the
+same units. This is the numerical starting point for scan registration; the
+window does not yet collect point pairs, refine with ICP or apply this matrix
+to a merged export.
+
 ## Station photos and walking
 
 E57 scans often carry the photos taken at each station as pinhole images, for example six cube faces of 90 degrees. They are listed from the file metadata when a scan opens; nothing is decoded until it is shown. Every station with photos is drawn as a ball that shows its surroundings, and stays visible through walls and roofs like the station markers.
@@ -190,7 +199,7 @@ A scan with photos, panoramas and photos along a path as well as the photos of i
 
 A photo only colours a point that it sees: for every photo the scan itself is laid out as seen from where the photo was taken, about a fifth of a degree per pixel, and a point that lies more than a few centimetres behind what is nearest in that direction is hidden from it. Points that no photo sees keep the colour they had. For a large scan the points are read from its index at a detail that follows their distance to each photo; a scan without an index of more than 5,000,000 points needs its index first (INDEX > **Build index**). A large region is coloured in parts of at most 8,000,000 points.
 
-When the job is done the scene shows the colours, in **RGB**. They take the place of the colours of the file for this scan until it is closed: **Undo** takes them back and **Redo** gives them again, and **Remove photo colours** takes them away, which can be undone as well. A later colouring is laid over the colours of an earlier one. Undo keeps at most about 1 GB of earlier photo colours, which for a scan of a hundred million points is about three colourings; beyond that a new colouring lets go of the oldest edits, and the status bar says how many. Closing the window stops a colouring that is under way. The file itself is not changed; an export writes the points with their photo colours. An E57 is then written as one scan of coordinates, colours and intensity, and points that no photo saw are written black when the file had no colours.
+When the job is done the scene shows the colours, in **RGB**. They take the place of the colours of the file for this scan until it is closed: **Undo** takes them back and **Redo** gives them again, and **Remove photo colours** takes them away, which can be undone as well. A later colouring is laid over the colours of an earlier one. Undo keeps at most about 1 GB of earlier photo colours, which for a scan of a hundred million points is about three colourings; beyond that a new colouring lets go of the oldest edits, and the status bar says how many. Closing the window stops a colouring that is under way. The file itself is not changed; an export writes the points with their photo colours. An E57 is then written as one scan of coordinates, colours and intensity, with the source photos and their camera poses retained when the transform is a positive uniform scale and translation. Points that no photo saw are written black when the file had no colours.
 
 The block then reports the points coloured and the share that no photo sees. When the points had colours, it also gives the mean and the median difference per channel (red, green and blue, from 0 to 255) between the photo colours and the colours they had. The colours a file stores are often made from the same photos with an exposure and a processing of their own, so a difference of a few tens remains even where the photos sit exactly right.
 

@@ -292,9 +292,27 @@ fn export_edited_where(
     expected_count: u64,
     mut include: impl FnMut(u64, &Point) -> bool,
 ) -> Result<(), pointcloud_core::LoadError> {
-    // Photo colours are written point by point; an E57 is then written as
-    // one scan of coordinates, colours and intensity.
     if let Some(colours) = colours {
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
+        {
+            pointcloud_core::export_e57_map_with_images(
+                &painted(cloud),
+                destination,
+                Some(expected_count),
+                transform.scale[0],
+                transform.offset,
+                |ordinal, point| {
+                    include(ordinal, &point)
+                        .then(|| painted_point(point, ordinal, transform, colours))
+                },
+            )?;
+            return Ok(());
+        }
         return pointcloud_core::export_map(
             &painted(cloud),
             destination,
@@ -357,6 +375,28 @@ fn export_edited_section(
     deleted: Option<&DeletionMask>,
 ) -> Result<u64, pointcloud_core::LoadError> {
     if let Some(colours) = colours {
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
+        {
+            return pointcloud_core::export_e57_map_with_images(
+                &painted(cloud),
+                destination,
+                None,
+                transform.scale[0],
+                transform.offset,
+                |ordinal, point| {
+                    if deleted.is_some_and(|mask| mask.contains(ordinal)) {
+                        return None;
+                    }
+                    let point = painted_point(point, ordinal, transform, colours);
+                    section.contains(point.xyz).then_some(point)
+                },
+            );
+        }
         return pointcloud_core::export_map_auto_count(
             &painted(cloud),
             destination,
@@ -665,6 +705,13 @@ fn main() -> iced::Result {
         cli::finish(
             cli::scans(&args.collect::<Vec<_>>()),
             "Usage: open-pointcloud-studio --scans INPUT",
+        );
+        return Ok(());
+    }
+    if first.as_deref() == Some(OsStr::new("--register-points")) {
+        cli::finish(
+            cli::register_points(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --register-points PAIRS.json",
         );
         return Ok(());
     }

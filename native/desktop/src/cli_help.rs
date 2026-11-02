@@ -62,6 +62,12 @@ pub const MODES: &[Mode] = &[
         description: key("Prints the scanner positions stored in a scan."),
     },
     Mode {
+        flag: "--register-points",
+        short: None,
+        arguments: "PAIRS.json",
+        description: key("Fits a rigid registration from corresponding scan points and prints the transform and residuals as JSON."),
+    },
+    Mode {
         flag: "--photos",
         short: None,
         arguments: "INPUT OUTPUT_DIRECTORY",
