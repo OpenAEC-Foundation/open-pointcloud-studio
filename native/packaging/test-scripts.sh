@@ -1247,4 +1247,6 @@ fi
 if [[ "$failures" -ne 0 ]]; then
     fail "$failures of the tests failed"
 fi
+bash "$packaging_dir/macos/test-validate-ticket.sh"
+bash "$packaging_dir/macos/test-refresh-verification-record.sh"
 echo "all tests of the package scripts passed"

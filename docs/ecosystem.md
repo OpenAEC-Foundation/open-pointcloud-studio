@@ -253,6 +253,26 @@ The verification workflow uses an empty keyring and requires the configured
 fingerprint to match both the bundled public key and the validated signature.
 It needs no keyserver. This addresses the 2026.44.1 verification failure,
 where fetching the configured key from keys.openpgp.org returned no data.
+
+### Rechecking published macOS files
+
+`Recheck published macOS release` can verify an existing signed CalVer
+release without rebuilding, resigning or moving its tag. It authenticates
+the release manifest with the pinned OpenPGP key, checks the Mac file
+hashes, and requires Gatekeeper, ticket validation, strict code signatures,
+the native application version and the C SDK to pass on macOS 26 Intel.
+The pre-publication installer test still covers macOS 15 Intel.
+
+The change avoids the documented
+[macOS 15 Intel CloudKit connection failure](https://github.com/actions/runner-images/issues/14924).
+It applies GitHub's workaround on the ephemeral Intel runner: block UDP/443
+so Apple's ticket service uses HTTPS over TCP, retaining TLS validation.
+Ticket validation retries only that specific network error, with a bounded
+delay; invalid tickets and exhausted retries fail. Set `publish_record` to
+true to refresh the diagnostic record after success. The workflow preserves
+the original source commit and the other platform records, confirms their
+successful jobs, and links both the original and corrective runs. Package
+files are unchanged. The default leaves the new record as an artifact.
 Package-script tests cover a fresh keyring, a wrong fingerprint, a modified
 AppImage and an exported secret signing subkey with its primary key offline.
 
