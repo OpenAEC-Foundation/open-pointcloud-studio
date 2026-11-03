@@ -4,6 +4,32 @@ use crate::{scene_transform::SceneTransform, LoadError, Point, PointCloud};
 use std::collections::HashMap;
 use std::path::Path;
 
+mod posed;
+
+fn point_values(cloud: &PointCloud, point: Point, xyz: [f64; 3]) -> Vec<e57::RecordValue> {
+    use e57::RecordValue;
+    let mut values: Vec<_> = xyz.map(RecordValue::Double).into();
+    if cloud.has_rgb {
+        values.extend(
+            point
+                .rgb
+                .unwrap_or([0; 3])
+                .map(|v| RecordValue::Integer(i64::from(v))),
+        );
+    }
+    if cloud.has_intensity {
+        values.push(RecordValue::Integer(i64::from(
+            point.intensity.unwrap_or(0),
+        )));
+    }
+    if cloud.has_classification {
+        values.push(RecordValue::Integer(i64::from(
+            point.classification.unwrap_or(0),
+        )));
+    }
+    values
+}
+
 pub struct SceneSource<'a> {
     pub cloud: &'a PointCloud,
     pub transform: SceneTransform,
@@ -463,60 +489,52 @@ pub fn write_e57_scene(
                 });
             }
             let guid = format!("{{{}}}", uuid::Uuid::new_v4());
-            let mut output = writer.add_pointcloud(&guid, prototype)?;
-            if preserve_images {
-                output.set_name(Some(
-                    source
-                        .cloud
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into(),
-                ));
-                output.set_transform(Some(source.transform.pose(None)));
-            }
-            let mut ordinal = 0;
-            crate::visit_points(&source.cloud.path, &mut |point| {
-                if include(source_index, ordinal, &point) {
-                    let xyz = if preserve_images {
-                        point.xyz.map(|v| v * source.transform.scale)
-                    } else {
-                        source.transform.xyz(point.xyz)
-                    };
-                    let mut values: Vec<_> = xyz.map(RecordValue::Double).into();
-                    if source.cloud.has_rgb {
-                        values.extend(
-                            point
-                                .rgb
-                                .unwrap_or([0; 3])
-                                .map(|v| RecordValue::Integer(i64::from(v))),
-                        );
-                    }
-                    if source.cloud.has_intensity {
-                        values.push(RecordValue::Integer(i64::from(
-                            point.intensity.unwrap_or(0),
-                        )));
-                    }
-                    if source.cloud.has_classification {
-                        values.push(RecordValue::Integer(i64::from(
-                            point.classification.unwrap_or(0),
-                        )));
-                    }
-                    output.add_point(values)?;
-                    written += 1;
+            if preserve_images && !source.cloud.scan_poses.is_empty() {
+                let before = processed;
+                written += posed::write(
+                    &mut writer,
+                    source,
+                    prototype,
+                    &guid,
+                    &mut |ordinal, point| include(source_index, ordinal, point),
+                    &mut |read| progress(before + read, total),
+                )?;
+                processed += source.cloud.total_points;
+            } else {
+                let mut output = writer.add_pointcloud(&guid, prototype)?;
+                if preserve_images {
+                    output.set_name(Some(
+                        source
+                            .cloud
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into(),
+                    ));
                 }
-                ordinal += 1;
-                processed += 1;
-                if processed % 4096 == 0 {
-                    progress(processed, total)?;
+                let mut ordinal = 0;
+                crate::visit_points(&source.cloud.path, &mut |point| {
+                    if include(source_index, ordinal, &point) {
+                        output.add_point(point_values(
+                            source.cloud,
+                            point,
+                            source.transform.xyz(point.xyz),
+                        ))?;
+                        written += 1;
+                    }
+                    ordinal += 1;
+                    processed += 1;
+                    if processed % 4096 == 0 {
+                        progress(processed, total)?;
+                    }
+                    Ok(())
+                })?;
+                if ordinal != source.cloud.total_points {
+                    return Err(LoadError::InvalidData("source point count changed".into()));
                 }
-                Ok(())
-            })?;
-            if ordinal != source.cloud.total_points {
-                return Err(LoadError::InvalidData("source point count changed".into()));
+                output.finalize()?;
             }
-            output.finalize()?;
             if preserve_images {
                 crate::photo_edits::write_added(
                     &mut writer,
@@ -543,6 +561,128 @@ pub fn write_e57_scene(
 mod tests {
     use super::*;
     use crate::{photo_edits::PhotoEdits, FilePhoto, PhotoProjection, ScanImageFormat};
+
+    #[test]
+    fn mixed_export_keeps_pcd_and_each_ptx_station_without_inventing_origins() {
+        let dir = tempfile::tempdir().unwrap();
+        let pcd = dir.path().join("posed.pcd");
+        std::fs::write(&pcd, "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 2\nVIEWPOINT 10 20 30 0.7071067811865476 0 0 0.7071067811865476\nDATA ascii\n1 2 3\n2 3 4\n").unwrap();
+        let ptx = dir.path().join("blocks.ptx");
+        std::fs::write(&ptx, crate::ptx::tests::THREE_BLOCKS).unwrap();
+        let xyz = dir.path().join("unposed.xyz");
+        std::fs::write(&xyz, "1 2 3\n2 3 4\n").unwrap();
+        let clouds: Vec<_> = [&pcd, &ptx, &xyz]
+            .map(|path| crate::open(path, 100).unwrap())
+            .into();
+        let transform = SceneTransform {
+            rotation: [[0., -1., 0.], [1., 0., 0.], [0., 0., 1.]],
+            translation: [100., 200., 300.],
+            scale: 2.,
+        };
+        let sources: Vec<_> = clouds
+            .iter()
+            .map(|cloud| SceneSource { cloud, transform })
+            .collect();
+        let out = dir.path().join("posed.e57");
+        assert_eq!(
+            write_e57_scene(
+                &sources,
+                &out,
+                true,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(())
+            )
+            .unwrap(),
+            10
+        );
+        let actual = crate::open(&out, 100).unwrap();
+        let expected: Vec<_> = clouds
+            .iter()
+            .flat_map(|cloud| cloud.points.iter().map(|point| transform.xyz(point.xyz)))
+            .collect();
+        for (point, expected) in actual.points.iter().zip(expected) {
+            assert!((0..3).all(|i| (point.xyz[i] - expected[i]).abs() < 1e-9));
+        }
+        let expected_poses: Vec<_> = clouds.iter().flat_map(|cloud| &cloud.scan_poses).collect();
+        assert_eq!(actual.scan_poses.len(), expected_poses.len());
+        for (pose, expected) in actual.scan_poses.iter().zip(expected_poses) {
+            let position = transform.xyz(expected.position);
+            assert!((0..3).all(|i| (pose.position[i] - position[i]).abs() < 1e-9));
+            let axes = expected.axes.unwrap().map(|axis| transform.direction(axis));
+            let actual_axes = pose.axes.unwrap();
+            assert!((0..3).all(|i| (0..3).all(|j| (actual_axes[i][j] - axes[i][j]).abs() < 1e-9)));
+        }
+        assert_eq!(
+            crate::e57_points::open_reader(&out)
+                .unwrap()
+                .pointclouds()
+                .len(),
+            5
+        );
+        let bare = dir.path().join("bare.e57");
+        write_e57_scene(&sources, &bare, false, &mut |_, _, _| true, &mut |_, _| {
+            Ok(())
+        })
+        .unwrap();
+        assert!(crate::open(&bare, 100).unwrap().scan_poses.is_empty());
+    }
+
+    #[test]
+    fn filtered_ptx_keeps_empty_scan_boundaries_and_unposed_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blocks.ptx");
+        std::fs::write(&path, crate::ptx::tests::THREE_BLOCKS).unwrap();
+        let cloud = crate::open(&path, 100).unwrap();
+        let sources = [SceneSource {
+            cloud: &cloud,
+            transform: SceneTransform::default(),
+        }];
+        let out = dir.path().join("filtered.e57");
+        assert_eq!(
+            write_e57_scene(
+                &sources,
+                &out,
+                true,
+                &mut |_, ordinal, _| ordinal >= 3,
+                &mut |_, _| Ok(())
+            )
+            .unwrap(),
+            3
+        );
+        let reader = crate::e57_points::open_reader(&out).unwrap();
+        assert_eq!(
+            reader
+                .pointclouds()
+                .iter()
+                .map(|scan| scan.records)
+                .collect::<Vec<_>>(),
+            [0, 2, 1]
+        );
+        let opened = crate::open(&out, 100).unwrap();
+        assert_eq!(opened.scan_poses.len(), 2);
+        assert!(opened.station_of(0).is_none());
+        assert_eq!(opened.station_pose(2).unwrap().position, [40., 50., 60.]);
+    }
+
+    #[test]
+    fn cancelling_a_posed_stream_releases_backpressure_and_keeps_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.pcd");
+        std::fs::write(&path, format!("FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 50000\nVIEWPOINT 10 20 30 1 0 0 0\nDATA ascii\n{}", "1 2 3\n".repeat(50000))).unwrap();
+        let cloud = crate::open(&path, 100).unwrap();
+        let sources = [SceneSource {
+            cloud: &cloud,
+            transform: SceneTransform::default(),
+        }];
+        let out = dir.path().join("cancel.e57");
+        std::fs::write(&out, b"existing output").unwrap();
+        let result = write_e57_scene(&sources, &out, true, &mut |_, _, _| true, &mut |_, _| {
+            Err(LoadError::Cancelled)
+        });
+        assert!(matches!(result, Err(LoadError::Cancelled)));
+        assert_eq!(std::fs::read(&out).unwrap(), b"existing output");
+    }
+
     #[test]
     fn mixed_scene_keeps_registered_photos_and_photo_edits_round_trip() {
         let dir = tempfile::tempdir().unwrap();
