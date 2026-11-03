@@ -489,7 +489,15 @@ pub fn write_e57_scene(
                 });
             }
             let guid = format!("{{{}}}", uuid::Uuid::new_v4());
-            if preserve_images && !source.cloud.scan_poses.is_empty() {
+            let has_scan_blocks = source
+                .cloud
+                .path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("pcd") || extension.eq_ignore_ascii_case("ptx")
+                });
+            if preserve_images && has_scan_blocks {
                 let before = processed;
                 written += posed::write(
                     &mut writer,
@@ -625,6 +633,61 @@ mod tests {
         })
         .unwrap();
         assert!(crate::open(&bare, 100).unwrap().scan_poses.is_empty());
+        let reader = crate::e57_points::open_reader(&out).unwrap();
+        assert!(reader.pointclouds()[0]
+            .name
+            .as_ref()
+            .unwrap()
+            .contains("posed.pcd"));
+    }
+
+    #[test]
+    fn all_unposed_ptx_blocks_keep_boundaries_and_unique_source_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unknown.PTX");
+        let text = crate::ptx::tests::THREE_BLOCKS
+            .replace("\n10 20 30\n", "\nnan nan nan\n")
+            .replace("\n40 50 60\n", "\nnan nan nan\n");
+        std::fs::write(&path, text).unwrap();
+        let cloud = crate::open(&path, 100).unwrap();
+        assert!(cloud.scan_poses.is_empty());
+        let sources = [SceneSource {
+            cloud: &cloud,
+            transform: SceneTransform::default(),
+        }];
+        let out = dir.path().join("unknown.e57");
+        assert_eq!(
+            write_e57_scene(
+                &sources,
+                &out,
+                true,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(())
+            )
+            .unwrap(),
+            6
+        );
+        let reader = crate::e57_points::open_reader(&out).unwrap();
+        let scans = reader.pointclouds();
+        assert_eq!(
+            scans.iter().map(|scan| scan.records).collect::<Vec<_>>(),
+            [3, 2, 1]
+        );
+        for (index, scan) in scans.iter().enumerate() {
+            assert!(scan.transform.is_none());
+            assert_eq!(
+                scan.name.as_deref(),
+                Some(format!("unknown.PTX — block {}", index + 1).as_str())
+            );
+        }
+        let actual = crate::open(&out, 100).unwrap();
+        assert!(actual.scan_poses.is_empty());
+        assert_eq!(actual.points.len(), cloud.points.len());
+        for (actual, original) in actual.points.iter().zip(&cloud.points) {
+            assert_eq!(actual.xyz, original.xyz);
+            assert_eq!(actual.rgb, original.rgb);
+            assert_eq!(actual.intensity, original.intensity);
+        }
     }
 
     #[test]

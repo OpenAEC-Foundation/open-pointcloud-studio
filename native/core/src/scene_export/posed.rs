@@ -98,18 +98,16 @@ pub(super) fn write(
                 if let Some(station) = station {
                     output.set_transform(Some(source.transform.pose(Some(station.pose(None)))));
                 }
-                output.set_name(Some(pose.map_or_else(
-                    || {
-                        source
-                            .cloud
-                            .path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned()
-                    },
-                    |pose| pose.label,
-                )));
+                let filename = source
+                    .cloud
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                output.set_name(Some(match pose {
+                    Some(pose) => format!("{filename} — {}", pose.label),
+                    None => format!("{filename} — block {scans}"),
+                }));
                 loop {
                     match next.take().or_else(|| receiver.recv().ok()) {
                         Some(begin @ Event::Begin(_)) => {
