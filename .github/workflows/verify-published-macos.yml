@@ -1,0 +1,157 @@
+name: Recheck published macOS release
+
+# Recheck immutable published bytes without rebuilding or moving the tag.
+# macos-15-intel's CloudKit route is broken (runner-images#14924); the
+# installer still has its pre-publication macOS 15 Intel compatibility test.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published signed CalVer tag to verify'
+        required: true
+        default: v2026.45.1
+      publish_record:
+        description: 'Update only the verification record after every check passes'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.meta.outputs.number }}
+      original_run: ${{ steps.meta.outputs.original_run }}
+      source_commit: ${{ steps.meta.outputs.source_commit }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      FINGERPRINT: ${{ vars.OPENAEC_GPG_FINGERPRINT }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test fail-closed ticket retries and record replacement
+        run: |
+          bash native/packaging/macos/test-validate-ticket.sh
+          bash native/packaging/macos/test-refresh-verification-record.sh
+          bash -n native/packaging/macos/verify-published.sh
+      - name: Download and authenticate the published inputs
+        id: meta
+        run: |
+          [[ "$TAG" =~ ^v[1-9][0-9]{3}\.([1-9]|[1-4][0-9]|5[0-3])\.(0|[1-9][0-9]?)$ ]]
+          number=${TAG#v}
+          [[ $(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft) == false ]]
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
+            --pattern '*_macos-universal.dmg' --pattern '*_macos-universal.tar.gz' \
+            --pattern '*_macos-universal-dylib.tar.gz' --pattern '*.AppImage' \
+            --pattern '*.AppImage.asc' --pattern SHA256SUMS --pattern SHA256SUMS.asc \
+            --pattern open-pointcloud-studio-signing-key.asc \
+            --pattern '*_verification.md' --pattern '*_verification.md.sha256'
+          bash native/packaging/verify-linux-signatures.sh assets "$number" "$FINGERPRINT"
+          (cd assets && sha256sum --ignore-missing -c SHA256SUMS && sha256sum -c "open-pointcloud-studio_${number}_verification.md.sha256")
+          old="assets/open-pointcloud-studio_${number}_verification.md"
+          original=$(sed -n 's/^- Original release run: //p' "$old" | head -n 1)
+          if [[ -z "$original" ]]; then original=$(sed -n 's/^- Run: //p' "$old" | head -n 1); fi
+          original=${original%% *}
+          [[ "$original" == "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/"* ]]
+          run_id=${original##*/}
+          [[ "$run_id" =~ ^[0-9]+$ ]]
+          commit=$(sed -n 's/^- Commit: //p' "$old" | head -n 1)
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > source-run.json
+          jq -e --arg commit "$commit" --arg tag "$TAG" '.head_sha == $commit and .head_branch == $tag' source-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > source-jobs.json
+          for part in windows linux macos-arm64; do
+            jq -e --arg name "Verify the published release ($part)" \
+              'any(.jobs[]; .name == $name and .conclusion == "success")' source-jobs.json
+          done
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "original_run=$run_id" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: authenticated-macos-inputs
+          overwrite: true
+          compression-level: 0
+          path: |
+            assets/*_macos-universal.dmg
+            assets/*_macos-universal.tar.gz
+            assets/*_macos-universal-dylib.tar.gz
+            assets/SHA256SUMS
+            assets/*_verification.md
+          if-no-files-found: error
+
+  verify:
+    needs: inputs
+    runs-on: macos-26-intel
+    timeout-minutes: 20
+    env:
+      NUMBER: ${{ needs.inputs.outputs.number }}
+      PART: macos-x86_64
+      MACOS_SIGNED: 'true'
+      SDK_MACOS_SIGNED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: authenticated-macos-inputs
+          path: assets
+      - name: Use GitHub's TCP workaround for the Apple ticket service
+        run: |
+          echo "block return out quick proto udp from any to any port 443" | sudo pfctl -f -
+          sudo pfctl -E
+      - name: Verify hashes, signatures, ticket, Gatekeeper, application and SDK
+        run: |
+          [[ $(uname -m) == x86_64 ]]
+          mkdir -p "$RUNNER_TEMP/verification"
+          record="$RUNNER_TEMP/verification/$PART.md"
+          printf '## %s\n\nRunner image %s %s, %s.\n\n' "$PART" "$ImageOS" "$ImageVersion" "$(uname -sm)" > "$record"
+          (cd assets && grep -E '_macos-universal(\.dmg|\.tar\.gz|-dylib\.tar\.gz)$' SHA256SUMS | shasum -a 256 -c -) | tee -a "$record"
+          bash native/packaging/macos/verify-published.sh "$PWD/assets" "$NUMBER" "$record"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corrected-macos-verification
+          overwrite: true
+          path: ${{ runner.temp }}/verification
+          if-no-files-found: error
+
+  record:
+    needs: [inputs, verify]
+    if: inputs.publish_record
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      NUMBER: ${{ needs.inputs.outputs.number }}
+      ORIGINAL_RUN: ${{ needs.inputs.outputs.original_run }}
+      SOURCE_COMMIT: ${{ needs.inputs.outputs.source_commit }}
+      CORRECTION_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      CORRECTION_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: authenticated-macos-inputs
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: corrected-macos-verification
+          path: corrected
+      - name: Attach the verified report without replacing packages
+        run: |
+          record="open-pointcloud-studio_${NUMBER}_verification.md"
+          bash native/packaging/macos/refresh-verification-record.sh "$TAG" \
+            "assets/$record" corrected/macos-x86_64.md "$record"
+          sha256sum "$record" > "$record.sha256"
+          cat "$record" >> "$GITHUB_STEP_SUMMARY"
+          gh release upload "$TAG" "$record" "$record.sha256" --clobber --repo "$GITHUB_REPOSITORY"
