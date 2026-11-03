@@ -226,7 +226,7 @@ exports and exports after Colour from photos.
 
 ![Photo editing and camera placement](screenshots/photo-editor-2026-45-0.png)
 
-The [2026.45.0 validation record](validation/2026.45.0.md) describes the
+The [2026.45.1 validation record](validation/2026.45.1.md) describes the
 GUI, API, MCP and independent-file checks and their coverage limits.
 
 ## Panoramas and photos along a path

@@ -164,6 +164,53 @@ mod tests {
         let _ = studio.remove_clouds(vec![0]);
         assert_eq!(studio.registration.moving, None);
     }
+
+    #[test]
+    fn the_section_clips_moving_samples_after_the_initial_alignment() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut studio = Studio::default();
+        for (name, points) in [
+            (
+                "fixed.xyz",
+                "100 200 300\n101 200 300\n100 201 300\n100 200 301\n102 202 302\n110 210 310\n",
+            ),
+            (
+                "moving.xyz",
+                "0 0 0\n1 0 0\n0 1 0\n0 0 1\n2 2 2\n10 10 10\n",
+            ),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, points).unwrap();
+            let _ = studio.update(Message::Loaded(Ok(Arc::new(
+                pointcloud_core::open(path, 100).unwrap(),
+            ))));
+        }
+        let _ = send(
+            &mut studio,
+            serde_json::json!({"command":"registration_setup","fixed":0,"moving":1}),
+        );
+        let _ = send(
+            &mut studio,
+            serde_json::json!({"command":"registration_set_matrix","transform":{"rotation":[[1,0,0],[0,1,0],[0,0,1]],"translation":[100,200,300],"scale":1}}),
+        );
+        assert_eq!(
+            send(
+                &mut studio,
+                serde_json::json!({"command":"set_section","min":[99.9,199.9,299.9],"max":[101.1,201.1,301.1]})
+            )["ok"],
+            true
+        );
+        let fixed = studio.registration_samples(0).unwrap();
+        let moving = studio.registration_samples(1).unwrap();
+        assert_eq!(fixed.len(), 4);
+        assert_eq!(
+            moving,
+            [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]
+        );
+        for (fixed, moving) in fixed.into_iter().zip(moving) {
+            assert_eq!(studio.registration.transform.xyz(moving), fixed);
+        }
+    }
 }
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -406,7 +453,14 @@ impl Studio {
                     .is_none_or(|mask| !mask.contains(**ordinal))
             })
             .map(|(p, _)| entry.transform.xyz(p.xyz))
-            .filter(|p| section.is_none_or(|b| b.contains(*p)))
+            .filter(|p| {
+                let aligned = if self.registration.moving == Some(index) {
+                    self.registration.transform.xyz(*p)
+                } else {
+                    *p
+                };
+                section.is_none_or(|b| b.contains(aligned))
+            })
             .collect())
     }
     pub(crate) fn registration_action(&mut self, action: Action) -> Task<Message> {

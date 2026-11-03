@@ -239,7 +239,7 @@ Evidence:
 - CI: the release run (Packages, SDK) and the tag run (`publish`, `image`, `verify-release`, `verification-record`).
 - Owner: confirm that the Windows signing secrets and the six `APPLE_*` secrets are set for the organisation. For the OpenPGP signatures ([style book #10](https://github.com/OpenAEC-Foundation/OpenAEC-style-book/issues/10)): an organisation key with an ed25519 signing subkey and the primary key kept offline; the secrets `OPENAEC_GPG_PRIVATE_KEY` (the armoured secret subkey) and `OPENAEC_GPG_PASSPHRASE` and the variable `OPENAEC_GPG_FINGERPRINT` of the organisation; the public key on keys.openpgp.org and on the website; and who holds the primary key, where its offline copy is kept and when it expires. Until then `sign-linux.sh` signs nothing and the notes name no signature.
 
-### Public signing key from 2026.45.0
+### Public signing key from 2026.45.1
 
 When Linux signing is configured, the release carries
 `open-pointcloud-studio-signing-key.asc`. Inspect it with

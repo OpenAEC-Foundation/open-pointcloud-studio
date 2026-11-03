@@ -49,7 +49,7 @@ RCP/RCS writer. Before considering an optional integration, establish SDK
 access, redistribution and license compatibility with the LGPL application,
 current platform support, and how scanner photos and registration metadata
 would map. Until those are verified, **E57 is the supported interchange
-format**. This is the implemented route for release 2026.45.0; the export
+format**. This is the implemented route for release 2026.45.1; the export
 does not advertise `.rcp` or `.rcs` as output formats. Autodesk also describes an RCP as a project referencing its RCS
 files in its [file-format guide][project].
 
