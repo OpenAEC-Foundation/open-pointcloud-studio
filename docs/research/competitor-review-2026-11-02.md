@@ -1,12 +1,14 @@
 # Point-cloud competitor review and proposed priorities
 
-Reviewed: 2 November 2026. Repository baseline: `b273590` (`upstream/main`, release 2026.44.1).
+Initially reviewed: 2 November 2026. Updated: 4 November 2026. Repository baseline: `afe5c0c` (`upstream/main`, including the 2026.45.1 registration and exchange work).
+
+The [weekly competitor watchlist](competitor-watchlist.md) expands this review with products, research questions and an issue deduplication procedure.
 
 ## Recommendation
 
-Prioritise **registration of scans from different sources**, followed by **repeatable drawing delivery** and **exportable quality evidence**. Keep the native, local workflow and open exchange formats as the foundation.
+Prioritise **field validation of the implemented registration and exchange workflows**, followed by **repeatable drawing delivery** and **exportable quality evidence**. Keep the native, local workflow and open exchange formats as the foundation.
 
-This is a research proposal, not a promise of implemented features or a release commitment. The strongest demand signal is the user feedback recorded in [issue #44](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/44): aligning static and SLAM scans. Competitor capabilities help define the workflow; they do not establish demand on their own. The earlier [October requirements study, #32](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/32), explicitly says its priorities still need validation with project users.
+This is a research proposal, not a release commitment. Registration, ICP, mixed-format export and the ReCap handoff were implemented after the initial review in [PR #47](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/47), with follow-up corrections in [#48](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/48), [#49](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/49) and [#50](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/50). Do not create new feature issues for that existing scope. The strongest demand signal is the user feedback recorded in [issue #44](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/44): aligning static and SLAM scans. Competitor capabilities help define the workflow; they do not establish demand on their own. The earlier [October requirements study, #32](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/32), explicitly says its priorities still need validation with project users.
 
 ## Method and limits
 
@@ -27,26 +29,26 @@ The baseline comes from this repository's [README](../../README.md), [command AP
 
 | Area | Already documented in main | Remaining work or uncertainty |
 | --- | --- | --- |
-| Registration | Multiple scan layers, moving/scaling and restricted LAS/LAZ merging. | [#44](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/44) records the missing point-pair/ICP registration workflow and cross-format merge request. |
+| Registration | Point pairs, manual transforms, bounded point-to-plane ICP, residuals, reusable matrices and registered/mixed-format exports. | [#44](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/44) now tracks remaining vendor/indoor field validation; the feature itself is implemented. |
 | Drawings | Turned section boxes, plans/elevations/sections, measured contours and straight CAD polylines, DXF/DWG export. | Assess repeated cuts and export consistency across a whole building. Do not propose the existing line simplifier as new work. |
 | Drawing delivery | A4–A0 sheets, placed views, title blocks, PDF export, dimensions and annotations. Pointcloud to Drawing also has a persisted project and resume workflow. | Test whether an exported set carries enough source/settings information to reproduce and review it; extend the existing project rather than introducing a second project format. |
 | Quality | Detected-face RMS, P95/max and coverage; mesh-quality/deviation data in the API. | Audit which metrics survive export, how sampling is disclosed and whether they can be reviewed with their source and settings. Existing metrics are not a general scan-to-BIM tolerance check. |
 | Collaboration | Saved views, annotations and BCF 2.1 export. | Verify object identity and coordinate handling in receiving tools. Do not imply every existing BCF note is linked to an IFC object. |
-| Exchange and automation | E57/LAS/LAZ and other open formats; CLI, desktop API/MCP, service API and C library. | Photo/station preservation and ReCap handoff still have open work: [#42](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/42), [#45](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/45). |
+| Exchange and automation | E57/LAS/LAZ and other open formats; station/photo preservation, panorama editing, ReCap E57 handoff; CLI, desktop API/MCP, service API and C library. | [#42](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/42) retains vendor panorama validation. [#45](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/45) is closed; see the implemented [ReCap transfer and its validation boundary](../recap-interoperability.md). |
 
 ## Proposed implementation slices
 
-### 1. Registration preview — first implementation candidate
+### 1. Validate the existing registration and exchange workflow
 
-Extend #44 with a small first slice: choose a fixed scan and a moving scan, pick at least three non-collinear corresponding pairs and preview a rigid transform. Rotation and translation belong to this operation; scale remains unchanged. ICP and cross-format merge are later slices of the same issue, not prerequisites for reviewing this first interaction.
+The first review proposed point-pair registration as an implementation slice. Main now includes it, ICP, registered exports and panorama editing. Use [2026.45.1 validation](../validation/2026.45.1.md) as the starting evidence, not as proof of every scanner/workflow combination.
 
-Acceptance criteria:
+Research acceptance criteria:
 
-- Display residuals per pair and an aggregate RMS with explicit units. Reject degenerate pairs with an actionable message.
-- Keep the original transform until the user applies the preview; cancel leaves it intact and undo restores it after application.
-- Show and export the 4×4 matrix, reference/moving scan identity and coordinate convention. A saved/reopened project retains the applied transform.
-- Rendering, point picking, measurements, section drawings and point export use the same transform. Existing station/photo poses follow it where supported; unsupported preservation is disclosed.
-- Verify with generated geometry with a known transform, large coordinate offsets and a degenerate case. Then validate a static/SLAM overlap with authorised data, kept out of the repository. Pair-fit residual is not a claim of absolute survey accuracy.
+- Observe a user aligning static and SLAM scans of the same indoor space; record setup time, confusing steps, failures and corrections.
+- Check pair residuals, overlap and independent check points separately. A small fit residual does not establish absolute survey accuracy or remove SLAM drift.
+- Validate a vendor SLAM E57 with panoramas and check that image associations, scanner/camera poses and units survive the registered export; keep the remaining checks under #42/#44.
+- Complete a real Windows ReCap import of the prepared E57, including supported panoramas. The existing independent E57 checks do not establish a ReCap import result.
+- Reuse the existing issues for new evidence unless a separate, confirmed defect or need has a demonstrably different scope.
 
 ### 2. Repeatable drawing-set delivery
 
@@ -74,7 +76,7 @@ Acceptance criteria:
 
 | Order | Reason | Next evidence |
 | --- | --- | --- |
-| Registration preview | Direct reported user need in #44; a clear CloudCompare reference workflow. | Observe a user aligning a static and SLAM scan; record failure points and whether the preview is understandable. |
+| Registration field validation | Direct reported user need in #44; implementation and public-data checks now exist. | Observe the indoor static/SLAM workflow and validate vendor panoramas; record evidence under #42/#44. |
 | Repeatable drawing delivery | Builds on the existing product and the PointCab workflow. | Time the two-storey task and count manual corrections and settings that must be re-entered. |
 | Quality evidence | Supports review and the open requirements in #32; inspired by CloudCompare and Cyclone workflows. | Ask a receiving engineer which measurements, provenance and formats are required to accept an output. |
 
