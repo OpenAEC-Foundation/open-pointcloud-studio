@@ -457,6 +457,8 @@ mod tests {
         ),
         ("open_progress.rs", include_str!("open_progress.rs")),
         ("photo_colours.rs", include_str!("photo_colours.rs")),
+        ("photo_editor.rs", include_str!("photo_editor.rs")),
+        ("registration_tool.rs", include_str!("registration_tool.rs")),
         (
             "opencad_properties.rs",
             include_str!("opencad_properties.rs"),

@@ -364,6 +364,15 @@ impl Default for PhotoTool {
 }
 
 impl PhotoTool {
+    pub(crate) fn invalidate(&mut self, source: &Path) {
+        self.cache.retain(|photo| photo.source != source);
+        self.failed.retain(|(path, _)| path != source);
+        self.decoding.retain(|(path, _)| path != source);
+        if self.view.as_ref().is_some_and(|view| view.source == source) {
+            self.close();
+        }
+    }
+
     fn cached(&self, source: &Path, index: usize) -> Option<&Arc<DecodedPhoto>> {
         self.cache
             .iter()
@@ -624,7 +633,11 @@ impl Studio {
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"));
-        if !is_e57 || self.photos.files.contains_key(&path) || self.photos.listing.contains(&path) {
+        let has_edits = pointcloud_core::photo_edits::PhotoEdits::path(&path).exists();
+        if (!is_e57 && !has_edits)
+            || self.photos.files.contains_key(&path)
+            || self.photos.listing.contains(&path)
+        {
             return Task::none();
         }
         self.photos.listing.insert(path.clone());
@@ -660,11 +673,20 @@ impl Studio {
                 self.photos.listing.remove(&path);
                 let open = self.clouds.iter().any(|entry| entry.cloud.path == path);
                 match result {
-                    Ok(photos)
+                    Ok(mut photos)
                         if open
                             && (!photos.photos.is_empty()
                                 || photos.coordinate_system.is_some()) =>
                     {
+                        if pointcloud_core::photo_edits::PhotoEdits::path(&path).exists() {
+                            match pointcloud_core::file_photos(&path) {
+                                Ok(latest) => photos = Arc::new(latest),
+                                Err(error) => {
+                                    self.status = error.to_string();
+                                    return Task::none();
+                                }
+                            }
+                        }
                         self.photos.files.insert(path, photos);
                     }
                     Ok(_) => {}

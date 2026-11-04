@@ -377,7 +377,9 @@ jobs:
           - name: macos-arm64
             runner: macos-15
           - name: macos-x86_64
-            runner: macos-15-intel
+            # 15-intel drops CloudKit ticket requests (runner-images#14924).
+            # The pre-publication installer test still covers macOS 15 Intel.
+            runner: macos-26-intel
           - name: linux
             runner: ubuntu-24.04
     runs-on: ${{ matrix.runner }}
@@ -400,6 +402,8 @@ jobs:
       LINUX_GPG_FINGERPRINT: ${{ vars.OPENAEC_GPG_FINGERPRINT }}
       PART: ${{ matrix.name }}
     steps:
+      - uses: actions/checkout@v4
+        if: matrix.name != 'windows'
       - name: Start the record
         run: |
           mkdir -p "$RUNNER_TEMP/verification"
@@ -524,63 +528,18 @@ jobs:
           cd release
           grep -E '_macos-universal(\.dmg|\.tar\.gz|-dylib\.tar\.gz)$' SHA256SUMS | shasum -a 256 -c - \
             | tee -a "$RUNNER_TEMP/verification/$PART.md"
+      # GitHub's documented workaround: keep HTTPS certificate validation,
+      # but force TCP instead of the broken UDP/443 route on Intel runners.
+      - name: Use TCP for Apple ticket validation
+        if: matrix.name == 'macos-x86_64'
+        run: |
+          echo "block return out quick proto udp from any to any port 443" | sudo pfctl -f -
+          sudo pfctl -E
       - name: Verify the published release
         if: startsWith(matrix.name, 'macos')
         run: |
-          record="$RUNNER_TEMP/verification/$PART.md"
-          identities="$RUNNER_TEMP/verification/identities-$PART.txt"
-          failures=()
-          # shown COMMAND...: runs it, and puts it with its output and exit
-          # code into the record.
-          shown() {
-            local output code
-            output=$("$@" 2>&1) && code=0 || code=$?
-            { echo "\`$*\` (exit $code)"; echo; echo '```'; echo "$output"; echo '```'; echo; } >> "$record"
-            echo "$output"
-            return "$code"
-          }
-          dmg="release/open-pointcloud-studio_${NUMBER}_macos-universal.dmg"
-          # Marked as a browser marks a download, so that the system assesses
-          # it as it would assess a download.
-          xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");verify-release;$(uuidgen)" "$dmg"
-          { echo "### Assessment and notarization"; echo; } >> "$record"
-          accepted=true
-          shown spctl -a -t open --context context:primary-signature -v "$dmg" > /dev/null || accepted=false
-          shown xcrun stapler validate "$dmg" > /dev/null || accepted=false
-          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/image" "$dmg" > /dev/null
-          app="$RUNNER_TEMP/image/Open Pointcloud Studio.app"
-          shown spctl --assess --type execute -vv "$app" > /dev/null || accepted=false
-          if [[ "$MACOS_SIGNED" == true && "$accepted" != true ]]; then
-            failures+=("the release says the app is notarized, and spctl or the ticket does not agree")
-          fi
-          { echo "### Signatures"; echo; } >> "$record"
-          mkdir -p "$RUNNER_TEMP/unpacked"
-          tar -xzf "release/open-pointcloud-studio_${NUMBER}_macos-universal.tar.gz" -C "$RUNNER_TEMP/unpacked"
-          tar -xzf "release/open-pointcloud-studio-sdk_${NUMBER}_macos-universal-dylib.tar.gz" -C "$RUNNER_TEMP/unpacked"
-          sdk="$RUNNER_TEMP/unpacked/open-pointcloud-studio-sdk_${NUMBER}_macos-universal-dylib"
-          for file in "$app" "$app/Contents/MacOS/open-pointcloud-studio" "$app/Contents/MacOS/OpenCADStudio" \
-              "$RUNNER_TEMP/unpacked/open-pointcloud-studio_${NUMBER}_macos-universal/open-pointcloud-studio" \
-              "$sdk/lib/libops_pointcloud.dylib"; do
-            details=$(shown codesign -dvv --verbose=4 "$file") || failures+=("codesign cannot read the signature of $file")
-            expected=$MACOS_SIGNED
-            [[ "$file" != *.dylib ]] || expected=$SDK_MACOS_SIGNED
-            if [[ "$expected" == true ]]; then
-              grep -q '^Authority=Developer ID Application' <<< "$details" \
-                || failures+=("$(basename "$file") is not signed with the developer certificate")
-              echo "Team ID of the signature of $(basename "$file"): $(sed -n 's/^TeamIdentifier=//p' <<< "$details")" >> "$identities"
-            fi
-          done
-          hdiutil detach "$RUNNER_TEMP/image" > /dev/null
-          { echo "### The C library on $(uname -m)"; echo; } >> "$record"
-          cc -std=c11 -Wall -Wextra -Werror -I"$sdk/include" "$sdk/examples/inspect.c" \
-            -L"$sdk/lib" -lops_pointcloud -Wl,-rpath,"$sdk/lib" -o "$RUNNER_TEMP/inspect"
-          mkdir -p "$RUNNER_TEMP/run"
-          shown "$RUNNER_TEMP/inspect" "$RUNNER_TEMP/run" > /dev/null || failures+=("the example of the C library failed")
-          if [[ ${#failures[@]} -gt 0 ]]; then
-            { echo "**Failed:**"; printf -- '- %s\n' "${failures[@]}"; } >> "$record"
-            printf '::error::%s\n' "${failures[@]}"
-            exit 1
-          fi
+          bash native/packaging/macos/verify-published.sh "$PWD/release" "$NUMBER" \
+            "$RUNNER_TEMP/verification/$PART.md"
 
       # ---- Linux and the image ----------------------------------------------
       - name: Download every file of the release
@@ -616,15 +575,12 @@ jobs:
           echo >> "$record"
           if [[ "$LINUX_GPG_SIGNED" == true ]]; then
             { echo "### OpenPGP"; echo; } >> "$record"
-            gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$LINUX_GPG_FINGERPRINT" \
-              || failures+=("the key $LINUX_GPG_FINGERPRINT cannot be fetched from keys.openpgp.org")
-            for file in SHA256SUMS *.AppImage; do
-              if output=$(gpg --batch --verify "$file.asc" "$file" 2>&1); then
-                echo "- $file: $(grep -m1 'Good signature' <<< "$output")" >> "$record"
-              else
-                failures+=("gpg --verify $file.asc $file failed")
-              fi
-            done
+            if output=$(bash ../native/packaging/verify-linux-signatures.sh . "$NUMBER" "$LINUX_GPG_FINGERPRINT" 2>&1); then
+              printf '%s\n' "$output" >> "$record"
+            else
+              printf '%s\n' "$output" >> "$record"
+              failures+=("OpenPGP signatures or the pinned public key do not verify")
+            fi
             echo "OpenPGP fingerprint: $LINUX_GPG_FINGERPRINT" >> "$identities"
           else
             echo "OpenPGP: no key is configured, so the release carries no OpenPGP signatures." >> "$record"
@@ -676,6 +632,7 @@ jobs:
         if: always()
         with:
           name: verification-${{ matrix.name }}
+          overwrite: true
           path: ${{ runner.temp }}/verification
           if-no-files-found: error
 

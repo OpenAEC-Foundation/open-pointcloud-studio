@@ -59,6 +59,7 @@ pub const READ_ONLY: &[&str] = &[
     "list_sheets",
     "list_faces",
     "list_photos",
+    "registration_matrix",
     "list_extensions",
     "list_tabs",
     "context",
@@ -90,6 +91,7 @@ pub const DESTRUCTIVE: &[&str] = &[
     "export_faces",
     "clear_faces",
     "export",
+    "export_recap",
     "export_section",
     "export_selection",
     "export_minus_selection",
@@ -100,6 +102,10 @@ pub const DESTRUCTIVE: &[&str] = &[
     "export_sheet_pdf",
     "export_drawing_file",
     "merge_visible",
+    "add_panorama",
+    "edit_photo",
+    "delete_photo",
+    "registration_export",
     "bag3d",
     "install_extension",
     "run_extension",
@@ -352,6 +358,26 @@ fn face_settings() -> Vec<Argument> {
     ]
 }
 
+fn panorama_arguments(add: bool) -> Vec<Argument> {
+    let mut arguments = vec![
+        required("position", xyz("Source camera position [x,y,z]")),
+        optional("name", text("Photo name", 1, 256)),
+        optional("heading", number("Degrees clockwise from north")),
+        optional("pitch", number("Pitch in degrees")),
+        optional("roll", number("Roll in degrees")),
+        optional("layer", ordinal("Layer index")),
+    ];
+    if add {
+        arguments.push(required(
+            "path",
+            text("Absolute JPG/PNG panorama path", 1, 32768),
+        ));
+    } else {
+        arguments.push(required("index", ordinal("Photo index")));
+    }
+    arguments
+}
+
 fn view_name() -> Value {
     text(
         "Name of a saved view of the active scan; letter case is ignored",
@@ -361,7 +387,7 @@ fn view_name() -> Value {
 }
 
 const POINT_FILE: &str = "Absolute destination path; its extension (.ply, .xyz, .pts, .csv, .las, .laz or .e57) selects the format. The file is replaced atomically";
-const LAS_FILE: &str = "Absolute destination path ending in .las or .laz";
+const LAS_FILE: &str = "Absolute destination path ending in .e57, .las or .laz; E57 retains stations and photos by default";
 const OBJ_FILE: &str = "Absolute destination path ending in .obj";
 const MESH_JOB_FILE: &str = "Absolute destination path. Required for terrain and surface, where it ends in .obj. For closed it may be left out: the mesh then only becomes the mesh of the active layer; with a path ending in .obj, .ply, .stl, .dxf, .dwg or .ifc in a folder that exists it is also written there, as the scene shows it";
 const MESH_FILE: &str = "Absolute destination path; its extension selects the format: .obj (colours and normals), .ply (binary, double coordinates, colours and normals), .stl (binary, triangles only), .dxf or .dwg (editable MESH entities on layer OPS-MESH, metres; no ACIS solids) or .ifc (IFC4 building element proxy with a triangulated face set). The file is replaced atomically";
@@ -452,6 +478,17 @@ fn table() -> Vec<Tool> {
             required("index", ordinal("Zero-based photo number, as list_photos gives it")),
             optional("layer", ordinal("Zero-based layer index; without it the active layer when it has photos, else the first layer with photos")),
         ]),
+        tool("add_panorama", Command, "Adds a JPG or PNG 2:1 equirectangular panorama to a scan. Camera position is in source coordinates, heading in degrees clockwise from north, pitch and roll in degrees. Edits are non-destructive, persistent, undoable and included in E57 exports.", panorama_arguments(true)),
+        tool("edit_photo", Command, "Changes the name, position and orientation of an existing photo, with Undo and persistent E57 export.", panorama_arguments(false)),
+        tool("delete_photo", Command, "Removes a photo from the layer and subsequent E57 exports; undo_delete restores it.", vec![required("index",ordinal("Photo index")),optional("layer",ordinal("Layer index"))]),
+        tool("registration_setup", Command, "Chooses two open scans and clears their corresponding point pairs.", vec![required("fixed",ordinal("Reference scan layer")),required("moving",ordinal("Moving scan layer"))]),
+        tool("registration_pair", Command, "Adds one corresponding reference/moving point pair in scene coordinates.", vec![required("fixed",xyz("Reference point")),required("moving",xyz("Corresponding moving point"))]),
+        tool("registration_fit", Command, "Fits the coarse rigid alignment from at least three non-collinear point pairs and reports per-pair residuals.",vec![]),
+        tool("registration_refine", Job, "Refines the selected scans with bounded point-to-plane ICP in the section box when enabled; returns RMS/p95 and opens a deviation-coloured preview.",vec![]),
+        tool("registration_export", Job, "Applies the registration to the full moving scan, or merges it with the reference; writes E57 retaining stations and photos plus a reusable registration JSON.",vec![required("path",text("Absolute .e57 output path",1,32768)),optional("merge",boolean("Include reference scan (default false)")),optional("keep_stations_photos",boolean("Keep stations and photos in E57 (default true)"))]),
+        tool("registration_set_matrix",Command,"Loads a previously saved rigid registration for the selected moving scan.",vec![required("transform",json!({"description":"Rigid registration with a 3x3 rotation, translation and positive uniform scale","type":"object","required":["rotation","translation","scale"],"properties":{"rotation":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"number"}}},"translation":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"number"}},"scale":{"type":"number","exclusiveMinimum":0}},"additionalProperties":false}))]),
+        tool("registration_matrix", Command, "Reports the current registration matrix, point pairs, residuals and ICP state.",vec![]),
+        tool("cancel_registration", Command, "Cancels the active registration or registered export.",vec![]),
         tool("photo_blend", Command, "Sets how much of the entered photo covers the points, as the Photo slider does: 0 shows the points only, 1 the photo only. It stays for later photos.", vec![
             required("value", number_in("From 0 to 1", 0.0, 1.0)),
         ]),
@@ -789,8 +826,10 @@ fn table() -> Vec<Tool> {
             optional("path", path("Absolute path of an existing .dxf or .dwg file; without it the last exported one")),
         ]),
         tool("cancel_drawing", Command, "Cancels the running section drawing or preview; the step under way ends first, and an existing file at the destination is left as it is.", vec![]),
-        tool("merge_visible", Job, "Merges the visible LAS/LAZ layers, with their deletions and transforms, into one file. Answers with a job_id.", vec![
+        tool("export_recap", Job, "Prepares the active scan for Autodesk ReCap: an E57 with its camera images and a companion file with the official import steps. ReCap creates RCP/RCS when this E57 is imported and saved.",vec![required("path",path("Absolute .e57 destination"))]),
+        tool("merge_visible", Job, "Merges the visible layers, with their deletions and transforms, into one file. Answers with a job_id.", vec![
             required("path", path(LAS_FILE)),
+            optional("keep_stations_photos", boolean("Keep stations and photos for E57 output (default true); false writes only world-space points")),
         ]),
         tool("cancel_merge", Command, "Cancels the running merge.", vec![]),
         tool("bag3d", Job, "Downloads the buildings of the Dutch 3D BAG register inside a box in RD New coordinates of at most 2 by 2 km and about 5,000 buildings, writes them as a georeferenced OBJ mesh and opens that as a layer. Needs an internet connection. Answers with a job_id; the running job reports the page it is at, the complete job the buildings, vertices, triangles and pages. A denser area fails after the first page with the number of buildings it holds.", vec![
@@ -1104,6 +1143,7 @@ pub fn busy(result: &Value) -> Vec<&'static str> {
         ("selection_bounds_pending", "selection_bounds"),
         ("section_align_pending", "section_align"),
         ("thin_pending", "thin"),
+        ("registration_pending", "registration"),
         ("mesh_export_pending", "mesh_export"),
         ("detail_pending", "points"),
     ] {

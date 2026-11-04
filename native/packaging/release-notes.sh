@@ -111,9 +111,9 @@ if [[ "${LINUX_GPG_SIGNED:-false}" == "true" ]]; then
     fingerprint=$(tr -d ' ' <<< "${LINUX_GPG_FINGERPRINT:-}" | tr 'a-f' 'A-F')
     [[ "$fingerprint" =~ ^[0-9A-F]{40}([0-9A-F]{24})?$ ]] \
         || fail "LINUX_GPG_SIGNED=true needs the fingerprint of the key in LINUX_GPG_FINGERPRINT"
-    fetch="gpg --keyserver hkps://keys.openpgp.org --recv-keys $fingerprint"
-    linux_signing="\`SHA256SUMS.asc\` and the \`.asc\` beside each AppImage are OpenPGP signatures by the key of the OpenAEC Foundation with the fingerprint \`$fingerprint\`. Fetch the key with \`$fetch\` and check with \`gpg --verify SHA256SUMS.asc SHA256SUMS\` and \`gpg --verify FILE.AppImage.asc FILE.AppImage\`."
-    linux_signing_nl="\`SHA256SUMS.asc\` en de \`.asc\` naast elke AppImage zijn OpenPGP-handtekeningen met de sleutel van de OpenAEC Foundation, vingerafdruk \`$fingerprint\`. Haal de sleutel op met \`$fetch\` en controleer met \`gpg --verify SHA256SUMS.asc SHA256SUMS\` en \`gpg --verify BESTAND.AppImage.asc BESTAND.AppImage\`."
+    fetch="gpg --import open-pointcloud-studio-signing-key.asc"
+    linux_signing="\`SHA256SUMS.asc\` and the \`.asc\` beside each AppImage are OpenPGP signatures by the key of the OpenAEC Foundation with the fingerprint \`$fingerprint\`. Download \`open-pointcloud-studio-signing-key.asc\` from this release, inspect it with \`gpg --show-keys --with-fingerprint open-pointcloud-studio-signing-key.asc\` and compare the fingerprint above before importing it with \`$fetch\`. Check with \`gpg --verify SHA256SUMS.asc SHA256SUMS\` and \`gpg --verify FILE.AppImage.asc FILE.AppImage\`. No keyserver is required."
+    linux_signing_nl="\`SHA256SUMS.asc\` en de \`.asc\` naast elke AppImage zijn OpenPGP-handtekeningen met de sleutel van de OpenAEC Foundation, vingerafdruk \`$fingerprint\`. Download \`open-pointcloud-studio-signing-key.asc\` van deze release, bekijk de sleutel met \`gpg --show-keys --with-fingerprint open-pointcloud-studio-signing-key.asc\` en vergelijk eerst de bovenstaande vingerafdruk. Importeer daarna met \`$fetch\` en controleer met \`gpg --verify SHA256SUMS.asc SHA256SUMS\` en \`gpg --verify BESTAND.AppImage.asc BESTAND.AppImage\`. Een sleutelserver is niet nodig."
 fi
 
 footer=$(mktemp)
