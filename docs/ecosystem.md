@@ -214,7 +214,7 @@ Evidence:
 
 ## Signing per file
 
-Signing depends on the secrets of the organisation. Without the secrets of its code-signing account the Windows files are not signed; without its six `APPLE_*` secrets the macOS files are signed ad hoc and not notarized. The release notes say which a release is. *Check that the libraries are signed as the applications are* refuses a release whose application is signed while its library is not; a draft run only warns. The release workflow checks the published files with the commands of this table, in `verify-release`.
+Public publication requires verified signing outputs for the Windows application/installer, Windows SDK library, macOS application/disk image, macOS SDK library and Linux OpenPGP manifest. `require-signatures.sh` runs after signing and before the release draft is created or updated; a missing, false or malformed output fails publication even when all platform credentials are absent. An explicit draft-only run warns for every missing proof and cannot publish. The release workflow subsequently checks the downloaded files with the commands of this table, in `verify-release`. This gate establishes policy; the real publisher identities and cryptographic checks still require a successful organisation-signed release run.
 
 The last column is filled in from the first signed tag run; the verification record lists the same identities.
 
