@@ -22,6 +22,7 @@ mod export;
 pub mod grid2d;
 pub mod local_fit;
 mod mesh_formats;
+mod mesh_photo;
 mod mesh_points;
 mod mesh_quality;
 mod mesh_simplify;
@@ -98,7 +99,10 @@ pub use mesh_quality::{
     MeshTopology,
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
-pub use mesh_texture::{write_colored_obj_atlas, AtlasOptions, AtlasReport};
+pub use mesh_texture::{
+    write_colored_obj_atlas, write_photographic_obj_atlas, AtlasOptions, AtlasReport,
+    PhotoAtlasReport, PhotoAtlasRequest, PhotoTextureCoverage, PhotoTextureOptions,
+};
 pub use mesh_write::{read_stl_origin, write_mesh, MeshFormat, MeshWriteReport};
 pub use mesher::{
     mesh_terrain_obj, mesh_terrain_obj_where, mesh_terrain_obj_where_progress, MeshConfig,

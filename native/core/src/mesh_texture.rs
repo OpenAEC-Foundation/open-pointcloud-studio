@@ -9,8 +9,13 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
+
+use crate::mesh_photo::{ChartCoverage, PhotoBaker};
+pub use crate::mesh_photo::{PhotoTextureCoverage, PhotoTextureOptions};
 use crate::obj_mesh::{MeshGeometry, MAX_TRIANGLES, MAX_VERTICES};
-use crate::LoadError;
+use crate::photo_colour::PhotoPixels;
+use crate::{FilePhoto, LoadError};
 
 const MAX_PAGES: u32 = 512;
 
@@ -42,6 +47,119 @@ pub struct AtlasReport {
     pub max_resolution: u32,
 }
 
+/// Photographs and the surface share source coordinates. The output mesh
+/// may have moved, but must retain the source topology: UV sampling still
+/// refers to the original measurements, including after nonuniform scaling.
+pub struct PhotoAtlasRequest<'a> {
+    pub source_mesh: &'a MeshGeometry,
+    pub output_mesh: &'a MeshGeometry,
+    pub photos: &'a [FilePhoto],
+    pub atlas: AtlasOptions,
+    pub photographs: PhotoTextureOptions,
+}
+
+#[derive(Debug, Clone)]
+pub struct PhotoAtlasReport {
+    pub atlas: AtlasReport,
+    pub coverage: PhotoTextureCoverage,
+}
+
+/// Bake calibrated E57 photo pixels onto independent triangle UV charts.
+/// Missing observations use measured point colours, otherwise neutral grey;
+/// their counts remain separate. Decoding is lazy and cached for four images
+/// of at most 2048×2048 RGBA pixels. Rays reject hidden/back-facing surfaces.
+pub fn write_photographic_obj_atlas(
+    request: PhotoAtlasRequest<'_>,
+    destination: impl AsRef<Path>,
+    decode: &mut dyn FnMut(usize) -> Result<PhotoPixels, LoadError>,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<PhotoAtlasReport, LoadError> {
+    if request.source_mesh.triangles != request.output_mesh.triangles
+        || request.source_mesh.vertices.len() != request.output_mesh.vertices.len()
+    {
+        return Err(LoadError::InvalidData(
+            "texture source and output need the same mesh topology".into(),
+        ));
+    }
+    if cancelled() {
+        return Err(LoadError::Cancelled);
+    }
+    let mut baker = PhotoBaker::new(request.source_mesh, request.photos, request.photographs)?;
+    let mut coverage = PhotoTextureCoverage::default();
+    let mut used = vec![false; request.photos.len()];
+    let atlas = write_sampled_obj_atlas(
+        request.output_mesh,
+        destination.as_ref(),
+        request.atlas,
+        cancelled,
+        progress,
+        &mut |pixels, resolution, at, side, face| {
+            if cancelled() {
+                return Err(LoadError::Cancelled);
+            }
+            let chart = baker.chart(face, decode)?;
+            let indices = chart.photo_indices().collect::<Vec<_>>();
+            let counts = pixels
+                .par_chunks_exact_mut(resolution as usize * 3)
+                .skip(at[1] as usize)
+                .take(side as usize + 2)
+                .enumerate()
+                .map(|(row, pixels)| -> Result<ChartCoverage, LoadError> {
+                    let mut counts = ChartCoverage::default();
+                    let mut pending = Vec::with_capacity(32);
+                    for column in 0..side as usize + 2 {
+                        if column % 64 == 0 && cancelled() {
+                            return Err(LoadError::Cancelled);
+                        }
+                        let mut u = ((column as f64 - 1.0) / f64::from(side - 1)).clamp(0.0, 1.0);
+                        let mut v = ((row as f64 - 1.0) / f64::from(side - 1)).clamp(0.0, 1.0);
+                        if u + v > 1.0 {
+                            let sum = u + v;
+                            u /= sum;
+                            v /= sum;
+                        }
+                        let (rgb, category, mask) = chart.sample([1.0 - u - v, u, v], &mut pending);
+                        let offset = (at[0] as usize + column) * 3;
+                        pixels[offset..offset + 3].copy_from_slice(&rgb);
+                        if row >= 1 && column >= 1 && row + column <= side as usize + 1 {
+                            match category {
+                                0 => counts.photographs += 1,
+                                1 => counts.points += 1,
+                                _ => counts.unseen += 1,
+                            }
+                            counts.used |= mask;
+                        }
+                    }
+                    Ok(counts)
+                })
+                .try_reduce(ChartCoverage::default, |mut a, b| {
+                    a.photographs += b.photographs;
+                    a.points += b.points;
+                    a.unseen += b.unseen;
+                    a.used |= b.used;
+                    Ok(a)
+                })?;
+            coverage.photograph_texels += counts.photographs;
+            coverage.point_colour_texels += counts.points;
+            coverage.unobserved_texels += counts.unseen;
+            for (bit, index) in indices.into_iter().enumerate() {
+                if counts.used & (1 << bit) != 0 {
+                    used[index] = true;
+                }
+            }
+            Ok(())
+        },
+    )?;
+    coverage.photos_used = used
+        .iter()
+        .enumerate()
+        .filter_map(|(index, used)| used.then_some(index))
+        .collect();
+    coverage.photos_failed = baker.failed();
+    Ok(PhotoAtlasReport { atlas, coverage })
+}
+
 fn valid(mesh: &MeshGeometry, options: AtlasOptions) -> bool {
     !mesh.vertices.is_empty()
         && !mesh.triangles.is_empty()
@@ -50,7 +168,7 @@ fn valid(mesh: &MeshGeometry, options: AtlasOptions) -> bool {
         && mesh
             .colors
             .as_ref()
-            .is_some_and(|colors| colors.len() == mesh.vertices.len())
+            .is_none_or(|colors| colors.len() == mesh.vertices.len())
         && mesh
             .vertices
             .iter()
@@ -83,8 +201,8 @@ fn chart_size(mesh: &MeshGeometry, face: [u32; 3], options: AtlasOptions) -> (u3
 fn paint_chart(pixels: &mut [u8], resolution: u32, at: [u32; 2], side: u32, colors: [[u8; 3]; 3]) {
     for row in 0..side + 2 {
         for column in 0..side + 2 {
-            let mut u = (column as f64 - 1.0) / f64::from(side);
-            let mut v = (row as f64 - 1.0) / f64::from(side);
+            let mut u = (column as f64 - 1.0) / f64::from(side - 1);
+            let mut v = (row as f64 - 1.0) / f64::from(side - 1);
             u = u.clamp(0.0, 1.0);
             v = v.clamp(0.0, 1.0);
             if u + v > 1.0 {
@@ -132,12 +250,50 @@ pub fn write_colored_obj_atlas(
     cancelled: &dyn Fn() -> bool,
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<AtlasReport, LoadError> {
+    let Some(colors) = mesh
+        .colors
+        .as_ref()
+        .filter(|colors| colors.len() == mesh.vertices.len())
+    else {
+        return Err(LoadError::InvalidData(
+            "mesh has no measured colours".into(),
+        ));
+    };
+    write_sampled_obj_atlas(
+        mesh,
+        destination.as_ref(),
+        options,
+        cancelled,
+        progress,
+        &mut |pixels, resolution, at, side, face| {
+            paint_chart(
+                pixels,
+                resolution,
+                at,
+                side,
+                face.map(|index| colors[index as usize]),
+            );
+            Ok(())
+        },
+    )
+}
+
+type ChartPainter<'a> =
+    dyn FnMut(&mut [u8], u32, [u32; 2], u32, [u32; 3]) -> Result<(), LoadError> + 'a;
+
+fn write_sampled_obj_atlas(
+    mesh: &MeshGeometry,
+    destination: &Path,
+    options: AtlasOptions,
+    cancelled: &dyn Fn() -> bool,
+    progress: &mut dyn FnMut(usize, usize),
+    paint: &mut ChartPainter<'_>,
+) -> Result<AtlasReport, LoadError> {
     if !valid(mesh, options) {
         return Err(LoadError::InvalidData(
-            "invalid coloured mesh or texture settings".into(),
+            "invalid mesh or texture settings".into(),
         ));
     }
-    let destination = destination.as_ref();
     if !destination
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("obj"))
@@ -168,8 +324,11 @@ pub fn write_colored_obj_atlas(
     let mut mtl = BufWriter::new(File::create(stage.path().join(&material_name))?);
     writeln!(obj, "# Textured mesh exported by Open Pointcloud Studio")?;
     writeln!(obj, "mtllib {material_name}")?;
-    let colors = mesh.colors.as_ref().expect("validated colours");
-    for (vertex, color) in mesh.vertices.iter().zip(colors) {
+    for (index, vertex) in mesh.vertices.iter().enumerate() {
+        let color = mesh
+            .colors
+            .as_ref()
+            .map_or([128; 3], |colors| colors[index]);
         writeln!(
             obj,
             "v {} {} {} {} {} {}",
@@ -231,8 +390,7 @@ pub fn write_colored_obj_atlas(
             writeln!(obj, "usemtl atlas_{page:03}")?;
         }
         occupied = true;
-        let rgb = face.map(|index| colors[index as usize]);
-        paint_chart(&mut pixels, resolution, [x, y], side, rgb);
+        paint(&mut pixels, resolution, [x, y], side, face)?;
         let uv = [
             [f64::from(x) + 1.5, f64::from(y) + 1.5],
             [f64::from(x + side) + 0.5, f64::from(y) + 1.5],
@@ -311,7 +469,9 @@ pub fn write_colored_obj_atlas(
             }
             return Err(LoadError::Cancelled);
         }
-        if let Err(error) = fs::rename(source, &target) {
+        let publication = tempfile::TempPath::try_from_path(source)
+            .and_then(|path| path.persist_noclobber(&target).map_err(|error| error.error));
+        if let Err(error) = publication {
             for path in published {
                 let _ = fs::remove_file(path);
             }
@@ -371,7 +531,9 @@ mod tests {
             pixels[(y * 256 + x) * 3..][..3].try_into().unwrap()
         };
         assert_eq!(at(1, 1), [255, 0, 0]);
+        assert_eq!(at(142, 1), [0, 255, 0]); // centre addressed by the second UV
         assert_eq!(at(143, 1), [0, 255, 0]);
+        assert_eq!(at(1, 142), [0, 0, 255]); // centre addressed by the third UV
         assert_eq!(at(1, 143), [0, 0, 255]);
     }
 
