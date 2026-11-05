@@ -1410,7 +1410,7 @@ mod tests {
         let status = send(&mut studio, ApiCommand::Status);
         assert_eq!(
             status["result"]["clouds"][0]["mesh"],
-            json!({"vertices": 12, "triangles": 12, "open_edges": 0, "components": 1})
+            json!({"vertices": 12, "triangles": 12, "open_edges": 0, "components": 1, "texture": null})
         );
     }
 
@@ -1611,7 +1611,7 @@ mod tests {
         let status = send(&mut studio, ApiCommand::Status);
         assert_eq!(
             status["result"]["clouds"][0]["mesh"],
-            json!({"vertices": 7, "triangles": 3, "open_edges": 7, "components": 2})
+            json!({"vertices": 7, "triangles": 3, "open_edges": 7, "components": 2, "texture": null})
         );
 
         for refused in [

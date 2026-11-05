@@ -237,7 +237,7 @@ atlas padding. The native viewport shows the exported atlas on the same mesh;
 `set_texture_preview` accepts optional `layer` and required boolean `visible`.
 Status mesh data includes `texture` with visibility, page count, export and
 preview resolution, GPU support and coverage. Preview images share a 128 MiB
-budget and may have lower resolution than exported PNGs. Unsupported GPU devices
+budget per mesh and may have lower resolution than exported PNGs. Unsupported GPU devices
 retain the geometry view and report that limitation. `preview_error` on a
 completed job indicates a saved export whose preview could not be loaded.
 

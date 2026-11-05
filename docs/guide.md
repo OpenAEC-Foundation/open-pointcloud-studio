@@ -740,7 +740,7 @@ The source scan and original photographs stay unchanged.
 and **Atlas (px)** the maximum page side (256–4096 pixels). Properties shows
 progress and **Cancel texture**, followed by photo/point-colour/unobserved texel
 counts and source photo indices. **Show texture** toggles the exported UV atlas
-in the native viewport. Preview pages share a 128 MiB budget; **Preview (px)**
+in the native viewport. Preview pages share a 128 MiB budget per mesh; **Preview (px)**
 reports their resolution, which can be lower than the exported PNG resolution.
 Unsupported graphics devices retain geometry and show a message. Imported OBJ
 texture images are not automatically loaded; the new preview belongs to the

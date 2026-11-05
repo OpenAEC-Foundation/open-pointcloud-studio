@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+import urllib.error
 
 from PIL import Image, ImageChops
 import numpy as np
@@ -47,8 +48,18 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                 request = urllib.request.Request(f'http://127.0.0.1:{port}/exec',
                     json.dumps({'command': command, **arguments}).encode(),
                     {'Content-Type':'application/json', 'X-OPS-Token':instance['token']})
-                with urllib.request.urlopen(request, timeout=90) as response:
-                    reply = json.load(response)
+                deadline = time.monotonic()+90
+                while True:
+                    try:
+                        with urllib.request.urlopen(request, timeout=90) as response:
+                            reply = json.load(response)
+                        break
+                    except urllib.error.HTTPError as error:
+                        # CPU Vulkan may exceed the command timeout compiling its
+                        # first pipelines. Never replay a state-changing command.
+                        if error.code != 504 or command not in ('status','screenshot') or time.monotonic()>=deadline:
+                            raise
+                        time.sleep(.2)
                 assert reply.get('ok'), reply
                 return reply
             def wait_job(reply):
@@ -62,6 +73,7 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                     time.sleep(.2)
                 raise RuntimeError('Job timeout')
             api('status')
+            api('set_budget',points=1000)
             mesh = output/'measured.obj'
             mesh.write_text('v -1 -1 0 20 30 40\nv 1 -1 0 20 30 40\nv -1 1 0 20 30 40\nf 1 2 3\n')
             api('set_auto_index', enabled=False)
@@ -122,6 +134,7 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                 assert all(g.visual.kind=='texture' for g in loaded.geometry.values())
                 report['real_e57']={'source':args.e57.name,'surface':surface,'texture':real,
                                    'independent_materials':len(loaded.geometry)}
+                (output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
                 api('screenshot',path=str(output/'real-photo.png'),base64=False,max_edge=1200,window=True)
             (output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
             print('Photo atlas preview and independent OBJ/UV reload passed',flush=True)

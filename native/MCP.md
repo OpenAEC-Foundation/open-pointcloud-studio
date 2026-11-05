@@ -253,8 +253,8 @@ follows when that view is restored.
 | `cancel_mesh` | — | Cancels the mesh job |
 | `export_mesh` | `path` (`.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc`), optional `wait_seconds` | Saves the mesh of the active layer in the format of the extension; job |
 | `texture_mesh` | new absolute `.obj` `path`, optional `texel_size` (metres), `max_resolution` (256–4096 pixels), `source` (`point_colours` or `photographs`), `wait_seconds` | Bakes stored mesh RGB or calibrated E57/added photographs into an OBJ, MTL and PNG atlas; reports coverage and loads a native viewport preview |
-| `set_texture_preview` | optional `layer`, required `visible` | Shows or hides the baked UV texture on the mesh |
 | `cancel_texture_mesh` | — | Cancels the running texture export and removes its staged files |
+| `set_texture_preview` | optional `layer`, required `visible` | Shows or hides the baked UV texture on the mesh |
 | `set_face_settings` | optional `distance_tolerance` (0.001–0.5 m), `angle_tolerance` (1–45 degrees), `min_area` (0.01–10000 m²), `cylinders`, `layers` (`active` or `visible`), `color` (`face` or `deviation`) | Sets the options of the faces in Mesh Pointcloud and the colouring of the faces that are shown; refused as a whole when one value is |
 | `detect_faces` | the settings of `set_face_settings`, all optional, and `wait_seconds` | Finds the flat faces (floors, ceilings, walls, sloped planes) and the round columns and pipes of the active layer, or of every visible layer that reaches the section box, inside the section box, and keeps them with the active layer beside its mesh; job. The job reports the faces per type, the edges, the voxel used and the points on a face. Settings left out keep what the options have |
 | `cancel_detect_faces` | — | Cancels the running face detection |

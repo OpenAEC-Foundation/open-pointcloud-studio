@@ -653,7 +653,7 @@ fn table() -> Vec<Tool> {
             optional("texel_size", number_in("Target metres per texture pixel; default 0.02", 0.0001, 100.0)),
             optional("max_resolution", integer_in("Maximum atlas page width and height; 256 to 4096, default 4096", 256, 4096)),
         ]),
-        tool("cancel_texture_mesh", Command, "Cancels the running texture atlas export. No OBJ, MTL or atlas page is published when cancellation completes.", vec![]),
+        tool("cancel_texture_mesh", Command, "Cancels the running texture atlas export before publication and removes staged files. If publication already completed, preserves the saved OBJ, MTL and atlas pages and only skips preview preparation.", vec![]),
         tool("set_texture_preview", Command, "Shows a layer's baked UV texture or its normal geometry/point colours. The preview uses the exact exported UV charts; very large atlases use bounded overview images, while exported PNG files retain full resolution. Fails when no texture has been baked for that layer.", vec![
             optional("layer", integer_in("Layer index; active layer when omitted",0,u32::MAX as u64)),
             required("visible",boolean("Show the baked texture")),
