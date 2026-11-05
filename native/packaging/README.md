@@ -330,3 +330,9 @@ With no Apple secrets the workflow retains the ad hoc signature and the
 release notes state that notarization was not performed. The signed path must
 pass a real release run before its claim can be verified; local Linux script
 tests cannot exercise Apple's signing and notary service.
+
+### All product version fields
+
+`set-version.sh set` synchronizes the native workspace (including its local UI crate), Classic npm manifests and lockfile, Classic Cargo manifest and lockfile, and Tauri configuration. `set-version.sh check` rejects drift before a build. Python 3 is required for the Classic manifest check. Dependencies keep their own versions. Historical release names in the documentation are unchanged.
+
+The Classic MSI version uses `year - 2000`, week and sequence (for example `26.45.1` for product release `2026.45.1`), because MSI cannot store a four-digit major version. Native Windows releases use Inno Setup rather than MSI. Classic remains a historical prototype; synchronized metadata does not make it a supported native-equivalent edition.
