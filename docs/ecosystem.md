@@ -2,7 +2,22 @@
 
 This is the record of issue [#33](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33): what Open Pointcloud Studio delivers for each system, the library and the service it offers besides the desktop application, how its MCP servers, its interface, its signatures and its cloud deployment stand, and for each requirement of the issue which check proves it and what is still open.
 
-It was written on 25 October 2026 for the release 2026.44.0, which is not published yet; the evidence of 24 and 25 October was gathered on the same code under the number 2026.43.0, the number of the week it was built in. The newest published release is 0.9.5.
+The current verified stable release is [2026.45.1](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v2026.45.1), published on 3 November 2026. The original 25 October audit below is historical evidence; its uncompleted publication steps are superseded only where the current record proves them.
+
+## Published evidence, checked 5 November 2026
+
+The [published verification record](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.45.1/open-pointcloud-studio_2026.45.1_verification.md) reports success for the [release run](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/runs/41555995130) and [replacement Intel Mac check](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/runs/41567418555). Its downloaded SHA-256 sidecar verified locally on 5 November. The checks below were performed by those platform runners, rather than repeated on this Linux workstation.
+
+| Area | Versioned evidence | Remaining limit |
+| --- | --- | --- |
+| Windows x64 application, installer and SDK DLL | Valid Authenticode and timestamp; publisher Impertio Studio B.V.; clean Windows Server container ran version/export | Interactive installation on Windows 10/11 is a separate check |
+| macOS universal application, DMG and SDK dylib | Developer ID Maarten Vroegindeweij, team 7KFV4QY98M; Gatekeeper/notarization/ticket checks on arm64 and Intel | Original Intel runner had an Apple network failure; replacement is linked above |
+| Linux amd64/arm64 packages and SDK | Checksums and GitHub build attestations; OpenPGP manifest and both AppImages verified against fingerprint `13F6D414ADEE4ED4CD09AC60601D86C93C504D29` | OpenPGP covers the other packages through the signed manifest |
+| Linux runtime | Ubuntu 24.04 `.deb` installation and Ubuntu 22.04 extracted AppImage start | These are clean containers, not every desktop distribution |
+| Headless API image | Published digest `sha256:417e869953dac1584dbf185149cc15e69a1664326aa9a44f00e05c8108120a14`; attestation, pull and version passed | A local/container test does not establish deployment in AWS |
+| Claude clients, UI parity and AWS | Existing setup/contracts remain below | Live Claude Desktop/Code checks, full component parity and deployed AWS smoke evidence remain open |
+
+Publication now requires all five platform signing proofs; draft-only warnings are not permission to publish. Updater minisign integration remains tracked separately in #40. This update provides current evidence for #33 and #39 without declaring their remaining acceptance points complete.
 
 ## Contents
 
@@ -25,18 +40,18 @@ Every piece of evidence below is one of these kinds:
 
 - **Local**: a check that ran on a development machine (Windows 11, Rust 1.99.0 with the GNU target) on 25 October 2026. Unless a line says otherwise, it ran on commit `386c863`, which joins the shared operations, the cloud API, the C library, the container, the deployment definition and the release wiring. The branch that carries this document adds to it the generated demo scenes (an example of the core, with a dependency for its tests only), the pictures taken from them, and more attempts for the notary steps of the macOS packages; the sources of the core, the desktop application, the service and the library, `deploy/` and the CI, SDK, Container and Release workflows are those of `386c863`.
 - **Local, on this branch**: with this document, on 25 October 2026, `cargo test --workspace --locked` passed (core 555 with 3 ignored, core `disk_caches` 1, the demo scenes 3, desktop 722 with 9 ignored, ui 21, server 42, sdk `abi` 19 and `caches` 1), `bash native/packaging/test-scripts.sh` gave 86 ok, and `release-notes.sh --check 2026.43.0` and `set-version.sh check` passed.
-- **CI**: a workflow and its job, and the step where it matters. None of these workflows has run on this work yet, so a CI line says what will prove a requirement, not a result.
+- **CI**: a workflow and its job, and the step where it matters. In the historical 25 October audit these lines describe intended checks; the published evidence above records the subsequently completed release checks.
 - **Owner**: what waits for a decision, an account or a hand of the owner of the project.
 
 The evidence of record comes from the published tag run of a release: its jobs, its `verify-release` job and the verification record `open-pointcloud-studio_VERSION_verification.md` it attaches to the release. A draft run (*Leave the release as a draft*) is a dry run: it pushes no image and publishes nothing, so it proves the build and the checks, not the published files. A requirement of the issue is ticked only when its evidence is in, and this document then names the release, the run and the date.
 
 ## Capability matrix
 
-All releases so far are stable; there is no prerelease channel. "2026.44.0" in the table is the release this record was written for. The first release with the new parts takes the number of the week it is made in ([Releasing](../native/packaging/README.md#releasing)), so the "Since" column of those parts is filled in from the first tag run.
+The supported stable version in this matrix is 2026.45.1. Historical introduction versions are retained where established; “by 2026.45.1” identifies the verified delivery without claiming its earliest release. Release numbers follow [Releasing](../native/packaging/README.md#releasing).
 
 | Delivered as | System or runtime | Processors | Status | Version | Since | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Installer `_x64-setup.exe` and zip `_windows-x64.zip` | Windows 10 and 11 | x64 | stable | 0.9.5 published, 2026.44.0 not released yet | installer 0.6.0, these names 0.8.0 | Packages `windows`; Release `verify-release` (windows) |
+| Installer `_x64-setup.exe` and zip `_windows-x64.zip` | Windows 10 and 11 | x64 | stable | 2026.45.1 published | installer 0.6.0, these names 0.8.0 | Packages `windows`; Release `verify-release` (windows) |
 | Disk image `.dmg` and archive `_macos-universal.tar.gz` | macOS 11 and later | arm64 and x86-64 in one file | stable | as above | 0.8.0 | Packages `macos`, `verify-macos`; Release `verify-release` (macos-arm64, macos-x86_64) |
 | `.deb`, AppImage and `_linux-amd64.tar.gz` | Linux with a C library of version 2.35 or newer, the C++ runtime of GCC 12 or newer, X11 or Wayland | amd64 | stable | as above | 0.8.0 | Packages `verify-linux`; Release `verify-release` (linux) |
 | `_arm64.deb`, `_arm64.AppImage` and `_linux-arm64.tar.gz` | as above | arm64 | experimental: built and tested on build machines with software rendering only | as above | 0.8.0 | Packages `verify-linux` (arm64) |
