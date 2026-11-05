@@ -73,14 +73,14 @@ What is not delivered or does not apply, and why:
 | WebAssembly or a browser edition | not delivered | A desktop tool with a GPU view of scans of many gigabytes on local disks. The frozen `classic/` prototype is no supported edition |
 | Android or iOS | not delivered | The same reason |
 | Web view runtime | not applicable | The window is drawn by the application itself and uses no web view, so no web view runtime is installed or carried |
-| Updater signatures | not applicable | There is no updater; a new version is downloaded from the release page |
+| Native in-app updater | not delivered | Native releases are downloaded from the release page. The separate OpenAEC Installer manifest/minisign integration is tracked in [#40](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/40) and [#53](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/53) |
 | Image for arm64 | not delivered | Deferred; the image and the prepared deployment are for Linux on x86-64 |
 | Installable MCP bundle | not delivered | Deferred; a client starts the desktop server from its configuration ([Starting it from a client](../native/MCP.md#starting-it-from-a-client)) |
 | Interactive MCP app or connector | not delivered | Tracked under [style book #9](https://github.com/OpenAEC-Foundation/OpenAEC-style-book/issues/9) |
 
 ## Clean machines
 
-The checks of the workflows, once they have run for one release, go in this table with the URL of the run and the result:
+The following table preserves the 25 October 2026 test plan and results known at that time. Its “not run yet” entries are historical; the completed v2026.45.1 platform checks are recorded under [Published evidence](#published-evidence-checked-5-november-2026).
 
 | Job | Machine | What it does | Result |
 | --- | --- | --- | --- |
@@ -107,7 +107,7 @@ Result:
 Date:
 ```
 
-None has been done yet.
+The historical audit recorded no manual clean-desktop trial. The published automated checks above supplement that record; interactive installation and scan-opening trials on clean Windows, macOS and Linux desktops remain open.
 
 ## Library boundary
 
