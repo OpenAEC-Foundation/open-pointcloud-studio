@@ -820,7 +820,7 @@ impl Studio {
                 self.status = "Choose where to save the drawing as DXF or DWG…".into();
                 return Task::perform(
                     async move {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("DXF", &["dxf"])
                             .add_filter("DWG", &["dwg"])
                             .set_file_name(suggested)

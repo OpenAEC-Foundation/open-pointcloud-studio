@@ -1105,5 +1105,6 @@
   "Merges mixed scan formats into E57, LAS or LAZ.": "Voegt verschillende scanformaten samen tot E57, LAS of LAZ.",
   "Applies a saved registration matrix to a scan, retaining its stations and photos in E57.": "Past een opgeslagen registratiematrix toe op een scan, met behoud van stations en foto’s in E57.",
   "RMS (mm)": "RMS (mm)",
-  "95% (mm)": "95% (mm)"
+  "95% (mm)": "95% (mm)",
+  "Serves the desktop MCP tools over authenticated HTTP using OPENAEC_MCP_POORT and OPENAEC_MCP_GEHEIM.": "Biedt de desktop-MCP-gereedschappen via HTTP aan met OPENAEC_MCP_POORT en OPENAEC_MCP_GEHEIM."
 }

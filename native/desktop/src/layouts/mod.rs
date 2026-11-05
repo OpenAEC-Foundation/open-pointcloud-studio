@@ -667,7 +667,7 @@ impl Studio {
                 self.status = "Choose where to save the sheet as PDF…".into();
                 return Task::perform(
                     async move {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("PDF", &["pdf"])
                             .set_file_name(suggested)
                             .save_file()

@@ -25,7 +25,7 @@ pub const API_NAME: &str = "native-rust-v1";
 /// Raised by one with every release that adds a command or a field, or
 /// changes what a command does; API.md lists the revisions under API
 /// changes.
-pub const API_REVISION: u64 = 12;
+pub const API_REVISION: u64 = 13;
 
 /// How many `/exec` requests wait for the window at once. `/health` and
 /// `/info` are answered by the thread that takes the requests, so they do
