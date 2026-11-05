@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 from pye57 import E57,libe57
 from images import images
+from schema import non_colour_schema
 from scipy.spatial.transform import Rotation
 parser=argparse.ArgumentParser(description="Validate BLK2GO photo and raw-field export using a fresh test window")
 parser.add_argument("directory", type=Path)
@@ -86,6 +87,7 @@ assert {tuple(h) for h in photo_hashes(source_images)} <= out_hashes
 assert len(images(out))==7;associations(out)
 assert any(row.get("name")=="Added test panorama edited" for row in images(out))
 a=read_raw(E57(str(out)),0);assert len(a["cartesianX"])==471
+assert non_colour_schema(E57(str(section)),0)==non_colour_schema(E57(str(out)),0)
 for key in expected.files:
  if not key.startswith("color"):np.testing.assert_allclose(a[key],expected[key],rtol=0,atol=1e-10 if key.startswith("cartesian") else 0)
 report.update(added_panorama_edited_and_retained=True,edited_points=471,non_colour_attributes_exact=True)
@@ -118,6 +120,7 @@ if args.static:
  count=0
  for scan in range(before.scan_count):
   original=read_raw(before,scan);edited=read_raw(after,scan)
+  assert non_colour_schema(before,scan)==non_colour_schema(after,scan)
   for key in original:
    if not key.startswith("color"):np.testing.assert_array_equal(edited[key],original[key])
   count+=len(original["cartesianX"])

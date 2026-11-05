@@ -57,11 +57,14 @@ Its 471-point selection was compared against an independent pass over all
 199,186,802 source records. All six original pinhole payloads survive. Adding,
 editing and recolouring from a synthetic panorama retains seven images and the
 original non-colour point values, including Single-precision floating intensity.
+An additional independent prototype comparison verifies unchanged non-colour
+field types, precision, limits and scaled-integer scale/offset in all six tested
+scans (one BLK2GO section and five static scans).
 A rigid registration retains the image bytes and transforms camera positions
 and orientations correctly. Rotations are compared as matrices: opposite-sign
 quaternions represent the same orientation.
 
-The static fixture SHA-256 is
+The static fixture matches the [published SourceForge checksum](https://sourceforge.net/projects/e57-3d-imgfmt/files/E57Example-data/manitouNoInvalidPoints.e57/download). Its SHA-256 is
 `d4f06e2a80e3e54be7391130b911c82af0c6a7857cec133177431f5f578f23cf`.
 After photo colouring, libE57 verified five scans, five unchanged image payloads,
 1,095,702 points, unchanged scan poses and exact original non-colour fields.
