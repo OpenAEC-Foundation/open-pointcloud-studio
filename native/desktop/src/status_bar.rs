@@ -443,8 +443,10 @@ mod tests {
         let _language = TestLanguage::hold(Language::English);
         let _turn = crate::native_api::one_server_at_a_time();
         let (_, handle) = crate::native_api::start(Some(0)).unwrap();
-        let mut studio = Studio::default();
-        studio.api_handle = Some(handle);
+        let mut studio = Studio {
+            api_handle: Some(handle),
+            ..Studio::default()
+        };
         for width in [580.0, 900.0, 1100.0, 1280.0, 1700.0] {
             studio.window_size = Some(Size::new(width, 760.0));
             let (_, messages) = crate::test_render::render_after(

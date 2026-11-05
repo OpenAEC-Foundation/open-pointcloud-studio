@@ -121,8 +121,10 @@ fn feedback_form_renders_for_both_languages_and_all_themes() {
     for language in [Language::English, Language::Table(0)] {
         let _language = TestLanguage::hold(language);
         for theme in crate::ui_theme::UiTheme::ALL {
-            let mut studio = Studio::default();
-            studio.ui_theme = theme;
+            let mut studio = Studio {
+                ui_theme: theme,
+                ..Studio::default()
+            };
             let _ = studio.feedback_action(Action::Open);
             studio.window_size = Some(iced::Size::new(1280.0, 760.0));
             let picture =
