@@ -28,13 +28,17 @@ chunks and saves the expected selection's original XYZ, intensity and RGB. It
 also hashes the original Images2D blobs. This validates the section against the
 actual vendor data, rather than merely comparing an export to itself.
 
-Start a fresh test window with isolated XDG_CONFIG_HOME and XDG_CACHE_HOME, then
-pass that window's instance JSON from its configuration `instances` directory.
-Never commit or print that JSON: it contains the local command API token.
+Run the desktop probe in a disposable window. `run.py` creates isolated
+configuration/cache directories, waits for the GUI command path, supplies its
+discovery token privately to the validator and closes the window even on failure.
 
 ```sh
-python3 validate.py /path/to/working-directory /path/to/open-pointcloud-studio /path/to/instance-PID.json --static /path/to/ManitouNoInvalidPoints.e57
+python3 run.py /path/to/open-pointcloud-studio /path/to/working-directory --static /path/to/ManitouNoInvalidPoints.e57
 ```
+
+For an already isolated empty test window, the lower-level `validate.py` takes
+its instance JSON as the third argument after directory and binary. Never commit
+or print that JSON: it contains the local command API token.
 
 The probe refuses a window that already has loaded clouds. It checks the 471
 selected records against independent source values, the six original images,
@@ -43,3 +47,38 @@ scan associations, registration of image positions and orientations, and raw
 non-colour attributes. The optional static test checks five scan identities,
 five image payloads and every non-colour raw point field after recolouring.
 Generated JSON records the assertions that passed; failed assertions abort.
+
+## Result, 5 November 2026
+
+`result-2026-11-05.json` records a successful run against the fixed development
+binary. The BLK2GO source SHA-256 is
+`e01da70d9cc3a2c8a0cf9e3e00f76b2d96895590d12285240b8148c2eb6a5040`.
+Its 471-point selection was compared against an independent pass over all
+199,186,802 source records. All six original pinhole payloads survive. Adding,
+editing and recolouring from a synthetic panorama retains seven images and the
+original non-colour point values, including Single-precision floating intensity.
+A rigid registration retains the image bytes and transforms camera positions
+and orientations correctly. Rotations are compared as matrices: opposite-sign
+quaternions represent the same orientation.
+
+The static fixture SHA-256 is
+`d4f06e2a80e3e54be7391130b911c82af0c6a7857cec133177431f5f578f23cf`.
+After photo colouring, libE57 verified five scans, five unchanged image payloads,
+1,095,702 points, unchanged scan poses and exact original non-colour fields.
+894,556 points received photo colours; unobserved points are retained. The
+Python convenience reader omits the standard `isColorInvalid` field, so the
+validator reads that field through libE57's SourceDestBuffer API, checks its
+validity domain and refuses any other unsupported field instead of skipping it.
+
+The complete BLK2GO section command took 9m31.31s with peak RSS 66,572 KiB on a
+shared Ryzen 7 3700U Linux workstation. This is a full-source **section export**
+measurement; recolouring was tested on the extracted selection and the static
+fixture. It is not a 199-million-point GUI colour benchmark. Original vendor
+pinhole images and the deliberately added test panorama are reported separately;
+this does not establish a vendor route-panorama trajectory calibration test.
+
+All 568 core unit tests passed (3 ignored), including all 28 export tests. The
+raw override applies to positive uniform scales/translations. Nonuniform or
+reflected transforms use the existing generic path, which rejects E57 photo
+poses that cannot be represented; this result does not claim arbitrary affine
+camera support or preservation of every vendor extension/grouping structure.

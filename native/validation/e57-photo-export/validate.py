@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 from pye57 import E57,libe57
 from images import images
+from scipy.spatial.transform import Rotation
 parser=argparse.ArgumentParser(description="Validate BLK2GO photo and raw-field export using a fresh test window")
 parser.add_argument("directory", type=Path)
 parser.add_argument("binary", type=Path)
@@ -18,6 +19,21 @@ def api(command,**args):
  with urllib.request.urlopen(req,timeout=30) as f:r=json.load(f)
  assert r.get("ok"),r
  return r
+def read_raw(file, scan):
+ # pye57 omits this standard field from its convenience mapping. Read it
+ # through libE57 directly instead of ignoring an unsupported attribute.
+ header=file.get_header(scan);data={};buffers=libe57.VectorSourceDestBuffer()
+ for field in header.point_fields:
+  if field=="isColorInvalid":
+   array=np.empty(header.point_count,np.int8)
+   buffer=libe57.SourceDestBuffer(file.image_file,field,array,header.point_count,True,True)
+  else:array,buffer=file.make_buffer(field,header.point_count)
+  data[field]=array;buffers.append(buffer)
+ reader=header.points.reader(buffers)
+ assert reader.read()==header.point_count
+ reader.close()
+ if "isColorInvalid" in data:assert np.isin(data["isColorInvalid"],[0,1]).all()
+ return data
 def status():return api("status")["result"]
 def idle(timeout=600):
  until=time.monotonic()+timeout
@@ -36,7 +52,7 @@ def job(reply):
  raise RuntimeError("job timeout")
 
 source_images=json.loads((b/"source-images.json").read_text());section=b/"section.e57";expected=np.load(b/"independent-section.npz")
-f=E57(str(section));raw=f.read_scan_raw(0);assert len(raw["cartesianX"])==len(expected["cartesianX"])==471
+f=E57(str(section));raw=read_raw(f,0);assert len(raw["cartesianX"])==len(expected["cartesianX"])==471
 for key in expected.files:
  np.testing.assert_allclose(raw[key],expected[key],rtol=0,atol=1e-10 if key.startswith("cartesian") else 0,err_msg=key)
 def photo_hashes(records):return sorted(sorted((k,v) for k,v in row.items() if ":" in k) for row in records)
@@ -45,8 +61,10 @@ def associations(path):
  assert all(row.get("associatedData3DGuid") is None or row["associatedData3DGuid"] in guids for row in images(path))
 records=images(section);assert len(records)==6;assert photo_hashes(records)==photo_hashes(source_images);associations(section)
 for original,filtered in zip(source_images,records):
- for key in ["position","orientation"]:
-  if key in original:np.testing.assert_array_equal(filtered[key],original[key])
+ if "position" in original:np.testing.assert_array_equal(filtered["position"],original["position"])
+ if "orientation" in original:
+  def rotation(q):return Rotation.from_quat([*q[1:],q[0]]).as_matrix()
+  np.testing.assert_allclose(rotation(filtered["orientation"]),rotation(original["orientation"]),rtol=0,atol=1e-12)
 (b/"section.e57.ops-photos.json").unlink(missing_ok=True)
 report={"source_points":199186802,"section_points":471,"source_images":6,"section_image_bytes_unchanged":True,"section_attributes_exact":True}
 print("section passes",report,flush=True)
@@ -61,20 +79,20 @@ api("add_panorama",layer=0,path=str(panorama),position=[0,0,1.6],name="Added tes
 listed=api("list_photos",layer=0);print("listed photos",listed,flush=True)
 api("edit_photo",layer=0,index=0,name="Added test panorama edited",position=[0,0,1.6],heading=15)
 job(api("colour_from_photos",layer=0,max_distance=100,blend=False));idle()
-report["colour_job"]=status()["colour_from_photos"];print("colours",report["colour_job"],flush=True)
+report["colour_job"]=status()["colour_from_photos"];assert report["colour_job"]["last"]["coloured"]==471;print("colours",report["colour_job"],flush=True)
 out=b/"edited-coloured.e57";job(api("export",path=str(out)));idle()
 out_hashes={tuple(h) for h in photo_hashes(images(out))}
 assert {tuple(h) for h in photo_hashes(source_images)} <= out_hashes
 assert len(images(out))==7;associations(out)
 assert any(row.get("name")=="Added test panorama edited" for row in images(out))
-a=E57(str(out)).read_scan_raw(0);assert len(a["cartesianX"])==471
+a=read_raw(E57(str(out)),0);assert len(a["cartesianX"])==471
 for key in expected.files:
  if not key.startswith("color"):np.testing.assert_allclose(a[key],expected[key],rtol=0,atol=1e-10 if key.startswith("cartesian") else 0)
 report.update(added_panorama_edited_and_retained=True,edited_points=471,non_colour_attributes_exact=True)
 matrix={"rotation":[[0,-1,0],[1,0,0],[0,0,1]],"translation":[10,20,30],"scale":1};(b/"matrix.json").write_text(json.dumps(matrix))
 registered=b/"registered.e57";run=subprocess.run([str(args.binary.resolve()),"--apply-registration",str(out),str(b/"matrix.json"),str(registered)],capture_output=True,text=True);assert run.returncode==0,run.stderr
 assert photo_hashes(images(registered))==photo_hashes(images(out));associations(registered)
-registered_raw=E57(str(registered)).read_scan_raw(0)
+registered_raw=read_raw(E57(str(registered)),0)
 for key in a:
  if not key.startswith("cartesian"):np.testing.assert_array_equal(registered_raw[key],a[key])
 from scipy.spatial.transform import Rotation
@@ -90,6 +108,7 @@ if args.static:
  api("remove",index=0);api("open",path=str(static));idle()
  listed=api("list_photos",layer=0);assert len(listed["photos"])==5
  job(api("colour_from_photos",layer=0,max_distance=100,blend=True));idle()
+ static_colouring=status()["colour_from_photos"]["last"];assert static_colouring["coloured"]>0
  coloured=b/"static-coloured.e57";job(api("export",path=str(coloured)));idle()
  assert photo_hashes(images(coloured))==photo_hashes(images(static));associations(coloured)
  before=E57(str(static));after=E57(str(coloured));assert before.scan_count==after.scan_count==5
@@ -98,11 +117,11 @@ if args.static:
   np.testing.assert_array_equal(before.get_header(scan).translation,after.get_header(scan).translation)
  count=0
  for scan in range(before.scan_count):
-  original=before.read_scan_raw(scan);edited=after.read_scan_raw(scan)
+  original=read_raw(before,scan);edited=read_raw(after,scan)
   for key in original:
    if not key.startswith("color"):np.testing.assert_array_equal(edited[key],original[key])
   count+=len(original["cartesianX"])
- report["static"]={"scans":5,"images":5,"points":count,"image_bytes_unchanged":True,"non_colour_attributes_exact":True}
+ report["static"]={"scans":5,"images":5,"points":count,"image_bytes_unchanged":True,"non_colour_attributes_exact":True,"coloured_points":static_colouring["coloured"]}
 report["ok"]=True
 h=hashlib.sha256()
 with (b/"BLK2GO_Demo02.e57").open("rb") as stream:
