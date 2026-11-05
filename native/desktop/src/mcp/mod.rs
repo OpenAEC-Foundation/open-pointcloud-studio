@@ -2,7 +2,9 @@
 //! 2.0 messages, one per line, whose tools drive a running window of the
 //! application through its local command API.
 
+mod http;
 mod instances;
+pub(crate) use http::run as run_http;
 #[cfg(test)]
 mod mock;
 mod schema;
