@@ -17,6 +17,9 @@ section its version and date.
 
 ## Unreleased
 
+- Feedback in the title strip opens a native private Open Feedback Studio form. It sends the entered message and optional reply email with the app version, retains the draft on failure, and attaches no scans, paths, screenshots or logs.
+- The MCP server checkbox at the bottom right allows or pauses external MCP/API commands and remembers the choice. Extension runs and jobs already started continue. API revision 13 reports the bridge state as `mcp_enabled`.
+
 ## 2026.45.1 - 2026-11-03
 
 - E57 exports now retain station photos, spherical and cylindrical panoramas, masks, camera poses and scan associations after filtering, section export and colouring points from photos. Edits that cannot preserve camera poses fail explicitly instead of silently dropping the images.

@@ -7,6 +7,8 @@ the camera, take screenshots of the 3D view, measure, select, save views,
 export, draw sections, mesh and detect faces, just as the commands of that
 API do.
 
+The **MCP server** checkbox at the bottom right of each desktop window allows or pauses external commands to that window. It is checked when the local bridge is available and allowed, not when an AI client is connected. Pausing returns an explicit error for new external commands; jobs already running and extension tokens continue. Re-enable the checkbox in the window to resume. The preference survives restart. `/info` stays available with `mcp_enabled` so clients can identify a paused instance. The client still starts the stdio process below; the checkbox neither starts nor stops that child process.
+
 The server speaks JSON-RPC 2.0 with one message per line. Standard output
 carries nothing but those messages; diagnostics go to standard error. The
 process keeps its console streams and opens no window itself.
