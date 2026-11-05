@@ -58,8 +58,26 @@ that no staged or published files remain; `--expected-sha256` verifies the
 original source bytes after the probe. The report includes processing times,
 bounded progress samples, output counts and Linux peak resident memory.
 
-Issue #13 also still requires robust distance/normal-aware point-cloud colour
-resampling and the 46M-or-larger E57 performance/progress/cancellation trial.
+The 199,186,802-point [Scanner2GO BLK2GO fixture](https://support.scanner2go.de/hc/de/articles/18239199476369-Download-Beispiele-BLK2GO-f%C3%BCr-Import-CAD)
+passed the large-source probe on 6 November (`large-result-2026-11-06.json`).
+Its complete source was sampled into 5,000 vertices and 15,238 triangles in
+48.96 seconds using a private disk octree. Baking took 39.00 seconds and wrote
+12,081,126 bytes of OBJ, MTL and one 4096² PNG atlas. Native peak RSS was
+662,820 KiB (about 647 MiB); the separate index preparation peaked at
+240,828 KiB. Preparation used PR #59's packet-reader fix and unchanged index
+format; its wall clock includes compilation pauses and is not a throughput
+benchmark. Progress advanced during the bake, cancellation left no partial
+files, and the original E57 SHA-256 remained
+`e01da70d9cc3a2c8a0cf9e3e00f76b2d96895590d12285240b8148c2eb6a5040`.
+
+Only 3,619 interior texels came from the six station images; 3,814,645 used
+stored mesh RGB and none were unobserved. This explicitly exercises fallback
+and bounded ingestion/baking; it does not claim full SLAM trajectory-photo
+calibration or reconstruction quality. The full input/data/images are not
+redistributed.
+
+Issue #13 still requires robust distance/normal-aware point-cloud colour
+resampling.
 Current photo occlusion uses the reconstructed mesh BVH; cloud points omitted
 from that mesh do not occlude projections. Point RGB fallback interpolates
 stored mesh colours. Preview pages have a 128 MiB budget per mesh and can be
