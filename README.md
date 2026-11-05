@@ -23,6 +23,7 @@ A desktop application for viewing, measuring, editing and converting laser scans
 - [What you can do](#what-you-can-do)
 - [File formats](#file-formats)
 - [Measured speed and limits](#measured-speed-and-limits)
+- [Feedback and MCP access](#feedback-and-mcp-access)
 - [Automation](#automation)
 - [Build from source](#build-from-source)
 - [Repository layout](#repository-layout)
@@ -348,6 +349,14 @@ Limits in the application:
 | 3D BAG download | 2 by 2 km and about 5,000 buildings |
 
 An index can take several gigabytes on disk for a large survey.
+
+## Feedback and MCP access
+
+**Feedback** in the title strip opens a native form for a private message to Open Feedback Studio. Choose a bug, feature request or general feedback, enter a title and description, and optionally a reply email. Only these fields and the app version are sent when you press **Send feedback**; scans, file paths, screenshots and logs are not attached. The draft stays in memory on a failed request or when the form is closed, until the window exits. A success message appears only after the service confirms private receipt.
+
+The **MCP server** checkbox at the bottom right allows or pauses external commands through the local MCP/API bridge and remembers the choice. Pausing keeps extension runs and jobs already started working; it does not cancel them. An unavailable listener is shown as an unchecked, disabled control. The checkbox controls access to this window; the AI client still starts `--mcp` as documented below.
+
+The [competitor gap analysis of 5 November 2026](docs/research/gap-analysis-2026-11-05.md) compares nine products with the current implementation and proposes the next validation and development priorities.
 
 ## Automation
 
