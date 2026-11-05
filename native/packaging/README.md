@@ -290,6 +290,20 @@ from the secret `OPENAEC_GPG_PRIVATE_KEY`, its passphrase from
 verifies each signature it writes. While any of them is missing it signs
 nothing and the notes name no signature.
 
+Updates through the OpenAEC Installer
+([OpenAEC-Blueprint#33](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/33)):
+after the Authenticode and OpenPGP signing, `sign-updates.sh` writes a
+minisign `.sig` beside the Windows setup and each AppImage, with the updater
+key in the secrets `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; without them it signs nothing. The
+`.sig` files go on the release (`signature-assets.sh`). Once the release is
+public, the job *updater-manifest* makes `latest.json` with the
+[release kit](https://github.com/OpenAEC-Foundation/openaec-installer/tree/main/release-kit)
+of the installer: it checks every `.sig` against the variable
+`UPDATER_PUBKEY` and the tag against `native/Cargo.toml`, and attaches
+`latest.json` last. The installer then checks the signature before it
+updates silently, with `/VERYSILENT` for this Inno Setup installer.
+
 ### The image of the cloud API
 
 The Container workflow builds the image from
