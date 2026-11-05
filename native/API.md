@@ -223,12 +223,14 @@ absolute `.obj` `path`. Optional `source` is `point_colours` (the compatible
 default) or `photographs`; `texel_size` is in metres (default 0.02), and
 `max_resolution` is 256–4096 pixels (default 4096). Point-colour mode interpolates
 stored mesh vertex RGB. Photograph mode projects calibrated E57 station images
-and added panoramas directly onto the measured mesh, rejects back-facing and
-mesh-occluded rays, and blends compatible overlapping observations with bounded
-exposure correction. Disagreeing observations retain the best camera to avoid
+and added panoramas directly onto the measured mesh within a 20 m photo reach.
+It rejects back-facing and mesh-occluded rays and blends compatible overlapping
+observations with bounded exposure correction. Disagreeing observations retain the best camera to avoid
 ghosting. Missing observations fall back to mesh RGB, or grey when no RGB exists.
 Only the reconstructed mesh participates in occlusion; foreground cloud points
-outside that mesh are not occluders. Original files and photo pixels stay unchanged.
+outside that mesh are not occluders. Photos are sampled at up to 2048 pixels
+on their longest side; a finer atlas cannot add detail beyond that image sample.
+Original files and photo pixels stay unchanged.
 
 The completed job reports `pages`, `triangles`, `resolution_limited` and, for
 photographs, `coverage` (`photograph_texels`, `point_colour_texels`,

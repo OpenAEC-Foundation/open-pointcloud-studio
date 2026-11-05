@@ -81,8 +81,8 @@ pub struct PhotoAtlasReport {
 
 /// Bake calibrated E57 photo pixels onto independent triangle UV charts.
 /// Missing observations use measured point colours, otherwise neutral grey;
-/// their counts remain separate. Decoding is lazy and cached for four images
-/// of at most 2048×2048 RGBA pixels. Rays reject hidden/back-facing surfaces.
+/// their counts remain separate. Decoding is lazy and cached for up to eight images
+/// of at most 2048×2048 RGBA pixels within a 64 MiB decoded-image budget. Rays reject hidden/back-facing surfaces.
 pub fn write_photographic_obj_atlas(
     request: PhotoAtlasRequest<'_>,
     destination: impl AsRef<Path>,

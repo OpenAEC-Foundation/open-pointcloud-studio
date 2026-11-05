@@ -1,9 +1,10 @@
 # Photo texture validation
 
-The core tests exercise calibrated pinhole checkerboards, ray occlusion,
+Fourteen core tests exercise calibrated pinhole checkerboards, ray occlusion,
 back-facing surfaces, exposure blending, colour disagreement, missing/transparent
 images, survey coordinates, reflected meshes, deterministic threading and atomic
-export cancellation. Run `cargo test -p pointcloud-core mesh_photo` from `native/`.
+export cancellation. An additional integration test writes and reopens an
+actual E57 containing a calibrated PNG checkerboard before baking it. Run `cargo test -p pointcloud-core mesh_photo` from `native/`.
 
 `smoke.py` starts its own native window with isolated configuration and cache.
 It opens one measured triangle, adds a generated panorama, bakes its pixels,
@@ -34,6 +35,28 @@ reopened and rendered correctly in trimesh’s independent pyglet 1.5.31/OpenGL
 viewer; its frame was visually inspected. Reproduce with `python3 viewer.py
 /output/photographic.obj /output/trimesh-viewer.png` from an X11/OpenGL session
 with `pyglet<2` installed.
+
+The 6 November calibrated E57 run processed all 1,095,702 source points into
+300 vertices and 890 triangles. Its atlas reports 45,335 photographed texels,
+194,293 explicitly unobserved texels, four used photos and zero failed photos.
+The coarse test surface intentionally leaves large unobserved regions; this
+is a calibration/export check rather than a claim about reconstruction quality.
+The OBJ also reopened and rendered in the independent OpenGL viewer.
+`result-2026-11-06.json` records the output, safe cancellation without partial
+files, unchanged source SHA-256, and peak native RSS of 310,348 KiB. Increasing
+the working set from four to at most eight decoded images, still within a
+64 MiB byte budget, reduced this repeated local run from 18.47 to 4.62 seconds.
+OBJ, MTL and PNG bytes were identical. These are development-build sanity runs,
+not a controlled comparison across hardware or workloads. Export names containing spaces were
+separately reopened successfully with their MTL/PNG references.
+
+For larger sources, `--cache-root` selects a private persistent octree cache;
+prepare it with `XDG_CACHE_HOME=/private/cache binary --index source.e57`.
+`--vertices`, `--texel-size`, `--max-resolution` and `--job-timeout` adjust the
+probe. `--cancel-probe` additionally cancels a finer texture export and checks
+that no staged or published files remain; `--expected-sha256` verifies the
+original source bytes after the probe. The report includes processing times,
+bounded progress samples, output counts and Linux peak resident memory.
 
 Issue #13 also still requires robust distance/normal-aware point-cloud colour
 resampling and the 46M-or-larger E57 performance/progress/cancellation trial.

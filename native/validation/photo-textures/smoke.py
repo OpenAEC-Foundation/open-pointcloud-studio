@@ -5,6 +5,7 @@ Requires Pillow, NumPy and trimesh. Starts and cleans up its own isolated window
 Run under a Wayland compositor or an X11 display with a Vulkan-capable renderer.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,13 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('binary', type=Path)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--e57', type=Path, help='Optional real calibrated E57 fixture')
+parser.add_argument('--cache-root', type=Path, help='Private persistent cache, optionally preindexed')
+parser.add_argument('--vertices', type=int, default=300)
+parser.add_argument('--texel-size', type=float, default=.2)
+parser.add_argument('--max-resolution', type=int, default=1024)
+parser.add_argument('--job-timeout', type=float, default=180)
+parser.add_argument('--cancel-probe', action='store_true')
+parser.add_argument('--expected-sha256', help='Verify the original real fixture after the probe')
 args = parser.parse_args()
 output = args.output.resolve()
 output.mkdir(parents=True, exist_ok=True)
@@ -32,7 +40,7 @@ with socket.socket() as socket_:
 with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
     root = Path(temporary)
     env = {**os.environ, 'XDG_CONFIG_HOME': str(root/'config'),
-           'XDG_CACHE_HOME': str(root/'cache')}
+           'XDG_CACHE_HOME': str(args.cache_root.resolve() if args.cache_root else root/'cache')}
     with (output/'window.log').open('w') as log:
         process = subprocess.Popen([str(args.binary.resolve()), '--api-port', str(port)],
                                    env=env, stdout=log, stderr=log)
@@ -57,17 +65,25 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                     except urllib.error.HTTPError as error:
                         # CPU Vulkan may exceed the command timeout compiling its
                         # first pipelines. Never replay a state-changing command.
-                        if error.code != 504 or command not in ('status','screenshot') or time.monotonic()>=deadline:
+                        if error.code != 504 or command not in ('status','screenshot','job') or time.monotonic()>=deadline:
                             raise
                         time.sleep(.2)
                 assert reply.get('ok'), reply
                 return reply
-            def wait_job(reply):
-                deadline = time.monotonic()+180
+            progress_samples=[]
+            def wait_job(reply, accepted_states=('complete',)):
+                started=time.monotonic()
+                deadline = started+args.job_timeout
+                next_sample=0.
                 while time.monotonic()<deadline:
                     reply_ = api('job', id=reply['job_id'])
                     value = reply_.get('result') or reply_.get('job') or reply_
-                    if value.get('state')=='complete':
+                    if time.monotonic()>=next_sample:
+                        progress_samples.append({'seconds':round(time.monotonic()-started,3),**{key:value[key] for key in ('operation','mode','state','processed','total','stage') if key in value}})
+                        if len(progress_samples)>240:
+                            del progress_samples[0]
+                        next_sample=time.monotonic()+2
+                    if value.get('state') in accepted_states:
                         return value
                     assert value.get('state') not in ('failed','cancelled'), value
                     time.sleep(.2)
@@ -125,18 +141,43 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                         break
                     assert time.monotonic()<deadline
                     time.sleep(.2)
-                api('set_surface_settings',max_vertices=300,neighbors=12,edge_factor=4,mesh_size=0)
+                api('set_surface_settings',max_vertices=args.vertices,neighbors=12,edge_factor=4,mesh_size=0)
+                reconstruction_started=time.monotonic()
                 surface=wait_job(api('mesh',mode='surface',path=str(output/'real-surface.obj')))
+                reconstruction_seconds=time.monotonic()-reconstruction_started
+                texture_started=time.monotonic()
                 real=wait_job(api('texture_mesh',path=str(output/'real-photo.obj'),source='photographs',
-                                  texel_size=.2,max_resolution=1024))
+                                  texel_size=args.texel_size,max_resolution=args.max_resolution))
+                texture_seconds=time.monotonic()-texture_started
                 assert real['coverage']['photograph_texels']>0, real
                 loaded=trimesh.load(str(output/'real-photo.obj'),force='scene',process=False)
                 assert all(g.visual.kind=='texture' for g in loaded.geometry.values())
                 report['real_e57']={'source':args.e57.name,'surface':surface,'texture':real,
-                                   'independent_materials':len(loaded.geometry)}
+                                   'independent_materials':len(loaded.geometry),
+                                   'reconstruction_seconds':reconstruction_seconds,'texture_seconds':texture_seconds,
+                                   'output_bytes':sum(item.stat().st_size for item in output.glob('real-photo*') if item.suffix in ('.obj','.mtl','.png')),
+                                   'progress_samples':progress_samples}
+                if args.cancel_probe:
+                    before={item.name for item in output.iterdir()}
+                    cancelled=api('texture_mesh',path=str(output/'cancelled.obj'),source='photographs',
+                                  texel_size=.001,max_resolution=4096)
+                    api('cancel_texture_mesh')
+                    cancelled=wait_job(cancelled,('cancelled',))
+                    assert {item.name for item in output.iterdir()}==before, 'Cancellation left export/staged files'
+                    report['real_e57']['cancellation']={'state':cancelled['state'],'left_partial_files':False}
+                status_path=Path(f'/proc/{process.pid}/status')
+                if status_path.exists():
+                    hwm=next(line for line in status_path.read_text().splitlines() if line.startswith('VmHWM:'))
+                    report['native_peak_rss_kib']=int(hwm.split()[1])
+                report['execution_profile']='development binary, core opt-level=2; Vulkan software renderer'
                 (output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
                 api('screenshot',path=str(output/'real-photo.png'),base64=False,max_edge=1200,window=True)
             (output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
+            if args.e57 and args.expected_sha256:
+                digest=hashlib.file_digest(args.e57.open('rb'),'sha256').hexdigest()
+                assert digest==args.expected_sha256, 'Source fixture bytes changed'
+                report['real_e57']['sha256']=digest
+                (output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
             print('Photo atlas preview and independent OBJ/UV reload passed',flush=True)
         finally:
             if process.poll() is None:

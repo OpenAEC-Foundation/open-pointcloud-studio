@@ -734,7 +734,8 @@ Photograph mode rejects back-facing and mesh-occluded projections and blends
 compatible overlapping photographs with exposure correction. Where no photograph
 observes the surface it uses mesh RGB, or grey if no RGB exists. Foreground
 points outside the reconstructed mesh do not participate in this visibility test.
-The source scan and original photographs stay unchanged.
+Photographs are sampled at up to 2048 pixels on their longest side and within
+a 20 m reach. The source scan and original photographs stay unchanged.
 
 **Texel (m)** is the requested size of a pixel on the surface (default 0.02 m),
 and **Atlas (px)** the maximum page side (256–4096 pixels). Properties shows

@@ -9,7 +9,11 @@ use crate::obj_mesh::{MeshGeometry, MAX_TRIANGLES, MAX_VERTICES};
 use crate::photo_colour::PhotoPixels;
 use crate::{FilePhoto, LoadError, PhotoProjection};
 
-const CACHE_PHOTOS: usize = 4;
+// Keep more decoded images than observations per face: five overlapping
+// station images must not evict each other on alternating neighbouring faces.
+const CACHE_PHOTOS: usize = 8;
+const CANDIDATE_PHOTOS: usize = 4;
+const MAX_CACHE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_PHOTO_SIDE: u32 = 2048;
 
 #[derive(Debug, Clone, Copy)]
@@ -175,7 +179,7 @@ impl PhotoBaker<'_> {
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
         let mut photos = Vec::new();
         for (index, _) in ranked {
-            if photos.len() == CACHE_PHOTOS {
+            if photos.len() == CANDIDATE_PHOTOS {
                 break;
             }
             let pixels = if let Some(place) = self.cache.iter().position(|(id, _)| *id == index) {
@@ -200,8 +204,19 @@ impl PhotoBaker<'_> {
                     continue;
                 }
                 let pixels = Arc::new(pixels);
-                if self.cache.len() == CACHE_PHOTOS {
-                    self.cache.pop_front();
+                let mut cached_bytes = self
+                    .cache
+                    .iter()
+                    .map(|(_, image)| image.rgba.len())
+                    .sum::<usize>();
+                while self.cache.len() >= CACHE_PHOTOS
+                    || cached_bytes + pixels.rgba.len() > MAX_CACHE_BYTES
+                {
+                    let (_, removed) = self
+                        .cache
+                        .pop_front()
+                        .expect("an image fits the cache budget");
+                    cached_bytes -= removed.rgba.len();
                 }
                 self.cache.push_back((index, Arc::clone(&pixels)));
                 pixels
@@ -327,7 +342,7 @@ impl PhotoChart<'_> {
         pending: &mut Vec<u32>,
     ) -> ([u8; 3], u8, u8) {
         let point = self.position(barycentric);
-        let mut found = [(0.0, [0.0; 3], 0u8); CACHE_PHOTOS];
+        let mut found = [(0.0, [0.0; 3], 0u8); CANDIDATE_PHOTOS];
         let mut count = 0;
         for (index, photo) in self.photos.iter().enumerate() {
             if let Some((rgb, weight)) = self.observation(photo, point, pending) {
@@ -592,6 +607,70 @@ mod tests {
             assert_eq!((kind, mask), (0, 3));
         }
         assert_eq!(decodes, 2);
+    }
+
+    #[test]
+    fn overlapping_station_images_are_not_redecoded_for_alternating_faces() {
+        let base = surface();
+        let mesh = MeshGeometry {
+            vertices: [-1., 1.]
+                .into_iter()
+                .flat_map(|shift| {
+                    base.vertices
+                        .iter()
+                        .map(move |point| [point[0] + shift, point[1], point[2]])
+                })
+                .collect(),
+            triangles: vec![[0, 1, 2], [3, 4, 5]],
+            colors: None,
+            normals: None,
+        };
+        let photos: Vec<_> = (0..5)
+            .map(|index| {
+                let mut photo = camera();
+                photo.position[0] = (f64::from(index) - 2.) * 0.2;
+                photo
+            })
+            .collect();
+        let mut counts = [0; 5];
+        let mut baker = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        for face in mesh.triangles.iter().cycle().take(100) {
+            let chart = baker
+                .chart(*face, &mut |index| {
+                    counts[index] += 1;
+                    Ok(solid([80, 100, 120]))
+                })
+                .unwrap();
+            assert_eq!(chart.photo_indices().count(), 4);
+            drop(chart);
+            assert!(baker.cache.len() <= 8);
+        }
+        assert_eq!(counts, [1; 5]);
+        // Larger frames still have a byte budget: five 2048² RGBA images
+        // exceed it, even though the cache accepts up to eight small frames.
+        let mut large = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        for face in &mesh.triangles {
+            let chart = large
+                .chart(*face, &mut |_| {
+                    Ok(PhotoPixels {
+                        width: 2048,
+                        height: 2048,
+                        rgba: vec![80; 2048 * 2048 * 4],
+                    })
+                })
+                .unwrap();
+            assert_eq!(chart.photo_indices().count(), 4);
+            drop(chart);
+            assert!(large.cache.len() <= 4);
+            assert!(
+                large
+                    .cache
+                    .iter()
+                    .map(|(_, image)| image.rgba.len())
+                    .sum::<usize>()
+                    <= MAX_CACHE_BYTES
+            );
+        }
     }
 
     #[test]
