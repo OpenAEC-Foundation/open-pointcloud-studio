@@ -10,7 +10,7 @@ and logs. Bearer keys are random per run and excluded from reports.
 
 `result-2026-11-05.json` records a successful local amd64 Linux run with labwc
 0.7.1 and the development binary. Idle RSS was measured after the empty window
-rendered: 243,764 KiB (about 238 MiB). This is not a release AppImage or arm64
+rendered: 253,172 KiB (about 247 MiB). This is not a release AppImage or arm64
 result; those are checked separately by the package workflow. Initial software
 shader compilation can exceed the desktop's ten-second command timeout, so the
 probe retries only the read-only status and screenshot commands for up to ninety
