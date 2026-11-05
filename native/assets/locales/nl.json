@@ -1105,5 +1105,17 @@
   "Merges mixed scan formats into E57, LAS or LAZ.": "Voegt verschillende scanformaten samen tot E57, LAS of LAZ.",
   "Applies a saved registration matrix to a scan, retaining its stations and photos in E57.": "Past een opgeslagen registratiematrix toe op een scan, met behoud van stations en foto’s in E57.",
   "RMS (mm)": "RMS (mm)",
-  "95% (mm)": "95% (mm)"
+  "95% (mm)": "95% (mm)",
+  "Texture source": "Textuurbron",
+  "Point colours": "Puntkleuren",
+  "Photographs": "Foto's",
+  "Texture preview": "Textuurvoorbeeld",
+  "Show texture": "Textuur tonen",
+  "Preview (px)": "Voorbeeld (px)",
+  "Photo texels": "Texels uit foto's",
+  "Point-colour texels": "Texels uit puntkleuren",
+  "Unobserved texels": "Niet-waargenomen texels",
+  "Photos used": "Gebruikte foto's",
+  "Texture preview is unavailable on this renderer; exported images retain their detail.": "Deze renderer kan geen textuurvoorbeeld tonen; geëxporteerde beelden behouden hun detail.",
+  "Preparing texture preview…": "Textuurvoorbeeld voorbereiden…"
 }

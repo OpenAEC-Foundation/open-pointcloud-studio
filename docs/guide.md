@@ -726,7 +726,28 @@ An STL file stores 32-bit numbers, which hold about seven digits. Up to 2,048 m 
 
 An OBJ or PLY file of 3D BAG buildings carries the credit of the register in its first lines, in plain ASCII in a PLY file. Open Pointcloud Studio reads it there when the file is opened again, so the scene shows the credit and a further export keeps it. An STL file has no room for the credit; name the source yourself when you pass such a file on.
 
-**Texture surface…** beside **Export mesh…** writes a mesh with colours as an OBJ file with UV coordinates, an MTL file and one or more PNG atlas pages, for a program that shows textures rather than colours per vertex. The atlas is painted from the colours at the vertices of the mesh, so it holds no more detail than they do; it does not take the pixels of E57 photos. Colours that [Colour from photos](#colour-from-photos) gave the points are carried into a surface mesh made after them, so make an older mesh again to include them. **Texel (m)** is the size of one pixel of the atlas on the surface, 0.02 m unless changed, and **Atlas (px)** the largest side of a page, from 256 to 4096 pixels. Properties shows the progress with **Cancel texture**; a cancelled export leaves no files. The OBJ keeps its colours per vertex too, which is what this application shows when it opens the file again. A DXF, DWG or IFC file holds no texture images.
+**Texture surface…** beside **Export mesh…** writes OBJ geometry with UV
+coordinates, an MTL and PNG atlas pages. **Texture source** offers **Point
+colours**, which interpolates stored mesh RGB, and **Photographs**, which
+projects calibrated E57 images or added panoramas directly onto the mesh.
+Photograph mode rejects back-facing and mesh-occluded projections and blends
+compatible overlapping photographs with exposure correction. Where no photograph
+observes the surface it uses mesh RGB, or grey if no RGB exists. Foreground
+points outside the reconstructed mesh do not participate in this visibility test.
+The source scan and original photographs stay unchanged.
+
+**Texel (m)** is the requested size of a pixel on the surface (default 0.02 m),
+and **Atlas (px)** the maximum page side (256–4096 pixels). Properties shows
+progress and **Cancel texture**, followed by photo/point-colour/unobserved texel
+counts and source photo indices. **Show texture** toggles the exported UV atlas
+in the native viewport. Preview pages share a 128 MiB budget; **Preview (px)**
+reports their resolution, which can be lower than the exported PNG resolution.
+Unsupported graphics devices retain geometry and show a message. Imported OBJ
+texture images are not automatically loaded; the new preview belongs to the
+mesh on which **Texture surface…** ran. DWG, DXF and IFC exports do not retain
+these texture images. Cancellation before publishing removes staged files;
+cancelling preview preparation after publication retains the completed export.
+
 
 Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, `--texture-mesh INPUT_MESH OUTPUT.obj` writes the atlas of a mesh file with colours, and `--mesh-export INPUT OUTPUT` writes the faces of any mesh file as OBJ, PLY, STL, DXF, DWG or IFC by the extension of `OUTPUT`.
 

@@ -43,6 +43,7 @@ mod mcp;
 mod measure;
 mod memory_usage;
 mod mesh_export;
+mod mesh_texture_preview;
 mod mesh_to_plans;
 mod mesh_wizard;
 mod native_api;
@@ -1853,6 +1854,8 @@ enum Message {
     TextureMesh,
     TextureTexelSize(String),
     TextureMaxResolution(String),
+    TextureSource(mesh_export::TextureSource),
+    TexturePreview(bool),
     TexturePoll,
     CancelTextureExport,
     TexturePathChosen(mesh_export::MeshExportRequest, Option<PathBuf>),
@@ -2167,6 +2170,7 @@ struct Studio {
     texture_export: Option<Arc<mesh_export::TextureExportControl>>,
     texture_texel_size: String,
     texture_max_resolution: String,
+    texture_source: mesh_export::TextureSource,
     mesh_dialog_pending: bool,
     mesh_job: Option<MeshJob>,
     merge_job: Option<MergeJob>,
@@ -2346,6 +2350,8 @@ struct CloudEntry {
     /// made or read.
     mesh_topology: Option<pointcloud_core::MeshTopology>,
     mesh_visible: bool,
+    texture: Option<Arc<mesh_texture_preview::BakedTexture>>,
+    texture_visible: bool,
     /// The faces detected in this scan, a layer of its own beside the mesh.
     faces: Option<faces::FaceLayer>,
     bag_source: bool,
@@ -2866,6 +2872,7 @@ impl Default for Studio {
             texture_export: None,
             texture_texel_size: "0.02".into(),
             texture_max_resolution: "4096".into(),
+            texture_source: mesh_export::TextureSource::default(),
             mesh_dialog_pending: false,
             mesh_job: None,
             merge_job: None,
@@ -3166,6 +3173,8 @@ impl Studio {
             mesh: None,
             mesh_topology: None,
             mesh_visible: true,
+            texture: None,
+            texture_visible: false,
             faces: None,
             bag_source: false,
             visible: true,
@@ -5061,8 +5070,12 @@ impl Studio {
                 path,
                 texel_size,
                 max_resolution,
-            } => self.api_texture_mesh(path, texel_size, max_resolution),
+                source,
+            } => self.api_texture_mesh(path, texel_size, max_resolution, source),
             ApiCommand::CancelTextureMesh => (self.cancel_texture_export(), Task::none()),
+            ApiCommand::SetTexturePreview { layer, visible } => {
+                (self.api_set_texture_preview(layer, visible), Task::none())
+            }
             ApiCommand::SetFaceSettings { options } => {
                 (self.api_set_face_settings(&options), Task::none())
             }
@@ -5842,6 +5855,8 @@ impl Studio {
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
+                        texture: None,
+                        texture_visible: false,
                         faces: None,
                         bag_source: false,
                         visible: true,
@@ -6948,6 +6963,8 @@ impl Studio {
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
+                        texture: None,
+                        texture_visible: false,
                         faces: None,
                         visible: true,
                         selection: None,
@@ -6992,6 +7009,8 @@ impl Studio {
                                 measured.mesh.triangles.len()
                             );
                             entry.mesh = Some(measured.mesh);
+                            entry.texture = None;
+                            entry.texture_visible = false;
                             entry.mesh_topology = Some(measured.topology);
                         }
                         Ok(None) => {}
@@ -7330,6 +7349,8 @@ impl Studio {
                             .find(|entry| entry.matches_source(&source))
                         {
                             entry.mesh = Some(measured.mesh);
+                            entry.texture = None;
+                            entry.texture_visible = false;
                             entry.mesh_topology = Some(measured.topology);
                             self.status = format!(
                                 "{} mesh displayed: {} vertices, {} triangles, {} from {} points → {}",
@@ -7356,6 +7377,10 @@ impl Studio {
             Message::TextureMesh => return self.export_texture_mesh(),
             Message::TextureTexelSize(value) => self.texture_texel_size = value,
             Message::TextureMaxResolution(value) => self.texture_max_resolution = value,
+            Message::TextureSource(source) => self.texture_source = source,
+            Message::TexturePreview(visible) => {
+                let _ = self.api_set_texture_preview(None, visible);
+            }
             Message::TexturePoll => return self.texture_poll(),
             Message::CancelTextureExport => {
                 self.cancel_texture_export();

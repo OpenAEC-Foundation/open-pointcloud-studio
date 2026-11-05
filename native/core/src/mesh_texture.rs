@@ -47,6 +47,20 @@ pub struct AtlasReport {
     pub max_resolution: u32,
 }
 
+/// Compact per-face chart placement, in the same order as the mesh faces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AtlasChart {
+    pub page: u32,
+    pub position: [u32; 2],
+    pub side: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct BakedAtlas {
+    pub atlas: AtlasReport,
+    pub charts: Vec<AtlasChart>,
+}
+
 /// Photographs and the surface share source coordinates. The output mesh
 /// may have moved, but must retain the source topology: UV sampling still
 /// refers to the original measurements, including after nonuniform scaling.
@@ -62,6 +76,7 @@ pub struct PhotoAtlasRequest<'a> {
 pub struct PhotoAtlasReport {
     pub atlas: AtlasReport,
     pub coverage: PhotoTextureCoverage,
+    pub charts: Vec<AtlasChart>,
 }
 
 /// Bake calibrated E57 photo pixels onto independent triangle UV charts.
@@ -75,8 +90,23 @@ pub fn write_photographic_obj_atlas(
     cancelled: &(dyn Fn() -> bool + Sync),
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<PhotoAtlasReport, LoadError> {
-    if request.source_mesh.triangles != request.output_mesh.triangles
-        || request.source_mesh.vertices.len() != request.output_mesh.vertices.len()
+    if request.source_mesh.vertices.len() != request.output_mesh.vertices.len()
+        || request.source_mesh.triangles.len() != request.output_mesh.triangles.len()
+        || request
+            .source_mesh
+            .triangles
+            .iter()
+            .zip(&request.output_mesh.triangles)
+            .any(|(source, output)| {
+                if source == output {
+                    return false;
+                }
+                let mut a = *source;
+                let mut b = *output;
+                a.sort_unstable();
+                b.sort_unstable();
+                a != b
+            })
     {
         return Err(LoadError::InvalidData(
             "texture source and output need the same mesh topology".into(),
@@ -88,17 +118,18 @@ pub fn write_photographic_obj_atlas(
     let mut baker = PhotoBaker::new(request.source_mesh, request.photos, request.photographs)?;
     let mut coverage = PhotoTextureCoverage::default();
     let mut used = vec![false; request.photos.len()];
+    let mut charts = Vec::with_capacity(request.source_mesh.triangles.len());
     let atlas = write_sampled_obj_atlas(
         request.output_mesh,
         destination.as_ref(),
         request.atlas,
         cancelled,
         progress,
-        &mut |pixels, resolution, at, side, face| {
+        &mut |pixels, resolution, at, side, face, place| {
             if cancelled() {
                 return Err(LoadError::Cancelled);
             }
-            let chart = baker.chart(face, decode)?;
+            let chart = baker.chart_oriented(face, request.source_mesh.triangles[place], decode)?;
             let indices = chart.photo_indices().collect::<Vec<_>>();
             let counts = pixels
                 .par_chunks_exact_mut(resolution as usize * 3)
@@ -150,6 +181,7 @@ pub fn write_photographic_obj_atlas(
             }
             Ok(())
         },
+        &mut |chart| charts.push(chart),
     )?;
     coverage.photos_used = used
         .iter()
@@ -157,7 +189,11 @@ pub fn write_photographic_obj_atlas(
         .filter_map(|(index, used)| used.then_some(index))
         .collect();
     coverage.photos_failed = baker.failed();
-    Ok(PhotoAtlasReport { atlas, coverage })
+    Ok(PhotoAtlasReport {
+        atlas,
+        coverage,
+        charts,
+    })
 }
 
 fn valid(mesh: &MeshGeometry, options: AtlasOptions) -> bool {
@@ -250,6 +286,44 @@ pub fn write_colored_obj_atlas(
     cancelled: &dyn Fn() -> bool,
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<AtlasReport, LoadError> {
+    write_colored_inner(
+        mesh,
+        destination.as_ref(),
+        options,
+        cancelled,
+        progress,
+        &mut |_| {},
+    )
+}
+
+/// The same export with its exact UV chart placement for native preview.
+pub fn write_colored_obj_atlas_with_layout(
+    mesh: &MeshGeometry,
+    destination: impl AsRef<Path>,
+    options: AtlasOptions,
+    cancelled: &dyn Fn() -> bool,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<BakedAtlas, LoadError> {
+    let mut charts = Vec::new();
+    let atlas = write_colored_inner(
+        mesh,
+        destination.as_ref(),
+        options,
+        cancelled,
+        progress,
+        &mut |chart| charts.push(chart),
+    )?;
+    Ok(BakedAtlas { atlas, charts })
+}
+
+fn write_colored_inner(
+    mesh: &MeshGeometry,
+    destination: &Path,
+    options: AtlasOptions,
+    cancelled: &dyn Fn() -> bool,
+    progress: &mut dyn FnMut(usize, usize),
+    placed: &mut dyn FnMut(AtlasChart),
+) -> Result<AtlasReport, LoadError> {
     let Some(colors) = mesh
         .colors
         .as_ref()
@@ -261,11 +335,11 @@ pub fn write_colored_obj_atlas(
     };
     write_sampled_obj_atlas(
         mesh,
-        destination.as_ref(),
+        destination,
         options,
         cancelled,
         progress,
-        &mut |pixels, resolution, at, side, face| {
+        &mut |pixels, resolution, at, side, face, _| {
             paint_chart(
                 pixels,
                 resolution,
@@ -275,11 +349,12 @@ pub fn write_colored_obj_atlas(
             );
             Ok(())
         },
+        placed,
     )
 }
 
 type ChartPainter<'a> =
-    dyn FnMut(&mut [u8], u32, [u32; 2], u32, [u32; 3]) -> Result<(), LoadError> + 'a;
+    dyn FnMut(&mut [u8], u32, [u32; 2], u32, [u32; 3], usize) -> Result<(), LoadError> + 'a;
 
 fn write_sampled_obj_atlas(
     mesh: &MeshGeometry,
@@ -288,6 +363,7 @@ fn write_sampled_obj_atlas(
     cancelled: &dyn Fn() -> bool,
     progress: &mut dyn FnMut(usize, usize),
     paint: &mut ChartPainter<'_>,
+    placed: &mut dyn FnMut(AtlasChart),
 ) -> Result<AtlasReport, LoadError> {
     if !valid(mesh, options) {
         return Err(LoadError::InvalidData(
@@ -356,6 +432,7 @@ fn write_sampled_obj_atlas(
     let mut occupied = false;
     let mut images = Vec::<(PathBuf, PathBuf)>::new();
     let mut limited = 0;
+    let mut last_progress = std::time::Instant::now();
     for (place, face) in mesh.triangles.iter().copied().enumerate() {
         if cancelled() {
             return Err(LoadError::Cancelled);
@@ -390,7 +467,12 @@ fn write_sampled_obj_atlas(
             writeln!(obj, "usemtl atlas_{page:03}")?;
         }
         occupied = true;
-        paint(&mut pixels, resolution, [x, y], side, face)?;
+        placed(AtlasChart {
+            page,
+            position: [x, y],
+            side,
+        });
+        paint(&mut pixels, resolution, [x, y], side, face, place)?;
         let uv = [
             [f64::from(x) + 1.5, f64::from(y) + 1.5],
             [f64::from(x + side) + 0.5, f64::from(y) + 1.5],
@@ -433,8 +515,9 @@ fn write_sampled_obj_atlas(
         }
         x += tile;
         row_height = row_height.max(tile);
-        if place % 4096 == 0 {
+        if place == 0 || last_progress.elapsed() >= std::time::Duration::from_millis(100) {
             progress(place + 1, mesh.triangles.len());
+            last_progress = std::time::Instant::now();
         }
     }
     if occupied {

@@ -100,8 +100,9 @@ pub use mesh_quality::{
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
 pub use mesh_texture::{
-    write_colored_obj_atlas, write_photographic_obj_atlas, AtlasOptions, AtlasReport,
-    PhotoAtlasReport, PhotoAtlasRequest, PhotoTextureCoverage, PhotoTextureOptions,
+    write_colored_obj_atlas, write_colored_obj_atlas_with_layout, write_photographic_obj_atlas,
+    AtlasChart, AtlasOptions, AtlasReport, BakedAtlas, PhotoAtlasReport, PhotoAtlasRequest,
+    PhotoTextureCoverage, PhotoTextureOptions,
 };
 pub use mesh_write::{read_stl_origin, write_mesh, MeshFormat, MeshWriteReport};
 pub use mesher::{

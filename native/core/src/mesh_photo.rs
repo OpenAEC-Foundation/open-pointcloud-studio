@@ -27,7 +27,7 @@ impl Default for PhotoTextureOptions {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct PhotoTextureCoverage {
     pub photograph_texels: u64,
     pub point_colour_texels: u64,
@@ -113,14 +113,28 @@ impl PhotoBaker<'_> {
         self.failed.iter().filter(|failed| **failed).count()
     }
 
+    #[cfg(test)]
     pub(crate) fn chart(
         &mut self,
         face: [u32; 3],
         decode: &mut dyn FnMut(usize) -> Result<PhotoPixels, LoadError>,
     ) -> Result<PhotoChart<'_>, LoadError> {
+        self.chart_oriented(face, face, decode)
+    }
+
+    pub(crate) fn chart_oriented(
+        &mut self,
+        face: [u32; 3],
+        source_face: [u32; 3],
+        decode: &mut dyn FnMut(usize) -> Result<PhotoPixels, LoadError>,
+    ) -> Result<PhotoChart<'_>, LoadError> {
         let vertices = face.map(|i| self.mesh.vertices[i as usize]);
         let centre = std::array::from_fn(|a| vertices.iter().map(|v| v[a]).sum::<f64>() / 3.0);
-        let raw_normal = cross(sub(vertices[1], vertices[0]), sub(vertices[2], vertices[0]));
+        let orientation = source_face.map(|index| self.mesh.vertices[index as usize]);
+        let raw_normal = cross(
+            sub(orientation[1], orientation[0]),
+            sub(orientation[2], orientation[0]),
+        );
         let magnitude = dot(raw_normal, raw_normal).sqrt();
         let normal = raw_normal.map(|v| {
             if magnitude > 1e-15 {
@@ -733,6 +747,39 @@ mod atlas_tests {
         let reopened = crate::read_obj_mesh(&path).unwrap();
         assert_eq!(reopened.vertices, mesh.vertices);
         assert_eq!(reopened.triangles, mesh.triangles);
+    }
+
+    #[test]
+    fn mirrored_output_keeps_source_photo_orientation_and_uv_corner_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = mesh();
+        let mut mirrored = mesh();
+        for vertex in &mut mirrored.vertices {
+            vertex[0] *= -2.;
+        }
+        mirrored.triangles[0] = [0, 2, 1];
+        let photos = [photo()];
+        let mut parameters = request(&original, &photos);
+        parameters.output_mesh = &mirrored;
+        let path = directory.path().join("mirror.obj");
+        let report = write_photographic_obj_atlas(
+            parameters,
+            &path,
+            &mut |_| Ok(pixels()),
+            &|| false,
+            &mut |_, _| {},
+        )
+        .unwrap();
+        assert!(report.coverage.photograph_texels > 0);
+        assert_eq!(report.coverage.unobserved_texels, 0);
+        let reopened = crate::read_obj_mesh(&path).unwrap();
+        assert_eq!(reopened.vertices, mirrored.vertices);
+        assert_eq!(reopened.triangles, mirrored.triangles);
+        let chart = report.charts[0];
+        let image = decode_png(&directory.path().join("mirror-atlas-000.png"));
+        // UV origin belongs to the first source corner even after reflection.
+        let offset = (((chart.position[1] + 1) * 256 + chart.position[0] + 1) * 3) as usize;
+        assert_eq!(&image[offset..offset + 3], &[115, 105, 40]);
     }
 
     #[test]
