@@ -6332,6 +6332,9 @@ impl Studio {
         // The RAM label needs a fresh sample, not the model and drawing
         // settlement work that follows every normal UI action.
         if matches!(&message, Message::MemoryTick) {
+            if let Some(handle) = &self.api_handle {
+                handle.mark_gui_alive();
+            }
             self.memory_usage.refresh();
             return Task::none();
         }

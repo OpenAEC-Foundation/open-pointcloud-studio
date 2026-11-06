@@ -147,8 +147,12 @@ fn handle(mut request: Request, state: &Arc<State>) {
         let running = instances::discover(&crate::native_api::discovery_directory(), &state.client)
             .iter()
             .any(|instance| {
-                instances::send(&state.client, instance, &json!({"command": "status"}))
-                    .is_ok_and(|reply| reply["ok"] == true)
+                state
+                    .client
+                    .get(format!("http://127.0.0.1:{}/gui-health", instance.port))
+                    .timeout(std::time::Duration::from_secs(3))
+                    .send()
+                    .is_ok_and(|reply| reply.status().is_success())
             });
         respond(
             request,

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -845,24 +845,53 @@ impl Grants {
     }
 }
 
+/// Owner access and GUI liveness are independent: pausing MCP must not make
+/// a healthy managed desktop look crashed to its container supervisor.
+struct AccessState {
+    enabled: AtomicBool,
+    last_gui_tick: Mutex<Option<Instant>>,
+}
+
+impl AccessState {
+    fn gui_responsive(&self) -> bool {
+        self.last_gui_tick
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some_and(|tick| tick.elapsed() <= Duration::from_secs(30))
+    }
+}
+
 pub struct ApiHandle {
     pub port: u16,
     pub grants: Grants,
     discovery_path: PathBuf,
-    enabled: Arc<AtomicBool>,
+    access: Arc<AccessState>,
 }
 
 impl ApiHandle {
+    pub fn mark_gui_alive(&self) {
+        *self
+            .access
+            .last_gui_tick
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+    }
+
     pub fn set_enabled(&self, enabled: bool) {
-        self.enabled.store(enabled, Ordering::SeqCst);
+        self.access.enabled.store(enabled, Ordering::SeqCst);
     }
     pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::SeqCst)
+        self.access.enabled.load(Ordering::SeqCst)
     }
 }
 
 impl Drop for ApiHandle {
     fn drop(&mut self) {
+        *self
+            .access
+            .last_gui_tick
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
         let _ = fs::remove_file(&self.discovery_path);
     }
 }
@@ -995,13 +1024,21 @@ fn route(
     token: &str,
     grants: &Grants,
     exec: &mpsc::Sender<Accepted>,
-    enabled: &AtomicBool,
+    access: &AccessState,
 ) {
     match (request.method(), request.url()) {
         (&Method::Get, "/health") => respond(request, 200, json!({"status": "ok"})),
+        (&Method::Get, "/gui-health") => {
+            let alive = access.gui_responsive();
+            respond(
+                request,
+                if alive { 200 } else { 503 },
+                json!({"status": if alive {"ok"} else {"unavailable"}}),
+            );
+        }
         (&Method::Get, "/info") => {
             let mut value = info(port, started);
-            value["mcp_enabled"] = json!(enabled.load(Ordering::SeqCst));
+            value["mcp_enabled"] = json!(access.enabled.load(Ordering::SeqCst));
             respond(request, 200, value);
         }
         (&Method::Post, "/eval") => respond(
@@ -1028,7 +1065,7 @@ fn route(
             };
             // Extension runs use their own grants and continue while external
             // access is paused. The owner/discovery token is used by MCP/API.
-            if grant.is_none() && !enabled.load(Ordering::SeqCst) {
+            if grant.is_none() && !access.enabled.load(Ordering::SeqCst) {
                 respond(
                     request,
                     503,
@@ -1122,8 +1159,11 @@ pub fn start(
     let (sender, receiver) = unbounded_channel();
     let grants = Grants::default();
     let served = grants.clone();
-    let enabled = Arc::new(AtomicBool::new(crate::preferences::load().mcp_enabled));
-    let served_enabled = Arc::clone(&enabled);
+    let access = Arc::new(AccessState {
+        enabled: AtomicBool::new(crate::preferences::load().mcp_enabled),
+        last_gui_tick: Mutex::new(None),
+    });
+    let served_access = Arc::clone(&access);
     let (exec, accepted) = mpsc::channel::<Accepted>();
     let accepted = Arc::new(Mutex::new(accepted));
     for _ in 0..EXEC_WORKERS {
@@ -1150,7 +1190,7 @@ pub fn start(
                 &token,
                 &served,
                 &exec,
-                &served_enabled,
+                &served_access,
             );
         }
     });
@@ -1160,7 +1200,7 @@ pub fn start(
             port,
             grants,
             discovery_path,
-            enabled,
+            access,
         },
     ))
 }
@@ -1181,7 +1221,35 @@ mod tests {
             .timeout(Duration::from_secs(3))
             .build()
             .unwrap();
+        assert_eq!(
+            client
+                .get(format!("{url}/gui-health"))
+                .send()
+                .unwrap()
+                .status(),
+            503
+        );
+        handle.mark_gui_alive();
         handle.set_enabled(false);
+        assert_eq!(
+            client
+                .get(format!("{url}/gui-health"))
+                .send()
+                .unwrap()
+                .status(),
+            200
+        );
+        *handle.access.last_gui_tick.lock().unwrap() =
+            Some(Instant::now() - Duration::from_secs(31));
+        assert_eq!(
+            client
+                .get(format!("{url}/gui-health"))
+                .send()
+                .unwrap()
+                .status(),
+            503
+        );
+        handle.mark_gui_alive();
         let response = client
             .post(format!("{url}/exec"))
             .header("X-OPS-Token", token)

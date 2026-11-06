@@ -15,7 +15,12 @@ pick the newest. A fixed port can be requested with `--api-port PORT [INPUT ...]
 [MCP.md](MCP.md) describes `--mcp`, a Model Context Protocol server that finds
 windows this way and offers these commands as tools.
 
-`GET /health` returns `{"status":"ok"}`. `GET /info` returns the process ID,
+`GET /health` returns `{"status":"ok"}` for the command server.
+`GET /gui-health` returns the same with HTTP 200 only after a GUI heartbeat
+within the last 30 seconds, or HTTP 503 with `status: "unavailable"`. It contains
+no scan information and stays available when the status-bar MCP checkbox is off.
+The managed transport uses this heartbeat for `/gezond`, so pausing external
+commands does not restart a healthy desktop. `GET /info` returns the process ID,
 port, version, API name and start time, `api_revision`, the revision of the
 commands (see [API changes](#api-changes)), and `commands`, the names of the
 commands the window knows in sorted order. `POST /exec` accepts one JSON
