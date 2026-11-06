@@ -12,7 +12,8 @@ use std::sync::Arc;
 use iced::widget::{button, column, container, text};
 use iced::{Element, Fill, Task};
 use pointcloud_core::{
-    AtlasOptions, AtlasReport, LoadError, MeshFormat, MeshGeometry, MeshTopology,
+    AtlasOptions, AtlasReport, FilePhoto, LoadError, MeshFormat, MeshGeometry, MeshTopology,
+    PhotoAtlasRequest, PhotoTextureCoverage, PhotoTextureOptions,
 };
 use serde_json::{json, Value};
 
@@ -38,6 +39,27 @@ const FORMATS: [(MeshFormat, &str); 6] = [
 
 const NO_FORMAT: &str = "Choose an .obj, .ply, .stl, .dxf, .dwg or .ifc file name for the mesh";
 const SAME_FILE: &str = "Choose a mesh file different from the source file";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextureSource {
+    #[default]
+    PointColours,
+    Photographs,
+}
+
+impl TextureSource {
+    const ALL: [Self; 2] = [Self::PointColours, Self::Photographs];
+}
+
+impl std::fmt::Display for TextureSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(tr(match self {
+            Self::PointColours => crate::i18n::key("Point colours"),
+            Self::Photographs => crate::i18n::key("Photographs"),
+        }))
+    }
+}
 
 /// A mesh with what was measured of it when it was made or read.
 #[derive(Debug, Clone)]
@@ -89,6 +111,8 @@ pub(crate) struct MeshExportRequest {
     source: PathBuf,
     bag_source: bool,
     transform: CloudTransform,
+    texture_source: TextureSource,
+    photos: Vec<FilePhoto>,
 }
 
 /// A mesh file that was written.
@@ -107,12 +131,16 @@ pub(crate) struct MeshExportDone {
 pub(crate) struct TextureExportDone {
     path: PathBuf,
     report: AtlasReport,
+    coverage: Option<PhotoTextureCoverage>,
+    preview: Result<Arc<crate::mesh_texture_preview::BakedTexture>, String>,
+    source: PathBuf,
 }
 
 pub(crate) struct TextureExportControl {
     pub(crate) cancelled: AtomicBool,
     pub(crate) processed: AtomicUsize,
     pub(crate) total: usize,
+    pub(crate) saved: AtomicBool,
     pub(crate) api_job_id: Option<String>,
 }
 
@@ -129,14 +157,99 @@ fn write_texture(
         moved = in_scene(&request.mesh, request.transform);
         &moved
     };
-    let report = pointcloud_core::write_colored_obj_atlas(
-        mesh,
+    let cancelled = || control.cancelled.load(Ordering::Relaxed);
+    let mut progress = |processed, _| control.processed.store(processed, Ordering::Relaxed);
+    let (report, coverage, charts) = match request.texture_source {
+        TextureSource::PointColours => {
+            let result = pointcloud_core::write_colored_obj_atlas_with_layout(
+                mesh,
+                &path,
+                options,
+                &cancelled,
+                &mut progress,
+            )?;
+            (result.atlas, None, result.charts)
+        }
+        TextureSource::Photographs => {
+            let result = pointcloud_core::write_photographic_obj_atlas(
+                PhotoAtlasRequest {
+                    source_mesh: &request.mesh,
+                    output_mesh: mesh,
+                    photos: &request.photos,
+                    atlas: options,
+                    photographs: PhotoTextureOptions::default(),
+                },
+                &path,
+                &mut |index| {
+                    if cancelled() {
+                        return Err(LoadError::Cancelled);
+                    }
+                    decode_texture_photo(&request.source, &request.photos[index])
+                },
+                &cancelled,
+                &mut progress,
+            )?;
+            (result.atlas, Some(result.coverage), result.charts)
+        }
+    };
+    control.saved.store(true, Ordering::Relaxed);
+    let preview = crate::mesh_texture_preview::BakedTexture::read(
         &path,
-        options,
-        &|| control.cancelled.load(Ordering::Relaxed),
-        &mut |processed, _| control.processed.store(processed, Ordering::Relaxed),
-    )?;
-    Ok(TextureExportDone { path, report })
+        Arc::clone(&request.mesh),
+        report,
+        charts,
+        coverage.clone(),
+        request
+            .transform
+            .scale
+            .iter()
+            .filter(|value| **value < 0.0)
+            .count()
+            % 2
+            == 1,
+        &cancelled,
+    )
+    .map(Arc::new);
+    Ok(TextureExportDone {
+        path,
+        report,
+        coverage,
+        preview,
+        source: request.source.clone(),
+    })
+}
+
+fn decode_texture_photo(
+    source: &Path,
+    photo: &FilePhoto,
+) -> Result<pointcloud_core::photo_colour::PhotoPixels, LoadError> {
+    use pointcloud_core::ScanImageFormat;
+    let bytes = pointcloud_core::read_file_photo(source, photo)?;
+    let format = match photo.format {
+        ScanImageFormat::Png => ::image::ImageFormat::Png,
+        ScanImageFormat::Jpeg => ::image::ImageFormat::Jpeg,
+    };
+    let (width, height) = ::image::io::Reader::with_format(std::io::Cursor::new(&bytes), format)
+        .into_dimensions()
+        .map_err(|error| LoadError::InvalidData(error.to_string()))?;
+    let factor = match photo.format {
+        ScanImageFormat::Jpeg => crate::file_photos::jpeg_reduction(width, height, 2048),
+        _ => 1,
+    };
+    if u64::from(width.div_ceil(factor)) * u64::from(height.div_ceil(factor)) * 4
+        > 128 * 1024 * 1024
+    {
+        return Err(LoadError::InvalidData(
+            "photograph exceeds the bounded texture decoder size".into(),
+        ));
+    }
+    let image = crate::file_photos::decode_pixels(&bytes, photo.format, 2048)
+        .map_err(LoadError::InvalidData)?;
+    Ok(pointcloud_core::photo_colour::PhotoPixels {
+        width: image.width(),
+        height: image.height(),
+        rgba: image.into_raw(),
+    })
 }
 
 impl MeshExportDone {
@@ -201,6 +314,11 @@ pub(crate) fn mesh_value(entry: &CloudEntry) -> Value {
         "triangles": mesh.triangles.len(),
         "open_edges": entry.mesh_topology.map(|topology| topology.open_edges),
         "components": entry.mesh_topology.map(|topology| topology.components),
+        "texture": entry.texture.as_ref().map(|texture|json!({
+            "visible":entry.texture_visible,"pages":texture.report.pages,
+            "preview_resolution":texture.pixels.side,"export_resolution":texture.report.max_resolution,
+            "preview_supported":crate::gpu_viewport::texture_supported(),"coverage":texture.coverage,
+        })),
     })
 }
 
@@ -316,6 +434,8 @@ pub(crate) fn convert_file(source: &Path, destination: &Path) -> Result<String, 
         source: source.to_path_buf(),
         bag_source: is_bag3d_mesh(source),
         transform: CloudTransform::default(),
+        texture_source: TextureSource::PointColours,
+        photos: Vec::new(),
     };
     let done = write(&request, destination.to_path_buf(), format).map_err(failed)?;
     let mut lines = format!(
@@ -365,8 +485,10 @@ impl Studio {
             self.status = "Select a coloured surface mesh first".into();
             return Task::none();
         };
-        if request.mesh.colors.is_none() {
-            self.status = "This mesh has no measured colours to texture".into();
+        if request.mesh.colors.is_none()
+            && (request.texture_source == TextureSource::PointColours || request.photos.is_empty())
+        {
+            self.status = "This mesh has no measured colours or photographs to texture".into();
             return Task::none();
         }
         if let Err(error) = self.texture_options() {
@@ -383,7 +505,7 @@ impl Studio {
         self.status = "Choose a new name for the textured OBJ…".into();
         Task::perform(
             async move {
-                rfd::AsyncFileDialog::new()
+                crate::managed::file_dialog()
                     .add_filter("Textured OBJ", &["obj"])
                     .set_file_name(format!("{stem}-textured.obj"))
                     .save_file()
@@ -437,6 +559,7 @@ impl Studio {
             cancelled: AtomicBool::new(false),
             processed: AtomicUsize::new(0),
             total: request.mesh.triangles.len(),
+            saved: AtomicBool::new(false),
             api_job_id: api_job_id.clone(),
         });
         self.texture_export = Some(Arc::clone(&control));
@@ -471,7 +594,9 @@ impl Studio {
         };
         let processed = control.processed.load(Ordering::Relaxed);
         let total = control.total;
-        self.status = if control.cancelled.load(Ordering::Relaxed) {
+        self.status = if control.saved.load(Ordering::Relaxed) {
+            tr("Preparing texture preview…").to_owned()
+        } else if control.cancelled.load(Ordering::Relaxed) {
             "Cancelling texture export…".into()
         } else {
             format!("Texturing surface: {processed}/{total} triangles")
@@ -497,6 +622,7 @@ impl Studio {
                 "processed": control.processed.load(Ordering::Relaxed),
                 "total": control.total,
                 "cancelling": control.cancelled.load(Ordering::Relaxed),
+                "saved": control.saved.load(Ordering::Relaxed),
             })
         })
     }
@@ -527,6 +653,8 @@ impl Studio {
                     "path": done.path, "triangles": done.report.triangles,
                     "pages": done.report.pages,
                     "resolution_limited": done.report.resolution_limited,
+                    "coverage": done.coverage,
+                    "preview_error":done.preview.as_ref().err(),
                 }),
                 Err(_) if cancelled => json!({"state": "cancelled", "operation": "texture_mesh"}),
                 Err(error) => {
@@ -536,15 +664,49 @@ impl Studio {
         }
         match result {
             Ok(done) => {
+                if let Ok(preview) = &done.preview {
+                    if let Some(entry) = self.clouds.iter_mut().find(|entry| {
+                        entry.cloud.path == done.source
+                            && entry
+                                .mesh
+                                .as_ref()
+                                .is_some_and(|mesh| Arc::ptr_eq(mesh, &preview.mesh))
+                    }) {
+                        entry.texture = Some(Arc::clone(preview));
+                        entry.texture_visible =
+                            crate::gpu_viewport::texture_supported() != Some(false);
+                    }
+                }
                 self.status = format!(
                     "Textured OBJ saved to {} with {} image page(s)",
                     done.path.display(),
                     done.report.pages
-                )
+                );
+                if let Err(error) = done.preview {
+                    self.status
+                        .push_str(&format!("; preview unavailable: {error}"));
+                }
             }
             Err(_) if cancelled => self.status = "Texture export cancelled".into(),
             Err(error) => self.status = format!("Texture export failed: {error}"),
         }
+    }
+
+    pub(crate) fn api_set_texture_preview(&mut self, layer: Option<usize>, visible: bool) -> Value {
+        let Some(entry) = layer
+            .or(self.active)
+            .and_then(|index| self.clouds.get_mut(index))
+        else {
+            return json!({"ok":false,"error":"layer index is out of range"});
+        };
+        if entry.texture.is_none() {
+            return json!({"ok":false,"error":"the layer has no baked texture preview"});
+        }
+        if visible && crate::gpu_viewport::texture_supported() == Some(false) {
+            return json!({"ok":false,"error":"the renderer does not support texture previews"});
+        }
+        entry.texture_visible = visible;
+        json!({"ok":true,"visible":visible})
     }
 
     pub(crate) fn api_texture_mesh(
@@ -552,6 +714,7 @@ impl Studio {
         path: PathBuf,
         texel_size: Option<f64>,
         max_resolution: Option<u32>,
+        source: Option<TextureSource>,
     ) -> (Value, Task<Message>) {
         let refuse = |error: &str| (json!({"ok": false, "error": error}), Task::none());
         if !path.is_absolute()
@@ -565,11 +728,14 @@ impl Studio {
         if self.mesh_export_pending {
             return refuse("a mesh export is already open or running");
         }
-        let Some(request) = self.mesh_export_request() else {
+        let Some(mut request) = self.mesh_export_request() else {
             return refuse("the active layer has no mesh");
         };
-        if request.mesh.colors.is_none() {
-            return refuse("the active mesh has no measured vertex colours");
+        request.texture_source = source.unwrap_or_default();
+        if request.mesh.colors.is_none()
+            && (request.texture_source == TextureSource::PointColours || request.photos.is_empty())
+        {
+            return refuse("the active mesh has no measured colours or photographs");
         }
         if path == request.source || path.exists() {
             return refuse("choose a new destination different from the source");
@@ -608,6 +774,8 @@ impl Studio {
             source: entry.cloud.path.clone(),
             bag_source: entry.bag_source,
             transform: entry.transform,
+            texture_source: self.texture_source,
+            photos: self.colour_photos(index?),
         })
     }
 
@@ -640,7 +808,7 @@ impl Studio {
             async move {
                 FORMATS
                     .iter()
-                    .fold(rfd::AsyncFileDialog::new(), |dialog, (format, name)| {
+                    .fold(crate::managed::file_dialog(), |dialog, (format, name)| {
                         dialog.add_filter(*name, &[format.extension()])
                     })
                     .set_file_name(suggestion)
@@ -807,8 +975,55 @@ impl Studio {
                 .padding([4, 8]),
             );
         }
+        if let Some(texture) = &entry.texture {
+            rows = rows.push(opencad_properties::property_control(
+                "Texture preview",
+                ui_style::checkbox(
+                    tr("Show texture"),
+                    entry.texture_visible
+                        && crate::gpu_viewport::texture_supported() != Some(false),
+                )
+                .on_toggle(Message::TexturePreview)
+                .into(),
+            ));
+            rows = rows.push(opencad_properties::property_row(
+                "Preview (px)",
+                texture.pixels.side.to_string(),
+            ));
+            if let Some(coverage) = &texture.coverage {
+                rows = rows
+                    .push(opencad_properties::property_row(
+                        "Photo texels",
+                        format_count(coverage.photograph_texels),
+                    ))
+                    .push(opencad_properties::property_row(
+                        "Point-colour texels",
+                        format_count(coverage.point_colour_texels),
+                    ))
+                    .push(opencad_properties::property_row(
+                        "Unobserved texels",
+                        format_count(coverage.unobserved_texels),
+                    ))
+                    .push(opencad_properties::property_row(
+                        "Photos used",
+                        coverage.photos_used.len().to_string(),
+                    ));
+            }
+            if crate::gpu_viewport::texture_supported() == Some(false) {
+                rows=rows.push(text(tr("Texture preview is unavailable on this renderer; exported images retain their detail.")).size(10));
+            }
+        }
         // The texture settings are rows of the shared property grid.
         let texture_settings = column![
+            opencad_properties::property_control(
+                "Texture source",
+                ui_style::pick_list(
+                    TextureSource::ALL,
+                    Some(self.texture_source),
+                    Message::TextureSource
+                )
+                .into()
+            ),
             opencad_properties::property_input(
                 "Texel (m)",
                 "0.02",
@@ -829,7 +1044,9 @@ impl Studio {
             button(tr("Texture surface…"))
                 .on_press_maybe(
                     (!self.mesh_export_pending
-                        && mesh.colors.is_some()
+                        && (mesh.colors.is_some()
+                            || (self.texture_source == TextureSource::Photographs
+                                && !self.colour_photos(active).is_empty()))
                         && self.texture_options().is_ok())
                     .then_some(Message::TextureMesh)
                 )
@@ -909,6 +1126,8 @@ mod tests {
             source: PathBuf::from("scan.laz"),
             bag_source: false,
             transform,
+            texture_source: TextureSource::PointColours,
+            photos: Vec::new(),
         }
     }
 
@@ -1191,7 +1410,7 @@ mod tests {
         let status = send(&mut studio, ApiCommand::Status);
         assert_eq!(
             status["result"]["clouds"][0]["mesh"],
-            json!({"vertices": 12, "triangles": 12, "open_edges": 0, "components": 1})
+            json!({"vertices": 12, "triangles": 12, "open_edges": 0, "components": 1, "texture": null})
         );
     }
 
@@ -1392,7 +1611,7 @@ mod tests {
         let status = send(&mut studio, ApiCommand::Status);
         assert_eq!(
             status["result"]["clouds"][0]["mesh"],
-            json!({"vertices": 7, "triangles": 3, "open_edges": 7, "components": 2})
+            json!({"vertices": 7, "triangles": 3, "open_edges": 7, "components": 2, "texture": null})
         );
 
         for refused in [
@@ -1607,6 +1826,7 @@ mod tests {
             path: path.clone(),
             texel_size: Some(0.05),
             max_resolution: Some(256),
+            source: None,
         };
         assert_eq!(
             send(&mut studio, command())["error"],
@@ -1629,7 +1849,7 @@ mod tests {
         let status = send(&mut studio, ApiCommand::Status);
         assert_eq!(
             status["result"]["texture_export"],
-            json!({"operation": "texture_mesh", "processed": 1, "total": 3, "cancelling": false})
+            json!({"operation": "texture_mesh", "processed": 1, "total": 3, "cancelling": false, "saved": false})
         );
         assert_eq!(
             crate::mcp::busy(&status["result"]),
@@ -1680,6 +1900,7 @@ mod tests {
                 path: path.clone(),
                 texel_size: None,
                 max_resolution: Some(256),
+                source: None,
             },
         );
         let id = accepted["job_id"].as_str().unwrap().to_owned();
@@ -1729,5 +1950,94 @@ mod tests {
         assert_eq!(tr("Texture surface…"), "Oppervlak textureren…");
         assert_eq!(tr("Open edges"), "Open randen");
         assert_eq!(tr("Connected parts"), "Samenhangende delen");
+    }
+}
+
+#[cfg(test)]
+mod photo_texture_tests {
+    use super::*;
+    use crate::native_api::{ApiCommand, ApiRequest};
+
+    fn send(studio: &mut Studio, command: ApiCommand) -> Value {
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.handle_api(ApiRequest { command, reply });
+        receive.recv().unwrap()
+    }
+
+    #[test]
+    fn api_bakes_added_photographs_without_recolouring_the_original_points() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo.xyz");
+        std::fs::write(&source, "0 0 0\n1 0 0\n0 1 0\n").unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 100).unwrap());
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        studio.clouds[0].mesh = Some(Arc::new(MeshGeometry {
+            vertices: vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]],
+            triangles: vec![[0, 1, 2]],
+            colors: None,
+            normals: None,
+        }));
+        let photo = directory.path().join("panorama.png");
+        ::image::RgbaImage::from_pixel(32, 16, ::image::Rgba([40, 140, 70, 255]))
+            .save(&photo)
+            .unwrap();
+        let added = send(
+            &mut studio,
+            ApiCommand::AddPanorama {
+                path: photo,
+                layer: Some(0),
+                camera: crate::photo_editor::Camera {
+                    position: [1.3, 0.2, 3.],
+                    name: Some("Measured test photo".into()),
+                    heading: 90.,
+                    pitch: 0.,
+                    roll: 0.,
+                },
+            },
+        );
+        assert_eq!(added["ok"], true, "{added}");
+        let _ = studio.update(Message::TextureSource(TextureSource::Photographs));
+        let path = directory.path().join("photo-texture.obj");
+        let accepted = send(
+            &mut studio,
+            ApiCommand::TextureMesh {
+                path: path.clone(),
+                texel_size: Some(0.1),
+                max_resolution: Some(256),
+                source: Some(TextureSource::Photographs),
+            },
+        );
+        assert_eq!(accepted["accepted"], true, "{accepted}");
+        let id = accepted["job_id"].as_str().unwrap().to_owned();
+        let result = write_texture(
+            &studio.mesh_export_request().unwrap(),
+            path,
+            AtlasOptions {
+                texel_size: 0.1,
+                max_resolution: 256,
+            },
+            studio.texture_export.as_ref().unwrap(),
+        )
+        .unwrap();
+        assert!(result.coverage.as_ref().unwrap().photograph_texels > 0);
+        assert!(result.preview.is_ok(), "{:?}", result.preview);
+        studio.texture_exported(Some(id.clone()), Ok(result));
+        assert!(studio.clouds[0].colours.is_none());
+        assert_eq!(std::fs::read(source).unwrap(), original);
+        let job = studio.api_jobs.get(&id).unwrap();
+        assert_eq!(job["state"], "complete");
+        assert!(job["coverage"]["photograph_texels"].as_u64().unwrap() > 0);
+        assert!(studio.clouds[0].texture.is_some());
+        let hidden = send(
+            &mut studio,
+            ApiCommand::SetTexturePreview {
+                layer: Some(0),
+                visible: false,
+            },
+        );
+        assert_eq!(hidden["ok"], true);
+        assert!(!studio.clouds[0].texture_visible);
     }
 }

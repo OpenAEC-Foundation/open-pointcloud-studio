@@ -810,6 +810,7 @@ fn api_makes_a_closed_mesh_of_a_room_and_reports_how_good_it_is() {
         json!({
             "vertices": vertices, "triangles": triangles,
             "open_edges": 0, "components": 1,
+            "texture": null,
         })
     );
     assert!(studio

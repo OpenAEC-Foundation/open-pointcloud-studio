@@ -23,13 +23,14 @@ A desktop application for viewing, measuring, editing and converting laser scans
 - [What you can do](#what-you-can-do)
 - [File formats](#file-formats)
 - [Measured speed and limits](#measured-speed-and-limits)
+- [Feedback and MCP access](#feedback-and-mcp-access)
 - [Automation](#automation)
 - [Build from source](#build-from-source)
 - [Repository layout](#repository-layout)
 - [Licences](#licences)
 - [Contributing](#contributing)
 
-The [user guide](docs/guide.md) describes every tool in detail; an [illustrated Dutch wiki manual](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/wiki/Handleiding) covers the main workflows ([source](docs/wiki/Handleiding.md)). [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
+The [user guide](docs/guide.md) describes every tool in detail; an [illustrated Dutch wiki manual](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/wiki/Handleiding) covers the main workflows ([source](docs/wiki/Handleiding.md)). [CHANGELOG.md](CHANGELOG.md) lists what changed in each release. The [competitor review and proposed priorities](docs/research/competitor-review-2026-11-02.md) and [weekly watchlist](docs/research/competitor-watchlist.md) record the November 2026 research, research questions and follow-up process.
 
 ## Download and install
 
@@ -186,7 +187,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 - The classes that occur in the open clouds are listed in the project panel and can be shown or hidden one by one.
 - A view cube with a switch between perspective and orthographic (PERSP and ORTHO under it), seven camera directions, **Zoom all** and a right-click menu in the scene.
 - Tabs in the document strip under the ribbon put the 3D model, opened views, drawings and sheets, and E57 photos side by side; Ctrl+Tab steps through them. A photo tab remembers its look while the model keeps its own camera, and the window remembers saved-view and drawing tabs.
-- In an E57 photo, **Compare with 3D** shows the photo and the preceding model camera in two panes with a draggable divider. Use **Stack panes** or **Side by side** beside it to switch the layout. The comparison choice, orientation and divider ratio survive a restart. The photo remains interactive for picking and measuring. The 3D pane has its own orbit, pan, zoom and view-cube controls; its header opens that camera as the full model tab. Free tab dragging, 2 × 2 grids and detached windows are still planned in issue #16.
+- In an E57 photo, **Compare with 3D** shows the photo and the preceding model camera in two panes with a draggable divider. Use **Stack panes** or **Side by side** beside it to switch the layout. The comparison choice, orientation and divider ratio survive a restart. The photo remains interactive for picking and measuring. The 3D pane has its own orbit, pan, zoom and view-cube controls; its header opens that camera as the full model tab. Use **▥** beside the document tabs to start native tiling. Each pane keeps its own camera, and **↗** opens its document in a separate native window. The pane header docks a satellite back into the main window. Layout restoration, linked panes and complete cross-window drag behavior remain tracked in issue #16.
 - Scanner stations of E57, PCD and PTX scans are shown as markers. Stations with photos are drawn as balls: click one to stand in that station and look around.
 - Panoramas and photos taken along a path in an E57 file are marked along their path. Double-click a mark, or a photo under its scan in the project panel, to stand where it was taken: the photo lies over the points, a **Photo** slider sets how much, `Page Up` and `Page Down` step along the path, and `Esc` returns. Measuring and picking work on the points under the photo.
 - **Colour from photos** gives the points of a scan the colours its photos see them with, for a scan without colours or to replace them: only from photos that see a point unhidden, in the background, with Undo; exports write the new colours.
@@ -349,6 +350,14 @@ Limits in the application:
 
 An index can take several gigabytes on disk for a large survey.
 
+## Feedback and MCP access
+
+**Feedback** in the title strip opens a native form for a private message to Open Feedback Studio. Choose a bug, feature request or general feedback, enter a title and description, and optionally a reply email. Only these fields and the app version are sent when you press **Send feedback**; scans, file paths, screenshots and logs are not attached. The draft stays in memory on a failed request or when the form is closed, until the window exits. A success message appears only after the service confirms private receipt.
+
+The **MCP server** checkbox at the bottom right allows or pauses external commands through the local MCP/API bridge and remembers the choice. Pausing keeps extension runs and jobs already started working; it does not cancel them. An unavailable listener is shown as an unchecked, disabled control. The checkbox controls access to this window; the AI client still starts `--mcp` as documented below.
+
+The [competitor gap analysis of 5 November 2026](docs/research/gap-analysis-2026-11-05.md) compares nine products with the current implementation and proposes the next validation and development priorities.
+
 ## Automation
 
 ### Command line
@@ -360,6 +369,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `open-pointcloud-studio [INPUT ...]` | Opens the window with the scans, scan folders and scan project files given |
 | `--api-port PORT [INPUT ...]` | Opens the window with its command API on a fixed port |
 | `--mcp` | Serves the commands as MCP tools on standard input and output, without a window of its own |
+| `--mcp-http` | Serves the desktop MCP tools over authenticated HTTP using the configured environment |
 | `--list-scans PATH [PATH ...]` | Prints the scan files found in files, folders and scan project files |
 | `--index INPUT` | Builds the index of a scan and keeps it for later |
 | `--scans INPUT` | Prints the scanner positions stored in a scan |
@@ -530,3 +540,17 @@ Every package carries the licence texts.
 - Test data is generated by the tests or comes from public data sets; [native/TEST_DATA.md](native/TEST_DATA.md) lists the public ones. Do not add scans of real projects, or screenshots of them, to the repository.
 - A text of the interface is written in English in the source and looked up in `native/assets/locales/nl.json`. A new text needs an entry there; the tests fail when a text has no entry or an entry is no longer used.
 - A new command-line mode is one entry in `native/desktop/src/cli_help.rs` and one row in the table above; a test holds the two to each other and to the code. A new command of the API gets a row in `native/API.md`, a tool, and the tool's row in `native/MCP.md`; the tests fail when a command, its row or its tool is missing, or when a row does not name an argument of its tool. A release that adds a command or a field raises `API_REVISION` in `native_api.rs` and adds a row under API changes in `native/API.md`.
+
+## Managed native SuperCloud sessions
+
+The current [Blueprint Linux contract](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61) uses one centrally maintained OpenAEC Linux image. Pointcloud supplies its existing amd64 and arm64 AppImages; unpack them and run `AppRun`, without FUSE. The `-api` container documented above is a separate headless service and does not stream the desktop UI.
+
+Set `OPENAEC_BEHEERD=1` for a managed native session. `OPENAEC_MAP` must name an existing absolute directory (normally `/openaec`); it supplies the initial directory of open/save dialogs. `OPENAEC_TAAL=auto|en|nl` and `OPENAEC_THEMA=light|dark|forge|openaec|blueprint|contrast` override startup preferences without replacing the user's saved choices. Settings persist through the existing `XDG_CONFIG_HOME` mechanism. Command-line file arguments work as usual; source files are not silently resaved on shutdown.
+
+Start the application normally and a second process with `--mcp-http`, using the same `XDG_CONFIG_HOME`. The HTTP process requires `OPENAEC_MCP_POORT` and `OPENAEC_MCP_GEHEIM` (at least 32 printable, non-space ASCII characters). The secret is read from the environment, never from command-line arguments. It binds loopback by default; `OPENAEC_MCP_ADRES` may select the container's private interface. Keep that port on the internal network and provide TLS/authenticated routing at the platform boundary.
+
+`POST /mcp` is Streamable HTTP with JSON replies, MCP session IDs and Bearer authentication. Browser requests containing any `Origin` header are refused. It exposes the **same desktop tool table and implementations**, with `pointcloud_` prefixes; `pointcloud_stand` aliases `status`, `pointcloud_open` opens a mounted file and `pointcloud_opslaan` aliases full active-layer export to a mounted path. The platform transfers Docs files into that directory and versions the saved output. Call the existing wait tools for background imports/exports. `DELETE /mcp` ends a session. Authenticated `GET /gezond` returns 200 only while a native window is running in the same configuration directory, otherwise 503. The stdio MCP server stays available with its existing names.
+
+There is no automatic application updater or telemetry in the native app. Network use is explicit: the optional 3D BAG extension downloads from its documented service, and user-invoked external links open their target. Fonts and icons are bundled. Managed SIGTERM follows the normal Exit path, flushing the current Pointcloud-to-Drawing project and cancelling background work; this is not a new persistent project format for unsaved point edits.
+
+The package workflow tests the extracted AppImage on amd64 and arm64 under headless labwc/Wayland with Mesa lavapipe software Vulkan rendering. The GLES backend cannot translate the viewport’s depth-texture shader; the smoke test selects lavapipe explicitly. The probe opens a mounted sample, saves through the actual desktop MCP export, checks authentication and Origin refusal, captures the window and checks SIGTERM and health after exit. Its JSON report includes idle resident memory; screenshots and logs are CI artifacts. Run it locally with `bash native/packaging/managed-wayland-smoke.sh /path/to/AppRun /path/to/results` when labwc and Mesa are installed.

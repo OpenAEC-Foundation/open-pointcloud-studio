@@ -1,0 +1,28 @@
+{
+  "source_sha256": "21b15d28bd44d66a337da20adea0e86f8858cb09dbe90acc4fc9aab00027c8a5",
+  "station_tab": {
+    "active": true,
+    "closable": true,
+    "index": 1,
+    "kind": "photo",
+    "locked": false,
+    "name": "Photo \u00b7 Weg 05-1",
+    "photo_type": "station_panorama",
+    "station_index": 0
+  },
+  "model_camera_restored": true,
+  "photo_camera_restored": true,
+  "closing_preserves_scan": true,
+  "source_unchanged": true,
+  "date": "2026-11-06",
+  "source_commit": "f092549d8b1c724978e607b65d171e95690674b7",
+  "fixture": "471-point section of the public Scanner2GO BLK2GO Demo02 E57, retaining its calibrated station photographs",
+  "native_tests": {
+    "passed": 738,
+    "failed": 0,
+    "ignored": 9
+  },
+  "clippy_all_targets_warnings_denied": "passed",
+  "display": "headless Wayland (labwc/pixman), Mesa lavapipe software Vulkan",
+  "visual_check": "native window shows a separate active station-photo tab beside the 3D model and decoded station panorama"
+}

@@ -323,6 +323,43 @@ fn source_is_e57(cloud: &PointCloud) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("e57"))
 }
 
+/// Apply photo colours to raw E57 records without normalizing unrelated
+/// attributes through the viewer's compact Point representation.
+pub fn export_e57_colours_where(
+    cloud: &PointCloud,
+    destination: impl AsRef<Path>,
+    expected_count: Option<u64>,
+    scale: f64,
+    translation: [f64; 3],
+    colours: &crate::photo_colour::PointColours,
+    mut include: impl FnMut(u64, &Point) -> bool,
+) -> Result<Option<u64>, LoadError> {
+    if !source_is_e57(cloud) {
+        return Ok(None);
+    }
+    if !scale.is_finite() || scale <= 0.0 || !translation.iter().all(|v| v.is_finite()) {
+        return Err(LoadError::InvalidData(
+            "invalid E57 photo-colour transform".into(),
+        ));
+    }
+    if colours.total() != cloud.total_points {
+        return Err(LoadError::InvalidData(
+            "photo colours belong to another source size".into(),
+        ));
+    }
+    cloud.validate_source()?;
+    export_e57_filtered_colours_count(
+        cloud,
+        destination.as_ref(),
+        expected_count,
+        scale,
+        translation,
+        &mut include,
+        Some(colours),
+    )
+    .map(Some)
+}
+
 /// Preserve E57 scan identities and raw point fields while translating all
 /// scanner poses. Returns `None` when a source scan has no pose, so callers
 /// can use a coordinate-writing export instead of inventing a station.
@@ -854,6 +891,169 @@ fn export_e57_filtered_count(
     translation: [f64; 3],
     include: &mut dyn FnMut(u64, &Point) -> bool,
 ) -> Result<u64, LoadError> {
+    export_e57_filtered_colours_count(
+        cloud,
+        destination,
+        expected_count,
+        scale,
+        translation,
+        include,
+        None,
+    )
+}
+
+/// A colour override stores the source channel's units and representation.
+/// Other records, including floating intensity and scanner grid indices,
+/// never pass through an 8/16-bit viewer conversion.
+struct E57ColourField {
+    index: usize,
+    data_type: e57::RecordDataType,
+    minimum: f64,
+    maximum: f64,
+}
+
+impl E57ColourField {
+    fn value(&self, channel: u8) -> e57::RecordValue {
+        use e57::{RecordDataType, RecordValue};
+        let value = self.minimum + (self.maximum - self.minimum) * f64::from(channel) / 255.0;
+        match self.data_type {
+            RecordDataType::Integer { min, max } => {
+                RecordValue::Integer((value.round() as i64).clamp(min, max))
+            }
+            RecordDataType::ScaledInteger {
+                min,
+                max,
+                scale,
+                offset,
+            } => RecordValue::ScaledInteger(
+                (((value - offset) / scale).round() as i64).clamp(min, max),
+            ),
+            RecordDataType::Single { .. } => RecordValue::Single(value as f32),
+            RecordDataType::Double { .. } => RecordValue::Double(value),
+        }
+    }
+}
+
+fn e57_colour_fields(
+    prototype: &mut Vec<e57::Record>,
+    limits: Option<&e57::ColorLimits>,
+) -> Result<Vec<E57ColourField>, LoadError> {
+    use e57::{Record, RecordDataType, RecordName};
+    let ranges = limits.map(|v| {
+        [
+            (&v.red_min, &v.red_max),
+            (&v.green_min, &v.green_max),
+            (&v.blue_min, &v.blue_max),
+        ]
+    });
+    let mut fields = Vec::new();
+    for (channel, name) in [
+        RecordName::ColorRed,
+        RecordName::ColorGreen,
+        RecordName::ColorBlue,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let index = match prototype.iter().position(|record| record.name == name) {
+            Some(index) => index,
+            None => {
+                prototype.push(Record {
+                    name,
+                    data_type: RecordDataType::Integer { min: 0, max: 255 },
+                });
+                prototype.len() - 1
+            }
+        };
+        let original = &prototype[index].data_type;
+        let (fallback_min, fallback_max) = match *original {
+            RecordDataType::Integer { min, max } => (min as f64, max as f64),
+            RecordDataType::ScaledInteger {
+                min,
+                max,
+                scale,
+                offset,
+            } => (min as f64 * scale + offset, max as f64 * scale + offset),
+            RecordDataType::Single { min, max } => {
+                (f64::from(min.unwrap_or(0.)), f64::from(max.unwrap_or(1.)))
+            }
+            RecordDataType::Double { min, max } => (min.unwrap_or(0.), max.unwrap_or(1.)),
+        };
+        let (minimum, maximum) = if let Some(ranges) = &ranges {
+            (
+                ranges[channel]
+                    .0
+                    .as_ref()
+                    .map(|v| v.to_f64(original))
+                    .transpose()?
+                    .unwrap_or(fallback_min),
+                ranges[channel]
+                    .1
+                    .as_ref()
+                    .map(|v| v.to_f64(original))
+                    .transpose()?
+                    .unwrap_or(fallback_max),
+            )
+        } else {
+            (fallback_min, fallback_max)
+        };
+        if !minimum.is_finite() || !maximum.is_finite() || maximum <= minimum {
+            return Err(LoadError::InvalidData(
+                "E57 RGB channel needs a finite, increasing colour range".into(),
+            ));
+        }
+        let data_type = match *original {
+            RecordDataType::Integer { min, max } => RecordDataType::Integer {
+                min: min.min(minimum.floor() as i64),
+                max: max.max(maximum.ceil() as i64),
+            },
+            RecordDataType::ScaledInteger {
+                min,
+                max,
+                scale,
+                offset,
+            } if scale.is_finite() && scale != 0. => {
+                let a = (minimum - offset) / scale;
+                let b = (maximum - offset) / scale;
+                RecordDataType::ScaledInteger {
+                    min: min.min(a.min(b).floor() as i64),
+                    max: max.max(a.max(b).ceil() as i64),
+                    scale,
+                    offset,
+                }
+            }
+            RecordDataType::ScaledInteger { .. } => {
+                return Err(LoadError::InvalidData("invalid E57 RGB scale".into()))
+            }
+            RecordDataType::Single { min, max } => RecordDataType::Single {
+                min: Some(min.unwrap_or(minimum as f32).min(minimum as f32)),
+                max: Some(max.unwrap_or(maximum as f32).max(maximum as f32)),
+            },
+            RecordDataType::Double { min, max } => RecordDataType::Double {
+                min: Some(min.unwrap_or(minimum).min(minimum)),
+                max: Some(max.unwrap_or(maximum).max(maximum)),
+            },
+        };
+        prototype[index].data_type = data_type.clone();
+        fields.push(E57ColourField {
+            index,
+            data_type,
+            minimum,
+            maximum,
+        });
+    }
+    Ok(fields)
+}
+
+fn export_e57_filtered_colours_count(
+    cloud: &PointCloud,
+    destination: &Path,
+    expected_count: Option<u64>,
+    scale: f64,
+    translation: [f64; 3],
+    include: &mut dyn FnMut(u64, &Point) -> bool,
+    colours: Option<&crate::photo_colour::PointColours>,
+) -> Result<u64, LoadError> {
     use e57::{CartesianCoordinate, E57Writer, RecordDataType, RecordName, RecordValue};
 
     if destination == cloud.path
@@ -886,7 +1086,31 @@ fn export_e57_filtered_count(
     let mut scan_guids = HashMap::new();
     for source_scan in reader.pointclouds() {
         let mut prototype = source_scan.prototype.clone();
-        if scale != 1.0 {
+        let unposed_affine =
+            source_scan.transform.is_none() && (scale != 1.0 || translation != [0.0; 3]);
+        let colour_fields = if colours.is_some() {
+            e57_colour_fields(&mut prototype, source_scan.color_limits.as_ref())?
+        } else {
+            Vec::new()
+        };
+        let colour_invalid = if colours.is_some()
+            && !source_scan.has_color()
+            && !prototype
+                .iter()
+                .any(|record| record.name == RecordName::IsColorInvalid)
+        {
+            prototype.push(e57::Record {
+                name: RecordName::IsColorInvalid,
+                data_type: RecordDataType::Integer { min: 0, max: 1 },
+            });
+            Some(prototype.len() - 1)
+        } else {
+            prototype
+                .iter()
+                .position(|record| record.name == RecordName::IsColorInvalid)
+        };
+        let field_count = prototype.len();
+        if scale != 1.0 || unposed_affine {
             for record in &mut prototype {
                 if matches!(
                     record.name,
@@ -894,7 +1118,12 @@ fn export_e57_filtered_count(
                         | RecordName::CartesianY
                         | RecordName::CartesianZ
                         | RecordName::SphericalRange
-                ) {
+                ) || (unposed_affine
+                    && matches!(
+                        record.name,
+                        RecordName::SphericalAzimuth | RecordName::SphericalElevation
+                    ))
+                {
                     record.data_type = RecordDataType::Double {
                         min: None,
                         max: None,
@@ -943,7 +1172,7 @@ fn export_e57_filtered_count(
         points.spherical_to_cartesian(true);
         points.intensity_to_color(false);
         points.apply_pose(true);
-        for simple in points {
+        for simple in e57_points::complete_points(points) {
             let simple = simple?;
             let mut values = raw_points.next().ok_or_else(|| {
                 LoadError::InvalidData("E57 raw and decoded streams have different lengths".into())
@@ -961,8 +1190,37 @@ fn export_e57_filtered_count(
             if !point.xyz.iter().all(|value| value.is_finite()) {
                 return Err(LoadError::InvalidData("non-finite E57 coordinate".into()));
             }
-            if scale != 1.0 {
+            if scale != 1.0 || unposed_affine {
+                let world = [
+                    point.xyz[0] * scale + translation[0],
+                    point.xyz[1] * scale + translation[1],
+                    point.xyz[2] * scale + translation[2],
+                ];
                 for (value, record) in values.iter_mut().zip(&source_scan.prototype) {
+                    if unposed_affine {
+                        let replacement = match record.name {
+                            RecordName::CartesianX => Some(world[0]),
+                            RecordName::CartesianY => Some(world[1]),
+                            RecordName::CartesianZ => Some(world[2]),
+                            RecordName::SphericalRange => {
+                                Some(world[0].hypot(world[1]).hypot(world[2]))
+                            }
+                            RecordName::SphericalAzimuth => Some(world[1].atan2(world[0])),
+                            RecordName::SphericalElevation => {
+                                Some(world[2].atan2(world[0].hypot(world[1])))
+                            }
+                            _ => None,
+                        };
+                        if let Some(replacement) = replacement {
+                            if !replacement.is_finite() {
+                                return Err(LoadError::InvalidData(
+                                    "transform produced non-finite E57 coordinate".into(),
+                                ));
+                            }
+                            *value = RecordValue::Double(replacement);
+                        }
+                        continue;
+                    }
                     if matches!(
                         record.name,
                         RecordName::CartesianX
@@ -977,6 +1235,21 @@ fn export_e57_filtered_count(
                             ));
                         }
                         *value = RecordValue::Double(scaled);
+                    }
+                }
+            }
+            if let Some(colours) = colours {
+                values.resize(field_count, RecordValue::Integer(0));
+                if let Some(rgb) = colours.get(ordinal) {
+                    for (field, channel) in colour_fields.iter().zip(rgb) {
+                        values[field.index] = field.value(channel);
+                    }
+                    if let Some(index) = colour_invalid {
+                        values[index] = RecordValue::Integer(0);
+                    }
+                } else if !source_scan.has_color() {
+                    if let Some(index) = colour_invalid {
+                        values[index] = RecordValue::Integer(1);
                     }
                 }
             }
@@ -1842,7 +2115,15 @@ mod tests {
     fn parallel_point_export_keeps_order_and_exact_count_across_batches() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("ordered.xyz");
-        let mut source_file = BufWriter::new(fs::File::create(&source).unwrap());
+        let mut source_file = BufWriter::new(
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&source)
+                .unwrap(),
+        );
         for ordinal in 0..65_541 {
             writeln!(source_file, "{ordinal} 1 2").unwrap();
         }
@@ -1893,6 +2174,305 @@ mod tests {
             assert_eq!(reopened.bounds, cloud.bounds);
             assert!(reopened.has_rgb);
         }
+    }
+
+    #[test]
+    fn photo_colours_keep_float_intensity_grid_indices_and_unpainted_16bit_rgb() {
+        use e57::{E57Reader, E57Writer, Record, RecordDataType, RecordName, RecordValue};
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("float-intensity.e57");
+        let mut writer = E57Writer::new(
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&source)
+                .unwrap(),
+            "source",
+        )
+        .unwrap();
+        let prototype = vec![
+            Record::CARTESIAN_X_F64,
+            Record::CARTESIAN_Y_F64,
+            Record::CARTESIAN_Z_F64,
+            Record {
+                name: RecordName::Intensity,
+                data_type: RecordDataType::Single {
+                    min: Some(0.),
+                    max: Some(1.),
+                },
+            },
+            Record {
+                name: RecordName::RowIndex,
+                data_type: RecordDataType::U16,
+            },
+            Record {
+                name: RecordName::ColorRed,
+                data_type: RecordDataType::U16,
+            },
+            Record {
+                name: RecordName::ColorGreen,
+                data_type: RecordDataType::U16,
+            },
+            Record {
+                name: RecordName::ColorBlue,
+                data_type: RecordDataType::U16,
+            },
+        ];
+        let mut scan = writer.add_pointcloud("scan", prototype.clone()).unwrap();
+        scan.set_transform(Some(Default::default()));
+        let rows: Vec<_> = [0.004455566f32, 0.1234567]
+            .into_iter()
+            .enumerate()
+            .map(|(i, intensity)| {
+                vec![
+                    RecordValue::Double(i as f64),
+                    RecordValue::Double(0.),
+                    RecordValue::Double(0.),
+                    RecordValue::Single(intensity),
+                    RecordValue::Integer(7 + i as i64),
+                    RecordValue::Integer(40_000),
+                    RecordValue::Integer(32_000),
+                    RecordValue::Integer(12_000),
+                ]
+            })
+            .collect();
+        for row in &rows {
+            scan.add_point(row.clone()).unwrap();
+        }
+        scan.finalize().unwrap();
+        writer.finalize().unwrap();
+        drop(writer);
+        let cloud = crate::open(&source, 10).unwrap();
+        let mut colours = crate::photo_colour::PointColours::new(2);
+        colours.set(0, [10, 20, 30]);
+        let destination = directory.path().join("coloured.e57");
+        assert_eq!(
+            export_e57_colours_where(
+                &cloud,
+                &destination,
+                Some(2),
+                1.,
+                [3., 4., 5.],
+                &colours,
+                |_, _| true
+            )
+            .unwrap(),
+            Some(2)
+        );
+        let mut reader = E57Reader::new(fs::File::open(&destination).unwrap()).unwrap();
+        let scan = reader.pointclouds()[0].clone();
+        assert_eq!(scan.prototype.len(), prototype.len());
+        for (actual, expected) in scan.prototype.iter().zip(&prototype) {
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(
+                format!("{:?}", actual.data_type),
+                format!("{:?}", expected.data_type)
+            );
+        }
+        assert_eq!(scan.transform.as_ref().unwrap().translation.x, 3.);
+        let output: Vec<_> = reader
+            .pointcloud_raw(&scan)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(&output[0][..5], &rows[0][..5]);
+        assert_eq!(
+            &output[0][5..],
+            &[
+                RecordValue::Integer(2570),
+                RecordValue::Integer(5140),
+                RecordValue::Integer(7710)
+            ]
+        );
+        assert_eq!(output[1], rows[1]);
+        let subset = directory.path().join("subset.e57");
+        export_e57_colours_where(
+            &cloud,
+            &subset,
+            Some(1),
+            1.,
+            [0.; 3],
+            &colours,
+            |ordinal, _| ordinal == 1,
+        )
+        .unwrap()
+        .unwrap();
+        let mut reader = E57Reader::new(fs::File::open(subset).unwrap()).unwrap();
+        let scan = reader.pointclouds()[0].clone();
+        let subset: Vec<_> = reader
+            .pointcloud_raw(&scan)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(subset, vec![rows[1].clone()]);
+    }
+
+    #[test]
+    fn photo_colours_add_rgb_without_losing_intensity_or_inventing_a_station() {
+        use e57::{E57Reader, E57Writer, Record, RecordDataType, RecordName, RecordValue};
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("unposed.e57");
+        let mut writer = E57Writer::new(
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&source)
+                .unwrap(),
+            "source",
+        )
+        .unwrap();
+        let mut scan = writer
+            .add_pointcloud(
+                "scan",
+                vec![
+                    Record::CARTESIAN_X_F64,
+                    Record::CARTESIAN_Y_F64,
+                    Record::CARTESIAN_Z_F64,
+                    Record {
+                        name: RecordName::Intensity,
+                        data_type: RecordDataType::Single {
+                            min: Some(0.),
+                            max: Some(1.),
+                        },
+                    },
+                ],
+            )
+            .unwrap();
+        for i in 0..2 {
+            scan.add_point(vec![
+                RecordValue::Double(i as f64),
+                RecordValue::Double(0.),
+                RecordValue::Double(0.),
+                RecordValue::Single(0.1234567),
+            ])
+            .unwrap();
+        }
+        scan.finalize().unwrap();
+        writer.finalize().unwrap();
+        drop(writer);
+        let cloud = crate::open(&source, 10).unwrap();
+        let mut colours = crate::photo_colour::PointColours::new(2);
+        colours.set(0, [8, 9, 10]);
+        let destination = directory.path().join("coloured.e57");
+        export_e57_colours_where(
+            &cloud,
+            &destination,
+            Some(2),
+            2.,
+            [3., 4., 5.],
+            &colours,
+            |_, _| true,
+        )
+        .unwrap()
+        .unwrap();
+        let mut reader = E57Reader::new(fs::File::open(destination).unwrap()).unwrap();
+        let scan = reader.pointclouds()[0].clone();
+        assert!(scan.transform.is_none());
+        let raw: Vec<_> = reader
+            .pointcloud_raw(&scan)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(raw[0][3], RecordValue::Single(0.1234567));
+        assert_eq!(raw[1][3], raw[0][3]);
+        assert_eq!(
+            &raw[0][..3],
+            &[
+                RecordValue::Double(3.),
+                RecordValue::Double(4.),
+                RecordValue::Double(5.)
+            ]
+        );
+        assert_eq!(
+            &raw[1][..3],
+            &[
+                RecordValue::Double(5.),
+                RecordValue::Double(4.),
+                RecordValue::Double(5.)
+            ]
+        );
+        let invalid = scan
+            .prototype
+            .iter()
+            .position(|r| r.name == RecordName::IsColorInvalid)
+            .unwrap();
+        assert_eq!(raw[0][invalid], RecordValue::Integer(0));
+        assert_eq!(raw[1][invalid], RecordValue::Integer(1));
+    }
+
+    #[test]
+    fn photo_colours_transform_unposed_spherical_coordinates_without_quantizing_intensity() {
+        use e57::{E57Reader, E57Writer, Record, RecordDataType, RecordName, RecordValue};
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("spherical.e57");
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&source)
+            .unwrap();
+        let mut writer = E57Writer::new(file, "source").unwrap();
+        let mut scan = writer
+            .add_pointcloud(
+                "scan",
+                vec![
+                    Record::SPHERICAL_RANGE_F64,
+                    Record::SPHERICAL_AZIMUTH_F64,
+                    Record::SPHERICAL_ELEVATION_F64,
+                    Record {
+                        name: RecordName::Intensity,
+                        data_type: RecordDataType::Single {
+                            min: Some(0.),
+                            max: Some(1.),
+                        },
+                    },
+                ],
+            )
+            .unwrap();
+        scan.add_point(vec![
+            RecordValue::Double(2.),
+            RecordValue::Double(0.),
+            RecordValue::Double(0.),
+            RecordValue::Single(0.1234567),
+        ])
+        .unwrap();
+        scan.finalize().unwrap();
+        writer.finalize().unwrap();
+        drop(writer);
+        let cloud = crate::open(&source, 10).unwrap();
+        let mut colours = crate::photo_colour::PointColours::new(1);
+        colours.set(0, [1, 2, 3]);
+        let output = directory.path().join("output.e57");
+        export_e57_colours_where(
+            &cloud,
+            &output,
+            Some(1),
+            2.,
+            [1., 2., 3.],
+            &colours,
+            |_, _| true,
+        )
+        .unwrap()
+        .unwrap();
+        let reopened = crate::open(&output, 10).unwrap();
+        for (actual, expected) in reopened.points[0].xyz.into_iter().zip([5., 2., 3.]) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        let mut reader = E57Reader::new(fs::File::open(output).unwrap()).unwrap();
+        let scan = reader.pointclouds()[0].clone();
+        assert!(scan.transform.is_none());
+        let row = reader
+            .pointcloud_raw(&scan)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(row[3], RecordValue::Single(0.1234567));
     }
 
     #[test]

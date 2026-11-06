@@ -22,6 +22,7 @@ mod export;
 pub mod grid2d;
 pub mod local_fit;
 mod mesh_formats;
+mod mesh_photo;
 mod mesh_points;
 mod mesh_quality;
 mod mesh_simplify;
@@ -87,9 +88,10 @@ pub use drawing::{
 pub use dxf::read_mesh as read_dxf_mesh;
 pub use export::{
     export_affine, export_affine_axes, export_affine_axes_where, export_affine_where,
-    export_e57_map_with_images, export_e57_translated_where, export_e57_uniform_affine_where,
-    export_full, export_map, export_map_auto_count, export_section, export_section_where,
-    export_thin_percent_where, export_where, merge_las_map_count, ExportFormat,
+    export_e57_colours_where, export_e57_map_with_images, export_e57_translated_where,
+    export_e57_uniform_affine_where, export_full, export_map, export_map_auto_count,
+    export_section, export_section_where, export_thin_percent_where, export_where,
+    merge_las_map_count, ExportFormat,
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
 pub use mesh_quality::{
@@ -98,7 +100,11 @@ pub use mesh_quality::{
     MeshTopology,
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
-pub use mesh_texture::{write_colored_obj_atlas, AtlasOptions, AtlasReport};
+pub use mesh_texture::{
+    write_colored_obj_atlas, write_colored_obj_atlas_with_layout, write_photographic_obj_atlas,
+    AtlasChart, AtlasOptions, AtlasReport, BakedAtlas, PhotoAtlasReport, PhotoAtlasRequest,
+    PhotoTextureCoverage, PhotoTextureOptions,
+};
 pub use mesh_write::{read_stl_origin, write_mesh, MeshFormat, MeshWriteReport};
 pub use mesher::{
     mesh_terrain_obj, mesh_terrain_obj_where, mesh_terrain_obj_where_progress, MeshConfig,
