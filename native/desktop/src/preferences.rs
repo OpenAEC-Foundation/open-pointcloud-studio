@@ -14,6 +14,8 @@ pub(crate) const MAX_POINT_BUDGET: u32 = 10_000_000;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Preferences {
+    /// Allows the external MCP/API bridge; extension tokens remain separate.
+    pub mcp_enabled: bool,
     pub color_mode: ColorMode,
     pub point_size: f32,
     pub eye_dome: bool,
@@ -91,6 +93,7 @@ fn texts_or_none<'de, D: serde::Deserializer<'de>>(
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            mcp_enabled: true,
             color_mode: ColorMode::Rgb,
             point_size: 2.0,
             eye_dome: true,
@@ -273,6 +276,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config/settings.json");
         let settings = Preferences {
+            mcp_enabled: false,
             color_mode: ColorMode::Classification,
             point_size: 4.5,
             budget: 220_000,
@@ -303,6 +307,10 @@ mod tests {
         )
         .unwrap();
         let repaired = load_from(&path);
+        assert!(
+            repaired.mcp_enabled,
+            "older settings allow the bridge by default"
+        );
         assert_eq!(repaired.point_size, 2.0);
         assert_eq!(repaired.eye_dome_strength, 1.0);
         assert_eq!(repaired.budget, 250_000);

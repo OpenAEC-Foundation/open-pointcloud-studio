@@ -265,6 +265,37 @@ impl Studio {
         }
     }
 
+    /// The external command bridge is available only when its listener exists.
+    fn mcp_checkbox(&self) -> Element<'_, Message> {
+        let available = self.api_handle.is_some();
+        let enabled = available
+            && self.mcp_enabled
+            && self
+                .api_handle
+                .as_ref()
+                .is_some_and(|handle| handle.is_enabled());
+        let mut checkbox = ui_style::checkbox(tr("MCP server"), enabled).style(|theme, status| {
+            let mut style = ui_style::check(theme, status);
+            let colors = ui_theme::colors(theme);
+            style.text_color = Some(
+                if matches!(status, iced::widget::checkbox::Status::Disabled { .. }) {
+                    colors.status_text_label
+                } else {
+                    colors.status_text
+                },
+            );
+            style
+        });
+        if available {
+            checkbox = checkbox.on_toggle(Message::SetMcpEnabled);
+        }
+        ui_style::tooltip(cell(checkbox), tr(if available {
+            crate::i18n::key("Allow external MCP/API commands. Extensions keep working; running jobs continue.")
+        } else {
+            crate::i18n::key("The local command server could not start. Restart the application to retry.")
+        })).into()
+    }
+
     /// The bar along the bottom of the window with `message` at its left.
     pub(crate) fn status_bar(&self, message: String) -> Element<'_, Message> {
         let colors = self.ui_theme.colors();
@@ -291,7 +322,18 @@ impl Studio {
                     .push(separator());
             }
             compact_bar = compact_bar.push(item(&colors, tr("RAM:"), self.memory_usage.label()));
-            return openaec_ui::frame::status_bar(self.ui_theme.shared(), compact_bar.into(), 8);
+            // Reserve the access control before laying out variable-length names.
+            let compact_bar = Element::new(LeadRow {
+                children: [
+                    container(compact_bar).clip(true).into(),
+                    row![separator(), self.mcp_checkbox()]
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .into(),
+                ],
+                spacing: 8.0,
+            });
+            return openaec_ui::frame::status_bar(self.ui_theme.shared(), compact_bar, 8);
         }
         // The message comes first and gives way to the totals after it: a
         // long one is cut off at its right instead of wrapping or pushing
@@ -356,6 +398,20 @@ impl Studio {
         right = right
             .push(separator())
             .push(item(&colors, tr("RAM:"), self.memory_usage.label()));
+        let right = Element::new(LeadRow {
+            children: [
+                container(right)
+                    .width(Fill)
+                    .align_x(Alignment::End)
+                    .clip(true)
+                    .into(),
+                row![separator(), self.mcp_checkbox()]
+                    .spacing(12)
+                    .align_y(Alignment::Center)
+                    .into(),
+            ],
+            spacing: 12.0,
+        });
 
         let bar = row![
             container(left).width(Fill).clip(true),
@@ -381,6 +437,55 @@ mod tests {
     use crate::i18n::{Language, TestLanguage};
     use crate::ui_theme::UiTheme;
     use crate::CameraPreset;
+
+    #[test]
+    fn mcp_checkbox_is_clickable_at_the_bottom_right_in_wide_and_narrow_windows() {
+        let _language = TestLanguage::hold(Language::English);
+        let _turn = crate::native_api::one_server_at_a_time();
+        let (_, handle) = crate::native_api::start(Some(0)).unwrap();
+        let mut studio = Studio {
+            api_handle: Some(handle),
+            ..Studio::default()
+        };
+        for width in [580.0, 900.0, 1100.0, 1280.0, 1700.0] {
+            studio.window_size = Some(Size::new(width, 760.0));
+            let (_, messages) = crate::test_render::render_after(
+                studio.status_bar("Ready".into()),
+                &studio.ui_theme.iced(),
+                Size::new(width, HEIGHT),
+                mouse::Cursor::Available(Point::new(width - 70.0, HEIGHT / 2.0)),
+                &[
+                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                ],
+            );
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| matches!(message, Message::SetMcpEnabled(false))),
+                "checkbox at width {width}"
+            );
+        }
+        let _ = studio.update(Message::SetMcpEnabled(false));
+        assert!(!studio.api_handle.as_ref().unwrap().is_enabled());
+        assert!(!studio.preferences().mcp_enabled);
+        let (reply, receive) = std::sync::mpsc::channel();
+        let _ = studio.update(Message::ApiRequest(crate::native_api::ApiRequest {
+            command: crate::native_api::ApiCommand::Status,
+            reply,
+        }));
+        let response = receive.recv().unwrap();
+        assert_eq!(response["ok"], false);
+        assert!(response["error"].as_str().unwrap().contains("paused"));
+        let _ = studio.update(Message::SetMcpEnabled(true));
+        assert!(studio.api_handle.as_ref().unwrap().is_enabled());
+        let picture = crate::test_render::render_window(&studio, Size::new(1700.0, 760.0));
+        if let Some(directory) = std::env::var_os("OPS_UI_REVIEW_DIR") {
+            let directory = std::path::Path::new(&directory);
+            std::fs::create_dir_all(directory).unwrap();
+            picture.save_png(&directory.join("mcp-status.png"));
+        }
+    }
 
     /// Where the two parts of a row of `width` lie: the left edge and the
     /// width of each.

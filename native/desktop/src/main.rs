@@ -26,6 +26,7 @@ mod drawing_notes;
 mod drawing_view;
 mod extensions;
 mod faces;
+mod feedback;
 mod file_photos;
 mod file_view;
 mod fonts;
@@ -1209,6 +1210,7 @@ fn main() -> iced::Result {
             studio.memory_usage.refresh();
             if let Some((receiver, handle)) = api {
                 studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
+                handle.set_enabled(studio.mcp_enabled);
                 studio.api_handle = Some(handle);
             }
             // This runs on the main thread after the event loop was made and
@@ -1720,6 +1722,8 @@ impl RibbonTab {
 enum Message {
     SyncWindowChrome(u8),
     ApiRequest(native_api::ApiRequest),
+    Feedback(feedback::Action),
+    SetMcpEnabled(bool),
     ApiScreenshot(screenshot::Step),
     ApiExported(String, bool, Result<(PathBuf, u64), String>),
     MergeVisible,
@@ -2066,6 +2070,8 @@ struct Studio {
     api_receiver:
         Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<native_api::Delivery>>>>,
     api_handle: Option<native_api::ApiHandle>,
+    mcp_enabled: bool,
+    feedback: feedback::Feedback,
     /// Files the system hands to the application after it started; only
     /// macOS delivers files this way.
     opened_files: Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<PathBuf>>>>,
@@ -2768,6 +2774,8 @@ impl Default for Studio {
         Self {
             api_receiver: None,
             api_handle: None,
+            mcp_enabled: settings.mcp_enabled,
+            feedback: feedback::Feedback::default(),
             opened_files: None,
             api_jobs: HashMap::new(),
             api_job_order: VecDeque::new(),
@@ -3012,6 +3020,7 @@ impl Studio {
 
     fn preferences(&self) -> preferences::Preferences {
         preferences::Preferences {
+            mcp_enabled: self.mcp_enabled,
             color_mode: self.color_mode,
             point_size: self.point_size,
             eye_dome: self.eye_dome,
@@ -3047,14 +3056,15 @@ impl Studio {
     }
 
     /// Whether the model is out of sight behind the File view, the Settings
-    /// dialog, the card of the Pointcloud to Drawing wizard or that of Mesh
-    /// Pointcloud. Keys then leave the model alone, and a screenshot or a
+    /// or Feedback dialog, the card of the Pointcloud to Drawing wizard or
+    /// that of Mesh Pointcloud. Keys then leave the model alone, and a screenshot or a
     /// view snapshot is not taken, as it would show what covers the model.
     /// The strip of the Pointcloud to Drawing wizard lies beside the scene and
     /// covers nothing.
     fn model_covered(&self) -> bool {
         self.file_open
             || self.settings.is_some()
+            || self.feedback.open
             || self.mesh_to_plans.covers_model()
             || self.mesh_wizard.is_open()
     }
@@ -3998,6 +4008,7 @@ impl Studio {
                             "total": job.source.total_points,
                         })),
                         "api_port": self.api_handle.as_ref().map(|handle| handle.port),
+                        "mcp_enabled": self.mcp_enabled && self.api_handle.as_ref().is_some_and(|handle| handle.is_enabled()),
                     }}),
                     Task::none(),
                 );
@@ -6302,7 +6313,27 @@ impl Studio {
                     );
                 }
             }
-            Message::ApiRequest(request) => return self.handle_api(request),
+            Message::Feedback(action) => return self.feedback_action(action),
+            Message::Escape if self.feedback.open => {
+                return self.feedback_action(feedback::Action::Close)
+            }
+            Message::SetMcpEnabled(enabled) => {
+                self.mcp_enabled = enabled;
+                if let Some(handle) = &self.api_handle {
+                    handle.set_enabled(enabled);
+                }
+                return self.queue_preferences_save();
+            }
+            Message::ApiRequest(request) => {
+                // Also gate commands queued before the user paused the bridge.
+                if !self.mcp_enabled {
+                    let _ = request.reply.send(
+                        json!({"ok": false, "error": "MCP/API access is paused in the status bar"}),
+                    );
+                    return Task::none();
+                }
+                return self.handle_api(request);
+            }
             Message::ApiScreenshot(step) => return self.screenshot_step(step),
             Message::ApiExported(id, section_only, result) => {
                 if section_only {
@@ -10463,12 +10494,23 @@ impl Studio {
                     .into()
                 ),
                 drag_area(
-                    container(row![quick_access, settings_button, window_buttons].spacing(0))
-                        .width(iced::Length::FillPortion(1))
-                        .height(Fill)
-                        .align_x(iced::Alignment::End)
-                        .align_y(iced::Alignment::Center)
-                        .into()
+                    container(
+                        row![
+                            quick_access,
+                            button(text(i18n::tr("Feedback")).size(11))
+                                .on_press(Message::Feedback(feedback::Action::Open))
+                                .padding([4, 8])
+                                .style(ui_style::tool),
+                            settings_button,
+                            window_buttons
+                        ]
+                        .spacing(0)
+                    )
+                    .width(iced::Length::FillPortion(1))
+                    .height(Fill)
+                    .align_x(iced::Alignment::End)
+                    .align_y(iced::Alignment::Center)
+                    .into()
                 ),
             ]
             .width(Fill)
@@ -12054,6 +12096,9 @@ impl Studio {
             layers = layers.push(wizard);
         }
         if let Some(dialog) = self.settings_view().or_else(|| self.sheet_dialog_view()) {
+            layers = layers.push(dialog);
+        }
+        if let Some(dialog) = self.feedback_view() {
             layers = layers.push(dialog);
         }
         // An install or uninstall waits for the user above everything.

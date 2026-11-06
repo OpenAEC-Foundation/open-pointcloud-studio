@@ -30,6 +30,7 @@ The interface is in English or Dutch. The guide uses the English names. Its four
 - [3D BAG buildings](#3d-bag-buildings)
 - [Index and level of detail](#index-and-level-of-detail)
 - [Settings, language and extensions](#settings-language-and-extensions)
+- [Feedback and local MCP access](#feedback-and-local-mcp-access)
 - [Where settings and indexes are stored](#where-settings-and-indexes-are-stored)
 - [Keys and mouse](#keys-and-mouse)
 
@@ -37,7 +38,7 @@ The interface is in English or Dutch. The guide uses the English names. Its four
 
 ## The window
 
-- The **title strip** at the top has the application logo at its left, the name of the application in its middle and, at its right end, five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo and Redo), and the **Settings** button. Actions that are not available are shown muted. Under it, the **File** tab and the **Home** tab (*Start* in Dutch) stand on a line in the accent colour.
+- The **title strip** at the top has the application logo at its left, the name of the application in its middle and, at its right end, five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo and Redo), the **Feedback** form and the **Settings** button. Actions that are not available are shown muted. Under it, the **File** tab and the **Home** tab (*Start* in Dutch) stand on a line in the accent colour.
 - The single **Home** ribbon has the groups FILE (Open, Open scan folder), NAVIGATION (Zoom all, Zoom in, Zoom out, Zoom selection, Pan), SELECTION (Select, Box select, Clear selection, Delete selection, Export selection), SECTION BOX (Section box, Fit section box to selection, Reset box), SURFACE (Mesh and its four methods: Closed, Terrain, 3D mesh and Faces), DRAWING (Mesh to Plan, 2D section, Sheet), MEASURE (Distance, Area), ANNOTATION (Add note, Draw line), INDEX (Index, Refresh LOD) and EXPORT. The small buttons are icons, named in their tooltip. On narrower windows, whole groups fold from the right into a button with a dropdown that holds their controls. **Display** beneath the view cube opens the camera directions, point colours, point size and points in view, eye-dome lighting and scan positions; see [Looking around](#looking-around) and [Display](#display). Extensions are managed and run from **File → Extensions**.
 - The **Project Browser** at the left has five groups, each under a band with an icon, its name and a count: **SCANS**, **CLASSES**, **VIEWS**, **SHEETS** and **BCF**. The bands are alike in every group; the icons on the bands and the rows tell a scan from a view or a drawing. A click on a band collapses the group or opens it again; the window remembers which groups are collapsed. Collapsing never closes or hides anything.
   - **SCANS** lists the open clouds in name order, one row each with a visibility switch, the icon of a scan, the point count and a button to close the cloud. A second line appears only while a cloud is loading or indexing, or when it has selected or deleted points. Its band shows how many scans are open and their points, a switch that shows or hides every scan (with a dash while only some are shown; a click on the dash shows them all), and buttons to add a point cloud and to open a scan folder. While scans open or index, a line under the band says how many are ready, with a thin bar, also while the group is collapsed. Scans from more than one folder are grouped per folder, each folder with its own band, switch and count.
@@ -1141,6 +1142,12 @@ The **Extensions** page of the File view lists the extensions under **BUILT IN**
 
 An installed extension runs only when you start it: with a button on its card, a tile, or **Run** on its card. Its card shows the running state and the status bar shows its name, its progress and **Stop**; a click on the action button also stops it. When it ends, the status bar shows its message, or that it finished, or that it failed with its exit code and the last lines of its error output. Every run writes a log in the `logs` folder of the extension, which **Show folder** opens. Stopping a run also ends the programs it started, and closing the window ends the extensions that run; a run that ends by itself leaves open what it opened, such as a report in its program. [Writing an extension](extensions.md) describes the folder, its `extension.json` and the API for authors, with an example.
 
+## Feedback and local MCP access
+
+**Feedback** in the title strip opens a private message form for Open Feedback Studio. Choose the category, enter a title and description, and optionally give a reply email. **Send feedback** sends only these fields and the app version. No scans, paths, screenshots or logs are attached. The form confirms success only after private receipt; failed requests keep the draft, and closing the form keeps it in memory until the window exits. Duplicate and rate-limit responses have their own notices. No feedback is sent automatically and this route does not create public GitHub issues.
+
+The **MCP server** checkbox at the bottom right controls external access through the local command bridge. Uncheck it to refuse new external MCP/API commands; check it to allow them again. The choice is saved. It does not cancel jobs already started or block extension runs, which have separate grants. A failed listener appears unchecked and disabled. The checkbox shows bridge availability and permission, not whether an AI client is connected. The AI client still starts `open-pointcloud-studio --mcp`; see [MCP.md](../native/MCP.md).
+
 ## Where settings and indexes are stored
 
 Settings are in the folder `open-pointcloud-studio-native`:
@@ -1154,7 +1161,7 @@ When the environment variable `XDG_CONFIG_HOME` is set, on any system, the folde
 
 | File | What it holds |
 | --- | --- |
-| `settings.json` | Colour mode, point size, eye-dome lighting and its strength, station markers, point budget, Auto-index |
+| `settings.json` | Colour mode, point size, eye-dome lighting and its strength, station markers, point budget, Auto-index, external MCP/API access |
 | `theme`, `language` | The theme and the language |
 | `extensions.json` | The extensions that are switched off and the installed extensions with their versions |
 | `extensions/` | The installed extensions, a folder each, with the logs of their runs |

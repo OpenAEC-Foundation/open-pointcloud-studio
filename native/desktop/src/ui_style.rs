@@ -140,6 +140,34 @@ pub fn input(theme: &Theme, status: field::Status) -> field::Style {
     openaec_ui::widgets::text_input_style(ui_theme::shared_theme(theme), status)
 }
 
+/// A multiline field using the same input tokens as the other native forms.
+pub fn text_editor(
+    content: &iced::widget::text_editor::Content,
+) -> iced::widget::TextEditor<'_, iced::advanced::text::highlighter::PlainText, Message> {
+    iced::widget::TextEditor::new(content)
+        .size(12)
+        .padding(6)
+        .style(|theme, status| {
+            let colors = colors(theme);
+            iced::widget::text_editor::Style {
+                background: colors.dialog_input_bg.into(),
+                border: iced::Border {
+                    color: if status == iced::widget::text_editor::Status::Focused {
+                        colors.accent
+                    } else {
+                        colors.dialog_input_border
+                    },
+                    width: 1.0,
+                    radius: 0.0.into(),
+                },
+                icon: colors.dialog_input_text,
+                placeholder: colors.text_muted,
+                value: colors.dialog_input_text,
+                selection: colors.accent.scale_alpha(0.25),
+            }
+        })
+}
+
 /// A choice list, as the ThemedSelect of the template.
 pub fn select(theme: &Theme, status: choice::Status) -> choice::Style {
     openaec_ui::widgets::pick_list_style(ui_theme::shared_theme(theme), status)
