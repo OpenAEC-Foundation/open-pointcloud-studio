@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test product version synchronization
+        run: python3 native/packaging/test-classic-version.py
       - name: Check the version
         run: bash native/packaging/set-version.sh check
 
