@@ -503,6 +503,26 @@ fn strip_id() -> scrollable::Id {
 }
 
 impl Studio {
+    pub(crate) fn retained_model_snapshot(&self) -> crate::document_panes::snapshot::Snapshot {
+        let mut snapshot = crate::document_panes::snapshot::Snapshot::capture(TabId::Model, self);
+        if let Some(look) = self
+            .tabs
+            .model
+            .filter(|_| self.shown_tab() != Some(TabId::Model))
+        {
+            snapshot.set_model_camera(
+                look.yaw,
+                look.pitch,
+                look.zoom,
+                look.pan,
+                look.orbit_point,
+                look.walk,
+                look.label,
+                look.color_mode,
+            );
+        }
+        snapshot
+    }
     pub(crate) fn update_compare_model(&mut self, action: CompareAction) {
         let Some(look) = self.tabs.model.as_mut() else {
             return;
@@ -806,6 +826,21 @@ impl Studio {
     /// was left, else as it was saved; a drawing comes back zoomed as it was
     /// left, and one that is not made in this session yet is made.
     pub(crate) fn show_tab(&mut self, tab: &TabId) -> Result<Task<Message>, String> {
+        if let Some(mut documents) = self.documents.take() {
+            let result = (|| {
+                let key = tab.document_key().ok_or("Invalid document reference")?;
+                documents
+                    .workspace
+                    .open(key.clone(), documents.workspace.active_pane)?;
+                documents.focus(self, &key)
+            })();
+            self.documents = Some(documents);
+            return result;
+        }
+        self.show_tab_legacy(tab)
+    }
+
+    pub(crate) fn show_tab_legacy(&mut self, tab: &TabId) -> Result<Task<Message>, String> {
         // A tab chosen by hand wins over the one kept as active.
         self.tabs.drop_pending();
         self.remember_station_photo_tab();
@@ -1315,7 +1350,7 @@ impl Studio {
         let mut tabs = row![].spacing(1).align_y(iced::Alignment::End);
         for ((tab, (full, _)), short) in listed.iter().zip(names).zip(fitted) {
             let active = shown.as_ref() == Some(tab);
-            tabs = tabs.push(self.tab_button(tab.clone(), full, short, active));
+            tabs = tabs.push(self.tab_button(tab.clone(), full, short, active, false));
         }
         // The bar under the tabs stays 3 pixels, so that it does not cover
         // them.
@@ -1325,18 +1360,27 @@ impl Studio {
             ))
             .id(strip_id())
             .width(Fill);
-        let line = row![strip].align_y(iced::Alignment::End);
+        let split = button(text("▥").size(14))
+            .style(ui_style::tool)
+            .on_press(Message::Documents(
+                crate::document_panes::Action::SplitCurrent(
+                    crate::document_panes::layout::Side::Right,
+                ),
+            ))
+            .padding([3, 8]);
+        let line = row![strip, split].align_y(iced::Alignment::End);
         openaec_ui::frame::document_bar(self.ui_theme.shared(), line.into())
     }
 
     /// One tab: its icon, name and ×. The shared Style Book style owns the
     /// 24 px body while Pointcloud keeps its identity and navigation actions.
-    fn tab_button(
+    pub(crate) fn tab_button(
         &self,
         tab: TabId,
         full: String,
         short: String,
         active: bool,
+        focus_on_press: bool,
     ) -> Element<'_, Message> {
         let closable = tab.closable();
         let mut content = row![
@@ -1363,8 +1407,18 @@ impl Studio {
         }
         let theme = self.ui_theme.shared();
         let body = button(content)
-            .on_press(Message::Tabs(TabAction::Show(tab.clone())))
-            .style(move |_, status| openaec_ui::widgets::document_tab_style(theme, active, status))
+            .on_press_maybe((!focus_on_press).then(|| Message::Tabs(TabAction::Show(tab.clone()))))
+            .style(move |_, status| {
+                openaec_ui::widgets::document_tab_style(
+                    theme,
+                    active,
+                    if focus_on_press && status == button::Status::Disabled {
+                        button::Status::Active
+                    } else {
+                        status
+                    },
+                )
+            })
             .height(TAB_HEIGHT)
             .padding(Padding {
                 top: 0.0,
@@ -1378,13 +1432,18 @@ impl Studio {
             _ => tr(self.tab_kind(&tab).label()),
         };
         let tip = format!("{full}\n{kind}");
-        let element: Element<'_, Message> = if closable {
-            mouse_area(body)
-                .on_middle_press(Message::Tabs(TabAction::Close(tab)))
-                .into()
-        } else {
-            body.into()
-        };
+        let mut area = mouse_area(body);
+        if focus_on_press {
+            if let Some(key) = tab.document_key() {
+                area = area.on_press(Message::Documents(
+                    crate::document_panes::Action::BeginDrag(key),
+                ));
+            }
+        }
+        if closable {
+            area = area.on_middle_press(Message::Tabs(TabAction::Close(tab)));
+        }
+        let element: Element<'_, Message> = area.into();
         ui_style::tooltip(
             openaec_ui::widgets::document_tab_bottom_gap(theme, element),
             tip,

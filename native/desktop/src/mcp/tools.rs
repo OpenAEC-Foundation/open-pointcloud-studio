@@ -62,6 +62,7 @@ pub const READ_ONLY: &[&str] = &[
     "registration_matrix",
     "list_extensions",
     "list_tabs",
+    "list_panes",
     "context",
     "list_instances",
     "wait_for_job",
@@ -729,6 +730,10 @@ fn table() -> Vec<Tool> {
             required("group", text("The group", 1, 4096)),
             required("open", boolean("true to open the group, false to collapse it")),
         ]),
+        tool("tear_off_tab", Command, "Moves the active document into a native window with its own document strip and camera. Closing that window docks its documents back into the main window. Closing the main window exits all native windows.", vec![]),
+        tool("dock_pane_window", Command, "Docks a torn-off native pane window back into the main window, preserving its documents and cameras. window is the logical window id reported by list_panes; 0 is the main window and cannot be docked.", vec![required("window", ordinal("Logical window identifier from list_panes"))]),
+        tool("list_panes", Command, "Reports the current document pane layout and active document. A document belongs to exactly one pane; the model remains open. Does not open scans or change the layout.", vec![]),
+        tool("split_pane", Command, "Moves the active document into a new pane beside its current pane. Requires another document in the original pane and at most eight panes. Each pane keeps its own camera; selection, measurements and section geometry remain shared. side is left, right, above or below.", vec![required("side", choice("Where to put the new pane", &["left", "right", "above", "below"]))]),
         tool("list_tabs", Command, "Lists the tabs above the main area in their order: the 3D model first, which never closes, then saved views, drawings, sheets and the current E57 photo tab in the order they were opened. Each has index, name (3D model for the 3D model in every language), kind (model, view, drawing, file, sheet or photo), guid or path, active, closable and locked (a locked view or drawing); active is the index of the active tab. A view of a scan that is not the active one, or a drawing of scans that are not open, stays open but is listed again only with its scan. status.result.view_tabs reports the same.", vec![]),
         at_least_one(tool("show_tab", Command, "Shows an open tab as a click on it does, by its index or its name (any case) as list_tabs gives them. The 3D model gets back its own camera, section box and colour mode; a saved view that the scene still has is shown as it was left, else as it was saved; a drawing comes back zoomed as it was left. A drawing that is not made in this session yet is made from how it was made, and the answer then has accepted and a job_id. Refused while Settings, the dialog of Create 2D or the card of the Pointcloud to Drawing wizard is open. Answers with the tabs as list_tabs gives them and shown, the name of the tab.", vec![
             optional("name", text("Name of the tab as list_tabs gives it, any case", 1, 255)),

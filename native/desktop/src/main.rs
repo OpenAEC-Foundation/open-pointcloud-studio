@@ -20,7 +20,6 @@ mod cloud_centroid;
 #[cfg(test)]
 mod cloud_parity;
 mod cloud_transform;
-#[cfg(test)]
 mod document_panes;
 mod drawing;
 mod drawing_crop;
@@ -1134,13 +1133,32 @@ fn main() -> iced::Result {
         ..iced::Settings::default()
     })
     .subscription(|studio| {
-        let keyboard = iced::event::listen_with(|event, status, _| match event {
+        let keyboard = iced::event::listen_with(|event, status, window| match event {
             iced::Event::Window(
                 iced::window::Event::Resized(size) | iced::window::Event::Opened { size, .. },
-            ) => Some(Message::WindowResized(size)),
+            ) => Some(Message::Documents(document_panes::Action::NativeResized(
+                window, size,
+            ))),
             // The window is closed by the application itself, so work
             // that is under way is asked to stop first.
-            iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::Exit),
+            iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::Documents(
+                document_panes::Action::NativeClosed(window),
+            )),
+            iced::Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::Documents(
+                document_panes::Action::Pointer(window, position),
+            )),
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => Some(
+                Message::Documents(document_panes::Action::FinishDrag(window)),
+            ),
+            iced::Event::Mouse(mouse::Event::CursorLeft) => Some(Message::Documents(
+                document_panes::Action::NativeCursor(window, true),
+            )),
+            iced::Event::Mouse(mouse::Event::CursorEntered) => Some(Message::Documents(
+                document_panes::Action::NativeCursor(window, false),
+            )),
+            iced::Event::Window(iced::window::Event::Focused) => Some(Message::Documents(
+                document_panes::Action::NativeFocused(window),
+            )),
             iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                 Some(Message::FileDropped(path))
             }
@@ -2082,6 +2100,7 @@ enum Message {
     Browser(project_browser::BrowserAction),
     /// A tab above the main area was clicked or closed, or Ctrl+Tab pressed.
     Tabs(view_tabs::TabAction),
+    Documents(document_panes::Action),
     Sheet(sheet_dialog::SheetAction),
     OrbitPointPicked(Option<[f64; 3]>),
     /// A single click at a pixel of the scene with no tool on: the point
@@ -2274,6 +2293,7 @@ struct Studio {
     /// The tabs above the main area: the 3D model and the views and
     /// drawings opened from VIEWS.
     tabs: view_tabs::ViewTabs,
+    documents: Option<document_panes::runtime::Runtime>,
     /// How deep `update` is called within itself; the tabs follow what the
     /// window shows only when the outermost call ends.
     update_depth: u32,
@@ -2969,6 +2989,7 @@ impl Default for Studio {
             view_label: "ISOMETRIC",
             views: views::ViewTool::load(),
             browser: project_browser::BrowserState::new(settings.browser_collapsed.clone()),
+            documents: None,
             tabs: view_tabs::ViewTabs::new(&settings.view_tabs, settings.view_tab.as_deref()),
             update_depth: 0,
             sheet_dialog: None,
@@ -5213,6 +5234,10 @@ impl Studio {
             ApiCommand::DeleteDrawing { name } => (self.api_delete_drawing(&name), Task::none()),
             ApiCommand::SetBrowserGroup { group, open } => self.api_set_browser_group(&group, open),
             ApiCommand::ListTabs => self.api_list_tabs(),
+            ApiCommand::ListPanes => (self.panes_value(), Task::none()),
+            ApiCommand::TearOffTab => self.api_pane_window(None),
+            ApiCommand::DockPaneWindow { window } => self.api_pane_window(Some(window)),
+            ApiCommand::SplitPane { side } => self.api_split_pane(side),
             ApiCommand::ShowTab { name, index } => self.api_show_tab(name.as_deref(), index),
             ApiCommand::CloseTab { name, index } => self.api_close_tab(name.as_deref(), index),
             ApiCommand::SetSheetCrop { options } => self.api_set_sheet_crop(&options),
@@ -6341,6 +6366,26 @@ impl Studio {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        if let Message::Documents(document_panes::Action::Pointer(window, position)) = &message {
+            if let Some(documents) = &mut self.documents {
+                if documents.drag.is_none() {
+                    documents.pointers.insert(*window, *position);
+                    return Task::none();
+                }
+            } else {
+                return Task::none();
+            }
+        }
+        if matches!(
+            &message,
+            Message::Documents(document_panes::Action::FinishDrag(_))
+        ) && self
+            .documents
+            .as_ref()
+            .is_none_or(|documents| documents.drag.is_none())
+        {
+            return Task::none();
+        }
         // The RAM label needs a fresh sample, not the model and drawing
         // settlement work that follows every normal UI action.
         if matches!(&message, Message::MemoryTick) {
@@ -6351,6 +6396,36 @@ impl Studio {
             }
             self.memory_usage.refresh();
             return Task::none();
+        }
+        if matches!(
+            &message,
+            Message::EnterPanorama(_, _)
+                | Message::Views(views::ViewAction::Restore(_))
+                | Message::DrawingView(drawing_view::DrawingViewAction::ShowSheet(_))
+        ) {
+            if let Some(mut documents) = self.documents.take() {
+                documents.capture_active(self);
+                documents.detach_active_photo(self);
+                self.documents = Some(documents);
+            }
+        }
+        if self.update_depth == 0 {
+            if let Some(mut documents) = self.documents.take() {
+                documents.capture_active(self);
+                if let Message::PanoramaReady(source, station, result) = &message {
+                    if documents.background_panorama(source, *station, result) {
+                        self.documents = Some(documents);
+                        return Task::none();
+                    }
+                }
+                if let Message::Photos(action) = &message {
+                    if let Some(task) = documents.background_photo(self, action) {
+                        self.documents = Some(documents);
+                        return task;
+                    }
+                }
+                self.documents = Some(documents);
+            }
         }
         self.update_depth += 1;
         let task = self.handle(message);
@@ -6378,10 +6453,22 @@ impl Studio {
         if self.update_depth > 0 {
             return task;
         }
-        match self.settle_tabs() {
+        let task = match self.settle_tabs() {
             Some(tabs) => Task::batch([task, tabs]),
             None => task,
+        };
+        let mut task = task;
+        if let Some(mut documents) = self.documents.take() {
+            if self.shown_tab().is_some() {
+                if let Err(error) = documents.observe_current(self) {
+                    self.status = error;
+                }
+            }
+            documents.reconcile(self);
+            task = Task::batch([task, documents.settle_windows()]);
+            self.documents = Some(documents);
         }
+        task
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
@@ -6632,13 +6719,16 @@ impl Studio {
             Message::ToggleViewControls => self.view_controls_open = !self.view_controls_open,
             Message::NativeWindowOpened(id) => {
                 self.main_window = Some(id);
+                if let Some(documents) = &mut self.documents {
+                    documents.native_windows.insert(0, id);
+                }
                 return self.update(Message::SyncWindowChrome(3));
             }
             Message::WindowResized(size) => {
                 let previous = self.window_size.replace(size);
                 self.ribbon_panel_open = None;
                 // Maximizing, restoring and snapping all arrive as a new size.
-                let maximized = window_maximized_task();
+                let maximized = window_maximized_task(self.main_window);
                 if let Some(previous) = previous {
                     let viewport = Size::new(
                         (self.viewport_size.width + size.width - previous.width).max(1.0),
@@ -6660,15 +6750,23 @@ impl Studio {
                     return self.update(Message::WindowToggleMaximize);
                 }
                 self.title_pressed = Some(now);
-                return iced::window::get_latest().and_then(iced::window::drag);
+                return self
+                    .main_window
+                    .map(iced::window::drag)
+                    .unwrap_or_else(Task::none);
             }
             Message::WindowMinimize => {
-                return iced::window::get_latest().and_then(|id| iced::window::minimize(id, true));
+                return self
+                    .main_window
+                    .map(|id| iced::window::minimize(id, true))
+                    .unwrap_or_else(Task::none);
             }
             Message::WindowToggleMaximize => {
-                return iced::window::get_latest()
-                    .and_then(iced::window::toggle_maximize)
-                    .chain(window_maximized_task());
+                return self
+                    .main_window
+                    .map(iced::window::toggle_maximize)
+                    .unwrap_or_else(Task::none)
+                    .chain(window_maximized_task(self.main_window));
             }
             Message::WindowMaximized(maximized) => self.window_maximized = maximized,
             Message::Theme(theme) => {
@@ -8687,6 +8785,20 @@ impl Studio {
                 }
             }
             Message::LeaveWalk => {
+                if self.documents.is_some()
+                    && matches!(
+                        self.shown_tab(),
+                        Some(view_tabs::TabId::Photo(_) | view_tabs::TabId::StationPhoto(_))
+                    )
+                {
+                    return match self.show_tab(&view_tabs::TabId::Model) {
+                        Ok(task) => task,
+                        Err(error) => {
+                            self.status = error;
+                            Task::none()
+                        }
+                    };
+                }
                 // Leaving a photo puts the camera back where it was.
                 if let Some(task) = self.leave_photo() {
                     return task;
@@ -9288,6 +9400,7 @@ impl Studio {
             }
             Message::Views(action) => return self.update_views(action),
             Message::Browser(action) => return self.update_browser(action),
+            Message::Documents(action) => return self.update_documents(action),
             Message::Tabs(action) => return self.update_tabs(action),
             Message::Photos(action) => return self.update_photos(action),
             Message::PhotoEdit(action) => return self.photo_editor_action(action),
@@ -11311,7 +11424,19 @@ impl Studio {
         }
     }
 
-    fn view_for_window(&self, _window: iced::window::Id) -> Element<'_, Message> {
+    fn view_for_window(&self, window: iced::window::Id) -> Element<'_, Message> {
+        if let Some(documents) = &self.documents {
+            if let Some(logical) = documents
+                .native_windows
+                .iter()
+                .find_map(|(logical, id)| (*id == window).then_some(*logical))
+                .filter(|logical| *logical != 0)
+            {
+                if let Some(grid) = self.document_grid_for(logical) {
+                    return ui_style::no_hand(grid);
+                }
+            }
+        }
         self.view()
     }
 
@@ -12097,7 +12222,9 @@ impl Studio {
         if let Some(strip) = self.mesh_to_plans_strip() {
             viewport = viewport.push(strip);
         }
-        if let Some(mut model_view) = compare_model {
+        if let Some(panes) = self.document_grid() {
+            viewport = viewport.push(panes);
+        } else if let Some(mut model_view) = compare_model {
             if self.photo_split_vertical {
                 model_view.viewport_size.height *= self.photo_split_ratio;
             } else {
@@ -12204,7 +12331,7 @@ impl Studio {
             titlebar,
             tabs,
             ribbon,
-            documents: Some(self.tab_strip()),
+            documents: self.documents.is_none().then(|| self.tab_strip()),
             content: content.into(),
             status: self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
         }))
@@ -12446,10 +12573,10 @@ enum TitleIcon {
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
 /// Ask the system whether the window is maximized now.
-fn window_maximized_task() -> Task<Message> {
-    iced::window::get_latest()
-        .and_then(iced::window::get_maximized)
-        .map(Message::WindowMaximized)
+fn window_maximized_task(window: Option<iced::window::Id>) -> Task<Message> {
+    window
+        .map(|id| iced::window::get_maximized(id).map(Message::WindowMaximized))
+        .unwrap_or_else(Task::none)
 }
 
 /// An icon of a window button: in the colour of the text, as the shared

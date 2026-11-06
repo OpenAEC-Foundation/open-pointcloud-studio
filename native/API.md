@@ -1061,6 +1061,21 @@ and walking position, including a position outside the photo station. The
 3D model keeps its original camera; Esc returns to it. Photo tabs last for
 the session, and closing a tab leaves the scan and its photographs intact.
 
+`list_panes` reports whether native document tiling is enabled, the serializable
+`workspace` (windows, split tree, pane ids, document keys and active pane), and
+`active_document`. Its `documents` entries expose each key,
+`station_panorama_ready` and a local pane `error`, so an inactive panorama can
+be observed without focusing it. `split_pane` takes `side: "left" | "right" | "above" | "below"`
+and moves the active document into a new pane of its current window. Another
+document must remain in the original pane; the workspace allows eight panes.
+Each pane owns its camera and photo decode state. Selection, measurements and
+the section geometry stay shared. `tear_off_tab` moves the active document into
+a native window. `dock_pane_window` takes its logical `window` id from
+`list_panes` and docks its documents into the main window. Window `0` is the
+main window. Closing a satellite docks its documents; closing the main window
+exits the process and all of its windows. Screenshot capture follows the active
+document's native window, rather than the most recently created window.
+
 `list_tabs` answers with `tabs`, each with its `index`, `name` (`3D model`
 for the 3D model in every language, as `project_browser` names it), `kind`
 (`model`, `view`, `drawing`, `file`, `sheet` or `photo`), the `guid` of a view, a
@@ -1868,6 +1883,10 @@ layer with photo colours.
 | `show_drawing` | `name` | Shows a drawing of `create_drawing`, made again from how it was made when it is not made in this session yet (then with a job ID); `3D model` shows the 3D model as a click on its row does, letting go of the active view |
 | `delete_drawing` | `name` | Forgets a drawing of `create_drawing` with how it was made |
 | `set_browser_group` | `group`, `open` | Opens or collapses a group of the Project Browser; the window keeps the choice |
+| `tear_off_tab` | — | Moves the active document into a native window with its own camera and tab strip; closing it docks its documents. |
+| `dock_pane_window` | `window` | Docks a native window id from `list_panes` into the main window; id 0 cannot be docked. |
+| `list_panes` | — | Reports native window ids, pane ownership, split layout and the active document without changing it. |
+| `split_pane` | `side` | Moves the active document into a pane on the `left`, `right`, `above` or `below`; another tab must remain and at most eight panes are allowed. |
 | `list_tabs` | — | The tabs above the main area in their order, the 3D model first, and the active one |
 | `show_tab` | `name` or `index` | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job ID. Refused while Settings, the dialog of Create 2D or the card of the Pointcloud to Drawing wizard is open |
 | `close_tab` | `name` or `index` | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |
@@ -1922,6 +1941,7 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
+| 16 | Unreleased | Native document panes and satellite windows: `list_panes`, `split_pane`, `tear_off_tab`, `dock_pane_window`. Screenshot capture follows the active document window. Includes revisions 13–15. |
 | 15 | Unreleased | Calibrated station panoramas use independent photo tabs. `list_tabs` reports `kind: "photo"`, `photo_type: "station_panorama"`, `path` and `station_index`; `show_tab` restores their walking camera and `close_tab` keeps the source scan open. Includes the cumulative changes of revisions 13 and 14 below. |
 | 14 | Unreleased | `texture_mesh` accepts `source` (`point_colours` or `photographs`), reports photo coverage and preview errors; new `set_texture_preview` controls the native UV atlas overlay. Mesh status reports texture visibility, resolution and GPU support. |
 | 13 | Unreleased | The status-bar MCP checkbox gates external owner-token access; `/info` and `status.result` include `mcp_enabled`. Extension grants and running jobs remain available. Status also includes `managed.enabled` and `managed.directory`, the environment defaults of a managed native SuperCloud session. |

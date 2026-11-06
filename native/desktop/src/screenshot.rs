@@ -76,8 +76,8 @@ impl Uncaptured {
 /// renderer cannot make an image of zero size and would stop the
 /// application. The size is looked at just before the screenshot is asked;
 /// a window minimised in the moment between the two is not caught.
-pub fn capture_window() -> Task<Result<Screenshot, Uncaptured>> {
-    iced::window::get_latest().then(|window| {
+pub fn capture_window(window: Option<iced::window::Id>) -> Task<Result<Screenshot, Uncaptured>> {
+    Task::done(window).then(|window| {
         let Some(window) = window else {
             return Task::done(Err(Uncaptured::NoWindow));
         };
@@ -130,6 +130,14 @@ impl Studio {
     /// Where the part of the window that a screenshot captures lies: the
     /// sheet of the Drawing view while it is shown, else the 3D scene.
     pub(crate) fn shown_canvas_bounds(&self) -> Option<Rectangle> {
+        if let Some(bounds) = self
+            .documents
+            .as_ref()
+            .and_then(|documents| documents.snapshots.get(&documents.active))
+            .and_then(|snapshot| snapshot.bounds.get())
+        {
+            return Some(bounds);
+        }
         if self.drawing_view.shown_layout().is_some() {
             self.layouts.bounds.get()
         } else if self.drawing_view.shown {
@@ -195,7 +203,7 @@ impl Studio {
                 if quiet < QUIET_STEPS && remaining > 0 {
                     return settle_timer(request, remaining - 1, quiet);
                 }
-                capture_window().map(move |captured| {
+                capture_window(self.active_document_window()).map(move |captured| {
                     Message::ApiScreenshot(Step::Captured(request.clone(), captured))
                 })
             }

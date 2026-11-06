@@ -17,6 +17,8 @@ section its version and date.
 
 ## Unreleased
 
+- Side-by-side model, photo and drawing panes keep their own cameras. Documents can open in separate windows and dock back into the main window; closing the main window closes them together.
+
 - Feedback in the title strip opens a native private Open Feedback Studio form. It sends the entered message and optional reply email with the app version, retains the draft on failure, and attaches no scans, paths, screenshots or logs.
 - The MCP server checkbox at the bottom right allows or pauses external MCP/API commands and remembers the choice. Extension runs and jobs already started continue. API revision 13 reports the bridge state as `mcp_enabled`.
 

@@ -554,6 +554,14 @@ impl Studio {
     /// Size of the viewport as it was last drawn, which is what a view
     /// shows; before anything has been drawn, the size last reported.
     pub(crate) fn drawn_viewport(&self) -> Size {
+        if let Some(bounds) = self
+            .documents
+            .as_ref()
+            .and_then(|documents| documents.snapshots.get(&documents.active))
+            .and_then(|snapshot| snapshot.bounds.get())
+        {
+            return bounds.size();
+        }
         self.views
             .canvas
             .get()
@@ -1374,7 +1382,7 @@ impl Studio {
                 }
                 let shown = self.shows_view(&guid)
                     && !self.model_covered()
-                    && self.views.canvas.get().is_some();
+                    && self.shown_canvas_bounds().is_some();
                 if !shown {
                     // The viewport shows something else than the view holds.
                     // The snapshot stays due until the view is restored.
@@ -1418,16 +1426,19 @@ impl Studio {
                     );
                 }
                 // A minimised window gives no screenshot; the view stays due.
-                return crate::screenshot::capture_window().map(move |captured| {
-                    Message::Views(ViewAction::Captured(guid.clone(), serial, captured.ok()))
-                });
+                return crate::screenshot::capture_window(self.active_document_window()).map(
+                    move |captured| {
+                        Message::Views(ViewAction::Captured(guid.clone(), serial, captured.ok()))
+                    },
+                );
             }
             ViewAction::Captured(guid, serial, screenshot) => {
                 self.views.stop_capturing(serial);
                 if self.views.snapshots.get(&guid) != Some(&serial) {
                     return Task::none();
                 }
-                let (Some(screenshot), Some(canvas)) = (screenshot, self.views.canvas.get()) else {
+                let (Some(screenshot), Some(canvas)) = (screenshot, self.shown_canvas_bounds())
+                else {
                     self.views.snapshots.remove(&guid);
                     self.status = "The view is saved; its snapshot could not be taken".into();
                     return Task::none();
@@ -2096,6 +2107,30 @@ impl Studio {
                 })
                 .into(),
         )
+    }
+
+    pub(crate) fn document_views_overlay<'a>(
+        &'a self,
+        tab: &crate::view_tabs::TabId,
+        canvas: &'a Cell<Option<Rectangle>>,
+        active: bool,
+    ) -> Overlay<'a> {
+        let annotations = match tab {
+            crate::view_tabs::TabId::View(guid) => self
+                .views
+                .list
+                .iter()
+                .find(|view| view.guid == *guid)
+                .map_or(&[][..], |view| view.annotations.as_slice()),
+            _ => &[],
+        };
+        Overlay {
+            tool: active.then_some(self.views.tool).flatten(),
+            annotations,
+            line_start: active.then_some(self.views.line_start).flatten(),
+            note_point: active.then_some(self.views.note_point).flatten(),
+            canvas,
+        }
     }
 
     /// What the viewport draws of the views: the annotations of the active

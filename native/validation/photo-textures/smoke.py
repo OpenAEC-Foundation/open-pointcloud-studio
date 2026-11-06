@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import subprocess
@@ -30,6 +31,9 @@ parser.add_argument('--texel-size', type=float, default=.2)
 parser.add_argument('--max-resolution', type=int, default=1024)
 parser.add_argument('--job-timeout', type=float, default=180)
 parser.add_argument('--cancel-probe', action='store_true')
+parser.add_argument('--pointer-probe', type=Path, help='Optional isolated Wayland virtual pointer test helper')
+parser.add_argument('--windows-probe', action='store_true', help='Check native satellite creation, capture selection and docking')
+parser.add_argument('--panes-probe', action='store_true', help='Check separate native document panes and camera ownership')
 parser.add_argument('--compare-probe', action='store_true', help='Check independently prepared model/photo cameras in the real renderer')
 parser.add_argument('--expected-sha256', help='Verify the original real fixture after the probe')
 args = parser.parse_args()
@@ -132,10 +136,52 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
             report = {'job':complete,
                 'changed_viewport_pixels':changed,'independent_reader':'trimesh '+trimesh.__version__,
                 'uvs':geometry.visual.uv.tolist(),'source_photo_unchanged':True}
-            if args.compare_probe:
+            if args.compare_probe or args.panes_probe:
                 api('enter_photo', index=0)
-                api('set_photo_compare', enabled=True)
-                api('set_photo_split', ratio=.5, vertical=False)
+                if args.panes_probe:
+                    api('set_photo_compare', enabled=False)
+                    panes=api('split_pane', side='right')
+                    assert panes['enabled'], panes
+                    report['document_panes']=panes
+                    if args.pointer_probe:
+                        # This helper targets only this isolated compositor's
+                        # WAYLAND_DISPLAY; the user's desktop is never selected.
+                        subprocess.run(['wlrctl','toplevel','maximize','state:active'],check=True)
+                        time.sleep(.3)
+                        api('screenshot',path=str(output/'drag-before.png'),base64=False,max_edge=8192,window=True)
+                        width,height=Image.open(output/'drag-before.png').size
+                        outputs=subprocess.check_output(['wlrctl','output','list'],text=True)
+                        mode=re.search(r'\((\d+)x(\d+) ',outputs)
+                        assert mode, outputs
+                        output_width,output_height=map(int,mode.groups())
+                        # labwc's server decorations are outside Iced's screenshot.
+                        offset_y=output_height-height
+                        assert output_width==width and 0<=offset_y<=64, (outputs,width,height)
+                        header=32+28+94+14
+                        panel=240
+                        center_y=int((height+header)/2)
+                        def drag(start,end):
+                            subprocess.run([str(args.pointer_probe),'move',str(start[0]),str(start[1]+offset_y),str(output_width),str(output_height),
+                                'down','move',str(end[0]),str(end[1]+offset_y),str(output_width),str(output_height),'wait','300','up'],check=True)
+                            time.sleep(.3)
+                        drag((int(width/2)+40,header),(panel+int((width-2*panel)/4),center_y))
+                        merged=api('list_panes')
+                        api('screenshot',path=str(output/'drag-merged.png'),base64=False,max_edge=8192,window=True)
+                        assert merged['workspace']['windows'][0]['root']['kind']=='pane', merged
+                        api('show_tab',index=0)
+                        api('screenshot',path=str(output/'drag-model-selected.png'),base64=False,max_edge=8192,window=True)
+                        drag((panel+135,header),(width-panel-8,center_y))
+                        split=api('list_panes')
+                        api('screenshot',path=str(output/'drag-split.png'),base64=False,max_edge=8192,window=True)
+                        root=split['workspace']['windows'][0]['root']
+                        assert root['kind']=='split', split
+                        assert root['first']['pane']['tabs']==['model'], split
+                        assert root['second']['pane']['active']!='model', split
+                        report['native_tab_drag']={'merged_into_pane':True,'inactive_photo_dragged_to_edge':True}
+
+                else:
+                    api('set_photo_compare', enabled=True)
+                    api('set_photo_split', ratio=.5, vertical=False)
                 api('set_panorama', yaw=.2, pitch=.1, field_of_view=1.2)
                 # Let the newly decoded photograph settle before capturing.
                 time.sleep(.5)
@@ -175,6 +221,26 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                 assert counts['photo_turn_left']==0 and counts['model_turn_right']==0, counts
                 assert counts['photo_turn_right']>100 and counts['model_turn_left']>100, counts
                 report['independent_comparison_cameras']=counts
+                if args.windows_probe:
+                    torn=api('tear_off_tab')
+                    windows=torn['workspace']['windows']
+                    assert len(windows)==2, torn
+                    satellite=next(window['id'] for window in windows if window['id']!=0)
+                    time.sleep(.5)
+                    api('screenshot',path=str(output/'satellite-photo.png'),base64=False,max_edge=1200,window=True)
+                    satellite_size=Image.open(output/'satellite-photo.png').size
+                    api('show_tab',index=0)
+                    assert api('status')['result']['walk'] is None
+                    api('screenshot',path=str(output/'main-model.png'),base64=False,max_edge=1200,window=True)
+                    main_size=Image.open(output/'main-model.png').size
+                    assert main_size!=satellite_size, (main_size,satellite_size)
+                    api('show_tab',index=1)
+                    assert api('status')['result']['walk']==photo_camera
+                    docked=api('dock_pane_window',window=satellite)
+                    assert len(docked['workspace']['windows'])==1, docked
+                    report['native_satellite']={'logical_window':satellite,'satellite_capture_size':satellite_size,
+                        'main_capture_size':main_size,'docked':True,'photo_camera_preserved':True}
+
                 api('set_photo_compare',enabled=False)
                 api('close_panorama')
             if args.e57:

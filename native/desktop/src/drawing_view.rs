@@ -2455,6 +2455,7 @@ impl Studio {
         }
     }
 
+    /// A document-owned drawing canvas; globals and source scenes stay shared.
     /// The sheet with the drawing and what is drawn over it.
     pub(crate) fn drawing_sheet(&self) -> Element<'_, Message> {
         let tool = &self.drawing_view;
@@ -2652,6 +2653,38 @@ impl Studio {
 
 fn scene_layer_count(tool: &DrawingViewTool) -> usize {
     tool.scene().map_or(0, |scene| scene.layers.len())
+}
+
+impl DrawingViewTool {
+    pub(crate) fn pane_sheet<'a>(
+        &'a self,
+        theme: crate::ui_theme::UiTheme,
+        key: &'a str,
+        bounds: &'a std::cell::Cell<Option<Rectangle>>,
+        pane_bounds: &'a std::cell::Cell<Option<Rectangle>>,
+    ) -> Element<'a, Message> {
+        stack![
+            Sheet {
+                tool: self,
+                paper: paper(theme)
+            },
+            Canvas::new(crate::document_panes::widget::Scoped {
+                inner: Overlay {
+                    tool: self,
+                    crop: None,
+                    turning: false
+                },
+                key,
+                bounds,
+                pane_bounds,
+            })
+            .width(Fill)
+            .height(Fill),
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into()
+    }
 }
 
 #[cfg(test)]

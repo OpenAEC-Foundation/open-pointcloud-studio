@@ -15,6 +15,7 @@ import urllib.request
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('binary', type=Path)
 parser.add_argument('source', type=Path)
+parser.add_argument('--panes-probe', action='store_true')
 parser.add_argument('--output', required=True, type=Path)
 args = parser.parse_args()
 output = args.output.resolve()
@@ -75,6 +76,23 @@ with tempfile.TemporaryDirectory(prefix='ops-station-tabs-') as temporary:
             station = next(tab for tab in tabs['tabs'] if tab.get('photo_type')=='station_panorama')
             assert station['active'] and station['station_index']==0, tabs
             api('set_panorama', yaw=.8, pitch=.1, field_of_view=1.2)
+            if args.panes_probe:
+                panes=api('split_pane',side='right')
+                key=panes['active_document']
+                api('show_tab',index=0)
+                deadline=time.monotonic()+90
+                while True:
+                    state=api('list_panes')
+                    ready=next(document for document in state['documents'] if document['key']==key)
+                    assert ready['error'] is None, ready
+                    if ready['station_panorama_ready']:
+                        break
+                    assert time.monotonic()<deadline, 'Inactive station pane did not decode'
+                    time.sleep(.2)
+                assert api('status')['result']['camera']==model
+                api('screenshot',path=str(output/'station-inactive.png'),base64=False,max_edge=1200,window=True)
+                api('show_tab',index=station['index'])
+
             deadline = time.monotonic()+90
             while True:
                 look = api('status')['result']['walk']
@@ -97,6 +115,8 @@ with tempfile.TemporaryDirectory(prefix='ops-station-tabs-') as temporary:
             result = {'source_sha256': before_hash, 'station_tab': {key:value for key,value in station.items() if key!='path'},
                       'model_camera_restored': True, 'photo_camera_restored': True,
                       'closing_preserves_scan': True, 'source_unchanged': True}
+            if args.panes_probe:
+                result['tiled_station_ready_in_background']=True
             (output/'result.json').write_text(json.dumps(result, indent=2)+'\n')
             print(json.dumps(result, indent=2))
         finally:

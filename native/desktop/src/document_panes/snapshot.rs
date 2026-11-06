@@ -1,5 +1,6 @@
 //! A document's camera/render state. Selection, sources, measures and section
 //! geometry remain shared through Studio; a pane only owns how it looks.
+#[cfg(test)]
 use super::store;
 use crate::drawing_view::DrawingViewTool;
 use crate::file_photos::PhotoTool;
@@ -13,6 +14,7 @@ use std::sync::Arc;
 
 pub(crate) struct Snapshot {
     pub tab: TabId,
+    pub load_error: Option<String>,
     yaw: f32,
     pitch: f32,
     zoom: f32,
@@ -38,6 +40,7 @@ impl Snapshot {
             .then(|| studio.drawing_view.render_copy());
         let mut snapshot = Self {
             tab,
+            load_error: None,
             yaw: 0.,
             pitch: 0.,
             zoom: 1.,
@@ -58,6 +61,56 @@ impl Snapshot {
         };
         snapshot.capture_camera(studio);
         snapshot
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_model_camera(
+        &mut self,
+        yaw: f32,
+        pitch: f32,
+        zoom: f32,
+        pan: [f32; 2],
+        orbit: Option<[f64; 3]>,
+        walk: Option<WalkView>,
+        label: &'static str,
+        colour: ColorMode,
+    ) {
+        self.yaw = yaw;
+        self.pitch = pitch;
+        self.zoom = zoom;
+        self.pan = pan;
+        self.orbit_point = orbit;
+        self.walk = walk;
+        self.label = label;
+        self.colour = colour;
+        self.active_station = None;
+        self.station_tab = None;
+        self.panorama = None;
+    }
+    pub fn panorama_ready(&self) -> bool {
+        self.panorama.is_some()
+    }
+    pub fn accept_panorama(
+        &mut self,
+        source: &std::path::Path,
+        station: usize,
+        result: &Result<Arc<PhotoSet>, String>,
+    ) -> bool {
+        if self
+            .active_station
+            .as_ref()
+            .is_none_or(|(path, current)| path != source || *current != station)
+        {
+            return false;
+        }
+        match result {
+            Ok(set) if set.source == source && set.station == station => {
+                self.panorama = Some(set.clone());
+                self.load_error = None;
+            }
+            Ok(_) => {}
+            Err(error) => self.load_error = Some(format!("Station photo failed: {error}")),
+        }
+        true
     }
     pub fn capture_camera(&mut self, studio: &Studio) {
         self.yaw = studio.yaw;
@@ -88,7 +141,7 @@ impl Snapshot {
         self.panorama = studio.panorama_photos.clone();
         self.label = studio.view_label;
         self.colour = studio.color_mode;
-        self.reference_size = studio.drawn_viewport();
+        self.reference_size = studio.viewport_size;
         if let Some(drawing) = &mut self.drawing {
             drawing.copy_render_from(&studio.drawing_view);
         }
@@ -159,6 +212,11 @@ impl Snapshot {
         view.color_mode = self.colour;
         view.viewport_size = size;
         view.pointer = &self.pointer;
+        view.annotate = studio.document_views_overlay(
+            &self.tab,
+            &self.bounds,
+            studio.shown_tab().as_ref() == Some(&self.tab),
+        );
         view.photo_visible = matches!(self.tab, TabId::Photo(_));
         if let Some(photos) = &self.photos {
             view.photos = photos;
@@ -171,6 +229,7 @@ impl Snapshot {
         view.resident_points = studio.shown_tab().as_ref() != Some(&self.tab);
         view
     }
+    #[cfg(test)]
     pub fn stored_look(&self, active_photos: &PhotoTool) -> Option<store::Look> {
         let walking = |walk: WalkView| store::Walking {
             eye: walk.eye,
@@ -220,10 +279,12 @@ mod tests {
     use super::*;
     #[test]
     fn document_cameras_are_independent_and_leave_shared_section_untouched() {
-        let mut studio = Studio::default();
-        studio.yaw = 0.2;
-        studio.pitch = 0.3;
-        studio.pan = [12., -8.];
+        let mut studio = Studio {
+            yaw: 0.2,
+            pitch: 0.3,
+            pan: [12., -8.],
+            ..Studio::default()
+        };
         let first = Snapshot::capture(TabId::Model, &studio);
         studio.yaw = 1.2;
         studio.pitch = -0.4;
