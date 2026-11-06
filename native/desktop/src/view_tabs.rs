@@ -21,6 +21,7 @@ use iced::widget::scrollable::{self, AbsoluteOffset, Direction, Scrollbar};
 use iced::widget::{button, mouse_area, row, text};
 use iced::{Element, Fill, Padding, Task};
 use pointcloud_core::Bounds;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::i18n::tr;
@@ -30,7 +31,8 @@ use crate::ui_style;
 use crate::{icon_svg, ColorMode, Message, PointViewport, Studio, ToolIcon};
 
 /// A tab, by what it shows.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "document", rename_all = "snake_case")]
 pub enum TabId {
     /// The 3D model, the first tab, which never closes.
     Model,
@@ -61,6 +63,43 @@ const DRAWING_KEY: &str = "drawing:";
 const LAYOUT_KEY: &str = "layout:";
 
 impl TabId {
+    /// Canonical ownership key for a pane layout. Session-only legacy tab
+    /// preferences keep using `key`; paths here remain exact Unicode paths.
+    pub(crate) fn document_key(&self) -> Option<String> {
+        let valid = match self {
+            Self::View(id) | Self::Drawing(id) | Self::Layout(id) => {
+                !id.is_empty() && !id.contains('\0')
+            }
+            Self::Photo(path) | Self::StationPhoto(path) | Self::File(Some(path)) => path
+                .to_str()
+                .is_some_and(|path| !path.is_empty() && !path.contains('\0')),
+            Self::Model | Self::File(None) => true,
+        };
+        if !valid {
+            return None;
+        }
+        let key = if *self == Self::Model {
+            MODEL_KEY.to_owned()
+        } else {
+            serde_json::to_string(self).ok()?
+        };
+        (key.len() <= 32_768).then_some(key)
+    }
+
+    pub(crate) fn from_document_key(key: &str) -> Option<Self> {
+        if key.len() > 32_768 {
+            return None;
+        }
+        let tab = if key == MODEL_KEY {
+            Self::Model
+        } else {
+            serde_json::from_str(key).ok()?
+        };
+        // One document must not acquire two owners through alternate JSON
+        // whitespace, key ordering or a second spelling of the model key.
+        (tab.document_key().as_deref() == Some(key)).then_some(tab)
+    }
+
     /// The name the preferences keep the tab by; none for a preview, an
     /// export or a file, which last for the session.
     pub fn key(&self) -> Option<String> {

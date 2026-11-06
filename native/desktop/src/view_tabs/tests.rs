@@ -899,3 +899,40 @@ fn a_station_without_images_does_not_open_a_photo_tab() {
     assert_eq!(studio.listed_tabs(), [TabId::Model]);
     assert_eq!(studio.model_look(), before);
 }
+
+#[test]
+fn pane_document_keys_round_trip_exact_paths_and_all_tab_kinds() {
+    for tab in [
+        TabId::Model,
+        view("saved"),
+        drawing("plan"),
+        TabId::Layout("sheet".into()),
+        TabId::File(None),
+        TabId::File(Some(PathBuf::from("C:/Project A/plan.dwg"))),
+        TabId::Photo(PathBuf::from("/scans/één route.e57")),
+        TabId::StationPhoto(PathBuf::from("/scans/station \"A\".e57")),
+    ] {
+        let key = tab.document_key().unwrap();
+        assert_eq!(TabId::from_document_key(&key), Some(tab));
+    }
+}
+
+#[test]
+fn pane_document_keys_refuse_aliases_and_malformed_documents() {
+    for key in [
+        "",
+        " view:a",
+        "{\"kind\":\"model\"}",
+        "{\"kind\": \"view\", \"document\":\"a\"}",
+        "{\"document\":\"a\",\"kind\":\"view\"}",
+        "{\"kind\":\"view\",\"document\":\"\"}",
+        "{\"kind\":\"photo\",\"document\":\"\"}",
+    ] {
+        assert_eq!(TabId::from_document_key(key), None, "{key}");
+    }
+    assert!(view("").document_key().is_none());
+    assert!(TabId::Photo(PathBuf::from("bad\0path"))
+        .document_key()
+        .is_none());
+    assert!(view(&"x".repeat(32_768)).document_key().is_none());
+}
