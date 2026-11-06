@@ -902,6 +902,7 @@ impl Studio {
                 let key = tab
                     .document_key()
                     .ok_or_else(|| refusal("That scan is not open", &[]))?;
+                let return_to = documents.linked_origin_for(self, &tab);
                 if documents.active != key {
                     // Validate before changing pane ownership or the selected photo.
                     if !self.clouds.iter().any(|entry| entry.cloud.path == source)
@@ -930,7 +931,16 @@ impl Studio {
                         english: error.clone(),
                         shown: error,
                     })?;
-                    return Ok(Task::batch([task, entered]));
+                    let returned = match return_to {
+                        Some(origin) => {
+                            documents.focus(self, &origin).map_err(|error| Refusal {
+                                english: error.clone(),
+                                shown: error,
+                            })?
+                        }
+                        None => Task::none(),
+                    };
+                    return Ok(Task::batch([task, entered, returned]));
                 }
                 self.enter_photo(source, index)
             })();
@@ -1316,7 +1326,26 @@ impl Studio {
                 };
                 let source = self.clouds[layer].cloud.path.clone();
                 match self.enter_photo(&source, index) {
-                    Ok(task) => (self.entered_value(), task),
+                    Ok(task) => {
+                        let mut value = self.entered_value();
+                        if value["photo"].is_null() {
+                            if let Some(snapshot) = crate::view_tabs::TabId::Photo(source.clone())
+                                .document_key()
+                                .and_then(|key| self.documents.as_ref()?.snapshots.get(&key))
+                            {
+                                value["photo"] = Self::photo_value(
+                                    &self.clouds[layer],
+                                    &self.photos.files[&source].photos[index],
+                                    index,
+                                );
+                                value["walk"] = snapshot.walk_value(self);
+                                value["active_document"] =
+                                    json!(self.shown_tab().and_then(|tab| tab.document_key()));
+                                value["photo_document"] = json!(snapshot.tab.document_key());
+                            }
+                        }
+                        (value, task)
+                    }
                     Err(refused) => failed(refused.english),
                 }
             }
@@ -2232,6 +2261,150 @@ mod tests {
     }
 
     #[test]
+    fn linked_route_photo_selection_updates_its_pane_and_keeps_the_scene_camera() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_photos();
+        studio.yaw = 0.4;
+        studio.pitch = 0.3;
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        let panes: Vec<_> = studio
+            .documents
+            .as_ref()
+            .unwrap()
+            .workspace
+            .panes()
+            .iter()
+            .map(|pane| pane.id)
+            .collect();
+        for pane in &panes {
+            assert_eq!(
+                send(
+                    &mut studio,
+                    json!({"command":"set_pane_linked","pane":pane,"linked":true})
+                )["ok"],
+                true
+            );
+        }
+        studio.section_enabled = true;
+        let camera = studio.camera_value();
+        let entered = send(
+            &mut studio,
+            json!({"command":"enter_photo","index":1,"layer":0}),
+        );
+        assert_eq!(entered["ok"], true);
+        assert_eq!(entered["photo"]["index"], 1);
+        assert_eq!(entered["walk"]["eye"], json!([4., 5., 1.5]));
+        assert_eq!(entered["active_document"], "model");
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+        assert_eq!(studio.camera_value(), camera);
+        assert!(studio.section_enabled);
+        let documents = studio.documents.as_ref().unwrap();
+        let model = documents.workspace.owner("model").unwrap();
+        assert_eq!(
+            documents.linked_photo_views(model).iter().flatten().count(),
+            1
+        );
+        let key = crate::view_tabs::TabId::Photo(source)
+            .document_key()
+            .unwrap();
+        let photo = documents.workspace.owner(&key).unwrap();
+        assert_ne!(model, photo);
+        assert_eq!(
+            documents.workspace.pane(photo).unwrap().active.as_ref(),
+            Some(&key)
+        );
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command":"set_pane_linked","pane":photo,"linked":false})
+            )["ok"],
+            true
+        );
+        assert_eq!(
+            studio
+                .documents
+                .as_ref()
+                .unwrap()
+                .linked_photo_views(model)
+                .iter()
+                .flatten()
+                .count(),
+            0
+        );
+        let _ = send(
+            &mut studio,
+            json!({"command":"enter_photo","index":2,"layer":0}),
+        );
+        assert!(matches!(
+            studio.shown_tab(),
+            Some(crate::view_tabs::TabId::Photo(_))
+        ));
+    }
+
+    #[test]
+    fn linking_one_pane_does_not_hide_a_photo_opened_in_that_same_pane() {
+        use crate::document_panes::runtime::Runtime;
+        let (mut studio, _directory, source) = studio_with_photos();
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source, 0)));
+        let mut documents = Runtime::new(&studio);
+        let _ = documents.hydrate(&mut studio);
+        documents.workspace.pane_mut(1).unwrap().linked = true;
+        studio.documents = Some(documents);
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        let entered = send(
+            &mut studio,
+            json!({"command":"enter_photo","index":1,"layer":0}),
+        );
+        assert_eq!(entered["ok"], true);
+        assert!(matches!(
+            studio.shown_tab(),
+            Some(crate::view_tabs::TabId::Photo(_))
+        ));
+    }
+
+    #[test]
+    fn linked_station_selection_retains_its_photo_look_without_switching_the_scene() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, _source) = studio_with_station_and_route_photos();
+        studio.yaw = 0.4;
+        let _ = studio.update(Message::EnterPanorama(0, 0));
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = send(
+            &mut studio,
+            json!({"command":"set_panorama","yaw":1.2,"pitch":0.1,"field_of_view":1.1}),
+        );
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        let panes: Vec<_> = studio
+            .documents
+            .as_ref()
+            .unwrap()
+            .workspace
+            .panes()
+            .iter()
+            .map(|pane| pane.id)
+            .collect();
+        for pane in panes {
+            let _ = send(
+                &mut studio,
+                json!({"command":"set_pane_linked","pane":pane,"linked":true}),
+            );
+        }
+        let camera = studio.camera_value();
+        let entered = send(
+            &mut studio,
+            json!({"command":"open_panorama","index":0,"station":0}),
+        );
+        assert_eq!(entered["ok"], true);
+        assert_eq!(entered["active_document"], "model");
+        assert!((entered["walk"]["yaw"].as_f64().unwrap() - 1.2).abs() < 1e-6);
+        assert_eq!(entered["walk"]["station"]["station"], 0);
+        assert_eq!(studio.camera_value(), camera);
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+    }
+
+    #[test]
     fn failed_api_pane_mutations_leave_the_existing_layout_unchanged() {
         let mut studio = Studio::default();
         assert_eq!(
@@ -2250,6 +2423,16 @@ mod tests {
             false
         );
         assert!(studio.documents.is_none());
+        for pane in [1, 999] {
+            assert_eq!(
+                send(
+                    &mut studio,
+                    json!({"command":"set_pane_linked","pane":pane,"linked":true})
+                )["ok"],
+                false
+            );
+            assert!(studio.documents.is_none());
+        }
     }
 
     #[test]

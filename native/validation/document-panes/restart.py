@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import subprocess
@@ -15,6 +16,8 @@ import numpy as np
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('binary',type=Path)
+parser.add_argument('--linked',action='store_true',help='Verify linked camera indicators, photo following and persistence')
+parser.add_argument('--pointer-probe',type=Path,help='Optional isolated virtual pointer helper to click pane link controls')
 parser.add_argument('--sheets',action='store_true',help='Also show two distinct sheets with placed drawings and paper annotations')
 parser.add_argument('--drawings',action='store_true',help='Include independent plan/elevation panes and annotations')
 parser.add_argument('--station-source',type=Path,help='Optional real E57 with station 0 photographs')
@@ -36,6 +39,9 @@ for y in range(256):
     for x in range(512):
         pixels[x,y]=((230,70,120),(40,130,200), (80,190,90), (220,180,40))[(x//64+y//64)%4]
 image.save(photo)
+second_photo=output/'panorama-second.png'
+if args.linked and not args.station_source:
+    image.transpose(Image.Transpose.FLIP_TOP_BOTTOM).save(second_photo)
 
 with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
     root=Path(directory)
@@ -61,6 +67,15 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
                 answer=json.load(response)
             assert answer.get('ok'), answer
             return answer
+        if args.pointer_probe:
+            # Discovery is published before the first native window maps.
+            deadline=time.monotonic()+60
+            while subprocess.run(['wlrctl','toplevel','maximize','state:active']).returncode:
+                assert process.poll() is None, f'{name} exited before its window mapped'
+                assert time.monotonic()<deadline, 'Native window did not map'
+                time.sleep(.1)
+            time.sleep(1)
+            api('status')
         return process,log,api
     def stop(process,log):
         if process.poll() is None:
@@ -92,6 +107,17 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         rectangles={'model':(left,top,mid_x,mid_y),'photo':(mid_x,top,right,mid_y),
                     'plan':(left,mid_y,mid_x,bottom),'elevation':(mid_x,mid_y,right,bottom)}
         return {name:pixels[y1+20:y2-20,x1+20:x2-20] for name,(x1,y1,x2,y2) in rectangles.items()}
+    def visible_regions(path):
+        if args.drawings:
+            return interiors(path)
+        pixels=np.asarray(Image.open(path).convert('RGB')).astype(np.int16)
+        height,width=pixels.shape[:2]
+        return {name:pixels[int(height*.45):int(height*.9),int(width*a):int(width*b)]
+                for name,a,b in [('model',.2,.49),('photo',.51,.79)]}
+    def all_panes(workspace):
+        def walk(node):
+            return [node['pane']] if node['kind']=='pane' else walk(node['first'])+walk(node['second'])
+        return [pane for window in workspace['windows'] for pane in walk(window['root'])]
     def wait_photo(api):
         deadline=time.monotonic()+90
         while True:
@@ -114,6 +140,8 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
             time.sleep(.1)
         if not args.station_source:
             api('add_panorama',layer=0,path=str(photo),position=[0,0,2],name='Persistent panorama')
+            if args.linked:
+                api('add_panorama',layer=0,path=str(second_photo),position=[.45,.45,.45],name='Linked panorama')
         api('set_camera',yaw=.4,pitch=.5,zoom=.9,pan=[18,-6])
         if args.drawings:
             assert not args.station_source, 'The 2 x 2 probe uses the measured XYZ fixture'
@@ -145,6 +173,60 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
             if args.sheets:
                 api('show_tab',index=next(tab['index'] for tab in api('list_tabs')['tabs'] if tab.get('guid')==sheet_guids['Restart sheet A']))
             api('show_tab',index=0)
+        linked_report={}
+        if args.linked:
+            if not args.station_source:
+                api('show_tab',index=next(tab['index'] for tab in api('list_tabs')['tabs'] if tab['kind']=='photo'))
+                api('enter_photo',index=1,layer=0)
+                api('show_tab',index=0)
+                wait_photo(api)
+            model_before=api('status')['result']['camera']
+            api('screenshot',path=str(output/'link-off.png'),base64=False,max_edge=1200,window=True)
+            state=api('list_panes')
+            model_pane=next(pane for pane in all_panes(state['workspace']) if 'model' in pane['tabs'])
+            photo_key=next(doc['key'] for doc in state['documents'] if doc['look'] and doc['look']['kind'] in ('photo','station'))
+            photo_pane=next(pane for pane in all_panes(state['workspace']) if photo_key in pane['tabs'])
+            if args.pointer_probe:
+                api('screenshot',path=str(output/'link-controls.png'),base64=False,max_edge=8192,window=True)
+                width,height=Image.open(output/'link-controls.png').size
+                outputs=subprocess.check_output(['wlrctl','output','list'],text=True)
+                mode=re.search(r'\((\d+)x(\d+) ',outputs)
+                assert mode, outputs
+                output_width,output_height=map(int,mode.groups())
+                offset_y=output_height-height
+                assert output_width==width and 0<=offset_y<=64
+                for x in (width//2-36,width-240-36):
+                    subprocess.run([str(args.pointer_probe),'move',str(x),str(168+offset_y),str(output_width),str(output_height),
+                        'down','drop',str(x),str(168+offset_y),str(output_width),str(output_height),'wait','300'],check=True)
+                linked=api('list_panes')
+                assert all(pane['linked'] for pane in all_panes(linked['workspace']) if pane['id'] in (model_pane['id'],photo_pane['id'])), linked
+                linked_report['native_link_controls_clicked']=True
+                api('show_tab',index=0)
+            else:
+                for pane in (model_pane,photo_pane):
+                    api('set_pane_linked',pane=pane['id'],linked=True)
+            api('screenshot',path=str(output/'link-on.png'),base64=False,max_edge=1200,window=True)
+            assert api('status')['result']['camera']==model_before
+            assert next(doc for doc in api('list_panes')['documents'] if doc['key']=='model')['linked_photo_count']==1
+            off,on=visible_regions(output/'link-off.png'),visible_regions(output/'link-on.png')
+            indicator=int(np.count_nonzero(np.any(np.abs(off['model']-on['model'])>10,axis=2)))
+            assert not np.any(np.abs(off['photo']-on['photo'])>10)
+            if not args.station_source:
+                assert indicator>0, indicator
+            selected=api('open_panorama',index=0,station=0) if args.station_source else api('enter_photo',index=0,layer=0)
+            assert selected['active_document']=='model', selected
+            assert api('list_panes')['active_document']=='model'
+            assert api('status')['result']['camera']==model_before
+            wait_photo(api)
+            api('screenshot',path=str(output/'linked-selection.png'),base64=False,max_edge=1200,window=True)
+            if not args.station_source:
+                followed=visible_regions(output/'linked-selection.png')
+                changed=int(np.count_nonzero(np.any(np.abs(on['photo']-followed['photo'])>10,axis=2)))
+                assert changed>100, changed
+                linked_report['photo_follow_changed_pixels']=changed
+                api('enter_photo',index=1,layer=0)
+                wait_photo(api)
+            linked_report.update(link_flags_restored=True,linked_scene_camera_unchanged=True,linked_selection_keeps_scene_active=True,camera_indicator_changed_pixels=indicator)
         if args.drawings:
             # Rendering settles each drawing's first-fit camera before comparing.
             api('screenshot',path=str(output/'without-notes.png'),base64=False,max_edge=1200,window=True)
@@ -187,6 +269,8 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
             time.sleep(.1)
         wait_photo(api)
         assert panes['workspace']==workspace, (panes['workspace'],workspace)
+        if args.linked:
+            assert next(doc for doc in panes['documents'] if doc['key']=='model')['linked_photo_count']==1
         api('screenshot',path=str(output/'restored-model.png'),base64=False,max_edge=1200,window=True)
         restored_camera=api('status')['result']['camera']
         restored_panes=api('list_panes')
@@ -233,6 +317,7 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         result={'workspace_restored':True,'sources_reopened':True,'model_camera_restored':True,
                 'photo_camera_restored':True,
                 'station_source':bool(args.station_source),'render_changed_pixels':counts,'source_sha256':source_hash,'source_unchanged':True}
+        result.update(linked_report)
         if args.sheets:
             result.update(distinct_sheets_and_paper_cameras_restored=True,paper_annotations_restored=True)
         if args.drawings:

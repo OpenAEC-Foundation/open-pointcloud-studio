@@ -1067,7 +1067,20 @@ the session, and closing a tab leaves the scan and its photographs intact.
 `station_panorama_ready`, `photo_ready`, a local pane `error`, the typed camera
 `look` (including its reference viewport size) and the last rendered `viewport`.
 These fields observe an inactive document without focusing it. `persistence`
-reports whether startup restoration is under way and any storage/restore error. `split_pane` takes `side: "left" | "right" | "above" | "below"`
+reports whether startup restoration is under way and any storage/restore error.
+`set_pane_linked` takes a `pane` identifier from `list_panes` and `linked: true | false`.
+Link a scene pane and a different photo pane to show the photo camera position
+and viewing direction in the scene, while each keeps its own camera. Selecting
+a photo mark in that scene updates the existing photo pane and leaves the scene
+active. Route photographs and E57 station panoramas are supported. Every visible
+linked photo pane contributes an indicator; the scene document reports their
+`linked_photo_count`. The pane link flags survive a saved-layout restart.
+When a linked selection leaves the scene active, `enter_photo` and
+`open_panorama` report the requested photo's `walk`, its `photo_document` and
+the scene's `active_document`; the active scene's camera is unchanged.
+
+
+`split_pane` takes `side: "left" | "right" | "above" | "below"`
 and moves the active document into a new pane of its current window. Another
 document must remain in the original pane; the workspace allows eight panes.
 Each pane owns its camera and photo decode state. Selection, measurements and
@@ -1898,6 +1911,7 @@ layer with photo colours.
 | `dock_pane_window` | `window` | Docks a native window id from `list_panes` into the main window; id 0 cannot be docked. |
 | `list_panes` | — | Reports native window ids, pane ownership, split layout and the active document without changing it. |
 | `split_pane` | `side` | Moves the active document into a pane on the `left`, `right`, `above` or `below`; another tab must remain and at most eight panes are allowed. |
+| `set_pane_linked` | `pane`, `linked` | Enables or disables linking for a pane from `list_panes`; linked scene panes show linked photo camera poses and photo marks update an existing photo in another linked pane while keeping the scene active. |
 | `list_tabs` | — | The tabs above the main area in their order, the 3D model first, and the active one |
 | `show_tab` | `name` or `index` | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job ID. Refused while Settings, the dialog of Create 2D or the card of the Pointcloud to Drawing wizard is open |
 | `close_tab` | `name` or `index` | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |
@@ -1952,6 +1966,7 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
+| 17 | Unreleased | Optional linked photo/3D panes: `set_pane_linked`, per-scene `linked_photo_count` in `list_panes`, measured photo camera indicators and linked photo selection without moving the scene camera. Includes revisions 13–16. |
 | 16 | Unreleased | Native document panes and satellite windows: `list_panes`, `split_pane`, `tear_off_tab`, `dock_pane_window`. Screenshot capture follows the active document window. Includes revisions 13–15. |
 | 15 | Unreleased | Calibrated station panoramas use independent photo tabs. `list_tabs` reports `kind: "photo"`, `photo_type: "station_panorama"`, `path` and `station_index`; `show_tab` restores their walking camera and `close_tab` keeps the source scan open. Includes the cumulative changes of revisions 13 and 14 below. |
 | 14 | Unreleased | `texture_mesh` accepts `source` (`point_colours` or `photographs`), reports photo coverage and preview errors; new `set_texture_preview` controls the native UV atlas overlay. Mesh status reports texture visibility, resolution and GPU support. |

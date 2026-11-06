@@ -48,7 +48,7 @@ and requires Pillow and NumPy.
 
 Satellite placements currently have no verified platform monitor identifier,
 so startup safely docks their documents into the main window. Monitor-aware
-placement, linked panes and physical Windows/macOS multi-monitor checks remain
+placement and physical Windows/macOS multi-monitor checks remain
 acceptance work for issue #16.
 
 The recorded 2026-11-06 run passed 785 native tests (9 explicitly ignored),
@@ -125,3 +125,26 @@ The cross-window follow-up passed 799 native tests (9 explicitly ignored), a
 full workspace build and workspace/all-target Clippy with warnings denied.
 The one-output and two-output GUI probes both passed without diagnostic code;
 both also passed the real BLK2GO inactive-station check afterward.
+
+API revision 17 adds `set_pane_linked`. The ↔ controls and the API link individual
+panes. Linked scene panes retain their own camera and show the measured camera
+positions/directions of visible linked photo panes. Selecting a route photo or
+station marker updates an existing photo in a different linked pane while
+retaining the active scene. Same-pane selection still opens the photo normally.
+Split and tear-off operations retain their source pane's link membership.
+
+Run `restart.py BINARY --output DIRECTORY --linked` to verify following and
+restoration. Adding `--pointer-probe /absolute/path/virtual-pointer` clicks both
+native link controls, with `wlrctl` available in the isolated compositor. The
+synthetic run changed 445 model pixels when enabling the camera indicator and
+98,111 photo pixels when selecting the other panorama, while preserving the
+scene camera and active document. Both pane interiors were identical after a
+fresh-process restart. The real BLK2GO run also restored links/cameras and kept
+its source hash; its camera is outside this small section's comparison region,
+so that run verifies ownership rather than visible indicator pixels. Only the
+synthetic view appears in `linked-panes.png`.
+
+The linked-pane follow-up passed 803 native tests (9 explicitly ignored), all
+41 MCP tests, the translation checks, the workspace build and workspace/all-target
+Clippy with warnings denied. Invalid link requests do not activate a layout;
+linking a single pane does not hide a photo selected within it.

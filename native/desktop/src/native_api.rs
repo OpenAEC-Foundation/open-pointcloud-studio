@@ -26,7 +26,7 @@ pub const API_NAME: &str = "native-rust-v1";
 /// Raised by one with every release that adds a command or a field, or
 /// changes what a command does; API.md lists the revisions under API
 /// changes.
-pub const API_REVISION: u64 = 16;
+pub const API_REVISION: u64 = 17;
 
 /// How many `/exec` requests wait for the window at once. `/health` and
 /// `/info` are answered by the thread that takes the requests, so they do
@@ -471,6 +471,10 @@ pub enum ApiCommand {
     /// Split the currently displayed tab into a new pane of the same window.
     SplitPane {
         side: crate::document_panes::layout::Side,
+    },
+    SetPaneLinked {
+        pane: u64,
+        linked: bool,
     },
     /// Show an open tab, by its place as `list_tabs` gives it or by its
     /// name, as a click on it does.

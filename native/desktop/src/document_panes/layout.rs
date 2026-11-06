@@ -290,7 +290,10 @@ impl Workspace {
             }
             work.remove_inner(tab)?;
             let id = work.allocate()?;
-            let added = Pane::new(id, vec![tab.into()]);
+            let added = Pane {
+                linked: work.pane(target).unwrap().linked,
+                ..Pane::new(id, vec![tab.into()])
+            };
             assert!(work
                 .windows
                 .iter_mut()
@@ -336,13 +339,18 @@ impl Workspace {
 
     pub fn tear_off(&mut self, tab: &str, placement: Option<Placement>) -> Result<u64, String> {
         self.transaction(|work| {
+            let owner = work.owner(tab).ok_or("Document is unavailable")?;
+            let linked = work.pane(owner).unwrap().linked;
             work.remove_inner(tab)?;
             let window = work.allocate()?;
             let pane = work.allocate()?;
             work.windows.push(Window {
                 id: window,
                 root: Node::Pane {
-                    pane: Pane::new(pane, vec![tab.into()]),
+                    pane: Pane {
+                        linked,
+                        ..Pane::new(pane, vec![tab.into()])
+                    },
                 },
                 placement,
             });
@@ -598,6 +606,22 @@ mod tests {
             w
         );
     }
+    #[test]
+    fn splitting_and_tearing_off_keep_the_panes_link_membership() {
+        let mut workspace = Workspace::default();
+        workspace.open("photo".into(), 1).unwrap();
+        workspace.pane_mut(1).unwrap().linked = true;
+        let pane = workspace.split_tab("photo", 1, Side::Right).unwrap();
+        assert!(workspace.pane(pane).unwrap().linked);
+        let window = workspace.tear_off("photo", None).unwrap();
+        let pane = workspace.owner("photo").unwrap();
+        assert_eq!(workspace.window_of(pane), Some(window));
+        assert!(workspace.pane(pane).unwrap().linked);
+        let restored: Workspace =
+            serde_json::from_str(&serde_json::to_string(&workspace).unwrap()).unwrap();
+        assert_eq!(restored, workspace);
+    }
+
     #[test]
     fn malformed_restored_state_is_refused_without_panicking_or_mutating() {
         let mut w = Workspace::default();

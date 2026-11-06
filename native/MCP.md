@@ -285,6 +285,7 @@ follows when that view is restored.
 | `dock_pane_window` | `window` | Docks a native window id from `list_panes` into the main window; id 0 cannot be docked. |
 | `list_panes` | — | Reports native window ids, pane ownership, split layout and the active document without changing it. |
 | `split_pane` | `side` | Moves the active document into a pane on the `left`, `right`, `above` or `below`; another tab must remain and at most eight panes are allowed. |
+| `set_pane_linked` | `pane`, `linked` | Enables or disables linking for a pane from `list_panes`; linked scene panes show linked photo camera poses and photo marks update an existing photo in another linked pane while keeping the scene active. |
 | `list_tabs` | — | The tabs above the main area in their order, the 3D model first, with the active one; a tab of a sheet has the kind `sheet`, and each tab says whether it is `locked` |
 | `show_tab` | `name` or `index` as `list_tabs` gives them | Shows an open tab as a click on it does; a drawing not made in this session yet is made, with a job to wait for. Refused while Settings, the dialog of Create 2D or the card of the Pointcloud to Drawing wizard is open |
 | `close_tab` | `name` or `index` as `list_tabs` gives them | Closes a tab as its × does; its view or drawing stays, and the tab of the 3D model does not close |

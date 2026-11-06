@@ -1,5 +1,6 @@
 //! Document ownership and native pane presentation.
 pub(crate) mod layout;
+mod linked;
 pub(crate) mod persistence;
 pub(crate) mod runtime;
 pub(crate) mod snapshot;
@@ -15,6 +16,7 @@ use layout::{Node, Side};
 #[derive(Debug, Clone)]
 pub(crate) enum Action {
     HoverTab,
+    SetLinked(u64, bool),
     SplitCurrent(Side),
     Stored(Result<(), String>),
     SplitDocument(String, Side),
@@ -124,6 +126,14 @@ impl Studio {
             match action {
                 Action::HoverTab | Action::Stored(_) => unreachable!("handled above"),
                 Action::Input(_, _) => unreachable!("scoped input is handled above"),
+                Action::SetLinked(pane, linked) => {
+                    documents
+                        .workspace
+                        .pane_mut(pane)
+                        .ok_or("Pane is unavailable")?
+                        .linked = linked;
+                    Ok(Task::none())
+                }
                 Action::Focus(pane) => {
                     let key = documents
                         .workspace
@@ -277,6 +287,25 @@ impl Studio {
                         .on_press_maybe(pane.active.clone().map(|key| Message::Documents(
                             Action::SplitDocument(key, Side::Right)
                         )),)];
+                let linkable = pane
+                    .active
+                    .as_ref()
+                    .and_then(|key| TabId::from_document_key(key))
+                    .is_some_and(|tab| {
+                        tab.is_3d() || matches!(tab, TabId::Photo(_) | TabId::StationPhoto(_))
+                    });
+                let linked = pane.linked;
+                controls = controls.push(crate::ui_style::tooltip(
+                    iced::widget::button("↔")
+                        .style(move |theme, status| {
+                            crate::ui_style::ribbon_button(theme, linked, status)
+                        })
+                        .padding([3, 6])
+                        .on_press_maybe(
+                            linkable.then_some(Message::Documents(Action::SetLinked(*id, !linked))),
+                        ),
+                    crate::i18n::tr("Link photo and 3D panes"),
+                ));
                 if window == 0 {
                     controls = controls.push(
                         iced::widget::button("↗")
@@ -314,7 +343,9 @@ impl Studio {
                             pane_bounds,
                             documents.active == *key,
                         )
-                        .unwrap_or_else(|| iced::widget::text("Sheet unavailable").into())
+                        .unwrap_or_else(|| {
+                            iced::widget::text(crate::i18n::tr("Sheet unavailable")).into()
+                        })
                     } else if let Some(drawing) = &snapshot.drawing {
                         let sheet =
                             drawing.pane_sheet(self.ui_theme, key, &snapshot.bounds, pane_bounds);
@@ -329,7 +360,10 @@ impl Studio {
                             None => sheet,
                         }
                     } else {
-                        let viewport = snapshot.viewport(self, slot, live);
+                        let mut viewport = snapshot.viewport(self, slot, live);
+                        if snapshot.tab.is_3d() {
+                            viewport.linked_photos = documents.linked_photo_views(*id);
+                        }
                         iced::widget::stack![
                             crate::gpu_viewport::GpuViewport { overlay: viewport }
                                 .widget()
@@ -393,6 +427,7 @@ impl Studio {
                 "documents": documents.snapshots.iter().map(|(key, snapshot)| serde_json::json!({
                     "key": key, "station_panorama_ready": snapshot.panorama_ready(), "photo_ready": snapshot.photo_ready(&self.photos), "error": snapshot.load_error,
                     "look": snapshot.stored_look(&self.photos),
+                    "linked_photo_count": if snapshot.tab.is_3d() { documents.workspace.owner(key).map_or(0, |pane| documents.linked_photo_views(pane).iter().flatten().count()) } else { 0 },
                     "viewport": snapshot.bounds.get().map(|bounds| [bounds.width,bounds.height])
                 })).collect::<Vec<_>>()}),
             None => serde_json::json!({"ok": true, "enabled": false,
@@ -440,6 +475,32 @@ impl Studio {
                 (self.panes_value(), task)
             }
         }
+    }
+
+    pub(crate) fn api_set_pane_linked(
+        &mut self,
+        pane: u64,
+        linked: bool,
+    ) -> (serde_json::Value, Task<Message>) {
+        if self.tabs_covered() {
+            return (
+                serde_json::json!({"ok": false, "error": "a dialog covers the documents"}),
+                Task::none(),
+            );
+        }
+        if self
+            .documents
+            .as_ref()
+            .and_then(|documents| documents.workspace.pane(pane))
+            .is_none()
+        {
+            return (
+                serde_json::json!({"ok": false, "error": "Pane is unavailable"}),
+                Task::none(),
+            );
+        }
+        let task = self.update(Message::Documents(Action::SetLinked(pane, linked)));
+        (self.panes_value(), task)
     }
 }
 

@@ -4303,7 +4303,20 @@ impl Studio {
                 });
                 if has_photos {
                     let task = self.update(Message::EnterPanorama(index, station));
-                    (json!({"ok": true, "walk": self.walk_value()}), task)
+                    let mut value = json!({"ok": true, "walk": self.walk_value()});
+                    if value["walk"].is_null() {
+                        if let Some(snapshot) =
+                            view_tabs::TabId::StationPhoto(self.clouds[index].cloud.path.clone())
+                                .document_key()
+                                .and_then(|key| self.documents.as_ref()?.snapshots.get(&key))
+                        {
+                            value["walk"] = snapshot.walk_value(self);
+                            value["active_document"] =
+                                json!(self.shown_tab().and_then(|tab| tab.document_key()));
+                            value["photo_document"] = json!(snapshot.tab.document_key());
+                        }
+                    }
+                    (value, task)
                 } else {
                     (
                         json!({"ok": false, "error": "that cloud and station have no station photos"}),
@@ -5240,6 +5253,7 @@ impl Studio {
             ApiCommand::TearOffTab => self.api_pane_window(None),
             ApiCommand::DockPaneWindow { window } => self.api_pane_window(Some(window)),
             ApiCommand::SplitPane { side } => self.api_split_pane(side),
+            ApiCommand::SetPaneLinked { pane, linked } => self.api_set_pane_linked(pane, linked),
             ApiCommand::ShowTab { name, index } => self.api_show_tab(name.as_deref(), index),
             ApiCommand::CloseTab { name, index } => self.api_close_tab(name.as_deref(), index),
             ApiCommand::SetSheetCrop { options } => self.api_set_sheet_crop(&options),
@@ -8751,6 +8765,18 @@ impl Studio {
                 let position = entry.transform.xyz(pose.position);
                 let source = entry.cloud.path.clone();
                 let label = pose.label.clone();
+                let tab = view_tabs::TabId::StationPhoto(source.clone());
+                let return_to = self
+                    .documents
+                    .as_ref()
+                    .and_then(|documents| documents.linked_origin_for(self, &tab));
+                let linked_walk = return_to.as_ref().and_then(|_| {
+                    self.documents
+                        .as_ref()?
+                        .snapshots
+                        .get(&tab.document_key()?)?
+                        .walk_view()
+                });
                 self.remember_station_photo_tab();
                 self.remember_photo_tab();
                 self.remember_model_for_photo();
@@ -8758,7 +8784,7 @@ impl Studio {
                 self.tabs.active_station_photo = Some(source.clone());
                 self.drawing_view.shown = false;
                 self.file_open = false;
-                let view = match self.walk {
+                let view = match linked_walk.or(self.walk) {
                     // Keep looking the same way when stepping to another station.
                     Some(previous) => WalkView {
                         eye: position,
@@ -8779,7 +8805,23 @@ impl Studio {
                 self.pick_mode = false;
                 self.pan_tool = false;
                 self.drag_rectangle = None;
-                return self.panorama_task(cloud_index, station);
+                let task = self.panorama_task(cloud_index, station);
+                if let Some(origin) = return_to {
+                    if let Some(mut documents) = self.documents.take() {
+                        let returned = documents
+                            .observe_current(self)
+                            .and_then(|()| documents.focus(self, &origin));
+                        self.documents = Some(documents);
+                        return match returned {
+                            Ok(returned) => Task::batch([task, returned]),
+                            Err(error) => {
+                                self.status = error;
+                                task
+                            }
+                        };
+                    }
+                }
+                return task;
             }
             Message::PanoramaReady(source, station, result) => {
                 let current = self.walk_station.is_some_and(|(cloud, current)| {
@@ -11424,6 +11466,7 @@ impl Studio {
             pointer: &self.viewport_pointer,
             photos: &self.photos,
             photo_visible: true,
+            linked_photos: [None; 8],
             read_only: false,
             resident_points: false,
             view_slot: 0,
@@ -13566,6 +13609,7 @@ struct PointViewport<'a> {
     /// The photos of the files that are not those of their stations.
     photos: &'a file_photos::PhotoTool,
     photo_visible: bool,
+    linked_photos: [Option<WalkView>; 8],
     read_only: bool,
     /// Use the bounded resident sample when this camera differs from the
     /// camera whose octree detail is currently loaded.
@@ -15141,6 +15185,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
         if self.show_scan_poses {
             self.draw_photo_marks(&mut frame, projection, bounds.size());
         }
+        self.draw_linked_photos(&mut frame, projection, overall_bounds);
         if !self.clean {
             self.draw_drawing(&mut frame, bounds.size());
         }

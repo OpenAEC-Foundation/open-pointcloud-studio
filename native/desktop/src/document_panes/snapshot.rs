@@ -35,6 +35,19 @@ pub(crate) struct Snapshot {
     pub photos: Option<PhotoTool>,
 }
 impl Snapshot {
+    pub fn walk_view(&self) -> Option<WalkView> {
+        self.walk
+    }
+    pub fn walk_value(&self, studio: &Studio) -> serde_json::Value {
+        self.walk.map_or(serde_json::Value::Null, |view| serde_json::json!({
+            "eye": view.eye, "yaw": view.yaw, "pitch": view.pitch, "field_of_view": view.field_of_view,
+            "station": self.station(studio).map(|(cloud, station)| serde_json::json!({
+                "index": cloud, "station": station,
+                "label": studio.clouds[cloud].cloud.scan_poses[station].label,
+                "full_resolution": self.panorama_ready(),
+            })),
+        }))
+    }
     pub fn capture(tab: TabId, studio: &Studio) -> Self {
         let drawing = matches!(tab, TabId::Drawing(_) | TabId::File(_) | TabId::Layout(_))
             .then(|| studio.drawing_view.render_copy());

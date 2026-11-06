@@ -1,0 +1,20 @@
+{
+  "workspace_restored": true,
+  "sources_reopened": true,
+  "model_camera_restored": true,
+  "photo_camera_restored": true,
+  "station_source": false,
+  "render_changed_pixels": {
+    "model": 0,
+    "photo": 0
+  },
+  "source_sha256": "805f30818bd1676d0de50868ba95ef972e3eec882b46a5f5ba80b39d716e1838",
+  "source_unchanged": true,
+  "native_link_controls_clicked": true,
+  "photo_follow_changed_pixels": 98111,
+  "link_flags_restored": true,
+  "linked_scene_camera_unchanged": true,
+  "linked_selection_keeps_scene_active": true,
+  "camera_indicator_changed_pixels": 445,
+  "photo_blend_restored": true
+}

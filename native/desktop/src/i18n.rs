@@ -431,6 +431,10 @@ mod tests {
         ("drawing.rs", include_str!("drawing.rs")),
         ("drawing_crop.rs", include_str!("drawing_crop.rs")),
         ("drawing_view.rs", include_str!("drawing_view.rs")),
+        (
+            "document_panes/mod.rs",
+            include_str!("document_panes/mod.rs"),
+        ),
         ("extensions/mod.rs", include_str!("extensions/mod.rs")),
         ("extensions/page.rs", include_str!("extensions/page.rs")),
         ("faces.rs", include_str!("faces.rs")),

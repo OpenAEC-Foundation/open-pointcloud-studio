@@ -32,6 +32,38 @@ pub(crate) struct Runtime {
     pub grids: HashMap<u64, iced::widget::pane_grid::State<u64>>,
 }
 impl Runtime {
+    pub fn linked_origin_for(&self, studio: &Studio, target: &TabId) -> Option<String> {
+        let shown = studio.shown_tab()?;
+        if !shown.is_3d() || self.snapshots.get(&self.active)?.tab != shown {
+            return None;
+        }
+        let source = self.workspace.owner(&self.active)?;
+        let destination = self.workspace.owner(&target.document_key()?)?;
+        (source != destination
+            && self.workspace.pane(source)?.linked
+            && self.workspace.pane(destination)?.linked)
+            .then(|| self.active.clone())
+    }
+    pub fn linked_photo_views(&self, pane: u64) -> [Option<crate::station_photos::WalkView>; 8] {
+        let mut views = [None; 8];
+        if !self.workspace.pane(pane).is_some_and(|pane| pane.linked) {
+            return views;
+        }
+        for (index, photo) in self
+            .workspace
+            .panes()
+            .into_iter()
+            .filter(|pane| pane.linked)
+            .filter_map(|pane| pane.active.as_ref().and_then(|key| self.snapshots.get(key)))
+            .filter(|snapshot| matches!(snapshot.tab, TabId::Photo(_) | TabId::StationPhoto(_)))
+            .filter_map(Snapshot::walk_view)
+            .take(8)
+            .enumerate()
+        {
+            views[index] = Some(photo);
+        }
+        views
+    }
     pub fn new(studio: &Studio) -> Self {
         let mut workspace = Workspace::default();
         for tab in studio.listed_tabs() {
