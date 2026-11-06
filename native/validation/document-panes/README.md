@@ -85,3 +85,17 @@ without a prior split-button or API action. The pointer probe checks this first,
 then merges the photo into the model pane and drags that inactive photo back to
 an edge. A widget hover update settles the tooltip/scrollable layout before the
 press; a single-document strip disables the split button.
+
+Sheets use a separate paper renderer/camera rather than the last drawing canvas.
+Run `restart.py BINARY --output DIRECTORY --sheets` to include two different
+paper sizes with placed drawings and paper annotations. The lower comparison
+regions named `plan` and `elevation` contain A4 portrait and A3 landscape sheets
+in this run. Both paper cameras, the placed drawings and annotations survive a
+fresh-process restart with zero changed interior pixels; the model and photo
+remain unchanged too. `sheet-panes.png` uses only the synthetic fixture.
+
+The sheet follow-up passed 795 native tests (9 explicitly ignored), all-target
+workspace Clippy with warnings denied and a full workspace build. Focused tests
+also verify that restoring a paper camera preserves shared sheet definitions,
+revision counters and pending drawing jobs. Paper images remain shared, and
+inactive panes do not display the active tool's selection highlight.

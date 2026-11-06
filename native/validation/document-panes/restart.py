@@ -15,10 +15,12 @@ import numpy as np
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('binary',type=Path)
+parser.add_argument('--sheets',action='store_true',help='Also show two distinct sheets with placed drawings and paper annotations')
 parser.add_argument('--drawings',action='store_true',help='Include independent plan/elevation panes and annotations')
 parser.add_argument('--station-source',type=Path,help='Optional real E57 with station 0 photographs')
 parser.add_argument('--output',type=Path,required=True)
 args=parser.parse_args()
+args.drawings=args.drawings or args.sheets
 output=args.output.resolve()
 output.mkdir(parents=True,exist_ok=True)
 binary=args.binary.resolve()
@@ -130,15 +132,28 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         api('split_pane',side='right')
         api('show_tab',index=0)
         wait_photo(api)
+        if args.sheets:
+            sheet_guids={}
+            for drawing,name,paper,orientation,at in [('Restart plan','Restart sheet A','a4','portrait',[105,140]),('Restart elevation','Restart sheet B','a3','landscape',[210,140])]:
+                api('show_tab',name=drawing)
+                sheet_guids[name]=api('create_sheet',name=name,paper=paper,orientation=orientation)['sheet']['guid']
+                api('place_view',sheet=name,name=drawing,kind='drawing',at=at,scale=10)
+            api('show_tab',index=0)
         if args.drawings:
             api('show_tab',name='Restart plan')
             api('set_drawing_layer',layer='OPS-FRAME',visible=False)
+            if args.sheets:
+                api('show_tab',index=next(tab['index'] for tab in api('list_tabs')['tabs'] if tab.get('guid')==sheet_guids['Restart sheet A']))
             api('show_tab',index=0)
         if args.drawings:
             # Rendering settles each drawing's first-fit camera before comparing.
             api('screenshot',path=str(output/'without-notes.png'),base64=False,max_edge=1200,window=True)
-            for name in ('Restart plan','Restart elevation'):
-                api('annotate_drawing',name=name,kind='text',at=[100,450],text=name,height=.5)
+            if args.sheets:
+                for name in ('Restart sheet A','Restart sheet B'):
+                    api('annotate_sheet',sheet=name,kind='text',at=[30,100],text=name,height=10)
+            else:
+                for name in ('Restart plan','Restart elevation'):
+                    api('annotate_drawing',name=name,kind='text',at=[100,450],text=name,height=.5)
             api('screenshot',path=str(output/'with-notes.png'),base64=False,max_edge=1200,window=True)
             bare,marked=interiors(output/'without-notes.png'),interiors(output/'with-notes.png')
             annotation_pixels={name:int(np.count_nonzero(np.any(np.abs(bare[name]-marked[name])>10,axis=2))) for name in ('plan','elevation')}
@@ -180,7 +195,7 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
             'before_look':model_look,'after_look':restored_look},indent=2)+'\n')
         if args.drawings:
             restored_drawings={doc['key']:doc['look'] for doc in restored_panes['documents'] if doc['key'] in drawing_looks}
-            assert len(drawing_looks)==2, drawing_looks
+            assert len(drawing_looks)==(4 if args.sheets else 2), drawing_looks
             assert any(['OPS-FRAME',False] in look['layers'] for look in drawing_looks.values()), drawing_looks
             assert any(['OPS-FRAME',True] in look['layers'] for look in drawing_looks.values()), drawing_looks
             assert restored_drawings==drawing_looks, (restored_drawings,drawing_looks)
@@ -218,6 +233,8 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         result={'workspace_restored':True,'sources_reopened':True,'model_camera_restored':True,
                 'photo_camera_restored':True,
                 'station_source':bool(args.station_source),'render_changed_pixels':counts,'source_sha256':source_hash,'source_unchanged':True}
+        if args.sheets:
+            result.update(distinct_sheets_and_paper_cameras_restored=True,paper_annotations_restored=True)
         if args.drawings:
             result.update(drawing_cameras_and_layers_restored=True,annotations_restored=True,annotation_changed_pixels=annotation_pixels,four_panes_restored=True)
         if not args.station_source:

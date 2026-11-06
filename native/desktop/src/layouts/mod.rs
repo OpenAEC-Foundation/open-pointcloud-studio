@@ -241,6 +241,35 @@ impl LayoutTool {
         }
     }
 
+    /// A pane owns only its paper camera and render caches. Definitions,
+    /// source pictures and pending work remain in the application's tool.
+    pub(crate) fn render_copy(&self) -> Self {
+        let mut copy = Self::with(Vec::new());
+        copy.copy_render_from(self);
+        copy
+    }
+
+    pub(crate) fn copy_render_from(&mut self, other: &Self) {
+        if self.camera.get() != other.camera.get() || self.revision != other.revision {
+            self.cache.clear();
+            self.built.set(None);
+        }
+        self.camera.set(other.camera.get());
+        self.fit_pending.set(other.fit_pending.get());
+        self.bounds.set(other.bounds.get());
+        self.selected.clone_from(&other.selected);
+        self.revision = other.revision;
+    }
+
+    pub(crate) fn restore_camera_into(&self, root: &mut Self) {
+        root.camera.set(self.camera.get());
+        root.fit_pending.set(self.fit_pending.get());
+        root.bounds.set(self.bounds.get());
+        root.selected.clone_from(&self.selected);
+        root.cache.clear();
+        root.built.set(None);
+    }
+
     pub(crate) fn layout(&self, guid: &str) -> Option<&Layout> {
         self.list.iter().find(|layout| layout.guid == guid)
     }
@@ -1212,6 +1241,23 @@ impl Studio {
             self.viewport_content(viewport)
         }));
         *self.layouts.plot.borrow_mut() = Some((guid.to_owned(), revision, Arc::clone(&plot)));
+        Some(plot)
+    }
+
+    /// Resolve a pane's sheet from the shared definitions, with a separate
+    /// plot cache. Include the actual content fingerprint for inactive sheets.
+    pub(crate) fn pane_plot(&self, guid: &str, tool: &LayoutTool) -> Option<Arc<Plot>> {
+        let revision = self.layouts.revision ^ self.sheet_fingerprint(guid).rotate_left(17);
+        if let Some((known, built, plot)) = &*tool.plot.borrow() {
+            if known == guid && *built == revision {
+                return Some(Arc::clone(plot));
+            }
+        }
+        let layout = self.layouts.layout(guid)?;
+        let plot = Arc::new(plot::plot(layout, |viewport| {
+            self.viewport_content(viewport)
+        }));
+        *tool.plot.borrow_mut() = Some((guid.to_owned(), revision, Arc::clone(&plot)));
         Some(plot)
     }
 

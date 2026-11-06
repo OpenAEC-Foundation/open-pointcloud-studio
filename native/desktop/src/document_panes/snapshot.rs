@@ -30,6 +30,7 @@ pub(crate) struct Snapshot {
     pub bounds: Cell<Option<Rectangle>>,
     pub pointer: Cell<Option<[f32; 2]>>,
     pub drawing: Option<DrawingViewTool>,
+    pub layout: Option<crate::layouts::LayoutTool>,
     /// None while this document's PhotoTool is owned by the active Studio.
     pub photos: Option<PhotoTool>,
 }
@@ -37,6 +38,7 @@ impl Snapshot {
     pub fn capture(tab: TabId, studio: &Studio) -> Self {
         let drawing = matches!(tab, TabId::Drawing(_) | TabId::File(_) | TabId::Layout(_))
             .then(|| studio.drawing_view.render_copy());
+        let layout = matches!(tab, TabId::Layout(_)).then(|| studio.layouts.render_copy());
         let mut snapshot = Self {
             tab,
             load_error: None,
@@ -56,6 +58,7 @@ impl Snapshot {
             bounds: Cell::new(None),
             pointer: Cell::new(None),
             drawing,
+            layout,
             photos: None,
         };
         snapshot.capture_camera(studio);
@@ -154,6 +157,9 @@ impl Snapshot {
         if let Some(drawing) = &mut self.drawing {
             drawing.copy_render_from(&studio.drawing_view);
         }
+        if let Some(layout) = &mut self.layout {
+            layout.copy_render_from(&studio.layouts);
+        }
     }
     fn station(&self, studio: &Studio) -> Option<(usize, usize)> {
         let (source, station) = self.active_station.as_ref()?;
@@ -183,6 +189,9 @@ impl Snapshot {
         // that fitted camera back before an input action or snapshot capture.
         if let Some(drawing) = &self.drawing {
             studio.drawing_view.copy_render_from(drawing);
+        }
+        if let Some(layout) = &self.layout {
+            layout.restore_camera_into(&mut studio.layouts);
         }
         let Some(bounds) = self.bounds.get() else {
             return;
@@ -220,6 +229,9 @@ impl Snapshot {
         studio.file_open = false;
         if let Some(drawing) = &self.drawing {
             studio.drawing_view.copy_render_from(drawing);
+        }
+        if let Some(layout) = &self.layout {
+            layout.restore_camera_into(&mut studio.layouts);
         }
     }
     pub fn viewport<'a>(&'a self, studio: &'a Studio, slot: usize, live: u8) -> PointViewport<'a> {
@@ -288,6 +300,13 @@ impl Snapshot {
                 scale,
                 layers,
             } => {
+                if let Some(layout) = &mut self.layout {
+                    layout.camera.set(crate::drawing_view::ViewCamera {
+                        center: *center,
+                        scale: *scale,
+                    });
+                    layout.fit_pending.set(false);
+                }
                 if let Some(drawing) = &mut self.drawing {
                     drawing.keep_view(
                         Some(crate::drawing_view::ViewCamera {
@@ -343,11 +362,19 @@ impl Snapshot {
                 camera: walking(self.walk?),
             },
             TabId::Drawing(_) | TabId::File(_) | TabId::Layout(_) => {
-                let camera = self.drawing.as_ref()?.camera();
+                let camera = self
+                    .layout
+                    .as_ref()
+                    .map(|tool| tool.camera.get())
+                    .unwrap_or(self.drawing.as_ref()?.camera());
                 store::Look::Drawing {
                     center: camera.center,
                     scale: camera.scale,
-                    layers: self.drawing.as_ref()?.layer_switches(),
+                    layers: if self.layout.is_some() {
+                        Vec::new()
+                    } else {
+                        self.drawing.as_ref()?.layer_switches()
+                    },
                 }
             }
         })
@@ -385,6 +412,40 @@ mod tests {
         assert_eq!(view.pan, [12., -4.]);
         snapshot.sync_viewport(&mut studio);
         assert_eq!(studio.pan, [12., -4.]);
+    }
+
+    #[test]
+    fn sheets_store_the_paper_camera_independently_of_the_last_drawing() {
+        use crate::drawing_view::ViewCamera;
+        let mut studio = Studio::default();
+        studio.drawing_view.layout = Some("sheet".into());
+        studio.drawing_view.shown = true;
+        studio.layouts.camera.set(ViewCamera {
+            center: [100., 200.],
+            scale: 2.5,
+        });
+        let mut snapshot = Snapshot::capture(TabId::Layout("sheet".into()), &studio);
+        assert!(matches!(
+            snapshot.stored_look(&studio.photos),
+            Some(store::Look::Drawing {
+                center: [100., 200.],
+                scale: 2.5,
+                ..
+            })
+        ));
+        snapshot.apply_stored(&store::Look::Drawing {
+            center: [300., 400.],
+            scale: 3.,
+            layers: Vec::new(),
+        });
+        snapshot.restore_camera(&mut studio);
+        assert_eq!(
+            studio.layouts.camera.get(),
+            ViewCamera {
+                center: [300., 400.],
+                scale: 3.
+            }
+        );
     }
 
     #[test]

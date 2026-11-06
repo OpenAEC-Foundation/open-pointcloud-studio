@@ -302,7 +302,17 @@ impl Studio {
                     key.and_then(|key| documents.snapshots.get(key).map(|snapshot| (key, snapshot)))
                 {
                     let slot = pane_slots.iter().position(|pane| pane.id == *id).unwrap();
-                    if let Some(drawing) = &snapshot.drawing {
+                    if let (TabId::Layout(guid), Some(layout)) = (&snapshot.tab, &snapshot.layout) {
+                        self.pane_layout_canvas(
+                            guid,
+                            layout,
+                            key,
+                            &snapshot.bounds,
+                            pane_bounds,
+                            documents.active == *key,
+                        )
+                        .unwrap_or_else(|| iced::widget::text("Sheet unavailable").into())
+                    } else if let Some(drawing) = &snapshot.drawing {
                         let sheet =
                             drawing.pane_sheet(self.ui_theme, key, &snapshot.bounds, pane_bounds);
                         match self.pane_notes_layer(
