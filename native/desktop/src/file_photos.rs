@@ -291,6 +291,7 @@ pub(crate) struct ReturnCamera {
     /// The photo station the walking camera stood in, whose panorama comes
     /// back with it.
     station: Option<(usize, usize)>,
+    station_photo: bool,
 }
 
 impl ReturnCamera {
@@ -304,6 +305,7 @@ impl ReturnCamera {
             view_label: studio.view_label,
             walk: studio.walk,
             station: studio.walk_station,
+            station_photo: studio.tabs.active_station_photo.is_some(),
         }
     }
 }
@@ -849,6 +851,7 @@ impl Studio {
             Some(view) => view.back,
             None => ReturnCamera::of(self),
         };
+        self.remember_station_photo_tab();
         self.remember_model_for_photo();
         self.drawing_view.shown = false;
         self.file_open = false;
@@ -918,6 +921,11 @@ impl Studio {
     pub(crate) fn leave_photo(&mut self) -> Option<Task<Message>> {
         self.remember_photo_tab();
         let back = self.photos.view.take()?.back;
+        let station_photo = self
+            .tabs
+            .active_station_photo
+            .clone()
+            .filter(|_| back.station_photo);
         self.photos.close();
         self.leave_walk();
         self.yaw = back.yaw;
@@ -927,6 +935,7 @@ impl Studio {
         self.orbit_point = back.orbit_point;
         self.view_label = back.view_label;
         self.walk = back.walk;
+        self.tabs.active_station_photo = station_photo;
         // The panorama of the station the photo was entered from is shown
         // again.
         let station = match back.station.filter(|_| back.walk.is_some()) {
@@ -2729,9 +2738,8 @@ mod tests {
         assert_eq!((decoded.index, decoded.levels[0].width), (3, 8));
     }
 
-    #[test]
-    fn leaving_a_photo_entered_from_a_station_panorama_shows_that_panorama_again() {
-        let (mut studio, _directory, _source) = studio_with_photos();
+    fn studio_with_station_and_route_photos() -> (Studio, tempfile::TempDir, PathBuf) {
+        let (mut studio, directory, source) = studio_with_photos();
         let mut cloud = (*studio.clouds[0].cloud).clone();
         cloud.scan_poses = vec![pointcloud_core::ScanPose {
             label: "Station 1".into(),
@@ -2751,6 +2759,12 @@ mod tests {
             length: 1,
         }];
         studio.clouds[0].cloud = Arc::new(cloud);
+        (studio, directory, source)
+    }
+
+    #[test]
+    fn leaving_a_photo_entered_from_a_station_panorama_shows_that_panorama_again() {
+        let (mut studio, _directory, source) = studio_with_station_and_route_photos();
         let opened = send(
             &mut studio,
             json!({"command": "open_panorama", "index": 0, "station": 0}),
@@ -2773,9 +2787,62 @@ mod tests {
         assert_eq!(studio.walk_station, Some((0, 0)));
         let status = send(&mut studio, json!({"command": "status"}));
         assert_eq!(status["result"]["walk"]["station"]["label"], "Station 1");
+        assert_eq!(
+            studio.shown_tab(),
+            Some(crate::view_tabs::TabId::StationPhoto(source))
+        );
         // A second time leaves the panorama.
         let _ = send(&mut studio, json!({"command": "close_panorama"}));
         assert!(studio.walk.is_none() && studio.walk_station.is_none());
+    }
+
+    #[test]
+    fn closing_station_before_route_tab_does_not_reopen_the_closed_station() {
+        let (mut studio, _directory, source) = studio_with_station_and_route_photos();
+        let _ = send(
+            &mut studio,
+            json!({"command":"open_panorama", "index":0,"station":0}),
+        );
+        let _ = send(&mut studio, json!({"command":"enter_photo", "index":1}));
+        let station = crate::view_tabs::TabId::StationPhoto(source);
+        let _ = studio.show_tab(&station).unwrap();
+        let _ = studio.close_tab(&station);
+        assert!(
+            studio.photos.view.is_some(),
+            "the route tab follows the closed station tab"
+        );
+        assert!(studio.tabs.active_station_photo.is_none());
+        let _ = send(&mut studio, json!({"command":"close_panorama"}));
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+        assert!(!studio.listed_tabs().contains(&station));
+    }
+
+    #[test]
+    fn entering_station_from_route_photo_clears_overlay_and_preserves_model() {
+        let (mut studio, _directory, source) = studio_with_station_and_route_photos();
+        studio.yaw = 0.65;
+        studio.pitch = 0.3;
+        studio.pan = [5.0, -2.0];
+        let model = (studio.yaw, studio.pitch, studio.pan, studio.walk);
+        assert_eq!(
+            send(&mut studio, json!({"command":"enter_photo", "index":1}))["ok"],
+            true
+        );
+        assert!(studio.photos.view.is_some());
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command":"open_panorama", "index":0,"station":0})
+            )["ok"],
+            true
+        );
+        assert!(studio.photos.view.is_none());
+        assert_eq!(
+            studio.shown_tab(),
+            Some(crate::view_tabs::TabId::StationPhoto(source))
+        );
+        let _ = studio.show_model_tab();
+        assert_eq!((studio.yaw, studio.pitch, studio.pan, studio.walk), model);
     }
 
     #[test]

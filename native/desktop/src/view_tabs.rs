@@ -46,6 +46,8 @@ pub enum TabId {
     Layout(String),
     /// The current photo of an open scan, kept for this session.
     Photo(PathBuf),
+    /// Calibrated station panorama, with an independent walking camera.
+    StationPhoto(PathBuf),
 }
 
 /// How the preferences name the 3D model, and how they start the name of a
@@ -67,7 +69,7 @@ impl TabId {
             Self::View(guid) => Some(format!("{VIEW_KEY}{guid}")),
             Self::Drawing(guid) => Some(format!("{DRAWING_KEY}{guid}")),
             Self::Layout(guid) => Some(format!("{LAYOUT_KEY}{guid}")),
-            Self::File(_) | Self::Photo(_) => None,
+            Self::File(_) | Self::Photo(_) | Self::StationPhoto(_) => None,
         }
     }
 
@@ -95,7 +97,7 @@ impl TabId {
             Self::Drawing(_) => "drawing",
             Self::File(_) => "file",
             Self::Layout(_) => "sheet",
-            Self::Photo(_) => "photo",
+            Self::Photo(_) | Self::StationPhoto(_) => "photo",
         }
     }
 
@@ -113,7 +115,11 @@ impl TabId {
     /// the drawing of this tab.
     fn look_key(&self) -> Option<String> {
         match self {
-            Self::Model | Self::View(_) | Self::Layout(_) | Self::Photo(_) => None,
+            Self::Model
+            | Self::View(_)
+            | Self::Layout(_)
+            | Self::Photo(_)
+            | Self::StationPhoto(_) => None,
             Self::Drawing(guid) => Some(crate::drawing_view::sheet_look_key(guid)),
             Self::File(path) => Some(crate::drawing_view::file_look_key(path.as_deref())),
         }
@@ -315,6 +321,8 @@ pub struct ViewTabs {
     /// The last photo visited on each scan whose photo tab is open.
     pub(crate) photo_indexes: HashMap<PathBuf, usize>,
     pub(crate) photo_looks: HashMap<PathBuf, PhotoTabLook>,
+    pub(crate) active_station_photo: Option<PathBuf>,
+    pub(crate) station_looks: HashMap<PathBuf, (usize, WalkView)>,
     /// The open tabs and the active one as the preferences last got them.
     kept: (Vec<String>, Option<String>),
     /// A tab opened or closed, or the one kept as active let go, since the
@@ -339,6 +347,8 @@ impl ViewTabs {
             model: None,
             photo_indexes: HashMap::new(),
             photo_looks: HashMap::new(),
+            active_station_photo: None,
+            station_looks: HashMap::new(),
             kept: (Vec::new(), None),
             changed: false,
         };
@@ -551,6 +561,11 @@ impl Studio {
             if let Some(view) = &self.photos.view {
                 return Some(TabId::Photo(view.source.clone()));
             }
+            if self.walk.is_some() {
+                if let Some(source) = &self.tabs.active_station_photo {
+                    return Some(TabId::StationPhoto(source.clone()));
+                }
+            }
         }
         Some(match self.shown_row()? {
             ViewRow::Model => TabId::Model,
@@ -589,6 +604,14 @@ impl Studio {
                 .any(|drawing| drawing.guid == *guid),
             TabId::File(path) => self.sheet_place(path.as_deref()).is_some(),
             TabId::Layout(guid) => self.layouts.layout(guid).is_some(),
+            TabId::StationPhoto(source) => self.clouds.iter().any(|entry| {
+                entry.cloud.path == *source
+                    && entry.cloud.scan_images.iter().any(|image| {
+                        image
+                            .station
+                            .is_some_and(|station| station < entry.cloud.scan_poses.len())
+                    })
+            }),
             TabId::Photo(source) => {
                 self.photos
                     .files
@@ -611,6 +634,14 @@ impl Studio {
             TabId::Drawing(guid) => drawings.iter().any(|drawing| drawing.guid == *guid),
             TabId::File(path) => self.sheet_place(path.as_deref()).is_some(),
             TabId::Layout(guid) => self.layouts.layout(guid).is_some(),
+            TabId::StationPhoto(source) => self.clouds.iter().any(|entry| {
+                entry.cloud.path == *source
+                    && entry.cloud.scan_images.iter().any(|image| {
+                        image
+                            .station
+                            .is_some_and(|station| station < entry.cloud.scan_poses.len())
+                    })
+            }),
             TabId::Photo(source) => {
                 self.photos
                     .files
@@ -649,6 +680,20 @@ impl Studio {
                 .layouts
                 .layout(guid)
                 .map_or_else(String::new, crate::layouts::Layout::caption),
+            TabId::StationPhoto(source) => self
+                .tabs
+                .station_looks
+                .get(source)
+                .and_then(|(station, _)| {
+                    self.clouds
+                        .iter()
+                        .find(|entry| entry.cloud.path == *source)
+                        .and_then(|entry| entry.cloud.scan_poses.get(*station))
+                })
+                .map_or_else(
+                    || crate::display_name(source).to_owned(),
+                    |pose| format!("{} · {}", tr("Photo"), pose.label),
+                ),
             TabId::Photo(source) => self
                 .photos
                 .files
@@ -684,7 +729,9 @@ impl Studio {
                 .iter()
                 .find(|drawing| drawing.guid == *guid)
                 .map_or(ViewKind::Plans, |drawing| ViewKind::of(drawing.kind)),
-            TabId::File(_) | TabId::Layout(_) | TabId::Photo(_) => ViewKind::Files,
+            TabId::File(_) | TabId::Layout(_) | TabId::Photo(_) | TabId::StationPhoto(_) => {
+                ViewKind::Files
+            }
         }
     }
 
@@ -693,7 +740,7 @@ impl Studio {
             TabId::Model => ToolIcon::Model,
             TabId::View(_) => ToolIcon::SavedView,
             TabId::Layout(_) => ToolIcon::Sheet,
-            TabId::Photo(_) => ToolIcon::SavedView,
+            TabId::Photo(_) | TabId::StationPhoto(_) => ToolIcon::SavedView,
             _ => self.tab_kind(tab).icon(),
         }
     }
@@ -705,6 +752,14 @@ impl Studio {
     pub(crate) fn show_tab(&mut self, tab: &TabId) -> Result<Task<Message>, String> {
         // A tab chosen by hand wins over the one kept as active.
         self.tabs.drop_pending();
+        self.remember_station_photo_tab();
+        let station = if !matches!(tab, TabId::Photo(_) | TabId::StationPhoto(_) | TabId::Model)
+            && self.tabs.active_station_photo.is_some()
+        {
+            Some(self.show_model_tab())
+        } else {
+            None
+        };
         let leaving_photo = if !matches!(tab, TabId::Photo(_)) {
             self.leave_photo()
         } else {
@@ -745,6 +800,51 @@ impl Studio {
                     .update_drawing_view(crate::drawing_view::DrawingViewAction::ShowSheet(place)))
             }
             TabId::Layout(guid) => self.show_layout(guid),
+            TabId::StationPhoto(source) => {
+                if self.photos.view.is_none()
+                    && self.tabs.active_station_photo.as_ref() == Some(source)
+                {
+                    return Ok(leaving_photo.unwrap_or_else(Task::none));
+                }
+                let (station, walk) = self
+                    .tabs
+                    .station_looks
+                    .get(source)
+                    .copied()
+                    .ok_or_else(|| "That station tab has no selected panorama".to_owned())?;
+                let cloud = self
+                    .clouds
+                    .iter()
+                    .position(|entry| entry.cloud.path == *source)
+                    .ok_or_else(|| "That scan is not open".to_owned())?;
+                let entry = &self.clouds[cloud];
+                let pose = entry
+                    .cloud
+                    .scan_poses
+                    .get(station)
+                    .filter(|_| {
+                        entry
+                            .cloud
+                            .scan_images
+                            .iter()
+                            .any(|image| image.station == Some(station))
+                    })
+                    .ok_or_else(|| "That station panorama is no longer available".to_owned())?;
+                let position = entry.transform.xyz(pose.position);
+                let task = self.update(Message::EnterPanorama(cloud, station));
+                self.walk = Some(walk);
+                if position
+                    .iter()
+                    .zip(walk.eye)
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f64>()
+                    > crate::station_photos::BALL_RADIUS.powi(2)
+                {
+                    self.walk_station = None;
+                    self.panorama_photos = None;
+                }
+                Ok(task)
+            }
             TabId::Photo(source) => {
                 if self
                     .photos
@@ -763,7 +863,10 @@ impl Studio {
             }
         }?;
         Ok(Task::batch(
-            leaving_photo.into_iter().chain(std::iter::once(next)),
+            station
+                .into_iter()
+                .chain(leaving_photo)
+                .chain(std::iter::once(next)),
         ))
     }
 
@@ -772,16 +875,17 @@ impl Studio {
     /// active view lets go, so that the row of the 3D model is highlighted.
     pub(crate) fn show_model_tab(&mut self) -> Task<Message> {
         self.tabs.drop_pending();
+        self.remember_station_photo_tab();
+        let was_station = self.tabs.active_station_photo.is_some();
         let photo = self.leave_photo();
         self.drawing_view.shown = false;
         self.file_open = false;
-        let task =
-            match self.tabs.model.filter(|_| {
-                self.tabs.owner != TabId::Model || self.tabs.shown != Some(TabId::Model)
-            }) {
-                Some(look) => self.put_back_model_look(look),
-                None => Task::none(),
-            };
+        let task = match self.tabs.model.filter(|_| {
+            was_station || self.tabs.owner != TabId::Model || self.tabs.shown != Some(TabId::Model)
+        }) {
+            Some(look) => self.put_back_model_look(look),
+            None => Task::none(),
+        };
         self.deactivate_view();
         self.tabs.owner = TabId::Model;
         self.status = "3D model".into();
@@ -809,6 +913,9 @@ impl Studio {
             self.drawing_view.forget_look(&key);
         }
         let mut tasks = Vec::new();
+        if matches!(tab, TabId::StationPhoto(_)) && shown.as_ref() == Some(tab) {
+            tasks.push(self.show_model_tab());
+        }
         if self.tabs.owner == *tab {
             if let Some(look) = self.tabs.model {
                 tasks.push(self.put_back_model_look(look));
@@ -828,6 +935,9 @@ impl Studio {
         }
         if let TabId::Photo(source) = tab {
             self.tabs.photo_looks.remove(source);
+        }
+        if let TabId::StationPhoto(source) = tab {
+            self.tabs.station_looks.remove(source);
         }
         Task::batch(tasks)
     }
@@ -851,9 +961,36 @@ impl Studio {
         }
     }
 
+    pub(crate) fn remember_station_photo_tab(&mut self) {
+        if self.photos.view.is_some() {
+            return;
+        }
+        if let (Some(source), Some(walk)) = (&self.tabs.active_station_photo, self.walk) {
+            let station = self
+                .walk_station
+                .and_then(|(cloud, station)| {
+                    self.clouds
+                        .get(cloud)
+                        .filter(|entry| entry.cloud.path == *source)
+                        .map(|_| station)
+                })
+                .or_else(|| {
+                    self.tabs
+                        .station_looks
+                        .get(source)
+                        .map(|(station, _)| *station)
+                });
+            if let Some(station) = station {
+                self.tabs
+                    .station_looks
+                    .insert(source.clone(), (station, walk));
+            }
+        }
+    }
+
     /// Capture the exact model camera before a photo replaces the viewport.
     pub(crate) fn remember_model_for_photo(&mut self) {
-        if self.photos.view.is_none() {
+        if self.photos.view.is_none() && self.tabs.active_station_photo.is_none() {
             if self.tabs.owner == TabId::Model {
                 self.tabs.model = Some(self.model_look());
             }
@@ -931,11 +1068,24 @@ impl Studio {
     /// get the tabs when they changed. Answers the work this needs, if any.
     pub(crate) fn settle_tabs(&mut self) -> Option<Task<Message>> {
         let mut tasks = Vec::new();
+        if self
+            .tabs
+            .active_station_photo
+            .as_ref()
+            .is_some_and(|source| !self.clouds.iter().any(|entry| entry.cloud.path == *source))
+        {
+            tasks.push(self.show_model_tab());
+        }
         // A drawing opened from the Project Browser also leaves a photo,
         // although it does not go through `show_tab`.
         if self.drawing_view.shown {
             if let Some(task) = self.leave_photo() {
                 tasks.push(task);
+            }
+            if self.tabs.active_station_photo.is_some() {
+                if let Some(look) = self.tabs.model {
+                    tasks.push(self.put_back_model_look(look));
+                }
             }
         }
         // A saved view that had the scene and was deleted gives the scene
@@ -961,6 +1111,9 @@ impl Studio {
             .collect();
         for tab in gone {
             self.tabs.remove(&tab);
+            if let TabId::StationPhoto(source) = &tab {
+                self.tabs.station_looks.remove(source);
+            }
             if let TabId::Photo(source) = &tab {
                 self.tabs.photo_indexes.remove(source);
                 self.tabs.photo_looks.remove(source);
@@ -989,6 +1142,7 @@ impl Studio {
     /// shows while the scene is its own. Reports whether another tab is
     /// shown than when the tabs last followed.
     fn follow_shown_tab(&mut self) -> bool {
+        self.remember_station_photo_tab();
         let shown = self.shown_tab();
         let moved = shown != self.tabs.shown;
         if moved {
@@ -1004,7 +1158,12 @@ impl Studio {
         if let Some(tab) = shown.filter(TabId::is_3d) {
             self.tabs.owner = tab;
         }
-        if self.tabs.owner == TabId::Model && !matches!(self.tabs.shown, Some(TabId::Photo(_))) {
+        if self.tabs.owner == TabId::Model
+            && !matches!(
+                self.tabs.shown,
+                Some(TabId::Photo(_) | TabId::StationPhoto(_))
+            )
+        {
             self.tabs.model = Some(self.model_look());
         }
         moved
@@ -1157,7 +1316,7 @@ impl Studio {
             });
         let kind = match &tab {
             TabId::Layout(_) => tr("Sheets"),
-            TabId::Photo(_) => tr("Photo"),
+            TabId::Photo(_) | TabId::StationPhoto(_) => tr("Photo"),
             _ => tr(self.tab_kind(&tab).label()),
         };
         let tip = format!("{full}\n{kind}");
@@ -1197,6 +1356,15 @@ impl Studio {
                         entry["guid"] = json!(guid)
                     }
                     TabId::File(path) => entry["path"] = json!(path),
+                    TabId::StationPhoto(path) => {
+                        entry["path"] = json!(path);
+                        entry["photo_type"] = json!("station_panorama");
+                        entry["station_index"] = json!(self
+                            .tabs
+                            .station_looks
+                            .get(path)
+                            .map(|(station, _)| station));
+                    }
                     TabId::Photo(path) => {
                         entry["path"] = json!(path);
                         entry["photo_index"] = json!(self.tabs.photo_indexes.get(path));
