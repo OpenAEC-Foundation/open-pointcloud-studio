@@ -1895,7 +1895,7 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
-| 13 | Unreleased | The status-bar MCP checkbox gates external owner-token access; `/info` and `status.result` include `mcp_enabled`. Extension grants and running jobs remain available. |
+| 13 | Unreleased | The status-bar MCP checkbox gates external owner-token access; `/info` and `status.result` include `mcp_enabled`. Extension grants and running jobs remain available. Status also includes `managed.enabled` and `managed.directory`, the environment defaults of a managed native SuperCloud session. |
 | 12 | 2026.45.1 | Photo editing (`add_panorama`, `edit_photo`, `delete_photo`), scan registration (`registration_setup`, `registration_pair`, `registration_fit`, `registration_refine`, `registration_export`, `registration_matrix`, `registration_set_matrix`, `cancel_registration`), ReCap preparation (`export_recap`), and mixed-format `merge_visible` with optional `keep_stations_photos`. Status includes `registration` and `registration_pending`. |
 | 11 | 2026.44.0 | New commands `texture_mesh`, `cancel_texture_mesh`, `set_photo_compare` and `set_photo_split`. `export_drawing`, `preview_drawing` and `create_drawing` take `straight_lines`, `line_tolerance` and `line_min_length`, and `create_drawing` takes `square`; `status.result.drawing` reports the first three, and the statistics of a complete drawing have `straight_lines`. `status.result` has `texture_export`, and `photos` has `compare_with_3d`, `model_sample`, `model_camera`, `split_ratio` and `split_vertical`; `list_tabs` has tabs of the kind `photo`. `/info` has `api_revision` and `commands`, and answers while commands wait for the window |
 

@@ -248,6 +248,9 @@ fn save_to(path: &Path, language: Language) {
 
 /// The language chosen in an earlier session; the system's otherwise.
 pub fn load() -> Language {
+    if let Some(language) = crate::managed::language() {
+        return language;
+    }
     language_path()
         .and_then(|path| load_from(&path))
         .unwrap_or(Language::Auto)

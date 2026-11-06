@@ -40,6 +40,7 @@ mod locks;
 mod lod_pace;
 #[cfg(target_os = "macos")]
 mod macos_open;
+mod managed;
 mod mcp;
 mod measure;
 mod memory_usage;
@@ -679,6 +680,13 @@ fn main() -> iced::Result {
         println!("{text}");
         return Ok(());
     }
+    if first.as_deref() == Some(OsStr::new("--mcp-http")) {
+        if args.next().is_some() {
+            eprintln!("Usage: open-pointcloud-studio --mcp-http");
+            std::process::exit(2);
+        }
+        std::process::exit(mcp::run_http());
+    }
     if first.as_deref() == Some(OsStr::new("--mcp")) {
         if args.next().is_some() {
             eprintln!("Usage: open-pointcloud-studio --mcp");
@@ -1031,6 +1039,10 @@ fn main() -> iced::Result {
                 first.into_iter().chain(args).map(PathBuf::from).collect(),
             )
         };
+    if let Err(error) = managed::validate() {
+        eprintln!("Managed configuration: {error}");
+        std::process::exit(2);
+    }
     let api = match native_api::start(requested_port) {
         Ok(api) => Some(api),
         Err(error) => {
@@ -1176,7 +1188,8 @@ fn main() -> iced::Result {
                 iced::Subscription::none()
             };
             let memory = iced::time::every(Duration::from_secs(2)).map(|_| Message::MemoryTick);
-            iced::Subscription::batch([keyboard, api, opened, walking, clock, memory])
+            let shutdown = managed::shutdown().map(|()| Message::Exit);
+            iced::Subscription::batch([keyboard, api, opened, walking, clock, memory, shutdown])
         })
         .default_font(fonts::REGULAR)
         .theme(|studio: &Studio| studio.ui_theme.iced())
@@ -4017,6 +4030,7 @@ impl Studio {
                 answer.0["result"]["detail_pending"] = Value::Bool(self.detail_pending);
                 answer.0["result"]["index"] = self.index_value();
                 answer.0["result"]["language"] = Value::from(i18n::choice().key());
+                answer.0["result"]["managed"] = managed::summary();
                 answer.0["result"]["ribbon_tab"] = Value::from("start");
                 answer.0["result"]["view_controls_open"] = Value::Bool(self.view_controls_open);
                 answer.0["result"]["bag3d"] =
@@ -6370,7 +6384,7 @@ impl Studio {
                 self.status = "Choose where to save the merged visible scans…".into();
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("E57 scene with stations and photos", &["e57"])
                             .add_filter("LAZ point cloud", &["laz"])
                             .add_filter("LAS point cloud", &["las"])
@@ -6595,7 +6609,7 @@ impl Studio {
                     async {
                         let mut extensions = project_open::SCAN_EXTENSIONS.to_vec();
                         extensions.push(project_open::PROJECT_EXTENSION);
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("Point clouds and scan projects", &extensions)
                             .pick_files()
                             .await
@@ -6612,7 +6626,7 @@ impl Studio {
             Message::OpenFolder => {
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .set_title("Open scan folder")
                             .pick_folder()
                             .await
@@ -7061,7 +7075,7 @@ impl Studio {
             Message::ExportRecap => {
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("E57 for Autodesk ReCap", &["e57"])
                             .set_file_name("recap-transfer.e57")
                             .save_file()
@@ -7133,7 +7147,7 @@ impl Studio {
                     self.status = "Choose where to export the full-resolution section…".into();
                     return Task::perform(
                         async move {
-                            rfd::AsyncFileDialog::new()
+                            crate::managed::file_dialog()
                                 .add_filter(format.to_string(), &[format.extension()])
                                 .set_file_name(suggested)
                                 .save_file()
@@ -7255,7 +7269,7 @@ impl Studio {
                     .into();
                     return Task::perform(
                         async move {
-                            rfd::AsyncFileDialog::new()
+                            crate::managed::file_dialog()
                                 .add_filter("OBJ mesh", &["obj"])
                                 .set_file_name(suggested)
                                 .save_file()
@@ -12134,7 +12148,7 @@ fn save_task(
 ) -> Task<Message> {
     Task::perform(
         async move {
-            let chosen = rfd::AsyncFileDialog::new()
+            let chosen = crate::managed::file_dialog()
                 .add_filter(format.to_string(), &[format.extension()])
                 .set_file_name(suggested)
                 .save_file()

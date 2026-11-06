@@ -1844,7 +1844,7 @@ impl Studio {
                 self.file_open = false;
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .set_title(tr("Open a drawing"))
                             .add_filter(tr("Drawings (DXF, DWG)"), &["dxf", "dwg"])
                             .pick_file()

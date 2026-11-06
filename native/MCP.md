@@ -451,3 +451,9 @@ reads the transform and report; `registration_set_matrix` reuses a saved
 transform and `cancel_registration` cancels work. `export_recap` prepares an
 E57 and ReCap import instructions. See [API revision 12](API.md#photo-editing-and-scan-registration-revision-12)
 for fields and units.
+
+## Managed native HTTP transport
+
+`--mcp-http` uses the desktop server's existing tool table, schemas and operations. It provides stateful Streamable HTTP on `POST /mcp`; JSON replies are supported, and `GET /mcp` returns 405 because no unsolicited SSE stream is provided. Initialize first, retain the returned `Mcp-Session-Id`, and end the session with DELETE. HTTP names have the `pointcloud_` prefix plus the `pointcloud_stand`/`pointcloud_opslaan` aliases. Stdio names and behavior are unchanged.
+
+Configure `OPENAEC_MCP_POORT`, `OPENAEC_MCP_GEHEIM` and optionally `OPENAEC_MCP_ADRES`; see the repository README for authentication, internal-network deployment, managed window settings and the shared `XDG_CONFIG_HOME`. Sessions expire after 30 idle minutes and are limited to 16. At most eight HTTP tool calls are admitted at once, and a session serializes tool calls. Cancellation notifications can be handled while a tool waits. Request bodies are limited to 1 MiB. This desktop transport is distinct from the smaller headless cloud API's MCP endpoint.

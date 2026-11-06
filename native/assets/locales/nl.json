@@ -1124,5 +1124,6 @@
   "Reply email (optional)": "E-mailadres voor antwoord (optioneel)",
   "Your feedback was received privately. Thank you!": "Je feedback is privé ontvangen. Bedankt!",
   "Sending feedback…": "Feedback versturen…",
-  "Send feedback": "Feedback versturen"
+  "Send feedback": "Feedback versturen",
+  "Serves the desktop MCP tools over authenticated HTTP using OPENAEC_MCP_POORT and OPENAEC_MCP_GEHEIM.": "Biedt de desktop-MCP-gereedschappen via HTTP aan met OPENAEC_MCP_POORT en OPENAEC_MCP_GEHEIM."
 }

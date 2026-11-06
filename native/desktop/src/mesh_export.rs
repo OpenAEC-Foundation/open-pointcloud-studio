@@ -383,7 +383,7 @@ impl Studio {
         self.status = "Choose a new name for the textured OBJ…".into();
         Task::perform(
             async move {
-                rfd::AsyncFileDialog::new()
+                crate::managed::file_dialog()
                     .add_filter("Textured OBJ", &["obj"])
                     .set_file_name(format!("{stem}-textured.obj"))
                     .save_file()
@@ -640,7 +640,7 @@ impl Studio {
             async move {
                 FORMATS
                     .iter()
-                    .fold(rfd::AsyncFileDialog::new(), |dialog, (format, name)| {
+                    .fold(crate::managed::file_dialog(), |dialog, (format, name)| {
                         dialog.add_filter(*name, &[format.extension()])
                     })
                     .set_file_name(suggestion)

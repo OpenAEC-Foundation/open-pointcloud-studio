@@ -508,7 +508,8 @@ impl Studio {
                 self.cad_viewer.refresh();
             }
             CadAction::Browse => {
-                let mut dialog = rfd::AsyncFileDialog::new().set_title(tr("Choose the CAD viewer"));
+                let mut dialog =
+                    crate::managed::file_dialog().set_title(tr("Choose the CAD viewer"));
                 if cfg!(windows) {
                     dialog = dialog.add_filter(tr("Programs"), &["exe"]);
                 }
