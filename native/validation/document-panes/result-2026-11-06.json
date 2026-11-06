@@ -11,7 +11,7 @@
     },
     "operation": "texture_mesh",
     "pages": 1,
-    "path": "/tmp/opcs-pane-final-proof/panes/photographic.obj",
+    "path": "/tmp/opcs-initial-strip-hover-final-proof/panes/photographic.obj",
     "preview_error": null,
     "resolution_limited": 0,
     "state": "complete",
@@ -35,53 +35,29 @@
   ],
   "source_photo_unchanged": true,
   "document_panes": {
-    "active_document": "{\"kind\":\"photo\",\"document\":\"/tmp/opcs-pane-final-proof/panes/measured.obj\"}",
-    "documents": [
-      {
-        "error": null,
-        "key": "{\"kind\":\"photo\",\"document\":\"/tmp/opcs-pane-final-proof/panes/measured.obj\"}",
-        "station_panorama_ready": false
-      },
-      {
-        "error": null,
-        "key": "model",
-        "station_panorama_ready": false
-      }
-    ],
-    "enabled": true,
+    "active_document": "{\"kind\":\"photo\",\"document\":\"/tmp/opcs-initial-strip-hover-final-proof/panes/measured.obj\"}",
+    "enabled": false,
     "ok": true,
+    "persistence": {
+      "error": null,
+      "restoring": false
+    },
     "workspace": {
-      "active_pane": 2,
-      "next_id": 3,
+      "active_pane": 1,
+      "next_id": 2,
       "windows": [
         {
           "id": 0,
           "placement": null,
           "root": {
-            "axis": "vertical",
-            "first": {
-              "kind": "pane",
-              "pane": {
-                "active": "model",
-                "id": 1,
-                "linked": false,
-                "tabs": [
-                  "model"
-                ]
-              }
-            },
-            "kind": "split",
-            "ratio": 0.5,
-            "second": {
-              "kind": "pane",
-              "pane": {
-                "active": "{\"kind\":\"photo\",\"document\":\"/tmp/opcs-pane-final-proof/panes/measured.obj\"}",
-                "id": 2,
-                "linked": false,
-                "tabs": [
-                  "{\"kind\":\"photo\",\"document\":\"/tmp/opcs-pane-final-proof/panes/measured.obj\"}"
-                ]
-              }
+            "kind": "pane",
+            "pane": {
+              "active": "model",
+              "id": 1,
+              "linked": false,
+              "tabs": [
+                "model"
+              ]
             }
           }
         }
@@ -89,6 +65,7 @@
     }
   },
   "native_tab_drag": {
+    "initial_strip_split": true,
     "merged_into_pane": true,
     "inactive_photo_dragged_to_edge": true
   },

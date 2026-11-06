@@ -179,6 +179,11 @@ impl Snapshot {
         ]
     }
     pub fn sync_viewport(&self, studio: &mut Studio) {
+        // Sheet drawing performs first-fit through interior mutability. Carry
+        // that fitted camera back before an input action or snapshot capture.
+        if let Some(drawing) = &self.drawing {
+            studio.drawing_view.copy_render_from(drawing);
+        }
         let Some(bounds) = self.bounds.get() else {
             return;
         };
@@ -380,6 +385,28 @@ mod tests {
         assert_eq!(view.pan, [12., -4.]);
         snapshot.sync_viewport(&mut studio);
         assert_eq!(studio.pan, [12., -4.]);
+    }
+
+    #[test]
+    fn fitted_drawing_camera_reaches_input_owner_before_capture() {
+        use crate::drawing_view::ViewCamera;
+        let mut studio = Studio::default();
+        let mut snapshot = Snapshot::capture(TabId::Drawing("plan".into()), &studio);
+        let fitted = ViewCamera {
+            center: [320., -75.],
+            scale: 2.5,
+        };
+        snapshot
+            .drawing
+            .as_mut()
+            .unwrap()
+            .keep_view(Some(fitted), &[]);
+        assert_ne!(studio.drawing_view.camera(), fitted);
+        // No GPU or bounds callback is needed to keep a first-fit camera.
+        snapshot.sync_viewport(&mut studio);
+        assert_eq!(studio.drawing_view.camera(), fitted);
+        snapshot.capture_camera(&studio);
+        assert_eq!(snapshot.drawing.as_ref().unwrap().camera(), fitted);
     }
 
     #[test]

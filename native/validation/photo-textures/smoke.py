@@ -140,14 +140,15 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                 api('enter_photo', index=0)
                 if args.panes_probe:
                     api('set_photo_compare', enabled=False)
-                    panes=api('split_pane', side='right')
-                    assert panes['enabled'], panes
+                    panes=api('list_panes') if args.pointer_probe else api('split_pane', side='right')
+                    assert bool(panes['enabled']) != bool(args.pointer_probe), panes
                     report['document_panes']=panes
                     if args.pointer_probe:
                         # This helper targets only this isolated compositor's
                         # WAYLAND_DISPLAY; the user's desktop is never selected.
                         subprocess.run(['wlrctl','toplevel','maximize','state:active'],check=True)
-                        time.sleep(.3)
+                        time.sleep(1)
+                        api('status')
                         api('screenshot',path=str(output/'drag-before.png'),base64=False,max_edge=8192,window=True)
                         width,height=Image.open(output/'drag-before.png').size
                         outputs=subprocess.check_output(['wlrctl','output','list'],text=True)
@@ -162,8 +163,18 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                         center_y=int((height+header)/2)
                         def drag(start,end):
                             subprocess.run([str(args.pointer_probe),'move',str(start[0]),str(start[1]+offset_y),str(output_width),str(output_height),
-                                'down','move',str(end[0]),str(end[1]+offset_y),str(output_width),str(output_height),'wait','300','up'],check=True)
+                                'down','wait','300','move',str(end[0]),str(end[1]+offset_y),str(output_width),str(output_height),'wait','300','up'],check=True)
                             time.sleep(.3)
+                        # Split directly from the original shared tab strip;
+                        # no API split or enable action precedes this press.
+                        drag((135,header),(width-panel-8,center_y))
+                        initial=api('list_panes')
+                        api('screenshot',path=str(output/'drag-initial-strip.png'),base64=False,max_edge=8192,window=True)
+                        assert initial['enabled'], initial
+                        root=initial['workspace']['windows'][0]['root']
+                        assert root['kind']=='split', initial
+                        assert root['first']['pane']['tabs']==['model'], initial
+                        assert root['second']['pane']['active']!='model', initial
                         drag((int(width/2)+40,header),(panel+int((width-2*panel)/4),center_y))
                         merged=api('list_panes')
                         api('screenshot',path=str(output/'drag-merged.png'),base64=False,max_edge=8192,window=True)
@@ -177,7 +188,7 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                         assert root['kind']=='split', split
                         assert root['first']['pane']['tabs']==['model'], split
                         assert root['second']['pane']['active']!='model', split
-                        report['native_tab_drag']={'merged_into_pane':True,'inactive_photo_dragged_to_edge':True}
+                        report['native_tab_drag']={'initial_strip_split':True,'merged_into_pane':True,'inactive_photo_dragged_to_edge':True}
 
                 else:
                     api('set_photo_compare', enabled=True)

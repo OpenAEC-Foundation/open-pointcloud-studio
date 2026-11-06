@@ -15,6 +15,7 @@ import numpy as np
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('binary',type=Path)
+parser.add_argument('--drawings',action='store_true',help='Include independent plan/elevation panes and annotations')
 parser.add_argument('--station-source',type=Path,help='Optional real E57 with station 0 photographs')
 parser.add_argument('--output',type=Path,required=True)
 args=parser.parse_args()
@@ -70,6 +71,25 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
                 raise
         log.close()
         assert process.returncode==0, process.returncode
+    def wait_job(api, reply):
+        deadline=time.monotonic()+90
+        while True:
+            value=api('job',id=reply['job_id'])
+            value=value.get('result') or value.get('job') or value
+            if value.get('state')=='complete':
+                return value
+            assert value.get('state') not in ('failed','cancelled'), value
+            assert time.monotonic()<deadline, value
+            time.sleep(.1)
+    def interiors(path):
+        pixels=np.asarray(Image.open(path).convert('RGB')).astype(np.int16)
+        height,width=pixels.shape[:2]
+        left,right=240,width-240
+        top,bottom=198,height-30
+        mid_x,mid_y=(left+right)//2,(top+bottom)//2
+        rectangles={'model':(left,top,mid_x,mid_y),'photo':(mid_x,top,right,mid_y),
+                    'plan':(left,mid_y,mid_x,bottom),'elevation':(mid_x,mid_y,right,bottom)}
+        return {name:pixels[y1+20:y2-20,x1+20:x2-20] for name,(x1,y1,x2,y2) in rectangles.items()}
     def wait_photo(api):
         deadline=time.monotonic()+90
         while True:
@@ -93,6 +113,13 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         if not args.station_source:
             api('add_panorama',layer=0,path=str(photo),position=[0,0,2],name='Persistent panorama')
         api('set_camera',yaw=.4,pitch=.5,zoom=.9,pan=[18,-6])
+        if args.drawings:
+            assert not args.station_source, 'The 2 x 2 probe uses the measured XYZ fixture'
+            wait_job(api,api('create_drawing',kind='plan',height=.45,thickness=.2,sample_percent=100,name='Restart plan'))
+            api('split_pane',side='below')
+            wait_job(api,api('create_drawing',kind='elevation',side='front',sample_percent=100,name='Restart elevation'))
+            api('split_pane',side='right')
+            api('show_tab',index=0)
         if args.station_source:
             api('open_panorama',index=0,station=0)
         else:
@@ -103,11 +130,25 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         api('split_pane',side='right')
         api('show_tab',index=0)
         wait_photo(api)
+        if args.drawings:
+            api('show_tab',name='Restart plan')
+            api('set_drawing_layer',layer='OPS-FRAME',visible=False)
+            api('show_tab',index=0)
+        if args.drawings:
+            # Rendering settles each drawing's first-fit camera before comparing.
+            api('screenshot',path=str(output/'without-notes.png'),base64=False,max_edge=1200,window=True)
+            for name in ('Restart plan','Restart elevation'):
+                api('annotate_drawing',name=name,kind='text',at=[100,450],text=name,height=.5)
+            api('screenshot',path=str(output/'with-notes.png'),base64=False,max_edge=1200,window=True)
+            bare,marked=interiors(output/'without-notes.png'),interiors(output/'with-notes.png')
+            annotation_pixels={name:int(np.count_nonzero(np.any(np.abs(bare[name]-marked[name])>10,axis=2))) for name in ('plan','elevation')}
+            assert all(count>0 for count in annotation_pixels.values()), annotation_pixels
         api('screenshot',path=str(output/'before.png'),base64=False,max_edge=1200,window=True)
         model=api('status')['result']['camera']
         before_panes=api('list_panes')
+        drawing_looks={doc['key']:doc['look'] for doc in before_panes['documents'] if doc['look'] and doc['look']['kind']=='drawing'} if args.drawings else {}
         model_look=next(document['look']['camera'] for document in before_panes['documents'] if document['key']=='model')
-        api('show_tab',index=1)
+        api('show_tab',index=next(tab['index'] for tab in api('list_tabs')['tabs'] if tab['kind']=='photo'))
         photo_state=api('status')['result']
         walk=photo_state['walk']
         blend=photo_state['photos']['blend']
@@ -137,6 +178,12 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         restored_look=next(document['look']['camera'] for document in restored_panes['documents'] if document['key']=='model')
         (output/'camera-comparison.json').write_text(json.dumps({'before':model,'after':restored_camera,
             'before_look':model_look,'after_look':restored_look},indent=2)+'\n')
+        if args.drawings:
+            restored_drawings={doc['key']:doc['look'] for doc in restored_panes['documents'] if doc['key'] in drawing_looks}
+            assert len(drawing_looks)==2, drawing_looks
+            assert any(['OPS-FRAME',False] in look['layers'] for look in drawing_looks.values()), drawing_looks
+            assert any(['OPS-FRAME',True] in look['layers'] for look in drawing_looks.values()), drawing_looks
+            assert restored_drawings==drawing_looks, (restored_drawings,drawing_looks)
         for key in ('yaw','pitch','zoom','orbit_point','view'):
             assert restored_camera[key]==model[key], (restored_camera,model)
         for axis in (0,1):
@@ -144,7 +191,7 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
             after=restored_look['pan'][axis]/restored_look['reference_size'][axis]
             assert abs(before-after)<1e-6, (axis,before,after)
 
-        api('show_tab',index=1)
+        api('show_tab',index=next(tab['index'] for tab in api('list_tabs')['tabs'] if tab['kind']=='photo'))
         photo_state=api('status')['result']
         reopened=photo_state['walk']
         if not args.station_source:
@@ -161,11 +208,18 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         for name,columns in [('model',(.2,.49)),('photo',(.51,.79))]:
             region=(slice(int(height*.45),int(height*.9)),slice(int(width*columns[0]),int(width*columns[1])))
             counts[name]=int(np.count_nonzero(np.any(np.abs(before_pixels[region]-after_pixels[region])>10,axis=2)))
-        assert counts=={'model':0,'photo':0}, counts
+        if args.drawings:
+            before_regions,after_regions=interiors(output/'before.png'),interiors(output/'after.png')
+            counts={name:int(np.count_nonzero(np.any(np.abs(before_regions[name]-after_regions[name])>10,axis=2))) for name in before_regions}
+            assert all(count==0 for count in counts.values()), counts
+        else:
+            assert counts=={'model':0,'photo':0}, counts
         assert hashlib.sha256(source.read_bytes()).hexdigest()==source_hash
         result={'workspace_restored':True,'sources_reopened':True,'model_camera_restored':True,
                 'photo_camera_restored':True,
                 'station_source':bool(args.station_source),'render_changed_pixels':counts,'source_sha256':source_hash,'source_unchanged':True}
+        if args.drawings:
+            result.update(drawing_cameras_and_layers_restored=True,annotations_restored=True,annotation_changed_pixels=annotation_pixels,four_panes_restored=True)
         if not args.station_source:
             result['photo_blend_restored']=True
         (output/'result.json').write_text(json.dumps(result,indent=2)+'\n')

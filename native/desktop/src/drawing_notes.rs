@@ -1341,6 +1341,7 @@ pub(crate) fn note_input_id() -> text_input::Id {
 /// The layer of the Drawing view that draws the annotations of the drawing
 /// shown and takes the clicks of the annotation tools.
 pub(crate) struct NotesLayer<'a> {
+    pub interactive: bool,
     pub tool: &'a NoteTool,
     pub scene: &'a Arc<DrawScene>,
     pub shown_layers: Vec<bool>,
@@ -1518,6 +1519,9 @@ impl canvas::Program<Message> for NotesLayer<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (event::Status, Option<Message>) {
+        if !self.interactive {
+            return (event::Status::Ignored, None);
+        }
         let size = bounds.size();
         let notes = |action| Some(Message::Notes(action));
         let placing = self.tool.kind.is_some() && self.tool.typing.is_none();
@@ -1626,7 +1630,7 @@ impl canvas::Program<Message> for NotesLayer<'_> {
         };
         let ink = crate::drawing_view::ink([0, 0, 0]);
         for note in self.notes {
-            let selected = self.tool.selected.as_deref() == Some(note.id());
+            let selected = self.interactive && self.tool.selected.as_deref() == Some(note.id());
             let mut shown = note.clone();
             if let (true, Some((_, from, _)), Some(to)) = (selected, &state.held, state.to) {
                 let zero = self.frame.to_world([0.0, 0.0]);
@@ -1648,7 +1652,7 @@ impl canvas::Program<Message> for NotesLayer<'_> {
         }
         // What is being placed: the points clicked, and the annotation as it
         // would be with the pointer as its next point.
-        if let Some(kind) = self.tool.kind {
+        if let Some(kind) = self.tool.kind.filter(|_| self.interactive) {
             let pointer = cursor
                 .position_in(bounds)
                 .map(|at| self.picked_at(at, size));
@@ -1718,7 +1722,7 @@ impl canvas::Program<Message> for NotesLayer<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if !cursor.is_over(bounds) {
+        if !self.interactive || !cursor.is_over(bounds) {
             return mouse::Interaction::None;
         }
         if state.to.is_some() {
@@ -1773,6 +1777,7 @@ impl Studio {
             .collect();
         Some(
             Canvas::new(NotesLayer {
+                interactive: true,
                 tool: &self.notes,
                 scene,
                 shown_layers,
@@ -1781,6 +1786,44 @@ impl Studio {
                 factor: scene.units.factor(),
                 scale: drawing_scale(definition),
                 camera: self.drawing_view.camera(),
+            })
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
+    }
+
+    /// Render this document's annotations with its own scene and camera, even
+    /// while another drawing owns the tools in Properties.
+    pub(crate) fn pane_notes_layer<'a>(
+        &'a self,
+        drawing: &'a crate::drawing_view::DrawingViewTool,
+        key: &'a str,
+        bounds: &'a std::cell::Cell<Option<Rectangle>>,
+        pane_bounds: &'a std::cell::Cell<Option<Rectangle>>,
+        interactive: bool,
+    ) -> Option<Element<'a, Message>> {
+        let definition = self.definition(drawing.shown_guid()?)?;
+        let scene = drawing.shared_scene()?;
+        let frame = drawing_frame(definition)?;
+        Some(
+            Canvas::new(crate::document_panes::widget::Scoped {
+                inner: NotesLayer {
+                    interactive,
+                    tool: &self.notes,
+                    scene,
+                    shown_layers: (0..scene.layers.len())
+                        .map(|i| drawing.layer_shown(i))
+                        .collect(),
+                    notes: &definition.annotations,
+                    frame,
+                    factor: scene.units.factor(),
+                    scale: drawing_scale(definition),
+                    camera: drawing.camera(),
+                },
+                key,
+                bounds,
+                pane_bounds,
             })
             .width(Fill)
             .height(Fill)
@@ -2786,6 +2829,7 @@ mod tests {
             camera: ViewCamera,
         ) -> NotesLayer<'a> {
             NotesLayer {
+                interactive: true,
                 tool,
                 scene,
                 shown_layers: vec![true],
@@ -2803,6 +2847,15 @@ mod tests {
             ..NoteTool::default()
         };
         let mut state = NotesState::default();
+        let mut inactive = layer(&tool, &scene, &definition, camera);
+        inactive.interactive = false;
+        let (status, message) = inactive.update(&mut state, press.clone(), bounds, at(10., 10.));
+        assert_eq!(status, event::Status::Ignored);
+        assert!(message.is_none());
+        assert_eq!(
+            inactive.mouse_interaction(&state, bounds, at(10., 10.)),
+            mouse::Interaction::None
+        );
         let corner = camera.to_screen([1000.0, 1000.0], bounds.size());
         let (status, message) = layer(&tool, &scene, &definition, camera).update(
             &mut state,

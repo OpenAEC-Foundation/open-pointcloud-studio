@@ -14,6 +14,7 @@ use layout::{Node, Side};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Action {
+    HoverTab,
     SplitCurrent(Side),
     Stored(Result<(), String>),
     SplitDocument(String, Side),
@@ -70,6 +71,9 @@ fn split_path(node: &pane_grid::Node, split: pane_grid::Split, path: &mut Vec<bo
 
 impl Studio {
     pub(crate) fn update_documents(&mut self, action: Action) -> Task<Message> {
+        if matches!(action, Action::HoverTab) {
+            return Task::none();
+        }
         if let Action::Stored(result) = action {
             self.document_persistence.saved(result);
             if let Some(error) = &self.document_persistence.error {
@@ -116,7 +120,7 @@ impl Studio {
         }
         let result = (|| -> Result<Task<Message>, String> {
             match action {
-                Action::Stored(_) => unreachable!("handled above"),
+                Action::HoverTab | Action::Stored(_) => unreachable!("handled above"),
                 Action::Input(_, _) => unreachable!("scoped input is handled above"),
                 Action::Focus(pane) => {
                     let key = documents
@@ -299,7 +303,18 @@ impl Studio {
                 {
                     let slot = pane_slots.iter().position(|pane| pane.id == *id).unwrap();
                     if let Some(drawing) = &snapshot.drawing {
-                        drawing.pane_sheet(self.ui_theme, key, &snapshot.bounds, pane_bounds)
+                        let sheet =
+                            drawing.pane_sheet(self.ui_theme, key, &snapshot.bounds, pane_bounds);
+                        match self.pane_notes_layer(
+                            drawing,
+                            key,
+                            &snapshot.bounds,
+                            pane_bounds,
+                            documents.active == *key,
+                        ) {
+                            Some(notes) => iced::widget::stack![sheet, notes].into(),
+                            None => sheet,
+                        }
                     } else {
                         let viewport = snapshot.viewport(self, slot, live);
                         iced::widget::stack![

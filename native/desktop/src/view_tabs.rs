@@ -1360,7 +1360,15 @@ impl Studio {
         let mut tabs = row![].spacing(1).align_y(iced::Alignment::End);
         for ((tab, (full, _)), short) in listed.iter().zip(names).zip(fitted) {
             let active = shown.as_ref() == Some(tab);
-            tabs = tabs.push(self.tab_button(tab.clone(), full, short, active, false));
+            // A press owns the document before the pointer leaves the strip,
+            // so the very first drag can split a pane or tear off a window.
+            tabs = tabs.push(self.tab_button(
+                tab.clone(),
+                full,
+                short,
+                active,
+                tab.document_key().is_some(),
+            ));
         }
         // The bar under the tabs stays 3 pixels, so that it does not cover
         // them.
@@ -1372,11 +1380,11 @@ impl Studio {
             .width(Fill);
         let split = button(text("▥").size(14))
             .style(ui_style::tool)
-            .on_press(Message::Documents(
+            .on_press_maybe((listed.len() > 1).then_some(Message::Documents(
                 crate::document_panes::Action::SplitCurrent(
                     crate::document_panes::layout::Side::Right,
                 ),
-            ))
+            )))
             .padding([3, 8]);
         let line = row![strip, split].align_y(iced::Alignment::End);
         openaec_ui::frame::document_bar(self.ui_theme.shared(), line.into())
@@ -1444,6 +1452,9 @@ impl Studio {
         let tip = format!("{full}\n{kind}");
         let mut area = mouse_area(body);
         if focus_on_press {
+            // A widget-originated hover update settles the tooltip/scrollable
+            // layout before a press begins a drag from the shared strip.
+            area = area.on_enter(Message::Documents(crate::document_panes::Action::HoverTab));
             if let Some(key) = tab.document_key() {
                 area = area.on_press(Message::Documents(
                     crate::document_panes::Action::BeginDrag(key),

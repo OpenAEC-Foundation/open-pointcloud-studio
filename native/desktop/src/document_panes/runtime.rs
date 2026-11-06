@@ -197,7 +197,11 @@ impl Runtime {
     }
     pub fn capture_active(&mut self, studio: &Studio) {
         if let Some(snapshot) = self.snapshots.get_mut(&self.active) {
-            snapshot.capture_camera(studio);
+            // An asynchronous drawing open can already have changed the root
+            // tool while the previous document still owns the runtime focus.
+            if studio.shown_tab().as_ref() == Some(&snapshot.tab) {
+                snapshot.capture_camera(studio);
+            }
         }
     }
     pub fn observe_current(&mut self, studio: &mut Studio) -> Result<(), String> {
@@ -451,5 +455,29 @@ impl Runtime {
         let task = studio.update_photos(action.clone());
         snapshot.photos = Some(std::mem::replace(&mut studio.photos, current));
         Some(task)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn an_inflight_drawing_open_cannot_capture_the_previous_document_camera() {
+        let mut studio = Studio {
+            yaw: 0.4,
+            ..Studio::default()
+        };
+        let mut runtime = Runtime::new(&studio);
+        studio.drawing_view.shown = true;
+        studio.yaw = 1.2;
+        assert_ne!(studio.shown_tab(), Some(TabId::Model));
+        runtime.capture_active(&studio);
+        let super::super::store::Look::Scene { camera } = runtime.snapshots["model"]
+            .stored_look(&studio.photos)
+            .unwrap()
+        else {
+            panic!("model camera");
+        };
+        assert_eq!(camera.yaw, 0.4);
     }
 }

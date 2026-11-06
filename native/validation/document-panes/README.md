@@ -48,8 +48,7 @@ and requires Pillow and NumPy.
 
 Satellite placements currently have no verified platform monitor identifier,
 so startup safely docks their documents into the main window. Monitor-aware
-placement, linked panes, initial strip drag activation, the full 2 × 2 CAD and
-annotation restart case, and complete cross-window dragging remain acceptance
+placement, linked panes and complete cross-window dragging remain acceptance
 work for issue #16.
 
 The recorded 2026-11-06 run passed 785 native tests (9 explicitly ignored),
@@ -66,3 +65,23 @@ workspace build and all-target Clippy. Separate fresh-process runs restored a
 synthetic route panorama and the real BLK2GO station. Both runs reported zero
 changed model/photo interior pixels, retained the source SHA-256 and reopened
 the saved pane tree. The route case also retained its 37% photo blend.
+
+The four-pane follow-up can be reproduced with `restart.py BINARY --output
+DIRECTORY --drawings`. It creates a model/route-photo/plan/elevation grid,
+hides the plan frame while retaining the elevation frame, adds a text annotation
+to each drawing while the model is active, and restarts the process. The recorded
+run restored both drawing cameras and distinct layer switches, annotations,
+photo camera/blend and the full pane tree. Every compared pane interior had zero
+changed pixels; adding the annotations changed 1,673 plan pixels and 657 elevation
+pixels. `four-panes.png` contains only the synthetic fixture.
+
+The CAD follow-up also keeps first-fit drawing cameras when input returns to the
+root tool and refuses to capture a previous document's camera during an
+asynchronous drawing open. Without that identity check, reopening a drawing after
+a photo could overwrite the photo's restored walk camera.
+
+The initial shared document strip now starts the same document drag on a press,
+without a prior split-button or API action. The pointer probe checks this first,
+then merges the photo into the model pane and drags that inactive photo back to
+an edge. A widget hover update settles the tooltip/scrollable layout before the
+press; a single-document strip disables the split button.

@@ -6416,7 +6416,9 @@ impl Studio {
         if self.update_depth == 0 {
             if let Some(mut documents) = self.documents.take() {
                 if let Some(snapshot) = documents.snapshots.get(&documents.active) {
-                    snapshot.sync_viewport(self);
+                    if self.shown_tab().as_ref() == Some(&snapshot.tab) {
+                        snapshot.sync_viewport(self);
+                    }
                 }
                 documents.capture_active(self);
                 if let Message::PanoramaReady(source, station, result) = &message {
