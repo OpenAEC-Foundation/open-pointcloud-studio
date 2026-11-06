@@ -6,6 +6,8 @@ pub(crate) fn texture_max_page_side() -> u32 {
     textured_mesh::max_page_side()
 }
 
+mod slots;
+
 use std::cell::RefCell;
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
@@ -998,7 +1000,8 @@ impl shader::Program<Message> for GpuViewport<'_> {
             .and_then(|shown| crate::photo_overlay::frame(&shown));
         CloudPrimitive {
             geometry,
-            compare_model: self.overlay.resident_points,
+            view_slot: self.overlay.view_slot,
+            live_views: self.overlay.live_views,
             focus_drawn: self.overlay.focus_drawn,
             caps,
             camera,
@@ -1168,9 +1171,9 @@ struct PanoramaFrame {
 #[derive(Debug)]
 pub struct CloudPrimitive {
     geometry: Arc<RenderGeometry>,
-    /// The comparison pane needs its own uploads and camera until both
-    /// primitives have rendered; the photo pane prepares in the same frame.
-    compare_model: bool,
+    /// Unique camera/upload ownership, independent of point sampling policy.
+    view_slot: usize,
+    live_views: u8,
     /// Whether the points read inside the section box are drawn; they stay
     /// on the device while they are put aside.
     focus_drawn: bool,
@@ -1393,9 +1396,9 @@ struct GpuState {
     photo_overlay: crate::photo_overlay::PhotoOverlay,
 }
 
+#[derive(Default)]
 struct GpuStates {
-    main: GpuState,
-    comparison: Option<GpuState>,
+    views: slots::ViewSlots<GpuState>,
 }
 
 impl GpuState {
@@ -1864,20 +1867,15 @@ impl Primitive for CloudPrimitive {
         viewport: &shader::Viewport,
     ) {
         if !storage.has::<GpuStates>() {
-            storage.store(GpuStates {
-                main: GpuState::new(device, format),
-                comparison: None,
-            });
+            storage.store(GpuStates::default());
         }
         let states = storage
             .get_mut::<GpuStates>()
             .expect("pointcloud GPU states");
-        let state = if self.compare_model {
-            states
-                .comparison
-                .get_or_insert_with(|| GpuState::new(device, format))
-        } else {
-            &mut states.main
+        let Some(state) = states.views.prepare(self.view_slot, self.live_views, || {
+            GpuState::new(device, format)
+        }) else {
+            return;
         };
         // Each set of points is sent only when it changed: a change of the
         // section box sends none, and detail read inside the box sends only
@@ -1930,13 +1928,8 @@ impl Primitive for CloudPrimitive {
         clip_bounds: &Rectangle<u32>,
     ) {
         let states = storage.get::<GpuStates>().expect("pointcloud GPU states");
-        let state = if self.compare_model {
-            states
-                .comparison
-                .as_ref()
-                .expect("comparison GPU state prepared")
-        } else {
-            &states.main
+        let Some(state) = states.views.get(self.view_slot) else {
+            return;
         };
         if clip_bounds.width == 0 || clip_bounds.height == 0 {
             return;
@@ -2797,8 +2790,9 @@ mod section_box_tests {
             1
         );
 
-        let mut compare = studio.point_viewport();
-        compare.resident_points = true;
+        let compare = studio
+            .compare_model_viewport(studio.point_viewport())
+            .unwrap();
         let rectangle = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(450.0, 650.0));
         let cache = RefCell::new(RenderCache::default());
         let compared = shader::Program::draw(
@@ -2807,23 +2801,26 @@ mod section_box_tests {
             mouse::Cursor::Unavailable,
             rectangle,
         );
-        assert!(compared.compare_model);
+        assert_eq!(compared.view_slot, 1);
+        assert_eq!(compared.live_views, 3);
         let key = SceneKey::capture(compare, bounds);
         assert_eq!(
             GpuViewport { overlay: compare }.build_points(bounds).len(),
             1_010
         );
         studio.clouds[0].detail_points = Some(Arc::from(vec![]));
-        let mut compare = studio.point_viewport();
-        compare.resident_points = true;
+        let compare = studio
+            .compare_model_viewport(studio.point_viewport())
+            .unwrap();
         assert!(key.points_match(compare, bounds));
         assert_eq!(
             GpuViewport { overlay: compare }.build_points(bounds).len(),
             1_010
         );
         studio.take_view_sets(vec![(0, vec![first])]);
-        let mut compare = studio.point_viewport();
-        compare.resident_points = true;
+        let compare = studio
+            .compare_model_viewport(studio.point_viewport())
+            .unwrap();
         assert!(!key.points_match(compare, bounds));
         assert_eq!(
             GpuViewport { overlay: compare }.build_points(bounds).len(),

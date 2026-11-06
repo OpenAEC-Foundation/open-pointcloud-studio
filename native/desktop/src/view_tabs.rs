@@ -1078,6 +1078,8 @@ impl Studio {
         view.photo_visible = false;
         view.read_only = true;
         view.resident_points = true;
+        view.view_slot = 1;
+        view.live_views |= 3;
         view.focus_drawn = false;
         view.box_select = false;
         view.pick_mode = false;

@@ -11283,6 +11283,12 @@ impl Studio {
             photo_visible: true,
             read_only: false,
             resident_points: false,
+            view_slot: 0,
+            live_views: if self.photo_compare && self.shown_photo().is_some() {
+                3
+            } else {
+                1
+            },
             clean: self.views.capturing(),
         }
     }
@@ -13403,6 +13409,9 @@ struct PointViewport<'a> {
     /// Use the bounded resident sample when this camera differs from the
     /// camera whose octree detail is currently loaded.
     resident_points: bool,
+    /// Compositor-wide viewport slot and the live slots of every window.
+    view_slot: usize,
+    live_views: u8,
     /// A snapshot of the view is being taken: only the scene is drawn,
     /// without the controls of the viewport.
     clean: bool,
