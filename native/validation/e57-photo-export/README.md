@@ -85,3 +85,86 @@ raw override applies to positive uniform scales/translations. Nonuniform or
 reflected transforms use the existing generic path, which rejects E57 photo
 poses that cannot be represented; this result does not claim arbitrary affine
 camera support or preservation of every vendor extension/grouping structure.
+
+## External reader checks, 6 November 2026
+
+`reader_roundtrip.py` verifies an identity section export with pye57/libE57,
+PDAL and an E57-enabled CloudCompare. It operates on isolated copies so unrelated
+photo-edit sidecars do not affect file equivalence. The original vendor files
+remain unchanged. The external in-memory readers are limited to two million
+points per fixture by default; the separate large-source probes cover the
+199-million-point input.
+
+```sh
+python3 reader_roundtrip.py /absolute/path/to/open-pointcloud-studio \
+  --pdal /absolute/path/to/pdal \
+  --cloudcompare /absolute/path/to/CloudCompare \
+  --cloudcompare-version 'the installed E57-enabled build' \
+  --source /path/to/section.e57 /path/to/manitou.e57 \
+  --output /new/validation/directory
+```
+
+Use Python with the dependencies listed above. The successful Linux run used
+PDAL 2.10.2 and the upstream CloudComPy 2.13.90 experimental wheel's E57-enabled
+CloudCompare executable (advertised as 2.14 beta). The Ubuntu 2.11.3 package
+available on this machine had no E57 plugin. Both Qt platform and image-format
+plugins must be available; the probe configures their paths for the wheel's
+adjacent `plugins` directory. The [official CloudCompare CLI reference](https://cloudcompare.org/doc/wiki/index.php/Command_line_mode),
+[PDAL E57 reader contract](https://pdal.io/en/stable/stages/readers.e57.html) and
+[upstream wheel download](https://www.simulation.openfields.fr/index.php/cloudcompy-downloads/3-cloudcompy-binaries/13-experimental-pypi-wheels-install-with-pip/14-linux-wheel-files/142-cloudcompy-2-13-90-cp312-cp312-linux-x86-64-whl)
+describe the tools. `pdal-linux64-explicit.txt` pins the public conda-forge
+packages, and `readers-result-2026-11-06.json` records the executable/plugin/wheel
+hashes and Python package versions. No reader binaries or vendor data are
+redistributed.
+
+The additional checks exposed two interoperability problems:
+
+- The Riegl intensity maximum is a scalar `ScaledInteger`: raw value 32,767
+  with scale 1/32,767 represents **1.0**. e57 0.11.13 discarded the scalar's
+  scale/offset when writing limits. Raw Float32 point intensities stayed exact,
+  but the exported maximum became 32,767; PDAL read the first normalised
+  intensity as 0 instead of 8,190. Reading now resolves scaled or mixed scalar
+  pairs to physical doubles, and writing retains the correct physical range.
+  Original point records and their prototype encoding remain unchanged.
+- Replacing the original sensor index bounds with derived smaller bounds
+  changed CloudCompare's interpretation of 873 positions in the last Riegl
+  scan, by up to 19.11 m. Raw values, poses and PDAL coordinates still matched.
+  Filtered and scan-preserving scene exports now retain the original sensor
+  grid frame, including the absence of explicit bounds. The scene path also
+  uses the existing complete-packet iterator for valid alignment packets.
+
+The corrected files pass all three external applications:
+
+| Fixture | Point records | Scans | Original photos |
+| --- | ---: | ---: | ---: |
+| BLK2GO section | 471 | 1 | 6 |
+| Riegl Manitou | 1,095,702 | 5 | 5 |
+
+libE57 checks every supported point field and its prototype exactly, physical
+intensity/colour limits, index bounds, station poses, image bytes, calibration
+and remapped scan associations. PDAL's complete normalised point text and
+CloudCompare's complete point text are each byte-identical before and after
+export, with equal counts. The recorded pre-fix failures retain the evidence
+for both corrections.
+
+The integrations have distinct limits. PDAL exposes common Cartesian point
+dimensions and quantises intensity/RGB to uint16; CloudCompare uses float32
+coordinates and uint8 RGB. CloudCompare decodes all six pinhole images, and
+loads the five Riegl spherical images as ordinary images with an explicit
+unsupported-camera message. Their calibration is checked through libE57,
+not claimed as a CloudCompare spherical-camera test. All three external
+applications share the C++ libE57 family, independently of the native Rust
+decoder. This strengthens cross-application validation and does not establish
+three independently implemented external decoders or arbitrary vendor
+extension/grouping preservation; the broader requirements in #32 remain open.
+
+Existing affected exports need to be regenerated from the original source:
+the discarded scale is not safely inferable from the bad export. Cached
+normalised points are rebuilt only for sources with corrected scalar limits;
+plain-limit E57 files retain their old cache keys, including the full BLK2GO
+fixture. Invalid or changed source metadata is a cache miss, leaving error
+reporting to the ordinary reader.
+
+Final validation: 1,486 workspace tests passed, none failed and 12 were ignored.
+Workspace/all-target Clippy and minimal-core Clippy pass with warnings denied;
+Rustfmt, validation-script syntax and diff checks pass.

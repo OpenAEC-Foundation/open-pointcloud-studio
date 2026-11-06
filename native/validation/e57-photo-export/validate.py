@@ -5,6 +5,7 @@ import numpy as np
 from pye57 import E57,libe57
 from images import images
 from schema import non_colour_schema
+from raw_fields import read_raw
 from scipy.spatial.transform import Rotation
 parser=argparse.ArgumentParser(description="Validate BLK2GO photo and raw-field export using a fresh test window")
 parser.add_argument("directory", type=Path)
@@ -20,21 +21,6 @@ def api(command,**args):
  with urllib.request.urlopen(req,timeout=30) as f:r=json.load(f)
  assert r.get("ok"),r
  return r
-def read_raw(file, scan):
- # pye57 omits this standard field from its convenience mapping. Read it
- # through libE57 directly instead of ignoring an unsupported attribute.
- header=file.get_header(scan);data={};buffers=libe57.VectorSourceDestBuffer()
- for field in header.point_fields:
-  if field=="isColorInvalid":
-   array=np.empty(header.point_count,np.int8)
-   buffer=libe57.SourceDestBuffer(file.image_file,field,array,header.point_count,True,True)
-  else:array,buffer=file.make_buffer(field,header.point_count)
-  data[field]=array;buffers.append(buffer)
- reader=header.points.reader(buffers)
- assert reader.read()==header.point_count
- reader.close()
- if "isColorInvalid" in data:assert np.isin(data["isColorInvalid"],[0,1]).all()
- return data
 def status():return api("status")["result"]
 def idle(timeout=600):
  until=time.monotonic()+timeout

@@ -2,12 +2,12 @@
 from pye57 import libe57
 
 
-def non_colour_schema(file, scan):
+def point_schema(file, scan, omit_colour=False):
     header = file.get_header(scan)
     prototype = libe57.StructureNode(header.points.prototype())
     result = {}
     for name in header.point_fields:
-        if name.startswith('color') or name == 'isColorInvalid':
+        if omit_colour and (name.startswith('color') or name == 'isColorInvalid'):
             continue
         node = prototype.get(name)
         kind = node.type()
@@ -23,3 +23,7 @@ def non_colour_schema(file, scan):
         else:
             raise AssertionError(f'Unsupported prototype field type: {name}: {kind}')
     return result
+
+
+def non_colour_schema(file, scan):
+    return point_schema(file, scan, omit_colour=True)

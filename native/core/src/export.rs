@@ -1261,6 +1261,8 @@ fn export_e57_filtered_colours_count(
                 "E57 raw and decoded streams have different lengths".into(),
             ));
         }
+        // A filtered scan retains its original row/column coordinate frame.
+        output_scan.set_index_bounds(source_scan.index_bounds.clone());
         output_scan.finalize()?;
     }
     if source_count != cloud.total_points {
