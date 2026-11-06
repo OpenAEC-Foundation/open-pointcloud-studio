@@ -353,7 +353,7 @@ fn find(parent: &mut [u32], mut vertex: u32) -> u32 {
 /// make the lookup of the others slower. A lookup walks down nearest box
 /// first and skips every box that lies farther away than the best triangle
 /// found so far.
-struct TriangleIndex {
+pub(crate) struct TriangleIndex {
     /// Lower corner of the mesh. Everything is stored relative to it so the
     /// distances keep their precision at survey coordinates.
     origin: [f64; 3],
@@ -378,7 +378,7 @@ struct Node {
 type Pending = (f64, u32);
 
 impl TriangleIndex {
-    fn build(mesh: &MeshGeometry) -> Option<Self> {
+    pub(crate) fn build(mesh: &MeshGeometry) -> Option<Self> {
         let triangles = mesh
             .triangles
             .iter()
@@ -473,6 +473,58 @@ impl TriangleIndex {
         self.nearest(point, pending).0.sqrt()
     }
 
+    /// Visibility of an open segment. Its endpoints are excluded, so the
+    /// sampled surface cannot occlude itself and a camera on a surface is
+    /// usable. Reuse the same survey-relative BVH as distance measurements.
+    pub(crate) fn segment_clear(
+        &self,
+        from: [f64; 3],
+        to: [f64; 3],
+        pending: &mut Vec<u32>,
+    ) -> bool {
+        let origin = subtract(from, self.origin);
+        let direction = subtract(to, from);
+        let length = dot(direction, direction).sqrt();
+        if !length.is_finite() || length <= 1e-9 {
+            return false;
+        }
+        let tolerance = (1e-6 / length).clamp(1e-9, 1e-3);
+        pending.clear();
+        pending.push(0);
+        while let Some(place) = pending.pop() {
+            let node = &self.nodes[place as usize];
+            let mut near = tolerance;
+            let mut far = 1.0 - tolerance;
+            for axis in 0..3 {
+                if direction[axis] == 0.0 {
+                    if origin[axis] < node.low[axis] || origin[axis] > node.high[axis] {
+                        far = -1.0;
+                        break;
+                    }
+                } else {
+                    let a = (node.low[axis] - origin[axis]) / direction[axis];
+                    let b = (node.high[axis] - origin[axis]) / direction[axis];
+                    near = near.max(a.min(b));
+                    far = far.min(a.max(b));
+                }
+            }
+            if near > far {
+                continue;
+            }
+            if node.second != 0 {
+                pending.extend([place + 1, node.second]);
+                continue;
+            }
+            for face in &self.triangles[node.first as usize..node.end as usize] {
+                let [a, b, c] = face.map(|index| self.vertices[index as usize]);
+                if segment_hits_triangle(origin, direction, a, b, c, tolerance) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Squared distance to the nearest triangle, and how many triangles were
     /// measured to find it.
     fn nearest(&self, point: [f64; 3], pending: &mut Vec<Pending>) -> (f64, usize) {
@@ -515,6 +567,44 @@ impl TriangleIndex {
         }
         (best, measured)
     }
+}
+
+fn segment_hits_triangle(
+    origin: [f64; 3],
+    direction: [f64; 3],
+    a: [f64; 3],
+    b: [f64; 3],
+    c: [f64; 3],
+    tolerance: f64,
+) -> bool {
+    let cross = |a: [f64; 3], b: [f64; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let ab = subtract(b, a);
+    let ac = subtract(c, a);
+    let p = cross(direction, ac);
+    let determinant = dot(ab, p);
+    let scale = (dot(ab, ab) * dot(ac, ac) * dot(direction, direction)).sqrt();
+    if determinant.abs() <= scale * 1e-12 {
+        return false;
+    }
+    let inverse = 1.0 / determinant;
+    let offset = subtract(origin, a);
+    let u = dot(offset, p) * inverse;
+    if !(0.0..=1.0).contains(&u) {
+        return false;
+    }
+    let q = cross(offset, ab);
+    let v = dot(direction, q) * inverse;
+    if v < 0.0 || u + v > 1.0 {
+        return false;
+    }
+    let distance = dot(ac, q) * inverse;
+    distance > tolerance && distance < 1.0 - tolerance
 }
 
 impl Node {
