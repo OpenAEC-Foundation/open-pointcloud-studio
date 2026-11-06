@@ -1703,6 +1703,8 @@ impl Studio {
                     // A scan holds one mesh: this one takes the place of
                     // the mesh it had.
                     entry.mesh = Some(Arc::clone(&finished.mesh.mesh));
+                    entry.texture = None;
+                    entry.texture_visible = false;
                     entry.mesh_topology = Some(finished.mesh.topology);
                     display_name(&entry.cloud.path).to_owned()
                 });

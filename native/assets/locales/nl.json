@@ -1125,5 +1125,17 @@
   "Your feedback was received privately. Thank you!": "Je feedback is privé ontvangen. Bedankt!",
   "Sending feedback…": "Feedback versturen…",
   "Send feedback": "Feedback versturen",
-  "Serves the desktop MCP tools over authenticated HTTP using OPENAEC_MCP_POORT and OPENAEC_MCP_GEHEIM.": "Biedt de desktop-MCP-gereedschappen via HTTP aan met OPENAEC_MCP_POORT en OPENAEC_MCP_GEHEIM."
+  "Serves the desktop MCP tools over authenticated HTTP using OPENAEC_MCP_POORT and OPENAEC_MCP_GEHEIM.": "Biedt de desktop-MCP-gereedschappen via HTTP aan met OPENAEC_MCP_POORT en OPENAEC_MCP_GEHEIM.",
+  "Texture source": "Textuurbron",
+  "Point colours": "Puntkleuren",
+  "Photographs": "Foto's",
+  "Texture preview": "Textuurvoorbeeld",
+  "Show texture": "Textuur tonen",
+  "Preview (px)": "Voorbeeld (px)",
+  "Photo texels": "Texels uit foto's",
+  "Point-colour texels": "Texels uit puntkleuren",
+  "Unobserved texels": "Niet-waargenomen texels",
+  "Photos used": "Gebruikte foto's",
+  "Texture preview is unavailable on this renderer; exported images retain their detail.": "Deze renderer kan geen textuurvoorbeeld tonen; geëxporteerde beelden behouden hun detail.",
+  "Preparing texture preview…": "Textuurvoorbeeld voorbereiden…"
 }

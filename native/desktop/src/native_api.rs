@@ -26,7 +26,7 @@ pub const API_NAME: &str = "native-rust-v1";
 /// Raised by one with every release that adds a command or a field, or
 /// changes what a command does; API.md lists the revisions under API
 /// changes.
-pub const API_REVISION: u64 = 13;
+pub const API_REVISION: u64 = 14;
 
 /// How many `/exec` requests wait for the window at once. `/health` and
 /// `/info` are answered by the thread that takes the requests, so they do
@@ -341,8 +341,15 @@ pub enum ApiCommand {
         texel_size: Option<f64>,
         #[serde(default)]
         max_resolution: Option<u32>,
+        #[serde(default)]
+        source: Option<crate::mesh_export::TextureSource>,
     },
     CancelTextureMesh,
+    SetTexturePreview {
+        #[serde(default)]
+        layer: Option<usize>,
+        visible: bool,
+    },
     SetFaceSettings {
         #[serde(flatten)]
         options: crate::faces::FaceOptions,

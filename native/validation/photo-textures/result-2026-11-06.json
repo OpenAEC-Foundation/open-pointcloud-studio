@@ -1,0 +1,127 @@
+{
+  "job": {
+    "coverage": {
+      "photograph_texels": 10153,
+      "photos_failed": 0,
+      "photos_used": [
+        0
+      ],
+      "point_colour_texels": 0,
+      "unobserved_texels": 0
+    },
+    "operation": "texture_mesh",
+    "pages": 1,
+    "path": "photographic.obj",
+    "preview_error": null,
+    "resolution_limited": 0,
+    "state": "complete",
+    "triangles": 1
+  },
+  "changed_viewport_pixels": 57237,
+  "independent_reader": "trimesh 5.2.0",
+  "uvs": [
+    [
+      0.005859375,
+      0.994140625
+    ],
+    [
+      0.556640625,
+      0.994140625
+    ],
+    [
+      0.005859375,
+      0.443359375
+    ]
+  ],
+  "source_photo_unchanged": true,
+  "real_e57": {
+    "source": "manitouNoInvalidPoints.e57",
+    "surface": {
+      "components": 1,
+      "mode": "3D surface",
+      "open_edges": 564,
+      "path": "real-surface.obj",
+      "source_points": 1095702,
+      "state": "complete",
+      "triangles": 890,
+      "vertices": 300
+    },
+    "texture": {
+      "coverage": {
+        "photograph_texels": 45335,
+        "photos_failed": 0,
+        "photos_used": [
+          0,
+          1,
+          2,
+          4
+        ],
+        "point_colour_texels": 0,
+        "unobserved_texels": 194293
+      },
+      "operation": "texture_mesh",
+      "pages": 1,
+      "path": "real-photo.obj",
+      "preview_error": null,
+      "resolution_limited": 0,
+      "state": "complete",
+      "triangles": 890
+    },
+    "independent_materials": 1,
+    "reconstruction_seconds": 1.7177836990449578,
+    "texture_seconds": 4.6156960050575435,
+    "output_bytes": 446593,
+    "progress_samples": [
+      {
+        "seconds": 0.122,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 0.099,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running"
+      },
+      {
+        "seconds": 0.092,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 2.184,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 2,
+        "total": 890
+      },
+      {
+        "seconds": 4.321,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 890,
+        "total": 890
+      },
+      {
+        "seconds": 0.075,
+        "operation": "texture_mesh",
+        "state": "running"
+      }
+    ],
+    "cancellation": {
+      "state": "cancelled",
+      "left_partial_files": false
+    },
+    "sha256": "d4f06e2a80e3e54be7391130b911c82af0c6a7857cec133177431f5f578f23cf",
+    "independent_opengl_viewer_rendered": true,
+    "independent_viewer_pyglet": "1.5.31"
+  },
+  "native_peak_rss_kib": 310348,
+  "execution_profile": "development binary, core opt-level=2; Vulkan software renderer",
+  "cache_comparison": {
+    "prior_texture_seconds": 18.47047126106918,
+    "prior_cache": "four images",
+    "current_cache": "up to eight images within 64 MiB",
+    "obj_mtl_png_identical": true
+  }
+}

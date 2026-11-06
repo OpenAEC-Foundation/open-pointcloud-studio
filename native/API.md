@@ -220,27 +220,41 @@ changes nothing in the options.
 surface, a closed mesh, the faces of an opened mesh file or downloaded 3D BAG
 buildings.
 
-`texture_mesh` is a separate job for a mesh with measured vertex colours.
-Give it a new absolute `.obj` `path`, optional `texel_size` in metres (default
-0.02) and `max_resolution` from 256 to 4096 pixels (default 4096). It writes
-editable geometry with UV coordinates, an MTL and one or more PNG atlas pages
-beside the OBJ. Vertex RGB is also retained as a native-viewport fallback.
-The complete job reports `pages`, `triangles` and
-`resolution_limited`, the number of triangles whose chart could not reach the
-requested texel size on one page. The atlas interpolates stored mesh
-vertex colours. For a newly reconstructed surface, colours previously applied
-to source points with `colour_from_photos` are carried into sampled mesh
-vertices; an existing mesh must be reconstructed again to receive those
-edits. The atlas does not yet project E57 photo pixels directly onto texels.
+`texture_mesh` writes UV coordinates, an MTL and PNG atlas pages beside a new
+absolute `.obj` `path`. Optional `source` is `point_colours` (the compatible
+default) or `photographs`; `texel_size` is in metres (default 0.02), and
+`max_resolution` is 256–4096 pixels (default 4096). Point-colour mode interpolates
+stored mesh vertex RGB. Photograph mode projects calibrated E57 station images
+and added panoramas directly onto the measured mesh within a 20 m photo reach.
+It rejects back-facing and mesh-occluded rays and blends compatible overlapping
+observations with bounded exposure correction. Disagreeing observations retain the best camera to avoid
+ghosting. Missing observations fall back to mesh RGB, or grey when no RGB exists.
+Only the reconstructed mesh participates in occlusion; foreground cloud points
+outside that mesh are not occluders. Photos are sampled at up to 2048 pixels
+on their longest side; a finer atlas cannot add detail beyond that image sample.
+Original files and photo pixels stay unchanged.
+
+The completed job reports `pages`, `triangles`, `resolution_limited` and, for
+photographs, `coverage` (`photograph_texels`, `point_colour_texels`,
+`unobserved_texels`, zero-based `photos_used`, `photos_failed`). Counts exclude
+atlas padding. The native viewport shows the exported atlas on the same mesh;
+`set_texture_preview` accepts optional `layer` and required boolean `visible`.
+Status mesh data includes `texture` with visibility, page count, export and
+preview resolution, GPU support and coverage. Preview images share a 128 MiB
+budget per mesh and may have lower resolution than exported PNGs. Unsupported GPU devices
+retain the geometry view and report that limitation. `preview_error` on a
+completed job indicates a saved export whose preview could not be loaded.
+
 A CAD export such as DWG or DXF
 cannot retain these texture images.
 While the job runs, `job` reports `processed` and `total` triangles, and so
 does `status.result.texture_export`, with `operation` `texture_mesh` and
-`cancelling`, for an export started with **Texture surface…** in Properties
+`cancelling` and `saved` (whether publication completed), for an export started with **Texture surface…** in Properties
 as well; it is `null` when none runs. `status.result.mesh_export_pending` is
 true while it runs too.
-`cancel_texture_mesh` requests cancellation; after it completes the job state
-is `cancelled` and no export files are left behind.
+`cancel_texture_mesh` requests cancellation. Before publication the job becomes
+`cancelled` and staged files are removed. After publication the completed export
+is retained, and cancellation only skips preview preparation.
 `path` is an absolute destination whose extension chooses the format:
 
 - `.obj`: text, with colours and normals per vertex where the mesh has them.
@@ -1798,7 +1812,8 @@ layer with photo colours.
 | `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Sets the settings of a closed mesh, its options in Mesh Pointcloud, atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, a share of 0.01–100 percent of the source points, sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task, of whatever mode |
 | `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
-| `texture_mesh` | `path`, optional `texel_size`, `max_resolution` | Writes the active coloured mesh as an OBJ, MTL and PNG atlas pages; returns a job ID |
+| `texture_mesh` | `path`, optional `texel_size`, `max_resolution`, `source` | Writes the active mesh as an OBJ, MTL and PNG atlas pages from point colours or calibrated photographs; returns a job ID |
+| `set_texture_preview` | optional `layer`, required `visible` | Shows or hides the baked atlas on a mesh |
 | `cancel_texture_mesh` | — | Cancels a running texture export |
 | `set_face_settings` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Sets the settings of a face detection, the options of Flat faces in Mesh Pointcloud, atomically: a distance tolerance of 0.001–0.5 m, an angle tolerance of 1–45 degrees, a smallest face of 0.01–10000 m², cylinders on or off, layers `active` or `visible`, and the colouring `face` or `deviation` of the faces that are shown. Returns the `settings` |
 | `detect_faces` | optional `distance_tolerance`, `angle_tolerance`, `min_area`, `cylinders`, `layers`, `color` | Finds the flat faces and the cylinders in the undeleted points inside the active section box and visible classification filters, with the settings of a face detection and the fields given, and keeps them with the active layer beside its mesh. Returns a job ID; the complete job reports the faces per type, the edges, the voxel used and the points on a face |
@@ -1895,6 +1910,7 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
+| 14 | Unreleased | `texture_mesh` accepts `source` (`point_colours` or `photographs`), reports photo coverage and preview errors; new `set_texture_preview` controls the native UV atlas overlay. Mesh status reports texture visibility, resolution and GPU support. |
 | 13 | Unreleased | The status-bar MCP checkbox gates external owner-token access; `/info` and `status.result` include `mcp_enabled`. Extension grants and running jobs remain available. Status also includes `managed.enabled` and `managed.directory`, the environment defaults of a managed native SuperCloud session. |
 | 12 | 2026.45.1 | Photo editing (`add_panorama`, `edit_photo`, `delete_photo`), scan registration (`registration_setup`, `registration_pair`, `registration_fit`, `registration_refine`, `registration_export`, `registration_matrix`, `registration_set_matrix`, `cancel_registration`), ReCap preparation (`export_recap`), and mixed-format `merge_visible` with optional `keep_stations_photos`. Status includes `registration` and `registration_pending`. |
 | 11 | 2026.44.0 | New commands `texture_mesh`, `cancel_texture_mesh`, `set_photo_compare` and `set_photo_split`. `export_drawing`, `preview_drawing` and `create_drawing` take `straight_lines`, `line_tolerance` and `line_min_length`, and `create_drawing` takes `square`; `status.result.drawing` reports the first three, and the statistics of a complete drawing have `straight_lines`. `status.result` has `texture_export`, and `photos` has `compare_with_3d`, `model_sample`, `model_camera`, `split_ratio` and `split_vertical`; `list_tabs` has tabs of the kind `photo`. `/info` has `api_revision` and `commands`, and answers while commands wait for the window |
