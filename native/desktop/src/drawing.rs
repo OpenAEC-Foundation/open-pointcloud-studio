@@ -1680,7 +1680,7 @@ impl Studio {
                     async move {
                         FORMATS
                             .iter()
-                            .fold(rfd::AsyncFileDialog::new(), |dialog, (format, name)| {
+                            .fold(crate::managed::file_dialog(), |dialog, (format, name)| {
                                 dialog.add_filter(*name, &[format.extension()])
                             })
                             .set_file_name(suggestion)

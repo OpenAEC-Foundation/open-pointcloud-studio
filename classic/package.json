@@ -1,7 +1,7 @@
 {
   "name": "open-pointcloud-studio",
   "private": true,
-  "version": "0.3.0",
+  "version": "2026.45.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@openaec/ui": "github:OpenAEC-Foundation/openaec-ui",
     "@tailwindcss/postcss": "^4.2.1",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",

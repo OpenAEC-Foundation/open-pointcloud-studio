@@ -7,6 +7,8 @@ the camera, take screenshots of the 3D view, measure, select, save views,
 export, draw sections, mesh and detect faces, just as the commands of that
 API do.
 
+The **MCP server** checkbox at the bottom right of each desktop window allows or pauses external commands to that window. It is checked when the local bridge is available and allowed, not when an AI client is connected. Pausing returns an explicit error for new external commands; jobs already running and extension tokens continue. Re-enable the checkbox in the window to resume. The preference survives restart. `/info` stays available with `mcp_enabled` so clients can identify a paused instance. The client still starts the stdio process below; the checkbox neither starts nor stops that child process.
+
 The server speaks JSON-RPC 2.0 with one message per line. Standard output
 carries nothing but those messages; diagnostics go to standard error. The
 process keeps its console streams and opens no window itself.
@@ -252,8 +254,9 @@ follows when that view is restored.
 | `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers`, as for `mesh` | Sets the options of a closed mesh in Mesh Pointcloud; refused as a whole when one value is |
 | `cancel_mesh` | — | Cancels the mesh job |
 | `export_mesh` | `path` (`.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc`), optional `wait_seconds` | Saves the mesh of the active layer in the format of the extension; job |
-| `texture_mesh` | new absolute `.obj` `path`, optional `texel_size` (metres), `max_resolution` (256–4096 pixels), `wait_seconds` | Writes the active mesh's stored vertex colours to UV atlas PNG pages with an OBJ and MTL; job. Colours applied to points from E57 photos transfer to newly reconstructed surface meshes. Original E57 photo pixels are not projected directly onto texels |
+| `texture_mesh` | new absolute `.obj` `path`, optional `texel_size` (metres), `max_resolution` (256–4096 pixels), `source` (`point_colours` or `photographs`), `wait_seconds` | Bakes stored mesh RGB or calibrated E57/added photographs into an OBJ, MTL and PNG atlas; reports coverage and loads a native viewport preview |
 | `cancel_texture_mesh` | — | Cancels the running texture export and removes its staged files |
+| `set_texture_preview` | optional `layer`, required `visible` | Shows or hides the baked UV texture on the mesh |
 | `set_face_settings` | optional `distance_tolerance` (0.001–0.5 m), `angle_tolerance` (1–45 degrees), `min_area` (0.01–10000 m²), `cylinders`, `layers` (`active` or `visible`), `color` (`face` or `deviation`) | Sets the options of the faces in Mesh Pointcloud and the colouring of the faces that are shown; refused as a whole when one value is |
 | `detect_faces` | the settings of `set_face_settings`, all optional, and `wait_seconds` | Finds the flat faces (floors, ceilings, walls, sloped planes) and the round columns and pipes of the active layer, or of every visible layer that reaches the section box, inside the section box, and keeps them with the active layer beside its mesh; job. The job reports the faces per type, the edges, the voxel used and the points on a face. Settings left out keep what the options have |
 | `cancel_detect_faces` | — | Cancels the running face detection |
@@ -449,3 +452,9 @@ reads the transform and report; `registration_set_matrix` reuses a saved
 transform and `cancel_registration` cancels work. `export_recap` prepares an
 E57 and ReCap import instructions. See [API revision 12](API.md#photo-editing-and-scan-registration-revision-12)
 for fields and units.
+
+## Managed native HTTP transport
+
+`--mcp-http` uses the desktop server's existing tool table, schemas and operations. It provides stateful Streamable HTTP on `POST /mcp`; JSON replies are supported, and `GET /mcp` returns 405 because no unsolicited SSE stream is provided. Initialize first, retain the returned `Mcp-Session-Id`, and end the session with DELETE. HTTP names have the `pointcloud_` prefix plus the `pointcloud_stand`/`pointcloud_opslaan` aliases. Stdio names and behavior are unchanged.
+
+Configure `OPENAEC_MCP_POORT`, `OPENAEC_MCP_GEHEIM` and optionally `OPENAEC_MCP_ADRES`; see the repository README for authentication, internal-network deployment, managed window settings and the shared `XDG_CONFIG_HOME`. Sessions expire after 30 idle minutes and are limited to 16. At most eight HTTP tool calls are admitted at once, and a session serializes tool calls. Cancellation notifications can be handled while a tool waits. Request bodies are limited to 1 MiB. This desktop transport is distinct from the smaller headless cloud API's MCP endpoint.

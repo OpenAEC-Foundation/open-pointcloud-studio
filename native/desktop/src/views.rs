@@ -1517,7 +1517,7 @@ impl Studio {
                 self.status = "Choose where to save the views as BCF…".into();
                 return Task::perform(
                     async move {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("BIM Collaboration Format", &["bcf"])
                             .set_file_name(suggested)
                             .save_file()

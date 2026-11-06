@@ -26,6 +26,7 @@ mod drawing_notes;
 mod drawing_view;
 mod extensions;
 mod faces;
+mod feedback;
 mod file_photos;
 mod file_view;
 mod fonts;
@@ -39,10 +40,12 @@ mod locks;
 mod lod_pace;
 #[cfg(target_os = "macos")]
 mod macos_open;
+mod managed;
 mod mcp;
 mod measure;
 mod memory_usage;
 mod mesh_export;
+mod mesh_texture_preview;
 mod mesh_to_plans;
 mod mesh_wizard;
 mod native_api;
@@ -302,6 +305,25 @@ fn export_edited_where(
                 .scale
                 .iter()
                 .all(|value| *value == transform.scale[0])
+            && pointcloud_core::export_e57_colours_where(
+                cloud,
+                destination,
+                Some(expected_count),
+                transform.scale[0],
+                transform.offset,
+                colours,
+                &mut include,
+            )?
+            .is_some()
+        {
+            return Ok(());
+        }
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
         {
             pointcloud_core::export_e57_map_with_images(
                 &painted(cloud),
@@ -392,6 +414,28 @@ fn export_edited_section(
     deleted: Option<&DeletionMask>,
 ) -> Result<u64, pointcloud_core::LoadError> {
     if let Some(colours) = colours {
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
+        {
+            if let Some(count) = pointcloud_core::export_e57_colours_where(
+                cloud,
+                destination,
+                None,
+                transform.scale[0],
+                transform.offset,
+                colours,
+                |ordinal, point| {
+                    deleted.is_none_or(|mask| !mask.contains(ordinal))
+                        && section.contains(transform.xyz(point.xyz))
+                },
+            )? {
+                return Ok(count);
+            }
+        }
         if format == ExportFormat::E57
             && transform.scale[0] > 0.0
             && transform
@@ -677,6 +721,13 @@ fn main() -> iced::Result {
     if let Some(text) = cli_help::answer(first.as_deref()) {
         println!("{text}");
         return Ok(());
+    }
+    if first.as_deref() == Some(OsStr::new("--mcp-http")) {
+        if args.next().is_some() {
+            eprintln!("Usage: open-pointcloud-studio --mcp-http");
+            std::process::exit(2);
+        }
+        std::process::exit(mcp::run_http());
     }
     if first.as_deref() == Some(OsStr::new("--mcp")) {
         if args.next().is_some() {
@@ -1030,6 +1081,10 @@ fn main() -> iced::Result {
                 first.into_iter().chain(args).map(PathBuf::from).collect(),
             )
         };
+    if let Err(error) = managed::validate() {
+        eprintln!("Managed configuration: {error}");
+        std::process::exit(2);
+    }
     let api = match native_api::start(requested_port) {
         Ok(api) => Some(api),
         Err(error) => {
@@ -1175,7 +1230,8 @@ fn main() -> iced::Result {
                 iced::Subscription::none()
             };
             let memory = iced::time::every(Duration::from_secs(2)).map(|_| Message::MemoryTick);
-            iced::Subscription::batch([keyboard, api, opened, walking, clock, memory])
+            let shutdown = managed::shutdown().map(|()| Message::Exit);
+            iced::Subscription::batch([keyboard, api, opened, walking, clock, memory, shutdown])
         })
         .default_font(fonts::REGULAR)
         .theme(|studio: &Studio| studio.ui_theme.iced())
@@ -1209,6 +1265,7 @@ fn main() -> iced::Result {
             studio.memory_usage.refresh();
             if let Some((receiver, handle)) = api {
                 studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
+                handle.set_enabled(studio.mcp_enabled);
                 studio.api_handle = Some(handle);
             }
             // This runs on the main thread after the event loop was made and
@@ -1720,6 +1777,8 @@ impl RibbonTab {
 enum Message {
     SyncWindowChrome(u8),
     ApiRequest(native_api::ApiRequest),
+    Feedback(feedback::Action),
+    SetMcpEnabled(bool),
     ApiScreenshot(screenshot::Step),
     ApiExported(String, bool, Result<(PathBuf, u64), String>),
     MergeVisible,
@@ -1853,6 +1912,8 @@ enum Message {
     TextureMesh,
     TextureTexelSize(String),
     TextureMaxResolution(String),
+    TextureSource(mesh_export::TextureSource),
+    TexturePreview(bool),
     TexturePoll,
     CancelTextureExport,
     TexturePathChosen(mesh_export::MeshExportRequest, Option<PathBuf>),
@@ -2066,6 +2127,8 @@ struct Studio {
     api_receiver:
         Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<native_api::Delivery>>>>,
     api_handle: Option<native_api::ApiHandle>,
+    mcp_enabled: bool,
+    feedback: feedback::Feedback,
     /// Files the system hands to the application after it started; only
     /// macOS delivers files this way.
     opened_files: Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<PathBuf>>>>,
@@ -2167,6 +2230,7 @@ struct Studio {
     texture_export: Option<Arc<mesh_export::TextureExportControl>>,
     texture_texel_size: String,
     texture_max_resolution: String,
+    texture_source: mesh_export::TextureSource,
     mesh_dialog_pending: bool,
     mesh_job: Option<MeshJob>,
     merge_job: Option<MergeJob>,
@@ -2346,6 +2410,8 @@ struct CloudEntry {
     /// made or read.
     mesh_topology: Option<pointcloud_core::MeshTopology>,
     mesh_visible: bool,
+    texture: Option<Arc<mesh_texture_preview::BakedTexture>>,
+    texture_visible: bool,
     /// The faces detected in this scan, a layer of its own beside the mesh.
     faces: Option<faces::FaceLayer>,
     bag_source: bool,
@@ -2768,6 +2834,8 @@ impl Default for Studio {
         Self {
             api_receiver: None,
             api_handle: None,
+            mcp_enabled: settings.mcp_enabled,
+            feedback: feedback::Feedback::default(),
             opened_files: None,
             api_jobs: HashMap::new(),
             api_job_order: VecDeque::new(),
@@ -2866,6 +2934,7 @@ impl Default for Studio {
             texture_export: None,
             texture_texel_size: "0.02".into(),
             texture_max_resolution: "4096".into(),
+            texture_source: mesh_export::TextureSource::default(),
             mesh_dialog_pending: false,
             mesh_job: None,
             merge_job: None,
@@ -3012,6 +3081,7 @@ impl Studio {
 
     fn preferences(&self) -> preferences::Preferences {
         preferences::Preferences {
+            mcp_enabled: self.mcp_enabled,
             color_mode: self.color_mode,
             point_size: self.point_size,
             eye_dome: self.eye_dome,
@@ -3047,14 +3117,15 @@ impl Studio {
     }
 
     /// Whether the model is out of sight behind the File view, the Settings
-    /// dialog, the card of the Pointcloud to Drawing wizard or that of Mesh
-    /// Pointcloud. Keys then leave the model alone, and a screenshot or a
+    /// or Feedback dialog, the card of the Pointcloud to Drawing wizard or
+    /// that of Mesh Pointcloud. Keys then leave the model alone, and a screenshot or a
     /// view snapshot is not taken, as it would show what covers the model.
     /// The strip of the Pointcloud to Drawing wizard lies beside the scene and
     /// covers nothing.
     fn model_covered(&self) -> bool {
         self.file_open
             || self.settings.is_some()
+            || self.feedback.open
             || self.mesh_to_plans.covers_model()
             || self.mesh_wizard.is_open()
     }
@@ -3166,6 +3237,8 @@ impl Studio {
             mesh: None,
             mesh_topology: None,
             mesh_visible: true,
+            texture: None,
+            texture_visible: false,
             faces: None,
             bag_source: false,
             visible: true,
@@ -3595,6 +3668,8 @@ impl Studio {
     }
 
     fn leave_walk(&mut self) -> bool {
+        self.remember_station_photo_tab();
+        self.tabs.active_station_photo = None;
         self.panorama_photos = None;
         self.remember_photo_tab();
         self.photos.close();
@@ -3998,6 +4073,7 @@ impl Studio {
                             "total": job.source.total_points,
                         })),
                         "api_port": self.api_handle.as_ref().map(|handle| handle.port),
+                        "mcp_enabled": self.mcp_enabled && self.api_handle.as_ref().is_some_and(|handle| handle.is_enabled()),
                     }}),
                     Task::none(),
                 );
@@ -4006,6 +4082,7 @@ impl Studio {
                 answer.0["result"]["detail_pending"] = Value::Bool(self.detail_pending);
                 answer.0["result"]["index"] = self.index_value();
                 answer.0["result"]["language"] = Value::from(i18n::choice().key());
+                answer.0["result"]["managed"] = managed::summary();
                 answer.0["result"]["ribbon_tab"] = Value::from("start");
                 answer.0["result"]["view_controls_open"] = Value::Bool(self.view_controls_open);
                 answer.0["result"]["bag3d"] =
@@ -5061,8 +5138,12 @@ impl Studio {
                 path,
                 texel_size,
                 max_resolution,
-            } => self.api_texture_mesh(path, texel_size, max_resolution),
+                source,
+            } => self.api_texture_mesh(path, texel_size, max_resolution, source),
             ApiCommand::CancelTextureMesh => (self.cancel_texture_export(), Task::none()),
+            ApiCommand::SetTexturePreview { layer, visible } => {
+                (self.api_set_texture_preview(layer, visible), Task::none())
+            }
             ApiCommand::SetFaceSettings { options } => {
                 (self.api_set_face_settings(&options), Task::none())
             }
@@ -5842,6 +5923,8 @@ impl Studio {
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
+                        texture: None,
+                        texture_visible: false,
                         faces: None,
                         bag_source: false,
                         visible: true,
@@ -6249,6 +6332,9 @@ impl Studio {
         // The RAM label needs a fresh sample, not the model and drawing
         // settlement work that follows every normal UI action.
         if matches!(&message, Message::MemoryTick) {
+            if let Some(handle) = &self.api_handle {
+                handle.mark_gui_alive();
+            }
             self.memory_usage.refresh();
             return Task::none();
         }
@@ -6302,7 +6388,27 @@ impl Studio {
                     );
                 }
             }
-            Message::ApiRequest(request) => return self.handle_api(request),
+            Message::Feedback(action) => return self.feedback_action(action),
+            Message::Escape if self.feedback.open => {
+                return self.feedback_action(feedback::Action::Close)
+            }
+            Message::SetMcpEnabled(enabled) => {
+                self.mcp_enabled = enabled;
+                if let Some(handle) = &self.api_handle {
+                    handle.set_enabled(enabled);
+                }
+                return self.queue_preferences_save();
+            }
+            Message::ApiRequest(request) => {
+                // Also gate commands queued before the user paused the bridge.
+                if !self.mcp_enabled {
+                    let _ = request.reply.send(
+                        json!({"ok": false, "error": "MCP/API access is paused in the status bar"}),
+                    );
+                    return Task::none();
+                }
+                return self.handle_api(request);
+            }
             Message::ApiScreenshot(step) => return self.screenshot_step(step),
             Message::ApiExported(id, section_only, result) => {
                 if section_only {
@@ -6339,7 +6445,7 @@ impl Studio {
                 self.status = "Choose where to save the merged visible scans…".into();
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("E57 scene with stations and photos", &["e57"])
                             .add_filter("LAZ point cloud", &["laz"])
                             .add_filter("LAS point cloud", &["las"])
@@ -6564,7 +6670,7 @@ impl Studio {
                     async {
                         let mut extensions = project_open::SCAN_EXTENSIONS.to_vec();
                         extensions.push(project_open::PROJECT_EXTENSION);
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("Point clouds and scan projects", &extensions)
                             .pick_files()
                             .await
@@ -6581,7 +6687,7 @@ impl Studio {
             Message::OpenFolder => {
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .set_title("Open scan folder")
                             .pick_folder()
                             .await
@@ -6948,6 +7054,8 @@ impl Studio {
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
+                        texture: None,
+                        texture_visible: false,
                         faces: None,
                         visible: true,
                         selection: None,
@@ -6992,6 +7100,8 @@ impl Studio {
                                 measured.mesh.triangles.len()
                             );
                             entry.mesh = Some(measured.mesh);
+                            entry.texture = None;
+                            entry.texture_visible = false;
                             entry.mesh_topology = Some(measured.topology);
                         }
                         Ok(None) => {}
@@ -7030,7 +7140,7 @@ impl Studio {
             Message::ExportRecap => {
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("E57 for Autodesk ReCap", &["e57"])
                             .set_file_name("recap-transfer.e57")
                             .save_file()
@@ -7102,7 +7212,7 @@ impl Studio {
                     self.status = "Choose where to export the full-resolution section…".into();
                     return Task::perform(
                         async move {
-                            rfd::AsyncFileDialog::new()
+                            crate::managed::file_dialog()
                                 .add_filter(format.to_string(), &[format.extension()])
                                 .set_file_name(suggested)
                                 .save_file()
@@ -7224,7 +7334,7 @@ impl Studio {
                     .into();
                     return Task::perform(
                         async move {
-                            rfd::AsyncFileDialog::new()
+                            crate::managed::file_dialog()
                                 .add_filter("OBJ mesh", &["obj"])
                                 .set_file_name(suggested)
                                 .save_file()
@@ -7330,6 +7440,8 @@ impl Studio {
                             .find(|entry| entry.matches_source(&source))
                         {
                             entry.mesh = Some(measured.mesh);
+                            entry.texture = None;
+                            entry.texture_visible = false;
                             entry.mesh_topology = Some(measured.topology);
                             self.status = format!(
                                 "{} mesh displayed: {} vertices, {} triangles, {} from {} points → {}",
@@ -7356,6 +7468,10 @@ impl Studio {
             Message::TextureMesh => return self.export_texture_mesh(),
             Message::TextureTexelSize(value) => self.texture_texel_size = value,
             Message::TextureMaxResolution(value) => self.texture_max_resolution = value,
+            Message::TextureSource(source) => self.texture_source = source,
+            Message::TexturePreview(visible) => {
+                let _ = self.api_set_texture_preview(None, visible);
+            }
             Message::TexturePoll => return self.texture_poll(),
             Message::CancelTextureExport => {
                 self.cancel_texture_export();
@@ -8505,6 +8621,15 @@ impl Studio {
                     return Task::none();
                 }
                 let position = entry.transform.xyz(pose.position);
+                let source = entry.cloud.path.clone();
+                let label = pose.label.clone();
+                self.remember_station_photo_tab();
+                self.remember_photo_tab();
+                self.remember_model_for_photo();
+                self.photos.close();
+                self.tabs.active_station_photo = Some(source.clone());
+                self.drawing_view.shown = false;
+                self.file_open = false;
                 let view = match self.walk {
                     // Keep looking the same way when stepping to another station.
                     Some(previous) => WalkView {
@@ -8515,8 +8640,9 @@ impl Studio {
                 };
                 self.status = format!(
                     "Station photo: {} · drag to look around, scroll to zoom, W A S D to walk out, Esc to leave",
-                    pose.label
+                    label
                 );
+                self.tabs.station_looks.insert(source, (station, view));
                 self.walk = Some(view);
                 self.walk_station = Some((cloud_index, station));
                 self.panorama_photos = None;
@@ -8546,6 +8672,9 @@ impl Studio {
                 // Leaving a photo puts the camera back where it was.
                 if let Some(task) = self.leave_photo() {
                     return task;
+                }
+                if self.tabs.active_station_photo.is_some() {
+                    return self.show_model_tab();
                 }
                 if self.leave_walk() {
                     self.status = "Back in the 3D view".into();
@@ -10463,12 +10592,23 @@ impl Studio {
                     .into()
                 ),
                 drag_area(
-                    container(row![quick_access, settings_button, window_buttons].spacing(0))
-                        .width(iced::Length::FillPortion(1))
-                        .height(Fill)
-                        .align_x(iced::Alignment::End)
-                        .align_y(iced::Alignment::Center)
-                        .into()
+                    container(
+                        row![
+                            quick_access,
+                            button(text(i18n::tr("Feedback")).size(11))
+                                .on_press(Message::Feedback(feedback::Action::Open))
+                                .padding([4, 8])
+                                .style(ui_style::tool),
+                            settings_button,
+                            window_buttons
+                        ]
+                        .spacing(0)
+                    )
+                    .width(iced::Length::FillPortion(1))
+                    .height(Fill)
+                    .align_x(iced::Alignment::End)
+                    .align_y(iced::Alignment::Center)
+                    .into()
                 ),
             ]
             .width(Fill)
@@ -12056,6 +12196,9 @@ impl Studio {
         if let Some(dialog) = self.settings_view().or_else(|| self.sheet_dialog_view()) {
             layers = layers.push(dialog);
         }
+        if let Some(dialog) = self.feedback_view() {
+            layers = layers.push(dialog);
+        }
         // An install or uninstall waits for the user above everything.
         if let Some(dialog) = self.extension_dialog_view() {
             layers = layers.push(dialog);
@@ -12089,7 +12232,7 @@ fn save_task(
 ) -> Task<Message> {
     Task::perform(
         async move {
-            let chosen = rfd::AsyncFileDialog::new()
+            let chosen = crate::managed::file_dialog()
                 .add_filter(format.to_string(), &[format.extension()])
                 .set_file_name(suggested)
                 .save_file()

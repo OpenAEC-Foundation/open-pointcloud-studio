@@ -30,6 +30,7 @@ The interface is in English or Dutch. The guide uses the English names. Its four
 - [3D BAG buildings](#3d-bag-buildings)
 - [Index and level of detail](#index-and-level-of-detail)
 - [Settings, language and extensions](#settings-language-and-extensions)
+- [Feedback and local MCP access](#feedback-and-local-mcp-access)
 - [Where settings and indexes are stored](#where-settings-and-indexes-are-stored)
 - [Keys and mouse](#keys-and-mouse)
 
@@ -37,7 +38,7 @@ The interface is in English or Dutch. The guide uses the English names. Its four
 
 ## The window
 
-- The **title strip** at the top has the application logo at its left, the name of the application in its middle and, at its right end, five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo and Redo), and the **Settings** button. Actions that are not available are shown muted. Under it, the **File** tab and the **Home** tab (*Start* in Dutch) stand on a line in the accent colour.
+- The **title strip** at the top has the application logo at its left, the name of the application in its middle and, at its right end, five quick-access buttons, shown as icons whose names appear when the pointer rests on them (Import point cloud, Open scan folder, Export active point cloud, Undo and Redo), the **Feedback** form and the **Settings** button. Actions that are not available are shown muted. Under it, the **File** tab and the **Home** tab (*Start* in Dutch) stand on a line in the accent colour.
 - The single **Home** ribbon has the groups FILE (Open, Open scan folder), NAVIGATION (Zoom all, Zoom in, Zoom out, Zoom selection, Pan), SELECTION (Select, Box select, Clear selection, Delete selection, Export selection), SECTION BOX (Section box, Fit section box to selection, Reset box), SURFACE (Mesh and its four methods: Closed, Terrain, 3D mesh and Faces), DRAWING (Mesh to Plan, 2D section, Sheet), MEASURE (Distance, Area), ANNOTATION (Add note, Draw line), INDEX (Index, Refresh LOD) and EXPORT. The small buttons are icons, named in their tooltip. On narrower windows, whole groups fold from the right into a button with a dropdown that holds their controls. **Display** beneath the view cube opens the camera directions, point colours, point size and points in view, eye-dome lighting and scan positions; see [Looking around](#looking-around) and [Display](#display). Extensions are managed and run from **File → Extensions**.
 - The **Project Browser** at the left has five groups, each under a band with an icon, its name and a count: **SCANS**, **CLASSES**, **VIEWS**, **SHEETS** and **BCF**. The bands are alike in every group; the icons on the bands and the rows tell a scan from a view or a drawing. A click on a band collapses the group or opens it again; the window remembers which groups are collapsed. Collapsing never closes or hides anything.
   - **SCANS** lists the open clouds in name order, one row each with a visibility switch, the icon of a scan, the point count and a button to close the cloud. A second line appears only while a cloud is loading or indexing, or when it has selected or deleted points. Its band shows how many scans are open and their points, a switch that shows or hides every scan (with a dash while only some are shown; a click on the dash shows them all), and buttons to add a point cloud and to open a scan folder. While scans open or index, a line under the band says how many are ready, with a thin bar, also while the group is collapsed. Scans from more than one folder are grouped per folder, each folder with its own band, switch and count.
@@ -726,7 +727,29 @@ An STL file stores 32-bit numbers, which hold about seven digits. Up to 2,048 m 
 
 An OBJ or PLY file of 3D BAG buildings carries the credit of the register in its first lines, in plain ASCII in a PLY file. Open Pointcloud Studio reads it there when the file is opened again, so the scene shows the credit and a further export keeps it. An STL file has no room for the credit; name the source yourself when you pass such a file on.
 
-**Texture surface…** beside **Export mesh…** writes a mesh with colours as an OBJ file with UV coordinates, an MTL file and one or more PNG atlas pages, for a program that shows textures rather than colours per vertex. The atlas is painted from the colours at the vertices of the mesh, so it holds no more detail than they do; it does not take the pixels of E57 photos. Colours that [Colour from photos](#colour-from-photos) gave the points are carried into a surface mesh made after them, so make an older mesh again to include them. **Texel (m)** is the size of one pixel of the atlas on the surface, 0.02 m unless changed, and **Atlas (px)** the largest side of a page, from 256 to 4096 pixels. Properties shows the progress with **Cancel texture**; a cancelled export leaves no files. The OBJ keeps its colours per vertex too, which is what this application shows when it opens the file again. A DXF, DWG or IFC file holds no texture images.
+**Texture surface…** beside **Export mesh…** writes OBJ geometry with UV
+coordinates, an MTL and PNG atlas pages. **Texture source** offers **Point
+colours**, which interpolates stored mesh RGB, and **Photographs**, which
+projects calibrated E57 images or added panoramas directly onto the mesh.
+Photograph mode rejects back-facing and mesh-occluded projections and blends
+compatible overlapping photographs with exposure correction. Where no photograph
+observes the surface it uses mesh RGB, or grey if no RGB exists. Foreground
+points outside the reconstructed mesh do not participate in this visibility test.
+Photographs are sampled at up to 2048 pixels on their longest side and within
+a 20 m reach. The source scan and original photographs stay unchanged.
+
+**Texel (m)** is the requested size of a pixel on the surface (default 0.02 m),
+and **Atlas (px)** the maximum page side (256–4096 pixels). Properties shows
+progress and **Cancel texture**, followed by photo/point-colour/unobserved texel
+counts and source photo indices. **Show texture** toggles the exported UV atlas
+in the native viewport. Preview pages share a 128 MiB budget per mesh; **Preview (px)**
+reports their resolution, which can be lower than the exported PNG resolution.
+Unsupported graphics devices retain geometry and show a message. Imported OBJ
+texture images are not automatically loaded; the new preview belongs to the
+mesh on which **Texture surface…** ran. DWG, DXF and IFC exports do not retain
+these texture images. Cancellation before publishing removes staged files;
+cancelling preview preparation after publication retains the completed export.
+
 
 Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, `--texture-mesh INPUT_MESH OUTPUT.obj` writes the atlas of a mesh file with colours, and `--mesh-export INPUT OUTPUT` writes the faces of any mesh file as OBJ, PLY, STL, DXF, DWG or IFC by the extension of `OUTPUT`.
 
@@ -1141,6 +1164,12 @@ The **Extensions** page of the File view lists the extensions under **BUILT IN**
 
 An installed extension runs only when you start it: with a button on its card, a tile, or **Run** on its card. Its card shows the running state and the status bar shows its name, its progress and **Stop**; a click on the action button also stops it. When it ends, the status bar shows its message, or that it finished, or that it failed with its exit code and the last lines of its error output. Every run writes a log in the `logs` folder of the extension, which **Show folder** opens. Stopping a run also ends the programs it started, and closing the window ends the extensions that run; a run that ends by itself leaves open what it opened, such as a report in its program. [Writing an extension](extensions.md) describes the folder, its `extension.json` and the API for authors, with an example.
 
+## Feedback and local MCP access
+
+**Feedback** in the title strip opens a private message form for Open Feedback Studio. Choose the category, enter a title and description, and optionally give a reply email. **Send feedback** sends only these fields and the app version. No scans, paths, screenshots or logs are attached. The form confirms success only after private receipt; failed requests keep the draft, and closing the form keeps it in memory until the window exits. Duplicate and rate-limit responses have their own notices. No feedback is sent automatically and this route does not create public GitHub issues.
+
+The **MCP server** checkbox at the bottom right controls external access through the local command bridge. Uncheck it to refuse new external MCP/API commands; check it to allow them again. The choice is saved. It does not cancel jobs already started or block extension runs, which have separate grants. A failed listener appears unchecked and disabled. The checkbox shows bridge availability and permission, not whether an AI client is connected. The AI client still starts `open-pointcloud-studio --mcp`; see [MCP.md](../native/MCP.md).
+
 ## Where settings and indexes are stored
 
 Settings are in the folder `open-pointcloud-studio-native`:
@@ -1154,7 +1183,7 @@ When the environment variable `XDG_CONFIG_HOME` is set, on any system, the folde
 
 | File | What it holds |
 | --- | --- |
-| `settings.json` | Colour mode, point size, eye-dome lighting and its strength, station markers, point budget, Auto-index |
+| `settings.json` | Colour mode, point size, eye-dome lighting and its strength, station markers, point budget, Auto-index, external MCP/API access |
 | `theme`, `language` | The theme and the language |
 | `extensions.json` | The extensions that are switched off and the installed extensions with their versions |
 | `extensions/` | The installed extensions, a folder each, with the logs of their runs |
