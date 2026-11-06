@@ -304,6 +304,25 @@ fn export_edited_where(
                 .scale
                 .iter()
                 .all(|value| *value == transform.scale[0])
+            && pointcloud_core::export_e57_colours_where(
+                cloud,
+                destination,
+                Some(expected_count),
+                transform.scale[0],
+                transform.offset,
+                colours,
+                &mut include,
+            )?
+            .is_some()
+        {
+            return Ok(());
+        }
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
         {
             pointcloud_core::export_e57_map_with_images(
                 &painted(cloud),
@@ -394,6 +413,28 @@ fn export_edited_section(
     deleted: Option<&DeletionMask>,
 ) -> Result<u64, pointcloud_core::LoadError> {
     if let Some(colours) = colours {
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
+        {
+            if let Some(count) = pointcloud_core::export_e57_colours_where(
+                cloud,
+                destination,
+                None,
+                transform.scale[0],
+                transform.offset,
+                colours,
+                |ordinal, point| {
+                    deleted.is_none_or(|mask| !mask.contains(ordinal))
+                        && section.contains(transform.xyz(point.xyz))
+                },
+            )? {
+                return Ok(count);
+            }
+        }
         if format == ExportFormat::E57
             && transform.scale[0] > 0.0
             && transform

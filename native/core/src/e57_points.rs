@@ -466,6 +466,20 @@ pub fn read(
     Ok(())
 }
 
+/// e57 0.11's simple reader advances only one compressed-vector packet per
+/// call. A legal packet may contain no complete point yet (for example a
+/// one-bit validity stream whose final byte is in the following packet).
+/// Its raw reader already loops over this case; do the same here, retaining
+/// every actual decoding/I/O error. Each retry advances the underlying stream.
+pub(crate) fn complete_points<T: Read + Seek>(
+    points: e57::PointCloudReaderSimple<'_, T>,
+) -> impl Iterator<Item = Result<e57::Point, e57::Error>> + '_ {
+    points.filter(|point| {
+        !matches!(point, Err(e57::Error::Internal { desc, .. })
+            if desc == "Cannot read next point because of logic error")
+    })
+}
+
 /// Stream the registered, valid points of one scan.
 pub(crate) fn read_scan<T: Read + Seek>(
     file: &mut E57Reader<T>,
@@ -478,7 +492,7 @@ pub(crate) fn read_scan<T: Read + Seek>(
     // default converts intensity-only points into synthetic grey colors.
     points.intensity_to_color(false);
     points.apply_pose(true);
-    for point in points {
+    for point in complete_points(points) {
         let point = point?;
         let CartesianCoordinate::Valid { x, y, z } = &point.cartesian else {
             continue;
