@@ -56,6 +56,7 @@ impl Studio {
         Some(
             stack![
                 canvas::Paper {
+                    images: &self.layouts.images,
                     tool: &self.layouts,
                     plot: Arc::clone(&plot),
                     desk: canvas::desk(self.ui_theme),
@@ -79,6 +80,63 @@ impl Studio {
                         .collect(),
                     typing: self.notes.typing.is_some(),
                     selected_note: self.notes.selected.clone(),
+                })
+                .width(Fill)
+                .height(Fill),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
+    }
+
+    /// The paper of a document pane, with its own camera and shared contents.
+    pub(crate) fn pane_layout_canvas<'a>(
+        &'a self,
+        guid: &str,
+        tool: &'a super::LayoutTool,
+        key: &'a str,
+        bounds: &'a std::cell::Cell<Option<iced::Rectangle>>,
+        pane_bounds: &'a std::cell::Cell<Option<iced::Rectangle>>,
+        active: bool,
+    ) -> Option<Element<'a, Message>> {
+        let plot = self.pane_plot(guid, tool)?;
+        let colors = self.ui_theme.colors();
+        Some(
+            stack![
+                canvas::Paper {
+                    tool,
+                    images: &self.layouts.images,
+                    plot: Arc::clone(&plot),
+                    desk: canvas::desk(self.ui_theme),
+                    paper: iced::Color::WHITE
+                },
+                Canvas::new(crate::document_panes::widget::Scoped {
+                    inner: canvas::Overlay {
+                        tool,
+                        plot,
+                        selected: active.then(|| tool.selected.clone()).flatten(),
+                        dropping: None,
+                        accent: colors.accent,
+                        hint: None,
+                        hint_back: colors.dom.scene_badge_bg,
+                        hint_ink: colors.dom.scene_badge_text,
+                        tool_kind: active.then_some(self.notes.kind).flatten(),
+                        picked: if active {
+                            self.notes
+                                .picked
+                                .iter()
+                                .map(|point| [point[0], point[1]])
+                                .collect()
+                        } else {
+                            Vec::new()
+                        },
+                        typing: active && self.notes.typing.is_some(),
+                        selected_note: active.then(|| self.notes.selected.clone()).flatten(),
+                    },
+                    key,
+                    bounds,
+                    pane_bounds,
                 })
                 .width(Fill)
                 .height(Fill),

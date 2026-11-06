@@ -20,12 +20,14 @@ mod cloud_centroid;
 #[cfg(test)]
 mod cloud_parity;
 mod cloud_transform;
+mod document_panes;
 mod drawing;
 mod drawing_crop;
 mod drawing_notes;
 mod drawing_view;
 mod extensions;
 mod faces;
+mod feedback;
 mod file_photos;
 mod file_view;
 mod fonts;
@@ -39,10 +41,12 @@ mod locks;
 mod lod_pace;
 #[cfg(target_os = "macos")]
 mod macos_open;
+mod managed;
 mod mcp;
 mod measure;
 mod memory_usage;
 mod mesh_export;
+mod mesh_texture_preview;
 mod mesh_to_plans;
 mod mesh_wizard;
 mod native_api;
@@ -302,6 +306,25 @@ fn export_edited_where(
                 .scale
                 .iter()
                 .all(|value| *value == transform.scale[0])
+            && pointcloud_core::export_e57_colours_where(
+                cloud,
+                destination,
+                Some(expected_count),
+                transform.scale[0],
+                transform.offset,
+                colours,
+                &mut include,
+            )?
+            .is_some()
+        {
+            return Ok(());
+        }
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
         {
             pointcloud_core::export_e57_map_with_images(
                 &painted(cloud),
@@ -392,6 +415,28 @@ fn export_edited_section(
     deleted: Option<&DeletionMask>,
 ) -> Result<u64, pointcloud_core::LoadError> {
     if let Some(colours) = colours {
+        if format == ExportFormat::E57
+            && transform.scale[0] > 0.0
+            && transform
+                .scale
+                .iter()
+                .all(|value| *value == transform.scale[0])
+        {
+            if let Some(count) = pointcloud_core::export_e57_colours_where(
+                cloud,
+                destination,
+                None,
+                transform.scale[0],
+                transform.offset,
+                colours,
+                |ordinal, point| {
+                    deleted.is_none_or(|mask| !mask.contains(ordinal))
+                        && section.contains(transform.xyz(point.xyz))
+                },
+            )? {
+                return Ok(count);
+            }
+        }
         if format == ExportFormat::E57
             && transform.scale[0] > 0.0
             && transform
@@ -677,6 +722,13 @@ fn main() -> iced::Result {
     if let Some(text) = cli_help::answer(first.as_deref()) {
         println!("{text}");
         return Ok(());
+    }
+    if first.as_deref() == Some(OsStr::new("--mcp-http")) {
+        if args.next().is_some() {
+            eprintln!("Usage: open-pointcloud-studio --mcp-http");
+            std::process::exit(2);
+        }
+        std::process::exit(mcp::run_http());
     }
     if first.as_deref() == Some(OsStr::new("--mcp")) {
         if args.next().is_some() {
@@ -1030,6 +1082,10 @@ fn main() -> iced::Result {
                 first.into_iter().chain(args).map(PathBuf::from).collect(),
             )
         };
+    if let Err(error) = managed::validate() {
+        eprintln!("Managed configuration: {error}");
+        std::process::exit(2);
+    }
     let api = match native_api::start(requested_port) {
         Ok(api) => Some(api),
         Err(error) => {
@@ -1038,196 +1094,224 @@ fn main() -> iced::Result {
         }
     };
     release_own_console();
-    iced::application(Studio::window_title, Studio::update, Studio::view)
-        // Controls without an explicit size match the compact property rows.
-        .settings(iced::Settings {
-            default_text_size: iced::Pixels(12.0),
-            fonts: fonts::FILES
-                .into_iter()
-                .map(std::borrow::Cow::Borrowed)
-                .collect(),
-            ..iced::Settings::default()
-        })
-        .subscription(|studio| {
-            let keyboard = iced::event::listen_with(|event, status, _| match event {
-                iced::Event::Window(
-                    iced::window::Event::Resized(size) | iced::window::Event::Opened { size, .. },
-                ) => Some(Message::WindowResized(size)),
-                // The window is closed by the application itself, so work
-                // that is under way is asked to stop first.
-                iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::Exit),
-                iced::Event::Window(iced::window::Event::FileDropped(path)) => {
-                    Some(Message::FileDropped(path))
-                }
-                // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs above
-                // the main area.
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
-                    modifiers,
-                    ..
-                }) if modifiers.control() => Some(Message::Tabs(view_tabs::TabAction::Cycle(
-                    !modifiers.shift(),
-                ))),
-                // Escape, Delete, Backspace and Enter, and every other key
-                // without a character but Shift and the like, which end a
-                // half-typed RO.
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(named),
-                    ..
-                }) if !drawing_crop::is_modifier_key(named) => Some(Message::NamedKey(
-                    named,
-                    status == iced::event::Status::Ignored,
-                )),
-                // With the command key of the system: Control, and Command on
-                // macOS.
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Character(value),
-                    modifiers,
-                    ..
-                }) if status == iced::event::Status::Ignored && modifiers.command() => {
-                    if value.eq_ignore_ascii_case("z") {
-                        Some(Message::ModelKey(if modifiers.shift() {
-                            ModelKey::Redo
-                        } else {
-                            ModelKey::Undo
-                        }))
-                    } else if value.eq_ignore_ascii_case("y") {
-                        Some(Message::ModelKey(ModelKey::Redo))
-                    } else if value.as_str() == "," {
-                        Some(Message::Settings(settings_dialog::SettingsAction::Open))
+    let window_settings = iced::window::Settings {
+        size: Size::new(1440.0, 900.0),
+        icon: iced::window::icon::from_file_data(
+            include_bytes!("../../assets/icons/icon-64.png"),
+            None,
+        )
+        .ok(),
+        #[cfg(target_os = "linux")]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: APPLICATION_ID.into(),
+            ..Default::default()
+        },
+        #[cfg(windows)]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            undecorated_shadow: true,
+            ..Default::default()
+        },
+        // The title strip of the application is the only bar at the top
+        // and carries the window buttons (`native_chrome`).
+        decorations: !native_chrome::FRAMELESS,
+        // Closing arrives as `Message::Exit`, like Exit in the File view.
+        exit_on_close_request: false,
+        ..iced::window::Settings::default()
+    };
+    iced::daemon(
+        |studio: &Studio, _| studio.window_title(),
+        Studio::update,
+        Studio::view_for_window,
+    )
+    // Controls without an explicit size match the compact property rows.
+    .settings(iced::Settings {
+        default_text_size: iced::Pixels(12.0),
+        fonts: fonts::FILES
+            .into_iter()
+            .map(std::borrow::Cow::Borrowed)
+            .collect(),
+        ..iced::Settings::default()
+    })
+    .subscription(|studio| {
+        let keyboard = iced::event::listen_with(|event, status, window| match event {
+            iced::Event::Window(
+                iced::window::Event::Resized(size) | iced::window::Event::Opened { size, .. },
+            ) => Some(Message::Documents(document_panes::Action::NativeResized(
+                window, size,
+            ))),
+            // The window is closed by the application itself, so work
+            // that is under way is asked to stop first.
+            iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::Documents(
+                document_panes::Action::NativeClosed(window),
+            )),
+            iced::Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::Documents(
+                document_panes::Action::Pointer(window, position),
+            )),
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => Some(
+                Message::Documents(document_panes::Action::FinishDrag(window)),
+            ),
+            iced::Event::Mouse(mouse::Event::CursorLeft) => Some(Message::Documents(
+                document_panes::Action::NativeCursor(window, true),
+            )),
+            iced::Event::Mouse(mouse::Event::CursorEntered) => Some(Message::Documents(
+                document_panes::Action::NativeCursor(window, false),
+            )),
+            iced::Event::Window(iced::window::Event::Focused) => Some(Message::Documents(
+                document_panes::Action::NativeFocused(window),
+            )),
+            iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+                Some(Message::FileDropped(path))
+            }
+            // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs above
+            // the main area.
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+                modifiers,
+                ..
+            }) if modifiers.control() => Some(Message::Tabs(view_tabs::TabAction::Cycle(
+                !modifiers.shift(),
+            ))),
+            // Escape, Delete, Backspace and Enter, and every other key
+            // without a character but Shift and the like, which end a
+            // half-typed RO.
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(named),
+                ..
+            }) if !drawing_crop::is_modifier_key(named) => Some(Message::NamedKey(
+                named,
+                status == iced::event::Status::Ignored,
+            )),
+            // With the command key of the system: Control, and Command on
+            // macOS.
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Character(value),
+                modifiers,
+                ..
+            }) if status == iced::event::Status::Ignored && modifiers.command() => {
+                if value.eq_ignore_ascii_case("z") {
+                    Some(Message::ModelKey(if modifiers.shift() {
+                        ModelKey::Redo
                     } else {
-                        None
+                        ModelKey::Undo
+                    }))
+                } else if value.eq_ignore_ascii_case("y") {
+                    Some(Message::ModelKey(ModelKey::Redo))
+                } else if value.as_str() == "," {
+                    Some(Message::Settings(settings_dialog::SettingsAction::Open))
+                } else {
+                    None
+                }
+            }
+            // F fits the view, W A S D walk, Q and E move down and up,
+            // R and then O turn, and while turning digits type the
+            // angle. A key a text field takes only ends RO.
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Character(value),
+                modifiers,
+                ..
+            }) if !modifiers.control() && !modifiers.alt() && !modifiers.logo() => Some(
+                Message::KeyTyped(value.to_string(), status == iced::event::Status::Captured),
+            ),
+            iced::Event::Keyboard(iced::keyboard::Event::KeyReleased {
+                key: iced::keyboard::Key::Character(value),
+                ..
+            }) => WalkKey::from_character(value.as_str()).map(|key| Message::WalkKey(key, false)),
+            iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
+                Some(Message::Modifiers(modifiers))
+            }
+            // A key released while another window has focus never arrives.
+            iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WalkStop),
+            _ => None,
+        });
+        let walking = if studio.walk.is_some() && studio.walk_keys.contains(&true) {
+            iced::time::every(Duration::from_millis(16)).map(Message::WalkTick)
+        } else {
+            iced::Subscription::none()
+        };
+        let api = if let Some(receiver) = &studio.api_receiver {
+            let receiver = Arc::clone(receiver);
+            let stream = iced::stream::channel(32, move |mut output| async move {
+                loop {
+                    let delivery = receiver.lock().await.recv().await;
+                    let Some(delivery) = delivery else { break };
+                    // A request with the token of a run of an extension
+                    // is handled on behalf of that extension.
+                    let message = match delivery.caller {
+                        None => Message::ApiRequest(delivery.request),
+                        Some(caller) => Message::Extension(extensions::ExtensionAction::Api(
+                            caller,
+                            Box::new(delivery.request),
+                        )),
+                    };
+                    if output.send(message).await.is_err() {
+                        break;
                     }
                 }
-                // F fits the view, W A S D walk, Q and E move down and up,
-                // R and then O turn, and while turning digits type the
-                // angle. A key a text field takes only ends RO.
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Character(value),
-                    modifiers,
-                    ..
-                }) if !modifiers.control() && !modifiers.alt() && !modifiers.logo() => Some(
-                    Message::KeyTyped(value.to_string(), status == iced::event::Status::Captured),
-                ),
-                iced::Event::Keyboard(iced::keyboard::Event::KeyReleased {
-                    key: iced::keyboard::Key::Character(value),
-                    ..
-                }) => {
-                    WalkKey::from_character(value.as_str()).map(|key| Message::WalkKey(key, false))
-                }
-                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
-                    Some(Message::Modifiers(modifiers))
-                }
-                // A key released while another window has focus never arrives.
-                iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WalkStop),
-                _ => None,
             });
-            let walking = if studio.walk.is_some() && studio.walk_keys.contains(&true) {
-                iced::time::every(Duration::from_millis(16)).map(Message::WalkTick)
-            } else {
-                iced::Subscription::none()
-            };
-            let api = if let Some(receiver) = &studio.api_receiver {
-                let receiver = Arc::clone(receiver);
-                let stream = iced::stream::channel(32, move |mut output| async move {
-                    loop {
-                        let delivery = receiver.lock().await.recv().await;
-                        let Some(delivery) = delivery else { break };
-                        // A request with the token of a run of an extension
-                        // is handled on behalf of that extension.
-                        let message = match delivery.caller {
-                            None => Message::ApiRequest(delivery.request),
-                            Some(caller) => Message::Extension(extensions::ExtensionAction::Api(
-                                caller,
-                                Box::new(delivery.request),
-                            )),
-                        };
-                        if output.send(message).await.is_err() {
-                            break;
-                        }
+            iced::Subscription::run_with_id("native_api", stream)
+        } else {
+            iced::Subscription::none()
+        };
+        // Files the system hands over are opened like files dropped on
+        // the window.
+        let opened = if let Some(receiver) = &studio.opened_files {
+            let receiver = Arc::clone(receiver);
+            let stream = iced::stream::channel(32, move |mut output| async move {
+                loop {
+                    let path = receiver.lock().await.recv().await;
+                    let Some(path) = path else { break };
+                    if output.send(Message::FileDropped(path)).await.is_err() {
+                        break;
                     }
-                });
-                iced::Subscription::run_with_id("native_api", stream)
-            } else {
-                iced::Subscription::none()
-            };
-            // Files the system hands over are opened like files dropped on
-            // the window.
-            let opened = if let Some(receiver) = &studio.opened_files {
-                let receiver = Arc::clone(receiver);
-                let stream = iced::stream::channel(32, move |mut output| async move {
-                    loop {
-                        let path = receiver.lock().await.recv().await;
-                        let Some(path) = path else { break };
-                        if output.send(Message::FileDropped(path)).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-                iced::Subscription::run_with_id("opened_files", stream)
-            } else {
-                iced::Subscription::none()
-            };
-            let clock = if studio.extension_clock() {
-                iced::time::every(Duration::from_secs(1))
-                    .map(|_| Message::Extension(extensions::ExtensionAction::Tick))
-            } else {
-                iced::Subscription::none()
-            };
-            let memory = iced::time::every(Duration::from_secs(2)).map(|_| Message::MemoryTick);
-            iced::Subscription::batch([keyboard, api, opened, walking, clock, memory])
-        })
-        .default_font(fonts::REGULAR)
-        .theme(|studio: &Studio| studio.ui_theme.iced())
-        .antialiasing(true)
-        .window(iced::window::Settings {
-            size: Size::new(1440.0, 900.0),
-            icon: iced::window::icon::from_file_data(
-                include_bytes!("../../assets/icons/icon-64.png"),
-                None,
-            )
-            .ok(),
-            #[cfg(target_os = "linux")]
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: APPLICATION_ID.into(),
-                ..Default::default()
+                }
+            });
+            iced::Subscription::run_with_id("opened_files", stream)
+        } else {
+            iced::Subscription::none()
+        };
+        let clock = if studio.extension_clock() {
+            iced::time::every(Duration::from_secs(1))
+                .map(|_| Message::Extension(extensions::ExtensionAction::Tick))
+        } else {
+            iced::Subscription::none()
+        };
+        let memory = iced::time::every(Duration::from_secs(2)).map(|_| Message::MemoryTick);
+        let shutdown = managed::shutdown().map(|()| Message::Exit);
+        iced::Subscription::batch([keyboard, api, opened, walking, clock, memory, shutdown])
+    })
+    .default_font(fonts::REGULAR)
+    .theme(|studio: &Studio, _| studio.ui_theme.iced())
+    .antialiasing(true)
+    .run_with(move || {
+        let mut studio = Studio::default();
+        let (_, open_window) = iced::window::open(window_settings);
+        studio.memory_usage.refresh();
+        if let Some((receiver, handle)) = api {
+            studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
+            handle.set_enabled(studio.mcp_enabled);
+            studio.api_handle = Some(handle);
+        }
+        // This runs on the main thread after the event loop was made and
+        // before it starts, which is when the hand-over must be in place.
+        #[cfg(target_os = "macos")]
+        {
+            studio.opened_files =
+                macos_open::install().map(|receiver| Arc::new(tokio::sync::Mutex::new(receiver)));
+        }
+        let chrome = Task::perform(
+            async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                3
             },
-            #[cfg(windows)]
-            platform_specific: iced::window::settings::PlatformSpecific {
-                undecorated_shadow: true,
-                ..Default::default()
-            },
-            // The title strip of the application is the only bar at the top
-            // and carries the window buttons (`native_chrome`).
-            decorations: !native_chrome::FRAMELESS,
-            // Closing arrives as `Message::Exit`, like Exit in the File view.
-            exit_on_close_request: false,
-            ..iced::window::Settings::default()
-        })
-        .run_with(move || {
-            let mut studio = Studio::default();
-            studio.memory_usage.refresh();
-            if let Some((receiver, handle)) = api {
-                studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
-                studio.api_handle = Some(handle);
-            }
-            // This runs on the main thread after the event loop was made and
-            // before it starts, which is when the hand-over must be in place.
-            #[cfg(target_os = "macos")]
-            {
-                studio.opened_files = macos_open::install()
-                    .map(|receiver| Arc::new(tokio::sync::Mutex::new(receiver)));
-            }
-            let chrome = Task::perform(
-                async {
-                    tokio::time::sleep(Duration::from_millis(300)).await;
-                    3
-                },
-                Message::SyncWindowChrome,
-            );
-            let task = Task::batch([studio.open_paths(startup_files), chrome]);
-            (studio, task)
-        })
+            Message::SyncWindowChrome,
+        );
+        let task = Task::batch([
+            open_window.map(Message::NativeWindowOpened),
+            studio.open_with_document_layout(startup_files),
+            chrome,
+        ]);
+        (studio, task)
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1720,6 +1804,8 @@ impl RibbonTab {
 enum Message {
     SyncWindowChrome(u8),
     ApiRequest(native_api::ApiRequest),
+    Feedback(feedback::Action),
+    SetMcpEnabled(bool),
     ApiScreenshot(screenshot::Step),
     ApiExported(String, bool, Result<(PathBuf, u64), String>),
     MergeVisible,
@@ -1747,6 +1833,7 @@ enum Message {
     ToggleViewControls,
     /// The window opened or got another size: the ribbon measures its
     /// overflow again.
+    NativeWindowOpened(iced::window::Id),
     WindowResized(Size),
     /// A press on the empty part of the title strip: it moves the window, and
     /// a second press soon after maximizes or restores it.
@@ -1853,6 +1940,8 @@ enum Message {
     TextureMesh,
     TextureTexelSize(String),
     TextureMaxResolution(String),
+    TextureSource(mesh_export::TextureSource),
+    TexturePreview(bool),
     TexturePoll,
     CancelTextureExport,
     TexturePathChosen(mesh_export::MeshExportRequest, Option<PathBuf>),
@@ -2011,6 +2100,7 @@ enum Message {
     Browser(project_browser::BrowserAction),
     /// A tab above the main area was clicked or closed, or Ctrl+Tab pressed.
     Tabs(view_tabs::TabAction),
+    Documents(document_panes::Action),
     Sheet(sheet_dialog::SheetAction),
     OrbitPointPicked(Option<[f64; 3]>),
     /// A single click at a pixel of the scene with no tool on: the point
@@ -2066,6 +2156,8 @@ struct Studio {
     api_receiver:
         Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<native_api::Delivery>>>>,
     api_handle: Option<native_api::ApiHandle>,
+    mcp_enabled: bool,
+    feedback: feedback::Feedback,
     /// Files the system hands to the application after it started; only
     /// macOS delivers files this way.
     opened_files: Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<PathBuf>>>>,
@@ -2167,6 +2259,7 @@ struct Studio {
     texture_export: Option<Arc<mesh_export::TextureExportControl>>,
     texture_texel_size: String,
     texture_max_resolution: String,
+    texture_source: mesh_export::TextureSource,
     mesh_dialog_pending: bool,
     mesh_job: Option<MeshJob>,
     merge_job: Option<MergeJob>,
@@ -2200,12 +2293,15 @@ struct Studio {
     /// The tabs above the main area: the 3D model and the views and
     /// drawings opened from VIEWS.
     tabs: view_tabs::ViewTabs,
+    documents: Option<document_panes::runtime::Runtime>,
+    document_persistence: document_panes::persistence::Persistence,
     /// How deep `update` is called within itself; the tabs follow what the
     /// window shows only when the outermost call ends.
     update_depth: u32,
     sheet_dialog: Option<sheet_dialog::SheetDialog>,
     viewport_size: Size,
     /// The size of the window, once it opened.
+    main_window: Option<iced::window::Id>,
     window_size: Option<Size>,
     /// Whether the window is maximized, as the system last reported it.
     window_maximized: bool,
@@ -2346,6 +2442,8 @@ struct CloudEntry {
     /// made or read.
     mesh_topology: Option<pointcloud_core::MeshTopology>,
     mesh_visible: bool,
+    texture: Option<Arc<mesh_texture_preview::BakedTexture>>,
+    texture_visible: bool,
     /// The faces detected in this scan, a layer of its own beside the mesh.
     faces: Option<faces::FaceLayer>,
     bag_source: bool,
@@ -2768,6 +2866,8 @@ impl Default for Studio {
         Self {
             api_receiver: None,
             api_handle: None,
+            mcp_enabled: settings.mcp_enabled,
+            feedback: feedback::Feedback::default(),
             opened_files: None,
             api_jobs: HashMap::new(),
             api_job_order: VecDeque::new(),
@@ -2866,6 +2966,7 @@ impl Default for Studio {
             texture_export: None,
             texture_texel_size: "0.02".into(),
             texture_max_resolution: "4096".into(),
+            texture_source: mesh_export::TextureSource::default(),
             mesh_dialog_pending: false,
             mesh_job: None,
             merge_job: None,
@@ -2889,10 +2990,13 @@ impl Default for Studio {
             view_label: "ISOMETRIC",
             views: views::ViewTool::load(),
             browser: project_browser::BrowserState::new(settings.browser_collapsed.clone()),
+            documents: None,
+            document_persistence: document_panes::persistence::Persistence::new(),
             tabs: view_tabs::ViewTabs::new(&settings.view_tabs, settings.view_tab.as_deref()),
             update_depth: 0,
             sheet_dialog: None,
             viewport_size: Size::new(915.0, 743.0),
+            main_window: None,
             window_size: None,
             window_maximized: false,
             title_pressed: None,
@@ -3012,6 +3116,7 @@ impl Studio {
 
     fn preferences(&self) -> preferences::Preferences {
         preferences::Preferences {
+            mcp_enabled: self.mcp_enabled,
             color_mode: self.color_mode,
             point_size: self.point_size,
             eye_dome: self.eye_dome,
@@ -3047,14 +3152,15 @@ impl Studio {
     }
 
     /// Whether the model is out of sight behind the File view, the Settings
-    /// dialog, the card of the Pointcloud to Drawing wizard or that of Mesh
-    /// Pointcloud. Keys then leave the model alone, and a screenshot or a
+    /// or Feedback dialog, the card of the Pointcloud to Drawing wizard or
+    /// that of Mesh Pointcloud. Keys then leave the model alone, and a screenshot or a
     /// view snapshot is not taken, as it would show what covers the model.
     /// The strip of the Pointcloud to Drawing wizard lies beside the scene and
     /// covers nothing.
     fn model_covered(&self) -> bool {
         self.file_open
             || self.settings.is_some()
+            || self.feedback.open
             || self.mesh_to_plans.covers_model()
             || self.mesh_wizard.is_open()
     }
@@ -3166,6 +3272,8 @@ impl Studio {
             mesh: None,
             mesh_topology: None,
             mesh_visible: true,
+            texture: None,
+            texture_visible: false,
             faces: None,
             bag_source: false,
             visible: true,
@@ -3595,6 +3703,8 @@ impl Studio {
     }
 
     fn leave_walk(&mut self) -> bool {
+        self.remember_station_photo_tab();
+        self.tabs.active_station_photo = None;
         self.panorama_photos = None;
         self.remember_photo_tab();
         self.photos.close();
@@ -3998,6 +4108,7 @@ impl Studio {
                             "total": job.source.total_points,
                         })),
                         "api_port": self.api_handle.as_ref().map(|handle| handle.port),
+                        "mcp_enabled": self.mcp_enabled && self.api_handle.as_ref().is_some_and(|handle| handle.is_enabled()),
                     }}),
                     Task::none(),
                 );
@@ -4006,6 +4117,7 @@ impl Studio {
                 answer.0["result"]["detail_pending"] = Value::Bool(self.detail_pending);
                 answer.0["result"]["index"] = self.index_value();
                 answer.0["result"]["language"] = Value::from(i18n::choice().key());
+                answer.0["result"]["managed"] = managed::summary();
                 answer.0["result"]["ribbon_tab"] = Value::from("start");
                 answer.0["result"]["view_controls_open"] = Value::Bool(self.view_controls_open);
                 answer.0["result"]["bag3d"] =
@@ -4191,7 +4303,20 @@ impl Studio {
                 });
                 if has_photos {
                     let task = self.update(Message::EnterPanorama(index, station));
-                    (json!({"ok": true, "walk": self.walk_value()}), task)
+                    let mut value = json!({"ok": true, "walk": self.walk_value()});
+                    if value["walk"].is_null() {
+                        if let Some(snapshot) =
+                            view_tabs::TabId::StationPhoto(self.clouds[index].cloud.path.clone())
+                                .document_key()
+                                .and_then(|key| self.documents.as_ref()?.snapshots.get(&key))
+                        {
+                            value["walk"] = snapshot.walk_value(self);
+                            value["active_document"] =
+                                json!(self.shown_tab().and_then(|tab| tab.document_key()));
+                            value["photo_document"] = json!(snapshot.tab.document_key());
+                        }
+                    }
+                    (value, task)
                 } else {
                     (
                         json!({"ok": false, "error": "that cloud and station have no station photos"}),
@@ -5061,8 +5186,12 @@ impl Studio {
                 path,
                 texel_size,
                 max_resolution,
-            } => self.api_texture_mesh(path, texel_size, max_resolution),
+                source,
+            } => self.api_texture_mesh(path, texel_size, max_resolution, source),
             ApiCommand::CancelTextureMesh => (self.cancel_texture_export(), Task::none()),
+            ApiCommand::SetTexturePreview { layer, visible } => {
+                (self.api_set_texture_preview(layer, visible), Task::none())
+            }
             ApiCommand::SetFaceSettings { options } => {
                 (self.api_set_face_settings(&options), Task::none())
             }
@@ -5120,6 +5249,11 @@ impl Studio {
             ApiCommand::DeleteDrawing { name } => (self.api_delete_drawing(&name), Task::none()),
             ApiCommand::SetBrowserGroup { group, open } => self.api_set_browser_group(&group, open),
             ApiCommand::ListTabs => self.api_list_tabs(),
+            ApiCommand::ListPanes => (self.panes_value(), Task::none()),
+            ApiCommand::TearOffTab => self.api_pane_window(None),
+            ApiCommand::DockPaneWindow { window } => self.api_pane_window(Some(window)),
+            ApiCommand::SplitPane { side } => self.api_split_pane(side),
+            ApiCommand::SetPaneLinked { pane, linked } => self.api_set_pane_linked(pane, linked),
             ApiCommand::ShowTab { name, index } => self.api_show_tab(name.as_deref(), index),
             ApiCommand::CloseTab { name, index } => self.api_close_tab(name.as_deref(), index),
             ApiCommand::SetSheetCrop { options } => self.api_set_sheet_crop(&options),
@@ -5842,6 +5976,8 @@ impl Studio {
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
+                        texture: None,
+                        texture_visible: false,
                         faces: None,
                         bag_source: false,
                         visible: true,
@@ -6246,11 +6382,75 @@ impl Studio {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        if let Message::Documents(document_panes::Action::Pointer(window, position)) = &message {
+            if let Some(documents) = &mut self.documents {
+                if documents.drag.is_none() {
+                    if documents.native_windows.values().any(|id| id == window) {
+                        documents.pointers.insert(*window, *position);
+                    }
+                    return Task::none();
+                }
+            } else {
+                return Task::none();
+            }
+        }
+        if matches!(
+            &message,
+            Message::Documents(document_panes::Action::FinishDrag(_))
+        ) && self
+            .documents
+            .as_ref()
+            .is_none_or(|documents| documents.drag.is_none())
+        {
+            return Task::none();
+        }
         // The RAM label needs a fresh sample, not the model and drawing
         // settlement work that follows every normal UI action.
         if matches!(&message, Message::MemoryTick) {
+            if self.main_window.is_some() {
+                if let Some(handle) = &self.api_handle {
+                    handle.mark_gui_alive();
+                }
+            }
             self.memory_usage.refresh();
-            return Task::none();
+            let restore = self.settle_document_restore();
+            let save = self.queue_document_layout();
+            return Task::batch([restore, save]);
+        }
+        if matches!(
+            &message,
+            Message::EnterPanorama(_, _)
+                | Message::Views(views::ViewAction::Restore(_))
+                | Message::DrawingView(drawing_view::DrawingViewAction::ShowSheet(_))
+        ) {
+            if let Some(mut documents) = self.documents.take() {
+                documents.capture_active(self);
+                documents.detach_active_photo(self);
+                self.documents = Some(documents);
+            }
+        }
+        if self.update_depth == 0 {
+            if let Some(mut documents) = self.documents.take() {
+                if let Some(snapshot) = documents.snapshots.get(&documents.active) {
+                    if self.shown_tab().as_ref() == Some(&snapshot.tab) {
+                        snapshot.sync_viewport(self);
+                    }
+                }
+                documents.capture_active(self);
+                if let Message::PanoramaReady(source, station, result) = &message {
+                    if documents.background_panorama(source, *station, result) {
+                        self.documents = Some(documents);
+                        return Task::none();
+                    }
+                }
+                if let Message::Photos(action) = &message {
+                    if let Some(task) = documents.background_photo(self, action) {
+                        self.documents = Some(documents);
+                        return task;
+                    }
+                }
+                self.documents = Some(documents);
+            }
         }
         self.update_depth += 1;
         let task = self.handle(message);
@@ -6278,10 +6478,22 @@ impl Studio {
         if self.update_depth > 0 {
             return task;
         }
-        match self.settle_tabs() {
+        let task = match self.settle_tabs() {
             Some(tabs) => Task::batch([task, tabs]),
             None => task,
+        };
+        let mut task = task;
+        if let Some(mut documents) = self.documents.take() {
+            if self.shown_tab().is_some() {
+                if let Err(error) = documents.observe_current(self) {
+                    self.status = error;
+                }
+            }
+            documents.reconcile(self);
+            task = Task::batch([task, documents.settle_windows()]);
+            self.documents = Some(documents);
         }
+        Task::batch([task, self.settle_document_restore()])
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
@@ -6302,7 +6514,27 @@ impl Studio {
                     );
                 }
             }
-            Message::ApiRequest(request) => return self.handle_api(request),
+            Message::Feedback(action) => return self.feedback_action(action),
+            Message::Escape if self.feedback.open => {
+                return self.feedback_action(feedback::Action::Close)
+            }
+            Message::SetMcpEnabled(enabled) => {
+                self.mcp_enabled = enabled;
+                if let Some(handle) = &self.api_handle {
+                    handle.set_enabled(enabled);
+                }
+                return self.queue_preferences_save();
+            }
+            Message::ApiRequest(request) => {
+                // Also gate commands queued before the user paused the bridge.
+                if !self.mcp_enabled {
+                    let _ = request.reply.send(
+                        json!({"ok": false, "error": "MCP/API access is paused in the status bar"}),
+                    );
+                    return Task::none();
+                }
+                return self.handle_api(request);
+            }
             Message::ApiScreenshot(step) => return self.screenshot_step(step),
             Message::ApiExported(id, section_only, result) => {
                 if section_only {
@@ -6339,7 +6571,7 @@ impl Studio {
                 self.status = "Choose where to save the merged visible scans…".into();
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("E57 scene with stations and photos", &["e57"])
                             .add_filter("LAZ point cloud", &["laz"])
                             .add_filter("LAS point cloud", &["las"])
@@ -6499,6 +6731,7 @@ impl Studio {
                 }
             }
             Message::Exit => {
+                self.flush_document_layout();
                 // A change of the Pointcloud to Drawing project that waits for its
                 // moment is written before the window goes.
                 self.flush_mesh_to_plans();
@@ -6510,11 +6743,18 @@ impl Studio {
             }
             Message::CloseRibbonPanel => self.ribbon_panel_open = None,
             Message::ToggleViewControls => self.view_controls_open = !self.view_controls_open,
+            Message::NativeWindowOpened(id) => {
+                self.main_window = Some(id);
+                if let Some(documents) = &mut self.documents {
+                    documents.native_windows.insert(0, id);
+                }
+                return self.update(Message::SyncWindowChrome(3));
+            }
             Message::WindowResized(size) => {
                 let previous = self.window_size.replace(size);
                 self.ribbon_panel_open = None;
                 // Maximizing, restoring and snapping all arrive as a new size.
-                let maximized = window_maximized_task();
+                let maximized = window_maximized_task(self.main_window);
                 if let Some(previous) = previous {
                     let viewport = Size::new(
                         (self.viewport_size.width + size.width - previous.width).max(1.0),
@@ -6536,15 +6776,23 @@ impl Studio {
                     return self.update(Message::WindowToggleMaximize);
                 }
                 self.title_pressed = Some(now);
-                return iced::window::get_latest().and_then(iced::window::drag);
+                return self
+                    .main_window
+                    .map(iced::window::drag)
+                    .unwrap_or_else(Task::none);
             }
             Message::WindowMinimize => {
-                return iced::window::get_latest().and_then(|id| iced::window::minimize(id, true));
+                return self
+                    .main_window
+                    .map(|id| iced::window::minimize(id, true))
+                    .unwrap_or_else(Task::none);
             }
             Message::WindowToggleMaximize => {
-                return iced::window::get_latest()
-                    .and_then(iced::window::toggle_maximize)
-                    .chain(window_maximized_task());
+                return self
+                    .main_window
+                    .map(iced::window::toggle_maximize)
+                    .unwrap_or_else(Task::none)
+                    .chain(window_maximized_task(self.main_window));
             }
             Message::WindowMaximized(maximized) => self.window_maximized = maximized,
             Message::Theme(theme) => {
@@ -6564,7 +6812,7 @@ impl Studio {
                     async {
                         let mut extensions = project_open::SCAN_EXTENSIONS.to_vec();
                         extensions.push(project_open::PROJECT_EXTENSION);
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("Point clouds and scan projects", &extensions)
                             .pick_files()
                             .await
@@ -6581,7 +6829,7 @@ impl Studio {
             Message::OpenFolder => {
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .set_title("Open scan folder")
                             .pick_folder()
                             .await
@@ -6948,6 +7196,8 @@ impl Studio {
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
+                        texture: None,
+                        texture_visible: false,
                         faces: None,
                         visible: true,
                         selection: None,
@@ -6992,6 +7242,8 @@ impl Studio {
                                 measured.mesh.triangles.len()
                             );
                             entry.mesh = Some(measured.mesh);
+                            entry.texture = None;
+                            entry.texture_visible = false;
                             entry.mesh_topology = Some(measured.topology);
                         }
                         Ok(None) => {}
@@ -7030,7 +7282,7 @@ impl Studio {
             Message::ExportRecap => {
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("E57 for Autodesk ReCap", &["e57"])
                             .set_file_name("recap-transfer.e57")
                             .save_file()
@@ -7102,7 +7354,7 @@ impl Studio {
                     self.status = "Choose where to export the full-resolution section…".into();
                     return Task::perform(
                         async move {
-                            rfd::AsyncFileDialog::new()
+                            crate::managed::file_dialog()
                                 .add_filter(format.to_string(), &[format.extension()])
                                 .set_file_name(suggested)
                                 .save_file()
@@ -7224,7 +7476,7 @@ impl Studio {
                     .into();
                     return Task::perform(
                         async move {
-                            rfd::AsyncFileDialog::new()
+                            crate::managed::file_dialog()
                                 .add_filter("OBJ mesh", &["obj"])
                                 .set_file_name(suggested)
                                 .save_file()
@@ -7330,6 +7582,8 @@ impl Studio {
                             .find(|entry| entry.matches_source(&source))
                         {
                             entry.mesh = Some(measured.mesh);
+                            entry.texture = None;
+                            entry.texture_visible = false;
                             entry.mesh_topology = Some(measured.topology);
                             self.status = format!(
                                 "{} mesh displayed: {} vertices, {} triangles, {} from {} points → {}",
@@ -7356,6 +7610,10 @@ impl Studio {
             Message::TextureMesh => return self.export_texture_mesh(),
             Message::TextureTexelSize(value) => self.texture_texel_size = value,
             Message::TextureMaxResolution(value) => self.texture_max_resolution = value,
+            Message::TextureSource(source) => self.texture_source = source,
+            Message::TexturePreview(visible) => {
+                let _ = self.api_set_texture_preview(None, visible);
+            }
             Message::TexturePoll => return self.texture_poll(),
             Message::CancelTextureExport => {
                 self.cancel_texture_export();
@@ -8505,7 +8763,28 @@ impl Studio {
                     return Task::none();
                 }
                 let position = entry.transform.xyz(pose.position);
-                let view = match self.walk {
+                let source = entry.cloud.path.clone();
+                let label = pose.label.clone();
+                let tab = view_tabs::TabId::StationPhoto(source.clone());
+                let return_to = self
+                    .documents
+                    .as_ref()
+                    .and_then(|documents| documents.linked_origin_for(self, &tab));
+                let linked_walk = return_to.as_ref().and_then(|_| {
+                    self.documents
+                        .as_ref()?
+                        .snapshots
+                        .get(&tab.document_key()?)?
+                        .walk_view()
+                });
+                self.remember_station_photo_tab();
+                self.remember_photo_tab();
+                self.remember_model_for_photo();
+                self.photos.close();
+                self.tabs.active_station_photo = Some(source.clone());
+                self.drawing_view.shown = false;
+                self.file_open = false;
+                let view = match linked_walk.or(self.walk) {
                     // Keep looking the same way when stepping to another station.
                     Some(previous) => WalkView {
                         eye: position,
@@ -8515,8 +8794,9 @@ impl Studio {
                 };
                 self.status = format!(
                     "Station photo: {} · drag to look around, scroll to zoom, W A S D to walk out, Esc to leave",
-                    pose.label
+                    label
                 );
+                self.tabs.station_looks.insert(source, (station, view));
                 self.walk = Some(view);
                 self.walk_station = Some((cloud_index, station));
                 self.panorama_photos = None;
@@ -8525,7 +8805,23 @@ impl Studio {
                 self.pick_mode = false;
                 self.pan_tool = false;
                 self.drag_rectangle = None;
-                return self.panorama_task(cloud_index, station);
+                let task = self.panorama_task(cloud_index, station);
+                if let Some(origin) = return_to {
+                    if let Some(mut documents) = self.documents.take() {
+                        let returned = documents
+                            .observe_current(self)
+                            .and_then(|()| documents.focus(self, &origin));
+                        self.documents = Some(documents);
+                        return match returned {
+                            Ok(returned) => Task::batch([task, returned]),
+                            Err(error) => {
+                                self.status = error;
+                                task
+                            }
+                        };
+                    }
+                }
+                return task;
             }
             Message::PanoramaReady(source, station, result) => {
                 let current = self.walk_station.is_some_and(|(cloud, current)| {
@@ -8543,9 +8839,26 @@ impl Studio {
                 }
             }
             Message::LeaveWalk => {
+                if self.documents.is_some()
+                    && matches!(
+                        self.shown_tab(),
+                        Some(view_tabs::TabId::Photo(_) | view_tabs::TabId::StationPhoto(_))
+                    )
+                {
+                    return match self.show_tab(&view_tabs::TabId::Model) {
+                        Ok(task) => task,
+                        Err(error) => {
+                            self.status = error;
+                            Task::none()
+                        }
+                    };
+                }
                 // Leaving a photo puts the camera back where it was.
                 if let Some(task) = self.leave_photo() {
                     return task;
+                }
+                if self.tabs.active_station_photo.is_some() {
+                    return self.show_model_tab();
                 }
                 if self.leave_walk() {
                     self.status = "Back in the 3D view".into();
@@ -9141,6 +9454,7 @@ impl Studio {
             }
             Message::Views(action) => return self.update_views(action),
             Message::Browser(action) => return self.update_browser(action),
+            Message::Documents(action) => return self.update_documents(action),
             Message::Tabs(action) => return self.update_tabs(action),
             Message::Photos(action) => return self.update_photos(action),
             Message::PhotoEdit(action) => return self.photo_editor_action(action),
@@ -10463,12 +10777,23 @@ impl Studio {
                     .into()
                 ),
                 drag_area(
-                    container(row![quick_access, settings_button, window_buttons].spacing(0))
-                        .width(iced::Length::FillPortion(1))
-                        .height(Fill)
-                        .align_x(iced::Alignment::End)
-                        .align_y(iced::Alignment::Center)
-                        .into()
+                    container(
+                        row![
+                            quick_access,
+                            button(text(i18n::tr("Feedback")).size(11))
+                                .on_press(Message::Feedback(feedback::Action::Open))
+                                .padding([4, 8])
+                                .style(ui_style::tool),
+                            settings_button,
+                            window_buttons
+                        ]
+                        .spacing(0)
+                    )
+                    .width(iced::Length::FillPortion(1))
+                    .height(Fill)
+                    .align_x(iced::Alignment::End)
+                    .align_y(iced::Alignment::Center)
+                    .into()
                 ),
             ]
             .width(Fill)
@@ -11141,10 +11466,33 @@ impl Studio {
             pointer: &self.viewport_pointer,
             photos: &self.photos,
             photo_visible: true,
+            linked_photos: [None; 8],
             read_only: false,
             resident_points: false,
+            view_slot: 0,
+            live_views: if self.photo_compare && self.shown_photo().is_some() {
+                3
+            } else {
+                1
+            },
             clean: self.views.capturing(),
         }
+    }
+
+    fn view_for_window(&self, window: iced::window::Id) -> Element<'_, Message> {
+        if let Some(documents) = &self.documents {
+            if let Some(logical) = documents
+                .native_windows
+                .iter()
+                .find_map(|(logical, id)| (*id == window).then_some(*logical))
+                .filter(|logical| *logical != 0)
+            {
+                if let Some(grid) = self.document_grid_for(logical) {
+                    return ui_style::no_hand(grid);
+                }
+            }
+        }
+        self.view()
     }
 
     /// The title of the window: the application with its version, after the
@@ -11929,7 +12277,9 @@ impl Studio {
         if let Some(strip) = self.mesh_to_plans_strip() {
             viewport = viewport.push(strip);
         }
-        if let Some(mut model_view) = compare_model {
+        if let Some(panes) = self.document_grid() {
+            viewport = viewport.push(panes);
+        } else if let Some(mut model_view) = compare_model {
             if self.photo_split_vertical {
                 model_view.viewport_size.height *= self.photo_split_ratio;
             } else {
@@ -12036,7 +12386,7 @@ impl Studio {
             titlebar,
             tabs,
             ribbon,
-            documents: Some(self.tab_strip()),
+            documents: self.documents.is_none().then(|| self.tab_strip()),
             content: content.into(),
             status: self.status_bar(mesh_status.unwrap_or_else(|| self.status.clone())),
         }))
@@ -12054,6 +12404,9 @@ impl Studio {
             layers = layers.push(wizard);
         }
         if let Some(dialog) = self.settings_view().or_else(|| self.sheet_dialog_view()) {
+            layers = layers.push(dialog);
+        }
+        if let Some(dialog) = self.feedback_view() {
             layers = layers.push(dialog);
         }
         // An install or uninstall waits for the user above everything.
@@ -12089,7 +12442,7 @@ fn save_task(
 ) -> Task<Message> {
     Task::perform(
         async move {
-            let chosen = rfd::AsyncFileDialog::new()
+            let chosen = crate::managed::file_dialog()
                 .add_filter(format.to_string(), &[format.extension()])
                 .set_file_name(suggested)
                 .save_file()
@@ -12275,10 +12628,10 @@ enum TitleIcon {
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
 /// Ask the system whether the window is maximized now.
-fn window_maximized_task() -> Task<Message> {
-    iced::window::get_latest()
-        .and_then(iced::window::get_maximized)
-        .map(Message::WindowMaximized)
+fn window_maximized_task(window: Option<iced::window::Id>) -> Task<Message> {
+    window
+        .map(|id| iced::window::get_maximized(id).map(Message::WindowMaximized))
+        .unwrap_or_else(Task::none)
 }
 
 /// An icon of a window button: in the colour of the text, as the shared
@@ -13256,10 +13609,14 @@ struct PointViewport<'a> {
     /// The photos of the files that are not those of their stations.
     photos: &'a file_photos::PhotoTool,
     photo_visible: bool,
+    linked_photos: [Option<WalkView>; 8],
     read_only: bool,
     /// Use the bounded resident sample when this camera differs from the
     /// camera whose octree detail is currently loaded.
     resident_points: bool,
+    /// Compositor-wide viewport slot and the live slots of every window.
+    view_slot: usize,
+    live_views: u8,
     /// A snapshot of the view is being taken: only the scene is drawn,
     /// without the controls of the viewport.
     clean: bool,
@@ -14828,6 +15185,7 @@ impl canvas::Program<Message> for PointViewport<'_> {
         if self.show_scan_poses {
             self.draw_photo_marks(&mut frame, projection, bounds.size());
         }
+        self.draw_linked_photos(&mut frame, projection, overall_bounds);
         if !self.clean {
             self.draw_drawing(&mut frame, bounds.size());
         }

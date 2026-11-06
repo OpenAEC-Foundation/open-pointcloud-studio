@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Open Pointcloud Studio",
-  "version": "0.3.0",
+  "version": "2026.45.1",
   "identifier": "com.openpointcloudstudio.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -22,7 +22,8 @@
         "fullscreen": false,
         "decorations": false,
         "transparent": false,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "backgroundColor": "#36363E"
       }
     ],
     "security": {
@@ -45,6 +46,9 @@
       "timestampUrl": "",
       "nsis": {
         "installerIcon": "icons/icon.ico"
+      },
+      "wix": {
+        "version": "26.45.1"
       }
     },
     "createUpdaterArtifacts": false

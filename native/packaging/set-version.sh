@@ -21,8 +21,8 @@
 # set writes VERSION, or the version that next prints, as
 # [workspace.package] version in native/Cargo.toml and as the version of
 # every member of the workspace that takes it (version.workspace = true) in
-# native/Cargo.lock. A member with a version of its own, such as the vendored
-# ui crate, keeps it. A version that is not above the highest local tag is
+# native/Cargo.lock, and all Classic product manifests and lockfiles.
+# A third-party crate with its own version keeps it. A version that is not above the highest local tag is
 # refused. With --changelog DATE the section "## Unreleased" of CHANGELOG.md
 # becomes "## VERSION - DATE", with a new empty "## Unreleased" above it.
 # Nothing is written unless all of it can be; then it checks as check does.
@@ -239,12 +239,13 @@ check_versions() {
         [[ "$locked" == "$number" ]] \
             || fail "native/Cargo.lock has version '$locked' for $name, native/Cargo.toml has '$number'; cargo check in native/ writes it"
     done
+    python3 "$packaging_dir/classic-version.py" "$repo_dir" "$number"
 }
 
 # set_version VERSION [DATE] writes VERSION, and the changelog section of
 # DATE when it is given.
 set_version() {
-    local version=${1#v} date=${2:-} tags tag highest= members status=0
+    local version=${1#v} date=${2:-} tags tag highest= members status=0 name
     is_version "$version" || fail "'$1' is not $version_rule"
     tags=$(git -C "$repo_dir" tag --list 'v*')
     for tag in $tags; do
@@ -302,8 +303,13 @@ set_version() {
         esac
     fi
 
+    python3 "$packaging_dir/classic-version.py" "$repo_dir" "$version" --stage "$work" > "$work/classic-files"
+
     cat "$work/Cargo.toml" > "$cargo_toml"
     cat "$work/Cargo.lock" > "$cargo_lock"
+    while IFS= read -r name; do
+        cat "$work/$name" > "$repo_dir/$name"
+    done < "$work/classic-files"
     if [[ -n "$date" ]]; then
         cat "$work/CHANGELOG.md" > "$changelog"
     fi

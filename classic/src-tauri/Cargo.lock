@@ -2357,7 +2357,7 @@ dependencies = [
 
 [[package]]
 name = "open-pointcloud-studio"
-version = "0.3.0"
+version = "2026.45.1"
 dependencies = [
  "clap",
  "laz",

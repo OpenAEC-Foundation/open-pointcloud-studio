@@ -1,0 +1,13 @@
+{
+  "workspace_restored": true,
+  "sources_reopened": true,
+  "model_camera_restored": true,
+  "photo_camera_restored": true,
+  "station_source": true,
+  "render_changed_pixels": {
+    "model": 0,
+    "photo": 0
+  },
+  "source_sha256": "21b15d28bd44d66a337da20adea0e86f8858cb09dbe90acc4fc9aab00027c8a5",
+  "source_unchanged": true
+}
