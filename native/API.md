@@ -1064,8 +1064,10 @@ the session, and closing a tab leaves the scan and its photographs intact.
 `list_panes` reports whether native document tiling is enabled, the serializable
 `workspace` (windows, split tree, pane ids, document keys and active pane), and
 `active_document`. Its `documents` entries expose each key,
-`station_panorama_ready` and a local pane `error`, so an inactive panorama can
-be observed without focusing it. `split_pane` takes `side: "left" | "right" | "above" | "below"`
+`station_panorama_ready`, `photo_ready`, a local pane `error`, the typed camera
+`look` (including its reference viewport size) and the last rendered `viewport`.
+These fields observe an inactive document without focusing it. `persistence`
+reports whether startup restoration is under way and any storage/restore error. `split_pane` takes `side: "left" | "right" | "above" | "below"`
 and moves the active document into a new pane of its current window. Another
 document must remain in the original pane; the workspace allows eight panes.
 Each pane owns its camera and photo decode state. Selection, measurements and
@@ -1075,6 +1077,15 @@ a native window. `dock_pane_window` takes its logical `window` id from
 main window. Closing a satellite docks its documents; closing the main window
 exits the process and all of its windows. Screenshot capture follows the active
 document's native window, rather than the most recently created window.
+
+Native pane layouts and source references are stored atomically in
+`document-layout-v1.json` in the native configuration directory. A fresh launch
+without explicit input files reopens its sources and restores the main-window
+pane tree, document looks, source affine edits/visibility and shared section.
+The file contains references and display state; unsaved point edits are not
+recovered from it. Unsupported or invalid files are preserved. Current startup
+docks satellite documents into the main window while screen identity cannot be
+verified; retaining verified monitor placements remains pending.
 
 `list_tabs` answers with `tabs`, each with its `index`, `name` (`3D model`
 for the 3D model in every language, as `project_browser` names it), `kind`

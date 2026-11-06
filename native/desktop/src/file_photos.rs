@@ -379,6 +379,11 @@ impl Default for PhotoTool {
 }
 
 impl PhotoTool {
+    pub(crate) fn current_ready(&self) -> bool {
+        self.view
+            .as_ref()
+            .is_some_and(|view| self.cached(&view.source, view.index).is_some())
+    }
     pub(crate) fn metadata_copy(&self) -> Self {
         Self {
             files: self.files.clone(),
@@ -2049,6 +2054,58 @@ mod tests {
         let command: ApiCommand = serde_json::from_value(command).unwrap();
         let _ = studio.handle_api(ApiRequest { command, reply });
         receive.recv().unwrap()
+    }
+
+    #[test]
+    fn scoped_photo_input_returns_to_the_independently_changed_model_camera() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_photos();
+        studio.yaw = 0.4;
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let photo = crate::view_tabs::TabId::Photo(source.clone())
+            .document_key()
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        let _ = studio.update(Message::Orbit(30., 0.));
+        let model = studio.yaw;
+        let _ = studio
+            .show_tab(&crate::view_tabs::TabId::Photo(source))
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::Input(
+            photo,
+            Box::new(Message::LeaveWalk),
+        )));
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+        assert_eq!(studio.yaw, model);
+    }
+
+    #[test]
+    fn a_document_can_focus_a_saved_view_while_another_scan_is_selected() {
+        use crate::document_panes::runtime::Runtime;
+        let (mut studio, directory, _) = studio_with_photos();
+        let source = directory.path().join("other.xyz");
+        std::fs::write(&source, "0 0 0\n1 1 1\n2 0 0\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 1000).unwrap());
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        let view = crate::camera_views::SavedView::camera(
+            crate::camera_views::source_key(&source),
+            "Other source",
+            0.8,
+            0.4,
+            1.,
+            [0.; 2],
+        );
+        let tab = crate::view_tabs::TabId::View(view.guid.clone());
+        studio.views.list.push(view);
+        studio.tabs.add(tab.clone());
+        studio.active = Some(0);
+        let mut documents = Runtime::new(&studio);
+        let key = tab.document_key().unwrap();
+        documents.workspace.open(key.clone(), 1).unwrap();
+        let _ = documents.focus(&mut studio, &key).unwrap();
+        assert_eq!(studio.active, Some(1));
+        assert_eq!(studio.shown_tab(), Some(tab));
     }
 
     #[test]

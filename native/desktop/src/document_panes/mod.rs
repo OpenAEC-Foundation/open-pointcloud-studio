@@ -1,8 +1,8 @@
 //! Document ownership and native pane presentation.
 pub(crate) mod layout;
+pub(crate) mod persistence;
 pub(crate) mod runtime;
 pub(crate) mod snapshot;
-#[cfg(test)]
 pub(crate) mod store;
 pub(crate) mod widget;
 
@@ -15,6 +15,7 @@ use layout::{Node, Side};
 #[derive(Debug, Clone)]
 pub(crate) enum Action {
     SplitCurrent(Side),
+    Stored(Result<(), String>),
     SplitDocument(String, Side),
     TearOff(String),
     DockWindow(u64),
@@ -69,6 +70,13 @@ fn split_path(node: &pane_grid::Node, split: pane_grid::Split, path: &mut Vec<bo
 
 impl Studio {
     pub(crate) fn update_documents(&mut self, action: Action) -> Task<Message> {
+        if let Action::Stored(result) = action {
+            self.document_persistence.saved(result);
+            if let Some(error) = &self.document_persistence.error {
+                self.status = error.clone();
+            }
+            return Task::none();
+        }
         // Passive OS events never turn on document tiling.
         match &action {
             Action::NativeResized(id, size) if self.main_window.is_none_or(|main| main == *id) => {
@@ -95,14 +103,21 @@ impl Studio {
                 (documents, hydration)
             }
         };
+        if let Action::Input(key, message) = action {
+            let focus = documents.focus(self, &key);
+            self.documents = Some(documents);
+            return match focus {
+                Ok(focus) => Task::batch([hydration, focus, self.update(*message)]),
+                Err(error) => {
+                    self.status = error;
+                    hydration
+                }
+            };
+        }
         let result = (|| -> Result<Task<Message>, String> {
             match action {
-                Action::Input(key, message) => {
-                    let focus = documents.focus(self, &key)?;
-                    let task = self.update(*message);
-                    documents.observe_current(self)?;
-                    Ok(Task::batch([focus, task]))
-                }
+                Action::Stored(_) => unreachable!("handled above"),
+                Action::Input(_, _) => unreachable!("scoped input is handled above"),
                 Action::Focus(pane) => {
                     let key = documents
                         .workspace
@@ -344,16 +359,20 @@ impl Studio {
 
 impl Studio {
     pub(crate) fn panes_value(&self) -> serde_json::Value {
-        match &self.documents {
+        let mut answer = match &self.documents {
             Some(documents) => serde_json::json!({"ok": true, "enabled": true,
                 "workspace": documents.workspace, "active_document": documents.active,
                 "documents": documents.snapshots.iter().map(|(key, snapshot)| serde_json::json!({
-                    "key": key, "station_panorama_ready": snapshot.panorama_ready(), "error": snapshot.load_error
+                    "key": key, "station_panorama_ready": snapshot.panorama_ready(), "photo_ready": snapshot.photo_ready(&self.photos), "error": snapshot.load_error,
+                    "look": snapshot.stored_look(&self.photos),
+                    "viewport": snapshot.bounds.get().map(|bounds| [bounds.width,bounds.height])
                 })).collect::<Vec<_>>()}),
             None => serde_json::json!({"ok": true, "enabled": false,
                 "workspace": layout::Workspace::default(),
                 "active_document": self.shown_tab().and_then(|tab| tab.document_key())}),
-        }
+        };
+        answer["persistence"] = serde_json::json!({"restoring": self.document_persistence.restoring(), "error": self.document_persistence.error});
+        answer
     }
     pub(crate) fn api_split_pane(&mut self, side: Side) -> (serde_json::Value, Task<Message>) {
         if self.tabs_covered() {

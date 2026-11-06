@@ -347,8 +347,30 @@ impl Runtime {
             .map(|snapshot| snapshot.tab.clone())
             .or_else(|| TabId::from_document_key(key))
             .ok_or("Invalid document reference")?;
+        let target_source = if let TabId::View(guid) = &tab {
+            let source = &studio
+                .views
+                .list
+                .iter()
+                .find(|view| view.guid == *guid)
+                .ok_or("Saved view is unavailable")?
+                .source;
+            Some(
+                studio
+                    .clouds
+                    .iter()
+                    .position(|entry| crate::camera_views::source_key(&entry.cloud.path) == *source)
+                    .ok_or("That view's scan is not open")?,
+            )
+        } else {
+            None
+        };
         self.capture_active(studio);
         self.detach_active_photo(studio);
+        let previous_source = studio.active;
+        if let Some(source) = target_source {
+            studio.active = Some(source);
+        }
         if let Some(mut tool) = self
             .snapshots
             .get_mut(key)
@@ -376,6 +398,7 @@ impl Runtime {
         let task = match shown {
             Ok(task) => task,
             Err(error) => {
+                studio.active = previous_source;
                 if let Some(target) = self.snapshots.get_mut(key) {
                     if studio.photos.view.is_some() {
                         let metadata = studio.photos.metadata_copy();
@@ -407,7 +430,8 @@ impl Runtime {
         let fetch = studio.fetch_photos();
         self.suspend_inactive();
         self.workspace.validate()?;
-        Ok(Task::batch([task, fetch]))
+        studio.revision += 1;
+        Ok(Task::batch([task, fetch, studio.schedule_detail()]))
     }
     /// Route a completed read to the document that started it, without
     /// changing the active camera, tool or document strip.

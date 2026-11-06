@@ -1,6 +1,5 @@
 //! A document's camera/render state. Selection, sources, measures and section
 //! geometry remain shared through Studio; a pane only owns how it looks.
-#[cfg(test)]
 use super::store;
 use crate::drawing_view::DrawingViewTool;
 use crate::file_photos::PhotoTool;
@@ -86,6 +85,16 @@ impl Snapshot {
         self.station_tab = None;
         self.panorama = None;
     }
+    pub fn photo_ready(&self, active: &PhotoTool) -> bool {
+        let TabId::Photo(source) = &self.tab else {
+            return false;
+        };
+        let tool = self.photos.as_ref().unwrap_or(active);
+        tool.view
+            .as_ref()
+            .filter(|view| view.source == *source)
+            .is_some_and(|_| tool.current_ready())
+    }
     pub fn panorama_ready(&self) -> bool {
         self.panorama.is_some()
     }
@@ -164,13 +173,23 @@ impl Snapshot {
             .unwrap_or(self.reference_size)
     }
     fn pan_at_size(&self, size: Size) -> [f32; 2] {
-        let reference = self
-            .reference_size
-            .width
-            .min(self.reference_size.height)
-            .max(1.);
-        let ratio = size.width.min(size.height).max(1.) / reference;
-        self.pan.map(|value| value * ratio)
+        [
+            self.pan[0] * size.width.max(1.) / self.reference_size.width.max(1.),
+            self.pan[1] * size.height.max(1.) / self.reference_size.height.max(1.),
+        ]
+    }
+    pub fn sync_viewport(&self, studio: &mut Studio) {
+        let Some(bounds) = self.bounds.get() else {
+            return;
+        };
+        let size = bounds.size();
+        if size.width > 0.
+            && size.height > 0.
+            && ((studio.viewport_size.width - size.width).abs() > 0.0001
+                || (studio.viewport_size.height - size.height).abs() > 0.0001)
+        {
+            studio.resize_viewport(size);
+        }
     }
     pub fn restore_camera(&self, studio: &mut Studio) {
         let size = self.size();
@@ -229,7 +248,53 @@ impl Snapshot {
         view.resident_points = studio.shown_tab().as_ref() != Some(&self.tab);
         view
     }
-    #[cfg(test)]
+    pub fn apply_stored(&mut self, look: &store::Look) {
+        match look {
+            store::Look::Scene { camera } => {
+                self.yaw = camera.yaw;
+                self.pitch = camera.pitch;
+                self.zoom = camera.zoom;
+                self.pan = camera.pan;
+                self.orbit_point = camera.orbit_point;
+                self.walk = camera.walk.as_ref().map(super::persistence::walking);
+                self.reference_size = Size::new(camera.reference_size[0], camera.reference_size[1]);
+                self.colour = match camera.colour.as_str() {
+                    "elevation" => ColorMode::Elevation,
+                    "intensity" => ColorMode::Intensity,
+                    "classification" => ColorMode::Classification,
+                    _ => ColorMode::Rgb,
+                };
+                self.label = match camera.label.as_str() {
+                    "TOP" => "TOP",
+                    "BOTTOM" => "BOTTOM",
+                    "FRONT" => "FRONT",
+                    "BACK" => "BACK",
+                    "LEFT" => "LEFT",
+                    "RIGHT" => "RIGHT",
+                    "ISOMETRIC" => "ISOMETRIC",
+                    _ => "CUSTOM",
+                };
+            }
+            store::Look::Photo { camera, .. } | store::Look::Station { camera, .. } => {
+                self.walk = Some(super::persistence::walking(camera))
+            }
+            store::Look::Drawing {
+                center,
+                scale,
+                layers,
+            } => {
+                if let Some(drawing) = &mut self.drawing {
+                    drawing.keep_view(
+                        Some(crate::drawing_view::ViewCamera {
+                            center: *center,
+                            scale: *scale,
+                        }),
+                        layers,
+                    );
+                }
+            }
+        }
+    }
     pub fn stored_look(&self, active_photos: &PhotoTool) -> Option<store::Look> {
         let walking = |walk: WalkView| store::Walking {
             eye: walk.eye,
@@ -240,6 +305,15 @@ impl Snapshot {
         Some(match &self.tab {
             TabId::Model | TabId::View(_) => store::Look::Scene {
                 camera: store::Camera {
+                    reference_size: [self.reference_size.width, self.reference_size.height],
+                    colour: match self.colour {
+                        ColorMode::Rgb => "rgb",
+                        ColorMode::Elevation => "elevation",
+                        ColorMode::Intensity => "intensity",
+                        ColorMode::Classification => "classification",
+                    }
+                    .into(),
+                    label: self.label.into(),
                     yaw: self.yaw,
                     pitch: self.pitch,
                     zoom: self.zoom,
@@ -268,6 +342,7 @@ impl Snapshot {
                 store::Look::Drawing {
                     center: camera.center,
                     scale: camera.scale,
+                    layers: self.drawing.as_ref()?.layer_switches(),
                 }
             }
         })
@@ -277,6 +352,36 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn camera_pan_keeps_its_position_when_pane_aspect_changes() {
+        let mut studio = Studio {
+            pan: [12., -8.],
+            viewport_size: Size::new(800., 600.),
+            ..Studio::default()
+        };
+        let mut snapshot = Snapshot::capture(TabId::Model, &studio);
+        snapshot.reference_size = studio.viewport_size;
+        snapshot.bounds.set(Some(Rectangle {
+            x: 0.,
+            y: 0.,
+            width: 400.,
+            height: 600.,
+        }));
+        snapshot.restore_camera(&mut studio);
+        assert_eq!(studio.pan, [6., -8.]);
+        snapshot.capture_camera(&studio);
+        snapshot.bounds.set(Some(Rectangle {
+            x: 0.,
+            y: 0.,
+            width: 800.,
+            height: 300.,
+        }));
+        let view = snapshot.viewport(&studio, 0, 1);
+        assert_eq!(view.pan, [12., -4.]);
+        snapshot.sync_viewport(&mut studio);
+        assert_eq!(studio.pan, [12., -4.]);
+    }
+
     #[test]
     fn document_cameras_are_independent_and_leave_shared_section_untouched() {
         let mut studio = Studio {

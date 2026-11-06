@@ -611,7 +611,17 @@ impl Studio {
                 if self.tabs_covered() {
                     return Task::none();
                 }
-                let listed = self.listed_tabs();
+                let listed = self
+                    .documents
+                    .as_ref()
+                    .and_then(|documents| documents.workspace.pane(documents.workspace.active_pane))
+                    .map(|pane| {
+                        pane.tabs
+                            .iter()
+                            .filter_map(|key| TabId::from_document_key(key))
+                            .collect()
+                    })
+                    .unwrap_or_else(|| self.listed_tabs());
                 match cycled(&listed, self.shown_tab().as_ref(), forward) {
                     Some(tab) => self.update_tabs(TabAction::Show(tab)),
                     None => Task::none(),
@@ -669,7 +679,7 @@ impl Studio {
 
     /// Whether what a tab shows is still kept: a view or a drawing not
     /// deleted, a file still under Files.
-    fn tab_exists(&self, tab: &TabId) -> bool {
+    pub(crate) fn tab_exists(&self, tab: &TabId) -> bool {
         match tab {
             TabId::Model => true,
             TabId::View(guid) => self.views.list.iter().any(|view| view.guid == *guid),

@@ -1307,7 +1307,7 @@ fn main() -> iced::Result {
         );
         let task = Task::batch([
             open_window.map(Message::NativeWindowOpened),
-            studio.open_paths(startup_files),
+            studio.open_with_document_layout(startup_files),
             chrome,
         ]);
         (studio, task)
@@ -2294,6 +2294,7 @@ struct Studio {
     /// drawings opened from VIEWS.
     tabs: view_tabs::ViewTabs,
     documents: Option<document_panes::runtime::Runtime>,
+    document_persistence: document_panes::persistence::Persistence,
     /// How deep `update` is called within itself; the tabs follow what the
     /// window shows only when the outermost call ends.
     update_depth: u32,
@@ -2990,6 +2991,7 @@ impl Default for Studio {
             views: views::ViewTool::load(),
             browser: project_browser::BrowserState::new(settings.browser_collapsed.clone()),
             documents: None,
+            document_persistence: document_panes::persistence::Persistence::new(),
             tabs: view_tabs::ViewTabs::new(&settings.view_tabs, settings.view_tab.as_deref()),
             update_depth: 0,
             sheet_dialog: None,
@@ -6395,7 +6397,9 @@ impl Studio {
                 }
             }
             self.memory_usage.refresh();
-            return Task::none();
+            let restore = self.settle_document_restore();
+            let save = self.queue_document_layout();
+            return Task::batch([restore, save]);
         }
         if matches!(
             &message,
@@ -6411,6 +6415,9 @@ impl Studio {
         }
         if self.update_depth == 0 {
             if let Some(mut documents) = self.documents.take() {
+                if let Some(snapshot) = documents.snapshots.get(&documents.active) {
+                    snapshot.sync_viewport(self);
+                }
                 documents.capture_active(self);
                 if let Message::PanoramaReady(source, station, result) = &message {
                     if documents.background_panorama(source, *station, result) {
@@ -6468,7 +6475,7 @@ impl Studio {
             task = Task::batch([task, documents.settle_windows()]);
             self.documents = Some(documents);
         }
-        task
+        Task::batch([task, self.settle_document_restore()])
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
@@ -6706,6 +6713,7 @@ impl Studio {
                 }
             }
             Message::Exit => {
+                self.flush_document_layout();
                 // A change of the Pointcloud to Drawing project that waits for its
                 // moment is written before the window goes.
                 self.flush_mesh_to_plans();

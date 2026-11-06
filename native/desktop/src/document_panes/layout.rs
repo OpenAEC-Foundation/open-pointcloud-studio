@@ -378,7 +378,6 @@ impl Workspace {
     }
     /// A missing or unverifiable screen returns every document to the main
     /// window. Runtime code supplies platform monitor identifiers.
-    #[cfg(test)]
     pub fn recover_monitors(&mut self, available: &[String]) -> Result<(), String> {
         let missing: Vec<_> = self
             .windows

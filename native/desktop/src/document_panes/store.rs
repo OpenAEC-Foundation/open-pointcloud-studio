@@ -32,6 +32,12 @@ impl Walking {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
+    #[serde(default = "reference_size")]
+    pub reference_size: [f32; 2],
+    #[serde(default = "rgb")]
+    pub colour: String,
+    #[serde(default)]
+    pub label: String,
     pub yaw: f32,
     pub pitch: f32,
     pub zoom: f32,
@@ -39,9 +45,21 @@ pub struct Camera {
     pub orbit_point: Option<[f64; 3]>,
     pub walk: Option<Walking>,
 }
+fn reference_size() -> [f32; 2] {
+    [1., 1.]
+}
+fn rgb() -> String {
+    "rgb".into()
+}
 impl Camera {
     fn valid(&self) -> bool {
-        self.yaw.is_finite()
+        self.reference_size
+            .iter()
+            .all(|value| value.is_finite() && *value > 0. && *value <= 1_000_000.)
+            && ["rgb", "elevation", "intensity", "classification"].contains(&self.colour.as_str())
+            && self.label.len() <= 64
+            && !self.label.contains('\0')
+            && self.yaw.is_finite()
             && self.pitch.is_finite()
             && self.pitch.abs() <= std::f32::consts::FRAC_PI_2 + 0.001
             && self.zoom.is_finite()
@@ -74,6 +92,8 @@ pub enum Look {
     Drawing {
         center: [f64; 2],
         scale: f64,
+        #[serde(default)]
+        layers: Vec<(String, bool)>,
     },
 }
 impl Look {
@@ -93,8 +113,18 @@ impl Look {
                     && (0.0..=1.0).contains(blend)
             }
             Self::Station { camera, .. } => camera.valid(),
-            Self::Drawing { center, scale } => {
-                center.iter().all(|v| v.is_finite()) && scale.is_finite() && *scale > 0.0
+            Self::Drawing {
+                center,
+                scale,
+                layers,
+            } => {
+                center.iter().all(|v| v.is_finite())
+                    && scale.is_finite()
+                    && *scale > 0.0
+                    && layers.len() <= 4096
+                    && layers
+                        .iter()
+                        .all(|(name, _)| name.len() <= 32768 && !name.contains('\0'))
             }
         }
     }
@@ -109,12 +139,33 @@ pub struct Source {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Section {
+    pub enabled: bool,
+    pub reference: Option<([f64; 3], [f64; 3])>,
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+    pub rotation: f64,
+}
+impl Section {
+    fn valid(&self) -> bool {
+        fn bounds(min: [f64; 3], max: [f64; 3]) -> bool {
+            min.iter().chain(&max).all(|value| value.is_finite())
+                && (0..3).all(|axis| min[axis] <= max[axis])
+        }
+        bounds(self.min, self.max)
+            && self.rotation.is_finite()
+            && self.reference.is_none_or(|(min, max)| bounds(min, max))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct State {
     pub version: u32,
     pub workspace: Workspace,
     pub sources: Vec<Source>,
     pub looks: BTreeMap<String, Look>,
+    pub section: Option<Section>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -123,6 +174,7 @@ impl Default for State {
             workspace: Workspace::default(),
             sources: Vec::new(),
             looks: BTreeMap::new(),
+            section: None,
         }
     }
 }
@@ -135,6 +187,13 @@ impl State {
             return Err(invalid("Unsupported document layout version"));
         }
         self.workspace.validate().map_err(invalid)?;
+        if self
+            .section
+            .as_ref()
+            .is_some_and(|section| !section.valid())
+        {
+            return Err(invalid("Invalid shared section geometry"));
+        }
         let mut paths = HashSet::new();
         if self.sources.len() > 4096 {
             return Err(invalid("Too many layout sources"));
@@ -296,6 +355,7 @@ mod tests {
             Look::Drawing {
                 center: [f64::NAN, 0.],
                 scale: 1.,
+                layers: Vec::new(),
             },
         );
         assert!(state.save(&path).is_err());

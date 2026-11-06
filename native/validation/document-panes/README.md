@@ -32,11 +32,25 @@ then compile it against `libwayland-client`. The client requires an explicit
 `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR`; point those only at the disposable test
 compositor, never at a user's desktop. It sends no input outside that compositor.
 
-The storage and missing-monitor recovery tests currently exercise the separate
-layout backend. The application does not yet restore these pane layouts at
-startup. Linked panes, initial drag activation and complete cross-window drag
-behavior remain acceptance work for issue #16; none is inferred from the
-satellite open/dock test.
+Pane layouts now save automatically through a bounded atomic writer and on a
+graceful application exit. Sources reopen by reference; per-document cameras,
+photo index/pinning/zoom/blend, source transforms/visibility, drawing layer
+switches and the shared section are kept. Original scan bytes and unsaved point
+edits are not stored in this file. Invalid or unsupported layout files are kept
+and never overwritten by a fallback session.
+
+Run `restart.py BINARY --output DIRECTORY` in the same isolated compositor to
+verify two independent processes using one profile. It checks source reopening,
+layout and camera restoration, photo blend, and zero changed interior pixels.
+Add `--station-source /absolute/path/section.e57` to repeat with a real calibrated
+station panorama. The script uses managed SIGTERM handling for a graceful close
+and requires Pillow and NumPy.
+
+Satellite placements currently have no verified platform monitor identifier,
+so startup safely docks their documents into the main window. Monitor-aware
+placement, linked panes, initial strip drag activation, the full 2 × 2 CAD and
+annotation restart case, and complete cross-window dragging remain acceptance
+work for issue #16.
 
 The recorded 2026-11-06 run passed 785 native tests (9 explicitly ignored),
 workspace/all-target Clippy with warnings denied and a full workspace build.
@@ -46,3 +60,9 @@ from the public [Scanner2GO BLK2GO example](https://support.scanner2go.de/hc/de/
 Its photos decoded in an inactive visible pane, both cameras restored and the
 source hash stayed unchanged. Only the JSON report is checked in for that scan;
 `panes.png` contains the synthetic checkerboard fixture.
+
+The persistence follow-up passed 791 native tests (9 explicitly ignored), a
+workspace build and all-target Clippy. Separate fresh-process runs restored a
+synthetic route panorama and the real BLK2GO station. Both runs reported zero
+changed model/photo interior pixels, retained the source SHA-256 and reopened
+the saved pane tree. The route case also retained its 37% photo blend.
