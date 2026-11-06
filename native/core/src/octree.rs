@@ -1210,7 +1210,10 @@ pub(crate) fn open_cached_preview(
         return Ok(None);
     }
     let stamp = SourceStamp::read(path)?;
-    let fingerprint = cache_fingerprint_for(path, stamp, &config)?;
+    let Ok(fingerprint) = cache_fingerprint_for(path, stamp, &config) else {
+        // A changed/invalid source is a cache miss; the normal reader owns its error.
+        return Ok(None);
+    };
     let root = config.scratch_dir.unwrap_or_else(cache_root);
     let directory = cache_directory(&root, &fingerprint);
     if !directory.exists() || !directory.join("cloud.json").exists() {
@@ -1427,7 +1430,9 @@ fn open_preview_cache_in(
     sample_limit: usize,
 ) -> Result<Option<PointCloud>, LoadError> {
     let stamp = SourceStamp::read(path)?;
-    let fingerprint = cache_fingerprint_for(path, stamp, &IndexConfig::default())?;
+    let Ok(fingerprint) = cache_fingerprint_for(path, stamp, &IndexConfig::default()) else {
+        return Ok(None);
+    };
     let directory = preview_cache_directory(root, &fingerprint);
     let metadata_path = directory.join("preview.json");
     if !metadata_path.exists() {
@@ -1635,11 +1640,17 @@ fn cache_fingerprint_for(
         .modified
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_nanos());
-    Ok(format!(
+    let mut fingerprint = format!(
         "octree-v2\n{:?}\n{}\n{:?}\n{}\n{}\n{}\n",
         path, stamp.length, modified, config.leaf_points, config.preview_points, config.max_depth
     )
-    .into_bytes())
+    .into_bytes();
+    // Only affected E57 files need new normalised preview/index records.
+    // Preserve existing keys for other sources, including huge plain-float E57s.
+    if super::is_e57(source) && e57_points::open_reader(source)?.repaired_limits {
+        fingerprint.extend_from_slice(b"e57-physical-limits-v1\n");
+    }
+    Ok(fingerprint)
 }
 
 fn count_records(path: &Path) -> Result<u64, LoadError> {
@@ -2718,6 +2729,35 @@ mod tests {
 
     fn handled_by(node: &IndexedNode) -> u64 {
         node.total_points + node.children.iter().map(handled_by).sum::<u64>()
+    }
+
+    #[test]
+    fn scaled_e57_limits_invalidate_old_samples_without_changing_other_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = IndexConfig::default();
+        for scaled in [false, true] {
+            let path = directory
+                .path()
+                .join(if scaled { "scaled.e57" } else { "plain.e57" });
+            crate::e57_limits::tests::fixture(&path, scaled, false);
+            let stamp = SourceStamp::read(&path).unwrap();
+            let modified = stamp
+                .modified
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos());
+            let legacy = format!(
+                "octree-v2\n{:?}\n{}\n{:?}\n{}\n{}\n{}\n",
+                fs::canonicalize(&path).unwrap(),
+                stamp.length,
+                modified,
+                config.leaf_points,
+                config.preview_points,
+                config.max_depth
+            )
+            .into_bytes();
+            let current = cache_fingerprint_for(&path, stamp, &config).unwrap();
+            assert_eq!(current != legacy, scaled);
+        }
     }
 
     #[test]

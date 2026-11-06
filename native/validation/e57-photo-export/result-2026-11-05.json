@@ -1,0 +1,71 @@
+{
+  "source_points": 199186802,
+  "section_points": 471,
+  "source_images": 6,
+  "section_image_bytes_unchanged": true,
+  "section_attributes_exact": true,
+  "colour_job": {
+    "job": null,
+    "last": {
+      "blend": false,
+      "coloured": 471,
+      "compared": {
+        "mean_abs_difference": [
+          67.7,
+          42.4,
+          42.8
+        ],
+        "mean_difference": [
+          67.7,
+          42.4,
+          42.8
+        ],
+        "median_abs_difference": [
+          66,
+          42,
+          44
+        ],
+        "points": 471
+      },
+      "kept": true,
+      "max_distance": 100.0,
+      "operation": "colour_from_photos",
+      "parts": 1,
+      "photos": 2,
+      "photos_failed": 0,
+      "photos_used": 1,
+      "points": 471,
+      "region": "layer",
+      "seconds": 0.7,
+      "source": "section.e57",
+      "state": "complete",
+      "times": {
+        "colouring": 0.0,
+        "decoding": 0.7,
+        "depth": 0.0,
+        "photos": 0.7,
+        "reading": 0.0
+      },
+      "unseen": 0,
+      "unseen_share": 0.0
+    },
+    "settings": {
+      "blend": false,
+      "max_distance": 100.0
+    }
+  },
+  "added_panorama_edited_and_retained": true,
+  "edited_points": 471,
+  "non_colour_attributes_exact": true,
+  "registration_preserves_images_and_transforms_poses": true,
+  "static": {
+    "scans": 5,
+    "images": 5,
+    "points": 1095702,
+    "image_bytes_unchanged": true,
+    "non_colour_attributes_exact": true,
+    "coloured_points": 894556
+  },
+  "ok": true,
+  "source_sha256": "e01da70d9cc3a2c8a0cf9e3e00f76b2d96895590d12285240b8148c2eb6a5040"
+}

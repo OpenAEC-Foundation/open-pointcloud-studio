@@ -248,6 +248,9 @@ fn save_to(path: &Path, language: Language) {
 
 /// The language chosen in an earlier session; the system's otherwise.
 pub fn load() -> Language {
+    if let Some(language) = crate::managed::language() {
+        return language;
+    }
     language_path()
         .and_then(|path| load_from(&path))
         .unwrap_or(Language::Auto)
@@ -428,10 +431,15 @@ mod tests {
         ("drawing.rs", include_str!("drawing.rs")),
         ("drawing_crop.rs", include_str!("drawing_crop.rs")),
         ("drawing_view.rs", include_str!("drawing_view.rs")),
+        (
+            "document_panes/mod.rs",
+            include_str!("document_panes/mod.rs"),
+        ),
         ("extensions/mod.rs", include_str!("extensions/mod.rs")),
         ("extensions/page.rs", include_str!("extensions/page.rs")),
         ("faces.rs", include_str!("faces.rs")),
         ("file_photos.rs", include_str!("file_photos.rs")),
+        ("feedback.rs", include_str!("feedback.rs")),
         ("file_view.rs", include_str!("file_view.rs")),
         ("i18n.rs", include_str!("i18n.rs")),
         ("index_jobs.rs", include_str!("index_jobs.rs")),

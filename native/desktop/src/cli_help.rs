@@ -44,6 +44,14 @@ pub const MODES: &[Mode] = &[
         ),
     },
     Mode {
+        flag: "--mcp-http",
+        short: None,
+        arguments: "",
+        description: key(
+            "Serves the desktop MCP tools over authenticated HTTP using OPENAEC_MCP_POORT and OPENAEC_MCP_GEHEIM.",
+        ),
+    },
+    Mode {
         flag: "--list-scans",
         short: None,
         arguments: "PATH [PATH ...]",

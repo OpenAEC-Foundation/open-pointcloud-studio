@@ -302,7 +302,7 @@ impl Studio {
         self.status = "Choose where to save the 3DBAG OBJ…".into();
         Task::perform(
             async {
-                rfd::AsyncFileDialog::new()
+                crate::managed::file_dialog()
                     .add_filter("OBJ mesh", &["obj"])
                     .set_file_name("3dbag-buildings.obj")
                     .save_file()

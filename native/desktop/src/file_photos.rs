@@ -8,7 +8,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, PoisonError,
+};
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame};
@@ -260,12 +263,16 @@ fn decode_read(
 /// The photo that is shown, as the decodes under way see it: a photo that
 /// was stepped past while it waited is not decoded.
 #[derive(Debug, Default)]
-pub(crate) struct Wanted(Mutex<Option<(PathBuf, usize)>>);
+pub(crate) struct Wanted(Mutex<Option<(PathBuf, usize, bool)>>);
 
 impl Wanted {
     fn set(&self, shown: Option<(&Path, usize)>) {
+        self.set_mode(shown, true);
+    }
+
+    fn set_mode(&self, shown: Option<(&Path, usize)>, neighbours: bool) {
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) =
-            shown.map(|(source, index)| (source.to_path_buf(), index));
+            shown.map(|(source, index)| (source.to_path_buf(), index, neighbours));
     }
 
     /// Whether a photo is the one that is shown or a neighbour of it.
@@ -274,7 +281,9 @@ impl Wanted {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
-            .is_some_and(|(shown, at)| shown == source && at.abs_diff(index) <= 1)
+            .is_some_and(|(shown, at, neighbours)| {
+                shown == source && at.abs_diff(index) <= usize::from(*neighbours)
+            })
     }
 }
 
@@ -291,6 +300,7 @@ pub(crate) struct ReturnCamera {
     /// The photo station the walking camera stood in, whose panorama comes
     /// back with it.
     station: Option<(usize, usize)>,
+    station_photo: bool,
 }
 
 impl ReturnCamera {
@@ -304,6 +314,7 @@ impl ReturnCamera {
             view_label: studio.view_label,
             walk: studio.walk,
             station: studio.walk_station,
+            station_photo: studio.tabs.active_station_photo.is_some(),
         }
     }
 }
@@ -338,7 +349,9 @@ pub(crate) struct PhotoTool {
     /// Decoded photos, the one used last at the back.
     cache: VecDeque<Arc<DecodedPhoto>>,
     /// Photos being decoded.
-    decoding: HashSet<(PathBuf, usize)>,
+    decoding: HashMap<(PathBuf, usize), u64>,
+    foreground: bool,
+    displayed: bool,
     /// Photos that could not be decoded.
     failed: HashSet<(PathBuf, usize)>,
     /// The photo that is shown, as the decodes under way see it.
@@ -355,7 +368,9 @@ impl Default for PhotoTool {
             view: None,
             blend: DEFAULT_BLEND,
             cache: VecDeque::new(),
-            decoding: HashSet::new(),
+            decoding: HashMap::new(),
+            foreground: true,
+            displayed: true,
             failed: HashSet::new(),
             wanted: Arc::default(),
             expanded: HashSet::new(),
@@ -364,10 +379,68 @@ impl Default for PhotoTool {
 }
 
 impl PhotoTool {
+    pub(crate) fn current_ready(&self) -> bool {
+        self.view
+            .as_ref()
+            .is_some_and(|view| self.cached(&view.source, view.index).is_some())
+    }
+    pub(crate) fn metadata_copy(&self) -> Self {
+        Self {
+            files: self.files.clone(),
+            listing: self.listing.clone(),
+            expanded: self.expanded.clone(),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn sync_metadata(&mut self, current: &Self) {
+        self.files = current.files.clone();
+        self.listing = current.listing.clone();
+        self.expanded = current.expanded.clone();
+    }
+
+    /// An inactive visible photo keeps just its displayed image; hidden tabs
+    /// release their images. Keep the view itself for later camera restoration.
+    pub(crate) fn suspend(&mut self, visible: bool) {
+        self.foreground = false;
+        self.displayed = visible;
+        if !visible {
+            self.failed.clear();
+        }
+        let current = self.view.as_ref().filter(|_| visible);
+        self.wanted.set_mode(
+            current.map(|view| (view.source.as_path(), view.index)),
+            false,
+        );
+        self.cache.retain(|photo| {
+            current.is_some_and(|view| view.source == photo.source && view.index == photo.index)
+        });
+    }
+
+    pub(crate) fn resume(&mut self) {
+        self.foreground = true;
+        self.displayed = true;
+        self.wanted.set(
+            self.view
+                .as_ref()
+                .map(|view| (view.source.as_path(), view.index)),
+        );
+    }
+
+    pub(crate) fn owns_decode(&self, action: &PhotoAction) -> bool {
+        match action {
+            PhotoAction::Decoded(source, index, ticket, _)
+            | PhotoAction::Skipped(source, index, ticket) => {
+                self.decoding.get(&(source.clone(), *index)) == Some(ticket)
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn invalidate(&mut self, source: &Path) {
         self.cache.retain(|photo| photo.source != source);
         self.failed.retain(|(path, _)| path != source);
-        self.decoding.retain(|(path, _)| path != source);
+        self.decoding.retain(|(path, _), _| path != source);
         if self.view.as_ref().is_some_and(|view| view.source == source) {
             self.close();
         }
@@ -420,9 +493,10 @@ impl PhotoTool {
     /// Whether a photo is the one that is shown or a neighbour of it along
     /// the path: the photos worth keeping once they are decoded.
     fn near_view(&self, source: &Path, index: usize) -> bool {
-        self.view
-            .as_ref()
-            .is_some_and(|view| view.source == source && view.index.abs_diff(index) <= 1)
+        self.displayed
+            && self.view.as_ref().is_some_and(|view| {
+                view.source == source && view.index.abs_diff(index) <= usize::from(self.foreground)
+            })
     }
 
     /// Whether the photos of a source are still being listed.
@@ -433,10 +507,11 @@ impl PhotoTool {
     /// Whether the photo that is entered is still being decoded, or waits
     /// for its turn, so that a picture of the view would lack it.
     pub(crate) fn waiting(&self) -> bool {
-        self.view.as_ref().is_some_and(|view| {
-            self.cached(&view.source, view.index).is_none()
-                && !self.failed.contains(&(view.source.clone(), view.index))
-        })
+        self.displayed
+            && self.view.as_ref().is_some_and(|view| {
+                self.cached(&view.source, view.index).is_none()
+                    && !self.failed.contains(&(view.source.clone(), view.index))
+            })
     }
 
     /// Forget the photos of sources that are no longer open.
@@ -448,6 +523,8 @@ impl PhotoTool {
             self.close();
         }
         self.cache.retain(|photo| open(&photo.source));
+        self.decoding.retain(|(source, _), _| open(source));
+        self.failed.retain(|(source, _)| open(source));
     }
 }
 
@@ -607,9 +684,9 @@ pub enum PhotoAction {
     /// Stand where a photo of a source was taken and show it.
     Enter(PathBuf, usize),
     /// A photo was decoded, or could not be.
-    Decoded(PathBuf, usize, Result<Arc<DecodedPhoto>, String>),
+    Decoded(PathBuf, usize, u64, Result<Arc<DecodedPhoto>, String>),
     /// A photo was stepped past before it was decoded.
-    Skipped(PathBuf, usize),
+    Skipped(PathBuf, usize, u64),
     /// Go this many photos along the path.
     Step(i64),
     /// How much of the photo covers the points.
@@ -668,6 +745,11 @@ impl Studio {
     }
 
     pub(crate) fn update_photos(&mut self, action: PhotoAction) -> Task<Message> {
+        if matches!(&action, PhotoAction::Decoded(..) | PhotoAction::Skipped(..))
+            && !self.photos.owns_decode(&action)
+        {
+            return Task::none();
+        }
         match action {
             PhotoAction::Listed(path, result) => {
                 self.photos.listing.remove(&path);
@@ -706,8 +788,11 @@ impl Studio {
                     Task::none()
                 }
             },
-            PhotoAction::Decoded(source, index, result) => {
+            PhotoAction::Decoded(source, index, _, result) => {
                 self.photos.decoding.remove(&(source.clone(), index));
+                if !self.photos.displayed {
+                    return Task::none();
+                }
                 let shown = self
                     .photos
                     .view
@@ -738,7 +823,7 @@ impl Studio {
                 }
                 self.fetch_photos()
             }
-            PhotoAction::Skipped(source, index) => {
+            PhotoAction::Skipped(source, index, _) => {
                 self.photos.decoding.remove(&(source, index));
                 self.fetch_photos()
             }
@@ -811,6 +896,58 @@ impl Studio {
         source: &Path,
         index: usize,
     ) -> Result<Task<Message>, Refusal> {
+        if let Some(mut documents) = self.documents.take() {
+            let result = (|| {
+                let tab = crate::view_tabs::TabId::Photo(source.to_path_buf());
+                let key = tab
+                    .document_key()
+                    .ok_or_else(|| refusal("That scan is not open", &[]))?;
+                let return_to = documents.linked_origin_for(self, &tab);
+                if documents.active != key {
+                    // Validate before changing pane ownership or the selected photo.
+                    if !self.clouds.iter().any(|entry| entry.cloud.path == source)
+                        || !self
+                            .photos
+                            .files
+                            .get(source)
+                            .is_some_and(|file| index < file.photos.len())
+                    {
+                        return Err(refusal("That scan has no photos", &[]));
+                    }
+                    documents
+                        .workspace
+                        .open(key.clone(), documents.workspace.active_pane)
+                        .map_err(|error| Refusal {
+                            english: error.clone(),
+                            shown: error,
+                        })?;
+                    self.tabs.photo_indexes.insert(source.to_path_buf(), index);
+                    let task = documents.focus(self, &key).map_err(|error| Refusal {
+                        english: error.clone(),
+                        shown: error,
+                    })?;
+                    let entered = self.enter_photo(source, index)?;
+                    documents.observe_current(self).map_err(|error| Refusal {
+                        english: error.clone(),
+                        shown: error,
+                    })?;
+                    let returned = match return_to {
+                        Some(origin) => {
+                            documents.focus(self, &origin).map_err(|error| Refusal {
+                                english: error.clone(),
+                                shown: error,
+                            })?
+                        }
+                        None => Task::none(),
+                    };
+                    return Ok(Task::batch([task, entered, returned]));
+                }
+                self.enter_photo(source, index)
+            })();
+            self.documents = Some(documents);
+            return result;
+        }
+
         let entry = self
             .clouds
             .iter()
@@ -849,6 +986,7 @@ impl Studio {
             Some(view) => view.back,
             None => ReturnCamera::of(self),
         };
+        self.remember_station_photo_tab();
         self.remember_model_for_photo();
         self.drawing_view.shown = false;
         self.file_open = false;
@@ -878,6 +1016,7 @@ impl Studio {
             self.photos.blend = saved.blend;
         }
         self.photos.touch(source, index);
+        self.photos.resume();
         self.revision += 1;
         self.status = tr_args(
             "Photo {number} of {count} · {kind} · drag to look around, scroll to zoom, Page Up and Page Down for the previous and next photo, Esc to go back",
@@ -918,6 +1057,11 @@ impl Studio {
     pub(crate) fn leave_photo(&mut self) -> Option<Task<Message>> {
         self.remember_photo_tab();
         let back = self.photos.view.take()?.back;
+        let station_photo = self
+            .tabs
+            .active_station_photo
+            .clone()
+            .filter(|_| back.station_photo);
         self.photos.close();
         self.leave_walk();
         self.yaw = back.yaw;
@@ -927,6 +1071,7 @@ impl Studio {
         self.orbit_point = back.orbit_point;
         self.view_label = back.view_label;
         self.walk = back.walk;
+        self.tabs.active_station_photo = station_photo;
         // The panorama of the station the photo was entered from is shown
         // again.
         let station = match back.station.filter(|_| back.walk.is_some()) {
@@ -959,7 +1104,10 @@ impl Studio {
 
     /// Start decoding what the entered photo needs: the photo itself first,
     /// then its neighbours along the path.
-    fn fetch_photos(&mut self) -> Task<Message> {
+    pub(crate) fn fetch_photos(&mut self) -> Task<Message> {
+        if !self.photos.displayed {
+            return Task::none();
+        }
         let Some(view) = &self.photos.view else {
             return Task::none();
         };
@@ -967,11 +1115,19 @@ impl Studio {
             return Task::none();
         };
         let source = view.source.clone();
-        self.photos.wanted.set(Some((&source, view.index)));
+        self.photos
+            .wanted
+            .set_mode(Some((&source, view.index)), self.photos.foreground);
         let wanted = [
             Some(view.index),
-            view.index.checked_add(1),
-            view.index.checked_sub(1),
+            self.photos
+                .foreground
+                .then(|| view.index.checked_add(1))
+                .flatten(),
+            self.photos
+                .foreground
+                .then(|| view.index.checked_sub(1))
+                .flatten(),
         ];
         // The neighbours wait until the photo that is shown is decoded, or
         // could not be.
@@ -988,7 +1144,7 @@ impl Studio {
             }
             let key = (source.clone(), index);
             if self.photos.cached(&source, index).is_some()
-                || self.photos.decoding.contains(&key)
+                || self.photos.decoding.contains_key(&key)
                 || self.photos.failed.contains(&key)
             {
                 continue;
@@ -1004,7 +1160,9 @@ impl Studio {
             if self.photos.decoding.len() >= places {
                 break;
             }
-            self.photos.decoding.insert(key);
+            static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
+            let ticket = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed);
+            self.photos.decoding.insert(key, ticket);
             let photo = photo.clone();
             let path = source.clone();
             let reply = source.clone();
@@ -1020,8 +1178,8 @@ impl Studio {
                 },
                 move |result| {
                     Message::Photos(match result {
-                        Some(result) => PhotoAction::Decoded(reply.clone(), index, result),
-                        None => PhotoAction::Skipped(reply.clone(), index),
+                        Some(result) => PhotoAction::Decoded(reply.clone(), index, ticket, result),
+                        None => PhotoAction::Skipped(reply.clone(), index, ticket),
                     })
                 },
             ));
@@ -1168,7 +1326,26 @@ impl Studio {
                 };
                 let source = self.clouds[layer].cloud.path.clone();
                 match self.enter_photo(&source, index) {
-                    Ok(task) => (self.entered_value(), task),
+                    Ok(task) => {
+                        let mut value = self.entered_value();
+                        if value["photo"].is_null() {
+                            if let Some(snapshot) = crate::view_tabs::TabId::Photo(source.clone())
+                                .document_key()
+                                .and_then(|key| self.documents.as_ref()?.snapshots.get(&key))
+                            {
+                                value["photo"] = Self::photo_value(
+                                    &self.clouds[layer],
+                                    &self.photos.files[&source].photos[index],
+                                    index,
+                                );
+                                value["walk"] = snapshot.walk_value(self);
+                                value["active_document"] =
+                                    json!(self.shown_tab().and_then(|tab| tab.document_key()));
+                                value["photo_document"] = json!(snapshot.tab.document_key());
+                            }
+                        }
+                        (value, task)
+                    }
                     Err(refused) => failed(refused.english),
                 }
             }
@@ -1892,11 +2069,573 @@ mod tests {
     use super::*;
     use crate::native_api::ApiRequest;
 
+    fn decode_ticket(studio: &Studio, source: &Path, index: usize) -> u64 {
+        studio
+            .photos
+            .decoding
+            .get(&(source.to_path_buf(), index))
+            .copied()
+            .unwrap_or(0)
+    }
+
     fn send(studio: &mut Studio, command: Value) -> Value {
         let (reply, receive) = std::sync::mpsc::channel();
         let command: ApiCommand = serde_json::from_value(command).unwrap();
         let _ = studio.handle_api(ApiRequest { command, reply });
         receive.recv().unwrap()
+    }
+
+    #[test]
+    fn scoped_photo_input_returns_to_the_independently_changed_model_camera() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_photos();
+        studio.yaw = 0.4;
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let photo = crate::view_tabs::TabId::Photo(source.clone())
+            .document_key()
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        let _ = studio.update(Message::Orbit(30., 0.));
+        let model = studio.yaw;
+        let _ = studio
+            .show_tab(&crate::view_tabs::TabId::Photo(source))
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::Input(
+            photo,
+            Box::new(Message::LeaveWalk),
+        )));
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+        assert_eq!(studio.yaw, model);
+    }
+
+    #[test]
+    fn a_document_can_focus_a_saved_view_while_another_scan_is_selected() {
+        use crate::document_panes::runtime::Runtime;
+        let (mut studio, directory, _) = studio_with_photos();
+        let source = directory.path().join("other.xyz");
+        std::fs::write(&source, "0 0 0\n1 1 1\n2 0 0\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 1000).unwrap());
+        let _ = studio.update(Message::Loaded(Ok(cloud)));
+        let view = crate::camera_views::SavedView::camera(
+            crate::camera_views::source_key(&source),
+            "Other source",
+            0.8,
+            0.4,
+            1.,
+            [0.; 2],
+        );
+        let tab = crate::view_tabs::TabId::View(view.guid.clone());
+        studio.views.list.push(view);
+        studio.tabs.add(tab.clone());
+        studio.active = Some(0);
+        let mut documents = Runtime::new(&studio);
+        let key = tab.document_key().unwrap();
+        documents.workspace.open(key.clone(), 1).unwrap();
+        let _ = documents.focus(&mut studio, &key).unwrap();
+        assert_eq!(studio.active, Some(1));
+        assert_eq!(studio.shown_tab(), Some(tab));
+    }
+
+    #[test]
+    fn a_grabbed_release_docks_into_the_first_target_window_without_following_later_motion() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_photos();
+        let main = iced::window::Id::unique();
+        studio.main_window = Some(main);
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let photo = crate::view_tabs::TabId::Photo(source)
+            .document_key()
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = studio.update(Message::Documents(Action::TearOff(photo.clone())));
+        let documents = studio.documents.as_ref().unwrap();
+        let source_pane = documents.workspace.owner(&photo).unwrap();
+        let source_window = documents.workspace.window_of(source_pane).unwrap();
+        let satellite = documents.native_windows[&source_window];
+        let model_pane = documents.workspace.owner("model").unwrap();
+        documents.pane_bounds[&model_pane].set(Some(iced::Rectangle {
+            x: 0.,
+            y: 30.,
+            width: 800.,
+            height: 570.,
+        }));
+        for action in [
+            Action::Pointer(satellite, iced::Point::new(50., 15.)),
+            Action::BeginDrag(photo.clone()),
+            Action::Pointer(satellite, iced::Point::new(-300., 300.)),
+            Action::FinishDrag(satellite),
+        ] {
+            let _ = studio.update(Message::Documents(action));
+        }
+        let ticket = studio
+            .documents
+            .as_ref()
+            .unwrap()
+            .drag
+            .as_ref()
+            .unwrap()
+            .ticket;
+        for action in [
+            Action::NativeCursor(satellite, true),
+            Action::NativeCursor(main, false),
+            Action::Pointer(main, iced::Point::new(400., 300.)),
+            Action::Pointer(main, iced::Point::new(795., 300.)),
+            Action::CompleteDrag(ticket),
+        ] {
+            let _ = studio.update(Message::Documents(action));
+        }
+        let documents = studio.documents.as_ref().unwrap();
+        assert!(documents.drag.is_none());
+        assert_eq!(documents.workspace.windows.len(), 1);
+        assert_eq!(documents.workspace.panes().len(), 1);
+        assert_eq!(
+            documents.workspace.owner("model"),
+            documents.workspace.owner(&photo)
+        );
+    }
+
+    #[test]
+    fn dragging_an_inactive_tab_merges_and_splits_its_document_not_the_selected_model() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_photos();
+        let native = iced::window::Id::unique();
+        studio.main_window = Some(native);
+        studio.yaw = 0.4;
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let photo = crate::view_tabs::TabId::Photo(source)
+            .document_key()
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let documents = studio.documents.as_ref().unwrap();
+        for pane in documents.workspace.panes() {
+            let x = if pane.tabs.iter().any(|key| key == "model") {
+                0.
+            } else {
+                404.
+            };
+            documents.pane_bounds[&pane.id].set(Some(iced::Rectangle {
+                x,
+                y: 30.,
+                width: 400.,
+                height: 570.,
+            }));
+        }
+        for action in [
+            Action::Pointer(native, iced::Point::new(450., 15.)),
+            Action::BeginDrag(photo.clone()),
+            Action::Pointer(native, iced::Point::new(200., 300.)),
+            Action::FinishDrag(native),
+        ] {
+            let _ = studio.update(Message::Documents(action));
+        }
+        assert_eq!(
+            studio.documents.as_ref().unwrap().workspace.panes().len(),
+            1
+        );
+        let pane = studio.documents.as_ref().unwrap().workspace.active_pane;
+        studio.documents.as_ref().unwrap().pane_bounds[&pane].set(Some(iced::Rectangle {
+            x: 0.,
+            y: 30.,
+            width: 800.,
+            height: 570.,
+        }));
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        for action in [
+            Action::Pointer(native, iced::Point::new(150., 15.)),
+            Action::BeginDrag(photo.clone()),
+            Action::Pointer(native, iced::Point::new(795., 300.)),
+            Action::FinishDrag(native),
+        ] {
+            let _ = studio.update(Message::Documents(action));
+        }
+        let documents = studio.documents.as_ref().unwrap();
+        assert_eq!(documents.workspace.panes().len(), 2);
+        assert_ne!(
+            documents.workspace.owner("model"),
+            documents.workspace.owner(&photo)
+        );
+        assert_eq!(documents.active, photo);
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        assert_eq!(studio.yaw, 0.4);
+    }
+
+    #[test]
+    fn linked_route_photo_selection_updates_its_pane_and_keeps_the_scene_camera() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_photos();
+        studio.yaw = 0.4;
+        studio.pitch = 0.3;
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        let panes: Vec<_> = studio
+            .documents
+            .as_ref()
+            .unwrap()
+            .workspace
+            .panes()
+            .iter()
+            .map(|pane| pane.id)
+            .collect();
+        for pane in &panes {
+            assert_eq!(
+                send(
+                    &mut studio,
+                    json!({"command":"set_pane_linked","pane":pane,"linked":true})
+                )["ok"],
+                true
+            );
+        }
+        studio.section_enabled = true;
+        let camera = studio.camera_value();
+        let entered = send(
+            &mut studio,
+            json!({"command":"enter_photo","index":1,"layer":0}),
+        );
+        assert_eq!(entered["ok"], true);
+        assert_eq!(entered["photo"]["index"], 1);
+        assert_eq!(entered["walk"]["eye"], json!([4., 5., 1.5]));
+        assert_eq!(entered["active_document"], "model");
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+        assert_eq!(studio.camera_value(), camera);
+        assert!(studio.section_enabled);
+        let documents = studio.documents.as_ref().unwrap();
+        let model = documents.workspace.owner("model").unwrap();
+        assert_eq!(
+            documents.linked_photo_views(model).iter().flatten().count(),
+            1
+        );
+        let key = crate::view_tabs::TabId::Photo(source)
+            .document_key()
+            .unwrap();
+        let photo = documents.workspace.owner(&key).unwrap();
+        assert_ne!(model, photo);
+        assert_eq!(
+            documents.workspace.pane(photo).unwrap().active.as_ref(),
+            Some(&key)
+        );
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command":"set_pane_linked","pane":photo,"linked":false})
+            )["ok"],
+            true
+        );
+        assert_eq!(
+            studio
+                .documents
+                .as_ref()
+                .unwrap()
+                .linked_photo_views(model)
+                .iter()
+                .flatten()
+                .count(),
+            0
+        );
+        let _ = send(
+            &mut studio,
+            json!({"command":"enter_photo","index":2,"layer":0}),
+        );
+        assert!(matches!(
+            studio.shown_tab(),
+            Some(crate::view_tabs::TabId::Photo(_))
+        ));
+    }
+
+    #[test]
+    fn linking_one_pane_does_not_hide_a_photo_opened_in_that_same_pane() {
+        use crate::document_panes::runtime::Runtime;
+        let (mut studio, _directory, source) = studio_with_photos();
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source, 0)));
+        let mut documents = Runtime::new(&studio);
+        let _ = documents.hydrate(&mut studio);
+        documents.workspace.pane_mut(1).unwrap().linked = true;
+        studio.documents = Some(documents);
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        let entered = send(
+            &mut studio,
+            json!({"command":"enter_photo","index":1,"layer":0}),
+        );
+        assert_eq!(entered["ok"], true);
+        assert!(matches!(
+            studio.shown_tab(),
+            Some(crate::view_tabs::TabId::Photo(_))
+        ));
+    }
+
+    #[test]
+    fn linked_station_selection_retains_its_photo_look_without_switching_the_scene() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, _source) = studio_with_station_and_route_photos();
+        studio.yaw = 0.4;
+        let _ = studio.update(Message::EnterPanorama(0, 0));
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = send(
+            &mut studio,
+            json!({"command":"set_panorama","yaw":1.2,"pitch":0.1,"field_of_view":1.1}),
+        );
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        let panes: Vec<_> = studio
+            .documents
+            .as_ref()
+            .unwrap()
+            .workspace
+            .panes()
+            .iter()
+            .map(|pane| pane.id)
+            .collect();
+        for pane in panes {
+            let _ = send(
+                &mut studio,
+                json!({"command":"set_pane_linked","pane":pane,"linked":true}),
+            );
+        }
+        let camera = studio.camera_value();
+        let entered = send(
+            &mut studio,
+            json!({"command":"open_panorama","index":0,"station":0}),
+        );
+        assert_eq!(entered["ok"], true);
+        assert_eq!(entered["active_document"], "model");
+        assert!((entered["walk"]["yaw"].as_f64().unwrap() - 1.2).abs() < 1e-6);
+        assert_eq!(entered["walk"]["station"]["station"], 0);
+        assert_eq!(studio.camera_value(), camera);
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+    }
+
+    #[test]
+    fn failed_api_pane_mutations_leave_the_existing_layout_unchanged() {
+        let mut studio = Studio::default();
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command": "split_pane", "side": "right"})
+            )["ok"],
+            false
+        );
+        assert!(studio.documents.is_none());
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command": "dock_pane_window", "window": 0})
+            )["ok"],
+            false
+        );
+        assert!(studio.documents.is_none());
+        for pane in [1, 999] {
+            assert_eq!(
+                send(
+                    &mut studio,
+                    json!({"command":"set_pane_linked","pane":pane,"linked":true})
+                )["ok"],
+                false
+            );
+            assert!(studio.documents.is_none());
+        }
+    }
+
+    #[test]
+    fn native_satellite_close_docks_documents_and_keeps_the_model_camera() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_photos();
+        studio.main_window = Some(iced::window::Id::unique());
+        studio.yaw = 0.4;
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let photo = crate::view_tabs::TabId::Photo(source.clone())
+            .document_key()
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::TearOff(photo.clone())));
+        let documents = studio.documents.as_ref().unwrap();
+        assert_eq!(documents.workspace.windows.len(), 2);
+        let window = documents
+            .workspace
+            .window_of(documents.workspace.owner(&photo).unwrap())
+            .unwrap();
+        let native = documents.native_windows[&window];
+        assert_ne!(Some(native), studio.main_window);
+        let _ = studio.update(Message::Documents(Action::NativeClosed(native)));
+        let documents = studio.documents.as_ref().unwrap();
+        assert_eq!(documents.workspace.windows.len(), 1);
+        assert!(!documents.native_windows.values().any(|id| *id == native));
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        assert_eq!(studio.yaw, 0.4);
+        assert!(studio
+            .tabs
+            .open()
+            .contains(&crate::view_tabs::TabId::Photo(source)));
+    }
+
+    #[test]
+    fn native_document_grid_routes_input_and_background_loading_to_their_owner() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_photos();
+        studio.yaw = 0.4;
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let photo = crate::view_tabs::TabId::Photo(source.clone())
+            .document_key()
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        assert_eq!(
+            studio.documents.as_ref().unwrap().workspace.panes().len(),
+            2
+        );
+        assert!(studio.document_grid().is_some());
+        let _ = studio.update(Message::Documents(Action::Input(
+            "model".into(),
+            Box::new(Message::Orbit(10., 0.)),
+        )));
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+        let turned = studio.yaw;
+        assert_ne!(turned, 0.4);
+        let _ = studio
+            .show_tab(&crate::view_tabs::TabId::Photo(source.clone()))
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::Input(
+            photo.clone(),
+            Box::new(Message::Pan(12., -3.)),
+        )));
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        assert_eq!(studio.yaw, turned);
+        assert_eq!(
+            studio.documents.as_ref().unwrap().workspace.panes().len(),
+            2
+        );
+        let tool = studio.documents.as_ref().unwrap().snapshots[&photo]
+            .photos
+            .as_ref()
+            .unwrap();
+        let ticket = tool.decoding[&(source.clone(), 0)];
+        let _ = studio.update(Message::Photos(PhotoAction::Decoded(
+            source.clone(),
+            0,
+            ticket,
+            Ok(decoded(&source, 0)),
+        )));
+        assert_eq!(studio.yaw, turned);
+        assert!(studio.documents.as_ref().unwrap().snapshots[&photo]
+            .photos
+            .as_ref()
+            .unwrap()
+            .cached(&source, 0)
+            .is_some());
+        let _ = studio.update(Message::Tabs(crate::view_tabs::TabAction::Close(
+            crate::view_tabs::TabId::Photo(source),
+        )));
+        assert_eq!(
+            studio.documents.as_ref().unwrap().workspace.panes().len(),
+            1
+        );
+        assert!(!studio
+            .documents
+            .as_ref()
+            .unwrap()
+            .snapshots
+            .contains_key(&photo));
+    }
+
+    #[test]
+    fn another_pane_keeps_loading_its_photo_without_moving_the_active_model() {
+        use crate::document_panes::{layout::Side, runtime::Runtime};
+        let (mut studio, _directory, source) = studio_with_photos();
+        studio.yaw = 0.4;
+        let mut documents = Runtime::new(&studio);
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        documents.observe_current(&mut studio).unwrap();
+        let photo = crate::view_tabs::TabId::Photo(source.clone())
+            .document_key()
+            .unwrap();
+        documents
+            .workspace
+            .split_tab(&photo, 1, Side::Right)
+            .unwrap();
+        let _ = documents.focus(&mut studio, "model").unwrap();
+        assert_eq!(studio.yaw, 0.4);
+        assert!(studio.photos.view.is_none());
+        let tool = documents.snapshots[&photo].photos.as_ref().unwrap();
+        assert!(tool.wanted.wants(&source, 0));
+        assert!(!tool.wanted.wants(&source, 1));
+        let ticket = tool.decoding[&(source.clone(), 0)];
+        let result = PhotoAction::Decoded(source.clone(), 0, ticket, Ok(decoded(&source, 0)));
+        let _ = documents.background_photo(&mut studio, &result).unwrap();
+        assert_eq!(studio.yaw, 0.4);
+        assert!(studio.photos.view.is_none());
+        assert!(documents.snapshots[&photo]
+            .photos
+            .as_ref()
+            .unwrap()
+            .cached(&source, 0)
+            .is_some());
+        let _ = documents.focus(&mut studio, &photo).unwrap();
+        assert!(studio.photos.cached(&source, 0).is_some());
+        assert_eq!(studio.photos.view.as_ref().unwrap().index, 0);
+    }
+
+    #[test]
+    fn stale_decode_and_cancellation_cannot_complete_a_newer_request() {
+        let (mut studio, _directory, source) = studio_with_photos();
+        let _ = studio.enter_photo(&source, 0).unwrap();
+        let old = decode_ticket(&studio, &source, 0);
+        studio.photos.invalidate(&source);
+        let _ = studio.enter_photo(&source, 0).unwrap();
+        let current = decode_ticket(&studio, &source, 0);
+        assert_ne!(old, current);
+        let _ = studio.update_photos(PhotoAction::Decoded(
+            source.clone(),
+            0,
+            old,
+            Ok(decoded(&source, 0)),
+        ));
+        let _ = studio.update_photos(PhotoAction::Skipped(source.clone(), 0, old));
+        assert_eq!(decode_ticket(&studio, &source, 0), current);
+        assert!(studio.photos.cached(&source, 0).is_none());
+        let _ = studio.update_photos(PhotoAction::Decoded(
+            source.clone(),
+            0,
+            current,
+            Ok(decoded(&source, 0)),
+        ));
+        assert!(studio.photos.cached(&source, 0).is_some());
+    }
+
+    #[test]
+    fn inactive_visible_photos_keep_their_image_and_hidden_tabs_release_it() {
+        let (mut studio, _directory, source) = studio_with_photos();
+        let _ = studio.enter_photo(&source, 0).unwrap();
+        let ticket = decode_ticket(&studio, &source, 0);
+        let _ = studio.update_photos(PhotoAction::Decoded(
+            source.clone(),
+            0,
+            ticket,
+            Ok(decoded(&source, 0)),
+        ));
+        let metadata = studio.photos.metadata_copy();
+        assert!(Arc::ptr_eq(
+            &metadata.files[&source],
+            &studio.photos.files[&source]
+        ));
+        assert!(metadata.view.is_none() && metadata.cache.is_empty());
+        assert!(!Arc::ptr_eq(&metadata.wanted, &studio.photos.wanted));
+        studio.photos.suspend(true);
+        assert!(studio.photos.wanted.wants(&source, 0));
+        assert!(!studio.photos.wanted.wants(&source, 1));
+        assert_eq!(studio.photos.cache.len(), 1);
+        studio.photos.suspend(false);
+        assert!(!studio.photos.wanted.wants(&source, 0));
+        assert!(studio.photos.view.is_some() && studio.photos.cache.is_empty());
+        assert!(!studio.photos.waiting());
+        let late = decode_ticket(&studio, &source, 1);
+        let _ = studio.update_photos(PhotoAction::Decoded(
+            source.clone(),
+            1,
+            late,
+            Ok(decoded(&source, 1)),
+        ));
+        assert!(studio.photos.cache.is_empty());
+        studio.photos.resume();
+        assert!(studio.photos.wanted.wants(&source, 0));
+        assert!(studio.photos.wanted.wants(&source, 1));
     }
 
     /// A camera that looks along +X with +Z up and +Y on its left.
@@ -2063,19 +2802,20 @@ mod tests {
         assert!(shown.decoded.is_none() && !shown.pinned);
         assert_eq!(shown.title(), "Photo 1 of 3 · panorama · loading…");
         // The photo is decoded first, and a picture waits for it.
-        assert!(studio.photos.decoding.contains(&(source.clone(), 0)));
+        assert!(studio.photos.decoding.contains_key(&(source.clone(), 0)));
         assert_eq!(studio.photos.decoding.len(), 1);
         assert!(studio.scene_pending());
 
         let _ = studio.update(Message::Photos(PhotoAction::Decoded(
             source.clone(),
             0,
+            decode_ticket(&studio, &source, 0),
             Ok(decoded(&source, 0)),
         )));
         assert!(studio.shown_photo().unwrap().decoded.is_some());
         assert!(!studio.photos.waiting());
         // Then its neighbour along the path is read ahead.
-        assert!(studio.photos.decoding.contains(&(source.clone(), 1)));
+        assert!(studio.photos.decoding.contains_key(&(source.clone(), 1)));
         let status = send(&mut studio, json!({"command": "status"}));
         let photos = &status["result"]["photos"];
         assert_eq!(photos["view"]["index"], 0);
@@ -2591,6 +3331,7 @@ mod tests {
         let _ = studio.update(Message::Photos(PhotoAction::Decoded(
             source.clone(),
             1,
+            decode_ticket(&studio, &source, 1),
             Err("broken".into()),
         )));
         assert_eq!(studio.status, "Photo 2 could not be shown: broken");
@@ -2607,22 +3348,24 @@ mod tests {
         let decoding: HashSet<usize> = studio
             .photos
             .decoding
-            .iter()
+            .keys()
             .map(|(_, index)| *index)
             .collect();
         assert_eq!(decoding, HashSet::from([0, 2]));
         let _ = studio.update(Message::Photos(PhotoAction::Decoded(
             source.clone(),
             2,
+            decode_ticket(&studio, &source, 2),
             Ok(decoded(&source, 2)),
         )));
         assert!(studio.photos.cached(&source, 2).is_some());
-        assert!(!studio.photos.decoding.contains(&(source.clone(), 1)));
+        assert!(!studio.photos.decoding.contains_key(&(source.clone(), 1)));
         // A photo that arrives once the photos are left is let go.
         let _ = studio.update(Message::Escape);
         let _ = studio.update(Message::Photos(PhotoAction::Decoded(
             source.clone(),
             0,
+            decode_ticket(&studio, &source, 0),
             Ok(decoded(&source, 0)),
         )));
         assert!(studio.photos.cache.is_empty());
@@ -2649,7 +3392,7 @@ mod tests {
             studio
                 .photos
                 .decoding
-                .iter()
+                .keys()
                 .map(|(_, index)| *index)
                 .collect()
         };
@@ -2668,16 +3411,22 @@ mod tests {
         let _ = studio.update(Message::Photos(PhotoAction::Decoded(
             source.clone(),
             0,
+            decode_ticket(&studio, &source, 0),
             Ok(decoded(&source, 0)),
         )));
         assert!(studio.photos.cache.is_empty());
         assert_eq!(decoding(&studio), HashSet::from([1, 2, 30]));
-        let _ = studio.update(Message::Photos(PhotoAction::Skipped(source.clone(), 1)));
+        let _ = studio.update(Message::Photos(PhotoAction::Skipped(
+            source.clone(),
+            1,
+            decode_ticket(&studio, &source, 1),
+        )));
         // Its neighbours wait for it.
         assert_eq!(decoding(&studio), HashSet::from([2, 30]));
         let _ = studio.update(Message::Photos(PhotoAction::Decoded(
             source.clone(),
             30,
+            decode_ticket(&studio, &source, 30),
             Ok(decoded(&source, 30)),
         )));
         assert!(studio.shown_photo().unwrap().decoded.is_some());
@@ -2685,6 +3434,7 @@ mod tests {
         let _ = studio.update(Message::Photos(PhotoAction::Decoded(
             source.clone(),
             2,
+            decode_ticket(&studio, &source, 2),
             Err("stepped past".into()),
         )));
         assert_eq!(decoding(&studio), HashSet::from([29, 31]));
@@ -2729,9 +3479,8 @@ mod tests {
         assert_eq!((decoded.index, decoded.levels[0].width), (3, 8));
     }
 
-    #[test]
-    fn leaving_a_photo_entered_from_a_station_panorama_shows_that_panorama_again() {
-        let (mut studio, _directory, _source) = studio_with_photos();
+    fn studio_with_station_and_route_photos() -> (Studio, tempfile::TempDir, PathBuf) {
+        let (mut studio, directory, source) = studio_with_photos();
         let mut cloud = (*studio.clouds[0].cloud).clone();
         cloud.scan_poses = vec![pointcloud_core::ScanPose {
             label: "Station 1".into(),
@@ -2751,6 +3500,61 @@ mod tests {
             length: 1,
         }];
         studio.clouds[0].cloud = Arc::new(cloud);
+        (studio, directory, source)
+    }
+
+    #[test]
+    fn a_failed_station_change_restores_the_active_photos_owned_cache() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_station_and_route_photos();
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let ticket = decode_ticket(&studio, &source, 0);
+        let _ = studio.update(Message::Photos(PhotoAction::Decoded(
+            source.clone(),
+            0,
+            ticket,
+            Ok(decoded(&source, 0)),
+        )));
+        let cached = studio.photos.cached(&source, 0).unwrap().clone();
+        let _ = studio.update(Message::EnterPanorama(0, usize::MAX));
+        assert!(Arc::ptr_eq(
+            studio.photos.cached(&source, 0).unwrap(),
+            &cached
+        ));
+        assert_eq!(
+            studio.shown_tab(),
+            Some(crate::view_tabs::TabId::Photo(source))
+        );
+    }
+
+    #[test]
+    fn a_visible_station_pane_receives_its_late_panorama_without_changing_the_model() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_station_and_route_photos();
+        studio.yaw = 0.4;
+        let _ = studio.update(Message::EnterPanorama(0, 0));
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = studio.show_tab(&crate::view_tabs::TabId::Model).unwrap();
+        let set = Arc::new(crate::station_photos::PhotoSet {
+            source: source.clone(),
+            station: 0,
+            faces: Vec::new(),
+            size: 1,
+            pixels: Vec::new(),
+        });
+        let _ = studio.update(Message::PanoramaReady(source.clone(), 0, Ok(set.clone())));
+        assert_eq!(studio.yaw, 0.4);
+        assert!(studio.panorama_photos.is_none());
+        let _ = studio
+            .show_tab(&crate::view_tabs::TabId::StationPhoto(source))
+            .unwrap();
+        assert!(Arc::ptr_eq(studio.panorama_photos.as_ref().unwrap(), &set));
+    }
+
+    #[test]
+    fn leaving_a_photo_entered_from_a_station_panorama_shows_that_panorama_again() {
+        let (mut studio, _directory, source) = studio_with_station_and_route_photos();
         let opened = send(
             &mut studio,
             json!({"command": "open_panorama", "index": 0, "station": 0}),
@@ -2773,9 +3577,62 @@ mod tests {
         assert_eq!(studio.walk_station, Some((0, 0)));
         let status = send(&mut studio, json!({"command": "status"}));
         assert_eq!(status["result"]["walk"]["station"]["label"], "Station 1");
+        assert_eq!(
+            studio.shown_tab(),
+            Some(crate::view_tabs::TabId::StationPhoto(source))
+        );
         // A second time leaves the panorama.
         let _ = send(&mut studio, json!({"command": "close_panorama"}));
         assert!(studio.walk.is_none() && studio.walk_station.is_none());
+    }
+
+    #[test]
+    fn closing_station_before_route_tab_does_not_reopen_the_closed_station() {
+        let (mut studio, _directory, source) = studio_with_station_and_route_photos();
+        let _ = send(
+            &mut studio,
+            json!({"command":"open_panorama", "index":0,"station":0}),
+        );
+        let _ = send(&mut studio, json!({"command":"enter_photo", "index":1}));
+        let station = crate::view_tabs::TabId::StationPhoto(source);
+        let _ = studio.show_tab(&station).unwrap();
+        let _ = studio.close_tab(&station);
+        assert!(
+            studio.photos.view.is_some(),
+            "the route tab follows the closed station tab"
+        );
+        assert!(studio.tabs.active_station_photo.is_none());
+        let _ = send(&mut studio, json!({"command":"close_panorama"}));
+        assert_eq!(studio.shown_tab(), Some(crate::view_tabs::TabId::Model));
+        assert!(!studio.listed_tabs().contains(&station));
+    }
+
+    #[test]
+    fn entering_station_from_route_photo_clears_overlay_and_preserves_model() {
+        let (mut studio, _directory, source) = studio_with_station_and_route_photos();
+        studio.yaw = 0.65;
+        studio.pitch = 0.3;
+        studio.pan = [5.0, -2.0];
+        let model = (studio.yaw, studio.pitch, studio.pan, studio.walk);
+        assert_eq!(
+            send(&mut studio, json!({"command":"enter_photo", "index":1}))["ok"],
+            true
+        );
+        assert!(studio.photos.view.is_some());
+        assert_eq!(
+            send(
+                &mut studio,
+                json!({"command":"open_panorama", "index":0,"station":0})
+            )["ok"],
+            true
+        );
+        assert!(studio.photos.view.is_none());
+        assert_eq!(
+            studio.shown_tab(),
+            Some(crate::view_tabs::TabId::StationPhoto(source))
+        );
+        let _ = studio.show_model_tab();
+        assert_eq!((studio.yaw, studio.pitch, studio.pan, studio.walk), model);
     }
 
     #[test]

@@ -1,0 +1,18 @@
+{
+  "source_sha256": "21b15d28bd44d66a337da20adea0e86f8858cb09dbe90acc4fc9aab00027c8a5",
+  "station_tab": {
+    "active": true,
+    "closable": true,
+    "index": 1,
+    "kind": "photo",
+    "locked": false,
+    "name": "Photo \u00b7 Weg 05-1",
+    "photo_type": "station_panorama",
+    "station_index": 0
+  },
+  "model_camera_restored": true,
+  "photo_camera_restored": true,
+  "closing_preserves_scan": true,
+  "source_unchanged": true,
+  "tiled_station_ready_in_background": true
+}

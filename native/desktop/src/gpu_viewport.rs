@@ -1,6 +1,13 @@
 //! Native WGPU point-sprite renderer embedded in Iced's shader widget.
 //! Survey coordinates are rebased in f64 before f32 upload to retain precision.
 
+mod textured_mesh;
+pub(crate) fn texture_max_page_side() -> u32 {
+    textured_mesh::max_page_side()
+}
+
+mod slots;
+
 use std::cell::RefCell;
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
@@ -24,6 +31,10 @@ use pointcloud_core::{
 // Keep each upload below conservative WGPU adapter buffer limits. The full
 // viewport budget can span multiple draw calls without losing detail.
 const POINTS_PER_BUFFER: usize = 2_000_000;
+
+pub(crate) fn texture_supported() -> Option<bool> {
+    textured_mesh::supported()
+}
 
 // At close range the fixed-size sprites become single-pixel specks even when
 // the octree supplies exact points. Grow their screen radius gently so the
@@ -99,6 +110,7 @@ pub struct RenderCache {
     geometry: Option<Arc<RenderGeometry>>,
     mesh_key: Option<MeshKey>,
     mesh: Option<Arc<MeshBuffers>>,
+    texture_key: Vec<(Option<Arc<crate::mesh_texture_preview::BakedTexture>>, bool)>,
     /// What `caps` were made from; `None` while they are not those of the
     /// scene.
     caps_key: Option<CapKey>,
@@ -198,6 +210,8 @@ struct CloudKey {
     deleted: Option<Arc<DeletionMask>>,
     colours: Option<Arc<PointColours>>,
     mesh: Option<Arc<MeshGeometry>>,
+    texture: Option<Arc<crate::mesh_texture_preview::BakedTexture>>,
+    texture_visible: bool,
     /// The mesh of the detected faces as it is shown: nothing while the
     /// faces are switched off.
     faces: Option<Arc<MeshGeometry>>,
@@ -228,6 +242,8 @@ impl SceneKey {
                     deleted: entry.deleted.clone(),
                     colours: entry.colours.clone(),
                     mesh: entry.mesh.clone(),
+                    texture: entry.texture.clone(),
+                    texture_visible: entry.texture_visible,
                     faces: shown_faces(entry).cloned(),
                     visible: entry.visible,
                     mesh_visible: entry.mesh_visible,
@@ -328,6 +344,8 @@ impl CloudKey {
 
     fn meshes_match(&self, entry: &CloudEntry) -> bool {
         same_arc(&self.mesh, &entry.mesh)
+            && same_arc(&self.texture, &entry.texture)
+            && self.texture_visible == entry.texture_visible
             && match (&self.faces, shown_faces(entry)) {
                 (Some(kept), Some(shown)) => Arc::ptr_eq(kept, shown),
                 (None, None) => true,
@@ -552,9 +570,10 @@ impl<'a> GpuViewport<'a> {
     fn build_mesh(&self, overall_bounds: Option<Bounds>) -> MeshBuffers {
         let mut mesh_vertices = Vec::new();
         let mut mesh_indices = Vec::new();
+        let mut textured = Vec::new();
         if let Some(overall_bounds) = overall_bounds {
             let center = overall_bounds.center();
-            for (index, _, mesh) in drawn(self.overlay.clouds) {
+            for (index, part, mesh) in drawn(self.overlay.clouds) {
                 let entry = &self.overlay.clouds[index];
                 let mesh: &MeshGeometry = mesh;
                 // What `drawn` lets through stays far below the range of a
@@ -600,6 +619,20 @@ impl<'a> GpuViewport<'a> {
                         normal: [normal[0], normal[1], normal[2], 0.0],
                     });
                 }
+                if matches!(part, MeshPart::Surface) && entry.texture_visible {
+                    if let Some(texture) = entry.texture.as_ref().filter(|texture| {
+                        entry
+                            .mesh
+                            .as_ref()
+                            .is_some_and(|mesh| Arc::ptr_eq(mesh, &texture.mesh))
+                    }) {
+                        textured.push(TexturedMeshPart {
+                            first_vertex: base as usize,
+                            vertex_count: mesh.vertices.len(),
+                            source: Arc::clone(texture),
+                        });
+                    }
+                }
                 mesh_indices.reserve(mesh.triangles.len() * 3);
                 for face in &mesh.triangles {
                     mesh_indices.extend(face.map(|index| index + base));
@@ -609,6 +642,7 @@ impl<'a> GpuViewport<'a> {
         MeshBuffers {
             vertices: mesh_vertices,
             indices: mesh_indices,
+            textured,
         }
     }
 
@@ -780,11 +814,22 @@ impl shader::Program<Message> for GpuViewport<'_> {
                             .mesh_key
                             .as_ref()
                             .is_some_and(|key| key.matches(clouds, overall_bounds))
+                            && cache.texture_key.len() == clouds.len()
+                            && cache.texture_key.iter().zip(clouds).all(
+                                |((texture, visible), entry)| {
+                                    same_arc(texture, &entry.texture)
+                                        && *visible == entry.texture_visible
+                                },
+                            )
                     })
                     .map(Arc::clone);
                 let mesh = kept.unwrap_or_else(|| {
                     let mesh = Arc::new(self.build_mesh(overall_bounds));
                     cache.mesh_key = Some(MeshKey::capture(clouds, overall_bounds));
+                    cache.texture_key = clouds
+                        .iter()
+                        .map(|entry| (entry.texture.clone(), entry.texture_visible))
+                        .collect();
                     cache.mesh = Some(Arc::clone(&mesh));
                     mesh
                 });
@@ -955,7 +1000,8 @@ impl shader::Program<Message> for GpuViewport<'_> {
             .and_then(|shown| crate::photo_overlay::frame(&shown));
         CloudPrimitive {
             geometry,
-            compare_model: self.overlay.resident_points,
+            view_slot: self.overlay.view_slot,
+            live_views: self.overlay.live_views,
             focus_drawn: self.overlay.focus_drawn,
             caps,
             camera,
@@ -1018,6 +1064,14 @@ struct RenderGeometry {
 struct MeshBuffers {
     vertices: Vec<GpuMeshVertex>,
     indices: Vec<u32>,
+    textured: Vec<TexturedMeshPart>,
+}
+
+#[derive(Debug)]
+struct TexturedMeshPart {
+    first_vertex: usize,
+    vertex_count: usize,
+    source: Arc<crate::mesh_texture_preview::BakedTexture>,
 }
 
 struct PointBufferChunk {
@@ -1117,9 +1171,9 @@ struct PanoramaFrame {
 #[derive(Debug)]
 pub struct CloudPrimitive {
     geometry: Arc<RenderGeometry>,
-    /// The comparison pane needs its own uploads and camera until both
-    /// primitives have rendered; the photo pane prepares in the same frame.
-    compare_model: bool,
+    /// Unique camera/upload ownership, independent of point sampling policy.
+    view_slot: usize,
+    live_views: u8,
     /// Whether the points read inside the section box are drawn; they stay
     /// on the device while they are put aside.
     focus_drawn: bool,
@@ -1332,6 +1386,7 @@ struct GpuState {
     /// The points read inside the section box besides them.
     focus: PointUpload,
     mesh: MeshUpload,
+    textures: textured_mesh::TextureUpload,
     caps: MeshUpload,
     depth_texture: Option<wgpu::Texture>,
     depth_view: Option<wgpu::TextureView>,
@@ -1341,9 +1396,9 @@ struct GpuState {
     photo_overlay: crate::photo_overlay::PhotoOverlay,
 }
 
+#[derive(Default)]
 struct GpuStates {
-    main: GpuState,
-    comparison: Option<GpuState>,
+    views: slots::ViewSlots<GpuState>,
 }
 
 impl GpuState {
@@ -1647,6 +1702,7 @@ impl GpuState {
             points: PointUpload::default(),
             focus: PointUpload::default(),
             mesh: MeshUpload::new(device, "terrain mesh"),
+            textures: textured_mesh::TextureUpload::new(device, &camera_layout, scene_format),
             caps: MeshUpload::new(device, "section caps"),
             depth_texture: None,
             depth_view: None,
@@ -1811,20 +1867,15 @@ impl Primitive for CloudPrimitive {
         viewport: &shader::Viewport,
     ) {
         if !storage.has::<GpuStates>() {
-            storage.store(GpuStates {
-                main: GpuState::new(device, format),
-                comparison: None,
-            });
+            storage.store(GpuStates::default());
         }
         let states = storage
             .get_mut::<GpuStates>()
             .expect("pointcloud GPU states");
-        let state = if self.compare_model {
-            states
-                .comparison
-                .get_or_insert_with(|| GpuState::new(device, format))
-        } else {
-            &mut states.main
+        let Some(state) = states.views.prepare(self.view_slot, self.live_views, || {
+            GpuState::new(device, format)
+        }) else {
+            return;
         };
         // Each set of points is sent only when it changed: a change of the
         // section box sends none, and detail read inside the box sends only
@@ -1834,6 +1885,7 @@ impl Primitive for CloudPrimitive {
         // The meshes are sent only when they changed: a refinement of the
         // points keeps the buffers of a mesh of millions of triangles.
         state.mesh.upload(device, queue, &self.geometry.mesh);
+        state.textures.upload(device, queue, &self.geometry.mesh);
         state.caps.upload(device, queue, &self.caps);
         if let Some(atlas) = &self.photos.atlas {
             state.upload_ball_photos(device, queue, atlas);
@@ -1876,13 +1928,8 @@ impl Primitive for CloudPrimitive {
         clip_bounds: &Rectangle<u32>,
     ) {
         let states = storage.get::<GpuStates>().expect("pointcloud GPU states");
-        let state = if self.compare_model {
-            states
-                .comparison
-                .as_ref()
-                .expect("comparison GPU state prepared")
-        } else {
-            &states.main
+        let Some(state) = states.views.get(self.view_slot) else {
+            return;
         };
         if clip_bounds.width == 0 || clip_bounds.height == 0 {
             return;
@@ -1982,6 +2029,7 @@ impl Primitive for CloudPrimitive {
                     pass.draw_indexed(0..meshes.index_count, 0, 0..1);
                 }
             }
+            state.textures.draw(&mut pass);
             let chunks = || state.points.chunks.iter().chain(focus.clone());
             if chunks().next().is_some() {
                 pass.set_pipeline(&state.pipeline);
@@ -2406,6 +2454,8 @@ mod tests {
             mesh: None,
             mesh_topology: None,
             mesh_visible: false,
+            texture: None,
+            texture_visible: false,
             faces: None,
             bag_source: false,
             visible: true,
@@ -2740,8 +2790,9 @@ mod section_box_tests {
             1
         );
 
-        let mut compare = studio.point_viewport();
-        compare.resident_points = true;
+        let compare = studio
+            .compare_model_viewport(studio.point_viewport())
+            .unwrap();
         let rectangle = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(450.0, 650.0));
         let cache = RefCell::new(RenderCache::default());
         let compared = shader::Program::draw(
@@ -2750,23 +2801,26 @@ mod section_box_tests {
             mouse::Cursor::Unavailable,
             rectangle,
         );
-        assert!(compared.compare_model);
+        assert_eq!(compared.view_slot, 1);
+        assert_eq!(compared.live_views, 3);
         let key = SceneKey::capture(compare, bounds);
         assert_eq!(
             GpuViewport { overlay: compare }.build_points(bounds).len(),
             1_010
         );
         studio.clouds[0].detail_points = Some(Arc::from(vec![]));
-        let mut compare = studio.point_viewport();
-        compare.resident_points = true;
+        let compare = studio
+            .compare_model_viewport(studio.point_viewport())
+            .unwrap();
         assert!(key.points_match(compare, bounds));
         assert_eq!(
             GpuViewport { overlay: compare }.build_points(bounds).len(),
             1_010
         );
         studio.take_view_sets(vec![(0, vec![first])]);
-        let mut compare = studio.point_viewport();
-        compare.resident_points = true;
+        let compare = studio
+            .compare_model_viewport(studio.point_viewport())
+            .unwrap();
         assert!(!key.points_match(compare, bounds));
         assert_eq!(
             GpuViewport { overlay: compare }.build_points(bounds).len(),

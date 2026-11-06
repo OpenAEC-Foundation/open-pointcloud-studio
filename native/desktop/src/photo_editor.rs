@@ -527,7 +527,7 @@ impl Studio {
         if choose {
             return Task::perform(
                 async {
-                    rfd::AsyncFileDialog::new()
+                    crate::managed::file_dialog()
                         .add_filter("360° panorama", &["jpg", "jpeg", "png"])
                         .pick_file()
                         .await

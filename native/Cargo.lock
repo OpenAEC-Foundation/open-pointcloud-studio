@@ -3149,7 +3149,7 @@ dependencies = [
 
 [[package]]
 name = "openaec-ui"
-version = "0.1.0"
+version = "2026.45.1"
 dependencies = [
  "iced",
  "iced_tiny_skia",
@@ -3412,6 +3412,7 @@ dependencies = [
  "png",
  "rayon",
  "reqwest",
+ "roxmltree 0.20.0",
  "serde",
  "serde_json",
  "tempfile",
