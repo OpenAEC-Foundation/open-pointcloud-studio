@@ -1139,5 +1139,7 @@
   "Texture preview is unavailable on this renderer; exported images retain their detail.": "Deze renderer kan geen textuurvoorbeeld tonen; geëxporteerde beelden behouden hun detail.",
   "Preparing texture preview…": "Textuurvoorbeeld voorbereiden…",
   "Link photo and 3D panes": "Foto- en 3D-panelen koppelen",
-  "Sheet unavailable": "Blad niet beschikbaar"
+  "Sheet unavailable": "Blad niet beschikbaar",
+  "Texture source points": "Textuurbronpunten",
+  "Texture uses a bounded point sample; gaps remain unobserved.": "De textuur gebruikt een begrensde puntensample; hiaten blijven ongemeten."
 }

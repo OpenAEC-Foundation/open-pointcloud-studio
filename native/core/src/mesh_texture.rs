@@ -13,9 +13,11 @@ use rayon::prelude::*;
 
 use crate::mesh_photo::{ChartCoverage, PhotoBaker};
 pub use crate::mesh_photo::{PhotoTextureCoverage, PhotoTextureOptions};
+use crate::mesh_point_texture::PointSampler;
+pub use crate::mesh_point_texture::MAX_TEXTURE_POINTS;
 use crate::obj_mesh::{MeshGeometry, MAX_TRIANGLES, MAX_VERTICES};
 use crate::photo_colour::PhotoPixels;
-use crate::{FilePhoto, LoadError};
+use crate::{FilePhoto, LoadError, Point};
 
 const MAX_PAGES: u32 = 512;
 
@@ -90,6 +92,21 @@ pub fn write_photographic_obj_atlas(
     cancelled: &(dyn Fn() -> bool + Sync),
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<PhotoAtlasReport, LoadError> {
+    write_measured_obj_atlas(request, None, destination, decode, cancelled, progress)
+}
+
+/// Bake measured cloud RGB in source coordinates, optionally preferring calibrated
+/// photographs. A supplied point source is authoritative: unsupported texels stay
+/// unobserved instead of falling back to the coarser mesh vertex interpolation.
+/// The caller supplies at most MAX_TEXTURE_POINTS spatially distributed samples.
+pub fn write_measured_obj_atlas(
+    request: PhotoAtlasRequest<'_>,
+    points: Option<&[Point]>,
+    destination: impl AsRef<Path>,
+    decode: &mut dyn FnMut(usize) -> Result<PhotoPixels, LoadError>,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<PhotoAtlasReport, LoadError> {
     if request.source_mesh.vertices.len() != request.output_mesh.vertices.len()
         || request.source_mesh.triangles.len() != request.output_mesh.triangles.len()
         || request
@@ -115,8 +132,19 @@ pub fn write_photographic_obj_atlas(
     if cancelled() {
         return Err(LoadError::Cancelled);
     }
-    let mut baker = PhotoBaker::new(request.source_mesh, request.photos, request.photographs)?;
-    let mut coverage = PhotoTextureCoverage::default();
+    let sampler = points
+        .map(|points| PointSampler::new(points, request.atlas.texel_size * 4.0, cancelled))
+        .transpose()?;
+    let mut baker = PhotoBaker::new(
+        request.source_mesh,
+        request.photos,
+        request.photographs,
+        sampler.as_ref(),
+    )?;
+    let mut coverage = PhotoTextureCoverage {
+        sampled_points: points.map_or(0, <[Point]>::len),
+        ..Default::default()
+    };
     let mut used = vec![false; request.photos.len()];
     let mut charts = Vec::with_capacity(request.source_mesh.triangles.len());
     let atlas = write_sampled_obj_atlas(
@@ -139,6 +167,7 @@ pub fn write_photographic_obj_atlas(
                 .map(|(row, pixels)| -> Result<ChartCoverage, LoadError> {
                     let mut counts = ChartCoverage::default();
                     let mut pending = Vec::with_capacity(32);
+                    let mut nearest = Vec::with_capacity(33);
                     for column in 0..side as usize + 2 {
                         if column % 64 == 0 && cancelled() {
                             return Err(LoadError::Cancelled);
@@ -150,13 +179,21 @@ pub fn write_photographic_obj_atlas(
                             u /= sum;
                             v /= sum;
                         }
-                        let (rgb, category, mask) = chart.sample([1.0 - u - v, u, v], &mut pending);
+                        let (rgb, category, mask) =
+                            chart.sample([1.0 - u - v, u, v], &mut pending, &mut nearest);
                         let offset = (at[0] as usize + column) * 3;
                         pixels[offset..offset + 3].copy_from_slice(&rgb);
                         if row >= 1 && column >= 1 && row + column <= side as usize + 1 {
                             match category {
                                 0 => counts.photographs += 1,
-                                1 => counts.points += 1,
+                                1 => {
+                                    counts.points += 1;
+                                    counts.vertices += 1;
+                                }
+                                3 => {
+                                    counts.points += 1;
+                                    counts.measured += 1;
+                                }
                                 _ => counts.unseen += 1,
                             }
                             counts.used |= mask;
@@ -167,12 +204,16 @@ pub fn write_photographic_obj_atlas(
                 .try_reduce(ChartCoverage::default, |mut a, b| {
                     a.photographs += b.photographs;
                     a.points += b.points;
+                    a.measured += b.measured;
+                    a.vertices += b.vertices;
                     a.unseen += b.unseen;
                     a.used |= b.used;
                     Ok(a)
                 })?;
             coverage.photograph_texels += counts.photographs;
             coverage.point_colour_texels += counts.points;
+            coverage.measured_point_texels += counts.measured;
+            coverage.vertex_colour_texels += counts.vertices;
             coverage.unobserved_texels += counts.unseen;
             for (bit, index) in indices.into_iter().enumerate() {
                 if counts.used & (1 << bit) != 0 {
@@ -574,6 +615,67 @@ fn write_sampled_obj_atlas(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measured_points_override_stale_vertex_colours_and_mark_gaps() {
+        let mesh = MeshGeometry {
+            vertices: vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]],
+            triangles: vec![[0, 1, 2]],
+            colors: Some(vec![[255, 0, 0]; 3]),
+            normals: None,
+        };
+        let points = (-2..=12)
+            .flat_map(|x| {
+                (-2..=12).map(move |y| Point {
+                    xyz: [x as f64 * 0.025, y as f64 * 0.025, 0.],
+                    rgb: Some([60, 140, 100]),
+                    intensity: None,
+                    classification: None,
+                })
+            })
+            .collect::<Vec<_>>();
+        let folder = tempfile::tempdir().unwrap();
+        let bake = |name: &str| {
+            write_measured_obj_atlas(
+                PhotoAtlasRequest {
+                    source_mesh: &mesh,
+                    output_mesh: &mesh,
+                    photos: &[],
+                    atlas: AtlasOptions {
+                        texel_size: 0.02,
+                        max_resolution: 256,
+                    },
+                    photographs: PhotoTextureOptions::default(),
+                },
+                Some(&points),
+                folder.path().join(format!("{name}.obj")),
+                &mut |_| unreachable!(),
+                &|| false,
+                &mut |_, _| {},
+            )
+            .unwrap()
+        };
+        let report = bake("measured");
+        assert_eq!(report.coverage.sampled_points, points.len());
+        assert!(report.coverage.measured_point_texels > 0);
+        assert!(report.coverage.unobserved_texels > 0);
+        assert_eq!(report.coverage.vertex_colour_texels, 0);
+        let image = |name: &str| {
+            let decoder = png::Decoder::new(
+                File::open(folder.path().join(format!("{name}-atlas-000.png"))).unwrap(),
+            );
+            let mut reader = decoder.read_info().unwrap();
+            let mut pixels = vec![0; reader.output_buffer_size()];
+            reader.next_frame(&mut pixels).unwrap();
+            pixels
+        };
+        let pixels = image("measured");
+        assert!(pixels.as_chunks::<3>().0.contains(&[60, 140, 100]));
+        assert!(pixels.as_chunks::<3>().0.contains(&[128, 128, 128]));
+        assert!(!pixels.as_chunks::<3>().0.contains(&[255, 0, 0]));
+        bake("measured-repeat");
+        assert_eq!(pixels, image("measured-repeat"));
+    }
 
     #[test]
     fn a_coloured_triangle_writes_obj_mtl_and_measured_png() {

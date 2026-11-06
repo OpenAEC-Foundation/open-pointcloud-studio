@@ -113,6 +113,90 @@ pub(crate) struct MeshExportRequest {
     transform: CloudTransform,
     texture_source: TextureSource,
     photos: Vec<FilePhoto>,
+    points: Option<TexturePoints>,
+}
+
+/// Immutable edit snapshot; sampling and index I/O happen on the export worker.
+#[derive(Clone)]
+struct TexturePoints {
+    cloud: Arc<pointcloud_core::PointCloud>,
+    index: Option<Arc<pointcloud_core::OctreeIndex>>,
+    colours: Option<Arc<pointcloud_core::photo_colour::PointColours>>,
+    deleted: Option<Arc<crate::selection::DeletionMask>>,
+}
+impl std::fmt::Debug for TexturePoints {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TexturePoints")
+            .field("source", &self.cloud.path)
+            .finish_non_exhaustive()
+    }
+}
+impl TexturePoints {
+    fn has_colours(&self) -> bool {
+        self.cloud.has_rgb || self.colours.is_some()
+    }
+    fn sample(
+        &self,
+        cancelled: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<pointcloud_core::Point>, LoadError> {
+        use pointcloud_core::{IndexedPoint, MAX_TEXTURE_POINTS};
+        if cancelled() {
+            return Err(LoadError::Cancelled);
+        }
+        self.cloud.validate_source()?;
+        let records = if let Some(index) = &self.index {
+            index.sample_lod_indexed_cancellable(
+                MAX_TEXTURE_POINTS,
+                |_| Some(f32::MAX),
+                cancelled,
+            )?
+        } else {
+            let n = self.cloud.points.len().min(MAX_TEXTURE_POINTS);
+            (0..n)
+                .map(|slot| {
+                    let i = slot * self.cloud.points.len() / n;
+                    IndexedPoint {
+                        point: self.cloud.points[i],
+                        ordinal: self
+                            .cloud
+                            .point_ordinals
+                            .get(i)
+                            .copied()
+                            .unwrap_or(u64::MAX),
+                    }
+                })
+                .collect()
+        };
+        let mut points = Vec::with_capacity(records.len());
+        for record in records {
+            if cancelled() {
+                return Err(LoadError::Cancelled);
+            }
+            let mut point = record.point;
+            let uncertain_edit = record.ordinal == u64::MAX
+                && (self.deleted.as_ref().is_some_and(|mask| mask.count > 0)
+                    || self
+                        .colours
+                        .as_ref()
+                        .is_some_and(|colours| !colours.is_empty()));
+            point.rgb = if uncertain_edit
+                || self
+                    .deleted
+                    .as_ref()
+                    .is_some_and(|mask| mask.contains(record.ordinal))
+            {
+                None
+            } else {
+                self.colours
+                    .as_ref()
+                    .and_then(|colours| colours.get(record.ordinal))
+                    .or(point.rgb)
+            };
+            points.push(point);
+        }
+        self.cloud.validate_source()?;
+        Ok(points)
+    }
 }
 
 /// A mesh file that was written.
@@ -159,39 +243,43 @@ fn write_texture(
     };
     let cancelled = || control.cancelled.load(Ordering::Relaxed);
     let mut progress = |processed, _| control.processed.store(processed, Ordering::Relaxed);
-    let (report, coverage, charts) = match request.texture_source {
-        TextureSource::PointColours => {
-            let result = pointcloud_core::write_colored_obj_atlas_with_layout(
-                mesh,
-                &path,
-                options,
-                &cancelled,
-                &mut progress,
-            )?;
-            (result.atlas, None, result.charts)
-        }
-        TextureSource::Photographs => {
-            let result = pointcloud_core::write_photographic_obj_atlas(
-                PhotoAtlasRequest {
-                    source_mesh: &request.mesh,
-                    output_mesh: mesh,
-                    photos: &request.photos,
-                    atlas: options,
-                    photographs: PhotoTextureOptions::default(),
-                },
-                &path,
-                &mut |index| {
-                    if cancelled() {
-                        return Err(LoadError::Cancelled);
-                    }
-                    decode_texture_photo(&request.source, &request.photos[index])
-                },
-                &cancelled,
-                &mut progress,
-            )?;
-            (result.atlas, Some(result.coverage), result.charts)
-        }
+    let points = request
+        .points
+        .as_ref()
+        .map(|source| source.sample(&cancelled))
+        .transpose()?;
+    let photographs = if request.texture_source == TextureSource::Photographs {
+        &request.photos[..]
+    } else {
+        &[]
     };
+    let result = pointcloud_core::write_measured_obj_atlas(
+        PhotoAtlasRequest {
+            source_mesh: &request.mesh,
+            output_mesh: mesh,
+            photos: photographs,
+            atlas: options,
+            photographs: PhotoTextureOptions::default(),
+        },
+        points.as_deref(),
+        &path,
+        &mut |index| {
+            if cancelled() {
+                return Err(LoadError::Cancelled);
+            }
+            decode_texture_photo(&request.source, &photographs[index])
+        },
+        &cancelled,
+        &mut progress,
+    )?;
+    let report = result.atlas;
+    let charts = result.charts;
+    let mut coverage = result.coverage;
+    coverage.point_sampling_limited = request
+        .points
+        .as_ref()
+        .is_some_and(|source| (coverage.sampled_points as u64) < source.cloud.total_points);
+    let coverage = Some(coverage);
     control.saved.store(true, Ordering::Relaxed);
     let preview = crate::mesh_texture_preview::BakedTexture::read(
         &path,
@@ -436,6 +524,7 @@ pub(crate) fn convert_file(source: &Path, destination: &Path) -> Result<String, 
         transform: CloudTransform::default(),
         texture_source: TextureSource::PointColours,
         photos: Vec::new(),
+        points: None,
     };
     let done = write(&request, destination.to_path_buf(), format).map_err(failed)?;
     let mut lines = format!(
@@ -486,6 +575,10 @@ impl Studio {
             return Task::none();
         };
         if request.mesh.colors.is_none()
+            && !request
+                .points
+                .as_ref()
+                .is_some_and(TexturePoints::has_colours)
             && (request.texture_source == TextureSource::PointColours || request.photos.is_empty())
         {
             self.status = "This mesh has no measured colours or photographs to texture".into();
@@ -733,6 +826,10 @@ impl Studio {
         };
         request.texture_source = source.unwrap_or_default();
         if request.mesh.colors.is_none()
+            && !request
+                .points
+                .as_ref()
+                .is_some_and(TexturePoints::has_colours)
             && (request.texture_source == TextureSource::PointColours || request.photos.is_empty())
         {
             return refuse("the active mesh has no measured colours or photographs");
@@ -776,6 +873,12 @@ impl Studio {
             transform: entry.transform,
             texture_source: self.texture_source,
             photos: self.colour_photos(index?),
+            points: Some(TexturePoints {
+                cloud: Arc::clone(&entry.cloud),
+                index: entry.index.clone(),
+                colours: entry.colours.clone(),
+                deleted: entry.deleted.clone(),
+            }),
         })
     }
 
@@ -1008,6 +1111,18 @@ impl Studio {
                         "Photos used",
                         coverage.photos_used.len().to_string(),
                     ));
+                rows = rows.push(opencad_properties::property_row(
+                    "Texture source points",
+                    format_count(coverage.sampled_points as u64),
+                ));
+                if coverage.point_sampling_limited {
+                    rows = rows.push(
+                        text(tr(
+                            "Texture uses a bounded point sample; gaps remain unobserved.",
+                        ))
+                        .size(10),
+                    );
+                }
             }
             if crate::gpu_viewport::texture_supported() == Some(false) {
                 rows=rows.push(text(tr("Texture preview is unavailable on this renderer; exported images retain their detail.")).size(10));
@@ -1045,6 +1160,9 @@ impl Studio {
                 .on_press_maybe(
                     (!self.mesh_export_pending
                         && (mesh.colors.is_some()
+                            || self.clouds.get(active).is_some_and(
+                                |entry| entry.cloud.has_rgb || entry.colours.is_some()
+                            )
                             || (self.texture_source == TextureSource::Photographs
                                 && !self.colour_photos(active).is_empty()))
                         && self.texture_options().is_ok())
@@ -1071,6 +1189,50 @@ mod tests {
     use super::*;
     use crate::native_api::{ApiCommand, ApiRequest};
     use crate::{MeshControl, MeshJob, MeshMode};
+
+    #[test]
+    fn texture_sampling_respects_edit_snapshot_and_source_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("colours.xyz");
+        std::fs::write(&source, "0 0 0 10 20 30\n1 0 0 40 50 60\n0 1 0 70 80 90\n").unwrap();
+        let cloud = Arc::new(pointcloud_core::open(&source, 100).unwrap());
+        let mut colours = pointcloud_core::photo_colour::PointColours::new(cloud.total_points);
+        colours.set(1, [90, 100, 110]);
+        let selection = crate::selection::SelectionMask {
+            bits: vec![1],
+            count: 1,
+            highlights: vec![],
+            highlights_source: true,
+            source_bounds: None,
+        };
+        let mut deleted = crate::selection::DeletionMask::new(cloud.total_points).unwrap();
+        deleted.apply(&selection).unwrap();
+        let snapshot = TexturePoints {
+            cloud,
+            index: None,
+            colours: Some(Arc::new(colours)),
+            deleted: Some(Arc::new(deleted)),
+        };
+        let points = snapshot.sample(&|| false).unwrap();
+        assert_eq!(points[0].rgb, None); // Its geometry still occludes the original photograph.
+        assert_eq!(points[1].rgb, Some([90, 100, 110]));
+        assert_eq!(points[2].rgb, Some([70, 80, 90]));
+        let mut unknown = snapshot.clone();
+        Arc::make_mut(&mut unknown.cloud)
+            .point_ordinals
+            .fill(u64::MAX);
+        assert!(unknown
+            .sample(&|| false)
+            .unwrap()
+            .iter()
+            .all(|p| p.rgb.is_none()));
+        assert!(matches!(
+            snapshot.sample(&|| true),
+            Err(LoadError::Cancelled)
+        ));
+        std::fs::write(&source, "source changed").unwrap();
+        assert!(snapshot.sample(&|| false).is_err());
+    }
 
     #[test]
     fn gui_texture_settings_accept_metres_and_bound_atlas_memory() {
@@ -1128,6 +1290,7 @@ mod tests {
             transform,
             texture_source: TextureSource::PointColours,
             photos: Vec::new(),
+            points: None,
         }
     }
 

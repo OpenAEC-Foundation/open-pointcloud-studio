@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 from pathlib import Path
 import socket
@@ -31,6 +32,7 @@ parser.add_argument('--texel-size', type=float, default=.2)
 parser.add_argument('--max-resolution', type=int, default=1024)
 parser.add_argument('--job-timeout', type=float, default=180)
 parser.add_argument('--cancel-probe', action='store_true')
+parser.add_argument('--measured-point-probe', action='store_true', help='Validate measured RGB instead of stale vertex colour, marked gaps and repeatable pixels')
 parser.add_argument('--pointer-probe', type=Path, help='Optional isolated Wayland virtual pointer test helper')
 parser.add_argument('--pointer-layout-width', type=int, help='Total logical width of the isolated horizontal output layout')
 parser.add_argument('--desktop-capture', type=Path, help='Optional grim binary for screenshots of the isolated test compositor')
@@ -136,7 +138,20 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
             assert geometry.visual.uv.shape==(3,2)
             assert geometry.visual.material.image.size==(256,256)
             assert np.isfinite(geometry.visual.uv).all()
-            report = {'job':complete,
+            hardware={'system':platform.platform(),'processor':platform.processor(),'logical_cpus':os.cpu_count()}
+            cpuinfo=Path('/proc/cpuinfo')
+            if cpuinfo.exists():
+                hardware['processor']=next((line.split(':',1)[1].strip() for line in cpuinfo.read_text().splitlines() if line.startswith('model name')),hardware['processor'])
+            try:
+                hardware['physical_memory_bytes']=os.sysconf('SC_PHYS_PAGES')*os.sysconf('SC_PAGE_SIZE')
+            except (AttributeError,ValueError,OSError):
+                pass
+            report = {'hardware':hardware,'validation_settings':{
+                'rayon_threads':os.environ.get('RAYON_NUM_THREADS','automatic'),
+                'synthetic_atlas':{'texel_size':.02,'max_resolution':256},
+                'real_surface':{'max_vertices':args.vertices,'neighbors':12,'edge_factor':4,'mesh_size':0},
+                'real_atlas':{'texel_size':args.texel_size,'max_resolution':args.max_resolution},
+                'cache_root_supplied':args.cache_root is not None},'job':complete,
                 'changed_viewport_pixels':changed,'independent_reader':'trimesh '+trimesh.__version__,
                 'uvs':geometry.visual.uv.tolist(),'source_photo_unchanged':True}
             if args.compare_probe or args.panes_probe:
@@ -322,6 +337,52 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                 report['execution_profile']='development binary, core opt-level=2; Vulkan software renderer'
                 (output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
                 api('screenshot',path=str(output/'real-photo.png'),base64=False,max_edge=1200,window=True)
+            if args.measured_point_probe:
+                for _ in api('status')['result']['clouds']:
+                    api('remove', index=0)
+                # Three stale red mesh corners surround denser green scan RGB.
+                # The far half has no measurements and must stay unobserved.
+                points=[(0,0,0,255,0,0),(1,0,0,255,0,0),(0,1,0,255,0,0)]
+                points.extend((x*.02,y*.02,0,60,140,100) for x in range(-2,28) for y in range(-2,28))
+                source=output/'dense-colours.ply'
+                header=('ply\nformat ascii 1.0\nelement vertex '+str(len(points))+'\n'
+                    'property float x\nproperty float y\nproperty float z\n'
+                    'property uchar red\nproperty uchar green\nproperty uchar blue\n'
+                    'element face 1\nproperty list uchar int vertex_indices\nend_header\n')
+                source.write_text(header+''.join(' '.join(map(str,p))+'\n' for p in points)+'3 0 1 2\n')
+                original_source=hashlib.sha256(source.read_bytes()).hexdigest()
+                api('open',path=str(source))
+                deadline=time.monotonic()+60
+                while True:
+                    state=api('status')['result']
+                    if not state.get('imports') and any(Path(c['path'])==source for c in state['clouds']):
+                        break
+                    assert time.monotonic()<deadline, state
+                    time.sleep(.2)
+                measured=wait_job(api('texture_mesh',path=str(output/'measured-points.obj'),source='point_colours',texel_size=.02,max_resolution=256))
+                coverage=measured['coverage']
+                assert coverage['sampled_points']==len(points), measured
+                assert coverage['measured_point_texels']>0 and coverage['unobserved_texels']>0, measured
+                assert coverage['vertex_colour_texels']==0, measured
+                page=output/'measured-points-atlas-000.png'
+                pixels=np.asarray(Image.open(page))
+                assert np.any(np.all(pixels==[60,140,100],axis=2)), 'No measured green RGB'
+                assert np.any(np.all(pixels==[128,128,128],axis=2)), 'No unobserved grey'
+                assert not np.any(np.all(pixels==[255,0,0],axis=2)), 'Stale corner RGB leaked into texture'
+                first_pixels=page.read_bytes()
+                wait_job(api('texture_mesh',path=str(output/'measured-repeat.obj'),source='point_colours',texel_size=.02,max_resolution=256))
+                assert first_pixels==(output/'measured-repeat-atlas-000.png').read_bytes(), 'Repeated pixels differ'
+                independent=trimesh.load(str(output/'measured-points.obj'),force='scene',process=False)
+                assert all(g.visual.kind=='texture' for g in independent.geometry.values())
+                api('camera',preset='top')
+                api('screenshot',path=str(output/'measured-point-preview.png'),base64=False,max_edge=1200,window=True)
+                api('set_texture_preview',layer=0,visible=False)
+                api('screenshot',path=str(output/'measured-point-geometry.png'),base64=False,max_edge=1200,window=True)
+                measured_difference=ImageChops.difference(Image.open(output/'measured-point-preview.png').convert('RGB'),Image.open(output/'measured-point-geometry.png').convert('RGB'))
+                measured_changed=int(np.count_nonzero(np.any(np.asarray(measured_difference)>10,axis=2)))
+                assert measured_changed>100, f'Measured RGB preview did not change geometry pixels: {measured_changed}'
+                assert hashlib.sha256(source.read_bytes()).hexdigest()==original_source
+                report['measured_point_probe']={'coverage':coverage,'rejects_stale_vertex_rgb':True,'unobserved_gaps':True,'repeatable_png':True,'changed_viewport_pixels':measured_changed,'source_unchanged':True,'independent_reader':'trimesh '+trimesh.__version__}
             (output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
             if args.e57 and args.expected_sha256:
                 digest=hashlib.file_digest(args.e57.open('rb'),'sha256').hexdigest()

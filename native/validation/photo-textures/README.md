@@ -1,6 +1,6 @@
 # Photo texture validation
 
-Fourteen core tests exercise calibrated pinhole checkerboards, ray occlusion,
+Core tests exercise calibrated pinhole checkerboards, ray occlusion,
 back-facing surfaces, exposure blending, colour disagreement, missing/transparent
 images, survey coordinates, reflected meshes, deterministic threading and atomic
 export cancellation. An additional integration test writes and reopens an
@@ -76,10 +76,72 @@ and bounded ingestion/baking; it does not claim full SLAM trajectory-photo
 calibration or reconstruction quality. The full input/data/images are not
 redistributed.
 
-Issue #13 still requires robust distance/normal-aware point-cloud colour
-resampling.
-Current photo occlusion uses the reconstructed mesh BVH; cloud points omitted
-from that mesh do not occlude projections. Point RGB fallback interpolates
-stored mesh colours. Preview pages have a 128 MiB budget per mesh and can be
+The measured-point extension adds bounded source-cloud RGB resampling. Its
+core tests check a colour ramp within three RGB levels, isolated colour outliers,
+wrong surface directions, nearby parallel walls, missing measurements,
+source-cloud foreground occlusion outside the mesh, deterministic atlas pixels,
+and cancellation. Native tests also check edited/deleted RGB and source identity.
+Run `cargo test -p pointcloud-core mesh_point_texture` and
+`cargo test -p pointcloud-core measured_` from `native/`.
+
+`smoke.py --measured-point-probe` additionally opens a generated PLY with stale
+red mesh corners and a denser green RGB plane, bakes the original point colours,
+checks explicitly unobserved gaps, repeats the bake for byte-identical PNGs,
+captures the real native viewport and reopens the material in trimesh.
+
+Sampling reuses the disk octree and caps the source at 262,144 points. Without
+an index it uses a bounded resident preview; `point_sampling_limited` exposes
+both limits. The colour search radius is four times the numeric texel-size
+setting in source-coordinate metres; unsupported regions remain grey. Estimated
+local normals must agree within an absolute dot product of 0.75; plane distance
+is limited to one fifth of the search radius. Colours more than 48 RGB levels
+from the nearest-five channel median are excluded, and at least three accepted
+observations are needed. A photo's additional point-cloud depth map has at most
+512×512 cells, with eight maps cached (8 MiB); empty cells make no claim.
+Its visibility accuracy is limited by the angular cell size and the bounded
+point sample, with a 2 cm / 1% distance tolerance. Deleted source points no longer
+supply RGB, but their original geometry still occludes the original photo.
+No claim of visibility from every original scan point is made.
+
+The historical reports above used mesh-vertex fallback; rerun the probes for
+the measured-point extension before comparing coverage. Preview pages have a 128 MiB budget per mesh and can be
 smaller than the exported atlas pages. Original source photo pixels are never
 changed.
+
+The measured-point extension passed the isolated Wayland/Vulkan probes on
+6 November (`measured-small-result-2026-11-06.json` and
+`measured-large-result-2026-11-06.json`). These runs used a shared AMD Ryzen 7
+3700U workstation (4 cores / 8 logical CPUs, 14,596,902,912 bytes physical RAM),
+a development binary with core opt-level 2 and `RAYON_NUM_THREADS=2`, Mesa
+software Vulkan and a prepared private octree for the large fixture. They are
+functional and memory checks, not controlled throughput benchmarks.
+
+| Fixture | Source points | Samples | Photo texels | Measured RGB texels | Unobserved texels |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Generated coloured plane | 903 | 903 | 0 | 1,800 | 756 |
+| Riegl E57 | 1,095,702 | 100,000 | 43,913 | 0 | 195,715 |
+| BLK2GO E57 | 199,186,802 | 262,144 | 324 | 28,363 | 275,186 |
+
+The plane rejects stale red mesh colours, preserves the green measurements,
+produces identical PNG bytes on repeated runs and changes 47,957 actual viewport
+pixels when toggled against geometry. Its OBJ and the large E57 OBJ also
+rendered correctly in trimesh's independent pyglet/X11 OpenGL viewer; both
+frames were inspected. The standalone headless-EGL renderer was unavailable on
+this machine; the successful independent rendering used X11 OpenGL.
+
+For the large source, the same deliberately coarse 5,000-vertex / 15,238-face
+surface took 43.00 seconds to reconstruct. Baking at 0.2 m texel size and 4096²
+maximum resolution took 23.63 seconds and wrote 3,196,366 bytes. Native peak RSS
+for reconstruction and baking together was 660,152 KiB (about 645 MiB), not
+whole-machine/container memory. All six photos were used, with no failed decode.
+Progress advanced, cancellation left no files, and the original E57 hash stayed
+unchanged. The coarse geometry has 9,432 open edges and intentionally reports
+many unsupported texels; this proves bounded ingestion/export and explicit
+missing coverage, not reconstruction quality or full SLAM photo coverage.
+The historical vertex-fallback run used different atlas settings and should not
+be treated as a performance comparison. Neither vendor data nor photos are
+redistributed.
+
+Final validation: 1,480 workspace tests passed, none failed and 12 were ignored.
+Workspace/all-target and minimal-core Clippy pass with warnings denied;
+Rustfmt, probe syntax and diff checks pass.

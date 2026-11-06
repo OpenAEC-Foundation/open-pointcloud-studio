@@ -1,0 +1,212 @@
+{
+  "job": {
+    "coverage": {
+      "measured_point_texels": 0,
+      "photograph_texels": 10153,
+      "photos_failed": 0,
+      "photos_used": [
+        0
+      ],
+      "point_colour_texels": 0,
+      "point_sampling_limited": false,
+      "sampled_points": 3,
+      "unobserved_texels": 0,
+      "vertex_colour_texels": 0
+    },
+    "operation": "texture_mesh",
+    "pages": 1,
+    "path": "/tmp/opcs-measured-point-proof-final/small/photographic.obj",
+    "preview_error": null,
+    "resolution_limited": 0,
+    "state": "complete",
+    "triangles": 1
+  },
+  "changed_viewport_pixels": 57237,
+  "independent_reader": "trimesh 5.2.0",
+  "uvs": [
+    [
+      0.005859375,
+      0.994140625
+    ],
+    [
+      0.556640625,
+      0.994140625
+    ],
+    [
+      0.005859375,
+      0.443359375
+    ]
+  ],
+  "source_photo_unchanged": true,
+  "real_e57": {
+    "source": "manitou.e57",
+    "surface": {
+      "components": 1,
+      "mode": "3D surface",
+      "open_edges": 564,
+      "path": "/tmp/opcs-measured-point-proof-final/small/real-surface.obj",
+      "source_points": 1095702,
+      "state": "complete",
+      "triangles": 890,
+      "vertices": 300
+    },
+    "texture": {
+      "coverage": {
+        "measured_point_texels": 0,
+        "photograph_texels": 43913,
+        "photos_failed": 0,
+        "photos_used": [
+          0,
+          1,
+          2,
+          4
+        ],
+        "point_colour_texels": 0,
+        "point_sampling_limited": true,
+        "sampled_points": 100000,
+        "unobserved_texels": 195715,
+        "vertex_colour_texels": 0
+      },
+      "operation": "texture_mesh",
+      "pages": 1,
+      "path": "/tmp/opcs-measured-point-proof-final/small/real-photo.obj",
+      "preview_error": null,
+      "resolution_limited": 0,
+      "state": "complete",
+      "triangles": 890
+    },
+    "independent_materials": 1,
+    "reconstruction_seconds": 1.3591328728944063,
+    "texture_seconds": 8.744772434933111,
+    "output_bytes": 452592,
+    "progress_samples": [
+      {
+        "seconds": 0.088,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 0.094,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running"
+      },
+      {
+        "seconds": 0.092,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 2.343,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 1,
+        "total": 890
+      },
+      {
+        "seconds": 4.379,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 158,
+        "total": 890
+      },
+      {
+        "seconds": 6.457,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 437,
+        "total": 890
+      },
+      {
+        "seconds": 8.478,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 890,
+        "total": 890
+      },
+      {
+        "seconds": 0.061,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 0.064,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 0.082,
+        "operation": "texture_mesh",
+        "state": "running"
+      }
+    ],
+    "cancellation": {
+      "state": "cancelled",
+      "left_partial_files": false
+    },
+    "sha256": "d4f06e2a80e3e54be7391130b911c82af0c6a7857cec133177431f5f578f23cf"
+  },
+  "native_peak_rss_kib": 329092,
+  "execution_profile": "development binary, core opt-level=2; Vulkan software renderer",
+  "measured_point_probe": {
+    "coverage": {
+      "measured_point_texels": 1800,
+      "photograph_texels": 0,
+      "photos_failed": 0,
+      "photos_used": [],
+      "point_colour_texels": 1800,
+      "point_sampling_limited": false,
+      "sampled_points": 903,
+      "unobserved_texels": 756,
+      "vertex_colour_texels": 0
+    },
+    "rejects_stale_vertex_rgb": true,
+    "unobserved_gaps": true,
+    "repeatable_png": true,
+    "changed_viewport_pixels": 47957,
+    "source_unchanged": true,
+    "independent_reader": "trimesh 5.2.0"
+  },
+  "hardware": {
+    "system": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+    "processor": "AMD Ryzen 7 3700U with Radeon Vega Mobile Gfx",
+    "logical_cpus": 8,
+    "physical_memory_bytes": 14596902912
+  },
+  "validation_settings": {
+    "rayon_threads": "2",
+    "synthetic_atlas": {
+      "texel_size": 0.02,
+      "max_resolution": 256
+    },
+    "real_surface": {
+      "max_vertices": 300,
+      "neighbors": 12,
+      "edge_factor": 4,
+      "mesh_size": 0
+    },
+    "real_atlas": {
+      "texel_size": 0.2,
+      "max_resolution": 1024
+    },
+    "cache_root_supplied": false
+  },
+  "native_binary_sha256": "0cc7de6710d6f40afcd5f991a5db67f3ee8994e4f3d4fa742b825226577fbce4",
+  "independent_opengl_viewer": {
+    "reader": "trimesh 5.2.0",
+    "windowing": "pyglet 1.5.31 / X11 OpenGL",
+    "software_rendering": true,
+    "rendered": true,
+    "visually_inspected": true
+  },
+  "verification": {
+    "workspace_tests": {
+      "passed": 1480,
+      "failed": 0,
+      "ignored": 12
+    },
+    "workspace_all_target_clippy": "passed with -D warnings",
+    "minimal_core_clippy": "passed with --no-default-features -D warnings",
+    "rustfmt": "passed"
+  }
+}

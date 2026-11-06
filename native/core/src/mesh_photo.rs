@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use crate::mesh_point_texture::PointSampler;
 use crate::mesh_quality::TriangleIndex;
 use crate::obj_mesh::{MeshGeometry, MAX_TRIANGLES, MAX_VERTICES};
 use crate::photo_colour::PhotoPixels;
@@ -36,6 +37,12 @@ pub struct PhotoTextureCoverage {
     pub photograph_texels: u64,
     pub point_colour_texels: u64,
     pub unobserved_texels: u64,
+    /// Subset of point_colour_texels sampled from the original cloud.
+    pub measured_point_texels: u64,
+    /// Stored mesh-vertex interpolation used only without a point source.
+    pub vertex_colour_texels: u64,
+    pub sampled_points: usize,
+    pub point_sampling_limited: bool,
     pub photos_used: Vec<usize>,
     pub photos_failed: usize,
 }
@@ -44,9 +51,55 @@ pub(crate) struct PhotoBaker<'a> {
     mesh: &'a MeshGeometry,
     photos: &'a [FilePhoto],
     index: TriangleIndex,
+    points: Option<&'a PointSampler>,
     options: PhotoTextureOptions,
     cache: VecDeque<(usize, Arc<PhotoPixels>)>,
     failed: Vec<bool>,
+    depths: VecDeque<(usize, Arc<PointDepth>)>,
+}
+
+// A bounded angular depth map also sees measured foreground geometry outside
+// the reconstructed ROI. Empty cells make no visibility claim. No source image
+// is modified. Eight 512-square float maps cost at most 8 MiB.
+struct PointDepth {
+    width: usize,
+    height: usize,
+    distances: Vec<f32>,
+}
+impl PointDepth {
+    fn cell(&self, photo: &FilePhoto, pixel: [f64; 2]) -> usize {
+        let x = ((pixel[0] + 0.5) * self.width as f64 / photo.width as f64)
+            .floor()
+            .clamp(0.0, (self.width - 1) as f64) as usize;
+        let y = ((pixel[1] + 0.5) * self.height as f64 / photo.height as f64)
+            .floor()
+            .clamp(0.0, (self.height - 1) as f64) as usize;
+        y * self.width + x
+    }
+    fn new(photo: &FilePhoto, points: &PointSampler) -> Self {
+        let width = (photo.width as usize).clamp(1, 512);
+        let height = (photo.height as usize).clamp(1, 512);
+        let mut map = Self {
+            width,
+            height,
+            distances: vec![f32::INFINITY; width * height],
+        };
+        for &point in points.positions() {
+            let direction = sub(point, photo.position);
+            if let Some(pixel) = photo.project(direction) {
+                let distance = dot(direction, direction).sqrt();
+                if distance > 1e-9 {
+                    let cell = map.cell(photo, pixel);
+                    map.distances[cell] = map.distances[cell].min(distance as f32);
+                }
+            }
+        }
+        map
+    }
+    fn visible(&self, photo: &FilePhoto, pixel: [f64; 2], distance: f64) -> bool {
+        let measured = f64::from(self.distances[self.cell(photo, pixel)]);
+        distance <= measured + (measured * 0.01).max(0.02)
+    }
 }
 
 struct ReadyPhoto {
@@ -54,10 +107,12 @@ struct ReadyPhoto {
     photo: FilePhoto,
     pixels: Arc<PhotoPixels>,
     gain: f32,
+    depth: Option<Arc<PointDepth>>,
 }
 
 pub(crate) struct PhotoChart<'a> {
     index: &'a TriangleIndex,
+    points: Option<&'a PointSampler>,
     vertices: [[f64; 3]; 3],
     normal: [f64; 3],
     colours: Option<[[u8; 3]; 3]>,
@@ -71,6 +126,8 @@ pub(crate) struct ChartCoverage {
     pub photographs: u64,
     pub points: u64,
     pub unseen: u64,
+    pub measured: u64,
+    pub vertices: u64,
     pub used: u8,
 }
 
@@ -79,6 +136,7 @@ impl PhotoBaker<'_> {
         mesh: &'a MeshGeometry,
         photos: &'a [FilePhoto],
         options: PhotoTextureOptions,
+        points: Option<&'a PointSampler>,
     ) -> Result<PhotoBaker<'a>, LoadError> {
         if mesh.vertices.is_empty()
             || mesh.triangles.is_empty()
@@ -107,9 +165,11 @@ impl PhotoBaker<'_> {
             mesh,
             photos,
             index,
+            points,
             options,
             cache: VecDeque::new(),
             failed: vec![false; photos.len()],
+            depths: VecDeque::new(),
         })
     }
 
@@ -221,15 +281,32 @@ impl PhotoBaker<'_> {
                 self.cache.push_back((index, Arc::clone(&pixels)));
                 pixels
             };
+            let depth = self.points.map(|points| {
+                if let Some(at) = self.depths.iter().position(|(id, _)| *id == index) {
+                    let cached = self.depths.remove(at).unwrap();
+                    let depth = Arc::clone(&cached.1);
+                    self.depths.push_back(cached);
+                    depth
+                } else {
+                    let depth = Arc::new(PointDepth::new(&self.photos[index], points));
+                    if self.depths.len() == CACHE_PHOTOS {
+                        self.depths.pop_front();
+                    }
+                    self.depths.push_back((index, Arc::clone(&depth)));
+                    depth
+                }
+            });
             photos.push(ReadyPhoto {
                 index,
                 photo: self.photos[index].clone(),
                 pixels,
                 gain: 1.0,
+                depth,
             });
         }
         let mut chart = PhotoChart {
             index: &self.index,
+            points: self.points,
             vertices,
             normal,
             colours: self
@@ -275,7 +352,11 @@ impl PhotoChart<'_> {
             return None;
         }
         let pixel = photo.photo.project(direction)?;
-        if !opaque(photo, pixel)
+        if photo
+            .depth
+            .as_ref()
+            .is_some_and(|depth| !depth.visible(&photo.photo, pixel, distance))
+            || !opaque(photo, pixel)
             || !self
                 .index
                 .segment_clear(photo.photo.position, point, pending)
@@ -340,6 +421,7 @@ impl PhotoChart<'_> {
         &self,
         barycentric: [f64; 3],
         pending: &mut Vec<u32>,
+        nearest: &mut Vec<(f64, usize)>,
     ) -> ([u8; 3], u8, u8) {
         let point = self.position(barycentric);
         let mut found = [(0.0, [0.0; 3], 0u8); CANDIDATE_PHOTOS];
@@ -384,6 +466,11 @@ impl PhotoChart<'_> {
                     used,
                 );
             }
+        }
+        if let Some(points) = self.points {
+            return points
+                .sample(point, self.normal, nearest)
+                .map_or(([128; 3], 2, 0), |rgb| (rgb, 3, 0));
         }
         if let Some(colours) = self.colours {
             let rgb = std::array::from_fn(|channel| {
@@ -517,13 +604,50 @@ mod tests {
     }
 
     #[test]
+    fn measured_foreground_outside_the_mesh_rejects_photo_projection() {
+        let mesh = surface();
+        let photos = [camera()];
+        let points = [crate::Point {
+            xyz: [0., 0., 1.],
+            rgb: None,
+            intensity: None,
+            classification: None,
+        }];
+        let sampler = PointSampler::new(&points, 0.1, &|| false).unwrap();
+        let mut baker = PhotoBaker::new(
+            &mesh,
+            &photos,
+            PhotoTextureOptions::default(),
+            Some(&sampler),
+        )
+        .unwrap();
+        let chart = baker
+            .chart([0, 1, 2], &mut |_| Ok(solid([200, 10, 10])))
+            .unwrap();
+        // The ray hits a measured foreground point absent from this one-face mesh.
+        assert_eq!(
+            chart.sample([0., 0.5, 0.5], &mut Vec::new(), &mut Vec::new()),
+            ([128; 3], 2, 0)
+        );
+        // A different ray still observes the photograph.
+        assert_eq!(
+            chart
+                .sample([1., 0., 0.], &mut Vec::new(), &mut Vec::new())
+                .1,
+            0
+        );
+    }
+
+    #[test]
     fn calibrated_checkerboard_projects_to_the_expected_surface_texel() {
         let mesh = surface();
         let photos = [camera()];
-        let mut baker = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        let mut baker =
+            PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default(), None).unwrap();
         let chart = baker.chart([0, 1, 2], &mut |_| Ok(checkerboard())).unwrap();
         // World [-0.25,-0.25,0] projects to pixel [6.5,8.5], inside a green square.
-        let (rgb, kind, mask) = chart.sample([0.25, 0.375, 0.375], &mut Vec::new());
+        let (rgb, kind, mask) =
+            chart.sample([0.25, 0.375, 0.375], &mut Vec::new(), &mut Vec::new());
         assert_eq!(rgb, [20, 180, 60]);
         assert_eq!((kind, mask), (0, 1));
     }
@@ -535,12 +659,13 @@ mod tests {
         mesh.vertices
             .extend([[-0.5, -0.5, 1.], [0.5, -0.5, 1.], [-0.5, 0.5, 1.]]);
         mesh.triangles.push([3, 4, 5]);
-        let mut baker = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        let mut baker =
+            PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default(), None).unwrap();
         assert_eq!(
             baker
                 .chart([0, 1, 2], &mut |_| Ok(checkerboard()))
                 .unwrap()
-                .sample([0.25, 0.375, 0.375], &mut Vec::new())
+                .sample([0.25, 0.375, 0.375], &mut Vec::new(), &mut Vec::new())
                 .1,
             2
         );
@@ -548,7 +673,7 @@ mod tests {
             baker
                 .chart([3, 4, 5], &mut |_| Ok(checkerboard()))
                 .unwrap()
-                .sample([0.25, 0.375, 0.375], &mut Vec::new())
+                .sample([0.25, 0.375, 0.375], &mut Vec::new(), &mut Vec::new())
                 .1,
             0
         );
@@ -556,7 +681,7 @@ mod tests {
             baker
                 .chart([2, 1, 0], &mut |_| Ok(checkerboard()))
                 .unwrap()
-                .sample([0.25, 0.375, 0.375], &mut Vec::new())
+                .sample([0.25, 0.375, 0.375], &mut Vec::new(), &mut Vec::new())
                 .1,
             2
         );
@@ -577,12 +702,13 @@ mod tests {
             }
         }
         let photos = [photo];
-        let mut baker = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        let mut baker =
+            PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default(), None).unwrap();
         assert_eq!(
             baker
                 .chart([0, 1, 2], &mut |_| Ok(checkerboard()))
                 .unwrap()
-                .sample([0.25, 0.375, 0.375], &mut Vec::new())
+                .sample([0.25, 0.375, 0.375], &mut Vec::new(), &mut Vec::new())
                 .0,
             [20, 180, 60]
         );
@@ -597,12 +723,14 @@ mod tests {
             decodes += 1;
             Ok(solid(if index == 0 { [80; 3] } else { [100; 3] }))
         };
-        let mut baker = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        let mut baker =
+            PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default(), None).unwrap();
         for _ in 0..3 {
-            let (rgb, kind, mask) = baker
-                .chart([0, 1, 2], &mut decode)
-                .unwrap()
-                .sample([0.25, 0.375, 0.375], &mut Vec::new());
+            let (rgb, kind, mask) = baker.chart([0, 1, 2], &mut decode).unwrap().sample(
+                [0.25, 0.375, 0.375],
+                &mut Vec::new(),
+                &mut Vec::new(),
+            );
             assert!(rgb.into_iter().all(|v| v.abs_diff(80) <= 1));
             assert_eq!((kind, mask), (0, 3));
         }
@@ -633,7 +761,8 @@ mod tests {
             })
             .collect();
         let mut counts = [0; 5];
-        let mut baker = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        let mut baker =
+            PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default(), None).unwrap();
         for face in mesh.triangles.iter().cycle().take(100) {
             let chart = baker
                 .chart(*face, &mut |index| {
@@ -648,7 +777,8 @@ mod tests {
         assert_eq!(counts, [1; 5]);
         // Larger frames still have a byte budget: five 2048² RGBA images
         // exceed it, even though the cache accepts up to eight small frames.
-        let mut large = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        let mut large =
+            PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default(), None).unwrap();
         for face in &mesh.triangles {
             let chart = large
                 .chart(*face, &mut |_| {
@@ -689,12 +819,14 @@ mod tests {
                 Ok(image.clone())
             }
         };
-        let mut baker = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        let mut baker =
+            PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default(), None).unwrap();
         assert_eq!(
-            baker
-                .chart([0, 1, 2], &mut decode)
-                .unwrap()
-                .sample([0.25, 0.375, 0.375], &mut Vec::new()),
+            baker.chart([0, 1, 2], &mut decode).unwrap().sample(
+                [0.25, 0.375, 0.375],
+                &mut Vec::new(),
+                &mut Vec::new()
+            ),
             ([17, 23, 29], 1, 0)
         );
         assert_eq!(baker.failed(), 1);
@@ -708,17 +840,24 @@ mod tests {
             photo.axes[0] = [-1., 0., 0.];
             photo.axes[2] = [0., 0., -1.];
         }
-        let mut baker = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        let mut baker =
+            PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default(), None).unwrap();
         let chart = baker.chart([0, 1, 2], &mut |_| Ok(checkerboard())).unwrap();
         assert_eq!(chart.photo_indices().collect::<Vec<_>>(), [4]);
-        assert_eq!(chart.sample([0.25, 0.375, 0.375], &mut Vec::new()).1, 0);
+        assert_eq!(
+            chart
+                .sample([0.25, 0.375, 0.375], &mut Vec::new(), &mut Vec::new())
+                .1,
+            0
+        );
     }
 
     #[test]
     fn decoder_cancellation_is_propagated_without_publishing_a_fallback() {
         let mesh = surface();
         let photos = [camera()];
-        let mut baker = PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default()).unwrap();
+        let mut baker =
+            PhotoBaker::new(&mesh, &photos, PhotoTextureOptions::default(), None).unwrap();
         assert!(matches!(
             baker.chart([0, 1, 2], &mut |_| Err(LoadError::Cancelled)),
             Err(LoadError::Cancelled)

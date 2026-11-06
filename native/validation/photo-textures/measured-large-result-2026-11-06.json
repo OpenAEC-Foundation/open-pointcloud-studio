@@ -1,0 +1,397 @@
+{
+  "job": {
+    "coverage": {
+      "measured_point_texels": 0,
+      "photograph_texels": 10153,
+      "photos_failed": 0,
+      "photos_used": [
+        0
+      ],
+      "point_colour_texels": 0,
+      "point_sampling_limited": false,
+      "sampled_points": 3,
+      "unobserved_texels": 0,
+      "vertex_colour_texels": 0
+    },
+    "operation": "texture_mesh",
+    "pages": 1,
+    "path": "/tmp/opcs-measured-point-proof/large/photographic.obj",
+    "preview_error": null,
+    "resolution_limited": 0,
+    "state": "complete",
+    "triangles": 1
+  },
+  "changed_viewport_pixels": 57237,
+  "independent_reader": "trimesh 5.2.0",
+  "uvs": [
+    [
+      0.005859375,
+      0.994140625
+    ],
+    [
+      0.556640625,
+      0.994140625
+    ],
+    [
+      0.005859375,
+      0.443359375
+    ]
+  ],
+  "source_photo_unchanged": true,
+  "real_e57": {
+    "source": "BLK2GO_Demo02.e57",
+    "surface": {
+      "components": 2,
+      "mode": "3D surface",
+      "open_edges": 9432,
+      "path": "/tmp/opcs-measured-point-proof/large/real-surface.obj",
+      "source_points": 199186802,
+      "state": "complete",
+      "triangles": 15238,
+      "vertices": 5000
+    },
+    "texture": {
+      "coverage": {
+        "measured_point_texels": 28363,
+        "photograph_texels": 324,
+        "photos_failed": 0,
+        "photos_used": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "point_colour_texels": 28363,
+        "point_sampling_limited": true,
+        "sampled_points": 262144,
+        "unobserved_texels": 275186,
+        "vertex_colour_texels": 0
+      },
+      "operation": "texture_mesh",
+      "pages": 1,
+      "path": "/tmp/opcs-measured-point-proof/large/real-photo.obj",
+      "preview_error": null,
+      "resolution_limited": 0,
+      "state": "complete",
+      "triangles": 15238
+    },
+    "independent_materials": 1,
+    "reconstruction_seconds": 43.00396104599349,
+    "texture_seconds": 23.63128932309337,
+    "output_bytes": 3196366,
+    "progress_samples": [
+      {
+        "seconds": 0.13,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 0.105,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running"
+      },
+      {
+        "seconds": 2.143,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 4.153,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 6.178,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 8.198,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 10.237,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 12.249,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 14.284,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 16.401,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 18.438,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 20.464,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 22.497,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 24.521,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 26.527,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 28.65,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 30.658,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 32.679,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 34.698,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 36.735,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 38.758,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 40.797,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 42.946,
+        "mode": "3D surface",
+        "state": "complete"
+      },
+      {
+        "seconds": 0.094,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 2.261,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 0,
+        "total": 15238
+      },
+      {
+        "seconds": 4.472,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 291,
+        "total": 15238
+      },
+      {
+        "seconds": 6.515,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 2091,
+        "total": 15238
+      },
+      {
+        "seconds": 8.536,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 5693,
+        "total": 15238
+      },
+      {
+        "seconds": 10.626,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 8752,
+        "total": 15238
+      },
+      {
+        "seconds": 12.819,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 12042,
+        "total": 15238
+      },
+      {
+        "seconds": 15.026,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 14437,
+        "total": 15238
+      },
+      {
+        "seconds": 17.143,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 15216,
+        "total": 15238
+      },
+      {
+        "seconds": 19.193,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 15238,
+        "total": 15238
+      },
+      {
+        "seconds": 21.206,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 15238,
+        "total": 15238
+      },
+      {
+        "seconds": 23.558,
+        "operation": "texture_mesh",
+        "state": "complete"
+      },
+      {
+        "seconds": 0.099,
+        "operation": "texture_mesh",
+        "state": "cancelled"
+      }
+    ],
+    "cancellation": {
+      "state": "cancelled",
+      "left_partial_files": false
+    },
+    "sha256": "e01da70d9cc3a2c8a0cf9e3e00f76b2d96895590d12285240b8148c2eb6a5040"
+  },
+  "native_peak_rss_kib": 660152,
+  "execution_profile": "development binary, core opt-level=2; Vulkan software renderer",
+  "hardware": {
+    "system": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+    "processor": "AMD Ryzen 7 3700U with Radeon Vega Mobile Gfx",
+    "logical_cpus": 8,
+    "physical_memory_bytes": 14596902912
+  },
+  "validation_settings": {
+    "rayon_threads": "2",
+    "synthetic_atlas": {
+      "texel_size": 0.02,
+      "max_resolution": 256
+    },
+    "real_surface": {
+      "max_vertices": 5000,
+      "neighbors": 12,
+      "edge_factor": 4,
+      "mesh_size": 0
+    },
+    "real_atlas": {
+      "texel_size": 0.2,
+      "max_resolution": 4096
+    },
+    "cache_root_supplied": true
+  },
+  "native_binary_sha256": "0cc7de6710d6f40afcd5f991a5db67f3ee8994e4f3d4fa742b825226577fbce4",
+  "independent_opengl_viewer": {
+    "reader": "trimesh 5.2.0",
+    "windowing": "pyglet 1.5.31 / X11 OpenGL",
+    "software_rendering": true,
+    "rendered": true,
+    "visually_inspected": true
+  },
+  "verification": {
+    "workspace_tests": {
+      "passed": 1480,
+      "failed": 0,
+      "ignored": 12
+    },
+    "workspace_all_target_clippy": "passed with -D warnings",
+    "minimal_core_clippy": "passed with --no-default-features -D warnings",
+    "rustfmt": "passed"
+  }
+}

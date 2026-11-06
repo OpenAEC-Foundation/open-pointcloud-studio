@@ -228,20 +228,32 @@ buildings.
 `texture_mesh` writes UV coordinates, an MTL and PNG atlas pages beside a new
 absolute `.obj` `path`. Optional `source` is `point_colours` (the compatible
 default) or `photographs`; `texel_size` is in metres (default 0.02), and
-`max_resolution` is 256–4096 pixels (default 4096). Point-colour mode interpolates
-stored mesh vertex RGB. Photograph mode projects calibrated E57 station images
+`max_resolution` is 256–4096 pixels (default 4096). Point-colour mode resamples the source-cloud measurements near each surface texel. Photograph mode projects calibrated E57 station images
 and added panoramas directly onto the measured mesh within a 20 m photo reach.
 It rejects back-facing and mesh-occluded rays and blends compatible overlapping
 observations with bounded exposure correction. Disagreeing observations retain the best camera to avoid
-ghosting. Missing observations fall back to mesh RGB, or grey when no RGB exists.
-Only the reconstructed mesh participates in occlusion; foreground cloud points
-outside that mesh are not occluders. Photos are sampled at up to 2048 pixels
+ghosting. Missing photographs use measured point RGB sampled from the source cloud,
+with a search radius of four times the numeric texel-size setting in source-coordinate metres, local plane/normal filtering and rejection of
+colour residuals above 48 RGB levels relative to the nearest-five channel median.
+A neighbourhood needs at least three supported colour measurements. Unsupported
+texels stay neutral grey and count as unobserved. Mesh-only core callers without
+a cloud source retain the documented vertex-RGB interpolation fallback.
+The native worker reuses the disk octree for at most 262,144 spatially distributed
+source points, with a bounded resident-preview fallback before an index exists.
+Edited RGB overrides original RGB; deleted points do not supply colour. Their
+original positions still participate in photograph visibility. In addition to
+the mesh BVH, each candidate photo uses measured cloud depth in a map of at most
+512×512 cells, cached for eight photos (8 MiB). Empty depth cells make no visibility
+claim; occlusion is limited by this angular resolution and the bounded point sample.
+The depth comparison allows the larger of 2 cm or 1% of measured camera distance. Photos are sampled at up to 2048 pixels
 on their longest side; a finer atlas cannot add detail beyond that image sample.
 Original files and photo pixels stay unchanged.
 
-The completed job reports `pages`, `triangles`, `resolution_limited` and, for
-photographs, `coverage` (`photograph_texels`, `point_colour_texels`,
-`unobserved_texels`, zero-based `photos_used`, `photos_failed`). Counts exclude
+The completed job reports `pages`, `triangles`, `resolution_limited` and `coverage`
+(`photograph_texels`, `point_colour_texels`, `unobserved_texels`, zero-based
+`photos_used`, `photos_failed`, `sampled_points`, `point_sampling_limited`).
+`measured_point_texels` and `vertex_colour_texels` split `point_colour_texels` into
+source-cloud measurements and the legacy mesh-only fallback. Counts exclude
 atlas padding. The native viewport shows the exported atlas on the same mesh;
 `set_texture_preview` accepts optional `layer` and required boolean `visible`.
 Status mesh data includes `texture` with visibility, page count, export and
@@ -1966,6 +1978,7 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
+| 18 | Unreleased | `texture_mesh` resamples source-cloud colours with bounded distance/normal/outlier filtering and reports measured versus vertex fallback coverage, sample count and sampling limits. Photo visibility also uses bounded source-cloud depth. Includes revisions 13–17. |
 | 17 | Unreleased | Optional linked photo/3D panes: `set_pane_linked`, per-scene `linked_photo_count` in `list_panes`, measured photo camera indicators and linked photo selection without moving the scene camera. Includes revisions 13–16. |
 | 16 | Unreleased | Native document panes and satellite windows: `list_panes`, `split_pane`, `tear_off_tab`, `dock_pane_window`. Screenshot capture follows the active document window. Includes revisions 13–15. |
 | 15 | Unreleased | Calibrated station panoramas use independent photo tabs. `list_tabs` reports `kind: "photo"`, `photo_type: "station_panorama"`, `path` and `station_index`; `show_tab` restores their walking camera and `close_tab` keeps the source scan open. Includes the cumulative changes of revisions 13 and 14 below. |
