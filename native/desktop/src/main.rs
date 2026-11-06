@@ -1093,198 +1093,205 @@ fn main() -> iced::Result {
         }
     };
     release_own_console();
-    iced::application(Studio::window_title, Studio::update, Studio::view)
-        // Controls without an explicit size match the compact property rows.
-        .settings(iced::Settings {
-            default_text_size: iced::Pixels(12.0),
-            fonts: fonts::FILES
-                .into_iter()
-                .map(std::borrow::Cow::Borrowed)
-                .collect(),
-            ..iced::Settings::default()
-        })
-        .subscription(|studio| {
-            let keyboard = iced::event::listen_with(|event, status, _| match event {
-                iced::Event::Window(
-                    iced::window::Event::Resized(size) | iced::window::Event::Opened { size, .. },
-                ) => Some(Message::WindowResized(size)),
-                // The window is closed by the application itself, so work
-                // that is under way is asked to stop first.
-                iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::Exit),
-                iced::Event::Window(iced::window::Event::FileDropped(path)) => {
-                    Some(Message::FileDropped(path))
-                }
-                // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs above
-                // the main area.
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
-                    modifiers,
-                    ..
-                }) if modifiers.control() => Some(Message::Tabs(view_tabs::TabAction::Cycle(
-                    !modifiers.shift(),
-                ))),
-                // Escape, Delete, Backspace and Enter, and every other key
-                // without a character but Shift and the like, which end a
-                // half-typed RO.
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Named(named),
-                    ..
-                }) if !drawing_crop::is_modifier_key(named) => Some(Message::NamedKey(
-                    named,
-                    status == iced::event::Status::Ignored,
-                )),
-                // With the command key of the system: Control, and Command on
-                // macOS.
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Character(value),
-                    modifiers,
-                    ..
-                }) if status == iced::event::Status::Ignored && modifiers.command() => {
-                    if value.eq_ignore_ascii_case("z") {
-                        Some(Message::ModelKey(if modifiers.shift() {
-                            ModelKey::Redo
-                        } else {
-                            ModelKey::Undo
-                        }))
-                    } else if value.eq_ignore_ascii_case("y") {
-                        Some(Message::ModelKey(ModelKey::Redo))
-                    } else if value.as_str() == "," {
-                        Some(Message::Settings(settings_dialog::SettingsAction::Open))
+    let window_settings = iced::window::Settings {
+        size: Size::new(1440.0, 900.0),
+        icon: iced::window::icon::from_file_data(
+            include_bytes!("../../assets/icons/icon-64.png"),
+            None,
+        )
+        .ok(),
+        #[cfg(target_os = "linux")]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: APPLICATION_ID.into(),
+            ..Default::default()
+        },
+        #[cfg(windows)]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            undecorated_shadow: true,
+            ..Default::default()
+        },
+        // The title strip of the application is the only bar at the top
+        // and carries the window buttons (`native_chrome`).
+        decorations: !native_chrome::FRAMELESS,
+        // Closing arrives as `Message::Exit`, like Exit in the File view.
+        exit_on_close_request: false,
+        ..iced::window::Settings::default()
+    };
+    iced::daemon(
+        |studio: &Studio, _| studio.window_title(),
+        Studio::update,
+        Studio::view_for_window,
+    )
+    // Controls without an explicit size match the compact property rows.
+    .settings(iced::Settings {
+        default_text_size: iced::Pixels(12.0),
+        fonts: fonts::FILES
+            .into_iter()
+            .map(std::borrow::Cow::Borrowed)
+            .collect(),
+        ..iced::Settings::default()
+    })
+    .subscription(|studio| {
+        let keyboard = iced::event::listen_with(|event, status, _| match event {
+            iced::Event::Window(
+                iced::window::Event::Resized(size) | iced::window::Event::Opened { size, .. },
+            ) => Some(Message::WindowResized(size)),
+            // The window is closed by the application itself, so work
+            // that is under way is asked to stop first.
+            iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::Exit),
+            iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+                Some(Message::FileDropped(path))
+            }
+            // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs above
+            // the main area.
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+                modifiers,
+                ..
+            }) if modifiers.control() => Some(Message::Tabs(view_tabs::TabAction::Cycle(
+                !modifiers.shift(),
+            ))),
+            // Escape, Delete, Backspace and Enter, and every other key
+            // without a character but Shift and the like, which end a
+            // half-typed RO.
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(named),
+                ..
+            }) if !drawing_crop::is_modifier_key(named) => Some(Message::NamedKey(
+                named,
+                status == iced::event::Status::Ignored,
+            )),
+            // With the command key of the system: Control, and Command on
+            // macOS.
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Character(value),
+                modifiers,
+                ..
+            }) if status == iced::event::Status::Ignored && modifiers.command() => {
+                if value.eq_ignore_ascii_case("z") {
+                    Some(Message::ModelKey(if modifiers.shift() {
+                        ModelKey::Redo
                     } else {
-                        None
+                        ModelKey::Undo
+                    }))
+                } else if value.eq_ignore_ascii_case("y") {
+                    Some(Message::ModelKey(ModelKey::Redo))
+                } else if value.as_str() == "," {
+                    Some(Message::Settings(settings_dialog::SettingsAction::Open))
+                } else {
+                    None
+                }
+            }
+            // F fits the view, W A S D walk, Q and E move down and up,
+            // R and then O turn, and while turning digits type the
+            // angle. A key a text field takes only ends RO.
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Character(value),
+                modifiers,
+                ..
+            }) if !modifiers.control() && !modifiers.alt() && !modifiers.logo() => Some(
+                Message::KeyTyped(value.to_string(), status == iced::event::Status::Captured),
+            ),
+            iced::Event::Keyboard(iced::keyboard::Event::KeyReleased {
+                key: iced::keyboard::Key::Character(value),
+                ..
+            }) => WalkKey::from_character(value.as_str()).map(|key| Message::WalkKey(key, false)),
+            iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
+                Some(Message::Modifiers(modifiers))
+            }
+            // A key released while another window has focus never arrives.
+            iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WalkStop),
+            _ => None,
+        });
+        let walking = if studio.walk.is_some() && studio.walk_keys.contains(&true) {
+            iced::time::every(Duration::from_millis(16)).map(Message::WalkTick)
+        } else {
+            iced::Subscription::none()
+        };
+        let api = if let Some(receiver) = &studio.api_receiver {
+            let receiver = Arc::clone(receiver);
+            let stream = iced::stream::channel(32, move |mut output| async move {
+                loop {
+                    let delivery = receiver.lock().await.recv().await;
+                    let Some(delivery) = delivery else { break };
+                    // A request with the token of a run of an extension
+                    // is handled on behalf of that extension.
+                    let message = match delivery.caller {
+                        None => Message::ApiRequest(delivery.request),
+                        Some(caller) => Message::Extension(extensions::ExtensionAction::Api(
+                            caller,
+                            Box::new(delivery.request),
+                        )),
+                    };
+                    if output.send(message).await.is_err() {
+                        break;
                     }
                 }
-                // F fits the view, W A S D walk, Q and E move down and up,
-                // R and then O turn, and while turning digits type the
-                // angle. A key a text field takes only ends RO.
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: iced::keyboard::Key::Character(value),
-                    modifiers,
-                    ..
-                }) if !modifiers.control() && !modifiers.alt() && !modifiers.logo() => Some(
-                    Message::KeyTyped(value.to_string(), status == iced::event::Status::Captured),
-                ),
-                iced::Event::Keyboard(iced::keyboard::Event::KeyReleased {
-                    key: iced::keyboard::Key::Character(value),
-                    ..
-                }) => {
-                    WalkKey::from_character(value.as_str()).map(|key| Message::WalkKey(key, false))
-                }
-                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
-                    Some(Message::Modifiers(modifiers))
-                }
-                // A key released while another window has focus never arrives.
-                iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WalkStop),
-                _ => None,
             });
-            let walking = if studio.walk.is_some() && studio.walk_keys.contains(&true) {
-                iced::time::every(Duration::from_millis(16)).map(Message::WalkTick)
-            } else {
-                iced::Subscription::none()
-            };
-            let api = if let Some(receiver) = &studio.api_receiver {
-                let receiver = Arc::clone(receiver);
-                let stream = iced::stream::channel(32, move |mut output| async move {
-                    loop {
-                        let delivery = receiver.lock().await.recv().await;
-                        let Some(delivery) = delivery else { break };
-                        // A request with the token of a run of an extension
-                        // is handled on behalf of that extension.
-                        let message = match delivery.caller {
-                            None => Message::ApiRequest(delivery.request),
-                            Some(caller) => Message::Extension(extensions::ExtensionAction::Api(
-                                caller,
-                                Box::new(delivery.request),
-                            )),
-                        };
-                        if output.send(message).await.is_err() {
-                            break;
-                        }
+            iced::Subscription::run_with_id("native_api", stream)
+        } else {
+            iced::Subscription::none()
+        };
+        // Files the system hands over are opened like files dropped on
+        // the window.
+        let opened = if let Some(receiver) = &studio.opened_files {
+            let receiver = Arc::clone(receiver);
+            let stream = iced::stream::channel(32, move |mut output| async move {
+                loop {
+                    let path = receiver.lock().await.recv().await;
+                    let Some(path) = path else { break };
+                    if output.send(Message::FileDropped(path)).await.is_err() {
+                        break;
                     }
-                });
-                iced::Subscription::run_with_id("native_api", stream)
-            } else {
-                iced::Subscription::none()
-            };
-            // Files the system hands over are opened like files dropped on
-            // the window.
-            let opened = if let Some(receiver) = &studio.opened_files {
-                let receiver = Arc::clone(receiver);
-                let stream = iced::stream::channel(32, move |mut output| async move {
-                    loop {
-                        let path = receiver.lock().await.recv().await;
-                        let Some(path) = path else { break };
-                        if output.send(Message::FileDropped(path)).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-                iced::Subscription::run_with_id("opened_files", stream)
-            } else {
-                iced::Subscription::none()
-            };
-            let clock = if studio.extension_clock() {
-                iced::time::every(Duration::from_secs(1))
-                    .map(|_| Message::Extension(extensions::ExtensionAction::Tick))
-            } else {
-                iced::Subscription::none()
-            };
-            let memory = iced::time::every(Duration::from_secs(2)).map(|_| Message::MemoryTick);
-            let shutdown = managed::shutdown().map(|()| Message::Exit);
-            iced::Subscription::batch([keyboard, api, opened, walking, clock, memory, shutdown])
-        })
-        .default_font(fonts::REGULAR)
-        .theme(|studio: &Studio| studio.ui_theme.iced())
-        .antialiasing(true)
-        .window(iced::window::Settings {
-            size: Size::new(1440.0, 900.0),
-            icon: iced::window::icon::from_file_data(
-                include_bytes!("../../assets/icons/icon-64.png"),
-                None,
-            )
-            .ok(),
-            #[cfg(target_os = "linux")]
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: APPLICATION_ID.into(),
-                ..Default::default()
+                }
+            });
+            iced::Subscription::run_with_id("opened_files", stream)
+        } else {
+            iced::Subscription::none()
+        };
+        let clock = if studio.extension_clock() {
+            iced::time::every(Duration::from_secs(1))
+                .map(|_| Message::Extension(extensions::ExtensionAction::Tick))
+        } else {
+            iced::Subscription::none()
+        };
+        let memory = iced::time::every(Duration::from_secs(2)).map(|_| Message::MemoryTick);
+        let shutdown = managed::shutdown().map(|()| Message::Exit);
+        iced::Subscription::batch([keyboard, api, opened, walking, clock, memory, shutdown])
+    })
+    .default_font(fonts::REGULAR)
+    .theme(|studio: &Studio, _| studio.ui_theme.iced())
+    .antialiasing(true)
+    .run_with(move || {
+        let mut studio = Studio::default();
+        let (_, open_window) = iced::window::open(window_settings);
+        studio.memory_usage.refresh();
+        if let Some((receiver, handle)) = api {
+            studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
+            handle.set_enabled(studio.mcp_enabled);
+            studio.api_handle = Some(handle);
+        }
+        // This runs on the main thread after the event loop was made and
+        // before it starts, which is when the hand-over must be in place.
+        #[cfg(target_os = "macos")]
+        {
+            studio.opened_files =
+                macos_open::install().map(|receiver| Arc::new(tokio::sync::Mutex::new(receiver)));
+        }
+        let chrome = Task::perform(
+            async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                3
             },
-            #[cfg(windows)]
-            platform_specific: iced::window::settings::PlatformSpecific {
-                undecorated_shadow: true,
-                ..Default::default()
-            },
-            // The title strip of the application is the only bar at the top
-            // and carries the window buttons (`native_chrome`).
-            decorations: !native_chrome::FRAMELESS,
-            // Closing arrives as `Message::Exit`, like Exit in the File view.
-            exit_on_close_request: false,
-            ..iced::window::Settings::default()
-        })
-        .run_with(move || {
-            let mut studio = Studio::default();
-            studio.memory_usage.refresh();
-            if let Some((receiver, handle)) = api {
-                studio.api_receiver = Some(Arc::new(tokio::sync::Mutex::new(receiver)));
-                handle.set_enabled(studio.mcp_enabled);
-                studio.api_handle = Some(handle);
-            }
-            // This runs on the main thread after the event loop was made and
-            // before it starts, which is when the hand-over must be in place.
-            #[cfg(target_os = "macos")]
-            {
-                studio.opened_files = macos_open::install()
-                    .map(|receiver| Arc::new(tokio::sync::Mutex::new(receiver)));
-            }
-            let chrome = Task::perform(
-                async {
-                    tokio::time::sleep(Duration::from_millis(300)).await;
-                    3
-                },
-                Message::SyncWindowChrome,
-            );
-            let task = Task::batch([studio.open_paths(startup_files), chrome]);
-            (studio, task)
-        })
+            Message::SyncWindowChrome,
+        );
+        let task = Task::batch([
+            open_window.map(Message::NativeWindowOpened),
+            studio.open_paths(startup_files),
+            chrome,
+        ]);
+        (studio, task)
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1806,6 +1813,7 @@ enum Message {
     ToggleViewControls,
     /// The window opened or got another size: the ribbon measures its
     /// overflow again.
+    NativeWindowOpened(iced::window::Id),
     WindowResized(Size),
     /// A press on the empty part of the title strip: it moves the window, and
     /// a second press soon after maximizes or restores it.
@@ -2270,6 +2278,7 @@ struct Studio {
     sheet_dialog: Option<sheet_dialog::SheetDialog>,
     viewport_size: Size,
     /// The size of the window, once it opened.
+    main_window: Option<iced::window::Id>,
     window_size: Option<Size>,
     /// Whether the window is maximized, as the system last reported it.
     window_maximized: bool,
@@ -2962,6 +2971,7 @@ impl Default for Studio {
             update_depth: 0,
             sheet_dialog: None,
             viewport_size: Size::new(915.0, 743.0),
+            main_window: None,
             window_size: None,
             window_maximized: false,
             title_pressed: None,
@@ -6332,8 +6342,10 @@ impl Studio {
         // The RAM label needs a fresh sample, not the model and drawing
         // settlement work that follows every normal UI action.
         if matches!(&message, Message::MemoryTick) {
-            if let Some(handle) = &self.api_handle {
-                handle.mark_gui_alive();
+            if self.main_window.is_some() {
+                if let Some(handle) = &self.api_handle {
+                    handle.mark_gui_alive();
+                }
             }
             self.memory_usage.refresh();
             return Task::none();
@@ -6616,6 +6628,10 @@ impl Studio {
             }
             Message::CloseRibbonPanel => self.ribbon_panel_open = None,
             Message::ToggleViewControls => self.view_controls_open = !self.view_controls_open,
+            Message::NativeWindowOpened(id) => {
+                self.main_window = Some(id);
+                return self.update(Message::SyncWindowChrome(3));
+            }
             Message::WindowResized(size) => {
                 let previous = self.window_size.replace(size);
                 self.ribbon_panel_open = None;
@@ -11291,6 +11307,10 @@ impl Studio {
             },
             clean: self.views.capturing(),
         }
+    }
+
+    fn view_for_window(&self, _window: iced::window::Id) -> Element<'_, Message> {
+        self.view()
     }
 
     /// The title of the window: the application with its version, after the

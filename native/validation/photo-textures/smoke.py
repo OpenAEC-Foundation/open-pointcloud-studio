@@ -30,6 +30,7 @@ parser.add_argument('--texel-size', type=float, default=.2)
 parser.add_argument('--max-resolution', type=int, default=1024)
 parser.add_argument('--job-timeout', type=float, default=180)
 parser.add_argument('--cancel-probe', action='store_true')
+parser.add_argument('--compare-probe', action='store_true', help='Check independently prepared model/photo cameras in the real renderer')
 parser.add_argument('--expected-sha256', help='Verify the original real fixture after the probe')
 args = parser.parse_args()
 output = args.output.resolve()
@@ -131,6 +132,51 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
             report = {'job':complete,
                 'changed_viewport_pixels':changed,'independent_reader':'trimesh '+trimesh.__version__,
                 'uvs':geometry.visual.uv.tolist(),'source_photo_unchanged':True}
+            if args.compare_probe:
+                api('enter_photo', index=0)
+                api('set_photo_compare', enabled=True)
+                api('set_photo_split', ratio=.5, vertical=False)
+                api('set_panorama', yaw=.2, pitch=.1, field_of_view=1.2)
+                # Let the newly decoded photograph settle before capturing.
+                time.sleep(.5)
+                first=api('status')['result']
+                model_camera=first['photos']['model_camera']
+                assert model_camera is not None
+                api('screenshot',path=str(output/'compare-before.png'),base64=False,max_edge=1200,window=True)
+                api('set_panorama',yaw=1.4,pitch=.1,field_of_view=1.2)
+                turned=api('status')['result']
+                assert turned['photos']['model_camera']==model_camera, 'Photo turn changed model camera'
+                photo_camera=turned['walk']
+                api('screenshot',path=str(output/'compare-photo-turn.png'),base64=False,max_edge=1200,window=True)
+                # set_camera controls the model tab, not its comparison copy.
+                # Change the actual model and return to the preserved photo.
+                api('show_tab',index=0)
+                api('set_camera',yaw=.4,pitch=.5,zoom=1,pan=[0,0])
+                api('show_tab',index=1)
+                time.sleep(.5)
+                model_turned=api('status')['result']
+                assert model_turned['walk']==photo_camera, 'Model turn changed photo camera'
+                assert model_turned['photos']['model_camera']!=model_camera
+                api('screenshot',path=str(output/'compare-model-turn.png'),base64=False,max_edge=1200,window=True)
+                captures=[np.asarray(Image.open(output/name).convert('RGB')).astype(np.int16)
+                          for name in ('compare-before.png','compare-photo-turn.png','compare-model-turn.png')]
+                assert captures[0].shape==captures[1].shape==captures[2].shape
+                height,width=captures[0].shape[:2]
+                # Interior regions of this fixed two-pane fixture exclude
+                # chrome, the divider, compass, photo controls and status.
+                left=(slice(int(height*.45),int(height*.9)),slice(int(width*.2),int(width*.49)))
+                right=(slice(int(height*.45),int(height*.9)),slice(int(width*.51),int(width*.79)))
+                def changed_pixels(a,b,region):
+                    return int(np.count_nonzero(np.any(np.abs(a[region]-b[region])>10,axis=2)))
+                counts={'photo_turn_left':changed_pixels(captures[0],captures[1],left),
+                        'photo_turn_right':changed_pixels(captures[0],captures[1],right),
+                        'model_turn_left':changed_pixels(captures[1],captures[2],left),
+                        'model_turn_right':changed_pixels(captures[1],captures[2],right)}
+                assert counts['photo_turn_left']==0 and counts['model_turn_right']==0, counts
+                assert counts['photo_turn_right']>100 and counts['model_turn_left']>100, counts
+                report['independent_comparison_cameras']=counts
+                api('set_photo_compare',enabled=False)
+                api('close_panorama')
             if args.e57:
                 api('remove', index=0)
                 api('open', path=str(args.e57.resolve()))
