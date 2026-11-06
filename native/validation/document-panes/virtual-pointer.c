@@ -27,6 +27,10 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[i],"move") && i+4<argc) {
       uint32_t x=atoi(argv[++i]), y=atoi(argv[++i]), w=atoi(argv[++i]), h=atoi(argv[++i]);
       zwlr_virtual_pointer_v1_motion_absolute(pointer, now(), x, y, w, h);
+    } else if (!strcmp(argv[i],"drop") && i+4<argc) {
+      uint32_t x=atoi(argv[++i]), y=atoi(argv[++i]), w=atoi(argv[++i]), h=atoi(argv[++i]);
+      zwlr_virtual_pointer_v1_button(pointer, now(), BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+      zwlr_virtual_pointer_v1_motion_absolute(pointer, now(), x, y, w, h);
     } else if (!strcmp(argv[i],"down")) {
       zwlr_virtual_pointer_v1_button(pointer, now(), BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
     } else if (!strcmp(argv[i],"up")) {

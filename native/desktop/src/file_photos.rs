@@ -2109,6 +2109,64 @@ mod tests {
     }
 
     #[test]
+    fn a_grabbed_release_docks_into_the_first_target_window_without_following_later_motion() {
+        use crate::document_panes::{layout::Side, Action};
+        let (mut studio, _directory, source) = studio_with_photos();
+        let main = iced::window::Id::unique();
+        studio.main_window = Some(main);
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source.clone(), 0)));
+        let photo = crate::view_tabs::TabId::Photo(source)
+            .document_key()
+            .unwrap();
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = studio.update(Message::Documents(Action::TearOff(photo.clone())));
+        let documents = studio.documents.as_ref().unwrap();
+        let source_pane = documents.workspace.owner(&photo).unwrap();
+        let source_window = documents.workspace.window_of(source_pane).unwrap();
+        let satellite = documents.native_windows[&source_window];
+        let model_pane = documents.workspace.owner("model").unwrap();
+        documents.pane_bounds[&model_pane].set(Some(iced::Rectangle {
+            x: 0.,
+            y: 30.,
+            width: 800.,
+            height: 570.,
+        }));
+        for action in [
+            Action::Pointer(satellite, iced::Point::new(50., 15.)),
+            Action::BeginDrag(photo.clone()),
+            Action::Pointer(satellite, iced::Point::new(-300., 300.)),
+            Action::FinishDrag(satellite),
+        ] {
+            let _ = studio.update(Message::Documents(action));
+        }
+        let ticket = studio
+            .documents
+            .as_ref()
+            .unwrap()
+            .drag
+            .as_ref()
+            .unwrap()
+            .ticket;
+        for action in [
+            Action::NativeCursor(satellite, true),
+            Action::NativeCursor(main, false),
+            Action::Pointer(main, iced::Point::new(400., 300.)),
+            Action::Pointer(main, iced::Point::new(795., 300.)),
+            Action::CompleteDrag(ticket),
+        ] {
+            let _ = studio.update(Message::Documents(action));
+        }
+        let documents = studio.documents.as_ref().unwrap();
+        assert!(documents.drag.is_none());
+        assert_eq!(documents.workspace.windows.len(), 1);
+        assert_eq!(documents.workspace.panes().len(), 1);
+        assert_eq!(
+            documents.workspace.owner("model"),
+            documents.workspace.owner(&photo)
+        );
+    }
+
+    #[test]
     fn dragging_an_inactive_tab_merges_and_splits_its_document_not_the_selected_model() {
         use crate::document_panes::{layout::Side, Action};
         let (mut studio, _directory, source) = studio_with_photos();

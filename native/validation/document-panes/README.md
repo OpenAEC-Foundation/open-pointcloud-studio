@@ -48,8 +48,8 @@ and requires Pillow and NumPy.
 
 Satellite placements currently have no verified platform monitor identifier,
 so startup safely docks their documents into the main window. Monitor-aware
-placement, linked panes and complete cross-window dragging remain acceptance
-work for issue #16.
+placement, linked panes and physical Windows/macOS multi-monitor checks remain
+acceptance work for issue #16.
 
 The recorded 2026-11-06 run passed 785 native tests (9 explicitly ignored),
 workspace/all-target Clippy with warnings denied and a full workspace build.
@@ -99,3 +99,29 @@ workspace Clippy with warnings denied and a full workspace build. Focused tests
 also verify that restoring a paper camera preserves shared sheet definitions,
 revision counters and pending drawing jobs. Paper images remain shared, and
 inactive panes do not display the active tool's selection highlight.
+
+The cross-window pointer follow-up passes on one headless output and on two
+1280 × 720 outputs in a horizontal 2560 × 720 layout. Add
+`--cross-window-probe --pointer-layout-width 2560` to the photo-texture probe
+with `--pointer-probe`, `--panes-probe` and `--windows-probe`. Start labwc with
+`WLR_HEADLESS_OUTPUTS=2` and put the isolated pointer on the first output before
+launching the app. The probe moves the native satellite onto the second output
+and drags its photo tab back to the model pane on the first output. It checks
+single ownership, collapse of the empty satellite, and the unchanged photo
+camera. `--desktop-capture /absolute/path/grim` optionally records the test
+compositor; the two checked-in desktop images contain only the synthetic fixture.
+
+The pointer helper's `drop x y width height` emits release and the stationary
+position in one protocol frame, keeping the compositor's focus transition
+observable before destroying the test device. Production handles the target's
+motion both before and after the source's release message: it uses the most
+recent window and freezes the first deferred target position. Drag tickets
+prevent late completions from ending a newer drag. This follows
+[Wayland's pointer-grab model](https://wayland.freedesktop.org/docs/html/ch04.html),
+which delivers the release to the original surface. Pointer tracking is pruned
+when a window closes, including late events from already closed windows.
+
+The cross-window follow-up passed 799 native tests (9 explicitly ignored), a
+full workspace build and workspace/all-target Clippy with warnings denied.
+The one-output and two-output GUI probes both passed without diagnostic code;
+both also passed the real BLK2GO inactive-station check afterward.

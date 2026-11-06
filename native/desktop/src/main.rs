@@ -6371,7 +6371,9 @@ impl Studio {
         if let Message::Documents(document_panes::Action::Pointer(window, position)) = &message {
             if let Some(documents) = &mut self.documents {
                 if documents.drag.is_none() {
-                    documents.pointers.insert(*window, *position);
+                    if documents.native_windows.values().any(|id| id == window) {
+                        documents.pointers.insert(*window, *position);
+                    }
                     return Task::none();
                 }
             } else {

@@ -32,6 +32,9 @@ parser.add_argument('--max-resolution', type=int, default=1024)
 parser.add_argument('--job-timeout', type=float, default=180)
 parser.add_argument('--cancel-probe', action='store_true')
 parser.add_argument('--pointer-probe', type=Path, help='Optional isolated Wayland virtual pointer test helper')
+parser.add_argument('--pointer-layout-width', type=int, help='Total logical width of the isolated horizontal output layout')
+parser.add_argument('--desktop-capture', type=Path, help='Optional grim binary for screenshots of the isolated test compositor')
+parser.add_argument('--cross-window-probe', action='store_true', help='Drag a native satellite tab back using the isolated labwc pointer helper')
 parser.add_argument('--windows-probe', action='store_true', help='Check native satellite creation, capture selection and docking')
 parser.add_argument('--panes-probe', action='store_true', help='Check separate native document panes and camera ownership')
 parser.add_argument('--compare-probe', action='store_true', help='Check independently prepared model/photo cameras in the real renderer')
@@ -154,16 +157,19 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                         outputs=subprocess.check_output(['wlrctl','output','list'],text=True)
                         mode=re.search(r'\((\d+)x(\d+) ',outputs)
                         assert mode, outputs
-                        output_width,output_height=map(int,mode.groups())
+                        main_output_width,output_height=map(int,mode.groups())
+                        output_width=args.pointer_layout_width or main_output_width
                         # labwc's server decorations are outside Iced's screenshot.
                         offset_y=output_height-height
-                        assert output_width==width and 0<=offset_y<=64, (outputs,width,height)
+                        assert main_output_width==width and output_width>=main_output_width and 0<=offset_y<=64, (outputs,width,height)
                         header=32+28+94+14
                         panel=240
                         center_y=int((height+header)/2)
-                        def drag(start,end):
-                            subprocess.run([str(args.pointer_probe),'move',str(start[0]),str(start[1]+offset_y),str(output_width),str(output_height),
-                                'down','wait','300','move',str(end[0]),str(end[1]+offset_y),str(output_width),str(output_height),'wait','300','up'],check=True)
+                        def drag(start,end,client=True):
+                            offset=offset_y if client else 0
+                            subprocess.run([str(args.pointer_probe),'move',str(start[0]),str(start[1]+offset),str(output_width),str(output_height),
+                                'down','wait','300','move',str(start[0]+8),str(start[1]+offset),str(output_width),str(output_height),
+                                'move',str(end[0]),str(end[1]+offset),str(output_width),str(output_height),'wait','300','drop',str(end[0]),str(end[1]+offset),str(output_width),str(output_height),'wait','300'],check=True)
                             time.sleep(.3)
                         # Split directly from the original shared tab strip;
                         # no API split or enable action precedes this press.
@@ -247,7 +253,28 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
                     assert main_size!=satellite_size, (main_size,satellite_size)
                     api('show_tab',index=1)
                     assert api('status')['result']['walk']==photo_camera
-                    docked=api('dock_pane_window',window=satellite)
+                    if args.cross_window_probe:
+                        assert args.pointer_probe and args.panes_probe
+                        # The isolated labwc session centers this 900px-wide
+                        # satellite. Move its server titlebar right, exposing
+                        # the main model pane, then drop the photo tab there.
+                        if args.desktop_capture:
+                            subprocess.run([str(args.desktop_capture),str(output/'desktop-satellite.png')],check=True)
+                        drag((main_output_width//2,12),(output_width-180,12),client=False)
+                        if args.desktop_capture:
+                            subprocess.run([str(args.desktop_capture),str(output/'desktop-moved.png')],check=True)
+                        satellite_left=output_width-180-satellite_size[0]//2
+                        drag((satellite_left+40,14),(400,400))
+                        if args.desktop_capture:
+                            subprocess.run([str(args.desktop_capture),str(output/'desktop-drop.png')],check=True)
+                        docked=api('list_panes')
+                        api('screenshot',path=str(output/'cross-window-docked.png'),base64=False,max_edge=8192,window=True)
+                        assert len(docked['workspace']['windows'])==1, docked
+                        assert docked['workspace']['windows'][0]['root']['kind']=='pane', docked
+                        assert api('status')['result']['walk']==photo_camera
+                        report['native_drag_back']={'implicit_grab_release_handled':True,'single_main_pane':True,'photo_camera_preserved':True,'virtual_desktop_width':output_width,'main_output_width':main_output_width,'across_outputs':output_width>main_output_width}
+                    else:
+                        docked=api('dock_pane_window',window=satellite)
                     assert len(docked['workspace']['windows'])==1, docked
                     report['native_satellite']={'logical_window':satellite,'satellite_capture_size':satellite_size,
                         'main_capture_size':main_size,'docked':True,'photo_camera_preserved':True}

@@ -29,6 +29,7 @@ pub(crate) enum Action {
     BeginDrag(String),
     Pointer(iced::window::Id, iced::Point),
     FinishDrag(iced::window::Id),
+    CompleteDrag(u64),
     Resize(u64, pane_grid::ResizeEvent),
 }
 
@@ -93,6 +94,7 @@ impl Studio {
             | Action::NativeResized(_, _)
             | Action::NativeClosed(_)
             | Action::NativeCursor(_, _)
+            | Action::CompleteDrag(_)
                 if self.documents.is_none() =>
             {
                 return Task::none()
@@ -228,7 +230,8 @@ impl Studio {
                     documents.pointer(native, position);
                     Ok(Task::none())
                 }
-                Action::FinishDrag(native) => documents.finish_drag(self, native),
+                Action::FinishDrag(native) => documents.release_drag(self, native),
+                Action::CompleteDrag(ticket) => documents.complete_drag(self, ticket),
             }
         })();
         documents.refresh_grids();

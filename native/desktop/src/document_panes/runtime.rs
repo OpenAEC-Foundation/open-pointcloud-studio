@@ -10,13 +10,18 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 pub(crate) struct Drag {
+    pub ticket: u64,
     key: String,
     source: Option<iced::window::Id>,
     origin: iced::Point,
     moved: bool,
+    pointer: Option<(iced::window::Id, iced::Point)>,
+    release: Option<(iced::window::Id, Option<iced::Point>)>,
+    target: Option<(iced::window::Id, iced::Point)>,
 }
 pub(crate) struct Runtime {
     pub drag: Option<Drag>,
+    drag_serial: u64,
     pub pointers: HashMap<iced::window::Id, iced::Point>,
     pub pane_bounds: HashMap<u64, Cell<Option<iced::Rectangle>>>,
     pub workspace: Workspace,
@@ -43,6 +48,7 @@ impl Runtime {
         }
         Self {
             drag: None,
+            drag_serial: 0,
             pointers: HashMap::new(),
             pane_bounds: HashMap::new(),
             workspace,
@@ -119,63 +125,136 @@ impl Runtime {
         let origin = source
             .and_then(|source| self.pointers.get(&source).copied())
             .unwrap_or(iced::Point::ORIGIN);
+        self.drag_serial = self.drag_serial.wrapping_add(1);
         self.drag = Some(Drag {
+            ticket: self.drag_serial,
             key: key.into(),
             source,
             origin,
             moved: false,
+            pointer: source.map(|source| (source, origin)),
+            release: None,
+            target: None,
         });
         Ok(())
     }
     pub fn pointer(&mut self, window: iced::window::Id, position: iced::Point) {
         self.pointers.insert(window, position);
         if let Some(drag) = &mut self.drag {
+            drag.pointer = Some((window, position));
             drag.moved |= drag.source != Some(window) || drag.origin.distance(position) >= 6.;
+            if drag.release.is_some() && drag.target.is_none() && drag.source != Some(window) {
+                drag.target = Some((window, position));
+            }
         }
+    }
+    fn drop_target(&self, native: iced::window::Id) -> Option<(u64, Option<super::layout::Side>)> {
+        self.drop_target_at(native, *self.pointers.get(&native)?)
+    }
+    fn drop_target_at(
+        &self,
+        native: iced::window::Id,
+        point: iced::Point,
+    ) -> Option<(u64, Option<super::layout::Side>)> {
+        let window = self
+            .native_windows
+            .iter()
+            .find_map(|(window, id)| (*id == native).then_some(*window))?;
+        self.workspace
+            .panes()
+            .into_iter()
+            .filter(|pane| self.workspace.window_of(pane.id) == Some(window))
+            .find_map(|pane| {
+                let bounds = self.pane_bounds.get(&pane.id)?.get()?;
+                let including_header = iced::Rectangle {
+                    y: bounds.y - 30.,
+                    height: bounds.height + 30.,
+                    ..bounds
+                };
+                if !including_header.contains(point) {
+                    return None;
+                }
+                let side = if point.y < bounds.y {
+                    None
+                } else if point.x < bounds.x + bounds.width * 0.18 {
+                    Some(super::layout::Side::Left)
+                } else if point.x > bounds.x + bounds.width * 0.82 {
+                    Some(super::layout::Side::Right)
+                } else if point.y < bounds.y + bounds.height * 0.18 {
+                    Some(super::layout::Side::Above)
+                } else if point.y > bounds.y + bounds.height * 0.82 {
+                    Some(super::layout::Side::Below)
+                } else {
+                    None
+                };
+                Some((pane.id, side))
+            })
+    }
+    pub fn release_drag(
+        &mut self,
+        studio: &mut Studio,
+        native: iced::window::Id,
+    ) -> Result<Task<Message>, String> {
+        let Some(drag) = &self.drag else {
+            return Ok(Task::none());
+        };
+        if !drag.moved {
+            return self.finish_drag(studio, native);
+        }
+        let target = drag
+            .pointer
+            .and_then(|(window, point)| self.drop_target_at(window, point));
+        if target.is_some() {
+            return self.finish_drag_to(studio, target);
+        }
+        let ticket = drag.ticket;
+        let location = drag
+            .pointer
+            .map(|(window, point)| (window, Some(point)))
+            .unwrap_or((native, self.pointers.get(&native).copied()));
+        self.drag.as_mut().expect("drag exists").release = Some(location);
+        // The compositor delivers release to the original surface during an
+        // implicit pointer grab. Enter/motion for the target window follow it.
+        Ok(Task::perform(
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                ticket
+            },
+            |ticket| Message::Documents(super::Action::CompleteDrag(ticket)),
+        ))
+    }
+    pub fn complete_drag(
+        &mut self,
+        studio: &mut Studio,
+        ticket: u64,
+    ) -> Result<Task<Message>, String> {
+        if self.drag.as_ref().is_none_or(|drag| drag.ticket != ticket) {
+            return Ok(Task::none());
+        }
+        let drag = self.drag.as_ref().expect("matching drag");
+        let location = drag.target.or_else(|| {
+            drag.release
+                .and_then(|(native, point)| point.map(|point| (native, point)))
+        });
+        let target = location.and_then(|(native, point)| self.drop_target_at(native, point));
+        self.finish_drag_to(studio, target)
     }
     pub fn finish_drag(
         &mut self,
         studio: &mut Studio,
         native: iced::window::Id,
     ) -> Result<Task<Message>, String> {
+        let target = self.drop_target(native);
+        self.finish_drag_to(studio, target)
+    }
+    fn finish_drag_to(
+        &mut self,
+        studio: &mut Studio,
+        target: Option<(u64, Option<super::layout::Side>)>,
+    ) -> Result<Task<Message>, String> {
         let Some(drag) = self.drag.take().filter(|drag| drag.moved) else {
             return Ok(Task::none());
         };
-        let target = self.pointers.get(&native).and_then(|point| {
-            let window = self
-                .native_windows
-                .iter()
-                .find_map(|(window, id)| (*id == native).then_some(*window))?;
-            self.workspace
-                .panes()
-                .into_iter()
-                .filter(|pane| self.workspace.window_of(pane.id) == Some(window))
-                .find_map(|pane| {
-                    let bounds = self.pane_bounds.get(&pane.id)?.get()?;
-                    let including_header = iced::Rectangle {
-                        y: bounds.y - 30.,
-                        height: bounds.height + 30.,
-                        ..bounds
-                    };
-                    if !including_header.contains(*point) {
-                        return None;
-                    }
-                    let side = if point.y < bounds.y {
-                        None
-                    } else if point.x < bounds.x + bounds.width * 0.18 {
-                        Some(super::layout::Side::Left)
-                    } else if point.x > bounds.x + bounds.width * 0.82 {
-                        Some(super::layout::Side::Right)
-                    } else if point.y < bounds.y + bounds.height * 0.18 {
-                        Some(super::layout::Side::Above)
-                    } else if point.y > bounds.y + bounds.height * 0.82 {
-                        Some(super::layout::Side::Below)
-                    } else {
-                        None
-                    };
-                    Some((pane.id, side))
-                })
-        });
         if let Some((target, side)) = target {
             match side {
                 Some(side) => {
@@ -255,6 +334,13 @@ impl Runtime {
             })
             .cloned()
             .collect();
+        if self
+            .drag
+            .as_ref()
+            .is_some_and(|drag| closed.contains(&drag.key))
+        {
+            self.drag = None;
+        }
         for key in closed {
             let _ = self.workspace.close_tab(&key);
             if let Some(mut snapshot) = self.snapshots.remove(&key) {
@@ -291,13 +377,15 @@ impl Runtime {
             .copied()
             .filter(|id| !self.workspace.windows.iter().any(|window| window.id == *id))
             .collect();
+        let closed: Vec<_> = gone
+            .into_iter()
+            .filter_map(|id| self.native_windows.remove(&id))
+            .collect();
         self.outside_windows
             .retain(|native| self.native_windows.values().any(|id| id == native));
-        Task::batch(
-            gone.into_iter()
-                .filter_map(|id| self.native_windows.remove(&id))
-                .map(iced::window::close),
-        )
+        self.pointers
+            .retain(|native, _| self.native_windows.values().any(|id| id == native));
+        Task::batch(closed.into_iter().map(iced::window::close))
     }
     pub fn suspend_inactive(&mut self) {
         for (key, snapshot) in &mut self.snapshots {
@@ -461,6 +549,74 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn release_uses_the_latest_target_motion_instead_of_a_stale_source_position() {
+        let main = iced::window::Id::unique();
+        let target = iced::window::Id::unique();
+        let mut studio = Studio {
+            main_window: Some(main),
+            ..Studio::default()
+        };
+        let mut runtime = Runtime::new(&studio);
+        runtime.workspace.open("other".into(), 1).unwrap();
+        let window = runtime.workspace.tear_off("other", None).unwrap();
+        runtime.native_windows.insert(window, target);
+        runtime.refresh_grids();
+        let target_pane = runtime.workspace.owner("other").unwrap();
+        for id in [1, target_pane] {
+            runtime.pane_bounds[&id].set(Some(iced::Rectangle {
+                x: 0.,
+                y: 30.,
+                width: 800.,
+                height: 570.,
+            }));
+        }
+        runtime.pointer(main, iced::Point::new(50., 15.));
+        runtime.begin_drag("model").unwrap();
+        runtime.pointer(target, iced::Point::new(400., 300.));
+        let _ = runtime.release_drag(&mut studio, main).unwrap();
+        assert_eq!(runtime.workspace.owner("model"), Some(target_pane));
+        assert!(runtime.drag.is_none());
+    }
+
+    #[test]
+    fn a_late_drop_completion_does_not_finish_a_newer_drag() {
+        let mut studio = Studio::default();
+        let mut runtime = Runtime::new(&studio);
+        runtime.begin_drag("model").unwrap();
+        let old = runtime.drag.as_ref().unwrap().ticket;
+        runtime.begin_drag("model").unwrap();
+        let new = runtime.drag.as_ref().unwrap().ticket;
+        assert_ne!(old, new);
+        let _ = runtime.complete_drag(&mut studio, old).unwrap();
+        assert_eq!(runtime.drag.as_ref().unwrap().ticket, new);
+    }
+
+    #[test]
+    fn closed_windows_release_all_pointer_tracking() {
+        let mut studio = Studio::default();
+        let mut runtime = Runtime::new(&studio);
+        let closed = iced::window::Id::unique();
+        runtime.native_windows.insert(77, closed);
+        runtime.pointers.insert(closed, iced::Point::new(20., 30.));
+        runtime.outside_windows.insert(closed);
+        let _ = runtime.settle_windows();
+        assert!(!runtime.native_windows.contains_key(&77));
+        assert!(!runtime.pointers.contains_key(&closed));
+        assert!(!runtime.outside_windows.contains(&closed));
+        studio.documents = Some(runtime);
+        let _ = studio.update(Message::Documents(super::super::Action::Pointer(
+            closed,
+            iced::Point::new(10., 20.),
+        )));
+        assert!(!studio
+            .documents
+            .as_ref()
+            .unwrap()
+            .pointers
+            .contains_key(&closed));
+    }
+
     #[test]
     fn an_inflight_drawing_open_cannot_capture_the_previous_document_camera() {
         let mut studio = Studio {
