@@ -1049,6 +1049,13 @@ saved view that the scene still has comes back as it was left; otherwise its
 tab shows it as it was saved, as a click on its row does. A drawing comes back
 zoomed as it was left, with its layers as they were, also from its row.
 
+Station panoramas opened with `open_panorama` have their own photo tab, separate
+from a file's route-photo tab. Stepping to another station of the same source
+reuses its station tab. Switching back restores its direction, field of view
+and walking position, including a position outside the photo station. The
+3D model keeps its original camera; Esc returns to it. Photo tabs last for
+the session, and closing a tab leaves the scan and its photographs intact.
+
 `list_tabs` answers with `tabs`, each with its `index`, `name` (`3D model`
 for the 3D model in every language, as `project_browser` names it), `kind`
 (`model`, `view`, `drawing`, `file`, `sheet` or `photo`), the `guid` of a view, a
@@ -1910,6 +1917,7 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
+| 15 | Unreleased | Calibrated station panoramas use independent photo tabs. `list_tabs` reports `kind: "photo"`, `photo_type: "station_panorama"`, `path` and `station_index`; `show_tab` restores their walking camera and `close_tab` keeps the source scan open. Includes the cumulative changes of revisions 13 and 14 below. |
 | 14 | Unreleased | `texture_mesh` accepts `source` (`point_colours` or `photographs`), reports photo coverage and preview errors; new `set_texture_preview` controls the native UV atlas overlay. Mesh status reports texture visibility, resolution and GPU support. |
 | 13 | Unreleased | The status-bar MCP checkbox gates external owner-token access; `/info` and `status.result` include `mcp_enabled`. Extension grants and running jobs remain available. Status also includes `managed.enabled` and `managed.directory`, the environment defaults of a managed native SuperCloud session. |
 | 12 | 2026.45.1 | Photo editing (`add_panorama`, `edit_photo`, `delete_photo`), scan registration (`registration_setup`, `registration_pair`, `registration_fit`, `registration_refine`, `registration_export`, `registration_matrix`, `registration_set_matrix`, `cancel_registration`), ReCap preparation (`export_recap`), and mixed-format `merge_visible` with optional `keep_stations_photos`. Status includes `registration` and `registration_pending`. |
