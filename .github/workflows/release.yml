@@ -228,41 +228,6 @@ jobs:
           [[ "$missing" -eq 0 ]]
           for sum in *.sha256; do sha256sum -c "$sum"; done
           ls -l
-      # A release whose application is signed never ships a library that is
-      # not; a draft run only warns, so that it can be looked at.
-      - name: Check that the libraries are signed as the applications are
-        env:
-          WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}
-          MACOS_SIGNED: ${{ needs.packages.outputs.macos_signed }}
-          SDK_WINDOWS_SIGNED: ${{ needs.sdk.outputs.windows_signed }}
-          SDK_MACOS_SIGNED: ${{ needs.sdk.outputs.macos_signed }}
-          DRAFT_ONLY: ${{ inputs.draft_only }}
-        run: |
-          {
-            echo "### Signing gate"
-            echo
-            echo "| Files | Signed |"
-            echo "| --- | --- |"
-            echo "| Windows application and installer | ${WINDOWS_SIGNED:-false} |"
-            echo "| ops_pointcloud.dll | ${SDK_WINDOWS_SIGNED:-false} |"
-            echo "| macOS application and disk image | ${MACOS_SIGNED:-false} |"
-            echo "| libops_pointcloud.dylib | ${SDK_MACOS_SIGNED:-false} |"
-          } >> "$GITHUB_STEP_SUMMARY"
-          problems=()
-          if [[ "$WINDOWS_SIGNED" == true && "$SDK_WINDOWS_SIGNED" != true ]]; then
-            problems+=("the Windows application is signed, ops_pointcloud.dll is not")
-          fi
-          if [[ "$MACOS_SIGNED" == true && "$SDK_MACOS_SIGNED" != true ]]; then
-            problems+=("the macOS application is signed and notarized, libops_pointcloud.dylib is not")
-          fi
-          for problem in "${problems[@]}"; do
-            if [[ "$DRAFT_ONLY" == true ]]; then
-              echo "::warning::$problem"
-            else
-              echo "::error::$problem"
-            fi
-          done
-          [[ ${#problems[@]} -eq 0 || "$DRAFT_ONLY" == true ]]
       - name: Write SHA256SUMS
         working-directory: assets
         run: |
@@ -298,6 +263,15 @@ jobs:
           else
             echo "Updater: not signed; the updater key is not configured." >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Require signatures before creating or publishing a release
+        env:
+          WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}
+          MACOS_SIGNED: ${{ needs.packages.outputs.macos_signed }}
+          SDK_WINDOWS_SIGNED: ${{ needs.sdk.outputs.windows_signed }}
+          SDK_MACOS_SIGNED: ${{ needs.sdk.outputs.macos_signed }}
+          LINUX_GPG_SIGNED: ${{ steps.gpg.outputs.gpg_signed }}
+          DRAFT_ONLY: ${{ inputs.draft_only }}
+        run: bash native/packaging/require-signatures.sh
       # Every Linux package and Linux archive of the C library gets a build
       # attestation, signed through Sigstore and kept by GitHub. `gh
       # attestation verify FILE --repo OWNER/REPO --signer-workflow

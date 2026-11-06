@@ -21,6 +21,8 @@ jobs:
         run: python3 native/packaging/test-classic-version.py
       - name: Check the version
         run: bash native/packaging/set-version.sh check
+      - name: Test the release signing gate
+        run: python3 native/packaging/test-require-signatures.py
 
   native:
     strategy:
