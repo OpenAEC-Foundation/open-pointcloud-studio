@@ -786,3 +786,116 @@ fn the_local_api_lists_shows_and_closes_tabs() {
         assert_eq!(answer["ok"], false, "{refused} {answer}");
     }
 }
+
+fn studio_with_stations() -> (Studio, tempfile::TempDir, PathBuf) {
+    let (mut studio, directory) = studio_with_scan();
+    let mut cloud = (*studio.clouds[0].cloud).clone();
+    let source = cloud.path.clone();
+    cloud.scan_poses = (0..2)
+        .map(|index| pointcloud_core::ScanPose {
+            label: format!("Station {}", index + 1),
+            position: [index as f64 * 2.0, 0.0, 1.5],
+            axes: None,
+        })
+        .collect();
+    cloud.scan_images = (0..2)
+        .map(|station| pointcloud_core::ScanImage {
+            station: Some(station),
+            position: cloud.scan_poses[station].position,
+            axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            width: 64,
+            height: 64,
+            focal: [32.0; 2],
+            principal: [31.5; 2],
+            format: pointcloud_core::ScanImageFormat::Jpeg,
+            offset: 0,
+            length: 1,
+        })
+        .collect();
+    studio.clouds[0].cloud = Arc::new(cloud);
+    studio.follow_shown_tab();
+    (studio, directory, source)
+}
+
+#[test]
+fn station_photo_tab_keeps_model_camera_and_reopens_its_own_look() {
+    let (mut studio, _directory, source) = studio_with_stations();
+    studio.yaw = 0.7;
+    studio.pitch = 0.2;
+    studio.pan = [14.0, -8.0];
+    studio.follow_shown_tab();
+    let before = studio.model_look();
+    let _ = studio.update(Message::EnterPanorama(0, 0));
+    studio.follow_shown_tab();
+    let photo = TabId::StationPhoto(source.clone());
+    assert_eq!(studio.shown_tab(), Some(photo.clone()));
+    studio.walk.as_mut().unwrap().yaw = 1.3;
+    studio.walk.as_mut().unwrap().field_of_view = 0.9;
+    studio.follow_shown_tab();
+    let look = studio.walk;
+    let _ = studio.show_model_tab();
+    studio.follow_shown_tab();
+    assert_eq!(studio.shown_tab(), Some(TabId::Model));
+    assert_eq!(studio.model_look(), before);
+    let _ = studio.show_tab(&photo).unwrap();
+    studio.follow_shown_tab();
+    assert_eq!(studio.walk, look);
+    assert_eq!(
+        studio.tabs_value()["tabs"][1]["photo_type"],
+        "station_panorama"
+    );
+    assert_eq!(studio.tabs_value()["tabs"][1]["station_index"], 0);
+    let _ = studio.update(Message::LeaveWalk);
+    assert_eq!(studio.model_look(), before);
+}
+
+#[test]
+fn walking_out_keeps_station_tab_and_does_not_replace_model_camera() {
+    let (mut studio, _directory, source) = studio_with_stations();
+    let before = studio.model_look();
+    let _ = studio.update(Message::EnterPanorama(0, 0));
+    studio.follow_shown_tab();
+    studio.walk.as_mut().unwrap().eye = [100.0, 0.0, 1.5];
+    studio.walk_station = None;
+    studio.follow_shown_tab();
+    let outside = studio.walk;
+    assert_eq!(
+        studio.shown_tab(),
+        Some(TabId::StationPhoto(source.clone()))
+    );
+    let _ = studio.show_model_tab();
+    assert_eq!(studio.model_look(), before);
+    let _ = studio.show_tab(&TabId::StationPhoto(source)).unwrap();
+    assert_eq!(studio.walk, outside);
+    assert!(studio.walk_station.is_none());
+}
+
+#[test]
+fn station_steps_reuse_the_tab_and_closing_it_restores_model() {
+    let (mut studio, _directory, source) = studio_with_stations();
+    let before = studio.model_look();
+    let _ = studio.update(Message::EnterPanorama(0, 0));
+    studio.follow_shown_tab();
+    let _ = studio.update(Message::EnterPanorama(0, 1));
+    studio.follow_shown_tab();
+    assert_eq!(studio.listed_tabs().len(), 2);
+    assert_eq!(studio.tabs_value()["tabs"][1]["station_index"], 1);
+    let _ = studio.close_tab(&TabId::StationPhoto(source.clone()));
+    studio.follow_shown_tab();
+    assert_eq!(studio.model_look(), before);
+    assert!(!studio.tabs.station_looks.contains_key(&source));
+    assert_eq!(studio.listed_tabs(), [TabId::Model]);
+}
+
+#[test]
+fn a_station_without_images_does_not_open_a_photo_tab() {
+    let (mut studio, _directory, _source) = studio_with_stations();
+    Arc::make_mut(&mut studio.clouds[0].cloud)
+        .scan_images
+        .clear();
+    let before = studio.model_look();
+    let _ = studio.update(Message::EnterPanorama(0, 0));
+    studio.follow_shown_tab();
+    assert_eq!(studio.listed_tabs(), [TabId::Model]);
+    assert_eq!(studio.model_look(), before);
+}

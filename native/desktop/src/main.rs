@@ -3595,6 +3595,8 @@ impl Studio {
     }
 
     fn leave_walk(&mut self) -> bool {
+        self.remember_station_photo_tab();
+        self.tabs.active_station_photo = None;
         self.panorama_photos = None;
         self.remember_photo_tab();
         self.photos.close();
@@ -8505,6 +8507,15 @@ impl Studio {
                     return Task::none();
                 }
                 let position = entry.transform.xyz(pose.position);
+                let source = entry.cloud.path.clone();
+                let label = pose.label.clone();
+                self.remember_station_photo_tab();
+                self.remember_photo_tab();
+                self.remember_model_for_photo();
+                self.photos.close();
+                self.tabs.active_station_photo = Some(source.clone());
+                self.drawing_view.shown = false;
+                self.file_open = false;
                 let view = match self.walk {
                     // Keep looking the same way when stepping to another station.
                     Some(previous) => WalkView {
@@ -8515,8 +8526,9 @@ impl Studio {
                 };
                 self.status = format!(
                     "Station photo: {} · drag to look around, scroll to zoom, W A S D to walk out, Esc to leave",
-                    pose.label
+                    label
                 );
+                self.tabs.station_looks.insert(source, (station, view));
                 self.walk = Some(view);
                 self.walk_station = Some((cloud_index, station));
                 self.panorama_photos = None;
@@ -8546,6 +8558,9 @@ impl Studio {
                 // Leaving a photo puts the camera back where it was.
                 if let Some(task) = self.leave_photo() {
                     return task;
+                }
+                if self.tabs.active_station_photo.is_some() {
+                    return self.show_model_tab();
                 }
                 if self.leave_walk() {
                     self.status = "Back in the 3D view".into();
