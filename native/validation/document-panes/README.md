@@ -131,7 +131,8 @@ panes. Linked scene panes retain their own camera and show the measured camera
 positions/directions of visible linked photo panes. Selecting a route photo or
 station marker updates an existing photo in a different linked pane while
 retaining the active scene. Same-pane selection still opens the photo normally.
-Split and tear-off operations retain their source pane's link membership.
+Splitting inherits the target pane's link membership; tearing off retains the
+source pane's membership.
 
 Run `restart.py BINARY --output DIRECTORY --linked` to verify following and
 restoration. Adding `--pointer-probe /absolute/path/virtual-pointer` clicks both
