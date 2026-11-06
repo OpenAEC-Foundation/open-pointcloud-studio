@@ -913,7 +913,16 @@ fn pane_document_keys_round_trip_exact_paths_and_all_tab_kinds() {
         TabId::StationPhoto(PathBuf::from("/scans/station \"A\".e57")),
     ] {
         let key = tab.document_key().unwrap();
-        assert_eq!(TabId::from_document_key(&key), Some(tab));
+        let restored = TabId::from_document_key(&key).unwrap();
+        assert_eq!(restored.document_key().as_ref(), Some(&key));
+        match (&tab, &restored) {
+            (TabId::File(Some(path)), TabId::File(Some(restored)))
+            | (TabId::Photo(path), TabId::Photo(restored))
+            | (TabId::StationPhoto(path), TabId::StationPhoto(restored)) => {
+                assert_eq!(document_path(path).as_ref(), Some(restored));
+            }
+            _ => assert_eq!(restored, tab),
+        }
     }
 }
 
@@ -935,4 +944,18 @@ fn pane_document_keys_refuse_aliases_and_malformed_documents() {
         .document_key()
         .is_none());
     assert!(view(&"x".repeat(32_768)).document_key().is_none());
+}
+
+#[test]
+fn pane_document_keys_share_owners_for_relative_and_component_aliases() {
+    let relative = TabId::Photo(PathBuf::from("scan.e57"));
+    let absolute = TabId::Photo(std::env::current_dir().unwrap().join("scan.e57"));
+    let dotted = TabId::Photo(std::env::current_dir().unwrap().join("./scan.e57"));
+    assert_eq!(relative.document_key(), absolute.document_key());
+    assert_eq!(absolute.document_key(), dotted.document_key());
+    let symlink_parent = PathBuf::from("scan-link/../scan.e57");
+    assert!(document_path(&symlink_parent)
+        .unwrap()
+        .components()
+        .any(|part| part == std::path::Component::ParentDir));
 }

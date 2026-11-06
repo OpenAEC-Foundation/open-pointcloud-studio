@@ -62,6 +62,17 @@ const VIEW_KEY: &str = "view:";
 const DRAWING_KEY: &str = "drawing:";
 const LAYOUT_KEY: &str = "layout:";
 
+/// Resolve source references without touching the scan or a network share.
+/// Component normalization matches Path equality and preserves symlink `..`.
+pub(crate) fn document_path(path: &Path) -> Option<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    Some(absolute.components().collect())
+}
+
 impl TabId {
     /// Canonical ownership key for a pane layout. Session-only legacy tab
     /// preferences keep using `key`; paths here remain exact Unicode paths.
@@ -78,10 +89,16 @@ impl TabId {
         if !valid {
             return None;
         }
-        let key = if *self == Self::Model {
+        let tab = match self {
+            Self::Photo(path) => Self::Photo(document_path(path)?),
+            Self::StationPhoto(path) => Self::StationPhoto(document_path(path)?),
+            Self::File(Some(path)) => Self::File(Some(document_path(path)?)),
+            other => other.clone(),
+        };
+        let key = if tab == Self::Model {
             MODEL_KEY.to_owned()
         } else {
-            serde_json::to_string(self).ok()?
+            serde_json::to_string(&tab).ok()?
         };
         (key.len() <= 32_768).then_some(key)
     }
