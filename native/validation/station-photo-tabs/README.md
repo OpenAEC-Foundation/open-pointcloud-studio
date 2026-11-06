@@ -15,7 +15,7 @@ python3 native/validation/station-photo-tabs/smoke.py \
 
 A graphical display is required. For a headless Linux runner, use the same
 labwc/pixman and Mesa lavapipe Vulkan environment described by
-`native/ci/managed-wayland-smoke.sh` in the managed-session PR. Read-only API
+`native/packaging/managed-wayland-smoke.sh` in the managed-session PR. Read-only API
 requests can retry a 504 while software Vulkan initializes; mutations never retry.
 
 The public Scanner2GO BLK2GO example is described in
