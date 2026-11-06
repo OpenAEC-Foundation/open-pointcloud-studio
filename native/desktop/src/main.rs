@@ -20,6 +20,8 @@ mod cloud_centroid;
 #[cfg(test)]
 mod cloud_parity;
 mod cloud_transform;
+#[cfg(test)]
+mod document_panes;
 mod drawing;
 mod drawing_crop;
 mod drawing_notes;
