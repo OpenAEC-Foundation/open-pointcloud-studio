@@ -2,7 +2,14 @@
 # Run the extracted release under a headless Wayland compositor, without FUSE
 # or a GPU. The Python probe starts only the product and its MCP transport.
 set -euo pipefail
-[[ $# -eq 2 ]] || { echo 'usage: managed-wayland-smoke.sh APP_RUN OUTPUT_DIRECTORY' >&2; exit 2; }
+usage() { echo 'usage: managed-wayland-smoke.sh APP_RUN OUTPUT_DIRECTORY [--paused-access]' >&2; exit 2; }
+[[ $# -ge 2 && $# -le 3 ]] || usage
+probe=()
+case ${3:-} in
+    '') ;;
+    --paused-access) probe=(--paused-access) ;;
+    *) usage ;;
+esac
 binary=$(realpath "$1")
 mkdir -p "$2"
 output=$(realpath "$2")
@@ -46,4 +53,4 @@ for ((attempt=0; attempt<100; attempt++)); do
     sleep 0.1
 done
 [[ -n "${WAYLAND_DISPLAY:-}" ]] || { echo 'Wayland socket did not appear' >&2; exit 1; }
-timeout 180s python3 "$scripts/../validation/managed/smoke.py" "$binary" --output "$output"
+timeout 180s python3 "$scripts/../validation/managed/smoke.py" "$binary" --output "$output" "${probe[@]}"

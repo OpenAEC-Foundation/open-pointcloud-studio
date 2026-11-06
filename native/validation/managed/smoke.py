@@ -16,6 +16,7 @@ import urllib.request
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("binary", type=Path)
 parser.add_argument("--output", type=Path, required=True)
+parser.add_argument("--paused-access", action="store_true", help="Prove paused MCP does not make a healthy GUI fail its health check")
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
 binary = str(args.binary.resolve())
@@ -89,6 +90,10 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
            "OPENAEC_MAP": str(work), "OPENAEC_TAAL": "en", "OPENAEC_THEMA": "dark",
            "OPENAEC_MCP_POORT": str(port), "OPENAEC_MCP_GEHEIM": secret,
            "OPENAEC_MCP_ADRES": "127.0.0.1"}
+    if args.paused_access:
+        settings = directory / "config/open-pointcloud-studio-native/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"mcp_enabled": False}))
     window = bridge = None
     with (args.output / "window.log").open("w") as window_log, (args.output / "http.log").open("w") as http_log:
         try:
@@ -112,33 +117,38 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
             names = {item["name"] for item in definitions}
             assert {"pointcloud_stand", "pointcloud_open", "pointcloud_opslaan", "pointcloud_registration_refine"} <= names
             assert all(name.startswith("pointcloud_") for name in names)
-            assert tool("stand")["result"]["clouds"] == []
-            tool("screenshot", path=str((args.output / "managed-empty.png").resolve()), window=True)
             idle_rss_kib = None
-            process_status = Path(f"/proc/{window.pid}/status")
-            if process_status.is_file():
-                for line in process_status.read_text().splitlines():
-                    if line.startswith("VmRSS:"):
-                        idle_rss_kib = int(line.split()[1])
-            tool("open", path=str(source))
-            tool("wait_until_idle", timeout_seconds=60)
-            status = tool("stand")["result"]
-            assert status["managed"] == {"enabled": True, "directory": str(work)}
-            assert status["language"] == "en"
-            assert status["clouds"][0]["points"] == 1000
-            destination = work / "saved.ply"
-            exported = tool("opslaan", path=str(destination))
-            tool("wait_for_job", id=exported["job_id"], timeout_seconds=60)
-            assert destination.is_file() and destination.stat().st_size > 1000
-            tool("screenshot", path=str((args.output / "managed-window.png").resolve()), window=True)
-            assert (args.output / "managed-window.png").stat().st_size > 1000
+            if args.paused_access:
+                blocked = rpc("tools/call", {"name": "pointcloud_stand", "arguments": {}})
+                assert blocked.get("isError") and "paused" in str(blocked), blocked
+                assert request("GET", "/gezond")[0] == 200, "Pausing MCP must not make a healthy GUI look crashed"
+            else:
+                assert tool("stand")["result"]["clouds"] == []
+                tool("screenshot", path=str((args.output / "managed-empty.png").resolve()), window=True)
+                process_status = Path(f"/proc/{window.pid}/status")
+                if process_status.is_file():
+                    for line in process_status.read_text().splitlines():
+                        if line.startswith("VmRSS:"):
+                            idle_rss_kib = int(line.split()[1])
+                tool("open", path=str(source))
+                tool("wait_until_idle", timeout_seconds=60)
+                status = tool("stand")["result"]
+                assert status["managed"] == {"enabled": True, "directory": str(work)}
+                assert status["language"] == "en"
+                assert status["clouds"][0]["points"] == 1000
+                destination = work / "saved.ply"
+                exported = tool("opslaan", path=str(destination))
+                tool("wait_for_job", id=exported["job_id"], timeout_seconds=60)
+                assert destination.is_file() and destination.stat().st_size > 1000
+                tool("screenshot", path=str((args.output / "managed-window.png").resolve()), window=True)
+                assert (args.output / "managed-window.png").stat().st_size > 1000
             assert request("DELETE", "/mcp")[0] == 200
             assert request("POST", "/mcp", {"jsonrpc": "2.0", "id": 999, "method": "ping"})[0] == 404
             window.send_signal(signal.SIGTERM)
             assert window.wait(timeout=30) == 0
             assert request("GET", "/gezond")[0] == 503
             report = {"ok": True, "server": initialized["serverInfo"], "tool_count": len(definitions),
-                      "open_save_points": 1000, "idle_rss_kib": idle_rss_kib, "unauthenticated_status": 401, "origin_status": 403,
+                      "open_save_points": 0 if args.paused_access else 1000, "mcp_paused": args.paused_access, "idle_rss_kib": idle_rss_kib, "unauthenticated_status": 401, "origin_status": 403,
                       "health_after_window_exit": 503, "sigterm_exit": 0}
             (args.output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
             print(json.dumps(report))

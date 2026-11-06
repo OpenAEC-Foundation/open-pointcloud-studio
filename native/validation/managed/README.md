@@ -21,3 +21,15 @@ Origins, session lifecycle, all tool names, open/save, screenshots, successful
 SIGTERM and unhealthy status after exit. It does not claim that unsaved point
 edits have a persistent recovery format or that browser-only SuperCloud route A
 has been implemented. This integration is the supported native route B.
+
+## Combined MCP access-control regression
+
+Run `bash native/packaging/managed-wayland-smoke.sh BINARY RESULTS --paused-access`
+(or `smoke.py BINARY --output RESULTS --paused-access` in the same graphical
+environment) to start a real managed GUI with its persisted MCP checkbox off.
+The authenticated health endpoint must still return 200 while an MCP status
+call is refused as paused; after SIGTERM the endpoint must return 503. This
+protects the combination of the status-bar access control and container health.
+The GUI sends a heartbeat every two seconds; `/gui-health` expires after thirty
+seconds without a GUI tick, without accepting any external command or exposing
+scan data. The ordinary mode continues to exercise open/save and screenshots.

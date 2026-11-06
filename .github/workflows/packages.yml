@@ -795,6 +795,8 @@ jobs:
         run: |
           bash native/packaging/managed-wayland-smoke.sh \
             "$RUNNER_TEMP/appimage/squashfs-root/AppRun" "screenshots/managed-$ARCH"
+          bash native/packaging/managed-wayland-smoke.sh \
+            "$RUNNER_TEMP/appimage/squashfs-root/AppRun" "screenshots/managed-paused-$ARCH" --paused-access
       - name: Start the archive binary
         run: |
           tar -xzf "packages/open-pointcloud-studio_${NUMBER}_linux-${ARCH}.tar.gz"
