@@ -25,3 +25,14 @@ locally and is not redistributed with this test.
 
 This covers station/photo tab ownership. General per-pane tab strips, arbitrary
 split layouts and tear-off windows in issue #16 are separate work and remain open.
+
+## Recorded result, 6 November 2026
+
+The real BLK2GO section passed under headless Wayland and software Vulkan.
+`result-2026-11-06.json` records both camera restorations, retained scan and
+unchanged source hash. The actual native screenshot was visually inspected:
+the decoded station panorama is shown in its own active tab beside the model.
+No source scans or photographs are redistributed here. All 738 native tests
+passed (9 intentionally ignored review-image generators); all-target Clippy
+with warnings denied passed. Six new regressions cover station ownership,
+walking out, switching stations, closing tabs and transitions with route photos.
