@@ -2,6 +2,11 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './styles/globals.css';
+import { installSiteAppTools } from './assistant/siteAppTools';
+import { createPointcloudHost } from './assistant/pointcloudHost';
+
+// The assistant of OpenAEC SuperCloud operates the app through this interface: browser build only, not under Tauri.
+installSiteAppTools(createPointcloudHost());
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

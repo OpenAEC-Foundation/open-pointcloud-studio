@@ -22,6 +22,7 @@ let OrbitControls: any = null;
 let _viewerScene: THREE.Scene | null = null;
 let _viewerCamera: THREE.PerspectiveCamera | null = null;
 let _viewerControls: any = null;
+let _viewerRenderer: THREE.WebGLRenderer | null = null;
 let _meshMaterialRef: { current: THREE.MeshStandardMaterial | null } = { current: null };
 let _bag3dMeshes: THREE.Mesh[] = [];
 
@@ -110,6 +111,12 @@ export function zoomToFit(): void {
   console.log(`[zoomToFit] Camera at (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}), near=${camera.near.toFixed(4)}, far=${camera.far.toFixed(0)}`);
 }
 
+/** The live scene, camera, controls and renderer (for the assistant tools); null until the viewer is up. */
+export function getViewer() {
+  if (!_viewerScene || !_viewerCamera || !_viewerRenderer) return null;
+  return { scene: _viewerScene, camera: _viewerCamera, controls: _viewerControls, renderer: _viewerRenderer };
+}
+
 const isTauri = !!(window as any).__TAURI_INTERNALS__;
 
 interface BoxSelectState {
@@ -140,6 +147,7 @@ const PointcloudViewerInner = () => {
   const pointBudget = useAppStore((s) => s.pointBudget);
   const editMode = useAppStore((s) => s.editMode);
   const selectedPointIndices = useAppStore((s) => s.selectedPointIndices);
+  const clipBox = useAppStore((s) => s.clipBox);
 
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({
     active: false, startX: 0, startY: 0, currentX: 0, currentY: 0,
@@ -396,6 +404,7 @@ const PointcloudViewerInner = () => {
     renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
+    _viewerRenderer = renderer;
 
     // OrbitControls (from three/examples)
     // Left=Rotate, Right=Pan, Scroll=Zoom
@@ -519,6 +528,7 @@ const PointcloudViewerInner = () => {
       _viewerScene = null;
       _viewerCamera = null;
       _viewerControls = null;
+      _viewerRenderer = null;
 
       // Dispose Three.js resources
       if (controlsRef.current) controlsRef.current.dispose();
@@ -654,13 +664,15 @@ const PointcloudViewerInner = () => {
             console.log(`[viewer] baseSpacing=${baseSpacing.toFixed(4)}, footprint=${sizeX.toFixed(1)}x${sizeY.toFixed(1)}, points=${numPoints}`);
 
             if (!browserMaterialRef.current) {
+              // Positions are relative to the centre of the cloud, so is the elevation range.
               browserMaterialRef.current = createPointcloudMaterial({
                 pointSize,
                 colorMode,
                 screenHeight: containerRef.current?.clientHeight ?? 800,
-                elevationMin: pc.bounds.minZ,
-                elevationMax: pc.bounds.maxZ,
+                elevationMin: pc.bounds.minZ - parsed.center[2],
+                elevationMax: pc.bounds.maxZ - parsed.center[2],
                 baseSpacing,
+                clipBox: useAppStore.getState().clipBox,
               });
             } else {
               updatePointcloudMaterial(browserMaterialRef.current, { baseSpacing });
@@ -747,8 +759,9 @@ const PointcloudViewerInner = () => {
             pointSize,
             colorMode,
             screenHeight: containerRef.current?.clientHeight ?? 800,
-            elevationMin: pc.bounds.minZ,
-            elevationMax: pc.bounds.maxZ,
+            elevationMin: pc.bounds.minZ - parsed.center[2],
+            elevationMax: pc.bounds.maxZ - parsed.center[2],
+            clipBox: useAppStore.getState().clipBox,
           });
         }
 
@@ -795,6 +808,16 @@ const PointcloudViewerInner = () => {
       updatePointcloudMaterial(browserMaterialRef.current, opts);
     }
   }, [pointSize, colorMode]);
+
+  // Clip box (section) from the store
+  useEffect(() => {
+    for (const ctrl of lodControllersRef.current.values()) {
+      ctrl.updateMaterial({ clipBox });
+    }
+    if (browserMaterialRef.current) {
+      updatePointcloudMaterial(browserMaterialRef.current, { clipBox });
+    }
+  }, [clipBox]);
 
   // LOD update loop — runs alongside render loop
   useEffect(() => {

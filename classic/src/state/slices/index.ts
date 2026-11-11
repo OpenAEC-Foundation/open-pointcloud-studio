@@ -8,6 +8,7 @@ export {
   type PointcloudSlice,
   type PointcloudEntry,
   type PointcloudColorMode,
+  type PointcloudClipBox,
   initialPointcloudState,
   createPointcloudSlice,
 } from './pointcloudSlice';

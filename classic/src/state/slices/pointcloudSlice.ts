@@ -30,6 +30,12 @@ export interface PointcloudEntry {
 
 export type PointcloudColorMode = 'rgb' | 'intensity' | 'elevation' | 'classification';
 
+/** Axis-aligned clip box in scene coordinates (Y up); points outside it are hidden. */
+export interface PointcloudClipBox {
+  min: [number, number, number];
+  max: [number, number, number];
+}
+
 // ============================================================================
 // State Interface
 // ============================================================================
@@ -57,6 +63,8 @@ export interface PointcloudState {
   editMode: boolean;
   /** Selected point indices per pointcloud ID */
   selectedPointIndices: Record<string, number[]>;
+  /** Clip box (section); null shows all points */
+  clipBox: PointcloudClipBox | null;
 }
 
 // ============================================================================
@@ -80,6 +88,7 @@ export interface PointcloudActions {
   setSelectedPoints: (pcId: string, indices: number[]) => void;
   clearSelection: () => void;
   incrementTransformVersion: (id: string) => void;
+  setClipBox: (box: PointcloudClipBox | null) => void;
 }
 
 export type PointcloudSlice = PointcloudState & PointcloudActions;
@@ -103,6 +112,7 @@ export const initialPointcloudState: PointcloudState = {
   visibleClassifications: ALL_CLASSIFICATIONS,
   editMode: false,
   selectedPointIndices: {},
+  clipBox: null,
 };
 
 // ============================================================================
@@ -204,5 +214,9 @@ export const createPointcloudSlice = (
       const pc = s.pointclouds.find((p) => p.id === id);
       if (pc) pc.transformVersion = (pc.transformVersion || 0) + 1;
     });
+  },
+
+  setClipBox: (box: PointcloudClipBox | null) => {
+    set((s) => { s.clipBox = box; });
   },
 });

@@ -6,7 +6,7 @@
  */
 
 import * as THREE from 'three';
-import type { PointcloudColorMode } from '../../state/slices/pointcloudSlice';
+import type { PointcloudClipBox, PointcloudColorMode } from '../../state/slices/pointcloudSlice';
 
 const vertexShader = /* glsl */ `
   uniform float uPointSize;
@@ -15,6 +15,9 @@ const vertexShader = /* glsl */ `
   uniform int uColorMode; // 0=rgb, 1=intensity, 2=elevation, 3=classification
   uniform float uElevationMin;
   uniform float uElevationMax;
+  uniform int uClipEnabled;     // 1 = hide points outside the clip box
+  uniform vec3 uClipMin;
+  uniform vec3 uClipMax;
 
   attribute vec3 aColor;        // RGB (0-255 normalized to 0-1)
   attribute float aIntensity;   // 0-65535 normalized to 0-1
@@ -52,6 +55,14 @@ const vertexShader = /* glsl */ `
   }
 
   void main() {
+    vec4 clipPos = modelMatrix * vec4(position, 1.0);
+    if (uClipEnabled == 1 && (any(lessThan(clipPos.xyz, uClipMin)) || any(greaterThan(clipPos.xyz, uClipMax)))) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      vColor = vec3(0.0);
+      return;
+    }
+
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
     // World-space point size from global dataset spacing
@@ -109,6 +120,7 @@ export interface PointcloudMaterialOptions {
   elevationMax?: number;
   screenHeight?: number;
   baseSpacing?: number;
+  clipBox?: PointcloudClipBox | null;
 }
 
 const COLOR_MODE_MAP: Record<PointcloudColorMode, number> = {
@@ -129,6 +141,9 @@ export function createPointcloudMaterial(options: PointcloudMaterialOptions = {}
       uColorMode: { value: COLOR_MODE_MAP[options.colorMode ?? 'rgb'] },
       uElevationMin: { value: options.elevationMin ?? 0 },
       uElevationMax: { value: options.elevationMax ?? 100 },
+      uClipEnabled: { value: options.clipBox ? 1 : 0 },
+      uClipMin: { value: new THREE.Vector3(...(options.clipBox?.min ?? [0, 0, 0])) },
+      uClipMax: { value: new THREE.Vector3(...(options.clipBox?.max ?? [0, 0, 0])) },
     },
     transparent: false,
     depthTest: true,
@@ -146,4 +161,11 @@ export function updatePointcloudMaterial(
   if (options.colorMode !== undefined) material.uniforms.uColorMode.value = COLOR_MODE_MAP[options.colorMode];
   if (options.elevationMin !== undefined) material.uniforms.uElevationMin.value = options.elevationMin;
   if (options.elevationMax !== undefined) material.uniforms.uElevationMax.value = options.elevationMax;
+  if (options.clipBox !== undefined) {
+    material.uniforms.uClipEnabled.value = options.clipBox ? 1 : 0;
+    if (options.clipBox) {
+      material.uniforms.uClipMin.value.set(...options.clipBox.min);
+      material.uniforms.uClipMax.value.set(...options.clipBox.max);
+    }
+  }
 }
