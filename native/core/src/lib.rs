@@ -20,6 +20,7 @@ mod e57_parallel;
 mod e57_points;
 mod e57_quick;
 mod export;
+mod glb;
 pub mod grid2d;
 pub mod local_fit;
 mod mesh_formats;

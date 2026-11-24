@@ -1398,7 +1398,7 @@ fn command_line_meshes_a_box_of_a_scan_file() {
         refused(&[input, "room.off"]),
         (
             2,
-            "Supported mesh extensions: .obj, .ply, .stl, .dxf, .dwg, .ifc".to_owned()
+            "Supported mesh extensions: .obj, .ply, .stl, .glb, .dxf, .dwg, .ifc".to_owned()
         )
     );
     assert_eq!(

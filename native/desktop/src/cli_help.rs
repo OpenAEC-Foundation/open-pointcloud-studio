@@ -134,9 +134,9 @@ pub const MODES: &[Mode] = &[
     Mode {
         flag: "--closed-mesh",
         short: None,
-        arguments: "INPUT OUTPUT.obj|.ply|.stl|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic|centre|upward]",
+        arguments: "INPUT OUTPUT.obj|.ply|.stl|.glb|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic|centre|upward]",
         description: key(
-            "Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY, STL, DXF, DWG or IFC.",
+            "Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY, STL, GLB, DXF, DWG or IFC.",
         ),
     },
     Mode {
@@ -160,7 +160,7 @@ pub const MODES: &[Mode] = &[
         short: None,
         arguments: "INPUT OUTPUT",
         description: key(
-            "Writes the faces of a mesh file as OBJ, PLY, STL, DXF, DWG or IFC; the extension of OUTPUT chooses the format.",
+            "Writes the faces of a mesh file as OBJ, PLY, STL, GLB, DXF, DWG or IFC; the extension of OUTPUT chooses the format.",
         ),
     },
     Mode {

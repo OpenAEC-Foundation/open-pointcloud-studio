@@ -301,7 +301,7 @@ The [user guide](docs/guide.md) has the detail of every heading below.
 | OBJ | yes | yes | Mesh with colours and normals; material colours are read, texture images are not. `--texture-mesh` writes an OBJ with UV coordinates, MTL and PNG atlas from measured mesh vertex colours. Detected faces are written as OBJ too, with one group per face |
 | PLY as mesh | yes | yes | Shown as faces. Written as binary PLY with double coordinates, and with colours and normals where the mesh has them |
 | STL | yes | yes | Shown as faces. Written as binary STL: triangles only, without colours. A mesh more than 2,048 m from zero is written relative to a whole-metre origin that the file header names |
-| OFF | yes | no | Shown as faces; can be saved as OBJ, PLY, STL, DXF, DWG or IFC |
+| OFF | yes | no | Shown as faces; can be saved as OBJ, PLY, STL, GLB, DXF, DWG or IFC |
 | DXF | yes | yes, as a drawing and as 3D geometry | Read: ASCII DXF only. POINT entities open as points, 3DFACE entities as faces that can be saved as a mesh; other entities are skipped. Written: the 2D drawing of a section box, with points, filled regions, outlines and a line of text; and in 3D, in metres, detected faces as polyface meshes and a mesh as `MESH` entities, without ACIS solids. Not a format of the point exports |
 | DWG | no | yes, as a drawing and as 3D geometry | The 2D drawing of a section box, as for DXF, in the versions R2004 to R2018; detected faces and meshes in 3D as for DXF, in version R2013. DWG files are not opened |
 | IFC4 (`.ifc`) | no | yes | Detected faces and meshes as building element proxies with their measured values: flat faces as polygonal face sets with their openings, columns as extruded circles, meshes as triangulated face sets. Coordinates far from zero are relative to a local origin that the site carries |
@@ -333,7 +333,7 @@ Limits in the application:
 
 | Limit | Value |
 | --- | --- |
-| Point budget | 250,000 by default; 1,000 to 10,000,000 with **Points in view** beneath the view cube and through the command API |
+| Point budget | 250,000 by default; 1,000 to 50,000,000 with **Points in view** beneath the view cube and through the command API |
 | Automatic index | For clouds of 1,000,000 points or more; can be switched off with **Auto-index** |
 | Undo | 8 deletions |
 | Saved views | 32 per scan, each with at most 64 annotations; a note has at most 240 characters |
@@ -383,10 +383,10 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--mesh INPUT OUTPUT.obj` | Writes a terrain mesh of a scan |
 | `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]` | Writes a 3D surface mesh of a scan; reads the points from the index of the scan when it has one |
 | `--texture-mesh INPUT_MESH OUTPUT.obj [--texel-size METRES] [--max-resolution PIXELS]` | Writes a coloured OBJ mesh with an MTL and one or more PNG texture atlases from the measured colours at its vertices; requires a new output name |
-| `--closed-mesh INPUT OUTPUT.obj\|.ply\|.stl\|.dxf\|.dwg\|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic\|centre\|upward]` | Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY, STL, DXF, DWG or IFC; `P` selects a deterministic source share (100% by default) |
+| `--closed-mesh INPUT OUTPUT.obj\|.ply\|.stl\|.glb\|.dxf\|.dwg\|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic\|centre\|upward]` | Writes a closed mesh of a scan, or of a box in it, as OBJ, PLY, STL, GLB, DXF, DWG or IFC; `P` selects a deterministic source share (100% by default) |
 | `--faces INPUT OUTPUT.json\|.obj\|.dxf\|.dwg\|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--distance METRES] [--angle DEGREES] [--min-area SQUARE_METRES] [--cylinders on\|off]` | Detects the flat faces and the cylinders of a scan, or of a box in it, and writes them as JSON, OBJ, DXF, DWG or IFC: with a distance tolerance of 0.02 m, an angle tolerance of 10 degrees, faces from 0.25 m² and cylinders on unless the options say otherwise |
 | `--survey INPUT OUTPUT.json` | Surveys a scanned building for Pointcloud to Drawing and writes what was found as JSON: the box around the building without stray points far out, the main direction of its walls, its footprint, the occupied cells of 5 by 5 by 2 cm per height, and its levels: every floor with its ceiling, slab, slope and cut height, the roof, the ground and P |
-| `--mesh-export INPUT OUTPUT` | Writes the faces of a mesh file as OBJ, PLY, STL, DXF, DWG or IFC; the extension of `OUTPUT` chooses the format (`.obj`, `.ply`, `.stl`, `.dxf`, `.dwg`, `.ifc`) |
+| `--mesh-export INPUT OUTPUT` | Writes the faces of a mesh file as OBJ, PLY, STL, GLB, DXF, DWG or IFC; the extension of `OUTPUT` chooses the format (`.obj`, `.ply`, `.stl`, `.glb`, `.dxf`, `.dwg`, `.ifc`) |
 | `--bag3d XMIN,YMIN,XMAX,YMAX 1.2\|1.3\|2.2 OUTPUT.obj` | Downloads the 3D BAG buildings inside an RD New box as OBJ |
 | `--version`, `-V` | Prints the version |
 | `--help`, `-h` | Prints the modes |

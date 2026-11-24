@@ -226,7 +226,7 @@ follows when that view is restored.
 | `set_point_size` | `size` (0.1–20 pixels) | Point size |
 | `set_eye_dome` | `enabled` | Eye-dome shading on or off |
 | `set_eye_dome_strength` | `strength` (0–5) | Eye-dome strength |
-| `set_budget` | `points` (1,000–10,000,000) | Point budget of the viewport |
+| `set_budget` | `points` (1,000–50,000,000) | Point budget of the viewport |
 | `set_section` | `min`, `max`, optional `rotation` | Switches on a section box; `rotation` turns it that many degrees about the vertical through its centre |
 | `clear_section` | — | Switches the section box off |
 | `set_section_fill` | at least one of `fill_cut`, `color` (`#rrggbb`), `max_thickness` (maximum wall thickness, 0.01–2 m) | Fills the cut of a mesh by the section box between two opposite faces; a single surface gets no fill |
@@ -250,10 +250,10 @@ follows when that view is restored.
 | `cancel_index` | — | Cancels the octree builds and empties the queue |
 | `set_auto_index` | `enabled` | Automatic indexing of large clouds |
 | `set_surface_settings` | optional `max_vertices` (3–1,000,000), `neighbors` (3–32), `edge_factor` (above 0), `mesh_size` (0 or more, in the units of the scan) | Sets the settings of the 3D surface, its options in Mesh Pointcloud; a field left out keeps its value, and when one is refused none changes |
-| `mesh` | `mode` (`terrain`, `surface` or `closed`), `path` (`.obj`; for `closed` optional, and `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc`), for `closed` optional `voxel` (0.005–0.5 m or null for automatic), `max_hole` (0–3.2 m), `simplify_mm` (0–1000 or null for automatic), `sample_percent` (0.01–100), `sides` (`automatic`, `centre` or `upward`), `layers` (`active` or `visible`), optional `wait_seconds` | Meshes the active layer, or for `closed` the active layer or every visible layer that reaches the section box (layers of 3D BAG buildings stay out), inside the section box; the job reports vertices, triangles, open edges and connected parts, and for `closed` the distance between points and mesh, where the sides came from and advice. Settings left out keep what the options of a closed mesh in Mesh Pointcloud have |
+| `mesh` | `mode` (`terrain`, `surface` or `closed`), `path` (`.obj`; for `closed` optional, and `.obj`, `.ply`, `.stl`, `.glb`, `.dxf`, `.dwg` or `.ifc`), for `closed` optional `voxel` (0.005–0.5 m or null for automatic), `max_hole` (0–3.2 m), `simplify_mm` (0–1000 or null for automatic), `sample_percent` (0.01–100), `sides` (`automatic`, `centre` or `upward`), `layers` (`active` or `visible`), optional `wait_seconds` | Meshes the active layer, or for `closed` the active layer or every visible layer that reaches the section box (layers of 3D BAG buildings stay out), inside the section box; the job reports vertices, triangles, open edges and connected parts, and for `closed` the distance between points and mesh, where the sides came from and advice. Settings left out keep what the options of a closed mesh in Mesh Pointcloud have |
 | `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers`, as for `mesh` | Sets the options of a closed mesh in Mesh Pointcloud; refused as a whole when one value is |
 | `cancel_mesh` | — | Cancels the mesh job |
-| `export_mesh` | `path` (`.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc`), optional `wait_seconds` | Saves the mesh of the active layer in the format of the extension; job |
+| `export_mesh` | `path` (`.obj`, `.ply`, `.stl`, `.glb`, `.dxf`, `.dwg` or `.ifc`), optional `wait_seconds` | Saves the mesh of the active layer in the format of the extension; job |
 | `texture_mesh` | new absolute `.obj` `path`, optional `texel_size` (metres), `max_resolution` (256–4096 pixels), `source` (`point_colours` or `photographs`), `wait_seconds` | Bakes stored mesh RGB or calibrated E57/added photographs into an OBJ, MTL and PNG atlas; reports coverage and loads a native viewport preview |
 | `cancel_texture_mesh` | — | Cancels the running texture export and removes its staged files |
 | `set_texture_preview` | optional `layer`, required `visible` | Shows or hides the baked UV texture on the mesh |

@@ -63,7 +63,7 @@ const UNDECIDED_SHARE: f64 = 0.05;
 const BUSY: &str = "A closed mesh is already being made";
 const OTHER_MESH: &str = "A mesh task is already open or running";
 const NO_FORMAT: &str =
-    "mesh with mode closed takes an absolute .obj, .ply, .stl, .dxf, .dwg or .ifc destination";
+    "mesh with mode closed takes an absolute .obj, .ply, .stl, .glb, .dxf, .dwg or .ifc destination";
 
 /// How the side a face looks at is decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2204,7 +2204,7 @@ pub(crate) fn turned_box(
 }
 
 /// The `--closed-mesh` mode of the command line: make a closed mesh of a
-/// scan file, or of a box in it, and write it as OBJ, PLY, STL, DXF, DWG or IFC.
+/// scan file, or of a box in it, and write it as OBJ, PLY, STL, GLB, DXF, DWG or IFC.
 /// `arguments` are what follows the flag. Returns the lines to print, or the
 /// exit code with the line that says what is wrong; an empty line stands for
 /// the usage line.
@@ -2217,7 +2217,7 @@ pub(crate) fn command_line(arguments: &[OsString]) -> Result<String, (i32, Strin
     let (source, destination) = (PathBuf::from(source), PathBuf::from(destination));
     let Some(format) = MeshFormat::from_path(&destination) else {
         return Err(wrong(
-            "Supported mesh extensions: .obj, .ply, .stl, .dxf, .dwg, .ifc",
+            "Supported mesh extensions: .obj, .ply, .stl, .glb, .dxf, .dwg, .ifc",
         ));
     };
     if camera_views::source_key(&source) == camera_views::source_key(&destination) {

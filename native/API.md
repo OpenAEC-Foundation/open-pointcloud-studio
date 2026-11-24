@@ -122,7 +122,7 @@ wherever the scan has points or a gap up to `max_hole` wide. Deleted points
 and hidden classes are left out. The mesh goes to the active layer, where it
 takes the place of the mesh that layer had, and is kept in the frame of that
 layer, so a later `translate` or `scale` takes it along. `path` is optional:
-with an absolute `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` destination in
+with an absolute `.obj`, `.ply`, `.stl`, `.glb`, `.dxf`, `.dwg` or `.ifc` destination in
 a folder that exists the mesh is also written there, as the scene shows it
 and in the format described under Mesh export; without it the mesh is shown
 only, and `export_mesh` saves it later.
@@ -292,7 +292,7 @@ is retained, and cancellation only skips preview preparation.
 
 The mesh is written as the scene shows it, with the move and scale of its
 layer applied. The command answers with a `job_id`; the complete job has
-`operation` (`export_mesh`), `path`, `format` (`obj`, `ply`, `stl`, `dxf`,
+`operation` (`export_mesh`), `path`, `format` (`obj`, `ply`, `stl`, `glb`, `dxf`,
 `dwg` or `ifc`),
 `vertices`, `triangles` and `origin`. `origin` is `null` except for an STL
 file of a mesh that lies more than 2,048 m from zero on an axis: such an axis
@@ -1847,7 +1847,7 @@ layer with photo colours.
 | `set_point_size` | `size` | Sets point size from 0.1 to 20 |
 | `set_eye_dome` | `enabled` | Enables or disables the depth-based shading pass |
 | `set_eye_dome_strength` | `strength` | Sets depth-shading strength from 0 to 5; 1 is the default |
-| `set_budget` | `points` | Sets visible point budget from 1,000 to 10,000,000 |
+| `set_budget` | `points` | Sets visible point budget from 1,000 to 50,000,000 |
 | `set_section` | `min`, `max`, optional `rotation` | Enables an XYZ section box using two three-number arrays inside the visible model bounds. With `rotation`, degrees counter-clockwise seen from above, the box `min`..`max` is turned about the vertical through its centre; it must then have a width and a length and reach the model, and may reach past it in its corners. `status.result.section` and the answer hold `min`, `max` and `rotation`; exports, selections, drawings, Closed mesh and Detect faces keep what lies inside the turned box |
 | `clear_section` | — | Disables the section box |
 | `set_section_fill` | optional `fill_cut`, `color`, `max_thickness` | How the cut of a mesh by the section box is filled. Where a wall, floor or ceiling has two faces opposite each other no farther apart than `max_thickness` metres (0.01 to 2, default 0.5), the material between them is closed with a flat cap of `color` (`#rrggbb`, default `#585858`, a dark grey) on the faces of the box; a single surface, a loose sheet or the open edge of a mesh gets none. In a mesh made with stations the two faces must look away from each other; where most faces on a face of the box look at one point instead, as in a closed mesh made without stations, the walls are found from the turns of air and material along the cut, and a third face inside a thin wall is left out. `fill_cut` (default true) switches it. What is left out is kept, nothing changes when a value is invalid, and the setting is kept with the display preferences. The answer and `status.result.section_fill` hold `fill_cut`, `color` and `max_thickness`, and `pending`, true while the caps are being made after a change of the box, the meshes or the fill: for a mesh of millions of triangles that takes about a second, during which the cut is shown open. `pending` turns false when they are made, also while the Drawing view or the File view covers the 3D view or the window is minimised; the 3D view shows them when it is drawn again. `screenshot` and view snapshots wait for them |
@@ -1871,10 +1871,10 @@ layer with photo colours.
 | `set_auto_index` | `enabled` | Enables or disables automatic indexing of large clouds |
 | `set_surface_settings` | optional `max_vertices`, `neighbors`, `edge_factor`, `mesh_size` | Sets the settings of the 3D surface, its options in Mesh Pointcloud, atomically: 3–1,000,000 vertices, 3–32 neighbors, a finite positive edge factor and a mesh size of 0 or more in the units of the scan, the width of a voxel in which one point is kept before the vertices are thinned (`0`, the start, leaves the spacing to the vertices). A field that is left out keeps its value; the fields are checked together with the others and none is taken when one is refused. Returns the `surface_settings` |
 | `reset_transform` | — | Restores the active cloud's source coordinates |
-| `mesh` | `mode`, `path` (optional for `closed`), and for `closed` optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path, or a `closed` mesh that is shown and, with a `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path, also written, using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings, closed mode the settings of a closed mesh with the fields given; both are the options of those methods in Mesh Pointcloud. A layer that is still loading is refused (`a point cloud is still loading:` and its file name). Returns a job ID. The complete job reports the open edges and the connected parts of the mesh, and for `closed` the distance between points and mesh |
+| `mesh` | `mode`, `path` (optional for `closed`), and for `closed` optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Starts `terrain` or `surface` reconstruction to an absolute `.obj` path, or a `closed` mesh that is shown and, with a `.obj`, `.ply`, `.stl`, `.glb`, `.dxf`, `.dwg` or `.ifc` path, also written, using undeleted points inside the active section box and visible classification filters; surface mode uses the current 3D surface settings, closed mode the settings of a closed mesh with the fields given; both are the options of those methods in Mesh Pointcloud. A layer that is still loading is refused (`a point cloud is still loading:` and its file name). Returns a job ID. The complete job reports the open edges and the connected parts of the mesh, and for `closed` the distance between points and mesh |
 | `set_closed_mesh_settings` | optional `voxel`, `max_hole`, `simplify_mm`, `sample_percent`, `sides`, `layers` | Sets the settings of a closed mesh, its options in Mesh Pointcloud, atomically: a voxel of 0.005–0.5 m or `null` for automatic, gaps closed up to 0–3.2 m, simplification within 0–1000 mm or `null` for automatic, a share of 0.01–100 percent of the source points, sides `automatic`, `centre` or `upward`, layers `active` or `visible`. Returns the `settings` |
 | `cancel_mesh` | — | Requests cancellation of the running mesh task, of whatever mode |
-| `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply`, `.stl`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
+| `export_mesh` | `path` | Saves the mesh the active layer holds to an absolute `.obj`, `.ply`, `.stl`, `.glb`, `.dxf`, `.dwg` or `.ifc` path; the extension chooses the format. Returns a job ID |
 | `texture_mesh` | `path`, optional `texel_size`, `max_resolution`, `source` | Writes the active mesh as an OBJ, MTL and PNG atlas pages from point colours or calibrated photographs; returns a job ID |
 | `set_texture_preview` | optional `layer`, required `visible` | Shows or hides the baked atlas on a mesh |
 | `cancel_texture_mesh` | — | Cancels a running texture export |

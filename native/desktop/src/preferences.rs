@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::ColorMode;
 
 pub(crate) const MIN_POINT_BUDGET: u32 = 1_000;
-pub(crate) const MAX_POINT_BUDGET: u32 = 10_000_000;
+pub(crate) const MAX_POINT_BUDGET: u32 = 50_000_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -330,7 +330,7 @@ mod tests {
         save_to(&path, &high_budget).unwrap();
         assert_eq!(load_from(&path).budget, MAX_POINT_BUDGET);
 
-        fs::write(&path, r#"{"budget": 10000001}"#).unwrap();
+        fs::write(&path, r#"{"budget": 50000001}"#).unwrap();
         assert_eq!(load_from(&path).budget, 250_000);
     }
 }

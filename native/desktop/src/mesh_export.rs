@@ -1,4 +1,4 @@
-//! Saving the mesh a layer holds as OBJ, PLY, STL, DXF, DWG or IFC: the save
+//! Saving the mesh a layer holds as OBJ, PLY, STL, GLB, DXF, DWG or IFC: the save
 //! dialog behind the File view entry and the Properties button, the
 //! `export_mesh` command of the local API and the `--mesh-export` mode of the
 //! command line. Also
@@ -28,16 +28,18 @@ use crate::{
 /// The formats in the order the save dialog offers them, each with the name
 /// of its filter. The first one is what a file name without an extension
 /// gets where the system adds one.
-const FORMATS: [(MeshFormat, &str); 6] = [
+const FORMATS: [(MeshFormat, &str); 7] = [
     (MeshFormat::Obj, "OBJ mesh"),
     (MeshFormat::Ply, "PLY mesh (binary)"),
     (MeshFormat::Stl, "STL (binary)"),
+    (MeshFormat::Glb, "Binary glTF (GLB)"),
     (MeshFormat::Dxf, "DXF 3D mesh"),
     (MeshFormat::Dwg, "DWG 3D mesh"),
     (MeshFormat::Ifc, "IFC model"),
 ];
 
-const NO_FORMAT: &str = "Choose an .obj, .ply, .stl, .dxf, .dwg or .ifc file name for the mesh";
+const NO_FORMAT: &str =
+    "Choose an .obj, .ply, .stl, .glb, .dxf, .dwg or .ifc file name for the mesh";
 const SAME_FILE: &str = "Choose a mesh file different from the source file";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -505,7 +507,7 @@ fn write(
 pub(crate) fn convert_file(source: &Path, destination: &Path) -> Result<String, (i32, String)> {
     let format = destination_format(source, destination).map_err(|problem| {
         let line = if problem == NO_FORMAT {
-            "Supported mesh export extensions: .obj, .ply, .stl, .dxf, .dwg, .ifc"
+            "Supported mesh export extensions: .obj, .ply, .stl, .glb, .dxf, .dwg, .ifc"
         } else {
             "Choose an output path different from the input"
         };
@@ -906,7 +908,8 @@ impl Studio {
             .unwrap_or("surface");
         let suggestion = format!("{stem}-mesh.{}", FORMATS[0].0.extension());
         self.mesh_export_pending = true;
-        self.status = "Choose where to save the mesh as OBJ, PLY, STL, DXF, DWG or IFC…".into();
+        self.status =
+            "Choose where to save the mesh as OBJ, PLY, STL, GLB, DXF, DWG or IFC…".into();
         Task::perform(
             async move {
                 FORMATS
@@ -1005,7 +1008,7 @@ impl Studio {
         let refuse = |error: &str| (json!({"ok": false, "error": error}), Task::none());
         let Some(format) = MeshFormat::from_path(&path).filter(|_| path.is_absolute()) else {
             return refuse(
-                "export_mesh requires an absolute .obj, .ply, .stl, .dxf, .dwg or .ifc destination",
+                "export_mesh requires an absolute .obj, .ply, .stl, .glb, .dxf, .dwg or .ifc destination",
             );
         };
         if self.mesh_export_pending {
@@ -1350,6 +1353,7 @@ mod tests {
                 MeshFormat::Obj,
                 MeshFormat::Ply,
                 MeshFormat::Stl,
+                MeshFormat::Glb,
                 MeshFormat::Dxf,
                 MeshFormat::Dwg,
                 MeshFormat::Ifc
@@ -1689,7 +1693,8 @@ mod tests {
             refused("copy.off"),
             (
                 2,
-                "Supported mesh export extensions: .obj, .ply, .stl, .dxf, .dwg, .ifc".to_owned()
+                "Supported mesh export extensions: .obj, .ply, .stl, .glb, .dxf, .dwg, .ifc"
+                    .to_owned()
             )
         );
         assert_eq!(
@@ -1785,7 +1790,7 @@ mod tests {
             let answer = export(&mut studio, &refused);
             assert_eq!(
                 answer["error"],
-                "export_mesh requires an absolute .obj, .ply, .stl, .dxf, .dwg or .ifc destination",
+                "export_mesh requires an absolute .obj, .ply, .stl, .glb, .dxf, .dwg or .ifc destination",
                 "{}",
                 refused.display()
             );
@@ -1890,7 +1895,7 @@ mod tests {
         assert!(studio.mesh_export_pending);
         assert_eq!(
             studio.status,
-            "Choose where to save the mesh as OBJ, PLY, STL, DXF, DWG or IFC…"
+            "Choose where to save the mesh as OBJ, PLY, STL, GLB, DXF, DWG or IFC…"
         );
         let request = studio.mesh_export_request().unwrap();
 

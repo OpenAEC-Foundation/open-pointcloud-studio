@@ -959,7 +959,7 @@ fn main() -> iced::Result {
             Err((code, line)) => {
                 if line.is_empty() {
                     eprintln!(
-                        "Usage: open-pointcloud-studio --closed-mesh INPUT OUTPUT.obj|.ply|.stl|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic|centre|upward]"
+                        "Usage: open-pointcloud-studio --closed-mesh INPUT OUTPUT.obj|.ply|.stl|.glb|.dxf|.dwg|.ifc [--box XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX] [--rotation DEGREES] [--voxel METRES] [--max-hole METRES] [--simplify MILLIMETRES] [--sample-percent P] [--sides automatic|centre|upward]"
                     );
                 } else {
                     eprintln!("{line}");
@@ -4577,7 +4577,7 @@ impl Studio {
             ApiCommand::SetBudget { points } => {
                 if !(MIN_POINT_BUDGET..=MAX_POINT_BUDGET).contains(&points) {
                     (
-                        json!({"ok": false, "error": "point budget must be between 1000 and 10000000"}),
+                        json!({"ok": false, "error": format!("point budget must be between {MIN_POINT_BUDGET} and {MAX_POINT_BUDGET}")}),
                         Task::none(),
                     )
                 } else {
