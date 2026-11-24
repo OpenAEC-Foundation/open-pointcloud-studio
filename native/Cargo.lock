@@ -3097,7 +3097,7 @@ dependencies = [
 
 [[package]]
 name = "open-pointcloud-studio-api"
-version = "2026.45.1"
+version = "2026.48.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3115,7 +3115,7 @@ dependencies = [
 
 [[package]]
 name = "open-pointcloud-studio-native"
-version = "2026.45.1"
+version = "2026.48.0"
 dependencies = [
  "bytemuck",
  "flate2",
@@ -3149,7 +3149,7 @@ dependencies = [
 
 [[package]]
 name = "openaec-ui"
-version = "2026.45.1"
+version = "2026.48.0"
 dependencies = [
  "iced",
  "iced_tiny_skia",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "pointcloud-core"
-version = "2026.45.1"
+version = "2026.48.0"
 dependencies = [
  "acadrust",
  "crc32c",
@@ -3421,7 +3421,7 @@ dependencies = [
 
 [[package]]
 name = "pointcloud-sdk"
-version = "2026.45.1"
+version = "2026.48.0"
 dependencies = [
  "pointcloud-core",
  "serde_json",

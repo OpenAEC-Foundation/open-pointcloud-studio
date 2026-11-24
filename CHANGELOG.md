@@ -17,6 +17,12 @@ section its version and date.
 
 ## Unreleased
 
+## 2026.48.0 - 2026-11-24
+
+- E57 exports keep the original sensor grid, physical intensity limits and station photographs when filtering or recolouring scans.
+- Mesh texture export uses calibrated scan photographs and measured point colours. The coverage report distinguishes observed and unobserved areas.
+- Managed Linux sessions expose the running desktop’s health separately from the switch for assistant commands.
+
 - Meshes can be exported as binary glTF (.glb) with vertex colours and normals.
 - Points in view allows up to 50 million points. Above ten million, indexed layers can resolve all visible points when their visible leaves fit the allocated budget.
 
