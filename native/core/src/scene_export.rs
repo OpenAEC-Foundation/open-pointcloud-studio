@@ -58,11 +58,10 @@ fn coordinate_key(declaration: &str) -> String {
     key
 }
 
-fn scene_crs(sources: &[SceneSource<'_>]) -> Result<SceneCrs, LoadError> {
+fn scene_crs<'a>(clouds: impl IntoIterator<Item = &'a PointCloud>) -> Result<SceneCrs, LoadError> {
     let mut common = SceneCrs::default();
-    for source in sources {
-        let extension = source
-            .cloud
+    for cloud in clouds {
+        let extension = cloud
             .path
             .extension()
             .and_then(|e| e.to_str())
@@ -70,7 +69,7 @@ fn scene_crs(sources: &[SceneSource<'_>]) -> Result<SceneCrs, LoadError> {
             .to_ascii_lowercase();
         let mut current = SceneCrs::default();
         if extension == "e57" {
-            if let Some(system) = crate::e57_points::open_reader(&source.cloud.path)?
+            if let Some(system) = crate::e57_points::open_reader(&cloud.path)?
                 .coordinate_metadata()
                 .filter(|s| !s.trim().is_empty())
             {
@@ -78,7 +77,7 @@ fn scene_crs(sources: &[SceneSource<'_>]) -> Result<SceneCrs, LoadError> {
                 current.metadata = Some(system.into());
             }
         } else if extension == "las" || extension == "laz" {
-            current.vlrs = crate::las_crs::projection_records(&source.cloud.path)?;
+            current.vlrs = crate::las_crs::projection_records(&cloud.path)?;
             current.vlrs.sort_by_key(|v| v.record_id);
             if let Some(wkt) = current.vlrs.iter().find(|v| v.record_id == 2112) {
                 let value = String::from_utf8_lossy(&wkt.data)
@@ -109,6 +108,20 @@ fn scene_crs(sources: &[SceneSource<'_>]) -> Result<SceneCrs, LoadError> {
         }
     }
     Ok(common)
+}
+
+/// E57 stores the CRS as text. A binary LAS projection without a WKT
+/// declaration cannot be copied into that field.
+pub(super) fn e57_coordinate_metadata<'a>(
+    clouds: impl IntoIterator<Item = &'a PointCloud>,
+) -> Result<Option<String>, LoadError> {
+    let crs = scene_crs(clouds)?;
+    if crs.metadata.is_none() && !crs.vlrs.is_empty() {
+        return Err(LoadError::InvalidData(
+            "E57 export needs the source LAS coordinate system in WKT; convert the CRS metadata to WKT or export LAS/LAZ to keep the original projection records".into(),
+        ));
+    }
+    Ok(crs.metadata)
 }
 
 /// A normalised LAS 1.4 scene for inputs with different record layouts.
@@ -151,7 +164,7 @@ pub fn write_las_scene(
         }
     }
     let rgb = sources.iter().any(|s| s.cloud.has_rgb);
-    let crs = scene_crs(sources)?;
+    let crs = scene_crs(sources.iter().map(|source| source.cloud))?;
     let mut builder = Builder::from((1, 4));
     builder.generating_software = "Open Pointcloud Studio".into();
     builder.point_format = las::point::Format::new(if rgb { 7 } else { 6 })?;
@@ -209,7 +222,7 @@ pub fn write_las_scene(
                     let p = source.transform.xyz(point.xyz);
                     let class = point.classification.unwrap_or(0);
                     if legacy_geotiff && class > 31 {
-                        return Err(LoadError::InvalidData("this GeoTIFF CRS needs a WKT conversion before merging classifications above 31 into LAS; use E57 instead".into()));
+                        return Err(LoadError::InvalidData("this GeoTIFF CRS needs a WKT conversion before merging classifications above 31 into LAS".into()));
                     }
                     batch.push(las::Point {
                         x: p[0],
@@ -312,7 +325,9 @@ pub fn write_e57_scene(
         temporary.reopen()?,
         &format!("{{{}}}", uuid::Uuid::new_v4()),
     )?;
-    writer.set_coordinate_metadata(scene_crs(sources)?.metadata);
+    writer.set_coordinate_metadata(e57_coordinate_metadata(
+        sources.iter().map(|source| source.cloud),
+    )?);
     writer.register_extension(e57::Extension::new(
         "opsStudio",
         "https://open-aec.com/e57/point-attributes/1",

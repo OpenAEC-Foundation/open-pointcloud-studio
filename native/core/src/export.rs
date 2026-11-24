@@ -779,6 +779,8 @@ fn export_e57_map_count(
         for extension in reader.extensions() {
             writer.register_extension(extension)?;
         }
+    } else {
+        writer.set_coordinate_metadata(crate::scene_export::e57_coordinate_metadata([cloud])?);
     }
     let mut source_count = 0u64;
     let mut written_count = 0u64;

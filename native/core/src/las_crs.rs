@@ -157,6 +157,59 @@ mod tests {
     }
 
     #[test]
+    fn single_scan_e57_exports_keep_the_las_projection_wkt() {
+        let dir = tempfile::tempdir().unwrap();
+        let wkt = r#"LOCAL_CS["Survey grid",UNIT["metre",1]]"#;
+        let cloud = make_cloud(&dir.path().join("source.laz"), wkt);
+        let output = dir.path().join("scan.e57");
+        crate::export_full(&cloud, &output, crate::ExportFormat::E57).unwrap();
+        assert_eq!(
+            crate::e57_points::open_reader(&output)
+                .unwrap()
+                .coordinate_metadata(),
+            Some(wkt)
+        );
+    }
+
+    #[test]
+    fn e57_exports_report_a_geotiff_only_crs_before_replacing_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("rd.las");
+        let mut builder = las::Builder::from((1, 2));
+        // GeoKeyDirectoryTag: projected model, ProjectedCSTypeGeoKey = RD New.
+        builder.vlrs.push(Vlr {
+            user_id: "LASF_Projection".into(),
+            record_id: 34735,
+            data: [1u16, 1, 0, 2, 1024, 0, 1, 1, 3072, 0, 1, 28992]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+            ..Default::default()
+        });
+        let mut writer = las::Writer::from_path(&input, builder.into_header().unwrap()).unwrap();
+        writer.write_point(las::Point::default()).unwrap();
+        writer.close().unwrap();
+        let cloud = crate::open(&input, 1).unwrap();
+        let output = dir.path().join("scan.e57");
+        std::fs::write(&output, b"previous export").unwrap();
+        let single = crate::export_full(&cloud, &output, crate::ExportFormat::E57);
+        assert!(single.unwrap_err().to_string().contains("WKT"));
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous export");
+        let scene = write_e57_scene(
+            &[SceneSource {
+                cloud: &cloud,
+                transform: Default::default(),
+            }],
+            &output,
+            true,
+            &mut |_, _, _| true,
+            &mut |_, _| Ok(()),
+        );
+        assert!(scene.unwrap_err().to_string().contains("WKT"));
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous export");
+    }
+
+    #[test]
     fn e57_merge_with_images_accepts_wkt_layout_and_retains_the_first_declaration() {
         let directory = tempfile::tempdir().unwrap();
         let first = r#"LOCAL_CS["Survey ""West"" grid",UNIT["metre",1]]"#;
