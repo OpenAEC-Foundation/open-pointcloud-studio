@@ -69,8 +69,8 @@ fn the_whole_interface_on_a_ply_grid() {
     assert_eq!(info.station_count, 0);
     assert_eq!(info.has_rgb, 1);
     assert_eq!(info.min, [0.0; 3]);
-    for axis in 0..3 {
-        assert!((info.max[axis] - 0.9).abs() < 1e-9);
+    for maximum in info.max {
+        assert!((maximum - 0.9).abs() < 1e-9);
     }
     let json: serde_json::Value = serde_json::from_str(&cloud.json()).unwrap();
     assert_eq!(json["points"], 1000);
