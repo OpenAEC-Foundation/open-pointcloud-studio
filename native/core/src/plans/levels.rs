@@ -1230,8 +1230,7 @@ mod tests {
             .peaks
             .iter()
             .any(|peak| peak.role == PeakRole::LoweredCeiling));
-        for storey in 1..3 {
-            let level = &found.levels[storey];
+        for (storey, level) in found.floors().enumerate().skip(1) {
             assert!((level.ceiling_z.unwrap() - (spec.ceiling_z(storey) + z0)).abs() < 0.02);
             assert_eq!(level.slab_underside, None);
         }

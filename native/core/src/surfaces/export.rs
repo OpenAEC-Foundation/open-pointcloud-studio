@@ -511,6 +511,8 @@ pub(crate) fn faces_model(
     let residual_values = |residuals: &super::Residuals| {
         [
             ("Points", PropertyValue::Count(residuals.points)),
+            ("ResidualMean", PropertyValue::Length(residuals.mean)),
+            ("ResidualMeanAbs", PropertyValue::Length(residuals.mean_abs)),
             ("ResidualRms", PropertyValue::Length(residuals.rms)),
             ("ResidualP95", PropertyValue::Length(residuals.p95)),
             ("ResidualMax", PropertyValue::Length(residuals.max)),
