@@ -157,13 +157,59 @@ mod tests {
     }
 
     #[test]
+    fn e57_merge_with_images_accepts_wkt_layout_and_retains_the_first_declaration() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = r#"LOCAL_CS["Survey ""West"" grid",UNIT["metre",1]]"#;
+        let second = "LOCAL_CS[
+  \"Survey \"\"West\"\" grid\", UNIT[\"metre\", 1] ]";
+        let clouds = [("first", first), ("second", second)].map(|(stem, wkt)| {
+            let input = make_cloud(&directory.path().join(format!("{stem}.las")), wkt);
+            let e57 = directory.path().join(format!("{stem}.e57"));
+            write_e57_scene(
+                &[SceneSource {
+                    cloud: &input,
+                    transform: Default::default(),
+                }],
+                &e57,
+                true,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(()),
+            )
+            .unwrap();
+            crate::open(&e57, 4).unwrap()
+        });
+        let output = directory.path().join("merged.e57");
+        let sources = clouds.each_ref().map(|cloud| SceneSource {
+            cloud,
+            transform: Default::default(),
+        });
+        assert_eq!(
+            write_e57_scene(
+                &sources,
+                &output,
+                true,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(())
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            crate::e57_points::open_reader(&output)
+                .unwrap()
+                .coordinate_metadata(),
+            Some(first)
+        );
+    }
+
+    #[test]
     fn scene_exports_use_wkt_after_an_unrelated_extended_las_record() {
         let directory = tempfile::tempdir().unwrap();
         let wkt = r#"LOCAL_CS["Survey grid",UNIT["metre",1]]"#;
         let first = make_cloud(&directory.path().join("first.las"), wkt);
         let second = make_cloud(
             &directory.path().join("second.laz"),
-            r#"LOCAL_CS["Other grid",UNIT["metre",1]]"#,
+            r#"LOCAL_CS["Surveygrid",UNIT["metre",1]]"#,
         );
         let sources = [&first, &second].map(|cloud| SceneSource {
             cloud,
