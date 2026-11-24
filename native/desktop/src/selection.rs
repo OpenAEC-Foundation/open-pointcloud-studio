@@ -114,6 +114,18 @@ impl SelectionMask {
         })
     }
 
+    pub fn live_count(&self, deleted: Option<&DeletionMask>) -> u64 {
+        deleted.map_or(self.count, |mask| {
+            let overlap: u64 = self
+                .bits
+                .iter()
+                .zip(&mask.bits)
+                .map(|(&selected, &hidden)| u64::from((selected & hidden).count_ones()))
+                .sum();
+            self.count - overlap
+        })
+    }
+
     pub fn contains(&self, ordinal: u64) -> bool {
         let word = usize::try_from(ordinal / 64).ok();
         word.and_then(|index| self.bits.get(index))
