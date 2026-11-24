@@ -3141,6 +3141,34 @@ fn faces_of_a_room_with_a_column_export_as_dxf_dwg_and_ifc() {
                 .filter(|instance| instance.name == name)
                 .count()
         };
+        let residuals = found
+            .planes
+            .iter()
+            .map(|face| face.residuals)
+            .chain(found.cylinders.iter().map(|face| face.residuals));
+        for (name, expected) in [
+            (
+                "ResidualMean",
+                residuals.clone().map(|r| r.mean).collect::<Vec<_>>(),
+            ),
+            ("ResidualMeanAbs", residuals.map(|r| r.mean_abs).collect()),
+        ] {
+            let mut values: Vec<_> = instances
+                .values()
+                .filter(|instance| {
+                    instance.name == "IFCPROPERTYSINGLEVALUE"
+                        && instance.attributes[0] == format!("'{name}'")
+                })
+                .map(|instance| instance.attributes[2].clone())
+                .collect();
+            let mut expected: Vec<_> = expected
+                .into_iter()
+                .map(|value| format!("IFCLENGTHMEASURE({})", crate::cad3d::step::real(value)))
+                .collect();
+            expected.sort();
+            values.sort();
+            assert_eq!(values, expected, "{name}");
+        }
         assert_eq!(count("IFCBUILDINGELEMENTPROXY"), 7);
         assert_eq!(count("IFCPOLYGONALFACESET"), 6);
         assert_eq!(count("IFCEXTRUDEDAREASOLID"), 1);
