@@ -176,7 +176,8 @@ fn reencode_las_full(
         .unwrap_or(Path::new("."));
     let temporary = tempfile::NamedTempFile::new_in(parent)?;
     let mut reader = las::Reader::from_path(&cloud.path)?;
-    let mut builder = las::Builder::from(reader.header().clone());
+    let mut builder =
+        las::Builder::from(crate::las_crs::export_header(&cloud.path, reader.header())?);
     builder.point_format.is_compressed = format == ExportFormat::Laz;
     builder.vlrs.retain(|vlr| {
         !(vlr.record_id == 22204 && vlr.user_id.eq_ignore_ascii_case("laszip encoded"))
@@ -1527,7 +1528,10 @@ pub fn merge_las_map_count(
             .checked_add(source.total_points)
             .ok_or_else(|| LoadError::InvalidData("merged point count overflows".into()))?;
         let reader = las::Reader::from_path(&source.path)?;
-        headers.push(reader.header().clone());
+        headers.push(crate::las_crs::export_header(
+            &source.path,
+            reader.header(),
+        )?);
     }
     let first = &headers[0];
     let mut first_format = *first.point_format();
@@ -1677,7 +1681,10 @@ fn export_las_map_count(
         .filter(|extension| {
             extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
         })
-        .map(|_| las::Reader::from_path(&cloud.path).map(|reader| reader.header().clone()))
+        .map(|_| {
+            let reader = las::Reader::from_path(&cloud.path)?;
+            crate::las_crs::export_header(&cloud.path, reader.header())
+        })
         .transpose()?;
     let extended = cloud.total_points > u64::from(u32::MAX);
     let mut builder = if let Some(header) = &source_header {

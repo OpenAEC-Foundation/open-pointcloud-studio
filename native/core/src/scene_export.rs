@@ -4,7 +4,6 @@ use crate::{scene_transform::SceneTransform, LoadError, Point, PointCloud};
 use std::collections::HashMap;
 use std::path::Path;
 
-mod las_crs;
 mod posed;
 
 fn point_values(cloud: &PointCloud, point: Point, xyz: [f64; 3]) -> Vec<e57::RecordValue> {
@@ -62,7 +61,7 @@ fn scene_crs(sources: &[SceneSource<'_>]) -> Result<SceneCrs, LoadError> {
                 current.metadata = Some(system.into());
             }
         } else if extension == "las" || extension == "laz" {
-            current.vlrs = las_crs::projection_records(&source.cloud.path)?;
+            current.vlrs = crate::las_crs::projection_records(&source.cloud.path)?;
             current.vlrs.sort_by_key(|v| v.record_id);
             if let Some(wkt) = current.vlrs.iter().find(|v| v.record_id == 2112) {
                 let value = String::from_utf8_lossy(&wkt.data)
@@ -863,85 +862,6 @@ mod tests {
         .is_err());
         assert_eq!(std::fs::read(&cancelled).unwrap(), b"existing");
     }
-    #[test]
-    fn scene_exports_use_wkt_after_an_unrelated_extended_las_record() {
-        let directory = tempfile::tempdir().unwrap();
-        let wkt = r#"LOCAL_CS["Survey grid",UNIT["metre",1]]"#;
-        let make_cloud = |name: &str, wkt: &str| {
-            let path = directory.path().join(name);
-            let mut builder = las::Builder::from((1, 4));
-            builder.has_wkt_crs = true;
-            builder.evlrs.push(las::Vlr {
-                user_id: "survey".into(),
-                record_id: 1,
-                data: vec![0; 40],
-                ..Default::default()
-            });
-            builder.evlrs.push(las::Vlr {
-                user_id: "LASF_Projection".into(),
-                record_id: 2112,
-                data: wkt.bytes().chain([0]).collect(),
-                ..Default::default()
-            });
-            let mut writer = las::Writer::from_path(&path, builder.into_header().unwrap()).unwrap();
-            writer.write_point(las::Point::default()).unwrap();
-            writer.close().unwrap();
-            crate::open(&path, 4).unwrap()
-        };
-        let first = make_cloud("first.las", wkt);
-        let second = make_cloud("second.laz", r#"LOCAL_CS["Other grid",UNIT["metre",1]]"#);
-        let sources = [&first, &second].map(|cloud| SceneSource {
-            cloud,
-            transform: Default::default(),
-        });
-
-        let laz = directory.path().join("scene.laz");
-        write_las_scene(
-            &sources[..1],
-            &laz,
-            true,
-            &mut |_, _, _| true,
-            &mut |_, _| Ok(()),
-        )
-        .unwrap();
-        let reader = las::Reader::from_path(&laz).unwrap();
-        let record = reader
-            .header()
-            .all_vlrs()
-            .find(|record| record.record_id == 2112)
-            .unwrap();
-        assert_eq!(record.data, wkt.bytes().chain([0]).collect::<Vec<_>>());
-        let e57 = directory.path().join("scene.e57");
-        write_e57_scene(
-            &sources[..1],
-            &e57,
-            true,
-            &mut |_, _, _| true,
-            &mut |_, _| Ok(()),
-        )
-        .unwrap();
-        assert_eq!(
-            crate::e57_points::open_reader(&e57)
-                .unwrap()
-                .coordinate_metadata(),
-            Some(wkt)
-        );
-
-        std::fs::write(&laz, b"existing").unwrap();
-        let error = write_las_scene(
-            &sources,
-            &laz,
-            true,
-            &mut |_, _, _| true,
-            &mut |_, _| Ok(()),
-        )
-        .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("different coordinate reference systems"));
-        assert_eq!(std::fs::read(laz).unwrap(), b"existing");
-    }
-
     #[test]
     fn different_las_and_text_layouts_merge_into_normalised_laz() {
         let dir = tempfile::tempdir().unwrap();

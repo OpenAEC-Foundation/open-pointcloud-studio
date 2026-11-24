@@ -22,6 +22,7 @@ mod e57_quick;
 mod export;
 mod glb;
 pub mod grid2d;
+mod las_crs;
 pub mod local_fit;
 mod mesh_formats;
 mod mesh_photo;
