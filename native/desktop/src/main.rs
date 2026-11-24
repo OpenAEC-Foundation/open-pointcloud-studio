@@ -2561,10 +2561,18 @@ impl LodRefinement {
                 let deep_zoom = self.deep_zoom;
                 let projected =
                     |node_bounds| lod_node_span(*transform, section, projection, node_bounds);
-                let exact = if deep_zoom {
+                // At a high requested density, read the visible leaves in full
+                // when their records fit this layer's share of the budget.
+                // The index counts candidates before opening any leaf files.
+                let high_density = limit > 10_000_000;
+                let exact = if deep_zoom || high_density {
                     tree.sample_visible_indexed_cancellable(
                         limit,
-                        MAX_EXACT_VISIBLE_LOD_CANDIDATES,
+                        if high_density {
+                            limit as u64
+                        } else {
+                            MAX_EXACT_VISIBLE_LOD_CANDIDATES
+                        },
                         |bounds| projected(bounds).is_some(),
                         |record| {
                             let xyz = transform.xyz(record.point.xyz);

@@ -128,7 +128,7 @@ Drags continue when the pointer leaves the scene. Survey coordinates such as nat
 **Display** (*Weergave*) beneath the view cube opens a panel that sets how points are drawn. Its **CAMERA** row is described under [Looking around](#looking-around); below it are:
 
 - **COLOR**: **RGB**, **Elevation**, **Intensity** and **Class** choose the colours. A mode that no visible cloud has values for is dimmed; a cloud without stored colours or intensity is drawn in a neutral grey in that mode while another cloud has them.
-- **DETAIL**: **Point size** sets the point size from 0.1 to 20, and **Points in view** the point budget: the most points drawn at once, from 1,000 to 50,000,000 in steps of 100,000. Higher settings use more system and graphics memory. For scans larger than the budget, build the octree and zoom or use a section box to concentrate detail in the area of interest.
+- **DETAIL**: **Point size** sets the point size from 0.1 to 20, and **Points in view** the point budget: the most points drawn at once, from 1,000 to 50,000,000 in steps of 100,000. Higher settings use more system and graphics memory. When an indexed layer receives more than ten million points of the budget and the visible octree leaves fit, the viewer reads all visible points from those leaves. For scans larger than the budget, build the octree and zoom or use a section box to concentrate detail in the area of interest.
 - **Eye-dome** switches eye-dome lighting on or off: a shading by depth that makes edges and relief visible. While it is on, Properties has its **Strength**, from 0 to 5.
 - **Scan positions** shows or hides the station markers.
 
