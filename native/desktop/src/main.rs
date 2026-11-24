@@ -2564,12 +2564,16 @@ impl LodRefinement {
                 // At a high requested density, read the visible leaves in full
                 // when their records fit this layer's share of the budget.
                 // The index counts candidates before opening any leaf files.
-                let high_density = limit > 10_000_000;
+                let high_density = self.budget > 10_000_000;
                 let exact = if deep_zoom || high_density {
                     tree.sample_visible_indexed_cancellable(
                         limit,
                         if high_density {
-                            limit as u64
+                            (limit as u64).max(if deep_zoom {
+                                MAX_EXACT_VISIBLE_LOD_CANDIDATES
+                            } else {
+                                0
+                            })
                         } else {
                             MAX_EXACT_VISIBLE_LOD_CANDIDATES
                         },
@@ -17272,6 +17276,13 @@ mod lod_transition_tests {
         let afar = from_above(&cloud, 8.0);
         assert_eq!(read(afar), lod_pace::LOD_NODE_PREVIEW_POINTS);
         assert_eq!(tier(afar), None);
+
+        // A high display budget can draw every visible point even when the
+        // ordinary screen-space sampler chooses just the distant root.
+        let mut detailed = refinement_of(Arc::clone(&tree), afar, total);
+        detailed.budget = 12_000_000;
+        detailed.sample_pass().unwrap();
+        assert_eq!(detailed.samples[0].len(), total);
 
         let away = Projection::new(cloud.bounds, 0.0, 1.5, 1.0, [5_000.0, 0.0], 800.0, 600.0);
         assert_eq!(tier(away), None);

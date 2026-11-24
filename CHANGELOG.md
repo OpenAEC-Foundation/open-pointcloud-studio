@@ -17,6 +17,9 @@ section its version and date.
 
 ## Unreleased
 
+- Meshes can be exported as binary glTF (.glb) with vertex colours and normals.
+- Points in view allows up to 50 million points. Above ten million, indexed layers can resolve all visible points when their visible leaves fit the allocated budget.
+
 - The main-window pane layout, scans and model/photo cameras return after restarting. Detached documents return to the main window.
 
 - Side-by-side model, photo and drawing panes keep their own cameras. Documents can open in separate windows and dock back into the main window; closing the main window closes them together.
