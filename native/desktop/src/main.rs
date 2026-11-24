@@ -11831,6 +11831,12 @@ impl Studio {
         ] {
             properties = properties.push(row);
         }
+        if source_points > 0 {
+            properties = properties.push(opencad_properties::property_row(
+                "Index size (minimum)",
+                drawing::size_text(pointcloud_core::minimum_index_bytes(source_points)),
+            ));
+        }
         if self.active.is_some() {
             properties = properties.push(self.transform_properties());
         }

@@ -129,6 +129,9 @@ Drags continue when the pointer leaves the scene. Survey coordinates such as nat
 
 - **COLOR**: **RGB**, **Elevation**, **Intensity** and **Class** choose the colours. A mode that no visible cloud has values for is dimmed; a cloud without stored colours or intensity is drawn in a neutral grey in that mode while another cloud has them.
 - **DETAIL**: **Point size** sets the point size from 0.1 to 20, and **Points in view** the point budget: the most points drawn at once, from 1,000 to 50,000,000 in steps of 100,000. Higher settings use more system and graphics memory. When the budget exceeds ten million and all visible octree leaves fit the indexed layer’s share, the viewer reads all visible points from those leaves. For scans larger than the budget, build the octree and zoom or use a section box to concentrate detail in the area of interest.
+
+**Index storage.** Properties shows the minimum space for the active scan’s index. Each point takes 40 bytes in the leaf files, so 100 million points require at least 4 GB. Previews, filesystem overhead and temporary build files need additional space. To put persistent indexes and cached previews on a different disk, set `OPS_INDEX_DIR` to an absolute, writable directory before launching Studio. For example, launch with `OPS_INDEX_DIR=/mnt/survey-cache open-pointcloud-studio` on Linux. The same variable accepts a local drive or UNC path on Windows. An unset, empty or relative value uses the normal cache location. Changing the folder starts a separate cache; existing files remain in the old folder.
+
 - **Eye-dome** switches eye-dome lighting on or off: a shading by depth that makes edges and relief visible. While it is on, Properties has its **Strength**, from 0 to 5.
 - **Scan positions** shows or hides the station markers.
 
