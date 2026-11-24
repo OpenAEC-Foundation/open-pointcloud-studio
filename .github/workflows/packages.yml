@@ -124,10 +124,22 @@ jobs:
           path: native/target/open-cad-studio/source
           key: open-cad-studio-source-${{ steps.pin.outputs.commit }}
       - name: Look for its vendored crates in the cache
+        id: cad-vendor-cache
         uses: actions/cache@v4
         with:
           path: native/target/open-cad-studio/vendor
           key: open-cad-studio-vendor-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/packaging/archive-open-cad-studio-source.sh', 'native/packaging/open-cad-studio-source.sh') }}
+      # This commit uses a git dependency which is no longer publicly
+      # fetchable. The previous release includes its exact vendored sources.
+      - name: Restore the published vendor archive on a cold cache
+        if: steps.cad-vendor-cache.outputs.cache-hit != 'true' && steps.pin.outputs.commit == 'fc19afa7153443a1ca863817d4088ef8fd8e2e8d'
+        run: |
+          archive="$RUNNER_TEMP/open-cad-studio-vendor_fc19afa7.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.45.1/open-cad-studio-vendor_fc19afa7.tar.gz
+          echo "94d8649d63e17a00462a2c0e40f58dc7d6171295bbe588127c977ca9341a644f  $archive" | sha256sum --check
+          mkdir -p native/target/open-cad-studio
+          tar -xzf "$archive" --strip-components=1 -C native/target/open-cad-studio open-cad-studio-fc19afa7/vendor
       - name: Fetch and check the pinned commit
         run: bash native/packaging/build-open-cad-studio.sh --fetch
       - name: Write the source archives
