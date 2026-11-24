@@ -3408,6 +3408,7 @@ dependencies = [
  "image",
  "las",
  "laz",
+ "libc",
  "memmap2",
  "png",
  "rayon",
