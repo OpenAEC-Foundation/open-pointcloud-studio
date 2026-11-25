@@ -83,7 +83,7 @@ fn correct_blob_length(
         let physical = physical_offset(start + 8 + i as u64, PAGE);
         source.raw[(physical - source.raw_start) as usize] = byte;
     }
-    for page in source.raw.chunks_exact_mut(PAGE as usize) {
+    for page in source.raw.as_chunks_mut::<{ PAGE as usize }>().0 {
         let (data, crc) = page.split_at_mut(PAGE as usize - 4);
         crc.copy_from_slice(&crc32c::crc32c(data).to_be_bytes());
     }
@@ -104,7 +104,7 @@ mod tests {
         let mut logical = vec![0x5a; 2040];
         logical[offset..offset + 8].fill(0);
         logical[offset + 8..offset + 16].copy_from_slice(&length.to_le_bytes());
-        for page in logical.chunks_exact(1020) {
+        for page in logical.as_chunks::<1020>().0 {
             file.write_all(page).unwrap();
             file.write_all(&crc32c::crc32c(page).to_be_bytes()).unwrap();
         }
