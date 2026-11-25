@@ -17,6 +17,8 @@ section its version and date.
 
 ## Unreleased
 
+- Station photos and panoramas in rewritten E57 files open in readers that check the size of each image section.
+
 ## 2026.48.0 - 2026-11-24
 
 - E57 exports keep the original sensor grid, physical intensity limits and station photographs when filtering or recolouring scans.

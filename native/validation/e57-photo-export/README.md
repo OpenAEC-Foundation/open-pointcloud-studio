@@ -168,3 +168,41 @@ reporting to the ordinary reader.
 Final validation: 1,486 workspace tests passed, none failed and 12 were ignored.
 Workspace/all-target Clippy and minimal-core Clippy pass with warnings denied;
 Rustfmt, validation-script syntax and diff checks pass.
+
+## Image section lengths in rewritten files, 25 November 2026
+
+With the published Linux amd64 v2026.48.0 binary, a full-extent section of
+Manitou retained the points but failed to open its first panorama in Spirula
+Studio's independent C++ E57 reader. The source panorama opened in the same
+reader. The XML gave the correct JPEG byte count. The binary section length
+omitted the 16-byte header and the padding up to a multiple of four bytes.
+See the [reference writer](https://github.com/asmaloney/libE57Format/blob/3530724211d40f605624b21631c39be4f145c1ac/src/BlobNodeImpl.cpp)
+and the [reader used in the check](https://github.com/harry7557558/spirula-studio/blob/4e1497003213a40d775fd8e906e2f4b80af94c8b/src/data/E57Reader.cpp).
+
+To exercise the writer, copy the BLK2GO section and the original Manitou file
+into a clean directory without photo-edit sidecars, then run:
+
+```sh
+box=-1000000,-1000000,-1000000,1000000,1000000,1000000
+open-pointcloud-studio --section section.e57 "$box" section-out.e57
+open-pointcloud-studio --section manitou.e57 "$box" manitou-out.e57
+```
+
+Spirula's `Reader::read_blob(image.jpeg)` succeeded for all six Leica pinhole
+photos and all five Riegl panoramas in the corrected outputs. Their bytes
+matched the input JPEGs. Its point reader also returned the same XYZ for
+all 471 Leica points and all 1,095,702 Riegl points. The existing Leica
+section was itself written by an older Studio version, so its reference
+image hashes came from the other readers. A plain same-format export can
+copy the input byte for byte, including historical headers.
+
+- With [golibe57](https://github.com/mfbonfigli/golibe57/tree/055a98461e21f8a3d51e6dd5e5aa5bdf9ae66f6c),
+  a Go port of libE57Format, `Reader.Points` produced identical coordinates,
+  intensities, RGB values and validity flags before and after the rewrite.
+  `ReadImage2DData` returned matching SHA-256 hashes for all 11 photos.
+- With pye57 0.4.19, `reader_roundtrip.compare_libe57` verified the raw records,
+  physical limits, scan poses, image calibration, associations and photo bytes.
+- Spirula's display greys for the intensity-only Riegl scans differed. Its
+  reader uses the numeric XML text for the intensity maximum (32767 in the
+  source's scaled integer, 1 in the output's float). The physical maximum is
+  1 in both files. The checks above compare the stored measurements directly.
