@@ -942,6 +942,7 @@ pub fn open_las_preview(
             "LAZ chunks of varying size cannot be sampled in place".into(),
         ));
     }
+    let format = *reader.header().point_format();
     for block in 0..blocks {
         let start = if blocks == 1 {
             0
@@ -953,7 +954,7 @@ pub fn open_las_preview(
             .min(count - start)
             .min(target - cloud.points.len() as u64);
         for (offset, point) in reader.read_points(length)?.into_iter().enumerate() {
-            cloud.points.push(convert_las_point(&point));
+            cloud.points.push(convert_las_point(&point, format));
             cloud.point_ordinals.push(if compressed && count > target {
                 u64::MAX
             } else {
@@ -1115,6 +1116,7 @@ fn read_las_batches(
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
     batch_limit: usize,
 ) -> Result<(), LoadError> {
+    let format = *reader.header().point_format();
     let mut batch = Vec::with_capacity(batch_limit);
     loop {
         batch.clear();
@@ -1122,13 +1124,13 @@ fn read_las_batches(
             break;
         }
         for point in &batch {
-            push(convert_las_point(point))?;
+            push(convert_las_point(point, format))?;
         }
     }
     Ok(())
 }
 
-fn convert_las_point(point: &las::Point) -> Point {
+fn convert_las_point(point: &las::Point, format: las::point::Format) -> Point {
     let rgb = point.color.map(|color| {
         let channels = [color.red, color.green, color.blue];
         if channels.iter().all(|channel| *channel <= 255) {
@@ -1141,7 +1143,13 @@ fn convert_las_point(point: &las::Point) -> Point {
         xyz: [point.x, point.y, point.z],
         rgb,
         intensity: Some(point.intensity),
-        classification: Some(u8::from(point.classification)),
+        // las-rs exposes legacy class 12 as Unclassified plus an overlap flag.
+        // Extended records encode the class and the flag independently.
+        classification: Some(if !format.is_extended && point.is_overlap {
+            12
+        } else {
+            u8::from(point.classification)
+        }),
     }
 }
 
