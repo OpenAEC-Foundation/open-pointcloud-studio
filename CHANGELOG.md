@@ -17,6 +17,8 @@ section its version and date.
 
 ## Unreleased
 
+- Compare an exported mesh to its source scan with `--mesh-deviation` to see the mean, 95th percentile and maximum distance to its surface.
+
 ## 2026.48.0 - 2026-11-24
 
 - E57 exports keep the original sensor grid, physical intensity limits and station photographs when filtering or recolouring scans.

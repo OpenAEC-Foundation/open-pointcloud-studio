@@ -156,6 +156,12 @@ pub const MODES: &[Mode] = &[
         ),
     },
     Mode {
+        flag: "--mesh-deviation",
+        short: None,
+        arguments: "SCAN MESH",
+        description: key("Prints the mean, 95th percentile and maximum distance from scan points to mesh triangles as JSON."),
+    },
+    Mode {
         flag: "--mesh-export",
         short: None,
         arguments: "INPUT OUTPUT",
