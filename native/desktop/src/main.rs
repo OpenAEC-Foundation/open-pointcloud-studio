@@ -146,6 +146,7 @@ fn title_for(active: Option<&str>) -> String {
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
 const EXACT_VISIBLE_LOD_ZOOM: f32 = 0.05;
+const HIGH_DENSITY_LOD_THRESHOLD: usize = 10_000_000;
 const MAX_EXACT_VISIBLE_LOD_CANDIDATES: u64 = 2_000_000;
 const AUTO_INDEX_MIN_POINTS: u64 = 1_000_000;
 const ONE_PASS_IMPORT_MIN_BYTES: u64 = 64 * 1024 * 1024;
@@ -2548,6 +2549,19 @@ struct LodRefinement {
 }
 
 impl LodRefinement {
+    fn exact_scan_limit(&self, layer_quota: usize) -> u64 {
+        let density_limit = if self.budget > HIGH_DENSITY_LOD_THRESHOLD {
+            layer_quota as u64
+        } else {
+            0
+        };
+        if self.deep_zoom {
+            density_limit.max(MAX_EXACT_VISIBLE_LOD_CANDIDATES)
+        } else {
+            density_limit
+        }
+    }
+
     fn sample_pass(&mut self) -> Result<(), String> {
         let results: Result<Vec<_>, String> = self
             .sources
@@ -2558,25 +2572,16 @@ impl LodRefinement {
                 let limit = self.requested[slot];
                 let section = self.section;
                 let projection = self.projection;
-                let deep_zoom = self.deep_zoom;
                 let projected =
                     |node_bounds| lod_node_span(*transform, section, projection, node_bounds);
                 // At a high requested density, read the visible leaves in full
                 // when their records fit this layer's share of the budget.
                 // The index counts candidates before opening any leaf files.
-                let high_density = self.budget > 10_000_000;
-                let exact = if deep_zoom || high_density {
+                let scan_limit = self.exact_scan_limit(limit);
+                let exact = if scan_limit > 0 {
                     tree.sample_visible_indexed_cancellable(
                         limit,
-                        if high_density {
-                            (limit as u64).max(if deep_zoom {
-                                MAX_EXACT_VISIBLE_LOD_CANDIDATES
-                            } else {
-                                0
-                            })
-                        } else {
-                            MAX_EXACT_VISIBLE_LOD_CANDIDATES
-                        },
+                        scan_limit,
                         |bounds| projected(bounds).is_some(),
                         |record| {
                             let xyz = transform.xyz(record.point.xyz);
@@ -2608,6 +2613,30 @@ impl LodRefinement {
     }
 
     fn next_limits(&self) -> Option<Vec<usize>> {
+        // A coarse preview can return fewer points than requested even when
+        // the final layer quota would allow an exact read of the visible leaves.
+        if self.pass == 0 && self.budget > HIGH_DENSITY_LOD_THRESHOLD {
+            let full = distribute_lod_budget(self.budget, &self.source_weights);
+            let can_refine =
+                self.sources
+                    .iter()
+                    .enumerate()
+                    .any(|(slot, (_, tree, transform, _))| {
+                        let first = self.requested[slot];
+                        let first_scan_limit = self.exact_scan_limit(first);
+                        self.samples[slot].len() < first
+                            && full[slot] as u64 > first_scan_limit
+                            && tree
+                                .visible_leaf_candidates(full[slot] as u64, |bounds| {
+                                    lod_node_span(*transform, self.section, self.projection, bounds)
+                                        .is_some()
+                                })
+                                .is_some_and(|count| count > first_scan_limit)
+                    });
+            if can_refine {
+                return Some(full);
+            }
+        }
         rebalance_lod_limits(
             self.budget,
             &self.source_weights,
@@ -17286,6 +17315,20 @@ mod lod_transition_tests {
 
         let away = Projection::new(cloud.bounds, 0.0, 1.5, 1.0, [5_000.0, 0.0], 800.0, 600.0);
         assert_eq!(tier(away), None);
+    }
+
+    #[test]
+    fn high_density_finishes_after_a_distant_preview_underfills_the_first_pass() {
+        let directory = tempfile::tempdir().unwrap();
+        let (cloud, tree) = leafy_scan(directory.path());
+        let projection = from_above(&cloud, 8.0);
+        let mut detail = refinement_of(tree, projection, lod_pace::LOD_FIRST_PASS_MIN);
+        detail.budget = 12_000_000;
+        while detail.advance().unwrap().is_some() {}
+        let mut ordinals: Vec<_> = detail.samples[0].iter().map(|p| p.ordinal).collect();
+        ordinals.sort_unstable();
+        assert_eq!(ordinals.len(), cloud.points.len());
+        assert!(ordinals.iter().enumerate().all(|(i, &n)| n == i as u64));
     }
 
     #[test]

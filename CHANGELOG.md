@@ -17,6 +17,8 @@ section its version and date.
 
 ## Unreleased
 
+- Zoomed-out indexed scans now finish loading all visible points when they fit the layer’s high-density display budget.
+
 ## 2026.48.0 - 2026-11-24
 
 - E57 exports keep the original sensor grid, physical intensity limits and station photographs when filtering or recolouring scans.
