@@ -330,6 +330,7 @@
   "Exports the points of a scan that lie inside a box.": "Exporteert de punten van een scan die binnen een box liggen.",
   "Writes a terrain mesh of a scan.": "Schrijft een terreinmesh van een scan.",
   "Writes a 3D surface mesh of a scan.": "Schrijft een 3D-oppervlaktemesh van een scan.",
+  "Prints the mean, 95th percentile and maximum distance from scan points to mesh triangles as JSON.": "Toont het gemiddelde, het 95e percentiel en het maximum van de afstanden tussen scanpunten en meshdriehoeken als JSON.",
   "Writes the faces of a mesh file as OBJ, PLY, STL, GLB, DXF, DWG or IFC; the extension of OUTPUT chooses the format.": "Schrijft de vlakken van een meshbestand als OBJ, PLY, STL, GLB, DXF, DWG of IFC; de extensie van OUTPUT bepaalt het formaat.",
   "Downloads the 3D BAG buildings inside an RD New box as OBJ.": "Downloadt de 3D BAG-gebouwen binnen een RD New-box als OBJ.",
   "Prints the version.": "Toont de versie.",
