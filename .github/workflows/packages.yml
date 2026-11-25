@@ -809,6 +809,13 @@ jobs:
             "$RUNNER_TEMP/appimage/squashfs-root/AppRun" "screenshots/managed-$ARCH"
           bash native/packaging/managed-wayland-smoke.sh \
             "$RUNNER_TEMP/appimage/squashfs-root/AppRun" "screenshots/managed-paused-$ARCH" --paused-access
+      - name: Keep the managed AppImage measurement for release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-linux-${{ matrix.arch }}
+          overwrite: true
+          path: screenshots/managed-${{ matrix.arch }}/result.json
+          if-no-files-found: error
       - name: Start the archive binary
         run: |
           tar -xzf "packages/open-pointcloud-studio_${NUMBER}_linux-${ARCH}.tar.gz"
