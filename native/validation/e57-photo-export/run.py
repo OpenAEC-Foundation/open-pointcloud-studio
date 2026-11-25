@@ -24,6 +24,7 @@ with socket.socket() as sock:
 with tempfile.TemporaryDirectory(prefix='ops-e57-proof-') as work:
     env = {**os.environ, 'XDG_CONFIG_HOME': work + '/config',
            'XDG_CACHE_HOME': work + '/cache', 'PYTHONDONTWRITEBYTECODE': '1'}
+    env.pop("OPS_INDEX_DIR", None)
     with (directory / 'validation-window.log').open('w') as log:
         process = subprocess.Popen([binary, '--api-port', str(port)], env=env,
                                    stdout=log, stderr=log)
