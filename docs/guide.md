@@ -724,6 +724,8 @@ These figures say how the triangles hang together. They do not say how far the m
 
 To export an open mesh as GLB, choose **Export mesh…** and save it with a name such as `room.glb`. From the command line, run `open-pointcloud-studio --mesh-export room.obj room.glb`.
 
+In Blender 5.3, choose **File → Import → glTF 2.0** and open the GLB. To see the original vertex colours in Solid view, open the Viewport Shading options and select **Attribute** as the colour type.
+
 The mesh is written as the scene shows it, with the move and scale of its scan applied. A scan that is mirrored by a negative scale factor keeps its outside in the file: the corners of the triangles are written in reverse order and the normals point outward. The file appears under its name only when it is complete. The source file of the scan cannot be chosen as the destination.
 
 An STL file stores 32-bit numbers, which hold about seven digits. Up to 2,048 m from zero that is a quarter of a millimetre or better. A mesh that lies farther away on an axis, as a scan in RD New does, is therefore written relative to an origin in whole metres on that axis. The status bar names the origin, and the file states it in its 80-byte header as `origin X Y Z m`. Open Pointcloud Studio adds it again when it opens the file, so the mesh returns to its place. Another program does not read the header and shows the mesh near zero: add the origin there, or choose OBJ or PLY when the coordinates have to stay as they are.

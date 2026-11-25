@@ -52,6 +52,8 @@ Klik **Mesh** in de groep OPPERVLAK en kies de methode die bij je scan past: **G
 
 Een taak loopt door als je de kaart sluit: de knop **Mesh** blijft dan gemarkeerd en opent de kaart weer op de stap **Uitvoeren**. De strook boven het model toont de stap van een gesloten mesh of een vlakkenherkenning; **Eigenschappen** toont de voortgang van een terreinmesh of 3D-oppervlak. Controleer het resultaat en sla een mesh op met **Mesh exporteren…** als OBJ, PLY, STL, GLB, DXF, DWG of IFC. Kies voor binair glTF een bestandsnaam die eindigt op `.glb`, bijvoorbeeld `kamer.glb`. **Oppervlak textureren…** schrijft een mesh met kleuren als OBJ met een MTL-bestand en PNG-textuurpagina's.
 
+Open een geëxporteerde GLB in Blender 5.3 via **File → Import → glTF 2.0**. Kies in de instellingen van de weergave **Solid** bij het kleurtype **Attribute** om de oorspronkelijke vertexkleuren te zien.
+
 ![De kaart Puntenwolk meshen op de stap Methode met de vier methoden Gesloten mesh, Terreinmesh, 3D-oppervlak en Vlakken, en daaronder waar het op werkt: de actieve scan rooms.e57, de snedebox en de selectie](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/wiki/images/mesh-methoden.png)
 
 De resolutie, puntdichtheid en ruis bepalen de kwaliteit en rekentijd. **Vlakken** levert herkende geometrie; het is een andere uitkomst dan een doorlopend driehoeksmesh. [De uitgebreide gids](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/blob/main/docs/guide.md#mesh-pointcloud) beschrijft de grenzen van de methoden.
