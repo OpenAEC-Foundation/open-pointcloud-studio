@@ -621,6 +621,75 @@ impl DrawingViewTool {
         }
     }
 
+    /// A pane owns its camera and render caches; source scenes remain shared.
+    /// Session lists, pending work and the potentially large kept slabs stay
+    /// with the application instead of being copied for every pane.
+    pub(crate) fn render_copy(&self) -> Self {
+        Self {
+            shown: self.shown,
+            scene: self.scene.clone(),
+            visible: self.visible.clone(),
+            camera: Cell::new(self.camera.get()),
+            fit_pending: Cell::new(self.fit_pending.get()),
+            settled: self.settled,
+            zoom_serial: self.zoom_serial,
+            bounds: Cell::new(self.bounds.get()),
+            cache: canvas::Cache::new(),
+            built: RefCell::new(None),
+            revision: self.revision,
+            reading: None,
+            next_read: 0,
+            show_after_export: false,
+            last_error: self.last_error.clone(),
+            sheets: Vec::new(),
+            saved: Vec::new(),
+            made: Vec::new(),
+            crop_shown: self.crop_shown,
+            crop_selected: self.crop_selected.clone(),
+            kept: crate::kept_slabs::KeptSlabs::default(),
+            remake: None,
+            crop_edits: (None, Vec::new()),
+            pointer: Cell::new(self.pointer.get()),
+            held: None,
+            layout: self.layout.clone(),
+            looks: HashMap::new(),
+        }
+    }
+
+    /// Copy just the displayed document. Reuse an unchanged pane's caches,
+    /// and leave the application's session/job state in place on focus.
+    pub(crate) fn copy_render_from(&mut self, other: &Self) {
+        let same_scene = match (&self.scene, &other.scene) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        let changed = !same_scene
+            || self.visible != other.visible
+            || self.camera.get() != other.camera.get()
+            || self.revision != other.revision
+            || self.bounds.get().map(|b| b.size()) != other.bounds.get().map(|b| b.size());
+        self.shown = other.shown;
+        self.scene.clone_from(&other.scene);
+        self.visible.clone_from(&other.visible);
+        self.camera.set(other.camera.get());
+        self.fit_pending.set(other.fit_pending.get());
+        self.settled = other.settled;
+        self.zoom_serial = other.zoom_serial;
+        self.bounds.set(other.bounds.get());
+        self.revision = other.revision;
+        self.last_error.clone_from(&other.last_error);
+        self.crop_shown = other.crop_shown;
+        self.crop_selected.clone_from(&other.crop_selected);
+        self.pointer.set(other.pointer.get());
+        self.held = None;
+        self.layout.clone_from(&other.layout);
+        if changed {
+            self.cache.clear();
+            *self.built.borrow_mut() = None;
+        }
+    }
+
     /// The point of the drawing under the pointer, when it is over the
     /// sheet.
     pub(crate) fn pointer(&self) -> Option<[f64; 2]> {
@@ -1844,7 +1913,7 @@ impl Studio {
                 self.file_open = false;
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .set_title(tr("Open a drawing"))
                             .add_filter(tr("Drawings (DXF, DWG)"), &["dxf", "dwg"])
                             .pick_file()
@@ -2386,6 +2455,7 @@ impl Studio {
         }
     }
 
+    /// A document-owned drawing canvas; globals and source scenes stay shared.
     /// The sheet with the drawing and what is drawn over it.
     pub(crate) fn drawing_sheet(&self) -> Element<'_, Message> {
         let tool = &self.drawing_view;
@@ -2585,6 +2655,38 @@ fn scene_layer_count(tool: &DrawingViewTool) -> usize {
     tool.scene().map_or(0, |scene| scene.layers.len())
 }
 
+impl DrawingViewTool {
+    pub(crate) fn pane_sheet<'a>(
+        &'a self,
+        theme: crate::ui_theme::UiTheme,
+        key: &'a str,
+        bounds: &'a std::cell::Cell<Option<Rectangle>>,
+        pane_bounds: &'a std::cell::Cell<Option<Rectangle>>,
+    ) -> Element<'a, Message> {
+        stack![
+            Sheet {
+                tool: self,
+                paper: paper(theme)
+            },
+            Canvas::new(crate::document_panes::widget::Scoped {
+                inner: Overlay {
+                    tool: self,
+                    crop: None,
+                    turning: false
+                },
+                key,
+                bounds,
+                pane_bounds,
+            })
+            .width(Fill)
+            .height(Fill),
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2610,6 +2712,37 @@ mod tests {
         drawing.add_frame([-0.5, -1.5], [4.5, 3.5]).unwrap();
         drawing.add_info([-0.5, -1.75], 0.1, "Plan").unwrap();
         drawing
+    }
+
+    #[test]
+    fn render_snapshots_share_geometry_but_keep_independent_drawing_cameras() {
+        let mut tool = DrawingViewTool::new(true);
+        let scene = Arc::new(DrawScene::from_drawing(
+            &sample(DrawingUnits::Metres),
+            DrawingSource::Preview,
+        ));
+        tool.scene = Some(Arc::clone(&scene));
+        tool.shown = true;
+        tool.visible = vec![true; scene.layers.len()];
+        tool.sheets.push(Arc::clone(&scene));
+        tool.next_read = 42;
+        let mut copy = tool.render_copy();
+        assert!(Arc::ptr_eq(copy.shared_scene().unwrap(), &scene));
+        assert!(copy.sheets.is_empty() && copy.saved.is_empty() && copy.made.is_empty());
+        let original = tool.camera();
+        copy.camera.set(ViewCamera {
+            center: [8., 9.],
+            scale: 12.,
+        });
+        copy.visible[0] = false;
+        assert_eq!(tool.camera(), original);
+        assert!(tool.visible[0]);
+        tool.copy_render_from(&copy);
+        assert_eq!(tool.camera(), copy.camera());
+        assert!(!tool.visible[0]);
+        assert_eq!(tool.next_read, 42);
+        assert_eq!(tool.sheets.len(), 1);
+        assert!(tool.show_after_export);
     }
 
     fn per_layer(scene: &DrawScene) -> Vec<(String, [usize; 4])> {

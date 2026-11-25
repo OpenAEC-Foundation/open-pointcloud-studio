@@ -1,0 +1,39 @@
+{
+  "job": {
+    "coverage": {
+      "photograph_texels": 10153,
+      "photos_failed": 0,
+      "photos_used": [
+        0
+      ],
+      "point_colour_texels": 0,
+      "unobserved_texels": 0
+    },
+    "operation": "texture_mesh",
+    "pages": 1,
+    "path": "photographic.obj",
+    "preview_error": null,
+    "resolution_limited": 0,
+    "state": "complete",
+    "triangles": 1
+  },
+  "changed_viewport_pixels": 57237,
+  "independent_reader": "trimesh 5.2.0",
+  "uvs": [
+    [
+      0.005859375,
+      0.994140625
+    ],
+    [
+      0.556640625,
+      0.994140625
+    ],
+    [
+      0.005859375,
+      0.443359375
+    ]
+  ],
+  "source_photo_unchanged": true,
+  "independent_opengl_viewer_rendered": true,
+  "independent_viewer_pyglet": "1.5.31"
+}

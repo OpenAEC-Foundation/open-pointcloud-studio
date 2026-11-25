@@ -21,6 +21,8 @@ memmap2 = "0.9"
 delaunator = "1"
 earcutr = "0.5"
 serde_json = "1"
+# Already used by e57; needed to retain physical scaled scalar limits.
+roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
 rayon = "1.12"

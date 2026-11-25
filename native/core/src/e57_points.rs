@@ -22,8 +22,36 @@ const STATION_MATCH_DISTANCE: f64 = 0.01;
 
 /// Open an E57 file through a reader that keeps its buffer across the
 /// decoder's page-by-page seeks.
-pub(crate) fn open_reader(path: &Path) -> Result<E57Reader<WindowReader>, LoadError> {
-    Ok(E57Reader::new(WindowReader::open(path)?)?)
+pub(crate) struct Reader {
+    inner: E57Reader<WindowReader>,
+    scans: Vec<PointCloud>,
+    pub(crate) repaired_limits: bool,
+}
+impl Reader {
+    pub(crate) fn pointclouds(&self) -> Vec<PointCloud> {
+        self.scans.clone()
+    }
+}
+impl std::ops::Deref for Reader {
+    type Target = E57Reader<WindowReader>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+impl std::ops::DerefMut for Reader {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+pub(crate) fn open_reader(path: &Path) -> Result<Reader, LoadError> {
+    let inner = E57Reader::new(WindowReader::open(path)?)?;
+    let (scans, repaired_limits) = crate::e57_limits::repaired(&inner)?;
+    Ok(Reader {
+        inner,
+        scans,
+        repaired_limits,
+    })
 }
 
 /// The scanner station of every scan in a file that has one. A merged cloud
@@ -226,13 +254,13 @@ pub(crate) fn summary(path: &Path) -> Result<Summary, LoadError> {
 /// Read the station photos listed in E57 metadata without decoding them:
 /// the pinhole photos with a pose that a scanner station took.
 pub(crate) fn scan_images(path: &Path) -> Result<Vec<ScanImage>, LoadError> {
-    Ok(placed_images(&open_reader(path)?).0)
+    Ok(placed_images(&*open_reader(path)?).0)
 }
 
 /// Read the other photos listed in E57 metadata without decoding them, with
 /// the coordinate system the file states.
 pub(crate) fn file_photos(path: &Path) -> Result<FilePhotos, LoadError> {
-    Ok(placed_images(&open_reader(path)?).1)
+    Ok(placed_images(&*open_reader(path)?).1)
 }
 
 /// Focal length of a pinhole photo in pixels along its columns and rows.
@@ -466,6 +494,20 @@ pub fn read(
     Ok(())
 }
 
+/// e57 0.11's simple reader advances only one compressed-vector packet per
+/// call. A legal packet may contain no complete point yet (for example a
+/// one-bit validity stream whose final byte is in the following packet).
+/// Its raw reader already loops over this case; do the same here, retaining
+/// every actual decoding/I/O error. Each retry advances the underlying stream.
+pub(crate) fn complete_points<T: Read + Seek>(
+    points: e57::PointCloudReaderSimple<'_, T>,
+) -> impl Iterator<Item = Result<e57::Point, e57::Error>> + '_ {
+    points.filter(|point| {
+        !matches!(point, Err(e57::Error::Internal { desc, .. })
+            if desc == "Cannot read next point because of logic error")
+    })
+}
+
 /// Stream the registered, valid points of one scan.
 pub(crate) fn read_scan<T: Read + Seek>(
     file: &mut E57Reader<T>,
@@ -478,7 +520,7 @@ pub(crate) fn read_scan<T: Read + Seek>(
     // default converts intensity-only points into synthetic grey colors.
     points.intensity_to_color(false);
     points.apply_pose(true);
-    for point in points {
+    for point in complete_points(points) {
         let point = point?;
         let CartesianCoordinate::Valid { x, y, z } = &point.cartesian else {
             continue;

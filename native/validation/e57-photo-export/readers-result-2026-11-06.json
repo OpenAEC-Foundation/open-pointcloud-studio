@@ -1,0 +1,388 @@
+{
+  "native_binary_sha256": "2990926c91c076c289178fb43db71fe13af8e7a0ac16e9d8e008022668148881",
+  "pdal": "--------------------------------------------------------------------------------\npdal 2.10.2 (git-version: 21d285)\n--------------------------------------------------------------------------------",
+  "cloudcompare": "CloudComPy 2.13.90 wheel / CloudCompare 2.14 beta",
+  "cloudcompare_binary_sha256": "eb670863cdeeedf7581654d23a8cbeafb890282ea1ec430f8e8a581edb8705da",
+  "decoder_lineage": "Three external applications; shared C++ libE57 family, independent of the native Rust decoder",
+  "reader_limits": "PDAL quantises intensity/RGB to uint16; CloudCompare uses float32 coordinates and uint8 RGB. libE57 raw records/schema and physical metadata are checked separately.",
+  "system": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+  "cases": [
+    {
+      "source": "section.e57",
+      "source_points": 471,
+      "source_sha256": "21b15d28bd44d66a337da20adea0e86f8858cb09dbe90acc4fc9aab00027c8a5",
+      "libe57": {
+        "scans": [
+          {
+            "points": 471,
+            "fields": [
+              "cartesianX",
+              "cartesianY",
+              "cartesianZ",
+              "intensity",
+              "colorRed",
+              "colorGreen",
+              "colorBlue"
+            ],
+            "point_values_and_schema_exact": true,
+            "physical_limits": {
+              "intensityLimits": {
+                "intensityMinimum": 0.0,
+                "intensityMaximum": 1.0
+              },
+              "colorLimits": {
+                "colorRedMinimum": 0,
+                "colorRedMaximum": 255,
+                "colorGreenMinimum": 0,
+                "colorGreenMaximum": 255,
+                "colorBlueMinimum": 0,
+                "colorBlueMaximum": 255
+              }
+            },
+            "station_pose_unchanged": true
+          }
+        ],
+        "images": 6,
+        "image_bytes_and_calibration_exact": true,
+        "image_pose_and_scan_associations_unchanged": true
+      },
+      "pdal": {
+        "points": 471,
+        "normalised_text_sha256": "753588d24dfa993b35d0e4e59348bdd9f88dabc4f2b2505a76dc56da7cf27a0d",
+        "before_after_identical": true
+      },
+      "cloudcompare": {
+        "images_read": 6,
+        "unhandled_camera_types": 0,
+        "points": 471,
+        "normalised_text_sha256": "73def5ef12f5786e11a4a1ea58b06b840e9e8e3db7418c61dd7120c098067639",
+        "before_after_identical": true
+      },
+      "source_unchanged": true
+    },
+    {
+      "source": "manitou.e57",
+      "source_points": 1095702,
+      "source_sha256": "d4f06e2a80e3e54be7391130b911c82af0c6a7857cec133177431f5f578f23cf",
+      "libe57": {
+        "scans": [
+          {
+            "points": 346444,
+            "fields": [
+              "cartesianX",
+              "cartesianY",
+              "cartesianZ",
+              "intensity",
+              "rowIndex",
+              "columnIndex",
+              "cartesianInvalidState"
+            ],
+            "point_values_and_schema_exact": true,
+            "physical_limits": {
+              "intensityLimits": {
+                "intensityMaximum": 1.0,
+                "intensityMinimum": 0.0
+              },
+              "indexBounds": {
+                "rowMinimum": 0,
+                "rowMaximum": 387,
+                "columnMinimum": 0,
+                "columnMaximum": 3078,
+                "returnMinimum": 0,
+                "returnMaximum": 0
+              }
+            },
+            "station_pose_unchanged": true
+          },
+          {
+            "points": 156408,
+            "fields": [
+              "cartesianX",
+              "cartesianY",
+              "cartesianZ",
+              "intensity",
+              "rowIndex",
+              "columnIndex",
+              "cartesianInvalidState"
+            ],
+            "point_values_and_schema_exact": true,
+            "physical_limits": {
+              "intensityLimits": {
+                "intensityMaximum": 1.0,
+                "intensityMinimum": 0.0
+              },
+              "indexBounds": {
+                "rowMinimum": 0,
+                "rowMaximum": 254,
+                "columnMinimum": 0,
+                "columnMaximum": 2020,
+                "returnMinimum": 0,
+                "returnMaximum": 0
+              }
+            },
+            "station_pose_unchanged": true
+          },
+          {
+            "points": 453627,
+            "fields": [
+              "cartesianX",
+              "cartesianY",
+              "cartesianZ",
+              "intensity",
+              "rowIndex",
+              "columnIndex",
+              "cartesianInvalidState"
+            ],
+            "point_values_and_schema_exact": true,
+            "physical_limits": {
+              "intensityLimits": {
+                "intensityMaximum": 1.0,
+                "intensityMinimum": 0.0
+              },
+              "indexBounds": {
+                "rowMinimum": 0,
+                "rowMaximum": 387,
+                "columnMinimum": 0,
+                "columnMaximum": 3082,
+                "returnMinimum": 0,
+                "returnMaximum": 0
+              }
+            },
+            "station_pose_unchanged": true
+          },
+          {
+            "points": 34178,
+            "fields": [
+              "cartesianX",
+              "cartesianY",
+              "cartesianZ",
+              "intensity",
+              "rowIndex",
+              "columnIndex",
+              "cartesianInvalidState"
+            ],
+            "point_values_and_schema_exact": true,
+            "physical_limits": {
+              "intensityLimits": {
+                "intensityMaximum": 1.0,
+                "intensityMinimum": 0.0
+              },
+              "indexBounds": {
+                "rowMinimum": 0,
+                "rowMaximum": 387,
+                "columnMinimum": 0,
+                "columnMaximum": 1045,
+                "returnMinimum": 0,
+                "returnMaximum": 0
+              }
+            },
+            "station_pose_unchanged": true
+          },
+          {
+            "points": 105045,
+            "fields": [
+              "cartesianX",
+              "cartesianY",
+              "cartesianZ",
+              "intensity",
+              "rowIndex",
+              "columnIndex",
+              "cartesianInvalidState"
+            ],
+            "point_values_and_schema_exact": true,
+            "physical_limits": {
+              "intensityLimits": {
+                "intensityMaximum": 1.0,
+                "intensityMinimum": 0.0
+              },
+              "indexBounds": {
+                "rowMinimum": 0,
+                "rowMaximum": 387,
+                "columnMinimum": 0,
+                "columnMaximum": 2088,
+                "returnMinimum": 0,
+                "returnMaximum": 0
+              }
+            },
+            "station_pose_unchanged": true
+          }
+        ],
+        "images": 5,
+        "image_bytes_and_calibration_exact": true,
+        "image_pose_and_scan_associations_unchanged": true
+      },
+      "pdal": {
+        "points": 1095702,
+        "normalised_text_sha256": "02e02fa5668b79a0e7d4326d4f5c4147550d815a8f2cfc14731937405bb86e6b",
+        "before_after_identical": true
+      },
+      "cloudcompare": {
+        "images_read": 5,
+        "unhandled_camera_types": 5,
+        "points": 1095702,
+        "normalised_text_sha256": "885cf63319739f5360378a1d554e3a2456ed2f3538ca0499b6e70fc76c7f0d82",
+        "before_after_identical": true
+      },
+      "source_unchanged": true
+    }
+  ],
+  "cloudcompare_e57_plugin_sha256": "a8cfc9189a6f3e71541f3eb566cc020f32402b540ded78f1362e8fb0989cbcb2",
+  "external_reader_point_limit": 2000000,
+  "python_packages": {
+    "pye57": "0.4.19",
+    "numpy": "2.5.4",
+    "scipy": "1.18.1"
+  },
+  "cloudcompare_distribution": {
+    "name": "cloudcompy-2.13.90-cp312-cp312-linux_x86_64.whl",
+    "sha256": "604b25c9bc65ce89cf14e0b048257822fd5699ceed69905271b157dd13f4e292",
+    "source": "https://www.simulation.openfields.fr/index.php/cloudcompy-downloads/3-cloudcompy-binaries/13-experimental-pypi-wheels-install-with-pip/14-linux-wheel-files/142-cloudcompy-2-13-90-cp312-cp312-linux-x86-64-whl",
+    "status": "upstream experimental wheel; E57-enabled CloudCompare executable"
+  },
+  "reproduced_before_fix": {
+    "baseline_native_binary_sha256": "0cc7de6710d6f40afcd5f991a5db67f3ee8994e4f3d4fa742b825226577fbce4",
+    "original_intensity_limits": [
+      {
+        "intensityMaximum": 1.0,
+        "intensityMinimum": 0.0
+      },
+      {
+        "intensityMaximum": 1.0,
+        "intensityMinimum": 0.0
+      },
+      {
+        "intensityMaximum": 1.0,
+        "intensityMinimum": 0.0
+      },
+      {
+        "intensityMaximum": 1.0,
+        "intensityMinimum": 0.0
+      },
+      {
+        "intensityMaximum": 1.0,
+        "intensityMinimum": 0.0
+      }
+    ],
+    "bad_export_intensity_limits": [
+      {
+        "intensityMinimum": 0.0,
+        "intensityMaximum": 32767.0
+      },
+      {
+        "intensityMinimum": 0.0,
+        "intensityMaximum": 32767.0
+      },
+      {
+        "intensityMinimum": 0.0,
+        "intensityMaximum": 32767.0
+      },
+      {
+        "intensityMinimum": 0.0,
+        "intensityMaximum": 32767.0
+      },
+      {
+        "intensityMinimum": 0.0,
+        "intensityMaximum": 32767.0
+      }
+    ],
+    "pdal_first_intensity": {
+      "original": 8190,
+      "bad_export": 0
+    },
+    "lost_grid_frame": {
+      "original_index_bounds": [
+        {
+          "rowMinimum": 0,
+          "rowMaximum": 387,
+          "columnMinimum": 0,
+          "columnMaximum": 3078,
+          "returnMinimum": 0,
+          "returnMaximum": 0
+        },
+        {
+          "rowMinimum": 0,
+          "rowMaximum": 254,
+          "columnMinimum": 0,
+          "columnMaximum": 2020,
+          "returnMinimum": 0,
+          "returnMaximum": 0
+        },
+        {
+          "rowMinimum": 0,
+          "rowMaximum": 387,
+          "columnMinimum": 0,
+          "columnMaximum": 3082,
+          "returnMinimum": 0,
+          "returnMaximum": 0
+        },
+        {
+          "rowMinimum": 0,
+          "rowMaximum": 387,
+          "columnMinimum": 0,
+          "columnMaximum": 1045,
+          "returnMinimum": 0,
+          "returnMaximum": 0
+        },
+        {
+          "rowMinimum": 0,
+          "rowMaximum": 387,
+          "columnMinimum": 0,
+          "columnMaximum": 2088,
+          "returnMinimum": 0,
+          "returnMaximum": 0
+        }
+      ],
+      "derived_index_bounds": [
+        {
+          "rowMinimum": 0,
+          "rowMaximum": 387,
+          "columnMinimum": 139,
+          "columnMaximum": 2885
+        },
+        {
+          "rowMinimum": 0,
+          "rowMaximum": 252,
+          "columnMinimum": 0,
+          "columnMaximum": 2020
+        },
+        {
+          "rowMinimum": 0,
+          "rowMaximum": 387,
+          "columnMinimum": 0,
+          "columnMaximum": 3082
+        },
+        {
+          "rowMinimum": 0,
+          "rowMaximum": 226,
+          "columnMinimum": 638,
+          "columnMaximum": 990
+        },
+        {
+          "rowMinimum": 17,
+          "rowMaximum": 387,
+          "columnMinimum": 173,
+          "columnMaximum": 1684
+        }
+      ],
+      "cloudcompare_position_rows_changed": 873,
+      "maximum_coordinate_difference": [
+        11.600784301757812,
+        19.112104415893555,
+        0.8135380744934082
+      ],
+      "intensity_values_changed": 0
+    }
+  },
+  "scope": "Two all-valid public fixtures, operated on isolated copies without photo-edit sidecars. The source vendor files stayed unchanged. This does not establish three independent decoder implementations or arbitrary vendor extension/grouping preservation.",
+  "verification": {
+    "workspace_tests": {
+      "passed": 1486,
+      "failed": 0,
+      "ignored": 12
+    },
+    "workspace_all_target_clippy": "passed with -D warnings",
+    "minimal_core_clippy": "passed with --no-default-features -D warnings",
+    "rustfmt": "passed",
+    "validation_python_syntax": "passed"
+  }
+}

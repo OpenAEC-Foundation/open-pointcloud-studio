@@ -17,6 +17,22 @@ section its version and date.
 
 ## Unreleased
 
+## 2026.48.0 - 2026-11-24
+
+- E57 exports keep the original sensor grid, physical intensity limits and station photographs when filtering or recolouring scans.
+- Mesh texture export uses calibrated scan photographs and measured point colours. The coverage report distinguishes observed and unobserved areas.
+- Managed Linux sessions expose the running desktop’s health separately from the switch for assistant commands.
+
+- Meshes can be exported as binary glTF (.glb) with vertex colours and normals.
+- Points in view allows up to 50 million points. Above ten million, indexed layers can resolve all visible points when their visible leaves fit the allocated budget.
+
+- The main-window pane layout, scans and model/photo cameras return after restarting. Detached documents return to the main window.
+
+- Side-by-side model, photo and drawing panes keep their own cameras. Documents can open in separate windows and dock back into the main window; closing the main window closes them together.
+
+- Feedback in the title strip opens a native private Open Feedback Studio form. It sends the entered message and optional reply email with the app version, retains the draft on failure, and attaches no scans, paths, screenshots or logs.
+- The MCP server checkbox at the bottom right allows or pauses external MCP/API commands and remembers the choice. Extension runs and jobs already started continue. API revision 13 reports the bridge state as `mcp_enabled`.
+
 ## 2026.45.1 - 2026-11-03
 
 - E57 exports now retain station photos, spherical and cylindrical panoramas, masks, camera poses and scan associations after filtering, section export and colouring points from photos. Edits that cannot preserve camera poses fail explicitly instead of silently dropping the images.

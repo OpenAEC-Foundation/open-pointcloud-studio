@@ -117,7 +117,7 @@ pub struct PhotoPixels {
 }
 
 impl PhotoPixels {
-    fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         self.width > 0
             && self.height > 0
             && self.rgba.len() == self.width as usize * self.height as usize * 4
@@ -135,7 +135,7 @@ impl PhotoPixels {
     /// The colour at a pixel of the photo at its stored size, with integer
     /// values at pixel centres: bilinear between the four nearest decoded
     /// pixels, across the seam of a panorama that goes all the way round.
-    fn sample(&self, pixel: [f64; 2], stored: [u32; 2], wraps: bool) -> [f32; 3] {
+    pub(crate) fn sample(&self, pixel: [f64; 2], stored: [u32; 2], wraps: bool) -> [f32; 3] {
         let width = i64::from(self.width);
         let height = i64::from(self.height);
         let x = (pixel[0] + 0.5) * f64::from(self.width) / f64::from(stored[0]) - 0.5;

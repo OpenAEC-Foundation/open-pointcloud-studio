@@ -530,7 +530,7 @@ impl Studio {
                 ),
                 self.file_tile(
                     key("Surface mesh…"),
-                    key("The mesh of the active scan as OBJ, PLY, STL, DXF, DWG or IFC"),
+                    key("The mesh of the active scan as OBJ, PLY, STL, GLB, DXF, DWG or IFC"),
                     FileAction::ExportMesh,
                     active_cloud.is_some_and(|entry| entry.mesh.is_some())
                         && !self.mesh_export_pending,

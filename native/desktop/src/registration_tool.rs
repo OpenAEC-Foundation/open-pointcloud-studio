@@ -729,7 +729,7 @@ impl Studio {
             Action::Save(merge) => {
                 return Task::perform(
                     async move {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("E57 scene", &["e57"])
                             .set_file_name(if merge {
                                 "registered-scene.e57"
@@ -868,7 +868,7 @@ impl Studio {
             Action::Matrix => {
                 return Task::perform(
                     async {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .add_filter("Registration matrix", &["json"])
                             .set_file_name("registration.json")
                             .save_file()

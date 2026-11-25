@@ -26,6 +26,7 @@ pub enum MeshFormat {
     Obj,
     Ply,
     Stl,
+    Glb,
     /// `MESH` entities on the layer `OPS-MESH`, in metres.
     Dxf,
     /// As `Dxf`, in the binary drawing format.
@@ -46,6 +47,7 @@ impl MeshFormat {
         {
             Some("obj") => Some(Self::Obj),
             Some("ply") => Some(Self::Ply),
+            Some("glb") => Some(Self::Glb),
             Some("stl") => Some(Self::Stl),
             Some("dxf") => Some(Self::Dxf),
             Some("dwg") => Some(Self::Dwg),
@@ -58,6 +60,7 @@ impl MeshFormat {
         match self {
             Self::Obj => "obj",
             Self::Ply => "ply",
+            Self::Glb => "glb",
             Self::Stl => "stl",
             Self::Dxf => "dxf",
             Self::Dwg => "dwg",
@@ -69,6 +72,7 @@ impl MeshFormat {
         match self {
             Self::Obj => "OBJ",
             Self::Ply => "PLY",
+            Self::Glb => "GLB",
             Self::Stl => "STL",
             Self::Dxf => "DXF",
             Self::Dwg => "DWG",
@@ -116,6 +120,13 @@ pub fn write_mesh(
                 return Err(LoadError::InvalidData("invalid PLY mesh export".into()));
             }
             write_atomically(destination, |writer| write_ply(mesh, comments, writer))?;
+            Ok(MeshWriteReport::default())
+        }
+        MeshFormat::Glb => {
+            validate(mesh, comments, format)?;
+            write_atomically(destination, |writer| {
+                crate::glb::write(mesh, comments, writer)
+            })?;
             Ok(MeshWriteReport::default())
         }
         MeshFormat::Stl => {

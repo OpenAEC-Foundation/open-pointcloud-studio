@@ -404,7 +404,7 @@ pub fn write_e57_scene(
                 simple.apply_pose(true);
                 simple.intensity_to_color(false);
                 let mut records = raw.pointcloud_raw(&scan)?;
-                for point in simple {
+                for point in crate::e57_points::complete_points(simple) {
                     let point = point?;
                     let mut values = records.next().ok_or_else(|| {
                         LoadError::InvalidData("E57 stream length mismatch".into())
@@ -441,6 +441,7 @@ pub fn write_e57_scene(
                 if records.next().is_some() {
                     return Err(LoadError::InvalidData("E57 stream length mismatch".into()));
                 }
+                output.set_index_bounds(scan.index_bounds.clone());
                 output.finalize()?;
             }
             if ordinal != source.cloud.total_points {

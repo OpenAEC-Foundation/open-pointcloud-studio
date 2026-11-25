@@ -71,6 +71,7 @@ fn color(rgb: [u8; 3]) -> Color {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Built {
     revision: u64,
+    plot: usize,
     scale: f64,
 }
 
@@ -95,7 +96,12 @@ fn geometry_rect(rect: [[f64; 2]; 2], height: f64, scale: f64) -> Rectangle {
 
 /// Draw the marks of the plot but its texts into a frame whose origin is
 /// the upper left corner of the paper.
-fn draw_marks(frame: &mut Frame, plot: &Plot, tool: &LayoutTool, scale: f64) {
+fn draw_marks(
+    frame: &mut Frame,
+    plot: &Plot,
+    images: &std::collections::HashMap<String, super::Picture>,
+    scale: f64,
+) {
     let height = plot.size[1];
     for group in &plot.groups {
         match group.clip {
@@ -104,13 +110,13 @@ fn draw_marks(frame: &mut Frame, plot: &Plot, tool: &LayoutTool, scale: f64) {
                 let origin = Vector::new(-region.x, -region.y);
                 frame.with_clip(region, |frame| {
                     for mark in &group.marks {
-                        draw_mark(frame, mark, tool, height, scale, origin);
+                        draw_mark(frame, mark, images, height, scale, origin);
                     }
                 });
             }
             None => {
                 for mark in &group.marks {
-                    draw_mark(frame, mark, tool, height, scale, Vector::ZERO);
+                    draw_mark(frame, mark, images, height, scale, Vector::ZERO);
                 }
             }
         }
@@ -120,7 +126,7 @@ fn draw_marks(frame: &mut Frame, plot: &Plot, tool: &LayoutTool, scale: f64) {
 fn draw_mark(
     frame: &mut Frame,
     mark: &Mark,
-    tool: &LayoutTool,
+    images: &std::collections::HashMap<String, super::Picture>,
     height: f64,
     scale: f64,
     origin: Vector,
@@ -180,7 +186,7 @@ fn draw_mark(
             );
         }
         Mark::Image { rect, key } => {
-            if let Some(image) = tool.images.get(key) {
+            if let Some(image) = images.get(key) {
                 let mut bounds = geometry_rect(*rect, height, scale);
                 bounds.x += origin.x;
                 bounds.y += origin.y;
@@ -194,6 +200,7 @@ fn draw_mark(
 
 /// The paper with the cached geometry of the sheet.
 pub(crate) struct Paper<'a> {
+    pub images: &'a std::collections::HashMap<String, super::Picture>,
     pub tool: &'a LayoutTool,
     pub plot: Arc<Plot>,
     pub desk: Color,
@@ -247,6 +254,7 @@ impl Widget<Message, Theme, Renderer> for Paper<'_> {
         let camera = tool.camera.get();
         let [width, height] = plot.size;
         let wanted = Built {
+            plot: Arc::as_ptr(&self.plot) as usize,
             revision: tool.drawn_revision(),
             scale: camera.scale,
         };
@@ -281,7 +289,7 @@ impl Widget<Message, Theme, Renderer> for Paper<'_> {
             );
         });
         let geometry = tool.cache.draw(renderer, paper, |frame| {
-            draw_marks(frame, plot, tool, camera.scale);
+            draw_marks(frame, plot, self.images, camera.scale);
         });
         renderer.with_layer(bounds, |renderer| {
             renderer.with_transformation(

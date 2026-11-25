@@ -93,6 +93,7 @@ impl Studio {
     pub(crate) fn settings_action(&mut self, action: SettingsAction) {
         match action {
             SettingsAction::Open => {
+                self.feedback.open = false;
                 self.file_open = false;
                 // The shortcut also arrives while the dialog is open, which
                 // must not forget what Cancel goes back to.

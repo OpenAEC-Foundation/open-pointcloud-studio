@@ -1070,3 +1070,27 @@ fn a_sheet_not_shown_is_listed_and_written_with_the_names_its_views_have_now() {
     assert_eq!(studio.layouts.list[0].viewports[0].name, "Hall");
     assert!(studio.drawing_view.shown_layout().is_none());
 }
+
+#[test]
+fn a_paper_pane_restores_only_its_camera_without_rolling_back_shared_work() {
+    let mut root = LayoutTool::default();
+    root.camera.set(ViewCamera {
+        center: [100., 200.],
+        scale: 2.5,
+    });
+    root.fit_pending.set(false);
+    root.selected = Some("viewport-a".into());
+    let pane = root.render_copy();
+    root.camera.set(ViewCamera {
+        center: [20., 40.],
+        scale: 0.5,
+    });
+    root.making = Some("drawing-job".into());
+    root.revision = 17;
+    pane.restore_camera_into(&mut root);
+    assert_eq!(root.camera.get(), pane.camera.get());
+    assert_eq!(root.selected.as_deref(), Some("viewport-a"));
+    assert_eq!(root.making.as_deref(), Some("drawing-job"));
+    assert_eq!(root.revision, 17);
+    assert!(pane.list.is_empty() && pane.images.is_empty());
+}

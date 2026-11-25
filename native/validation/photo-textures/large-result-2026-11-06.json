@@ -1,0 +1,436 @@
+{
+  "job": {
+    "coverage": {
+      "photograph_texels": 10153,
+      "photos_failed": 0,
+      "photos_used": [
+        0
+      ],
+      "point_colour_texels": 0,
+      "unobserved_texels": 0
+    },
+    "operation": "texture_mesh",
+    "pages": 1,
+    "path": "photographic.obj",
+    "preview_error": null,
+    "resolution_limited": 0,
+    "state": "complete",
+    "triangles": 1
+  },
+  "changed_viewport_pixels": 57237,
+  "independent_reader": "trimesh 5.2.0",
+  "uvs": [
+    [
+      0.005859375,
+      0.994140625
+    ],
+    [
+      0.556640625,
+      0.994140625
+    ],
+    [
+      0.005859375,
+      0.443359375
+    ]
+  ],
+  "source_photo_unchanged": true,
+  "real_e57": {
+    "source": "BLK2GO_Demo02.e57",
+    "surface": {
+      "components": 2,
+      "mode": "3D surface",
+      "open_edges": 9432,
+      "path": "real-surface.obj",
+      "source_points": 199186802,
+      "state": "complete",
+      "triangles": 15238,
+      "vertices": 5000
+    },
+    "texture": {
+      "coverage": {
+        "photograph_texels": 3619,
+        "photos_failed": 0,
+        "photos_used": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "point_colour_texels": 3814645,
+        "unobserved_texels": 0
+      },
+      "operation": "texture_mesh",
+      "pages": 1,
+      "path": "real-photo.obj",
+      "preview_error": null,
+      "resolution_limited": 0,
+      "state": "complete",
+      "triangles": 15238
+    },
+    "independent_materials": 1,
+    "reconstruction_seconds": 48.958273604977876,
+    "texture_seconds": 38.99816451012157,
+    "output_bytes": 12081126,
+    "progress_samples": [
+      {
+        "seconds": 0.141,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 0.118,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running"
+      },
+      {
+        "seconds": 2.175,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 4.295,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 6.52,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 8.563,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 10.607,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 12.641,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 14.681,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 16.826,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 18.845,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 20.902,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 22.906,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 24.928,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 27.02,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 29.064,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 31.066,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 33.097,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 35.142,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 37.152,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 39.257,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 41.303,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 43.303,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 45.333,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 47.445,
+        "operation": "mesh",
+        "mode": "3D surface",
+        "state": "running",
+        "total": 199186802,
+        "stage": "reading"
+      },
+      {
+        "seconds": 0.168,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 2.242,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 285,
+        "total": 15238
+      },
+      {
+        "seconds": 4.652,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 1707,
+        "total": 15238
+      },
+      {
+        "seconds": 6.957,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 2257,
+        "total": 15238
+      },
+      {
+        "seconds": 9.096,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 3086,
+        "total": 15238
+      },
+      {
+        "seconds": 11.404,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 4718,
+        "total": 15238
+      },
+      {
+        "seconds": 13.505,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 6205,
+        "total": 15238
+      },
+      {
+        "seconds": 15.766,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 7386,
+        "total": 15238
+      },
+      {
+        "seconds": 17.845,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 8364,
+        "total": 15238
+      },
+      {
+        "seconds": 20.047,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 9916,
+        "total": 15238
+      },
+      {
+        "seconds": 22.074,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 11401,
+        "total": 15238
+      },
+      {
+        "seconds": 24.409,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 13005,
+        "total": 15238
+      },
+      {
+        "seconds": 26.581,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 14394,
+        "total": 15238
+      },
+      {
+        "seconds": 28.728,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 15229,
+        "total": 15238
+      },
+      {
+        "seconds": 30.754,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 15229,
+        "total": 15238
+      },
+      {
+        "seconds": 32.813,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 15238,
+        "total": 15238
+      },
+      {
+        "seconds": 34.84,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 15238,
+        "total": 15238
+      },
+      {
+        "seconds": 37.078,
+        "operation": "texture_mesh",
+        "state": "running",
+        "processed": 15238,
+        "total": 15238
+      },
+      {
+        "seconds": 0.132,
+        "operation": "texture_mesh",
+        "state": "running"
+      },
+      {
+        "seconds": 2.231,
+        "operation": "texture_mesh",
+        "state": "cancelled"
+      }
+    ],
+    "cancellation": {
+      "state": "cancelled",
+      "left_partial_files": false
+    },
+    "sha256": "e01da70d9cc3a2c8a0cf9e3e00f76b2d96895590d12285240b8148c2eb6a5040",
+    "independent_opengl_viewer_rendered": true,
+    "independent_viewer_pyglet": "1.5.31"
+  },
+  "native_peak_rss_kib": 662820,
+  "execution_profile": "development binary, core opt-level=2; Vulkan software renderer",
+  "index_preparation": {
+    "points": 199186802,
+    "nodes": 12673,
+    "leaves": 10706,
+    "depth": 9,
+    "peak_rss_kib": 240828,
+    "wall_seconds": 1858.4,
+    "wall_time_includes_compilation_pauses": true,
+    "reader_fix_pr": 59,
+    "reader_fix_commit": "5f5292d",
+    "note": "The unchanged octree format was prepared with the E57 packet-reader fix from PR 59; this is not an index throughput benchmark."
+  },
+  "settings": {
+    "vertices": 5000,
+    "texel_size": 0.05,
+    "max_resolution": 4096,
+    "photo_reach_metres": 20,
+    "maximum_decoded_photo_side": 2048
+  }
+}

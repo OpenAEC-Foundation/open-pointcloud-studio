@@ -117,3 +117,5 @@ shared crate. The Style Repo keeps the source mapping and native comparison.
 The sidebar-first frame API is synchronized with the Style Repo: `SidebarFrameProfile::WORKSPACE_COMPOSER` preserves the 32/220/22 px source geometry, and `ChromeMode::SidebarCompact` exposes a raw navigation slot without a ribbon or document band. Pointcloud continues to use its existing ribbon shell; the new variant is available to future sidebar-first OpenAEC tools. The native Pointcloud desktop package still passes `cargo check` with this shared API.
 
 The shared `ChromeMode::ThreePaneFixed` variant now accepts exact left and right pane widths for source-specific review screens. The Style Repo uses it for the Open Calc Studio budget screen at 320/240 px, based on the pinned Dutch capture. Pointcloud continues to use its existing resizable ribbon workspace.
+
+The local crate inherits the product workspace version (`YYYY.W.N`) so all first-party release metadata stays synchronized. The upstream source revision above remains the identity of the imported UI implementation.

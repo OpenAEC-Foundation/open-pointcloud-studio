@@ -116,6 +116,9 @@ impl UiTheme {
     }
 
     pub fn load() -> Self {
+        if let Some(theme) = crate::managed::theme() {
+            return theme;
+        }
         theme_path()
             .and_then(|path| std::fs::read_to_string(path).ok())
             .and_then(|value| Self::from_key(value.trim()))

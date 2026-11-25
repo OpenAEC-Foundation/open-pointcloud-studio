@@ -957,7 +957,7 @@ impl Studio {
                 let start = PathBuf::from(&self.mesh_to_plans.project_folder);
                 return Task::perform(
                     async move {
-                        let mut dialog = rfd::AsyncFileDialog::new();
+                        let mut dialog = crate::managed::file_dialog();
                         if let Some(parent) = start.parent().filter(|parent| parent.is_dir()) {
                             dialog = dialog.set_directory(parent);
                         }

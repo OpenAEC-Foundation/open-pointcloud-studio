@@ -716,7 +716,7 @@ impl Studio {
                 let filter = tr("Extension (.zip or extension.json)").to_owned();
                 return Task::perform(
                     async move {
-                        rfd::AsyncFileDialog::new()
+                        crate::managed::file_dialog()
                             .set_title(title)
                             .add_filter(filter, &["zip", "json"])
                             .pick_file()
@@ -1335,7 +1335,7 @@ impl Studio {
         let job = id.clone();
         let task = Task::perform(
             async move {
-                let mut dialog = rfd::AsyncFileDialog::new().set_title(title);
+                let mut dialog = crate::managed::file_dialog().set_title(title);
                 for filter in &options.filters {
                     dialog = dialog.add_filter(filter.name.trim(), &filter.extensions);
                 }

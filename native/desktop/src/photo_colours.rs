@@ -734,7 +734,7 @@ fn photos_of(files: Option<&[FilePhoto]>, entry: &CloudEntry) -> Vec<FilePhoto> 
 
 impl Studio {
     /// The photos of the layer at a place in the project list.
-    fn colour_photos(&self, index: usize) -> Vec<FilePhoto> {
+    pub(crate) fn colour_photos(&self, index: usize) -> Vec<FilePhoto> {
         let Some(entry) = self.clouds.get(index) else {
             return Vec::new();
         };

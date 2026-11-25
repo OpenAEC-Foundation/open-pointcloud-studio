@@ -1,0 +1,36 @@
+name: Classic package metadata
+
+on:
+  pull_request:
+    paths:
+      - 'classic/**'
+      - 'native/packaging/*version*'
+      - '.github/workflows/classic-check.yml'
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: classic
+    env:
+      # The pinned public UI dependency must not need an SSH account.
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: url.https://github.com/.insteadOf
+      GIT_CONFIG_VALUE_0: ssh://git@github.com/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: classic/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Check all product version fields
+        working-directory: .
+        run: bash native/packaging/set-version.sh check
+      - name: Build Windows MSI and NSIS without publishing
+        run: npm exec tauri build -- --bundles msi,nsis
