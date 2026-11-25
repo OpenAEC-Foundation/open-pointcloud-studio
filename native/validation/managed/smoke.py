@@ -79,12 +79,30 @@ def tool(name, **arguments):
     return json.loads(next(item["text"] for item in reply["content"] if item["type"] == "text"))
 
 
+def save_to(path, expected_points):
+    submitted = tool("opslaan", path=str(path))
+    reply = tool("wait_for_job", id=submitted["job_id"], timeout_seconds=60)
+    assert not reply["timed_out"], reply
+    job = reply["job"]
+    assert job["state"] == "complete" and job["path"] == str(path), job
+    assert job["points"] == expected_points, job
+    return job["points"]
+
+
+def xyz_coordinates(path):
+    rows = [tuple(map(float, line.split())) for line in path.read_text().splitlines()]
+    assert all(len(row) == 3 for row in rows)
+    assert len(rows) == len(set(rows)), "duplicate coordinates in the synthetic grid"
+    return set(rows)
+
+
 with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
     directory = Path(directory)
     work = directory / "files"
     work.mkdir()
     source = work / "sample.xyz"
     source.write_text("".join(f"{x/10} {y/10} {z/10}\n" for x in range(10) for y in range(10) for z in range(10)))
+    source_bytes = source.read_bytes()
     env = {**os.environ, "XDG_CONFIG_HOME": str(directory / "config"),
            "XDG_CACHE_HOME": str(directory / "cache"), "OPENAEC_BEHEERD": "1",
            "OPENAEC_MAP": str(work), "OPENAEC_TAAL": "en", "OPENAEC_THEMA": "dark",
@@ -118,6 +136,8 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
             assert {"pointcloud_stand", "pointcloud_open", "pointcloud_opslaan", "pointcloud_registration_refine"} <= names
             assert all(name.startswith("pointcloud_") for name in names)
             idle_rss_kib = None
+            open_save_points = 0
+            staged_points = []
             if args.paused_access:
                 blocked = rpc("tools/call", {"name": "pointcloud_stand", "arguments": {}})
                 assert blocked.get("isError") and "paused" in str(blocked), blocked
@@ -137,9 +157,20 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
                 assert status["language"] == "en"
                 assert status["clouds"][0]["points"] == 1000
                 destination = work / "saved.ply"
-                exported = tool("opslaan", path=str(destination))
-                tool("wait_for_job", id=exported["job_id"], timeout_seconds=60)
+                open_save_points = save_to(destination, 1000)
                 assert destination.is_file() and destination.stat().st_size > 1000
+                # The host can collect each completed version from this working path.
+                original = xyz_coordinates(source)
+                staged = work / "next-version.xyz"
+                tool("thin", percent=50)
+                tool("wait_until_idle", timeout_seconds=60)
+                staged_points.append(save_to(staged, 500))
+                edited = xyz_coordinates(staged)
+                assert len(edited) == 500 and edited < original
+                tool("undo_delete")
+                staged_points.append(save_to(staged, 1000))
+                assert xyz_coordinates(staged) == original
+                assert source.read_bytes() == source_bytes
                 tool("screenshot", path=str((args.output / "managed-window.png").resolve()), window=True)
                 assert (args.output / "managed-window.png").stat().st_size > 1000
             assert request("DELETE", "/mcp")[0] == 200
@@ -148,7 +179,7 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
             assert window.wait(timeout=30) == 0
             assert request("GET", "/gezond")[0] == 503
             report = {"ok": True, "server": initialized["serverInfo"], "tool_count": len(definitions),
-                      "open_save_points": 0 if args.paused_access else 1000, "mcp_paused": args.paused_access, "idle_rss_kib": idle_rss_kib, "unauthenticated_status": 401, "origin_status": 403,
+                      "open_save_points": open_save_points, "staged_version_points": staged_points, "mcp_paused": args.paused_access, "idle_rss_kib": idle_rss_kib, "unauthenticated_status": 401, "origin_status": 403,
                       "health_after_window_exit": 503, "sigterm_exit": 0}
             (args.output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
             print(json.dumps(report))

@@ -8,6 +8,13 @@ It exercises the real desktop's tools over authenticated MCP HTTP, rather than
 a mock of the point-cloud operations. Outputs include JSON, window screenshots
 and logs. Bearer keys are random per run and excluded from reports.
 
+The active-session probe also stages two XYZ exports for a Docs host. It thins
+the 1,000-point grid to 500, collects the exported coordinates after the job
+completes, then undoes the edit and saves again to the same output path. It
+checks both coordinate sets and the bytes of the original input. The
+`staged_version_points` array in `result.json` records the completed jobs.
+The platform must separately verify publication of new versions in Docs.
+
 `result-2026-11-05.json` records a successful local amd64 Linux run with labwc
 0.7.1 and the development binary. Idle RSS was measured after the empty window
 rendered: 253,172 KiB (about 247 MiB). This is not a release AppImage or arm64
