@@ -238,12 +238,23 @@ The gap, checked on 25 October 2026 by comparing `214c01a` with `main` of the St
 | `openaec-icons`, the B2 icon set | not adopted | A crate added after the copy was taken |
 | The colours of the 3D scene, of drawings and of sheets; the adaptive ribbon; the panels of the application | local | The domain of this application |
 
-Evidence:
+### Verification against the 2026.48.0 release
 
-- Local: the tests of `native/ui`, 21 passed. The review baselines are the software renders [native/design/pointcloud-shell-light.png](../native/design/pointcloud-shell-light.png) and [native/design/pointcloud-shell-forge.png](../native/design/pointcloud-shell-forge.png).
-- Not run for this record: `scripts/check_portable_ui.py` of the Style Repo against `214c01a` and against `main`. It needs a clone of the Style Repo, which the development machine does not have; its output and date go here once it has run.
-- CI: none. A check of the copy in CI is deferred.
-- The requirement stays open on the gap: the current packages of the Style Repo are not adopted.
+On 25 November 2026 the upstream checker ran against the tagged Studio source and both Style Repo revisions below. Both runs exited with status 1 at `Portable README.md differs`. The checker stops at that first difference. Studio documents its own integration in the crate README. The following independent comparison includes subdirectories under `src/` as well as the assets and licenses. [Upstream checker](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo/blob/2eb8a958bbfe864dea81237e8890cf2405620b7d/scripts/check_portable_ui.py)
+
+| Compared with Studio 2026.48.0 | Snapshot base, `214c01a` | Style Repo main on 25 November, `2eb8a95` |
+| --- | --- | --- |
+| Packaged assets, compared by relative path and bytes | All 150 match | All 150 match. Upstream adds five font files and a font manifest |
+| Files under `licenses/` | All five match | All five match. Upstream adds two font license files |
+| Rust sources, normalized with rustfmt (edition 2021) | 16 of 22 match | One of the 22 shared paths matches. Upstream has 22 further Rust files |
+| Values in `src/tokens.rs` | All 77 named RGBA values match in each of the five themes | The same 385 values match |
+| iced dependency | Both pin 0.13.1 | Upstream pins 0.14.0 |
+
+The upstream repository advanced 259 commits from the snapshot base. To reproduce the checker result, place a clean `open-pointcloud-studio` checkout at tag `v2026.48.0` next to the Style Repo checkout. In the latter, check out each revision in turn and run `python3 scripts/check_portable_ui.py`. [Snapshot base](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo/tree/214c01a8758850f165f0d620312f8863c5a84ea6/crates/openaec-ui) · [Compared upstream revision](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo/tree/2eb8a958bbfe864dea81237e8890cf2405620b7d/crates/openaec-ui) · [Studio release source](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/tree/v2026.48.0/native/ui)
+
+The published Linux amd64 AppImage rendered all five themes under headless Wayland with Mesa lavapipe in an isolated profile. Each `set_theme` call was checked with `status` and a full-window `screenshot`. In each 1278 × 693 image, the most frequent RGB on rows 18, 85, 164 and 680 matched the corresponding title, ribbon, document and status backgrounds (`bg_lighter`, `bg`, `docbar_bg`, `status_bg`). All 20 comparisons passed. After a process restart, `status` still reported the last selected theme, High contrast. In the tagged source, all 21 tests passed with `cargo test --locked -p openaec-ui` from `native/`.
+
+This establishes theme rendering on the sampled bands. Adoption of the newer component APIs and verification of the remaining controls are still open. The existing software-rendered shell baselines cover [Light](../native/design/pointcloud-shell-light.png) and [Forge](../native/design/pointcloud-shell-forge.png).
 
 ## Signing per file
 
@@ -395,9 +406,7 @@ Every requirement is open. "Now" is what exists and what ran; "CI" is what will 
 
 **8. The UI and its relation to the current packages and tokens of the OpenAEC Style Repo, themes and component conventions.**
 
-- Now: [UI and the OpenAEC Style Repo](#ui-and-the-openaec-style-repo), the gap of 12 commits checked on 25 October 2026, and the ui tests.
-- CI: nothing.
-- Open: the decision on iced 0.14 and the current packages, and `check_portable_ui.py` against both commits. This requirement stays open on the gap.
+The 2026.48.0 check covers the source snapshot, shared assets and theme values, the 21 UI crate tests and four rendered bands in each theme. The upstream snapshot checker was run against both revisions. The iced 0.14 migration and wider component parity remain open. [Verification and reproduction](#verification-against-the-2026480-release)
 
 **9. Signing verified on the files of a release, updater signatures apart, with signer or public key, command and result.**
 
