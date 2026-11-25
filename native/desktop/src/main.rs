@@ -394,6 +394,45 @@ fn export_edited_where(
     }
 }
 
+/// Keep point membership and the count written to format headers in sync,
+/// including when a selection still contains points hidden by later edits.
+struct ExportSelection<'a> {
+    mask: &'a SelectionMask,
+    deleted: Option<&'a DeletionMask>,
+    selected_only: bool,
+}
+
+impl ExportSelection<'_> {
+    fn write(
+        &self,
+        cloud: &PointCloud,
+        path: &Path,
+        format: ExportFormat,
+        transform: CloudTransform,
+        colours: Option<&PointColours>,
+    ) -> Result<u64, pointcloud_core::LoadError> {
+        let selected = self.mask.live_count(self.deleted);
+        let count = if self.selected_only {
+            selected
+        } else {
+            cloud.total_points - self.deleted.map_or(0, |mask| mask.count) - selected
+        };
+        export_edited_where(
+            cloud,
+            path,
+            format,
+            transform,
+            colours,
+            count,
+            |ordinal, _| {
+                self.mask.contains(ordinal) == self.selected_only
+                    && self.deleted.is_none_or(|mask| !mask.contains(ordinal))
+            },
+        )?;
+        Ok(count)
+    }
+}
+
 fn transformed_mesh_normals(normals: &[[f32; 3]], scale: [f64; 3]) -> Option<Vec<[f32; 3]>> {
     let transform = CloudTransform {
         scale,
@@ -2437,6 +2476,7 @@ struct CloudEntry {
     index_import_id: Option<u64>,
     transform: CloudTransform,
     centroid_cache: Option<CentroidCache>,
+    selected_count_cache: std::cell::RefCell<Option<SelectedCountCache>>,
     mesh: Option<Arc<MeshGeometry>>,
     /// The open edges and connected parts of `mesh`, counted when it was
     /// made or read.
@@ -2711,6 +2751,12 @@ impl LodRefinement {
     }
 }
 
+struct SelectedCountCache {
+    selection: std::sync::Weak<SelectionMask>,
+    deleted: std::sync::Weak<DeletionMask>,
+    count: u64,
+}
+
 struct CentroidCache {
     source_xyz: [f64; 3],
     deleted: Option<Arc<DeletionMask>>,
@@ -2852,6 +2898,32 @@ impl CloudEntry {
 
     fn bounds(&self) -> Bounds {
         self.transform.bounds(self.cloud.bounds)
+    }
+
+    fn selected_count(&self) -> u64 {
+        let Some(selection) = &self.selection else {
+            return 0;
+        };
+        let Some(deleted) = self.deleted.as_ref().filter(|mask| mask.count > 0) else {
+            return selection.count;
+        };
+        // UI redraws reuse the count until either ordinal mask changes. Weak
+        // references also invalidate the cache when Arc::make_mut edits a mask.
+        let mut cache = self.selected_count_cache.borrow_mut();
+        if let Some(known) = cache.as_ref() {
+            if known.selection.as_ptr() == Arc::as_ptr(selection)
+                && known.deleted.as_ptr() == Arc::as_ptr(deleted)
+            {
+                return known.count;
+            }
+        }
+        let count = selection.live_count(Some(deleted));
+        *cache = Some(SelectedCountCache {
+            selection: Arc::downgrade(selection),
+            deleted: Arc::downgrade(deleted),
+            count,
+        });
+        count
     }
 
     fn deleted_count(&self) -> u64 {
@@ -3281,6 +3353,7 @@ impl Studio {
             index_import_id: None,
             transform: CloudTransform::default(),
             centroid_cache: None,
+            selected_count_cache: Default::default(),
             mesh: None,
             mesh_topology: None,
             mesh_visible: true,
@@ -4039,7 +4112,7 @@ impl Studio {
                             "path": entry.cloud.path,
                             "points": entry.cloud.total_points,
                             "remaining": entry.remaining_count(),
-                            "selected": entry.selection.as_ref().map_or(0, |mask| mask.count),
+                            "selected": entry.selected_count(),
                             "deleted": entry.deleted.as_ref().map_or(0, |mask| mask.count),
                             "visible": entry.visible,
                             "indexed": entry.index.is_some(),
@@ -5485,7 +5558,7 @@ impl Studio {
                     Task::none(),
                 );
             };
-            Some((Arc::clone(mask), entry.remaining_count()))
+            Some(Arc::clone(mask))
         } else {
             None
         };
@@ -5517,13 +5590,8 @@ impl Studio {
                 move |result| Message::ApiExported(completion_id.clone(), true, result),
             );
             (response, task)
-        } else if let Some((mask, remaining)) = selection {
+        } else if let Some(mask) = selection {
             let selected = mode == ApiExportMode::Selected;
-            let expected_count = if selected {
-                mask.count
-            } else {
-                remaining.saturating_sub(mask.count)
-            };
             self.status = if selected {
                 "Exporting selected points through native API…"
             } else {
@@ -5534,25 +5602,13 @@ impl Studio {
             let task = Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
-                        export_edited_where(
-                            &cloud,
-                            &path,
-                            format,
-                            transform,
-                            colours.as_deref(),
-                            expected_count,
-                            |ordinal, _| {
-                                if selected {
-                                    mask.contains(ordinal)
-                                } else {
-                                    !mask.contains(ordinal)
-                                        && deleted
-                                            .as_ref()
-                                            .is_none_or(|bits| !bits.contains(ordinal))
-                                }
-                            },
-                        )
-                        .map(|()| (path, expected_count))
+                        ExportSelection {
+                            mask: &mask,
+                            deleted: deleted.as_deref(),
+                            selected_only: selected,
+                        }
+                        .write(&cloud, &path, format, transform, colours.as_deref())
+                        .map(|count| (path, count))
                         .map_err(|error| error.to_string())
                     })
                     .await
@@ -5985,6 +6041,7 @@ impl Studio {
                         index_import_id: None,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
+                        selected_count_cache: Default::default(),
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
@@ -7205,6 +7262,7 @@ impl Studio {
                         cloud,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
+                        selected_count_cache: Default::default(),
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
@@ -7782,7 +7840,8 @@ impl Studio {
                     self.status = format!("Could not open 3DBAG license: {error}");
                 }
             }
-            Message::ExportSelection => {
+            Message::ExportSelection | Message::RemoveSelection => {
+                let selected_only = matches!(message, Message::ExportSelection);
                 if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
                     if let Some(mask) = entry.selection.as_ref().filter(|mask| mask.count > 0) {
                         let format = self.export_format;
@@ -7790,66 +7849,33 @@ impl Studio {
                             .cloud
                             .path
                             .file_stem()
-                            .and_then(|stem| stem.to_str())
+                            .and_then(|name| name.to_str())
                             .unwrap_or("pointcloud");
-                        let suggestion = format!("{stem}-selection.{}", format.extension());
+                        let suffix = if selected_only {
+                            "selection"
+                        } else {
+                            "without-selection"
+                        };
+                        let suggestion = format!("{stem}-{suffix}.{}", format.extension());
                         let cloud = Arc::clone(&entry.cloud);
                         let mask = Arc::clone(mask);
+                        let deleted = entry.deleted.clone();
                         let transform = entry.transform;
-                        let colours = entry.colours.as_ref().map(Arc::clone);
-                        self.status =
-                            format!("Choose where to export {} selected points…", mask.count);
+                        let colours = entry.colours.clone();
+                        self.status = if selected_only {
+                            "Choose where to export the selected points…"
+                        } else {
+                            "Choose where to export the points outside the selection…"
+                        }
+                        .into();
                         return save_task(suggestion, format, move |path| {
-                            export_edited_where(
-                                &cloud,
-                                &path,
-                                format,
-                                transform,
-                                colours.as_deref(),
-                                mask.count,
-                                |ordinal, _| mask.contains(ordinal),
-                            )
-                            .map(|()| path)
-                            .map_err(|error| error.to_string())
-                        });
-                    }
-                }
-            }
-            Message::RemoveSelection => {
-                if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
-                    if let Some(mask) = entry.selection.as_ref().filter(|mask| mask.count > 0) {
-                        let format = self.export_format;
-                        let stem = entry
-                            .cloud
-                            .path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("pointcloud");
-                        let suggestion = format!("{stem}-without-selection.{}", format.extension());
-                        let cloud = Arc::clone(&entry.cloud);
-                        let mask = Arc::clone(mask);
-                        let deleted = entry.deleted.as_ref().map(Arc::clone);
-                        let transform = entry.transform;
-                        let colours = entry.colours.as_ref().map(Arc::clone);
-                        let expected = entry.remaining_count().saturating_sub(mask.count);
-                        self.status =
-                            format!("Choose output file without {} selected points…", mask.count);
-                        return save_task(suggestion, format, move |path| {
-                            export_edited_where(
-                                &cloud,
-                                &path,
-                                format,
-                                transform,
-                                colours.as_deref(),
-                                expected,
-                                |ordinal, _| {
-                                    !mask.contains(ordinal)
-                                        && deleted
-                                            .as_ref()
-                                            .is_none_or(|bits| !bits.contains(ordinal))
-                                },
-                            )
-                            .map(|()| path)
+                            ExportSelection {
+                                mask: &mask,
+                                deleted: deleted.as_deref(),
+                                selected_only,
+                            }
+                            .write(&cloud, &path, format, transform, colours.as_deref())
+                            .map(|_| path)
                             .map_err(|error| error.to_string())
                         });
                     }
@@ -7890,12 +7916,18 @@ impl Studio {
                     };
                     match deleted.apply(selection) {
                         Ok(added) if added > 0 => {
+                            let changed = match &entry.deleted {
+                                Some(previous) if added < selection.count => {
+                                    Arc::new(previous.newly_deleted(selection, added))
+                                }
+                                _ => Arc::clone(selection),
+                            };
                             removed += added;
                             updates.push((
                                 index,
                                 Arc::new(deleted),
                                 Arc::clone(&entry.cloud),
-                                Arc::clone(selection),
+                                changed,
                             ));
                         }
                         Ok(_) => {}
@@ -9585,7 +9617,7 @@ impl Studio {
                 let annotating = self.views.leave_tool();
                 self.bag_map_drawing = false;
                 self.drag_rectangle = None;
-                let deselected = self.selected_total() > 0;
+                let deselected = self.clouds.iter().any(|entry| entry.selection.is_some());
                 if deselected {
                     self.pending_delete = false;
                     self.revision += 1;
@@ -9821,11 +9853,7 @@ impl Studio {
     }
 
     fn selected_total(&self) -> u64 {
-        self.clouds
-            .iter()
-            .filter_map(|entry| entry.selection.as_ref())
-            .map(|selection| selection.count)
-            .sum()
+        self.clouds.iter().map(CloudEntry::selected_count).sum()
     }
 
     fn cancel_selection(&mut self) -> bool {
@@ -11119,7 +11147,7 @@ impl Studio {
                         icon_svg(ToolIcon::Clear, 25.0),
                         "Clear selection",
                         Message::ClearSelection,
-                        selected > 0
+                        self.clouds.iter().any(|entry| entry.selection.is_some())
                     ),
                 ]
                 .spacing(0),
@@ -11776,9 +11804,7 @@ impl Studio {
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
         let source_points = active_cloud.map_or(0, |entry| entry.cloud.total_points);
         let view_points = self.view_sample();
-        let selected_points = active_cloud
-            .and_then(|entry| entry.selection.as_ref())
-            .map_or(0, |selection| selection.count);
+        let selected_points = active_cloud.map_or(0, CloudEntry::selected_count);
         let indexed = active_cloud.is_some_and(|entry| entry.index.is_some());
         let filename = active_cloud.map_or(i18n::tr("No file loaded"), |entry| {
             display_name(&entry.cloud.path)
@@ -11986,7 +12012,7 @@ impl Studio {
             if let Some(point) = entry
                 .selection
                 .as_deref()
-                .filter(|selection| selection.count == 1)
+                .filter(|selection| selection.count == 1 && selected_points == 1)
                 .and_then(|selection| selection.highlights.first())
             {
                 let point = if entry
@@ -16878,6 +16904,53 @@ mod editing_tests {
     }
 
     #[test]
+    fn undoing_an_overlapping_delete_only_restores_points_changed_by_that_edit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("selection.xyz");
+        std::fs::write(&path, "1 0 0\n2 0 0\n3 0 0\n4 0 0\n").unwrap();
+        let mut studio = Studio::default();
+        let cloud = Arc::new(pointcloud_core::open(&path, 4).unwrap());
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&cloud))));
+        let mask = |bits: u64| {
+            let record = IndexedPoint {
+                ordinal: 0,
+                point: cloud.points[0],
+            };
+            let mut mask = SelectionMask::single(4, record).unwrap();
+            mask.bits[0] = bits;
+            mask.count = u64::from(bits.count_ones());
+            Arc::new(mask)
+        };
+        studio.clouds[0].selection = Some(mask(0b0011));
+        let _ = studio.update(Message::DeleteSelection);
+        let _ = studio.update(Message::UndoDelete);
+        studio.clouds[0].selection = Some(mask(0b1110));
+        assert_eq!(studio.selected_total(), 3);
+        let _ = studio.update(Message::RedoDelete);
+        assert_eq!(studio.selected_total(), 2);
+        let _ = studio.update(Message::UndoDelete);
+        assert_eq!(studio.selected_total(), 3);
+        let _ = studio.update(Message::RedoDelete);
+        let _ = studio.update(Message::DeleteSelection);
+        assert_eq!(studio.clouds[0].remaining_count(), 0);
+        let _ = studio.update(Message::UndoDelete);
+        let deleted = studio.clouds[0].deleted.as_ref().unwrap();
+        assert!(deleted.contains(0) && deleted.contains(1));
+        assert!(!deleted.contains(2) && !deleted.contains(3));
+        let _ = studio.update(Message::RedoDelete);
+        assert_eq!(studio.clouds[0].remaining_count(), 0);
+        let _ = studio.update(Message::UndoDelete);
+        let _ = studio.update(Message::UndoDelete);
+        assert_eq!(studio.clouds[0].remaining_count(), 4);
+        studio.clouds[0].selection = Some(mask(0b0011));
+        let _ = studio.update(Message::RedoDelete);
+        assert_eq!(studio.selected_total(), 0);
+        let _ = studio.update(Message::Escape);
+        let _ = studio.update(Message::UndoDelete);
+        assert!(studio.clouds[0].selection.is_none());
+    }
+
+    #[test]
     fn delete_undo_redo_keep_source_ordinals_across_two_clouds() {
         let directory = tempfile::tempdir().unwrap();
         let mut studio = Studio::default();
@@ -17235,6 +17308,52 @@ mod lod_transition_tests {
         assert!(exact.advance().unwrap().is_none());
         assert!(!exact.samples[0].is_empty());
         assert_eq!(exact.pace.read_points_per_ms(), seed);
+    }
+
+    #[test]
+    fn selection_exports_exclude_deleted_ordinals_in_all_point_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("original.xyz");
+        std::fs::write(&source, "1 2 3\n4 5 6\n7 8 9\n10 11 12\n").unwrap();
+        let cloud = pointcloud_core::open(&source, 4).unwrap();
+        let pick = |ordinal: usize| {
+            SelectionMask::single(
+                4,
+                IndexedPoint {
+                    ordinal: ordinal as u64,
+                    point: cloud.points[ordinal],
+                },
+            )
+            .unwrap()
+        };
+        let mut deleted = DeletionMask::new(4).unwrap();
+        deleted.apply(&pick(1)).unwrap();
+        let mut selection = pick(1);
+        selection.bits[0] |= 1 << 3;
+        selection.count += 1;
+        for format in ExportFormat::ALL {
+            for selected_only in [true, false] {
+                let expected = if selected_only { vec![10] } else { vec![1, 7] };
+                let path = dir.path().join(format!("copy.{}", format.extension()));
+                let filter = ExportSelection {
+                    mask: &selection,
+                    deleted: Some(&deleted),
+                    selected_only,
+                };
+                let count = filter
+                    .write(&cloud, &path, format, CloudTransform::default(), None)
+                    .unwrap();
+                assert_eq!(count as usize, expected.len());
+                let output = pointcloud_core::open(path, 4).unwrap();
+                let mut xs: Vec<_> = output
+                    .points
+                    .iter()
+                    .map(|point| point.xyz[0].round() as i32)
+                    .collect();
+                xs.sort_unstable();
+                assert_eq!(xs, expected, "{format:?}, selected={selected_only}");
+            }
+        }
     }
 
     #[test]
