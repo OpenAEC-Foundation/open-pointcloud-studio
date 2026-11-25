@@ -2,7 +2,21 @@
 
 This is the record of issue [#33](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33): what Open Pointcloud Studio delivers for each system, the library and the service it offers besides the desktop application, how its MCP servers, its interface, its signatures and its cloud deployment stand, and for each requirement of the issue which check proves it and what is still open.
 
-The current verified stable release is [2026.45.1](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v2026.45.1), published on 3 November 2026. The original 25 October audit below is historical evidence; its uncompleted publication steps are superseded only where the current record proves them.
+The current verified stable release is [2026.48.0](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v2026.48.0), published on 25 November 2026.
+
+## Published evidence, checked 25 November 2026
+
+The release runners verified the downloaded Windows, macOS and Linux packages and SDK libraries. The Windows Authenticode checks passed for publisher Impertio Studio B.V. The macOS checks passed on Intel and Apple silicon for Developer ID team `7KFV4QY98M`. The Linux runner verified the OpenPGP signatures on the checksum manifest and both AppImages. It also pulled the attested API image with digest `sha256:ee66ea26689a1f71eeb891be00661f97fa3d7dcdc8f08d5087cdb7d8082f089d`. See the [published verification record](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/open-pointcloud-studio_2026.48.0_verification.md) and [release run](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/runs/45540574535).
+
+A separate Linux amd64 check compiled the C11 example against the published SDK header and shared library outside the repository. It read 1,000 fixture points, checked that an export over its configured limit returned `OPS_ERROR_LIMIT`, exported 500 points and read all 500 back through the index. To reproduce this from the extracted [SDK archive](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/open-pointcloud-studio-sdk_2026.48.0_linux-amd64-so.tar.gz), run:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/inspect.c -Llib -lops_pointcloud -o inspect
+mkdir -p sample-output
+LD_LIBRARY_PATH="$PWD/lib" ./inspect sample-output
+```
+
+The OpenAEC Installer update manifest includes minisign signatures for the Windows x64 installer and both Linux AppImages. Live Claude Desktop and Claude Code sessions, the AWS deployment smoke test and full UI component parity remain open under [#33](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33). See the [versioned update manifest](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/latest.json).
 
 ## Published evidence, checked 5 November 2026
 
@@ -17,7 +31,7 @@ The [published verification record](https://github.com/OpenAEC-Foundation/open-p
 | Headless API image | Published digest `sha256:417e869953dac1584dbf185149cc15e69a1664326aa9a44f00e05c8108120a14`; attestation, pull and version passed | A local/container test does not establish deployment in AWS |
 | Claude clients, UI parity and AWS | Existing setup/contracts remain below | Live Claude Desktop/Code checks, full component parity and deployed AWS smoke evidence remain open |
 
-Publication now requires all five platform signing proofs; draft-only warnings are not permission to publish. Updater minisign integration remains tracked separately in #40. This update provides current evidence for #33 and #39 without declaring their remaining acceptance points complete.
+Publication now requires all five platform signing proofs; draft-only warnings are not permission to publish. At the time of this check, updater minisign integration was tracked separately in #40.
 
 ## Contents
 
@@ -47,18 +61,18 @@ The evidence of record comes from the published tag run of a release: its jobs, 
 
 ## Capability matrix
 
-The supported stable version in this matrix is 2026.45.1. Historical introduction versions are retained where established; “by 2026.45.1” identifies the verified delivery without claiming its earliest release. Release numbers follow [Releasing](../native/packaging/README.md#releasing).
+The supported stable version in this matrix is 2026.48.0. Historical introduction versions are retained where established; “by 2026.45.1” identifies the verified delivery without claiming its earliest release. Release numbers follow [Releasing](../native/packaging/README.md#releasing).
 
 | Delivered as | System or runtime | Processors | Status | Version | Since | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Installer `_x64-setup.exe` and zip `_windows-x64.zip` | Windows 10 and 11 | x64 | stable | 2026.45.1 published | installer 0.6.0, these names 0.8.0 | Packages `windows`; Release `verify-release` (windows) |
+| Installer `_x64-setup.exe` and zip `_windows-x64.zip` | Windows 10 and 11 | x64 | stable | 2026.48.0 published | installer 0.6.0, these names 0.8.0 | Packages `windows`; Release `verify-release` (windows) |
 | Disk image `.dmg` and archive `_macos-universal.tar.gz` | macOS 11 and later | arm64 and x86-64 in one file | stable | as above | 0.8.0 | Packages `macos`, `verify-macos`; Release `verify-release` (macos-arm64, macos-x86_64) |
 | `.deb`, AppImage and `_linux-amd64.tar.gz` | Linux with a C library of version 2.35 or newer, the C++ runtime of GCC 12 or newer, X11 or Wayland | amd64 | stable | as above | 0.8.0 | Packages `verify-linux`; Release `verify-release` (linux) |
 | `_arm64.deb`, `_arm64.AppImage` and `_linux-arm64.tar.gz` | as above | arm64 | experimental: built and tested on build machines with software rendering only | as above | 0.8.0 | Packages `verify-linux` (arm64) |
 | Command-line modes (`--export`, `--section`, `--drawing` and the others) | in every desktop package, without a window | as the package | stable | as above | 0.4.0 | `cli_help.rs`; `smoke-test.sh` in the Packages workflow |
-| Local command API | a running window, on 127.0.0.1 with a token; `native-rust-v1` | as the package | stable; changes are additive, and a release that adds a command or a field raises the revision | revision 11 in 2026.43.0 | 0.4.0 | `native_api.rs` and `mcp/tests.rs` hold [API.md](../native/API.md) to the code |
+| Local command API | a running window, on 127.0.0.1 with a token; `native-rust-v1` | as the package | stable; changes are additive, and a release that adds a command or a field raises the revision | revision 18 in 2026.48.0 | 0.4.0 | `native_api.rs` and `mcp/tests.rs` hold [API.md](../native/API.md) to the code |
 | MCP over standard input and output (`--mcp`) | in every desktop package | as the package | stable | as above | 0.7.0 | Packages `verify-linux`, step *External MCP client* |
-| C library `ops_pointcloud`, ABI 1.0: `ops_pointcloud.dll` | Windows 10 and 11 | x64 | new; ABI 1.x is stable | 2026.45.1 published | by 2026.45.1 | SDK `windows` |
+| C library `ops_pointcloud`, ABI 1.0: `ops_pointcloud.dll` | Windows 10 and 11 | x64 | new; ABI 1.x is stable | 2026.48.0 published | by 2026.45.1 | SDK `windows` |
 | `libops_pointcloud.dylib` | macOS 11 and later | arm64 and x86-64 in one file | new | as above | as above | SDK `macos`, `macos-x86_64`; Release `verify-release` (macos-arm64, macos-x86_64) |
 | `libops_pointcloud.so.1` | Linux with a C library of version 2.35 or newer | amd64, arm64 | new | as above | as above | SDK `linux` |
 | Rust crate `pointcloud-core`, entry point `pointcloud_core::ops` | by the git tag `vYYYY.W.N`; tested on Linux, Windows and macOS | any the core builds for | new; no semantic versioning beyond the one-release notice of [Compatibility](library.md#compatibility) | as above | as above | CI `native`; SDK `linux` (amd64), step *Build and run the Rust consumer* |
@@ -73,14 +87,14 @@ What is not delivered or does not apply, and why:
 | WebAssembly or a browser edition | not delivered | A desktop tool with a GPU view of scans of many gigabytes on local disks. The frozen `classic/` prototype is no supported edition |
 | Android or iOS | not delivered | The same reason |
 | Web view runtime | not applicable | The window is drawn by the application itself and uses no web view, so no web view runtime is installed or carried |
-| Native in-app updater | not delivered | Native releases are downloaded from the release page. The separate OpenAEC Installer manifest/minisign integration is tracked in [#40](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/40) and [#53](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/53) |
+| Native in-app updater | not delivered | Native releases are downloaded from the release page. The separate OpenAEC Installer consumes the published [signed package entries](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/latest.json) |
 | Image for arm64 | not delivered | Deferred; the image and the prepared deployment are for Linux on x86-64 |
 | Installable MCP bundle | not delivered | Deferred; a client starts the desktop server from its configuration ([Starting it from a client](../native/MCP.md#starting-it-from-a-client)) |
 | Interactive MCP app or connector | not delivered | Tracked under [style book #9](https://github.com/OpenAEC-Foundation/OpenAEC-style-book/issues/9) |
 
 ## Clean machines
 
-The following table preserves the 25 October 2026 test plan and results known at that time. Its “not run yet” entries are historical; the completed v2026.45.1 platform checks are recorded under [Published evidence](#published-evidence-checked-5-november-2026).
+The following table preserves the 25 October 2026 test plan and results known at that time. Its “not run yet” entries are historical; the latest platform checks are recorded under [Published evidence for 2026.48.0](#published-evidence-checked-25-november-2026).
 
 | Job | Machine | What it does | Result |
 | --- | --- | --- | --- |
@@ -229,24 +243,24 @@ Evidence:
 
 ## Signing per file
 
-Public publication requires verified signing outputs for the Windows application/installer, Windows SDK library, macOS application/disk image, macOS SDK library and Linux OpenPGP manifest. `require-signatures.sh` runs after signing and before the release draft is created or updated; a missing, false or malformed output fails publication even when all platform credentials are absent. An explicit draft-only run warns for every missing proof and cannot publish. The release workflow subsequently checks the downloaded files with the commands of this table, in `verify-release`. This gate establishes policy; the real publisher identities and cryptographic checks still require a successful organisation-signed release run.
+Public publication requires verified signing outputs for the Windows application/installer, Windows SDK library, macOS application/disk image, macOS SDK library and Linux OpenPGP manifest. `require-signatures.sh` runs after signing and before the release draft is created or updated; a missing, false or malformed output fails publication even when all platform credentials are absent. An explicit draft-only run warns for every missing proof and cannot publish. The release workflow subsequently checks the downloaded files with the commands of this table, in `verify-release`. The [2026.48.0 release evidence](#published-evidence-checked-25-november-2026) records the results.
 
-The last column is filled in from the first signed tag run; the verification record lists the same identities.
+The last column lists identities from the 2026.48.0 verification record.
 
 | Files | Signature | Check, as a user | Expected | CI | Identity |
 | --- | --- | --- | --- | --- | --- |
-| `open-pointcloud-studio.exe`, `OpenCADStudio.exe`, `_x64-setup.exe`, `ops_pointcloud.dll` | Authenticode through the organisation's code-signing account, SHA-256, RFC 3161 timestamp | `Get-AuthenticodeSignature FILE \| Format-List *` | `Status` `Valid`, `TimeStamperCertificate` set | Packages `windows` and SDK `windows`, *Report the signatures*; Release `verify-release` (windows) | subject and thumbprint: not recorded yet |
-| `Open Pointcloud Studio.app` and the `.dmg` | Developer ID Application of the organisation, hardened runtime, timestamp; notarized, ticket stapled | `codesign -dvv --verbose=4 FILE`; `spctl --assess --type execute -vv "Open Pointcloud Studio.app"`; `spctl -a -t open --context context:primary-signature -v FILE.dmg`; `xcrun stapler validate FILE.dmg` | `Authority=Developer ID Application`; accepted, `source=Notarized Developer ID`; the ticket validates | Packages `macos`, *Report the signatures*; `verify-macos`; Release `verify-release` (macos-arm64, macos-x86_64) | Team ID: not recorded yet |
+| `open-pointcloud-studio.exe`, `OpenCADStudio.exe`, `_x64-setup.exe`, `ops_pointcloud.dll` | Authenticode through the organisation's code-signing account, SHA-256, RFC 3161 timestamp | `Get-AuthenticodeSignature FILE \| Format-List *` | `Status` `Valid`, `TimeStamperCertificate` set | Packages `windows` and SDK `windows`, *Report the signatures*; Release `verify-release` (windows) | Impertio Studio B.V., `7351D01DA9D2044A2C510A5EA68921E07126D48A` |
+| `Open Pointcloud Studio.app` and the `.dmg` | Developer ID Application of the organisation, hardened runtime, timestamp; notarized, ticket stapled | `codesign -dvv --verbose=4 FILE`; `spctl --assess --type execute -vv "Open Pointcloud Studio.app"`; `spctl -a -t open --context context:primary-signature -v FILE.dmg`; `xcrun stapler validate FILE.dmg` | `Authority=Developer ID Application`; accepted, `source=Notarized Developer ID`; the ticket validates | Packages `macos`, *Report the signatures*; `verify-macos`; Release `verify-release` (macos-arm64, macos-x86_64) | Team `7KFV4QY98M` |
 | The binaries in `_macos-universal.tar.gz` | Developer ID Application, hardened runtime, timestamp; not notarized on their own | `codesign -dvv --verbose=4 FILE` | `Authority=Developer ID Application` | Packages `macos`; Release `verify-release` (macos-arm64, macos-x86_64) | as above |
 | `libops_pointcloud.dylib` | Developer ID Application, hardened runtime, timestamp; notarized (a library cannot be stapled; the notary service keeps the ticket) | `codesign -dvv --verbose=4 lib/libops_pointcloud.dylib` | `Authority=Developer ID Application`; the notarytool record says `Accepted` | SDK `macos`, *Sign and notarize the library*; Release `verify-release` (macos-arm64, macos-x86_64) | as above |
-| `.deb`, `.AppImage`, `_linux-*.tar.gz` and the two Linux archives of the C library | build attestation through Sigstore, kept by GitHub | `gh attestation verify FILE --repo OpenAEC-Foundation/open-pointcloud-studio --signer-workflow OpenAEC-Foundation/open-pointcloud-studio/.github/workflows/release.yml` | verified; the output names the tag | Release `publish`, *Attest the Linux packages*; `verify-release` (linux) | signer workflow: not recorded yet |
+| `.deb`, `.AppImage`, `_linux-*.tar.gz` and the two Linux archives of the C library | build attestation through Sigstore, kept by GitHub | `gh attestation verify FILE --repo OpenAEC-Foundation/open-pointcloud-studio --signer-workflow OpenAEC-Foundation/open-pointcloud-studio/.github/workflows/release.yml` | verified; the output names the tag | Release `publish`, *Attest the Linux packages*; `verify-release` (linux) | `.github/workflows/release.yml@refs/tags/v2026.48.0` |
 | `SHA256SUMS` | the checksums of every package and archive of the release, always | `sha256sum --ignore-missing -c SHA256SUMS` | `OK` for each file downloaded | Release `publish`, *Write SHA256SUMS*; `verify-release` (linux) | none |
-| `SHA256SUMS.asc` and an `.asc` for each AppImage | OpenPGP, detached and armoured, by the organisation's key; **off until that key exists** | `gpg --verify SHA256SUMS.asc SHA256SUMS` | a good signature by the published fingerprint | Release `publish`, *Sign SHA256SUMS and the AppImages*; `verify-release` (linux) | no key yet |
+| `SHA256SUMS.asc` and an `.asc` for each AppImage | OpenPGP, detached and armoured, by the organisation's key | `gpg --verify SHA256SUMS.asc SHA256SUMS` | a good signature by the published fingerprint | Release `publish`, *Sign SHA256SUMS and the AppImages*; `verify-release` (linux) | `13F6D414ADEE4ED4CD09AC60601D86C93C504D29` |
 | Every file | a `.sha256` beside it | `sha256sum -c FILE.sha256` | `OK` | Release `publish`, *Check that the release is complete* | none |
-| The image | pushed by its digest; build attestation, stored with the image in the registry | `gh attestation verify oci://ghcr.io/openaec-foundation/open-pointcloud-studio-api@sha256:DIGEST --repo OpenAEC-Foundation/open-pointcloud-studio` | verified; `docker pull` by the version gives that digest | Release `image`, *Attest the image*; `verify-release` (linux) | digest: not recorded yet |
-| An updater | not applicable: there is none | | | | |
+| The image | pushed by its digest; build attestation, stored with the image in the registry | `gh attestation verify oci://ghcr.io/openaec-foundation/open-pointcloud-studio-api@sha256:DIGEST --repo OpenAEC-Foundation/open-pointcloud-studio` | verified; `docker pull` by the version gives that digest | Release `image`, *Attest the image*; `verify-release` (linux) | [2026.48.0 image digest](#published-evidence-checked-25-november-2026) |
+| Windows installer and Linux AppImages offered by OpenAEC Installer | Detached minisign signatures | See the versioned `latest.json` and package `.sig` files | Valid package signatures | Release workflow | OpenAEC Installer update key |
 
-Evidence:
+Historical evidence from the October audit:
 
 - Local: `bash native/packaging/test-scripts.sh` passed, 86 ok: the release notes with and without the digest of the image, an OpenPGP signature and signed libraries; pruning a draft while keeping the signatures; `signature-assets.sh`; `sign-linux.sh` without a key (it signs nothing and says so), with a throwaway key (it signs and verifies) and with a wrong fingerprint (refused). In the review of the release wiring, a key exported as a signing subkey only signed and verified with either fingerprint, and `actionlint` 1.7.12 found nothing in the six workflows of `386c863`.
 - Earlier releases: the notes of 0.9.5 say that its installer and application carry a valid code signature, as the run that built them found. This record has not checked the published 0.9.5 files itself. The macOS files of 0.9.5 are signed ad hoc and not notarized.
