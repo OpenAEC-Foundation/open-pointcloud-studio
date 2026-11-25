@@ -16,7 +16,7 @@ mkdir -p sample-output
 LD_LIBRARY_PATH="$PWD/lib" ./inspect sample-output
 ```
 
-The OpenAEC Installer update manifest includes minisign signatures for the Windows x64 installer and both Linux AppImages. Live Claude Desktop and Claude Code sessions, the AWS deployment smoke test and full UI component parity remain open under [#33](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33). See the [versioned update manifest](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/latest.json).
+The OpenAEC Installer update manifest includes minisign signatures for the Windows x64 installer and both Linux AppImages. The [command-line client check](#ai-assistant-clients) covers discovery, reading, thinning and undo. The desktop-client check, interactive confirmation, AWS deployment smoke test and full UI component parity remain open under [#33](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33). See the [versioned update manifest](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/latest.json).
 
 ## Published evidence, checked 5 November 2026
 
@@ -206,12 +206,16 @@ Evidence:
 
 What is delivered is configuration only: for the desktop server the configuration in the [README](../README.md#mcp-server) and in [Starting it from a client](../native/MCP.md#starting-it-from-a-client), for the cloud server the one in [MCP client](cloud-api.md#mcp-client). There is no installable bundle and no interactive connector.
 
-The connection is checked once with a desktop AI assistant client and once with a command-line AI assistant client, with the owner, in this order: the configuration file used, the transport, the count of the first `tools/list`, one read-only call (`status`), one destructive call (`thin`) confirmed in the client, `undo_delete`, the result and the date. The names of the clients go in the comment on the issue, not here. The client of CI is the reference SDK, not an assistant client, so CI does not prove this.
+The connection is checked once with a desktop AI assistant client and once with a command-line AI assistant client, with the owner, in this order: the configuration file used, the transport, the count of the first `tools/list`, one read-only call (`status`), one destructive call (`thin`) confirmed in the client, `undo_delete`, the result and the date. The issue comment identifies the client versions. CI separately exercises the reference MCP SDK.
 
 | Client | Configuration | Transport | `tools/list` | Read-only call | Destructive call | `undo_delete` | Result | Date |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | a desktop AI assistant client | | | | | | | not done | |
-| a command-line AI assistant client | | | | | | | not done | |
+| a command-line AI assistant client | Project-local stdio entry and isolated test configuration | stdio | 170 distinct tools | `status` identified the 42-point fixture | `thin` with `percent=50` left 21 points | Restored all 42 | Data and undo verified. Interactive confirmation remains open | 25 November 2026 |
+
+On Linux amd64 the official command-line client 2.1.332 connected to the checksum-verified 2026.48.0 release binary. The host tool catalogue matched the names in the release server’s `tools/list` response exactly. A separate Studio window loaded a synthetic 7 × 6 grid. The client executed `status → thin → status → undo_delete → status` against that window. The source file’s SHA-256 digest was identical before and after the sequence.
+
+The test used a loopback Messages API fixture to supply a fixed sequence of tool requests, with the three tools pre-authorized for this test. The client connected to the real Studio server and returned its tool results. An interactive approval by a user and a hosted model session were outside this run. The [client setup instructions](../native/MCP.md#starting-it-from-a-client) include the commands to register the server and check a scan.
 
 ## UI and the OpenAEC Style Repo
 
@@ -387,7 +391,7 @@ Every requirement is open. "Now" is what exists and what ran; "CI" is what will 
 
 - Now: configuration only, see [AI assistant clients](#ai-assistant-clients); no bundle, no connector.
 - CI: nothing; the client of CI is no assistant client.
-- Open: the two client checks with the owner, recorded in the table.
+- Open: the desktop-client check and interactive approval of the command-line edit, recorded in the table.
 
 **8. The UI and its relation to the current packages and tokens of the OpenAEC Style Repo, themes and component conventions.**
 

@@ -49,6 +49,15 @@ Write the path out: most clients do not fill in `%LOCALAPPDATA%` or `~`. In
 JSON every backslash of a Windows path is written twice:
 `"C:\\Program Files\\Open Pointcloud Studio\\open-pointcloud-studio.exe"`.
 
+For Claude Code, run these commands from the project where you want to use Studio. Substitute the installed executable path from the table. The local scope keeps the entry private to this project.
+
+```sh
+claude mcp add --transport stdio --scope local open-pointcloud-studio -- /usr/bin/open-pointcloud-studio --mcp
+claude mcp get open-pointcloud-studio
+```
+
+A connected status confirms the stdio server started. To check that it reaches the intended Studio window, open a scan there and ask Claude Code to call the Studio `status` tool and report the active file and its point count. See the [Claude Code MCP guide](https://code.claude.com/docs/en/mcp).
+
 A development build works the same way:
 `cargo run -p open-pointcloud-studio-native -- --mcp` from `native/`, or the
 built `target/release/open-pointcloud-studio --mcp`.
