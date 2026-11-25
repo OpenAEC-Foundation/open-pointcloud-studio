@@ -556,7 +556,7 @@ pub fn write_e57_scene(
         source.cloud.validate_source()?;
     }
     progress(processed, total)?;
-    writer.finalize_customized_xml(|xml| Ok(xml.replace("readius", "radius")))?;
+    crate::e57_write::finalize(writer, &temporary)?;
     for source in sources {
         source.cloud.validate_source()?;
     }
