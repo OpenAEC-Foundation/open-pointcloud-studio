@@ -1,4 +1,4 @@
-//! Projection records may occur on either side of the LAS/LAZ point data.
+//! LAS/LAZ projection and extra-dimension records can occur before or after the points.
 use crate::LoadError;
 use las::{raw, Vlr};
 use std::fs::File;
@@ -16,11 +16,13 @@ pub(super) fn projection_records(path: &Path) -> Result<Vec<Vlr>, LoadError> {
             records.push(record);
         }
     }
-    append_extended_projection_records(&mut reader, header.evlr, 0, &mut records)?;
+    append_extended_records(&mut reader, header.evlr, 0, &mut records, |user_id, _| {
+        user_id.eq_ignore_ascii_case(b"LASF_Projection")
+    })?;
     Ok(records)
 }
 
-/// Retain projection EVLRs beyond the records exposed by las-rs when
+/// Retain projection and Extra Bytes EVLRs beyond the records exposed by las-rs when
 /// transcoding, filtering or comparing headers for a layout-preserving merge.
 pub(super) fn export_header(path: &Path, header: &las::Header) -> Result<las::Header, LoadError> {
     let known = header.evlrs().len();
@@ -36,15 +38,25 @@ pub(super) fn export_header(path: &Path, header: &las::Header) -> Result<las::He
         return Ok(header.clone());
     }
     let mut builder = las::Builder::from(header.clone());
-    append_extended_projection_records(&mut reader, raw.evlr, known, &mut builder.evlrs)?;
+    append_extended_records(
+        &mut reader,
+        raw.evlr,
+        known,
+        &mut builder.evlrs,
+        |user_id, record_id| {
+            user_id.eq_ignore_ascii_case(b"LASF_Projection")
+                || (user_id.eq_ignore_ascii_case(b"LASF_Spec") && record_id == 4)
+        },
+    )?;
     Ok(builder.into_header()?)
 }
 
-fn append_extended_projection_records(
+fn append_extended_records(
     reader: &mut BufReader<File>,
     directory: Option<raw::header::Evlr>,
     known: usize,
     records: &mut Vec<Vlr>,
+    keep: impl Fn(&[u8], u16) -> bool,
 ) -> Result<(), LoadError> {
     // las-rs 0.9.11 exposes just the first EVLR in its high-level Header.
     // Walk the directory, seeking past unrelated records such as waveforms.
@@ -66,7 +78,8 @@ fn append_extended_projection_records(
                 .split(|&byte| byte == 0)
                 .next()
                 .unwrap_or_default();
-            if index as usize >= known && user_id.eq_ignore_ascii_case(b"LASF_Projection") {
+            let record_id = u16::from_le_bytes([prefix[18], prefix[19]]);
+            if index as usize >= known && keep(user_id, record_id) {
                 let record = raw::Vlr::read_from(prefix.as_slice().chain(&mut *reader), true)?;
                 records.push(Vlr::new(record));
             } else {
@@ -154,6 +167,79 @@ mod tests {
             .to_string()
             .contains("incompatible point formats, coordinate grids or metadata"));
         assert_eq!(std::fs::read(merged).unwrap(), previous);
+    }
+
+    #[test]
+    fn point_exports_keep_extra_dimension_definitions_after_the_first_evlr() {
+        use crate::{export_full, export_where, merge_las_map_count, ExportFormat};
+
+        let dir = tempfile::tempdir().unwrap();
+        let make_source = |file: &str, name: &[u8]| {
+            let path = dir.path().join(file);
+            let mut builder = las::Builder::from((1, 4));
+            builder.point_format.extra_bytes = 2;
+            let mut descriptor = vec![0; 192];
+            descriptor[2] = 3; // LAS unsigned short
+            descriptor[4..4 + name.len()].copy_from_slice(name);
+            builder.evlrs.push(Vlr {
+                user_id: "survey".into(),
+                record_id: 1,
+                ..Vlr::default()
+            });
+            builder.evlrs.push(Vlr {
+                user_id: "LASF_Spec".into(),
+                record_id: 4,
+                data: descriptor.clone(),
+                ..Vlr::default()
+            });
+            let mut writer = las::Writer::from_path(&path, builder.into_header().unwrap()).unwrap();
+            for value in [420u16, 65000] {
+                writer
+                    .write_point(las::Point {
+                        extra_bytes: value.to_le_bytes().to_vec(),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+            writer.close().unwrap();
+            (crate::open(&path, 2).unwrap(), descriptor)
+        };
+        let (left, descriptor) = make_source("left.las", b"Quality");
+        let (right, _) = make_source("right.laz", b"Quality");
+        let (other, _) = make_source("other.las", b"Channel");
+        let converted = dir.path().join("converted.laz");
+        let selected = dir.path().join("selected.las");
+        let merged = dir.path().join("merged.laz");
+        export_full(&left, &converted, ExportFormat::Laz).unwrap();
+        export_where(&right, &selected, ExportFormat::Las, 1, |i, _| i == 0).unwrap();
+        let merge = |cloud: &crate::PointCloud| {
+            merge_las_map_count(
+                &[&left, cloud],
+                &merged,
+                ExportFormat::Laz,
+                Some(4),
+                &mut |_, _, point| Some(point),
+                &mut |_, _, _| Ok(()),
+            )
+        };
+        assert_eq!(merge(&right).unwrap(), 4);
+        for path in [&converted, &selected, &merged] {
+            let mut f = File::open(path).unwrap();
+            let directory = raw::Header::read_from(&mut f).unwrap().evlr.unwrap();
+            assert_eq!(directory.number_of_evlrs, 2);
+            f.seek(SeekFrom::Start(directory.start_of_first_evlr))
+                .unwrap();
+            raw::Vlr::read_from(&mut f, true).unwrap();
+            let extra = Vlr::new(raw::Vlr::read_from(&mut f, true).unwrap());
+            assert_eq!((extra.user_id.as_str(), extra.record_id), ("LASF_Spec", 4));
+            assert_eq!(extra.data, descriptor);
+        }
+        let previous = std::fs::read(&merged).unwrap();
+        assert!(merge(&other)
+            .unwrap_err()
+            .to_string()
+            .contains("extra dimensions"));
+        assert_eq!(std::fs::read(&merged).unwrap(), previous);
     }
 
     #[test]

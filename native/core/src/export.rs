@@ -1561,6 +1561,13 @@ pub fn merge_las_map_count(
             || vlrs != first_vlrs
             || header.evlrs() != first.evlrs()
         {
+            // Callers may retry incompatible layouts with the common-field scene
+            // writer. That writer cannot represent LAS extra dimensions.
+            if headers.iter().any(|h| h.point_format().extra_bytes != 0) {
+                return Err(LoadError::InvalidData(
+                    "LAS/LAZ merge would lose extra dimensions; align the source point formats, coordinate grids and metadata before merging".into(),
+                ));
+            }
             return Err(LoadError::InvalidData(
                 "LAS/LAZ sources have incompatible point formats, coordinate grids or metadata"
                     .into(),
