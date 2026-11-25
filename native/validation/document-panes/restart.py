@@ -49,6 +49,7 @@ if args.linked and not args.station_source:
 with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
     root=Path(directory)
     env={**os.environ,'XDG_CONFIG_HOME':str(root/'config'),'XDG_CACHE_HOME':str(root/'cache'),'OPENAEC_BEHEERD':'1'}
+    main_windows={}
     def launch(name):
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0))
@@ -61,6 +62,17 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
             assert process.poll() is None, f'{name} exited; inspect its log'
             assert time.monotonic()<deadline
             time.sleep(.1)
+        if os.name=='nt':
+            # A torn-off tab creates another top-level window. Record the main
+            # one now so the quit request cannot accidentally dock the photo.
+            query=f'(Get-Process -Id {process.pid}).MainWindowHandle.ToInt64()'
+            while True:
+                handle=int(subprocess.check_output(['powershell.exe','-NoProfile','-Command',query],text=True))
+                if handle:
+                    main_windows[process.pid]=handle
+                    break
+                assert time.monotonic()<deadline, 'Main window did not open'
+                time.sleep(.1)
         token=json.loads(discovery.read_text())['token']
         def api(command,**arguments):
             request=urllib.request.Request(f'http://127.0.0.1:{port}/exec',
@@ -82,7 +94,16 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         return process,log,api
     def stop(process,log):
         if process.poll() is None:
-            process.terminate()
+            if os.name=='nt':
+                import ctypes
+                from ctypes import wintypes
+                post=ctypes.WinDLL('user32',use_last_error=True).PostMessageW
+                post.argtypes=[wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
+                post.restype=wintypes.BOOL
+                if not post(main_windows.pop(process.pid),0x0010,0,0):  # WM_CLOSE
+                    raise ctypes.WinError(ctypes.get_last_error())
+            else:
+                process.terminate()
             try:
                 process.wait(timeout=15)
             except subprocess.TimeoutExpired:
