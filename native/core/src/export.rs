@@ -1535,6 +1535,18 @@ pub fn merge_las_map_count(
             reader.header(),
         )?);
     }
+    // One header describes the timestamps of every point in the output.
+    let mut time_types = headers
+        .iter()
+        .filter(|header| header.point_format().has_gps_time)
+        .map(las::Header::gps_time_type);
+    if let Some(first_time) = time_types.next() {
+        if time_types.any(|time| time != first_time) {
+            return Err(LoadError::InvalidData(
+                "LAS/LAZ merge mixes GPS week time and adjusted standard GPS time; convert the source timestamps to one time convention before merging".into(),
+            ));
+        }
+    }
     let first = &headers[0];
     let mut first_format = *first.point_format();
     first_format.is_compressed = false;
@@ -3148,6 +3160,51 @@ mod tests {
         let mut expected_moved = original_point;
         expected_moved.x += 10.0;
         assert_eq!(moved_point, expected_moved);
+    }
+
+    #[test]
+    fn merge_rejects_mixed_gps_times_before_normalising_different_point_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = |name: &str, format: u8, time_type, time| {
+            let path = dir.path().join(name);
+            let mut builder = las::Builder::from((1, 2));
+            builder.point_format = las::point::Format::new(format).unwrap();
+            builder.gps_time_type = time_type;
+            let mut writer = las::Writer::from_path(&path, builder.into_header().unwrap()).unwrap();
+            writer
+                .write_point(las::Point {
+                    gps_time: time,
+                    ..Default::default()
+                })
+                .unwrap();
+            writer.close().unwrap();
+            crate::open_las_header(path).unwrap()
+        };
+        let no_time = source("no-time.las", 0, las::GpsTimeType::Week, None);
+        let week = source("week.las", 1, las::GpsTimeType::Week, Some(304530.125));
+        let adjusted = source(
+            "adjusted.laz",
+            1,
+            las::GpsTimeType::Standard,
+            Some(474530000.125),
+        );
+        let dest = dir.path().join("merged.las");
+        std::fs::write(&dest, b"previous output").unwrap();
+        for sources in [vec![&week, &adjusted], vec![&no_time, &adjusted, &week]] {
+            let err = merge_las_map_count(
+                &sources,
+                &dest,
+                ExportFormat::Las,
+                None,
+                &mut |_, _, point| Some(point),
+                &mut |_, _, _| Ok(()),
+            )
+            .unwrap_err();
+            assert!(err
+                .to_string()
+                .contains("mixes GPS week time and adjusted standard GPS time"));
+            assert_eq!(std::fs::read(&dest).unwrap(), b"previous output");
+        }
     }
 
     #[test]
