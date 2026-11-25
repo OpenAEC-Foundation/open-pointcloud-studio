@@ -17,12 +17,15 @@ import numpy as np
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('binary',type=Path)
 parser.add_argument('--linked',action='store_true',help='Verify linked camera indicators, photo following and persistence')
+parser.add_argument('--recover-photo-window',action='store_true',help='Tear off the photo before restart and verify its pane comes back beside the model')
 parser.add_argument('--pointer-probe',type=Path,help='Optional isolated virtual pointer helper to click pane link controls')
 parser.add_argument('--sheets',action='store_true',help='Also show two distinct sheets with placed drawings and paper annotations')
 parser.add_argument('--drawings',action='store_true',help='Include independent plan/elevation panes and annotations')
 parser.add_argument('--station-source',type=Path,help='Optional real E57 with station 0 photographs')
 parser.add_argument('--output',type=Path,required=True)
 args=parser.parse_args()
+if args.recover_photo_window and (args.drawings or args.sheets):
+    parser.error('--recover-photo-window compares the two-pane model and photo layout')
 args.drawings=args.drawings or args.sheets
 output=args.output.resolve()
 output.mkdir(parents=True,exist_ok=True)
@@ -46,6 +49,7 @@ if args.linked and not args.station_source:
 with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
     root=Path(directory)
     env={**os.environ,'XDG_CONFIG_HOME':str(root/'config'),'XDG_CACHE_HOME':str(root/'cache'),'OPENAEC_BEHEERD':'1'}
+    main_windows={}
     def launch(name):
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0))
@@ -58,6 +62,17 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
             assert process.poll() is None, f'{name} exited; inspect its log'
             assert time.monotonic()<deadline
             time.sleep(.1)
+        if os.name=='nt':
+            # A torn-off tab creates another top-level window. Record the main
+            # one now so the quit request cannot accidentally dock the photo.
+            query=f'(Get-Process -Id {process.pid}).MainWindowHandle.ToInt64()'
+            while True:
+                handle=int(subprocess.check_output(['powershell.exe','-NoProfile','-Command',query],text=True))
+                if handle:
+                    main_windows[process.pid]=handle
+                    break
+                assert time.monotonic()<deadline, 'Main window did not open'
+                time.sleep(.1)
         token=json.loads(discovery.read_text())['token']
         def api(command,**arguments):
             request=urllib.request.Request(f'http://127.0.0.1:{port}/exec',
@@ -79,7 +94,16 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         return process,log,api
     def stop(process,log):
         if process.poll() is None:
-            process.terminate()
+            if os.name=='nt':
+                import ctypes
+                from ctypes import wintypes
+                post=ctypes.WinDLL('user32',use_last_error=True).PostMessageW
+                post.argtypes=[wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
+                post.restype=wintypes.BOOL
+                if not post(main_windows.pop(process.pid),0x0010,0,0):  # WM_CLOSE
+                    raise ctypes.WinError(ctypes.get_last_error())
+            else:
+                process.terminate()
             try:
                 process.wait(timeout=15)
             except subprocess.TimeoutExpired:
@@ -249,7 +273,10 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         photo_state=api('status')['result']
         walk=photo_state['walk']
         blend=photo_state['photos']['blend']
-        api('show_tab',index=0)
+        if args.recover_photo_window:
+            api('tear_off_tab')
+        else:
+            api('show_tab',index=0)
         workspace=api('list_panes')['workspace']
     finally:
         stop(first,log)
@@ -257,6 +284,15 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
     assert layout_path.exists(), 'Exit did not save the layout'
     saved=json.loads(layout_path.read_text())
     (output/'saved-layout.json').write_text(json.dumps(saved,indent=2)+'\n')
+    if args.recover_photo_window:
+        main, satellite = workspace['windows']
+        assert saved['workspace'] == workspace
+        assert main['id'] == 0 and satellite['id'] != 0 and satellite['placement'] is None
+        recovered_root = {
+            'kind': 'split', 'axis': 'vertical', 'ratio': 0.5,
+            'first': main['root'], 'second': satellite['root'],
+        }
+        workspace = {**workspace, 'windows': [{**main, 'root': recovered_root}]}
     second,log,api=launch('second')
     try:
         deadline=time.monotonic()+90
@@ -267,8 +303,11 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
                 break
             assert time.monotonic()<deadline, panes
             time.sleep(.1)
-        wait_photo(api)
         assert panes['workspace']==workspace, (panes['workspace'],workspace)
+        if args.recover_photo_window:
+            assert panes['active_document']==satellite['root']['pane']['active']
+            api('show_tab',index=0)
+        wait_photo(api)
         if args.linked:
             assert next(doc for doc in panes['documents'] if doc['key']=='model')['linked_photo_count']==1
         api('screenshot',path=str(output/'restored-model.png'),base64=False,max_edge=1200,window=True)
@@ -317,6 +356,8 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         result={'workspace_restored':True,'sources_reopened':True,'model_camera_restored':True,
                 'photo_camera_restored':True,
                 'station_source':bool(args.station_source),'render_changed_pixels':counts,'source_sha256':source_hash,'source_unchanged':True}
+        if args.recover_photo_window:
+            result['satellite_pane_recovered_in_main']=True
         result.update(linked_report)
         if args.sheets:
             result.update(distinct_sheets_and_paper_cameras_restored=True,paper_annotations_restored=True)
