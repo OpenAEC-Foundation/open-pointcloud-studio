@@ -2476,6 +2476,7 @@ struct CloudEntry {
     index_import_id: Option<u64>,
     transform: CloudTransform,
     centroid_cache: Option<CentroidCache>,
+    selected_count_cache: std::cell::RefCell<Option<SelectedCountCache>>,
     mesh: Option<Arc<MeshGeometry>>,
     /// The open edges and connected parts of `mesh`, counted when it was
     /// made or read.
@@ -2750,6 +2751,12 @@ impl LodRefinement {
     }
 }
 
+struct SelectedCountCache {
+    selection: std::sync::Weak<SelectionMask>,
+    deleted: std::sync::Weak<DeletionMask>,
+    count: u64,
+}
+
 struct CentroidCache {
     source_xyz: [f64; 3],
     deleted: Option<Arc<DeletionMask>>,
@@ -2891,6 +2898,32 @@ impl CloudEntry {
 
     fn bounds(&self) -> Bounds {
         self.transform.bounds(self.cloud.bounds)
+    }
+
+    fn selected_count(&self) -> u64 {
+        let Some(selection) = &self.selection else {
+            return 0;
+        };
+        let Some(deleted) = self.deleted.as_ref().filter(|mask| mask.count > 0) else {
+            return selection.count;
+        };
+        // UI redraws reuse the count until either ordinal mask changes. Weak
+        // references also invalidate the cache when Arc::make_mut edits a mask.
+        let mut cache = self.selected_count_cache.borrow_mut();
+        if let Some(known) = cache.as_ref() {
+            if known.selection.as_ptr() == Arc::as_ptr(selection)
+                && known.deleted.as_ptr() == Arc::as_ptr(deleted)
+            {
+                return known.count;
+            }
+        }
+        let count = selection.live_count(Some(deleted));
+        *cache = Some(SelectedCountCache {
+            selection: Arc::downgrade(selection),
+            deleted: Arc::downgrade(deleted),
+            count,
+        });
+        count
     }
 
     fn deleted_count(&self) -> u64 {
@@ -3320,6 +3353,7 @@ impl Studio {
             index_import_id: None,
             transform: CloudTransform::default(),
             centroid_cache: None,
+            selected_count_cache: Default::default(),
             mesh: None,
             mesh_topology: None,
             mesh_visible: true,
@@ -4078,7 +4112,7 @@ impl Studio {
                             "path": entry.cloud.path,
                             "points": entry.cloud.total_points,
                             "remaining": entry.remaining_count(),
-                            "selected": entry.selection.as_ref().map_or(0, |mask| mask.count),
+                            "selected": entry.selected_count(),
                             "deleted": entry.deleted.as_ref().map_or(0, |mask| mask.count),
                             "visible": entry.visible,
                             "indexed": entry.index.is_some(),
@@ -6007,6 +6041,7 @@ impl Studio {
                         index_import_id: None,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
+                        selected_count_cache: Default::default(),
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
@@ -7227,6 +7262,7 @@ impl Studio {
                         cloud,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
+                        selected_count_cache: Default::default(),
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
@@ -7880,12 +7916,18 @@ impl Studio {
                     };
                     match deleted.apply(selection) {
                         Ok(added) if added > 0 => {
+                            let changed = match &entry.deleted {
+                                Some(previous) if added < selection.count => {
+                                    Arc::new(previous.newly_deleted(selection, added))
+                                }
+                                _ => Arc::clone(selection),
+                            };
                             removed += added;
                             updates.push((
                                 index,
                                 Arc::new(deleted),
                                 Arc::clone(&entry.cloud),
-                                Arc::clone(selection),
+                                changed,
                             ));
                         }
                         Ok(_) => {}
@@ -9575,7 +9617,7 @@ impl Studio {
                 let annotating = self.views.leave_tool();
                 self.bag_map_drawing = false;
                 self.drag_rectangle = None;
-                let deselected = self.selected_total() > 0;
+                let deselected = self.clouds.iter().any(|entry| entry.selection.is_some());
                 if deselected {
                     self.pending_delete = false;
                     self.revision += 1;
@@ -9811,11 +9853,7 @@ impl Studio {
     }
 
     fn selected_total(&self) -> u64 {
-        self.clouds
-            .iter()
-            .filter_map(|entry| entry.selection.as_ref())
-            .map(|selection| selection.count)
-            .sum()
+        self.clouds.iter().map(CloudEntry::selected_count).sum()
     }
 
     fn cancel_selection(&mut self) -> bool {
@@ -11109,7 +11147,7 @@ impl Studio {
                         icon_svg(ToolIcon::Clear, 25.0),
                         "Clear selection",
                         Message::ClearSelection,
-                        selected > 0
+                        self.clouds.iter().any(|entry| entry.selection.is_some())
                     ),
                 ]
                 .spacing(0),
@@ -11766,9 +11804,7 @@ impl Studio {
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
         let source_points = active_cloud.map_or(0, |entry| entry.cloud.total_points);
         let view_points = self.view_sample();
-        let selected_points = active_cloud
-            .and_then(|entry| entry.selection.as_ref())
-            .map_or(0, |selection| selection.count);
+        let selected_points = active_cloud.map_or(0, CloudEntry::selected_count);
         let indexed = active_cloud.is_some_and(|entry| entry.index.is_some());
         let filename = active_cloud.map_or(i18n::tr("No file loaded"), |entry| {
             display_name(&entry.cloud.path)
@@ -11976,7 +12012,7 @@ impl Studio {
             if let Some(point) = entry
                 .selection
                 .as_deref()
-                .filter(|selection| selection.count == 1)
+                .filter(|selection| selection.count == 1 && selected_points == 1)
                 .and_then(|selection| selection.highlights.first())
             {
                 let point = if entry
@@ -16865,6 +16901,53 @@ mod editing_tests {
         let _ = studio.update(Message::ResetTransform);
         assert_eq!(studio.clouds[0].bounds(), cloud.bounds);
         assert_eq!(studio.section_bounds(), Some(cloud.bounds));
+    }
+
+    #[test]
+    fn undoing_an_overlapping_delete_only_restores_points_changed_by_that_edit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("selection.xyz");
+        std::fs::write(&path, "1 0 0\n2 0 0\n3 0 0\n4 0 0\n").unwrap();
+        let mut studio = Studio::default();
+        let cloud = Arc::new(pointcloud_core::open(&path, 4).unwrap());
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&cloud))));
+        let mask = |bits: u64| {
+            let record = IndexedPoint {
+                ordinal: 0,
+                point: cloud.points[0],
+            };
+            let mut mask = SelectionMask::single(4, record).unwrap();
+            mask.bits[0] = bits;
+            mask.count = u64::from(bits.count_ones());
+            Arc::new(mask)
+        };
+        studio.clouds[0].selection = Some(mask(0b0011));
+        let _ = studio.update(Message::DeleteSelection);
+        let _ = studio.update(Message::UndoDelete);
+        studio.clouds[0].selection = Some(mask(0b1110));
+        assert_eq!(studio.selected_total(), 3);
+        let _ = studio.update(Message::RedoDelete);
+        assert_eq!(studio.selected_total(), 2);
+        let _ = studio.update(Message::UndoDelete);
+        assert_eq!(studio.selected_total(), 3);
+        let _ = studio.update(Message::RedoDelete);
+        let _ = studio.update(Message::DeleteSelection);
+        assert_eq!(studio.clouds[0].remaining_count(), 0);
+        let _ = studio.update(Message::UndoDelete);
+        let deleted = studio.clouds[0].deleted.as_ref().unwrap();
+        assert!(deleted.contains(0) && deleted.contains(1));
+        assert!(!deleted.contains(2) && !deleted.contains(3));
+        let _ = studio.update(Message::RedoDelete);
+        assert_eq!(studio.clouds[0].remaining_count(), 0);
+        let _ = studio.update(Message::UndoDelete);
+        let _ = studio.update(Message::UndoDelete);
+        assert_eq!(studio.clouds[0].remaining_count(), 4);
+        studio.clouds[0].selection = Some(mask(0b0011));
+        let _ = studio.update(Message::RedoDelete);
+        assert_eq!(studio.selected_total(), 0);
+        let _ = studio.update(Message::Escape);
+        let _ = studio.update(Message::UndoDelete);
+        assert!(studio.clouds[0].selection.is_none());
     }
 
     #[test]

@@ -2451,6 +2451,7 @@ mod tests {
             cloud,
             transform: CloudTransform::default(),
             centroid_cache: None,
+            selected_count_cache: Default::default(),
             mesh: None,
             mesh_topology: None,
             mesh_visible: false,

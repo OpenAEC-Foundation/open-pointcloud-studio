@@ -277,6 +277,23 @@ impl DeletionMask {
                 .any(|(deleted, selected)| deleted & selected != 0)
     }
 
+    /// The undo record for a partially overlapping delete needs only the
+    /// ordinals which this edit changed. The prior deletion stays in force.
+    pub fn newly_deleted(&self, selection: &SelectionMask, added: u64) -> SelectionMask {
+        SelectionMask {
+            bits: selection
+                .bits
+                .iter()
+                .zip(&self.bits)
+                .map(|(selected, hidden)| selected & !hidden)
+                .collect(),
+            count: added,
+            highlights: Vec::new(),
+            highlights_source: true,
+            source_bounds: None,
+        }
+    }
+
     pub fn apply(&mut self, selection: &SelectionMask) -> Result<u64, String> {
         if self.bits.len() != selection.bits.len() {
             return Err("selection belongs to a different source size".into());
