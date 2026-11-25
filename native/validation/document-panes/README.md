@@ -47,7 +47,11 @@ station panorama. The script uses managed SIGTERM handling for a graceful close
 and requires Pillow and NumPy.
 
 Satellite placements currently have no verified platform monitor identifier,
-so startup safely docks their documents into the main window. Monitor-aware
+so startup moves each satellite's pane tree beside the existing main panes.
+Tab ownership, active tabs, divider ratios and pane links survive. An empty
+main window takes the recovered tree directly. Run the two-pane probe with
+`--recover-photo-window --linked` to verify a torn-off photo and its model
+return side by side after a process restart. Monitor-aware
 placement and physical Windows/macOS multi-monitor checks remain
 acceptance work for issue #16.
 
