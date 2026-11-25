@@ -3194,6 +3194,26 @@ mod tests {
             assert_eq!(preview.points[0].classification, Some(expected_class));
             let cloud = open(&path, 1).unwrap();
             assert_eq!(cloud.points[0].classification, Some(expected_class));
+            let scene = dir.path().join(format!("scene-{format}.laz"));
+            crate::scene_export::write_las_scene(
+                &[crate::scene_export::SceneSource {
+                    cloud: &cloud,
+                    transform: Default::default(),
+                }],
+                &scene,
+                true,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(()),
+            )
+            .unwrap();
+            let normalized = las::Reader::from_path(scene)
+                .unwrap()
+                .read_point()
+                .unwrap()
+                .unwrap();
+            assert_eq!(u8::from(normalized.classification), source_class);
+            assert!(normalized.is_overlap);
+
             let dest = dir.path().join(format!("edited-{format}.las"));
             export_map(&cloud, &dest, ExportFormat::Las, 1, |_, mut point| {
                 assert_eq!(point.classification, Some(expected_class));

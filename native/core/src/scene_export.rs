@@ -217,12 +217,15 @@ pub fn write_las_scene(
     let result = (|| -> Result<(), LoadError> {
         for (index, source) in sources.iter().enumerate() {
             let mut ordinal = 0;
-            crate::visit_points(&source.cloud.path, &mut |point| {
+            let mut write_point = |point: Point, overlap: bool| {
                 if include(index, ordinal, &point) {
                     let p = source.transform.xyz(point.xyz);
                     let class = point.classification.unwrap_or(0);
                     if legacy_geotiff && class > 31 {
                         return Err(LoadError::InvalidData("this GeoTIFF CRS needs a WKT conversion before merging classifications above 31 into LAS".into()));
+                    }
+                    if legacy_geotiff && overlap && class != 12 {
+                        return Err(LoadError::InvalidData("this GeoTIFF CRS needs a WKT conversion before merging a separate LAS overlap flag and classification".into()));
                     }
                     batch.push(las::Point {
                         x: p[0],
@@ -236,7 +239,7 @@ pub fn write_las_scene(
                         } else {
                             class
                         })?,
-                        is_overlap: class == 12,
+                        is_overlap: overlap || class == 12,
                         gps_time: Some(0.),
                         color: rgb.then(|| {
                             let c = point.rgb.unwrap_or([0; 3]);
@@ -260,7 +263,12 @@ pub fn write_las_scene(
                     progress(processed, total)?;
                 }
                 Ok(())
-            })?;
+            };
+            if crate::ops::is_las(&source.cloud.path) {
+                crate::read_las(&source.cloud.path, &mut write_point)?;
+            } else {
+                crate::visit_points(&source.cloud.path, &mut |point| write_point(point, false))?;
+            }
             if ordinal != source.cloud.total_points {
                 return Err(LoadError::InvalidData("source point count changed".into()));
             }

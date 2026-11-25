@@ -401,6 +401,8 @@ What an export keeps depends on the formats:
 
 **Merge visible scans…** streams visible E57, LAS/LAZ, PLY, PTX and other supported point-cloud layers into one E57, LAS or LAZ file, with deletions and positive uniform live transforms applied. E57 keeps the separate scans, raw E57 attributes, poses and images when **Keep stations and photos in E57** is checked; unchecked it writes world-space points. Compatible LAS/LAZ inputs keep their full original records. When merging LAS/LAZ scans to LAS or LAZ, all source timestamps must use the same convention. Convert GPS week time and adjusted standard GPS time to a common convention before merging those scans. Other LAS/LAZ merges normalise to LAS 1.4 and retain coordinates, colour, intensity and classification; source-specific extra fields and camera images need E57 instead. The Export page and Properties show progress and **Cancel merge**; cancellation leaves an existing destination untouched. Registration does not reproject coordinate reference systems.
 
+Older LAS point formats (0–5) store overlap as class 12. You can toggle that class in the Project Browser. In formats 6–10 a point can have its own class, such as Ground, and also carry an overlap flag. A LAS/LAZ merge preserves both when writing an extended point format. If a GeoTIFF-only CRS requires a legacy output format that cannot store this combination, the merge asks for the CRS in WKT.
+
 The command line does the same without a window: `--export`, `--section` and `--merge`; see the [README](../README.md#command-line).
 
 ## Section drawings

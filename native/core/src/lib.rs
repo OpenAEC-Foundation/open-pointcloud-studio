@@ -994,7 +994,7 @@ fn visit_points_with_poses(
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "las" | "laz" => read_las(path, push),
+        "las" | "laz" => read_las(path, &mut |point, _overlap| push(point)),
         "ply" => ply::read(path, push),
         "obj" => mesh_points::read_obj(path, push),
         "off" => mesh_points::read_off(path, push),
@@ -1097,7 +1097,7 @@ impl Collector {
 
 fn read_las(
     path: &Path,
-    push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    push: &mut impl FnMut(Point, bool) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
     let mut reader = las::Reader::from_path(path)?;
     // The LAZ reader only uses its parallel decompressor for read_points_into;
@@ -1113,7 +1113,7 @@ fn read_las(
 
 fn read_las_batches(
     reader: &mut las::Reader,
-    push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    push: &mut impl FnMut(Point, bool) -> Result<(), LoadError>,
     batch_limit: usize,
 ) -> Result<(), LoadError> {
     let format = *reader.header().point_format();
@@ -1124,7 +1124,7 @@ fn read_las_batches(
             break;
         }
         for point in &batch {
-            push(convert_las_point(point, format))?;
+            push(convert_las_point(point, format), point.is_overlap)?;
         }
     }
     Ok(())
@@ -1819,7 +1819,7 @@ mod tests {
             let mut points = Vec::new();
             read_las_batches(
                 &mut reader,
-                &mut |point| {
+                &mut |point, _overlap| {
                     points.push(point);
                     Ok(())
                 },
@@ -1837,7 +1837,7 @@ mod tests {
             let mut visited = Vec::new();
             let stopped = read_las_batches(
                 &mut reader,
-                &mut |point| {
+                &mut |point, _overlap| {
                     visited.push(point.xyz[0]);
                     if visited.len() == 3 {
                         Err(LoadError::Cancelled)
