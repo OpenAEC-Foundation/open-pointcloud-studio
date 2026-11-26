@@ -287,6 +287,11 @@ jobs:
             assets/*.deb
             assets/*.AppImage
             assets/*_linux-*.tar.gz
+      - name: Download the managed AppImage measurements
+        uses: actions/download-artifact@v4
+        with:
+          pattern: managed-linux-*
+          path: managed-reports
       - name: Write the release notes
         env:
           WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}
@@ -299,6 +304,7 @@ jobs:
           LINUX_GPG_FINGERPRINT: ${{ vars.OPENAEC_GPG_FINGERPRINT }}
         run: |
           bash native/packaging/release-notes.sh "$NUMBER" > notes.md
+          python3 native/packaging/managed-memory-notes.py "$NUMBER" managed-reports >> notes.md
           {
             echo "### Attestations and image"
             echo
