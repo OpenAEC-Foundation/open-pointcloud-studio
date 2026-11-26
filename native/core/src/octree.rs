@@ -434,11 +434,12 @@ impl OctreeIndex {
             return Self::build_with_progress(cloud, config, progress);
         }
         let fingerprint = cache_fingerprint(cloud, &config)?;
+        let preview_points = config.preview_points;
         let cache_root = config.scratch_dir.clone().unwrap_or_else(cache_root);
         fs::create_dir_all(&cache_root)?;
         let cache_path = cache_directory(&cache_root, &fingerprint);
         if cache_path.exists() {
-            if let Ok(index) = Self::open_cached(cloud, &cache_path, &fingerprint) {
+            if let Ok(index) = Self::open_cached(cloud, &cache_path, &fingerprint, preview_points) {
                 let _ = write_cached_cloud_header(&cache_path, cloud, None);
                 progress(IndexProgress::ready(
                     cloud.total_points,
@@ -460,7 +461,7 @@ impl OctreeIndex {
         if let Err(error) = fs::rename(&temporary_path, &cache_path) {
             let _ = fs::remove_dir_all(&temporary_path);
             if cache_path.exists() {
-                return Self::open_cached(cloud, &cache_path, &fingerprint);
+                return Self::open_cached(cloud, &cache_path, &fingerprint, preview_points);
             }
             return Err(error.into());
         }
@@ -716,7 +717,8 @@ impl OctreeIndex {
         if let Err(error) = fs::rename(&temporary_path, &cache_path) {
             let _ = fs::remove_dir_all(&temporary_path);
             if cache_path.exists() {
-                let index = Self::open_cached(&cloud, &cache_path, &fingerprint)?;
+                let index =
+                    Self::open_cached(&cloud, &cache_path, &fingerprint, config.preview_points)?;
                 return Ok((cloud, index));
             }
             return Err(error.into());
@@ -752,7 +754,7 @@ impl OctreeIndex {
         if !directory.exists() {
             return Ok(None);
         }
-        let index = Self::open_cached(cloud, &directory, &fingerprint)?;
+        let index = Self::open_cached(cloud, &directory, &fingerprint, config.preview_points)?;
         let _ = write_cached_cloud_header(&directory, cloud, None);
         Ok(Some(index))
     }
@@ -761,13 +763,14 @@ impl OctreeIndex {
         cloud: &PointCloud,
         directory: &Path,
         fingerprint: &[u8],
+        preview_points: usize,
     ) -> Result<Self, LoadError> {
         if fs::read(directory.join("source.meta"))? != fingerprint {
             return Err(LoadError::InvalidData(
                 "octree cache source mismatch".into(),
             ));
         }
-        let root = open_cached_node(directory, "r".to_owned(), cloud.bounds, 0)?;
+        let root = open_cached_node(directory, "r".to_owned(), cloud.bounds, 0, preview_points)?;
         if root.total_points != cloud.total_points {
             return Err(LoadError::InvalidData(
                 "octree cache point count mismatch".into(),
@@ -1297,7 +1300,7 @@ pub(crate) fn open_cached_preview(
         provisional: false,
         scan_ranges_known: false,
     };
-    let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint)?;
+    let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint, config.preview_points)?;
     if path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -1675,6 +1678,7 @@ fn open_cached_node(
     id: String,
     bounds: Bounds,
     depth: u8,
+    preview_points: usize,
 ) -> Result<IndexedNode, LoadError> {
     let preview_name = format!("{id}-preview.bin");
     let preview_path = directory.join(&preview_name);
@@ -1691,6 +1695,7 @@ fn open_cached_node(
                     child_id,
                     child_bounds(bounds, octant),
                     depth + 1,
+                    preview_points,
                 )?);
             }
         }
@@ -1699,7 +1704,13 @@ fn open_cached_node(
                 "octree cache has no children".into(),
             ));
         }
-        let total_points = children.iter().map(|node| node.total_points).sum();
+        let total_points: u64 = children.iter().map(|node| node.total_points).sum();
+        let expected = total_points.min(preview_points as u64);
+        if stored_points != expected {
+            return Err(LoadError::InvalidData(format!(
+                "octree cache preview {id} contains {stored_points} records, expected {expected}"
+            )));
+        }
         return Ok(IndexedNode {
             id,
             bounds,
@@ -3347,6 +3358,45 @@ mod tests {
                 .path(),
             cache_path
         );
+    }
+
+    #[test]
+    fn rebuilds_a_cache_with_a_wrong_length_inner_preview() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("scan.xyz");
+        fs::write(
+            &source,
+            "0 0 0\n1 0 0\n2 0 0\n3 0 0\n4 0 0\n5 0 0\n6 0 0\n7 0 0\n",
+        )
+        .unwrap();
+        let cloud = super::super::open(&source, 8).unwrap();
+        let config = IndexConfig {
+            leaf_points: 1,
+            preview_points: 3,
+            max_depth: 8,
+            scratch_dir: Some(directory.path().join("cache")),
+        };
+        let first = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
+        let inner = &first.root.children[0].children[0];
+        assert!(!inner.is_leaf());
+        assert_eq!(inner.total_points, 2);
+        let path = first.storage.path().join(&inner.data_path);
+        let expected = fs::read(&path).unwrap();
+        drop(first);
+
+        for records in [0, 1, 3] {
+            fs::write(&path, vec![0; records * RECORD_BYTES]).unwrap();
+            assert!(open_cached_preview(&source, 8, config.clone()).is_err());
+            assert!(OctreeIndex::open_cached_if_present(&cloud, config.clone()).is_err());
+            OctreeIndex::open_and_build_cached_with_progress(
+                &source,
+                8,
+                config.clone(),
+                |_| Ok(()),
+            )
+            .unwrap();
+            assert_eq!(fs::read(&path).unwrap(), expected);
+        }
     }
 
     #[test]
