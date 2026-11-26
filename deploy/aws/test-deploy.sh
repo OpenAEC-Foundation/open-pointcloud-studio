@@ -34,6 +34,7 @@ case "$*" in
             echo "aws cloudformation describe-change-set --change-set-name arn:aws:cloudformation:eu-central-1:123456789012:changeSet/awscli-cloudformation-package-deploy-1/abc"
         fi
         ;;
+    *"'DesiredCount'"*) echo "${AWS_TEST_COUNT:-1}" ;;
     *"StackStatus"*) [[ -n "${AWS_NEW:-}" ]] && echo REVIEW_IN_PROGRESS || echo UPDATE_COMPLETE ;;
     *"'ServiceUrl'"*) echo https://api.example.org ;;
     *"'LoadBalancerDnsName'"*) echo balancer-1.eu-central-1.elb.amazonaws.com ;;
@@ -62,7 +63,7 @@ deploy() {
     done
     shift
     : > "$work/aws.log"
-    env PATH="$work/bin:$PATH" AWS_LOG="$work/aws.log" ${settings[@]+"${settings[@]}"} \
+    env -u AWS_REGION -u OPENAEC_SMOKE_KEY -u AWS_TEST_COUNT -u AWS_NEW -u AWS_UNCHANGED PATH="$work/bin:$PATH" AWS_LOG="$work/aws.log" ${settings[@]+"${settings[@]}"} \
         bash "$work/deploy/aws/deploy.sh" "$@" > "$work/out.log" 2>&1
 }
 
@@ -128,6 +129,50 @@ if deploy AWS_REGION=eu-central-1 AWS_UNCHANGED=1 OPENAEC_SMOKE_KEY=secret-key -
 else
     wrong "deploy.sh --execute on an unchanged stack does more than the smoke test:"
     sed 's/^/        /' "$work/aws.log" "$work/out.log"
+fi
+
+# Stopping the service is a valid deployment with no HTTP target.
+if deploy AWS_REGION=eu-central-1 AWS_TEST_COUNT=0 OPENAEC_SMOKE_KEY= -- \
+        stack "$image" "$certificate" "$secret" api.example.org DesiredCount=0 --execute \
+    && grep -qF 'wait stack-update-complete --stack-name stack' "$work/aws.log" \
+    && grep -qF "'DesiredCount'" "$work/aws.log" \
+    && ! grep -q '^smoke ' "$work/aws.log"; then
+    passed "an explicit scale to zero waits for the stack and needs no smoke key"
+else
+    wrong "scaling to zero failed or tried to contact a stopped service"
+fi
+
+if deploy AWS_REGION=eu-central-1 AWS_UNCHANGED=1 AWS_TEST_COUNT=0 OPENAEC_SMOKE_KEY=test-key -- \
+        stack "$image" "$certificate" "$secret" api.example.org --execute \
+    && ! grep -qE 'execute-change-set|^smoke ' "$work/aws.log"; then
+    passed "an unchanged stack uses its effective task count"
+else
+    wrong "an unchanged stopped stack should have no HTTP test"
+fi
+
+if deploy AWS_REGION=eu-central-1 AWS_TEST_COUNT=2 OPENAEC_SMOKE_KEY=test-key -- \
+        stack "$image" "$certificate" "$secret" api.example.org DesiredCount=2 --execute \
+    && grep -qF 'wait stack-update-complete --stack-name stack' "$work/aws.log" \
+    && grep -q '^smoke .* --load via ' "$work/aws.log"; then
+    passed "a scale to two tasks runs the load check"
+else
+    wrong "scaling up must verify the service"
+fi
+
+if deploy AWS_REGION=eu-central-1 AWS_TEST_COUNT=None OPENAEC_SMOKE_KEY=test-key -- \
+        stack "$image" "$certificate" "$secret" api.example.org --execute \
+    || grep -q '^smoke ' "$work/aws.log"; then
+    wrong "a missing task count should fail explicitly"
+else
+    passed "a missing task count cannot pass verification"
+fi
+
+if deploy AWS_REGION=eu-central-1 AWS_TEST_COUNT=0 OPENAEC_SMOKE_KEY=test-key -- \
+        stack "$image" "$certificate" "$secret" api.example.org DesiredCount=2 --execute \
+    || ! grep -qF 'requested 2 tasks, but the stack reports DesiredCount=0' "$work/out.log"; then
+    wrong "a scale-up must fail if the applied task count is still zero"
+else
+    passed "a scale-up cannot pass on a stopped stack"
 fi
 
 if [[ "$failures" -ne 0 ]]; then
