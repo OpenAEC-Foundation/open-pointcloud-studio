@@ -39,15 +39,20 @@ switches and the shared section are kept. Original scan bytes and unsaved point
 edits are not stored in this file. Invalid or unsupported layout files are kept
 and never overwritten by a fallback session.
 
-Run `restart.py BINARY --output DIRECTORY` in the same isolated compositor to
-verify two independent processes using one profile. It checks source reopening,
+Run `restart.py BINARY --output DIRECTORY` in a graphical desktop session to
+verify two independent processes using one temporary profile. It checks source reopening,
 layout and camera restoration, photo blend, and zero changed interior pixels.
 Add `--station-source /absolute/path/section.e57` to repeat with a real calibrated
-station panorama. The script uses managed SIGTERM handling for a graceful close
-and requires Pillow and NumPy.
+station panorama. The script requires Pillow and NumPy. On Windows it requests
+a graceful close of the original main window with `WM_CLOSE`. On Linux and
+macOS it uses the managed SIGTERM handler.
 
 Satellite placements currently have no verified platform monitor identifier,
-so startup safely docks their documents into the main window. Monitor-aware
+so startup moves each satellite's pane tree beside the existing main panes.
+Tab ownership, active tabs, divider ratios and pane links survive. An empty
+main window takes the recovered tree directly. Run the two-pane probe with
+`--recover-photo-window --linked` to verify a torn-off photo and its model
+return side by side after a process restart. Monitor-aware
 placement and physical Windows/macOS multi-monitor checks remain
 acceptance work for issue #16.
 

@@ -1111,9 +1111,10 @@ Native pane layouts and source references are stored atomically in
 without explicit input files reopens its sources and restores the main-window
 pane tree, document looks, source affine edits/visibility and shared section.
 The file contains references and display state; unsaved point edits are not
-recovered from it. Unsupported or invalid files are preserved. Current startup
-docks satellite documents into the main window while screen identity cannot be
-verified; retaining verified monitor placements remains pending.
+recovered from it. Unsupported or invalid files are preserved. On startup each
+satellite's pane tree returns to the main window with its splits, tab selections
+and links intact. Reopening a window on its original monitor requires platform
+monitor identification, which is still pending.
 
 `list_tabs` answers with `tabs`, each with its `index`, `name` (`3D model`
 for the 3D model in every language, as `project_browser` names it), `kind`

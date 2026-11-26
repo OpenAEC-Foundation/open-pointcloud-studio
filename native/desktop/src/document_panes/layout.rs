@@ -387,21 +387,36 @@ impl Workspace {
     /// A missing or unverifiable screen returns every document to the main
     /// window. Runtime code supplies platform monitor identifiers.
     pub fn recover_monitors(&mut self, available: &[String]) -> Result<(), String> {
-        let missing: Vec<_> = self
-            .windows
-            .iter()
-            .filter(|w| {
-                w.id != 0
-                    && w.placement
-                        .as_ref()
-                        .is_none_or(|p| !available.contains(&p.monitor))
-            })
-            .map(|w| w.id)
-            .collect();
-        for id in missing {
-            self.dock_window(id)?;
-        }
-        Ok(())
+        self.transaction(|work| {
+            let mut windows = std::mem::take(&mut work.windows).into_iter();
+            let mut main = windows.next().expect("validated main window");
+            for window in windows {
+                if window
+                    .placement
+                    .as_ref()
+                    .is_some_and(|p| available.contains(&p.monitor))
+                {
+                    work.windows.push(window);
+                    continue;
+                }
+                // Move the whole pane tree so tab ownership, splits and links survive.
+                main.root = match main.root {
+                    Node::Pane { pane } if pane.tabs.is_empty() => window.root,
+                    root => Node::Split {
+                        axis: Axis::Vertical,
+                        ratio: 0.5,
+                        first: Box::new(root),
+                        second: Box::new(window.root),
+                    },
+                };
+            }
+            work.windows.insert(0, main);
+            if work.pane(work.active_pane).is_none() {
+                // The empty main docking target was replaced by a recovered tree.
+                work.active_pane = work.panes()[0].id;
+            }
+            Ok(())
+        })
     }
     fn collapse_empty(&mut self) {
         self.windows = self
@@ -552,8 +567,39 @@ mod tests {
         assert_eq!(w.windows.len(), 2);
         w.recover_monitors(&["first".into()]).unwrap();
         assert_eq!(w.windows.len(), 1);
-        assert_eq!(w.owner("photo"), Some(1));
+        assert_eq!(w.window_of(w.owner("photo").unwrap()), Some(0));
         assert!(w.dock_window(window).is_err());
+    }
+    #[test]
+    fn recovering_a_missing_window_preserves_both_pane_trees_and_focus() {
+        let mut w = Workspace::default();
+        w.open("photo".into(), 1).unwrap();
+        w.tear_off("photo", None).unwrap();
+        let photo = w.owner("photo").unwrap();
+        w.pane_mut(photo).unwrap().linked = true;
+        w.open("plan".into(), photo).unwrap();
+        w.split_tab("plan", photo, Side::Below).unwrap();
+        let active = w.active_pane;
+        let main = w.windows[0].root.clone();
+        let satellite = w.windows[1].root.clone();
+        w.recover_monitors(&[]).unwrap();
+        assert_eq!(w.windows.len(), 1);
+        assert!(
+            matches!(&w.windows[0].root, Node::Split { first, second, .. }
+            if **first == main && **second == satellite)
+        );
+        assert_eq!(w.active_pane, active);
+    }
+
+    #[test]
+    fn recovering_into_an_empty_main_window_reuses_the_satellite_tree() {
+        let mut w = Workspace::default();
+        w.tear_off("model", None).unwrap();
+        let satellite = w.windows[1].root.clone();
+        w.active_pane = 1;
+        w.recover_monitors(&[]).unwrap();
+        assert_eq!(w.windows[0].root, satellite);
+        assert_eq!(w.owner("model"), Some(w.active_pane));
     }
     #[test]
     fn refused_operations_leave_the_whole_layout_unchanged() {
