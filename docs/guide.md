@@ -394,7 +394,7 @@ Every export reads the source again from start to end, so points that are not on
 
 What an export keeps depends on the formats:
 
-- **Same format, nothing edited**: an unedited LAS, LAZ or E57 cloud exported in full to its own format is a byte-for-byte copy. E57 with a photo-edit sidecar is rewritten to embed the edited photos.
+- **Same format, nothing edited**: an unedited LAS, LAZ or E57 cloud exported in full to its own format is a byte-for-byte copy. E57 with a photo-edit sidecar is rewritten to embed the edited photos. A full copy of a local COPC LAZ therefore keeps its spatial index. Cropping, merging or converting those points produces ordinary LAS or LAZ. The export omits the COPC index because its byte offsets refer to the original compressed chunks.
 - **LAS and LAZ to LAS or LAZ**: the original point records are written, with their point format, GPS time, return data, 16-bit colours, projection records and coordinate grid. Edits change only the fields they concern.
 - **E57 to E57, filtered**: each source scan keeps its scanner pose, its name, its record types and values, its custom fields and its camera images with their poses. **Move** and a **Scale** with one positive factor for all three axes keep the scans when every scan has a pose.
 - **Everything else**: position, 8-bit colour, intensity and class are written. A new E57 file made this way holds one scan in model coordinates; this writer has no class field for E57 and writes zero where a point has no colour or intensity.

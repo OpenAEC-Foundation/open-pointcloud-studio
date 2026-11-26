@@ -22,32 +22,39 @@ pub(super) fn projection_records(path: &Path) -> Result<Vec<Vlr>, LoadError> {
     Ok(records)
 }
 
-/// Retain projection and Extra Bytes EVLRs beyond the records exposed by las-rs when
-/// transcoding, filtering or comparing headers for a layout-preserving merge.
+/// Prepare source metadata for an ordinary LAS/LAZ rewrite. Recover projection
+/// and Extra Bytes EVLRs after the first record exposed by las-rs. COPC's info
+/// and hierarchy describe byte offsets into the original compressed chunks.
 pub(super) fn export_header(path: &Path, header: &las::Header) -> Result<las::Header, LoadError> {
-    let known = header.evlrs().len();
-    if known == 0 {
-        return Ok(header.clone());
-    }
-    let mut reader = BufReader::new(File::open(path)?);
-    let raw = raw::Header::read_from(&mut reader)?;
-    if raw
-        .evlr
-        .is_none_or(|directory| directory.number_of_evlrs as usize <= known)
-    {
-        return Ok(header.clone());
-    }
     let mut builder = las::Builder::from(header.clone());
-    append_extended_records(
-        &mut reader,
-        raw.evlr,
-        known,
-        &mut builder.evlrs,
-        |user_id, record_id| {
-            user_id.eq_ignore_ascii_case(b"LASF_Projection")
-                || (user_id.eq_ignore_ascii_case(b"LASF_Spec") && record_id == 4)
-        },
-    )?;
+    let known = builder.evlrs.len();
+    if known > 0 {
+        let mut reader = BufReader::new(File::open(path)?);
+        let raw = raw::Header::read_from(&mut reader)?;
+        if raw
+            .evlr
+            .is_some_and(|dir| dir.number_of_evlrs as usize > known)
+        {
+            append_extended_records(
+                &mut reader,
+                raw.evlr,
+                known,
+                &mut builder.evlrs,
+                |user_id, record_id| {
+                    user_id.eq_ignore_ascii_case(b"LASF_Projection")
+                        || (user_id.eq_ignore_ascii_case(b"LASF_Spec") && record_id == 4)
+                },
+            )?;
+        }
+    }
+    let reusable = |record: &Vlr| {
+        !(record.user_id.eq_ignore_ascii_case("copc") && matches!(record.record_id, 1 | 1000))
+    };
+    builder.vlrs.retain(reusable);
+    builder.evlrs.retain(reusable);
+    if known > 0 && builder.evlrs.is_empty() {
+        builder.point_padding.clear();
+    }
     Ok(builder.into_header()?)
 }
 
@@ -167,6 +174,57 @@ mod tests {
             .to_string()
             .contains("incompatible point formats, coordinate grids or metadata"));
         assert_eq!(std::fs::read(merged).unwrap(), previous);
+    }
+
+    #[test]
+    fn rewritten_points_drop_copc_offsets_and_keep_survey_records() {
+        use crate::{export_full, export_where, ExportFormat};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.laz");
+        let mut builder = las::Builder::from((1, 4));
+        let record = |owner: &str, id, data| Vlr {
+            user_id: owner.into(),
+            record_id: id,
+            data,
+            ..Default::default()
+        };
+        builder.vlrs.push(record("copc", 1, vec![0; 160]));
+        builder.vlrs.push(record("survey", 1, vec![42]));
+        builder.evlrs.push(record("copc", 1000, vec![0; 32]));
+        let mut writer = las::Writer::from_path(&source, builder.into_header().unwrap()).unwrap();
+        for x in [1.0, 2.0] {
+            writer
+                .write_point(las::Point {
+                    x,
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        writer.close().unwrap();
+
+        let cloud = crate::open(&source, 2).unwrap();
+        let converted = dir.path().join("converted.las");
+        export_full(&cloud, &converted, ExportFormat::Las).unwrap();
+        let clipped = dir.path().join("clipped.laz");
+        export_where(&cloud, &clipped, ExportFormat::Laz, 1, |i, _| i == 1).unwrap();
+
+        for (path, expected) in [(converted, vec![1.0, 2.0]), (clipped, vec![2.0])] {
+            let mut reader = las::Reader::from_path(path).unwrap();
+            let header = reader.header();
+            assert!(header.all_vlrs().all(|v| v.user_id != "copc"));
+            assert!(header
+                .vlrs()
+                .iter()
+                .any(|v| v.user_id == "survey" && v.record_id == 1 && v.data == [42]));
+            assert_eq!(
+                reader.points().map(|p| p.unwrap().x).collect::<Vec<_>>(),
+                expected
+            );
+        }
+        let copy = dir.path().join("copy.laz");
+        export_full(&cloud, &copy, ExportFormat::Laz).unwrap();
+        assert_eq!(std::fs::read(copy).unwrap(), std::fs::read(source).unwrap());
     }
 
     #[test]
