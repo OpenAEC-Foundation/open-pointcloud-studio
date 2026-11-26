@@ -41,11 +41,27 @@ struct SceneCrs {
     metadata: Option<String>,
     vlrs: Vec<las::Vlr>,
 }
-fn scene_crs(sources: &[SceneSource<'_>]) -> Result<SceneCrs, LoadError> {
+
+/// Ignore layout outside WKT strings. Spaces inside a quoted name belong
+/// to the identifier. A doubled quote closes and immediately reopens it.
+fn coordinate_key(declaration: &str) -> String {
+    let mut key = String::with_capacity(declaration.len());
+    let mut quoted = false;
+    for ch in declaration.chars() {
+        if ch == '"' {
+            quoted = !quoted;
+        }
+        if quoted || !ch.is_whitespace() {
+            key.push(ch);
+        }
+    }
+    key
+}
+
+fn scene_crs<'a>(clouds: impl IntoIterator<Item = &'a PointCloud>) -> Result<SceneCrs, LoadError> {
     let mut common = SceneCrs::default();
-    for source in sources {
-        let extension = source
-            .cloud
+    for cloud in clouds {
+        let extension = cloud
             .path
             .extension()
             .and_then(|e| e.to_str())
@@ -53,28 +69,21 @@ fn scene_crs(sources: &[SceneSource<'_>]) -> Result<SceneCrs, LoadError> {
             .to_ascii_lowercase();
         let mut current = SceneCrs::default();
         if extension == "e57" {
-            if let Some(system) = crate::e57_points::open_reader(&source.cloud.path)?
+            if let Some(system) = crate::e57_points::open_reader(&cloud.path)?
                 .coordinate_metadata()
                 .filter(|s| !s.trim().is_empty())
             {
-                current.key = Some(system.split_whitespace().collect::<String>());
+                current.key = Some(coordinate_key(system));
                 current.metadata = Some(system.into());
             }
         } else if extension == "las" || extension == "laz" {
-            let reader = las::Reader::from_path(&source.cloud.path)?;
-            current.vlrs = reader
-                .header()
-                .vlrs()
-                .iter()
-                .filter(|v| v.user_id == "LASF_Projection")
-                .cloned()
-                .collect();
+            current.vlrs = crate::las_crs::projection_records(&cloud.path)?;
             current.vlrs.sort_by_key(|v| v.record_id);
             if let Some(wkt) = current.vlrs.iter().find(|v| v.record_id == 2112) {
                 let value = String::from_utf8_lossy(&wkt.data)
                     .trim_end_matches('\0')
                     .to_owned();
-                current.key = Some(value.split_whitespace().collect::<String>());
+                current.key = Some(coordinate_key(&value));
                 current.metadata = Some(value);
             } else if !current.vlrs.is_empty() {
                 current.key = Some(format!(
@@ -99,6 +108,20 @@ fn scene_crs(sources: &[SceneSource<'_>]) -> Result<SceneCrs, LoadError> {
         }
     }
     Ok(common)
+}
+
+/// E57 stores the CRS as text. A binary LAS projection without a WKT
+/// declaration cannot be copied into that field.
+pub(super) fn e57_coordinate_metadata<'a>(
+    clouds: impl IntoIterator<Item = &'a PointCloud>,
+) -> Result<Option<String>, LoadError> {
+    let crs = scene_crs(clouds)?;
+    if crs.metadata.is_none() && !crs.vlrs.is_empty() {
+        return Err(LoadError::InvalidData(
+            "E57 export needs the source LAS coordinate system in WKT; convert the CRS metadata to WKT or export LAS/LAZ to keep the original projection records".into(),
+        ));
+    }
+    Ok(crs.metadata)
 }
 
 /// A normalised LAS 1.4 scene for inputs with different record layouts.
@@ -141,7 +164,7 @@ pub fn write_las_scene(
         }
     }
     let rgb = sources.iter().any(|s| s.cloud.has_rgb);
-    let crs = scene_crs(sources)?;
+    let crs = scene_crs(sources.iter().map(|source| source.cloud))?;
     let mut builder = Builder::from((1, 4));
     builder.generating_software = "Open Pointcloud Studio".into();
     builder.point_format = las::point::Format::new(if rgb { 7 } else { 6 })?;
@@ -194,12 +217,15 @@ pub fn write_las_scene(
     let result = (|| -> Result<(), LoadError> {
         for (index, source) in sources.iter().enumerate() {
             let mut ordinal = 0;
-            crate::visit_points(&source.cloud.path, &mut |point| {
+            let mut write_point = |point: Point, overlap: bool| {
                 if include(index, ordinal, &point) {
                     let p = source.transform.xyz(point.xyz);
                     let class = point.classification.unwrap_or(0);
                     if legacy_geotiff && class > 31 {
-                        return Err(LoadError::InvalidData("this GeoTIFF CRS needs a WKT conversion before merging classifications above 31 into LAS; use E57 instead".into()));
+                        return Err(LoadError::InvalidData("this GeoTIFF CRS needs a WKT conversion before merging classifications above 31 into LAS".into()));
+                    }
+                    if legacy_geotiff && overlap && class != 12 {
+                        return Err(LoadError::InvalidData("this GeoTIFF CRS needs a WKT conversion before merging a separate LAS overlap flag and classification".into()));
                     }
                     batch.push(las::Point {
                         x: p[0],
@@ -213,7 +239,7 @@ pub fn write_las_scene(
                         } else {
                             class
                         })?,
-                        is_overlap: class == 12,
+                        is_overlap: overlap || class == 12,
                         gps_time: Some(0.),
                         color: rgb.then(|| {
                             let c = point.rgb.unwrap_or([0; 3]);
@@ -237,7 +263,12 @@ pub fn write_las_scene(
                     progress(processed, total)?;
                 }
                 Ok(())
-            })?;
+            };
+            if crate::ops::is_las(&source.cloud.path) {
+                crate::read_las(&source.cloud.path, &mut write_point)?;
+            } else {
+                crate::visit_points(&source.cloud.path, &mut |point| write_point(point, false))?;
+            }
             if ordinal != source.cloud.total_points {
                 return Err(LoadError::InvalidData("source point count changed".into()));
             }
@@ -302,14 +333,15 @@ pub fn write_e57_scene(
         temporary.reopen()?,
         &format!("{{{}}}", uuid::Uuid::new_v4()),
     )?;
-    writer.set_coordinate_metadata(scene_crs(sources)?.metadata);
+    writer.set_coordinate_metadata(e57_coordinate_metadata(
+        sources.iter().map(|source| source.cloud),
+    )?);
     writer.register_extension(e57::Extension::new(
         "opsStudio",
         "https://open-aec.com/e57/point-attributes/1",
     ))?;
     let mut processed = 0;
     let mut written = 0;
-    let mut coordinate_system: Option<String> = None;
     let mut extensions = HashMap::from([(
         "opsStudio".to_owned(),
         "https://open-aec.com/e57/point-attributes/1".to_owned(),
@@ -319,19 +351,6 @@ pub fn write_e57_scene(
         if crate::is_e57(&source.cloud.path) && preserve_images {
             let mut reader = crate::e57_points::open_reader(&source.cloud.path)?;
             let mut raw = crate::e57_points::open_reader(&source.cloud.path)?;
-            if let Some(system) = reader
-                .coordinate_metadata()
-                .filter(|s| !s.trim().is_empty())
-            {
-                if coordinate_system
-                    .as_deref()
-                    .is_some_and(|old| old != system)
-                {
-                    return Err(LoadError::InvalidData("scans state different coordinate reference systems; align/reproject them before merging".into()));
-                }
-                coordinate_system = Some(system.into());
-                writer.set_coordinate_metadata(coordinate_system.clone());
-            }
             for extension in reader.extensions() {
                 match extensions.get(&extension.namespace) {
                     Some(url) if *url == extension.url => {}

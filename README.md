@@ -379,7 +379,7 @@ The first argument chooses a mode. Without one, the arguments are files, folders
 | `--export INPUT OUTPUT` | Converts a scan; the extension of `OUTPUT` chooses the format (`.ply`, `.xyz`, `.pts`, `.csv`, `.las`, `.laz`, `.e57`) |
 | `--section INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT [--rotation DEGREES]` | Exports the points of a scan that lie inside a box; with `--rotation` the box is turned that many degrees counter-clockwise about the vertical through its centre |
 | `--drawing INPUT XMIN,YMIN,ZMIN,XMAX,YMAX,ZMAX OUTPUT.dxf\|.dwg [--view plan\|front\|back\|left\|right] [--rotation DEGREES] [--thickness METRES] [--units mm\|m] [--fill on\|off]` | Draws the slab behind one face of a box in a scan as a 2D drawing in DXF or DWG: a plan with a slab of 0.10 m in millimetres unless the options say otherwise |
-| `--merge OUTPUT.e57\|.las\|.laz INPUT1 INPUT2 [...]` | Merges mixed scan formats; E57 retains scanner stations and photos |
+| `--merge OUTPUT.e57\|.las\|.laz INPUT1 INPUT2 [...]` | Merges mixed scan formats; E57 retains scanner stations and photos. Merging LAS/LAZ inputs with extra dimensions into LAS/LAZ requires matching point formats, coordinate grids and metadata |
 | `--mesh INPUT OUTPUT.obj` | Writes a terrain mesh of a scan |
 | `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N] [--edge-factor N] [--mesh-size SIZE]` | Writes a 3D surface mesh of a scan; reads the points from the index of the scan when it has one |
 | `--texture-mesh INPUT_MESH OUTPUT.obj [--texel-size METRES] [--max-resolution PIXELS]` | Writes a coloured OBJ mesh with an MTL and one or more PNG texture atlases from the measured colours at its vertices; requires a new output name |

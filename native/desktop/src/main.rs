@@ -163,6 +163,7 @@ const ASPRS_CLASSIFICATIONS: &[(u8, &str)] = &[
     (9, i18n::key("Water")),
     (10, i18n::key("Rail")),
     (11, i18n::key("Road surface")),
+    (12, i18n::key("Overlap (legacy LAS)")),
     (13, i18n::key("Wire guard")),
     (14, i18n::key("Wire conductor")),
     (15, i18n::key("Transmission tower")),
