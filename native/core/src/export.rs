@@ -176,7 +176,8 @@ fn reencode_las_full(
         .unwrap_or(Path::new("."));
     let temporary = tempfile::NamedTempFile::new_in(parent)?;
     let mut reader = las::Reader::from_path(&cloud.path)?;
-    let mut builder = las::Builder::from(reader.header().clone());
+    let mut builder =
+        las::Builder::from(crate::las_crs::export_header(&cloud.path, reader.header())?);
     builder.point_format.is_compressed = format == ExportFormat::Laz;
     builder.vlrs.retain(|vlr| {
         !(vlr.record_id == 22204 && vlr.user_id.eq_ignore_ascii_case("laszip encoded"))
@@ -778,6 +779,8 @@ fn export_e57_map_count(
         for extension in reader.extensions() {
             writer.register_extension(extension)?;
         }
+    } else {
+        writer.set_coordinate_metadata(crate::scene_export::e57_coordinate_metadata([cloud])?);
     }
     let mut source_count = 0u64;
     let mut written_count = 0u64;
@@ -1452,6 +1455,7 @@ fn update_las_record(
     original: Point,
     point: Point,
     transforms: &[las::Transform; 3],
+    format: las::point::Format,
 ) -> Result<(), LoadError> {
     if !point.xyz.iter().all(|value| value.is_finite()) {
         return Err(LoadError::InvalidData(
@@ -1476,7 +1480,7 @@ fn update_las_record(
     }
     if point.classification != original.classification {
         let class_code = point.classification.unwrap_or(1);
-        raw_point.is_overlap = class_code == 12;
+        raw_point.is_overlap = class_code == 12 || (format.is_extended && raw_point.is_overlap);
         raw_point.classification =
             las::point::Classification::new(if class_code == 12 { 1 } else { class_code })?;
     }
@@ -1527,7 +1531,22 @@ pub fn merge_las_map_count(
             .checked_add(source.total_points)
             .ok_or_else(|| LoadError::InvalidData("merged point count overflows".into()))?;
         let reader = las::Reader::from_path(&source.path)?;
-        headers.push(reader.header().clone());
+        headers.push(crate::las_crs::export_header(
+            &source.path,
+            reader.header(),
+        )?);
+    }
+    // One header describes the timestamps of every point in the output.
+    let mut time_types = headers
+        .iter()
+        .filter(|header| header.point_format().has_gps_time)
+        .map(las::Header::gps_time_type);
+    if let Some(first_time) = time_types.next() {
+        if time_types.any(|time| time != first_time) {
+            return Err(LoadError::InvalidData(
+                "LAS/LAZ merge mixes GPS week time and adjusted standard GPS time; convert the source timestamps to one time convention before merging".into(),
+            ));
+        }
     }
     let first = &headers[0];
     let mut first_format = *first.point_format();
@@ -1555,6 +1574,13 @@ pub fn merge_las_map_count(
             || vlrs != first_vlrs
             || header.evlrs() != first.evlrs()
         {
+            // Callers may retry incompatible layouts with the common-field scene
+            // writer. That writer cannot represent LAS extra dimensions.
+            if headers.iter().any(|h| h.point_format().extra_bytes != 0) {
+                return Err(LoadError::InvalidData(
+                    "LAS/LAZ merge would lose extra dimensions; align the source point formats, coordinate grids and metadata before merging".into(),
+                ));
+            }
             return Err(LoadError::InvalidData(
                 "LAS/LAZ sources have incompatible point formats, coordinate grids or metadata"
                     .into(),
@@ -1591,7 +1617,8 @@ pub fn merge_las_map_count(
     let stream_result = (|| -> Result<(), LoadError> {
         for (source_index, source) in sources.iter().enumerate() {
             let mut reader = las::Reader::from_path(&source.path)?;
-            let read_limit = if reader.header().point_format().is_compressed {
+            let input_format = *reader.header().point_format();
+            let read_limit = if input_format.is_compressed {
                 PARALLEL_LAZ_BATCH_POINTS
             } else {
                 LAS_BATCH_POINTS
@@ -1604,9 +1631,15 @@ pub fn merge_las_map_count(
                     break;
                 }
                 for mut raw_point in input.drain(..) {
-                    let original = convert_las_point(&raw_point);
+                    let original = convert_las_point(&raw_point, input_format);
                     if let Some(mapped) = map(source_index, ordinal, original) {
-                        update_las_record(&mut raw_point, original, mapped, &transforms)?;
+                        update_las_record(
+                            &mut raw_point,
+                            original,
+                            mapped,
+                            &transforms,
+                            input_format,
+                        )?;
                         output.push(raw_point);
                         written += 1;
                         if output.len() == output_limit {
@@ -1677,7 +1710,10 @@ fn export_las_map_count(
         .filter(|extension| {
             extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
         })
-        .map(|_| las::Reader::from_path(&cloud.path).map(|reader| reader.header().clone()))
+        .map(|_| {
+            let reader = las::Reader::from_path(&cloud.path)?;
+            crate::las_crs::export_header(&cloud.path, reader.header())
+        })
         .transpose()?;
     let extended = cloud.total_points > u64::from(u32::MAX);
     let mut builder = if let Some(header) = &source_header {
@@ -1729,7 +1765,8 @@ fn export_las_map_count(
     let stream_result = if source_header.is_some() {
         (|| -> Result<(), LoadError> {
             let mut reader = las::Reader::from_path(&cloud.path)?;
-            let read_limit = if reader.header().point_format().is_compressed {
+            let input_format = *reader.header().point_format();
+            let read_limit = if input_format.is_compressed {
                 PARALLEL_LAZ_BATCH_POINTS
             } else {
                 LAS_BATCH_POINTS
@@ -1741,13 +1778,13 @@ fn export_las_map_count(
                     break;
                 }
                 for mut raw_point in read_batch.drain(..) {
-                    let original = convert_las_point(&raw_point);
+                    let original = convert_las_point(&raw_point, input_format);
                     let ordinal = source_count;
                     source_count += 1;
                     let Some(point) = map(ordinal, original) else {
                         continue;
                     };
-                    update_las_record(&mut raw_point, original, point, &transforms)?;
+                    update_las_record(&mut raw_point, original, point, &transforms, input_format)?;
                     batch.push(raw_point);
                     if batch.len() == batch_limit {
                         writer.write_points(&batch)?;
@@ -3132,6 +3169,111 @@ mod tests {
         let mut expected_moved = original_point;
         expected_moved.x += 10.0;
         assert_eq!(moved_point, expected_moved);
+    }
+
+    #[test]
+    fn overlap_is_a_class_in_legacy_las_and_an_independent_flag_in_extended_las() {
+        let dir = tempfile::tempdir().unwrap();
+        for (format, source_class, expected_class) in [(3, 1, 12), (7, 2, 2)] {
+            let path = dir.path().join(format!("source-{format}.laz"));
+            let mut builder = las::Builder::from((1, 4));
+            builder.point_format = las::point::Format::new(format).unwrap();
+            let mut writer = las::Writer::from_path(&path, builder.into_header().unwrap()).unwrap();
+            writer
+                .write_point(las::Point {
+                    classification: las::point::Classification::new(source_class).unwrap(),
+                    is_overlap: true,
+                    gps_time: Some(0.),
+                    color: Some(las::Color::default()),
+                    ..Default::default()
+                })
+                .unwrap();
+            writer.close().unwrap();
+
+            let preview = crate::open_las_preview(&path, 1).unwrap();
+            assert_eq!(preview.points[0].classification, Some(expected_class));
+            let cloud = open(&path, 1).unwrap();
+            assert_eq!(cloud.points[0].classification, Some(expected_class));
+            let scene = dir.path().join(format!("scene-{format}.laz"));
+            crate::scene_export::write_las_scene(
+                &[crate::scene_export::SceneSource {
+                    cloud: &cloud,
+                    transform: Default::default(),
+                }],
+                &scene,
+                true,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(()),
+            )
+            .unwrap();
+            let normalized = las::Reader::from_path(scene)
+                .unwrap()
+                .read_point()
+                .unwrap()
+                .unwrap();
+            assert_eq!(u8::from(normalized.classification), source_class);
+            assert!(normalized.is_overlap);
+
+            let dest = dir.path().join(format!("edited-{format}.las"));
+            export_map(&cloud, &dest, ExportFormat::Las, 1, |_, mut point| {
+                assert_eq!(point.classification, Some(expected_class));
+                point.classification = Some(6);
+                Some(point)
+            })
+            .unwrap();
+            let edited = las::Reader::from_path(dest)
+                .unwrap()
+                .read_point()
+                .unwrap()
+                .unwrap();
+            assert_eq!(u8::from(edited.classification), 6);
+            assert_eq!(edited.is_overlap, format == 7);
+        }
+    }
+
+    #[test]
+    fn merge_rejects_mixed_gps_times_before_normalising_different_point_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = |name: &str, format: u8, time_type, time| {
+            let path = dir.path().join(name);
+            let mut builder = las::Builder::from((1, 2));
+            builder.point_format = las::point::Format::new(format).unwrap();
+            builder.gps_time_type = time_type;
+            let mut writer = las::Writer::from_path(&path, builder.into_header().unwrap()).unwrap();
+            writer
+                .write_point(las::Point {
+                    gps_time: time,
+                    ..Default::default()
+                })
+                .unwrap();
+            writer.close().unwrap();
+            crate::open_las_header(path).unwrap()
+        };
+        let no_time = source("no-time.las", 0, las::GpsTimeType::Week, None);
+        let week = source("week.las", 1, las::GpsTimeType::Week, Some(304530.125));
+        let adjusted = source(
+            "adjusted.laz",
+            1,
+            las::GpsTimeType::Standard,
+            Some(474530000.125),
+        );
+        let dest = dir.path().join("merged.las");
+        std::fs::write(&dest, b"previous output").unwrap();
+        for sources in [vec![&week, &adjusted], vec![&no_time, &adjusted, &week]] {
+            let err = merge_las_map_count(
+                &sources,
+                &dest,
+                ExportFormat::Las,
+                None,
+                &mut |_, _, point| Some(point),
+                &mut |_, _, _| Ok(()),
+            )
+            .unwrap_err();
+            assert!(err
+                .to_string()
+                .contains("mixes GPS week time and adjusted standard GPS time"));
+            assert_eq!(std::fs::read(&dest).unwrap(), b"previous output");
+        }
     }
 
     #[test]

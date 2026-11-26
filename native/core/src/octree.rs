@@ -1650,6 +1650,13 @@ fn cache_fingerprint_for(
     if super::is_e57(source) && e57_points::open_reader(source)?.repaired_limits {
         fingerprint.extend_from_slice(b"e57-physical-limits-v1\n");
     }
+    // Earlier caches stored legacy LAS overlap points as class 1.
+    if super::ops::is_las(source) {
+        let header = las::raw::Header::read_from(BufReader::new(File::open(source)?))?;
+        if !las::point::Format::new(header.point_data_record_format)?.is_extended {
+            fingerprint.extend_from_slice(b"las-overlap-class-12\n");
+        }
+    }
     Ok(fingerprint)
 }
 
