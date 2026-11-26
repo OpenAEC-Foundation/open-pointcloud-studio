@@ -1300,7 +1300,7 @@ pub(crate) fn open_cached_preview(
         has_rgb: header.has_rgb,
         has_intensity: header.has_intensity,
         has_classification: header.has_classification,
-        scan_poses: if is_ptx {
+        scan_poses: if is_ptx(path) {
             header.scan_poses.unwrap_or_default()
         } else {
             Vec::new()
