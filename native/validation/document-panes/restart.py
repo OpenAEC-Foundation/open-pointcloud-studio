@@ -46,6 +46,7 @@ if args.linked and not args.station_source:
 with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
     root=Path(directory)
     env={**os.environ,'XDG_CONFIG_HOME':str(root/'config'),'XDG_CACHE_HOME':str(root/'cache'),'OPENAEC_BEHEERD':'1'}
+    env.pop("OPS_INDEX_DIR", None)
     def launch(name):
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0))

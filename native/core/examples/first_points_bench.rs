@@ -12,7 +12,8 @@
 //! read only, and lets the octrees be built side by side; `parallel` reads
 //! and builds every file at once. Set `XDG_CACHE_HOME` to an empty folder
 //! first, so that no index or preview of an earlier run is used and nothing
-//! lands in the user's own cache; delete it afterwards. The last lines hash
+//! lands in the user's own cache. This benchmark ignores the Studio setting
+//! `OPS_INDEX_DIR`. The last lines hash
 //! every index and preview the run made, to compare the outcome of two
 //! builds.
 
@@ -57,9 +58,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "parallel" => None,
         _ => return Err(usage.into()),
     };
-    if files.is_empty() || std::env::var_os("XDG_CACHE_HOME").is_none() {
-        return Err(format!("{usage}; set XDG_CACHE_HOME to an empty folder").into());
+    if files.is_empty() {
+        return Err(usage.into());
     }
+    let cache_home = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|path| !path.is_empty())
+        .ok_or("set XDG_CACHE_HOME to an empty folder")?;
+    // Build and hash under the same benchmark folder, even on a workstation
+    // with a separate index volume configured for the desktop.
+    std::env::remove_var("OPS_INDEX_DIR");
     let files: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
     let started = Instant::now();
     let timelines = match order.as_str() {
@@ -75,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report(file, timeline);
     }
     println!("all read and indexed in {total:.1} s");
-    hash_caches(Path::new(&std::env::var_os("XDG_CACHE_HOME").unwrap()))?;
+    hash_caches(Path::new(&cache_home))?;
     Ok(())
 }
 

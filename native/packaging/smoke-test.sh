@@ -51,6 +51,7 @@ mkdir -p "$work/scans" "$work/out" "$work/cache" "$work/config"
 
 # Keep the index cache and the settings of the test away from those of the
 # person or runner that starts it.
+unset OPS_INDEX_DIR
 export XDG_CACHE_HOME="$work/cache"
 export XDG_CONFIG_HOME="$work/config"
 

@@ -555,11 +555,24 @@ fn loaded_geometry_bounds_use_the_shared_property_grid() {
     for theme in [UiTheme::Light, UiTheme::Forge] {
         studio.ui_theme = theme;
         let picture = crate::test_render::render_window(&studio, iced::Size::new(1280.0, 760.0));
-        let rule = picture.rgb(1100, 605);
-        assert_eq!(picture.rgb(1100, 633), rule, "{} Y row", theme.key());
-        assert_eq!(picture.rgb(1100, 661), rule, "{} Z row", theme.key());
+        // The loaded scan adds one index-size property above Geometry.
+        let x_rule = 633;
+        let row_height = 28;
+        let rule = picture.rgb(1100, x_rule);
+        assert_eq!(
+            picture.rgb(1100, x_rule + row_height),
+            rule,
+            "{} Y row",
+            theme.key()
+        );
+        assert_eq!(
+            picture.rgb(1100, x_rule + 2 * row_height),
+            rule,
+            "{} Z row",
+            theme.key()
+        );
         assert_ne!(
-            picture.rgb(1100, 604),
+            picture.rgb(1100, x_rule - 1),
             rule,
             "{} one-pixel rule",
             theme.key()
@@ -567,8 +580,8 @@ fn loaded_geometry_bounds_use_the_shared_property_grid() {
         // The old CAD control drew full borders around each row. The shared
         // grid has only the horizontal rule, leaving the label column open.
         assert_eq!(
-            picture.rgb(1070, 590),
-            picture.rgb(1100, 590),
+            picture.rgb(1070, x_rule - 15),
+            picture.rgb(1100, x_rule - 15),
             "{} no inner box",
             theme.key()
         );

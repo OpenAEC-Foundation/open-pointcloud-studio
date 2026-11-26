@@ -1592,7 +1592,13 @@ pub fn disk_caches() -> bool {
     DISK_CACHES.load(Ordering::Relaxed)
 }
 
-/// Where disk indexes are kept: `XDG_CACHE_HOME` when set, otherwise the
+/// Bytes occupied by leaf point records alone. Node previews, directory
+/// entries and temporary files during construction require additional space.
+pub fn minimum_index_bytes(points: u64) -> u64 {
+    points.saturating_mul(RECORD_BYTES as u64)
+}
+
+/// Where disk indexes are kept: an absolute OPS_INDEX_DIR, then `XDG_CACHE_HOME` when set, otherwise the
 /// local application data folder on Windows and `~/.cache` elsewhere. The
 /// temporary directory is the last resort because the system may empty it.
 fn cache_root() -> PathBuf {
@@ -1601,6 +1607,9 @@ fn cache_root() -> PathBuf {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
+    if let Some(root) = set("OPS_INDEX_DIR").filter(|path| path.is_absolute()) {
+        return root;
+    }
     if let Some(root) = set("XDG_CACHE_HOME") {
         return root.join("open-pointcloud-studio/indexes");
     }

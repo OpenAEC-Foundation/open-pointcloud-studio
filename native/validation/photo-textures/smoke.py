@@ -51,6 +51,7 @@ with tempfile.TemporaryDirectory(prefix='ops-photo-texture-') as temporary:
     root = Path(temporary)
     env = {**os.environ, 'XDG_CONFIG_HOME': str(root/'config'),
            'XDG_CACHE_HOME': str(args.cache_root.resolve() if args.cache_root else root/'cache')}
+    env.pop("OPS_INDEX_DIR", None)
     with (output/'window.log').open('w') as log:
         process = subprocess.Popen([str(args.binary.resolve()), '--api-port', str(port)],
                                    env=env, stdout=log, stderr=log)
