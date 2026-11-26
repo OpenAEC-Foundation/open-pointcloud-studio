@@ -853,12 +853,6 @@ fn export_e57_map_count(
             },
             &crate::photo_edits::PhotoEdits::load(&cloud.path)?,
         )?;
-        writer.finalize_customized_xml(|xml| {
-            Ok(xml
-                .replace("<readius ", "<radius ")
-                .replace("<readius>", "<radius>")
-                .replace("</readius>", "</radius>"))
-        })?;
     } else {
         let (scale, translation) = image_transform.unwrap_or((1.0, [0.0; 3]));
         crate::photo_edits::write_added(
@@ -871,8 +865,8 @@ fn export_e57_map_count(
             },
             Some(&scan_guid),
         )?;
-        writer.finalize()?;
     }
+    crate::e57_write::finalize(writer, &temporary)?;
     if SourceStamp::read(&cloud.path)? != expected_stamp {
         return Err(LoadError::InvalidData(
             "source changed during export".into(),
@@ -1292,13 +1286,7 @@ fn export_e57_filtered_colours_count(
         },
         &crate::photo_edits::PhotoEdits::load(&cloud.path)?,
     )?;
-    // e57 0.11.13 writes the cylindrical radius element as "readius".
-    writer.finalize_customized_xml(|xml| {
-        Ok(xml
-            .replace("<readius ", "<radius ")
-            .replace("<readius>", "<radius>")
-            .replace("</readius>", "</radius>"))
-    })?;
+    crate::e57_write::finalize(writer, &temporary)?;
     if SourceStamp::read(&cloud.path)? != expected_stamp {
         return Err(LoadError::InvalidData(
             "source changed during export".into(),
@@ -2750,6 +2738,14 @@ mod tests {
             };
             let mut bytes = Vec::new();
             exported_images.blob(blob, &mut bytes).unwrap();
+            let mut pages = crate::e57_quick::Source::open(&destination, 1024).unwrap();
+            let mut header = Vec::new();
+            let logical = crate::e57_quick::logical_offset(blob.offset, 1024);
+            pages.read(logical, 16, &mut header).unwrap();
+            assert_eq!(
+                header[8..],
+                (16 + blob.length).next_multiple_of(4).to_le_bytes()
+            );
             assert_eq!(bytes, image_bytes);
         }
         assert_eq!(reopened.scan_poses.len(), 2);

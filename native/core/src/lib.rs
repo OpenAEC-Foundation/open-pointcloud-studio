@@ -19,6 +19,7 @@ mod e57_limits;
 mod e57_parallel;
 mod e57_points;
 mod e57_quick;
+mod e57_write;
 mod export;
 mod glb;
 pub mod grid2d;
