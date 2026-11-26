@@ -162,11 +162,17 @@ pub(crate) struct JobInput {
 }
 
 /// Count to `ticks` for a step, looking for a cancel at each tick.
-fn stand_in(place: usize, ticks: u32, tick: Duration, control: &Control) -> Result<(), LoadError> {
+fn stand_in(
+    place: usize,
+    ticks: u32,
+    tick: Duration,
+    control: &Control,
+    wait: &mut impl FnMut(Duration),
+) -> Result<(), LoadError> {
     let total = u64::from(ticks);
     for count in 0..total {
         control.report(place, count, total)?;
-        std::thread::sleep(tick);
+        wait(tick);
     }
     control.report(place, total, total)
 }
@@ -174,10 +180,20 @@ fn stand_in(place: usize, ticks: u32, tick: Duration, control: &Control) -> Resu
 /// Run the steps of a job one after the other. This runs on a worker
 /// thread.
 pub(crate) fn run(input: &JobInput, control: &Control) -> Result<(), LoadError> {
+    run_with_wait(input, control, std::thread::sleep)
+}
+
+pub(super) fn run_with_wait(
+    input: &JobInput,
+    control: &Control,
+    mut wait: impl FnMut(Duration),
+) -> Result<(), LoadError> {
     for (place, step) in input.steps.iter().enumerate() {
         let started = Instant::now();
         match (input.work, step) {
-            (Work::Placeholder { ticks, tick }, _) => stand_in(place, ticks, tick, control)?,
+            (Work::Placeholder { ticks, tick }, _) => {
+                stand_in(place, ticks, tick, control, &mut wait)?
+            }
             (Work::Steps, WizardStep::Prepare) => {
                 let prepare = input
                     .prepare
@@ -187,7 +203,7 @@ pub(crate) fn run(input: &JobInput, control: &Control) -> Result<(), LoadError> 
                 let prepared = super::prepare::run(prepare, &report)?;
                 control.keep_prepared(prepared);
             }
-            (Work::Steps, _) => stand_in(place, STAND_IN_TICKS, STAND_IN_TICK, control)?,
+            (Work::Steps, _) => stand_in(place, STAND_IN_TICKS, STAND_IN_TICK, control, &mut wait)?,
         }
         control.finish(StepDone {
             step: *step,
