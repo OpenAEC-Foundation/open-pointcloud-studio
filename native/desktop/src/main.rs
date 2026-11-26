@@ -1062,6 +1062,13 @@ fn main() -> iced::Result {
             }
         }
     }
+    if first.as_deref() == Some(OsStr::new("--mesh-deviation")) {
+        cli::finish(
+            cli::mesh_deviation(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --mesh-deviation SCAN MESH",
+        );
+        return Ok(());
+    }
     if first.as_deref() == Some(OsStr::new("--mesh")) {
         cli::finish(
             cli::mesh(&args.collect::<Vec<_>>()),

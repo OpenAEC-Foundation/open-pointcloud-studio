@@ -100,9 +100,9 @@ pub use export::{
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
 pub use mesh_quality::{
-    mesh_deviation, mesh_deviation_progress, mesh_topology, mesh_topology_by_position,
-    mesh_topology_progress, open_boundary_vertices, open_boundary_vertices_progress, MeshDeviation,
-    MeshTopology,
+    mesh_deviation, mesh_deviation_progress, mesh_source_deviation, mesh_topology,
+    mesh_topology_by_position, mesh_topology_progress, open_boundary_vertices,
+    open_boundary_vertices_progress, MeshDeviation, MeshTopology,
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
 pub use mesh_texture::{
